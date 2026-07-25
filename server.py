@@ -1719,7 +1719,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # history_notify_users was populated).
         if notify_list and int(category_id) in (1, 8, 10):  # Note or Comment (1/8 old OnlyOffice, 10=new DB)
             import re, html as _html_mod
-            snippet = _html_mod.unescape(re.sub(r'<[^>]+>', '', content))[:80].strip()
+            snippet = _html_mod.unescape(re.sub(r'<[^>]+>', '', content))[:120].strip()
             for uid in notify_list:
                 try:
                     db.execute(
