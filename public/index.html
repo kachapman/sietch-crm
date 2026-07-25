@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=2.1.3" />
+  <link rel="stylesheet" href="styles.css?v=2.2.0" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
 </head>
 <body>
@@ -177,7 +177,7 @@
             </svg>
           </button>
           <button type="button" id="add-tile-btn" class="btn btn-secondary btn-icon-only" title="Add tile" aria-label="Add tile">
-            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 5a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1l0 -4"/><path d="M14 5a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1l0 -4"/><path d="M4 15a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1l0 -4"/><path d="M14 17h6m-3 -3v6"/></svg>
           </button>
         </div>
       </div>
@@ -720,13 +720,13 @@
   <div id="opp-preview-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="opp-preview-title">
     <div class="modal-backdrop" data-opp-preview-dismiss></div>
     <div class="modal-card modal-card-opp-preview">
-      <div class="opp-preview-head">
+       <div class="opp-preview-head">
         <h2 id="opp-preview-title" class="modal-title">Opportunity</h2>
          <div class="opp-preview-head-actions">
-           <button type="button" id="opp-preview-refresh" class="opp-preview-refresh-btn" title="Refresh" aria-label="Refresh preview">⟳</button>
-            <button type="button" id="opp-preview-bookmark" class="opp-preview-bookmark-btn" title="Bookmark deal" aria-label="Bookmark deal"></button>
-            <button type="button" id="opp-preview-edit" class="opp-preview-edit-btn" title="Edit deal" aria-label="Edit deal">✎</button>
-            <span id="opp-preview-open-crm-wrap"></span>
+             <button type="button" id="opp-preview-bookmark" class="opp-preview-bookmark-btn" title="Bookmark deal" aria-label="Bookmark deal"></button>
+             <button type="button" id="opp-preview-edit" class="opp-preview-edit-btn" title="Edit deal" aria-label="Edit deal">✎</button>
+             <span id="opp-preview-open-crm-wrap"></span>
+             <button type="button" class="btn btn-icon-only modal-header-control" title="Close" data-opp-preview-dismiss aria-label="Close preview"><i class="ti ti-x"></i></button>
          </div>
       </div>
       <div id="opp-preview-body" class="opp-preview-body" aria-live="polite"></div>
@@ -832,17 +832,26 @@
            <div class="field">
              <label for="deal-edit-note-body">Note</label>
              <div class="note-format-toolbar" aria-label="Formatting">
-               <button type="button" class="note-format-btn" data-cmd="bold" title="Bold">B</button>
+               <button type="button" class="note-format-btn" data-cmd="bold" title="Bold"><b>B</b></button>
                <button type="button" class="note-format-btn" data-cmd="italic" title="Italic"><i>I</i></button>
-               <button type="button" class="note-format-btn" data-cmd="underline" title="Underline">U</button>
-               <button type="button" class="note-format-btn" data-cmd="hiliteColor" title="Highlight (light green)">H</button>
-               <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear">⌫</button>
-              </div>
-                   <div class="note-editor-wrap">
-                    <div id="deal-edit-note-body" class="note-editor" contenteditable="true" data-placeholder="Well go on, write the note already"></div>
-                    <div id="deal-edit-mention-dropdown" class="mention-dropdown hidden"></div>
-                    <input type="date" id="deal-edit-note-created" class="note-backdate-input" />
-                  </div>
+               <button type="button" class="note-format-btn" data-cmd="underline" title="Underline"><u>U</u></button>
+               <button type="button" class="note-format-btn" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+               <span class="note-format-sep"></span>
+               <button type="button" class="note-format-btn" data-cmd="insertUnorderedList" title="Bullet list">•</button>
+               <button type="button" class="note-format-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
+               <span class="note-format-sep"></span>
+               <button type="button" class="note-format-btn note-format-hilite-btn" title="Highlight color">🖍</button>
+               <button type="button" class="note-format-btn note-format-emoji-btn" title="Emoji">😀</button>
+               <button type="button" class="note-format-btn note-format-link-btn" title="Insert link">🔗</button>
+               <span class="note-format-sep"></span>
+               <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear formatting">⌫</button>
+               <button type="button" class="note-backdate-btn" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>
+             </div>
+                     <div class="note-editor-wrap">
+                     <div id="deal-edit-note-body" class="note-editor" contenteditable="true" data-placeholder="Well go on, write the note already"></div>
+                     <div id="deal-edit-mention-dropdown" class="mention-dropdown hidden"></div>
+                   </div>
+                   <input type="date" id="deal-edit-note-created" class="visually-hidden" />
                  <div class="field note-attachments-field">
                 <label>Attachments <span class="field-hint-inline">(max 25 MB each)</span></label>
                 <input type="file" id="deal-edit-note-attachments" multiple class="note-attachments-input" />
@@ -899,17 +908,26 @@
            <div class="field">
              <label for="quick-note-note-body">Note</label>
              <div class="note-format-toolbar" aria-label="Formatting">
-               <button type="button" class="note-format-btn" data-cmd="bold" title="Bold">B</button>
+               <button type="button" class="note-format-btn" data-cmd="bold" title="Bold"><b>B</b></button>
                <button type="button" class="note-format-btn" data-cmd="italic" title="Italic"><i>I</i></button>
-               <button type="button" class="note-format-btn" data-cmd="underline" title="Underline">U</button>
-               <button type="button" class="note-format-btn" data-cmd="hiliteColor" title="Highlight (light green)">H</button>
-               <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear">⌫</button>
-              </div>
-                 <div class="note-editor-wrap">
-                    <div id="quick-note-note-body" class="note-editor" contenteditable="true" data-placeholder="Enter activity note…"></div>
-                    <div id="quick-note-mention-dropdown" class="mention-dropdown hidden"></div>
-                    <input type="date" id="quick-note-note-created" class="note-backdate-input" />
-                  </div>
+               <button type="button" class="note-format-btn" data-cmd="underline" title="Underline"><u>U</u></button>
+               <button type="button" class="note-format-btn" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+               <span class="note-format-sep"></span>
+               <button type="button" class="note-format-btn" data-cmd="insertUnorderedList" title="Bullet list">•</button>
+               <button type="button" class="note-format-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
+               <span class="note-format-sep"></span>
+               <button type="button" class="note-format-btn note-format-hilite-btn" title="Highlight color">🖍</button>
+               <button type="button" class="note-format-btn note-format-emoji-btn" title="Emoji">😀</button>
+               <button type="button" class="note-format-btn note-format-link-btn" title="Insert link">🔗</button>
+               <span class="note-format-sep"></span>
+               <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear formatting">⌫</button>
+               <button type="button" class="note-backdate-btn" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>
+             </div>
+                   <div class="note-editor-wrap">
+                      <div id="quick-note-note-body" class="note-editor" contenteditable="true" data-placeholder="Enter activity note…"></div>
+                      <div id="quick-note-mention-dropdown" class="mention-dropdown hidden"></div>
+                   </div>
+                   <input type="date" id="quick-note-note-created" class="visually-hidden" />
                  <div class="field note-attachments-field">
                 <label>Attachments <span class="field-hint-inline">(max 25 MB each)</span></label>
                 <input type="file" id="quick-note-note-attachments" multiple class="note-attachments-input" />
@@ -1597,6 +1615,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
-  <script src="app.js?v=2.1.3" type="module"></script>
+  <script src="app.js?v=2.2.0" type="module"></script>
 </body>
 </html>

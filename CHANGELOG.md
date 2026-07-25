@@ -6,6 +6,27 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 Target release on `new-crm` branch.
 
+### Phase 2G (2026-07-24 session 23)
+- **Unified note editor toolbar across all modals.** Deal-edit and quick-note modals now have the same formatting toolbar as the preview modal: bold, italic, underline, strikethrough, bullet/numbered lists, highlighter color picker, emoji, link, clear formatting, and backdate calendar button. All three editors share identical UI and behavior.
+- **Backdate button moved into formatting toolbar.** Calendar icon button is now the last button in the toolbar row for all three editors (preview, deal-edit, quick-note). Removed separate `.note-backdate-wrap` divs from deal-edit and quick-note modals.
+- **Global delegated handlers for highlighter/emoji/link buttons.** Added document-level click handlers for `.note-format-hilite-btn`, `.note-format-emoji-btn`, `.note-format-link-btn` so they work in all note editors (preview, deal-edit, quick-note).
+- **Fixed preview modal note editor layout.** Editor section now renders after History & notes title and Quick Context button (was rendering above them). Fixed "strange semi-colon" text node artifact caused by leading newline in template literal — switched to string concatenation.
+- **Fixed group tile count + filter summary wrapping.** Deal count and filter summary text now share one flex row via `.group-tile-count-summary` wrapper instead of being separate children that wrap to different rows.
+- **Add Tile button icon updated.** Header "Add tile" button now uses Tabler `layout-grid-add` icon (3 squares + plus sign).
+- **Files:** `public/app.js` (unified toolbar, global delegated handlers, count+summary wrapper), `public/styles.css` (`.group-tile-count-summary` flex rules, removed stale `.note-backdate-wrap`/`.note-backdate-label`), `public/index.html` (deal-edit + quick-note toolbar HTML, Add Tile icon).
+- **Preview modal "Add Note" editor.** Added inline expandable rich text note editor inside the opportunity preview modal. "Add Note" button in the History & notes section title opens a formatted editor with enhanced toolbar: bold, italic, underline, strikethrough, bullet/numbered lists, highlighter color dropdown (6 dark-theme-safe colors), emoji picker, link insertion, and clear formatting. Note submission reuses `createOpportunityHistoryEvent` with category 10, @-mention support, and backdate. Preview auto-refreshes after submission.
+- **Highlighter color dropdown.** New floating palette (`.preview-highlighter-dropdown`) with 6 swatch buttons (green, yellow, blue, pink, orange, purple at 20% opacity) for highlighter formatting in the preview note editor.
+- **Emoji picker for contenteditable.** Adapted `showNotesEmojiPicker` pattern for contenteditable divs — inserts via `document.execCommand("insertText")` instead of textarea splice.
+- **Link insertion.** New inline URL input with Apply/Cancel buttons, auto-prefixes `https://` if missing, wraps selected text or inserts full URL as `<a>` link.
+- **Preview modal header buttons.** Removed refresh button (⟳) from header; added close (X) button matching search modal style (`class="btn btn-icon-only modal-header-control"` with `ti ti-x`).
+- **Backdate icon button in deal-edit and quick-note modals.** Replaced visible `<input type="date">` with calendar SVG icon button + hidden native date input + label tooltip. Delegated click/change handlers at document level. Label shows formatted short date (e.g., "Jul 24") on change. Preview note editor also includes backdate icon.
+- **Fixed preview modal field layout.** `.opp-preview-field` changed to `flex-direction: column` so labels and values stack. Checklist fields remain row direction.
+- **Fixed task/team tile collapse.** Added `min-height: 0 !important` for `.tasks-panel.tile-body-collapsed` and `.presence-panel.tile-body-collapsed .presence-tile-body` so collapsed panels don't consume grid space.
+- **Fixed user profile avatar save.** Added `&_t=${Date.now()}` cache-buster to img `src` to bypass 24h HTTP cache after photo changes.
+- **Delete photo button icon-only.** Removed "Delete Photo" text from button, kept `title` attribute.
+- **Files:** `public/app.js` (addNoteBtn handler, _toggleHighlighterDropdown, _showPreviewEmojiPicker, _showPreviewLinkInput, backdate delegated handlers, removed refresh handler, added close handler, tile collapse min-height fix, avatar cache-bust), `public/styles.css` (addNoteBtn, preview-note-editor-wrap, highlighter dropdown, link input, backdate btn/label/wrap, mention-dropdown positioning, format-sep), `public/index.html` (cache-bust v2.2.0, removed refresh button, added close button).
+- Cache-bust bumped to `app.js?v=2.2.0`, `styles.css?v=2.2.0`.
+
 ### Phase 2G (2026-07-24)
 - **Notification creation logging.** Added error logging to notification creation loop in `_handle_project_history_create()` — `except Exception: pass` replaced with `print()` + `traceback.print_exc()` to stderr. This will reveal the actual DB error that has been silently swallowing all notification INSERT failures.
 - **Fixed preview modal field layout.** Changed `.opp-preview-field` from row to column flex direction with `gap: 0.25rem`. Removed `flex-shrink: 0` and `white-space: nowrap` from `dt` so labels and values stack vertically on narrow viewports. Checklist fields (`.opp-preview-field-chk`) remain in row direction.

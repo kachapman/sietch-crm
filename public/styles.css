@@ -1574,6 +1574,13 @@ body {
   white-space: nowrap;
 }
 
+.group-tile-count-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+
 .tile-toolbar-tools {
   display: flex;
   align-items: center;
@@ -1611,11 +1618,13 @@ body {
   }
   /* Group tiles: deal count + filter summary drop to row 2 on narrow tiles.
      Filter toggle and template buttons stay on row 1 with the title. */
-  .board-group-tile .tile-toolbar-count,
-  .board-group-tile .group-tile-count,
-  .board-group-tile .group-filter-summary-compact {
+  .board-group-tile .group-tile-count-summary {
     order: 10;
     flex-basis: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    white-space: nowrap;
   }
   /* Generic tiles: tools row 2 */
   .tile-toolbar-tools {
@@ -2674,6 +2683,12 @@ body {
   color: #fff;
   border-color: var(--accent);
 }
+.note-format-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 0.15rem 0.2rem;
+}
 
 /* Single light-green highlighter button swatch (subtle so it doesn't look like the bright applied highlight) */
 .note-format-btn[data-cmd="hiliteColor"] { background: #c8e6c9; color: #222; border-color: #81c784; }
@@ -2690,6 +2705,37 @@ body {
   width: auto;
   max-width: 138px;
   min-width: 108px;
+}
+
+.note-backdate-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.note-backdate-btn {
+  background: none;
+  border: 1px solid var(--border);
+  padding: 0.15rem 0.3rem;
+  cursor: pointer;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+.note-backdate-btn:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.note-backdate-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.note-backdate-label {
+  font-size: 0.72rem;
+  color: var(--muted);
 }
 
 .note-editor {
@@ -4557,29 +4603,6 @@ body {
 .opp-preview-bookmark-btn .bookmark-ribbon-icon {
   width: 14px;
   height: 14px;
-}
-
-.opp-preview-refresh-btn {
-  width: 2rem;
-  height: 2rem;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 0.9rem;
-  line-height: 1;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
-  margin-right: 0.25rem;
-}
-
-.opp-preview-refresh-btn:hover,
-.opp-preview-refresh-btn:focus-visible {
-  border-color: var(--accent);
-  color: var(--text);
-  background: var(--surface-2);
-  outline: none;
 }
 
 .opp-preview-open-crm {
@@ -10700,5 +10723,205 @@ body {
 .note-editor-wrap {
   position: relative;
   overflow: visible;
+}
+
+/* ── Add Note button in preview history section header ───────────────── */
+/* Add note button in preview section header — matches docs modal "Add document" button style */
+.opp-preview-section-add-note {
+  background: none;
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 6px;
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.opp-preview-section-add-note:hover {
+  color: var(--accent, #66bb6a);
+  border-color: var(--accent, #66bb6a);
+  background: rgba(102, 187, 106, 0.08);
+}
+.opp-preview-section-add-note svg { width: 18px; height: 18px; }
+.opp-preview-section-add-note span { text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* Remove problematic margin/padding that causes visual layout issues */
+.preview-note-editor-wrap {
+  display: none;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2, var(--surface));
+  box-sizing: border-box;
+}
+.preview-note-editor-wrap.active { display: block; }
+
+/* Fix toolbar alignment and spacing */
+.preview-note-editor-wrap .preview-format-toolbar {
+  margin-bottom: 0.5rem;
+  justify-content: flex-start;
+  gap: 0.2rem;
+  flex-wrap: wrap;
+}
+.preview-note-editor-wrap .note-format-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 0.15rem 0.2rem;
+}
+
+/* Fix positioning for backdate button in toolbar */
+.preview-note-editor-wrap .note-format-toolbar {
+  position: relative;
+}
+.preview-note-editor-wrap .note-format-toolbar .note-backdate-btn {
+  margin-left: auto;
+  margin-right: 0;
+  background: none;
+  border: 1px solid var(--border);
+  padding: 0.15rem 0.3rem;
+  cursor: pointer;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+.preview-note-editor-wrap .note-format-toolbar .note-backdate-btn:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.preview-note-editor-wrap .note-format-toolbar .note-backdate-btn svg { width: 14px; height: 14px; }
+.opp-preview-section-add-note svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* ── Preview note editor wrapper ─────────────────────────────────────── */
+.preview-note-editor-wrap {
+  display: none;
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2, var(--surface));
+}
+.preview-note-editor-wrap.active {
+  display: block;
+}
+
+.preview-note-editor-wrap .preview-format-toolbar {
+  margin-bottom: 0.5rem;
+}
+.preview-note-editor-wrap .note-format-sep + .note-format-btn {
+  margin-left: 0;
+}
+.preview-note-editor-wrap .note-editor {
+  min-height: 80px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: var(--text);
+  margin-bottom: 0.5rem;
+}
+.preview-note-editor-wrap .note-editor:focus {
+  outline: none;
+  border-color: var(--accent, #66bb6a);
+}
+.preview-note-editor-wrap .note-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+/* Action row */
+.preview-note-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+/* ── Highlighter dropdown ────────────────────────────────────────────── */
+.preview-highlighter-dropdown {
+  position: fixed;
+  z-index: 99999;
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+.preview-highlighter-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.1s;
+}
+.preview-highlighter-swatch:hover {
+  border-color: var(--text);
+  transform: scale(1.15);
+}
+
+/* ── Preview link input ──────────────────────────────────────────────── */
+.preview-link-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+.preview-link-input {
+  flex: 1;
+  min-width: 160px;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-2, var(--surface));
+  color: var(--text);
+  font-size: 0.82rem;
+}
+.preview-link-input:focus {
+  outline: none;
+  border-color: var(--accent, #66bb6a);
+}
+.preview-link-input-wrap .btn {
+  flex-shrink: 0;
+}
+
+.preview-mention-dropdown {
+  position: absolute;
+  z-index: 99998;
+  left: 0;
+  right: auto;
+}
+
+/* ── Mention dropdown in preview editor ──────────────────────────────── */
+.preview-mention-dropdown {
+  position: absolute;
+  z-index: 99998;
+  left: 0;
+  right: auto;
 }
 

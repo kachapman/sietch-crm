@@ -1749,6 +1749,11 @@ function bindGroupTileChrome(section, group, tileId) {
   summaryCompactBar.className = "group-filter-summary-compact";
   summaryCompactBar.textContent = groupFilterSummary(group);
 
+  const countAndSummary = document.createElement("span");
+  countAndSummary.className = "group-tile-count-summary";
+  countAndSummary.appendChild(countEl);
+  countAndSummary.appendChild(summaryCompactBar);
+
   // --- Filter icon toggle ---
   const toggleFiltersBtn = document.createElement("button");
   toggleFiltersBtn.type = "button";
@@ -1863,8 +1868,7 @@ function bindGroupTileChrome(section, group, tileId) {
   toolbar.appendChild(toggleFiltersBtn);
   toolbar.appendChild(templateBtn);
   toolbar.appendChild(templateDropdown);
-  toolbar.appendChild(countEl);
-  toolbar.appendChild(summaryCompactBar);
+  toolbar.appendChild(countAndSummary);
   toolbar.appendChild(actions);
 
   section.prepend(toolbar);
@@ -17841,16 +17845,6 @@ function bindOpportunityPreviewModal() {
   if (!modal || modal.dataset.bound) return;
   modal.dataset.bound = "1";
   $("#opp-preview-close")?.addEventListener("click", closeOpportunityPreviewModal);
-  $("#opp-preview-refresh")?.addEventListener("click", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const ctx = oppPreviewContext;
-    if (ctx && ctx.oppId != null) {
-      const titleHint = ctx.opp ? (ctx.opp.title || ctx.opp.Title || "") : "";
-      // Manual refresh re-fetches from the server (subject to the proxy TTL cache).
-      openOpportunityPreviewModal(ctx.oppId, titleHint, ctx.group || null).catch(() => {});
-    }
-  });
   $("#opp-preview-edit")?.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -21448,46 +21442,190 @@ function renderOpportunityPreviewContent(container, data) {
   pfEditBtn.addEventListener("click", renderProjectFieldsEdit);
   renderProjectFieldsDisplay();
 
-  appendPreviewSection(detailsContent, "History & notes", (section) => {
-    if (!history.length) {
+  // ── History & notes section with Add Note button ──────────────────────
+  (() => {
+    const section = document.createElement("section");
+    section.className = "opp-preview-section";
+
+    // Section header with title + Add Note button
+    const head = document.createElement("div");
+    head.className = "opp-preview-section-head";
+    const h = document.createElement("h3");
+    h.className = "opp-preview-section-title";
+    h.textContent = "History & notes";
+    head.appendChild(h);
+
+    const addNoteBtn = document.createElement("button");
+    addNoteBtn.type = "button";
+    addNoteBtn.className = "opp-preview-section-add-note";
+    addNoteBtn.title = "Add note";
+    addNoteBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-pencil-plus"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4"/><path d="M13.5 6.5l4 4"/><path d="M16 19h6"/><path d="M19 16v6"/></svg><span>add note</span>`;
+    head.appendChild(addNoteBtn);
+    section.appendChild(head);
+
+    // Quick Context jump button (appended right after header, before editor)
+    let jumpBtn = null;
+    if (history.length) {
+      const ul = document.createElement("ul");
+      ul.className = "opp-preview-history";
+      for (const ev of history) {
+        const item = renderHistoryEventItem(ev);
+        ul.appendChild(item);
+        if (item.dataset.quickContext === "1" || item.classList.contains("opp-preview-history-item--quick-context")) {
+          jumpBtn = document.createElement("button");
+        }
+      }
+      if (jumpBtn) {
+        jumpBtn.type = "button";
+        jumpBtn.className = "opp-preview-jump-history";
+        jumpBtn.textContent = "Quick Context ↓";
+        jumpBtn.addEventListener("click", () => {
+          const firstQC = ul.querySelector('li.opp-preview-history-item--quick-context, li[data-quick-context="1"]');
+          if (firstQC) {
+            firstQC.scrollIntoView({ block: "center", behavior: "smooth" });
+          } else {
+            section.scrollIntoView({ block: "start", behavior: "smooth" });
+          }
+        });
+        section.appendChild(jumpBtn);
+      }
+      section._previewHistoryUl = ul;
+    }
+
+    // Add Note editor (hidden by default)
+    const editorWrap = document.createElement("div");
+    editorWrap.className = "preview-note-editor-wrap";
+    editorWrap.innerHTML = '<div class="note-format-toolbar preview-format-toolbar" aria-label="Formatting">' +
+      '<button type="button" class="note-format-btn" data-cmd="bold" title="Bold"><b>B</b></button>' +
+      '<button type="button" class="note-format-btn" data-cmd="italic" title="Italic"><i>I</i></button>' +
+      '<button type="button" class="note-format-btn" data-cmd="underline" title="Underline"><u>U</u></button>' +
+      '<button type="button" class="note-format-btn" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>' +
+      '<span class="note-format-sep"></span>' +
+      '<button type="button" class="note-format-btn" data-cmd="insertUnorderedList" title="Bullet list">•</button>' +
+      '<button type="button" class="note-format-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>' +
+      '<span class="note-format-sep"></span>' +
+      '<button type="button" class="note-format-btn note-format-hilite-btn" title="Highlight color">🖍</button>' +
+      '<button type="button" class="note-format-btn note-format-emoji-btn" title="Emoji">😀</button>' +
+      '<button type="button" class="note-format-btn note-format-link-btn" title="Insert link">🔗</button>' +
+      '<span class="note-format-sep"></span>' +
+      '<button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear formatting">⌫</button>' +
+      '<button type="button" class="note-backdate-btn" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>' +
+      '</div>' +
+      '<div class="note-editor-wrap">' +
+        '<div class="note-editor preview-note-editor" contenteditable="true" data-placeholder="Write a note\u2026"></div>' +
+        '<div class="preview-mention-dropdown mention-dropdown hidden"></div>' +
+      '</div>' +
+      '<div class="preview-note-actions">' +
+        '<button type="button" class="btn btn-primary btn-sm preview-note-submit">Add note</button>' +
+        '<button type="button" class="btn btn-ghost btn-sm preview-note-cancel">Cancel</button>' +
+      '</div>';
+    section.appendChild(editorWrap);
+
+    // Append the pre-built history list
+    if (section._previewHistoryUl) {
+      section.appendChild(section._previewHistoryUl);
+      delete section._previewHistoryUl;
+    } else if (!history.length) {
       const p = document.createElement("p");
       p.className = "opp-preview-empty";
       p.textContent = "No history events";
       section.appendChild(p);
-      return;
     }
-    const ul = document.createElement("ul");
-    ul.className = "opp-preview-history";
-    let hasQC = false;
-    for (const ev of history) {
-      const item = renderHistoryEventItem(ev);
-      ul.appendChild(item);
-      if (item.dataset.quickContext === "1" || item.classList.contains("opp-preview-history-item--quick-context")) {
-        hasQC = true;
+
+    // Wire Add Note toggle
+    addNoteBtn.addEventListener("click", () => {
+      const isOpen = editorWrap.classList.contains("active");
+      if (isOpen) {
+        editorWrap.classList.remove("active");
+      } else {
+        editorWrap.classList.add("active");
+        const ed = editorWrap.querySelector(".note-editor");
+        if (ed) ed.focus();
       }
+    });
+
+    // Wire Cancel
+    editorWrap.querySelector(".preview-note-cancel")?.addEventListener("click", () => {
+      editorWrap.classList.remove("active");
+      const ed = editorWrap.querySelector(".note-editor");
+      if (ed) ed.innerHTML = "";
+    });
+
+    // Wire @-mention autocomplete
+    const previewEditor = editorWrap.querySelector(".preview-note-editor");
+    const previewDropdown = editorWrap.querySelector(".preview-mention-dropdown");
+    if (previewEditor && previewDropdown) {
+      setupMentionAutocomplete(previewEditor, previewDropdown);
     }
-    if (hasQC) {
-      const jump = document.createElement("button");
-      jump.type = "button";
-      jump.className = "opp-preview-jump-history";
-      jump.textContent = "Quick Context ↓";
-      jump.addEventListener("click", () => {
-        const firstQC = ul.querySelector('li.opp-preview-history-item--quick-context, li[data-quick-context="1"]');
-        if (firstQC) {
-          firstQC.scrollIntoView({ block: "center", behavior: "smooth" });
-        } else {
-          section.scrollIntoView({ block: "start", behavior: "smooth" });
+
+    // Wire highlighter dropdown
+    const hiliteBtn = editorWrap.querySelector(".note-format-hilite-btn");
+    if (hiliteBtn && previewEditor) {
+      hiliteBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        _toggleHighlighterDropdown(hiliteBtn, previewEditor);
+      });
+    }
+
+    // Wire emoji picker
+    const emojiBtn = editorWrap.querySelector(".note-format-emoji-btn");
+    if (emojiBtn && previewEditor) {
+      emojiBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        _showPreviewEmojiPicker(emojiBtn, previewEditor);
+      });
+    }
+
+    // Wire link insertion
+    const linkBtn = editorWrap.querySelector(".note-format-link-btn");
+    if (linkBtn && previewEditor) {
+      linkBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        _showPreviewLinkInput(linkBtn, previewEditor);
+      });
+    }
+
+    // Wire note submission
+    const submitBtn = editorWrap.querySelector(".preview-note-submit");
+    if (submitBtn) {
+      submitBtn.addEventListener("click", async () => {
+        const ed = editorWrap.querySelector(".note-editor");
+        if (!ed) return;
+        const content = (ed.innerHTML || "").trim();
+        if (!content || /^(<br\s*\/?>|\s*|<div>\s*<br\s*\/?>\s*<\/div>)$/i.test(content)) {
+          showToast("Please write a note first.", true);
+          return;
+        }
+        const notifyUserList = extractMentionsFromContent(ed).map(String);
+        const dt = editorWrap.querySelector(".note-backdate-input");
+        const created = dt?.value || null;
+        submitBtn.disabled = true;
+        try {
+          await createOpportunityHistoryEvent(opp.id ?? opp.ID, {
+            content,
+            categoryId: 10,
+            notifyUserList,
+            created,
+          });
+          ed.innerHTML = "";
+          editorWrap.classList.remove("active");
+          const lbl = editorWrap.querySelector(".note-backdate-label");
+          if (lbl) lbl.textContent = "";
+          if (dt) dt.value = "";
+          showToast("Note added");
+          // Refresh preview
+          const titleHint = opp.title || opp.Title || "";
+          openOpportunityPreviewModal(opp.id ?? opp.ID, titleHint, oppPreviewContext?.group || null).catch(() => {});
+        } catch (err) {
+          showToast(err.message || "Failed to add note", true);
+        } finally {
+          submitBtn.disabled = false;
         }
       });
-      // Insert jump before the list (under the section title)
-      if (ul.parentNode) {
-        ul.parentNode.insertBefore(jump, ul);
-      } else {
-        section.appendChild(jump);
-      }
     }
-    section.appendChild(ul);
-  });
+
+    detailsContent.appendChild(section);
+  })();
 
   container.appendChild(detailsContent);
 
@@ -24297,6 +24435,228 @@ document.addEventListener("click", function (e) {
     document.execCommand(cmd, false, val);
   }
 });
+
+// Delegated handler for highlighter color picker button (all note editors)
+document.addEventListener("click", function (e) {
+  const btn = e.target.closest(".note-format-hilite-btn");
+  if (!btn) return;
+  const toolbar = btn.closest(".note-format-toolbar");
+  if (!toolbar) return;
+  const editor = toolbar.parentElement && toolbar.parentElement.querySelector(".note-editor");
+  if (!editor) return;
+  e.stopPropagation();
+  _toggleHighlighterDropdown(btn, editor);
+});
+
+// Delegated handler for emoji picker button (all note editors)
+document.addEventListener("click", function (e) {
+  const btn = e.target.closest(".note-format-emoji-btn");
+  if (!btn) return;
+  const toolbar = btn.closest(".note-format-toolbar");
+  if (!toolbar) return;
+  const editor = toolbar.parentElement && toolbar.parentElement.querySelector(".note-editor");
+  if (!editor) return;
+  e.stopPropagation();
+  _showPreviewEmojiPicker(btn, editor);
+});
+
+// Delegated handler for link insert button (all note editors)
+document.addEventListener("click", function (e) {
+  const btn = e.target.closest(".note-format-link-btn");
+  if (!btn) return;
+  const toolbar = btn.closest(".note-format-toolbar");
+  if (!toolbar) return;
+  const editor = toolbar.parentElement && toolbar.parentElement.querySelector(".note-editor");
+  if (!editor) return;
+  e.stopPropagation();
+  _showPreviewLinkInput(btn, editor);
+});
+
+// Backdate icon button: clicking the calendar icon opens the hidden date input.
+// On date change, shows the formatted date as a label next to the icon.
+document.addEventListener("click", function (e) {
+  const btn = e.target.closest(".note-backdate-btn");
+  if (!btn) return;
+  const wrap = btn.closest(".note-backdate-wrap");
+  if (!wrap) return;
+  const input = wrap.querySelector(".note-backdate-input");
+  if (input) input.click();
+});
+document.addEventListener("change", function (e) {
+  const input = e.target.closest(".note-backdate-input");
+  if (!input) return;
+  const wrap = input.closest(".note-backdate-wrap");
+  if (!wrap) return;
+  const label = wrap.querySelector(".note-backdate-label");
+  if (!label) return;
+  if (input.value) {
+    const d = new Date(input.value + "T00:00:00");
+    label.textContent = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  } else {
+    label.textContent = "";
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Preview Note Editor — Highlighter Dropdown
+// ════════════════════════════════════════════════════════════════════════════
+const _HIGHLIGHT_COLORS = [
+  { name: "Green",  css: "rgba(102,187,106,.20)" },
+  { name: "Yellow", css: "rgba(255,235,59,.20)" },
+  { name: "Blue",   css: "rgba(66,165,245,.20)" },
+  { name: "Pink",   css: "rgba(239,83,80,.20)" },
+  { name: "Orange", css: "rgba(255,167,38,.20)" },
+  { name: "Purple", css: "rgba(171,71,188,.20)" },
+];
+
+function _toggleHighlighterDropdown(btn, editor) {
+  const existing = document.querySelector(".preview-highlighter-dropdown");
+  if (existing) { existing.remove(); return; }
+  const dd = document.createElement("div");
+  dd.className = "preview-highlighter-dropdown";
+  dd.tabIndex = -1;
+  _HIGHLIGHT_COLORS.forEach(c => {
+    const sw = document.createElement("button");
+    sw.type = "button";
+    sw.className = "preview-highlighter-swatch";
+    sw.style.background = c.css;
+    sw.title = c.name;
+    sw.setAttribute("aria-label", c.name);
+    sw.addEventListener("click", (e) => {
+      e.stopPropagation();
+      editor.focus();
+      document.execCommand("hiliteColor", false, c.css);
+      dd.remove();
+    });
+    dd.appendChild(sw);
+  });
+  document.body.appendChild(dd);
+  const r = btn.getBoundingClientRect();
+  dd.style.left = `${Math.min(r.left, window.innerWidth - 180)}px`;
+  dd.style.top = `${r.bottom + 4}px`;
+  const close = (e) => {
+    if (!dd.contains(e.target) && !btn.contains(e.target)) {
+      dd.remove();
+      document.removeEventListener("click", close, true);
+    }
+  };
+  requestAnimationFrame(() => document.addEventListener("click", close, true));
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Preview Note Editor — Emoji Picker
+// ════════════════════════════════════════════════════════════════════════════
+function _showPreviewEmojiPicker(btn, editor) {
+  const existing = document.querySelector("#notes-emoji-picker");
+  if (existing) { existing.remove(); return; }
+  if (typeof EMOJIS === "undefined" || !EMOJIS.length) return;
+  const picker = document.createElement("div");
+  picker.id = "notes-emoji-picker";
+  picker.className = "presence-emoji-picker presence-emoji-picker-overlay";
+  picker.tabIndex = -1;
+  EMOJIS.forEach(em => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = em;
+    b.className = "presence-emoji-btn";
+    b.tabIndex = -1;
+    b.setAttribute("role", "menuitem");
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      editor.focus();
+      document.execCommand("insertText", false, em);
+      picker.remove();
+      requestAnimationFrame(() => { try { editor.focus({ preventScroll: true }); } catch { editor.focus(); } });
+    });
+    picker.appendChild(b);
+  });
+  document.body.appendChild(picker);
+  const r = btn.getBoundingClientRect();
+  const isMobile = window.innerWidth < 480;
+  picker.style.position = "fixed";
+  picker.style.zIndex = "99999";
+  picker.style.width = "auto";
+  picker.style.minWidth = "200px";
+  picker.style.maxWidth = isMobile ? "none" : "calc(100vw - 16px)";
+  if (isMobile) {
+    picker.style.left = "8px";
+    picker.style.right = "8px";
+  } else {
+    const nw = picker.offsetWidth || 220;
+    let left = r.right - nw;
+    if (left < 8) left = 8;
+    if (left + nw > window.innerWidth - 8) left = window.innerWidth - nw - 8;
+    picker.style.left = `${left}px`;
+  }
+  picker.style.top = `${r.bottom + 4}px`;
+  picker.style.right = "auto";
+  picker.style.bottom = "auto";
+  const closePicker = (e) => {
+    if (!picker.contains(e.target) && !btn.contains(e.target)) {
+      picker.remove();
+      document.removeEventListener("click", closePicker, true);
+    }
+  };
+  requestAnimationFrame(() => document.addEventListener("click", closePicker, true));
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Preview Note Editor — Link Insert
+// ════════════════════════════════════════════════════════════════════════════
+function _showPreviewLinkInput(btn, editor) {
+  const existing = document.querySelector(".preview-link-input-wrap");
+  if (existing) { existing.remove(); return; }
+  const wrap = document.createElement("div");
+  wrap.className = "preview-link-input-wrap";
+  const input = document.createElement("input");
+  input.type = "url";
+  input.className = "preview-link-input";
+  input.placeholder = "https://example.com";
+  input.autocomplete = "off";
+  const applyBtn = document.createElement("button");
+  applyBtn.type = "button";
+  applyBtn.className = "btn btn-primary btn-sm";
+  applyBtn.textContent = "Apply";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.className = "btn btn-ghost btn-sm";
+  cancelBtn.textContent = "Cancel";
+  wrap.appendChild(input);
+  wrap.appendChild(applyBtn);
+  wrap.appendChild(cancelBtn);
+  document.body.appendChild(wrap);
+  const r = btn.getBoundingClientRect();
+  wrap.style.position = "fixed";
+  wrap.style.left = `${Math.min(r.left, window.innerWidth - 300)}px`;
+  wrap.style.top = `${r.bottom + 4}px`;
+  wrap.style.zIndex = "99999";
+  input.focus();
+  const close = () => { wrap.remove(); document.removeEventListener("click", onClickAway, true); };
+  const onClickAway = (e) => {
+    if (!wrap.contains(e.target) && !btn.contains(e.target)) { e.stopPropagation(); close(); }
+  };
+  requestAnimationFrame(() => document.addEventListener("click", onClickAway, true));
+  applyBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const url = (input.value || "").trim();
+    if (!url) { close(); return; }
+    const fullUrl = /^https?:\/\//i.test(url) ? url : "https://" + url;
+    editor.focus();
+    const sel = window.getSelection();
+    const text = sel && sel.toString().trim();
+    if (text) {
+      document.execCommand("createLink", false, fullUrl);
+    } else {
+      document.execCommand("insertHTML", false, `<a href="${fullUrl}" target="_blank" rel="noopener">${fullUrl}</a>`);
+    }
+    close();
+  });
+  cancelBtn.addEventListener("click", (e) => { e.stopPropagation(); close(); });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); applyBtn.click(); }
+    if (e.key === "Escape") { close(); }
+  });
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 // Notification Drawer
