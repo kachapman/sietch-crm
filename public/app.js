@@ -715,17 +715,8 @@ function saveHiddenFeedEntries() {
   updateFeedHiddenToolbarButton();
 }
 
-function applyFeedUserPreferences(profile) {
-  if (!profile || typeof profile !== "object") return;
-  if (profile.feedKeywordFilter != null) {
-    state.feedKeywordFilter = String(profile.feedKeywordFilter || "");
-  }
-  if (profile.hiddenFeedKeys != null) {
-    state.hiddenFeedEntries = normalizeHiddenFeedEntries(profile.hiddenFeedKeys);
-    pruneHiddenFeedEntries();
-  }
-  syncFeedKeywordInput();
-  updateFeedHiddenToolbarButton();
+function applyFeedUserPreferences(_profile) {
+  // Feed tile removed — notification drawer uses server API directly.
 }
 
 function syncFeedKeywordInput() {
@@ -815,22 +806,27 @@ function ensureTileLayout() {
 
 function tileWidth(tileId) {
   const w = state.tileLayout.widths[tileId];
-  if (w === "quarter" || w === "half") return w;
+  if (w === "quarter" || w === "half" || w === "three") return w;
   return "full";
 }
 
 function tileHeight(tileId) {
-  return state.tileLayout.heights[tileId] === "double" ? "double" : "normal";
+  const h = state.tileLayout.heights[tileId];
+  if (h === "double") return 2;
+  if (typeof h === "number" && h >= 2) return Math.min(h, 8);
+  return 1;
 }
 
 function setTileWidth(tileId, width) {
   state.tileLayout.widths[tileId] =
-    width === "quarter" ? "quarter" : width === "half" ? "half" : "full";
+    width === "quarter" ? "quarter" : width === "half" ? "half"
+    : width === "three" ? "three" : "full";
   saveLayoutToStorage();
 }
 
 function setTileHeight(tileId, height) {
-  state.tileLayout.heights[tileId] = height === "double" ? "double" : "normal";
+  const n = typeof height === "number" ? height : (height === "double" ? 2 : 1);
+  state.tileLayout.heights[tileId] = Math.max(1, Math.min(n, 8));
   saveLayoutToStorage();
 }
 
@@ -925,10 +921,6 @@ async function loadTileCrmData(tileId, opts = {}) {
   const { quiet = false, force = false } = opts;
   if (!tileId || (!force && !shouldFetchTileCrmData(tileId))) return;
 
-  if (tileId === "tile-feed") {
-    await loadNotificationFeed({ force });
-    return;
-  }
   if (tileId === "tile-tasks") {
     await loadTasks({ force });
     return;
@@ -1035,8 +1027,8 @@ function applyTileBodyCollapsed(tileEl, tileId) {
   tileEl.classList.toggle("tile-body-collapsed", collapsed);
   if (collapsed) {
     // Preserve width (half/quarter) so collapsed groups keep their "status" instead of going full-width.
-    // Only strip double-height (vertical) as collapsed is horizontal bar.
-    tileEl.classList.remove("tile-double");
+    // Only strip height classes (vertical) as collapsed is horizontal bar.
+    tileEl.classList.remove("tile-double", "tile-triple", "tile-quad");
   } else {
     applyTileLayoutClasses(tileEl, tileId);
   }
@@ -1046,14 +1038,15 @@ function applyTileLayoutClasses(tileEl, tileId) {
   if (!tileEl || !tileId) return;
   const w = tileWidth(tileId);
   const h = tileHeight(tileId);
-  tileEl.classList.remove("tile-half", "tile-quarter", "tile-three");
+  tileEl.classList.remove("tile-half", "tile-quarter", "tile-three",
+    "tile-double", "tile-triple", "tile-quad");
   if (w === "half") tileEl.classList.add("tile-half");
   else if (w === "quarter") tileEl.classList.add("tile-quarter");
-  if (tileBodyCollapsed(tileId)) {
-    tileEl.classList.remove("tile-double", "tasks-tile-full");
-    return;
-  }
-  tileEl.classList.toggle("tile-double", h === "double");
+  else if (w === "three") tileEl.classList.add("tile-three");
+  if (tileBodyCollapsed(tileId)) return;
+  if (h === 2) tileEl.classList.add("tile-double");
+  else if (h === 3) tileEl.classList.add("tile-triple");
+  else if (h >= 4) tileEl.classList.add("tile-quad");
 }
 
 function createCollapseTileButton(tileEl, tileId) {
@@ -1354,7 +1347,7 @@ function bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn, quarte
     if (quarterBtn) quarterBtn.classList.toggle("tile-btn-active", w === "quarter");
     halfBtn.classList.toggle("tile-btn-active", w === "half");
     if (fullBtn) fullBtn.classList.toggle("tile-btn-active", w === "full");
-    if (tallBtn) tallBtn.classList.toggle("tile-btn-active", h === "double");
+    if (tallBtn) tallBtn.classList.toggle("tile-btn-active", h >= 2);
     applyTileLayoutClasses(tileEl, tileId);
     if (tileId === "tile-tasks") renderTasksByUser();
     if (PANEL_TILE_IDS.has(tileId)) syncPanelRowLayout();
@@ -1377,7 +1370,8 @@ function bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn, quarte
   if (tallBtn) {
     tallBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      setTileHeight(tileId, tileHeight(tileId) === "double" ? "normal" : "double");
+      const cur = tileHeight(tileId);
+      setTileHeight(tileId, cur >= 2 ? 1 : 2);
       syncTileLayout();
     });
   }
@@ -1507,8 +1501,8 @@ function bindTileResize(tileEl, tileId, handle, corner) {
   let pendingWidth = null;
   let singleRowH; /* actual single-row height derived from rendered tile */
 
-  const spanColsForWidth = (name) => (name === "quarter" ? 1 : name === "half" ? 2 : 4);
-  const widthForSpanCols = (span) => (span <= 1 ? "quarter" : span === 2 ? "half" : "full");
+  const spanColsForWidth = (name) => (name === "quarter" ? 1 : name === "half" ? 2 : name === "three" ? 3 : 4);
+  const widthForSpanCols = (span) => (span <= 1 ? "quarter" : span === 2 ? "half" : span === 3 ? "three" : "full");
 
   const positionGhost = (spanCols, heightName) => {
     if (!ghost) return;
@@ -1520,13 +1514,9 @@ function bindTileResize(tileEl, tileId, handle, corner) {
     // could force a horizontal page scrollbar mid-drag.
     left = Math.max(0, Math.min(left, gridContentWidth));
     widthPx = Math.min(widthPx, gridContentWidth - left);
-    // Height preview: always use the nominal size for the decided heightName.
-    // This lets the ghost shrink when going normal from a double start (baseHeight would be tall).
-    /* Use singleRowH (actual tile height) for ghost, not rowUnit (CSS var).
-       This keeps the preview accurate when rows are taller/shorter than 400px. */
-    const heightPx = heightName === "double"
-      ? singleRowH * 2 + gapWidth
-      : singleRowH;
+    // Height preview: use singleRowH × rows for accurate multi-row sizing.
+    const rows = typeof heightName === "number" ? heightName : (heightName === "double" ? 2 : 1);
+    const heightPx = singleRowH * rows + gapWidth * Math.max(0, rows - 1);
     ghost.style.top = `${baseTop}px`;
     ghost.style.left = `${left}px`;
     ghost.style.width = `${widthPx}px`;
@@ -1560,13 +1550,10 @@ function bindTileResize(tileEl, tileId, handle, corner) {
     startHeightName = tileHeight(tileId);
     pendingHeight = startHeightName;
     rowUnit = parseFloat(gridStyle.getPropertyValue("--tile-row-height")) || 400;
-    /* Derive single-row height from the actual rendered tile, not the CSS
-       variable. With grid-auto-rows: auto + align-items:stretch, the tile
-       fills its row, so baseHeight IS the row height for normal tiles.
-       For double tiles, back-compute the single-row height. */
-    singleRowH = startHeightName === "double"
-      ? (baseHeight - gapWidth) / 2
-      : baseHeight;
+    /* Use the CSS variable for single-row height — the rendered tile may be
+       oversized (e.g., group tiles with filter header), which would throw off
+       the ghost preview and resize snap calculations. */
+    singleRowH = rowUnit;
 
     ghost = document.createElement("div");
     ghost.className = "tile-resize-ghost";
@@ -1590,29 +1577,20 @@ function bindTileResize(tileEl, tileId, handle, corner) {
     const stretched = corner === "se" ? currentSpanWidth + dx : currentSpanWidth - dx;
     let newSpan = Math.round((stretched + gapWidth) / step);
     newSpan = Math.max(1, Math.min(4, newSpan));
-    if (newSpan === 3) newSpan = newSpan > startSpanCols ? 4 : 2;
 
     pendingWidth = widthForSpanCols(newSpan);
 
     // Vertical decision based on pointer position relative to grid rows.
-    // Latch decision. Skipped while collapsed.
-    // Require minimum 30px vertical drag before deciding height — prevents
-    // accidental double-height when clicking resize handle on a tall tile
-    // (e.g., group tiles with 420px .board min-height + toolbar).
+    // Continuous row count: drag down to add rows, up to remove.
+    // Skipped while collapsed.
     if (!tileBodyCollapsed(tileId)) {
       const pointerY = (e.clientY || 0);
-      const dy = Math.abs(pointerY - startY);
-      if (dy > 30) {
-        /* Boundary: bottom of the current tile (baseTop + baseHeight).
-           Use singleRowH for hysteresis threshold — this is the actual
-           single-row height, not the CSS variable which may differ. */
-        const boundary = baseTop + baseHeight;
-        const threshold = singleRowH * 0.15;
-        if (pointerY > boundary + threshold) {
-          pendingHeight = "double";
-        } else if (pointerY < boundary - threshold) {
-          pendingHeight = "normal";
-        }
+      const dy = pointerY - startY;
+      const rowStep = singleRowH + gapWidth;
+      if (Math.abs(dy) > 30) {
+        const startRows = typeof startHeightName === "number" ? startHeightName : 1;
+        const rowsDelta = Math.round(dy / rowStep);
+        pendingHeight = Math.max(1, Math.min(8, startRows + rowsDelta));
       }
     }
     positionGhost(newSpan, pendingHeight);
@@ -4840,7 +4818,6 @@ function buildUserProfilePayload() {
     localKanbanTiles: (state.localKanbanTiles || []).map((k) => stripLocalKanbanRuntimeFields(k)),
     groupTemplates: state.groupTemplates,
     hiddenFeedKeys: serializeHiddenFeedEntries(),
-    feedKeywordFilter: state.feedKeywordFilter || "",
     bookmarkedDeals: state.bookmarkedDeals.map((d) => stripBookmarkedRuntimeFields(d)),
     minimizedSearchTabs: (minimizedSearchTabs || []).map((t) => ({ oppId: t.oppId, title: t.title })),
   };
@@ -4948,8 +4925,6 @@ function persistProfileToLocalStorage() {
   localStorage.setItem(NOTES_TILES_STORAGE_KEY, JSON.stringify(payload.notesTiles));
   localStorage.setItem(LOCAL_KANBAN_TILES_STORAGE_KEY, JSON.stringify(payload.localKanbanTiles || []));
   localStorage.setItem(GROUP_TEMPLATES_STORAGE_KEY, JSON.stringify(payload.groupTemplates));
-  localStorage.setItem(HIDDEN_FEED_STORAGE_KEY, JSON.stringify(payload.hiddenFeedKeys));
-  localStorage.setItem(FEED_KEYWORD_STORAGE_KEY, payload.feedKeywordFilter);
   localStorage.setItem(BOOKMARKED_STORAGE_KEY, JSON.stringify(payload.bookmarkedDeals || []));
   localStorage.setItem(SEARCH_MINIMIZED_STORAGE_KEY, JSON.stringify(payload.minimizedSearchTabs || []));
 }
@@ -4972,8 +4947,6 @@ function loadLocalUserProfileBundle() {
     notesTiles: loadNotesTilesFromStorage(),
     localKanbanTiles: loadLocalKanbanTilesFromStorage(),
     groupTemplates: loadGroupTemplates(),
-    hiddenFeedKeys: hiddenFeedEntriesToPayload(loadHiddenFeedEntriesFromStorage()),
-    feedKeywordFilter: localStorage.getItem(FEED_KEYWORD_STORAGE_KEY) || "",
     bookmarkedDeals: (() => {
       try {
         const raw = localStorage.getItem(BOOKMARKED_STORAGE_KEY);
@@ -8285,7 +8258,6 @@ function renderBoardGroups() {
   // applies below see clean state and correct classes get added.
   ensureTileLayout();
 
-  renderFeedTile();
   renderTasksTile();
   renderPresenceTile();
   const dash = $("#dashboard-tiles");
@@ -9527,7 +9499,27 @@ async function loadNotificationFeed({ force = false } = {}) {
   state.feedPagination = pagination;
 
   try {
-    const historyItems = await loadCrmRelationshipNotifyEventsBulk(periodFrom, pagination, force);
+    // Phase 2G: use dedicated notifications endpoint instead of scanning all history
+    let historyItems = [];
+    try {
+      const notifResp = await api("/api/v2/notifications");
+      const notifRows = unwrap(notifResp);
+      historyItems = (Array.isArray(notifRows) ? notifRows : []).map((n) => ({
+        id: n.id,
+        title: n.projectTitle || n.project_title || "",
+        body: n.message || "",
+        date: n.created || n.createdAt || "",
+        project: n.projectTitle || n.project_title || null,
+        projectId: n.opportunityId || n.opportunity_id || null,
+        opportunity: null,
+        tags: [],
+        eventType: n.type || "note_tagged",
+        _raw: n,
+      }));
+    } catch {
+      // Fallback: scan all history events (old behavior)
+      historyItems = await loadCrmRelationshipNotifyEventsBulk(periodFrom, pagination, force);
+    }
     pagination.rawItems.push(...historyItems);
 
     if (!tileBodyCollapsed("tile-feed")) commitFeedRawItems(pagination.rawItems);
@@ -9974,6 +9966,8 @@ function closeDealEditModal() {
   if (sel) sel.innerHTML = "";
   const inp = $("#deal-edit-note-attachments");
   if (inp) inp.value = "";
+  const dd = $("#deal-edit-mention-dropdown");
+  if (dd) dd.classList.add("hidden");
 }
 
 function tagIdForTitle(title, catalog = buildTagCatalog()) {
@@ -10047,31 +10041,167 @@ function populateDealEditStageSelect(opp) {
   }
 }
 
-function populateNotifyUserSelect(selectEl) {
-  if (!selectEl) return;
-  selectEl.innerHTML = "";
+/* ── Phase 2G: @-mention autocomplete ──────────────────────────────────── */
+
+function _mentionGetUsers() {
   const users = new Map();
   for (const u of state.portalUsers) {
-    if (u.id != null) users.set(String(u.id), String(u.displayName || u.id));
+    if (u.id != null) users.set(String(u.id), String(u.displayName || u.email || u.id));
   }
   if (state.currentUserId != null) {
     users.set(String(state.currentUserId), String(state.currentUserName || state.currentUserId));
   }
-  for (const [id, name] of [...users.entries()].sort((a, b) => String(a[1] || "").localeCompare(String(b[1] || "")))) {
-    const opt = document.createElement("option");
-    opt.value = id;
-    opt.textContent = name;
-    selectEl.appendChild(opt);
+  return users;
+}
+
+function _mentionColor(name) {
+  let h = 0;
+  for (let i = 0; i < (name || "").length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+  const hue = Math.abs(h) % 360;
+  return `hsl(${hue}, 55%, 42%)`;
+}
+
+function _mentionInsertChip(dropdownEl, name, userId) {
+  // Find the editor (sibling of the dropdown inside .note-editor-wrap)
+  const wrap = dropdownEl.parentElement;
+  const editorEl = wrap?.querySelector(".note-editor");
+  if (!editorEl) return;
+
+  // Restore focus to the editor and get the current selection
+  editorEl.focus();
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return;
+
+  // Create the inline mention span
+  const span = document.createElement("span");
+  span.className = "mention-inline";
+  span.dataset.userId = userId;
+  span.setAttribute("contenteditable", "false");
+  span.style.setProperty("--mention-color", _mentionColor(name));
+  span.textContent = `@${name}`;
+
+  // Insert at cursor, replacing the @query text
+  const range = sel.getRangeAt(0);
+  // Collapse to end of selection
+  range.collapse(false);
+  range.insertNode(span);
+
+  // Move cursor to after the span
+  range.setStartAfter(span);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+
+  // Add a space after the mention for readability
+  const space = document.createTextNode("\u00A0");
+  range.insertNode(space);
+  range.setStartAfter(space);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function _mentionRenderDropdown(dropdownEl, query) {
+  const users = _mentionGetUsers();
+  const q = (query || "").toLowerCase();
+  const matches = [...users.entries()]
+    .filter(([id, name]) => name.toLowerCase().includes(q) || id === q)
+    .slice(0, 10);
+  dropdownEl.innerHTML = "";
+  if (!matches.length) {
+    dropdownEl.classList.add("hidden");
+    return;
   }
+  for (const [id, name] of matches) {
+    const item = document.createElement("div");
+    item.className = "mention-dropdown-item";
+    item.dataset.userId = id;
+    item.dataset.userName = name;
+    item.innerHTML = `<span class="mention-chip" style="--mention-color:${_mentionColor(name)}"><span class="mention-chip-at">@</span>${escapeHtml(name)}</span>`;
+    item.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      // Remove the @query text stored on the dropdown element
+      const startNode = dropdownEl._mentionStartNode;
+      const startOffset = dropdownEl._mentionStartOffset;
+      if (startNode && startNode.nodeType === Node.TEXT_NODE) {
+        const text = startNode.textContent || "";
+        const sel = window.getSelection();
+        const cursorOffset = sel.rangeCount ? sel.getRangeAt(0).startOffset : text.length;
+        const before = text.slice(0, startOffset);
+        const after = text.slice(cursorOffset);
+        startNode.textContent = before + after;
+        const range = document.createRange();
+        range.setStart(startNode, before.length);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+      _mentionInsertChip(dropdownEl, name, id);
+      dropdownEl.classList.add("hidden");
+      dropdownEl._mentionQuery = null;
+    });
+    dropdownEl.appendChild(item);
+  }
+  dropdownEl.classList.remove("hidden");
 }
 
-function populateDealEditNotifySelect() {
-  populateNotifyUserSelect($("#deal-edit-notify"));
+function setupMentionAutocomplete(editorEl, dropdownEl) {
+  if (!editorEl || !dropdownEl) return;
+
+  editorEl.addEventListener("input", () => {
+    const sel = window.getSelection();
+    if (!sel.rangeCount) return;
+    const range = sel.getRangeAt(0);
+    const node = range.startContainer;
+    if (node.nodeType !== Node.TEXT_NODE) { dropdownEl._mentionQuery = null; dropdownEl.classList.add("hidden"); return; }
+    const text = node.textContent || "";
+    const cursor = range.startOffset;
+    // Find @ before cursor
+    let atPos = -1;
+    for (let i = cursor - 1; i >= 0; i--) {
+      const ch = text[i];
+      if (ch === "@") { atPos = i; break; }
+      if (ch === " " || ch === "\n" || ch === "\t") break;
+    }
+    if (atPos < 0) { dropdownEl._mentionQuery = null; dropdownEl.classList.add("hidden"); return; }
+    const query = text.slice(atPos + 1, cursor);
+    dropdownEl._mentionQuery = query;
+    dropdownEl._mentionStartNode = node;
+    dropdownEl._mentionStartOffset = atPos;
+    _mentionRenderDropdown(dropdownEl, query);
+    // Position dropdown near cursor
+    const rect = range.getBoundingClientRect();
+    const editorRect = editorEl.getBoundingClientRect();
+    dropdownEl.style.top = (rect.bottom - editorRect.top + 4) + "px";
+    dropdownEl.style.left = (rect.left - editorRect.left) + "px";
+  });
+
+  editorEl.addEventListener("keydown", (e) => {
+    if (dropdownEl.classList.contains("hidden")) return;
+    if (e.key === "Escape") { dropdownEl.classList.add("hidden"); return; }
+    if (e.key === "Enter" || e.key === "Tab") {
+      const first = dropdownEl.querySelector(".mention-dropdown-item");
+      if (first) {
+        e.preventDefault();
+        first.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      }
+    }
+  });
+
+  editorEl.addEventListener("blur", () => {
+    setTimeout(() => dropdownEl.classList.add("hidden"), 150);
+  });
 }
 
-function populateQuickNoteNotifySelect() {
-  populateNotifyUserSelect($("#quick-note-notify"));
+function extractMentionsFromContent(editorEl) {
+  if (!editorEl) return [];
+  const spans = editorEl.querySelectorAll(".mention-inline[data-user-id]");
+  if (!spans?.length) return [];
+  return [...new Set([...spans].map(c => parseInt(c.dataset.userId, 10)).filter(Boolean))];
 }
+
+function populateDealEditNotifySelect() { /* no-op: mentions replace old select */ }
+function populateQuickNoteNotifySelect() { /* no-op: mentions replace old select */ }
 
 async function loadDealEditTags(opp) {
   let tags = getOppTagsFromRecord(opp);
@@ -10164,6 +10294,11 @@ async function openDealEditModal(opp, group) {
   populateDealEditStageSelect(opp);
   populateDealEditNotifySelect();
   renderDealEditTagChips();
+
+  // Phase 2G: setup @-mention autocomplete
+  const deEditor = $("#deal-edit-note-body");
+  const deDropdown = $("#deal-edit-mention-dropdown");
+  setupMentionAutocomplete(deEditor, deDropdown);
 
   modal.classList.remove("hidden");
   $("#deal-edit-due")?.focus();
@@ -10275,7 +10410,7 @@ async function createOpportunityHistoryEvent(oppId, { content, categoryId, notif
   const html = noteContentToHtml(content);
   if (!html) throw new Error("Note text is required");
 
-  const validNotifyUserList = (notifyUserList || []).map(String).map((s) => s.trim()).filter((s) => isGuid(s));
+  const validNotifyUserList = (notifyUserList || []).map(String).map((s) => s.trim()).filter((s) => isGuid(s) || /^\d+$/.test(s));
   const validFileIds = (fileIds || []).map((fid) => {
     if (fid == null) return null;
     const raw = typeof fid === "object" ? (fid.id || fid.Id || fid.Data || fid.data || null) : fid;
@@ -10571,10 +10706,8 @@ async function submitDealEditForm(e) {
     const noteBody = noteEl
       ? (noteEl.tagName === "TEXTAREA" ? (noteEl.value || "").trim() : (noteEl.innerHTML || "").trim())
       : "";
-    const notifySel = $("#deal-edit-notify");
-    const notifyUserList = notifySel
-      ? [...notifySel.selectedOptions].map((o) => o.value).filter(Boolean)
-      : [];
+    // Phase 2G: extract @-mentions from contenteditable chips
+    const notifyUserList = extractMentionsFromContent(noteEl).map(String);
     const dueChanged = dueVal !== ctx.initialDue;
     const stageChanged = stageId && stageId !== ctx.initialStageId;
     const titleVal = ($("#deal-edit-title")?.value ?? "").trim();
@@ -10908,6 +11041,11 @@ async function openQuickNoteModal() {
   if (!state.portalUsers.length) await loadPortalUsers();
   populateQuickNoteNotifySelect();
 
+  // Phase 2G: setup @-mention autocomplete
+  const qnEditor = $("#quick-note-note-body");
+  const qnDropdown = $("#quick-note-mention-dropdown");
+  setupMentionAutocomplete(qnEditor, qnDropdown);
+
   const results = $("#quick-note-opportunity-results");
   if (results) results.classList.add("hidden");
 
@@ -10959,10 +11097,8 @@ async function submitQuickNoteForm(e) {
   try {
     const oppId = ctx.oppId;
     const dueVal = $("#quick-note-due")?.value ?? "";
-    const notifySel = $("#quick-note-notify");
-    const notifyUserList = notifySel
-      ? [...notifySel.selectedOptions].map((o) => o.value).filter(Boolean)
-      : [];
+    // Phase 2G: extract @-mentions from contenteditable chips
+    const notifyUserList = extractMentionsFromContent(noteEl).map(String);
     const dueChanged = dueVal !== ctx.initialDue;
     const categoryId = resolveHistoryCategoryId($("#quick-note-note-category")?.value);
 
@@ -23358,6 +23494,7 @@ function showApp() {
 
 function showLogin() {
   stopPanelTileAutoRefresh();
+  stopNotificationBadgePoll();
   if (presenceHeaderPollTimer) { clearInterval(presenceHeaderPollTimer); presenceHeaderPollTimer = null; }
   userProfileReady = false;
   const app = $("#app");
@@ -23608,6 +23745,349 @@ function bindBrandingModal() {
   }
 }
 
+/* ── Phase 2G: Profile Modal ──────────────────────────────────────────── */
+
+function openProfileModal() {
+  const modal = $("#profile-modal");
+  if (!modal) return;
+  // Populate fields
+  const nameEl = $("#profile-display-name");
+  const emailEl = $("#profile-email");
+  if (nameEl) nameEl.value = state.currentUserName || "";
+  if (emailEl) emailEl.value = state.currentUserEmail || "";
+  _profileLoadAvatar();
+  _profileLoadPrefs();
+  // Clear password fields
+  for (const id of ["profile-current-password", "profile-new-password", "profile-confirm-password"]) {
+    const el = $(`#${id}`);
+    if (el) el.value = "";
+  }
+  modal.classList.remove("hidden");
+  nameEl?.focus();
+}
+
+function closeProfileModal() {
+  _hideCropUI();
+  const modal = $("#profile-modal");
+  if (modal) modal.classList.add("hidden");
+}
+
+async function _profileLoadAvatar() {
+  const circle = $("#profile-avatar-circle");
+  const uploadBtn = $("#profile-avatar-upload-btn");
+  if (!circle) return;
+  try {
+    const me = await api("/api/v2/me");
+    if (me.avatarUrl) {
+      circle.innerHTML = `<img src="${me.avatarUrl}?thumbnail=1" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" />`;
+      circle.classList.add("has-image");
+      // Toggle button to delete-photo icon
+      if (uploadBtn) {
+        uploadBtn.classList.add("has-photo");
+        uploadBtn.title = "Delete Photo";
+        uploadBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 8h.01"/><path d="M13 21h-7a3 3 0 0 1 -3 -3v-12a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v7"/><path d="M3 16l5 -5c.928 -.893 2.072 -.893 3 0l3 3"/><path d="M14 14l1 -1c.928 -.893 2.072 -.893 3 0"/><path d="M22 22l-5 -5"/><path d="M17 22l5 -5"/></svg> Delete Photo`;
+      }
+    } else {
+      const initials = _profileGetInitials(state.currentUserName || "");
+      circle.innerHTML = escapeHtml(initials);
+      circle.style.setProperty("--mention-color", _mentionColor(state.currentUserName || ""));
+      circle.classList.remove("has-image");
+      // Reset button to upload icon
+      if (uploadBtn) {
+        uploadBtn.classList.remove("has-photo");
+        uploadBtn.title = "Upload Photo";
+        uploadBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"/><path d="M7 9l5 -5l5 5"/><path d="M12 4l0 11"/></svg> Upload Photo`;
+      }
+    }
+  } catch { /* non-fatal */ }
+}
+
+function _profileGetInitials(name) {
+  const parts = (name || "").trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  return (name || "U").slice(0, 2).toUpperCase();
+}
+
+/* ── Avatar crop helper ───────────────────────────────────────────────── */
+let _cropState = null;
+
+function _showCropUI(file) {
+  const circle = $("#profile-avatar-circle");
+  const cropEl = $("#profile-avatar-crop");
+  const cropImg = $("#profile-avatar-crop-img");
+  const viewport = $("#profile-avatar-crop-viewport");
+  const saveBtn = $("#profile-avatar-save-crop");
+  const cancelBtn = $("#profile-avatar-cancel-crop");
+  if (!circle || !cropEl || !cropImg || !viewport || !saveBtn || !cancelBtn) return;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    cropImg.src = reader.result;
+    cropEl.classList.remove("hidden");
+    saveBtn.classList.remove("hidden");
+    cancelBtn.classList.remove("hidden");
+
+    const vw = viewport.offsetWidth;
+    const vh = viewport.offsetHeight;
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.max(vw / img.width, vh / img.height) * 1.1;
+      const imgW = img.width * scale;
+      const imgH = img.height * scale;
+      const initX = (vw - imgW) / 2;
+      const initY = (vh - imgH) / 2;
+      _cropState = { imgW, imgH, x: initX, y: initY, scale, vw, vh, imgNatW: img.width, imgNatH: img.height };
+      _applyCropTransform();
+    };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function _applyCropTransform() {
+  const cropImg = $("#profile-avatar-crop-img");
+  if (!cropImg || !_cropState) return;
+  cropImg.style.width = _cropState.imgW + "px";
+  cropImg.style.height = _cropState.imgH + "px";
+  cropImg.style.left = _cropState.x + "px";
+  cropImg.style.top = _cropState.y + "px";
+}
+
+function _startCropDrag(viewport) {
+  let dragging = false, startX, startY, origX, origY;
+  const onDown = (e) => {
+    if (!_cropState) return;
+    dragging = true;
+    const pt = e.touches ? e.touches[0] : e;
+    startX = pt.clientX; startY = pt.clientY;
+    origX = _cropState.x; origY = _cropState.y;
+    e.preventDefault();
+  };
+  const onMove = (e) => {
+    if (!dragging || !_cropState) return;
+    const pt = e.touches ? e.touches[0] : e;
+    _cropState.x = origX + (pt.clientX - startX);
+    _cropState.y = origY + (pt.clientY - startY);
+    _applyCropTransform();
+  };
+  const onUp = () => { dragging = false; };
+  viewport.addEventListener("mousedown", onDown);
+  viewport.addEventListener("touchstart", onDown, { passive: false });
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("touchmove", onMove, { passive: false });
+  window.addEventListener("mouseup", onUp);
+  window.addEventListener("touchend", onUp);
+  // Zoom with scroll
+  viewport.addEventListener("wheel", (e) => {
+    if (!_cropState) return;
+    e.preventDefault();
+    const factor = e.deltaY > 0 ? 0.92 : 1.08;
+    const oldScale = _cropState.scale;
+    _cropState.scale = Math.max(0.3, Math.min(5, _cropState.scale * factor));
+    const ratio = _cropState.scale / oldScale;
+    const cx = _cropState.vw / 2, cy = _cropState.vh / 2;
+    _cropState.imgW *= ratio;
+    _cropState.imgH *= ratio;
+    _cropState.x = cx - (cx - _cropState.x) * ratio;
+    _cropState.y = cy - (cy - _cropState.y) * ratio;
+    _applyCropTransform();
+  }, { passive: false });
+}
+
+async function _cropAndUpload() {
+  if (!_cropState) return;
+  const cropImg = $("#profile-avatar-crop-img");
+  if (!cropImg) return;
+
+  // Draw the cropped circle region onto a canvas
+  const canvas = document.createElement("canvas");
+  const size = 400;
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+
+  // Clip to circle
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+
+  // Map viewport coords → image natural coords
+  const sx = (-_cropState.x / _cropState.scale) * (_cropState.imgNatW * _cropState.scale / _cropState.imgW);
+  const sy = (-_cropState.y / _cropState.scale) * (_cropState.imgNatH * _cropState.scale / _cropState.imgH);
+  const sw = (_cropState.vw / _cropState.imgW) * _cropState.imgNatW;
+  const sh = (_cropState.vh / _cropState.imgH) * _cropState.imgNatH;
+
+  ctx.drawImage(cropImg, sx, sy, sw, sh, 0, 0, size, size);
+
+  canvas.toBlob(async (blob) => {
+    if (!blob) return;
+    const formData = new FormData();
+    formData.append("file", blob, "avatar.jpg");
+    try {
+      const resp = await fetch("/api/v2/my/avatar", { method: "POST", body: formData, credentials: "same-origin" });
+      if (!resp.ok) throw new Error(`Upload failed (HTTP ${resp.status})`);
+      _hideCropUI();
+      _profileLoadAvatar();
+      showToast("Profile picture updated");
+    } catch (err) {
+      showToast(`Upload failed: ${err.message}`, true);
+    }
+  }, "image/jpeg", 0.92);
+}
+
+function _hideCropUI() {
+  const cropEl = $("#profile-avatar-crop");
+  const saveBtn = $("#profile-avatar-save-crop");
+  const cancelBtn = $("#profile-avatar-cancel-crop");
+  if (cropEl) cropEl.classList.add("hidden");
+  if (saveBtn) saveBtn.classList.add("hidden");
+  if (cancelBtn) cancelBtn.classList.add("hidden");
+  _cropState = null;
+}
+
+/* ── Notification prefs ───────────────────────────────────────────────── */
+
+async function _profileLoadPrefs() {
+  try {
+    const prefs = await api("/api/v2/me/notification-prefs");
+    const dashEl = $("#pref-in-dashboard");
+    const tgEl = $("#pref-telegram");
+    const emailEl = $("#pref-email");
+    if (dashEl) dashEl.checked = prefs.inDashboard !== false;
+    if (tgEl) tgEl.checked = prefs.telegram !== false;
+    if (emailEl) emailEl.checked = prefs.email !== false;
+  } catch { /* use defaults */ }
+}
+
+async function _profileSave() {
+  const nameEl = $("#profile-display-name");
+  const newPw = $("#profile-new-password")?.value || "";
+  const curPw = $("#profile-current-password")?.value || "";
+  const confirmPw = $("#profile-confirm-password")?.value || "";
+
+  // Save display name
+  if (nameEl) {
+    try {
+      await api("/api/v2/me", { method: "PUT", body: JSON.stringify({ displayName: nameEl.value }) });
+      state.currentUserName = nameEl.value;
+    } catch (err) {
+      showToast(`Failed to save name: ${err.message}`, true);
+      return;
+    }
+  }
+
+  // Change password if fields filled
+  if (newPw || curPw) {
+    if (!curPw) { showToast("Current password is required", true); return; }
+    if (newPw.length < 6) { showToast("New password must be at least 6 characters", true); return; }
+    if (newPw !== confirmPw) { showToast("Passwords do not match", true); return; }
+    try {
+      await api("/api/v2/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({ currentPassword: curPw, newPassword: newPw }),
+      });
+      showToast("Password changed successfully");
+    } catch (err) {
+      showToast(`Failed to change password: ${err.message}`, true);
+      return;
+    }
+  }
+
+  // Save notification prefs
+  const dashEl = $("#pref-in-dashboard");
+  const tgEl = $("#pref-telegram");
+  try {
+    await api("/api/v2/me/notification-prefs", {
+      method: "PUT",
+      body: JSON.stringify({
+        inDashboard: dashEl?.checked ?? true,
+        telegram: tgEl?.checked ?? true,
+      }),
+    });
+  } catch { /* non-fatal */ }
+
+  closeProfileModal();
+  showToast("Profile saved");
+}
+
+function _setupProfileEvents() {
+  const profileBtn = $("#profile-btn");
+  if (profileBtn) profileBtn.addEventListener("click", openProfileModal);
+
+  // Dismiss buttons
+  for (const el of document.querySelectorAll("[data-profile-dismiss]")) {
+    el.addEventListener("click", closeProfileModal);
+  }
+
+  // Avatar upload/delete toggle
+  const avatarInput = $("#profile-avatar-input");
+  const avatarUploadBtn = $("#profile-avatar-upload-btn");
+  if (avatarUploadBtn && avatarInput) {
+    avatarUploadBtn.addEventListener("click", () => {
+      const hasPhoto = avatarUploadBtn.classList.contains("has-photo");
+      if (hasPhoto) {
+        // Delete photo
+        (async () => {
+          try {
+            await api("/api/v2/my/avatar", { method: "DELETE" });
+            _hideCropUI();
+            _profileLoadAvatar();
+            showToast("Profile picture removed");
+          } catch (err) {
+            showToast(`Remove failed: ${err.message}`, true);
+          }
+        })();
+      } else {
+        // Upload — trigger file picker
+        avatarInput.click();
+      }
+    });
+    avatarInput.addEventListener("change", () => {
+      const file = avatarInput.files?.[0];
+      if (!file) return;
+      _showCropUI(file);
+      avatarInput.value = "";
+    });
+  }
+
+  // Crop save / cancel
+  const saveCropBtn = $("#profile-avatar-save-crop");
+  const cancelCropBtn = $("#profile-avatar-cancel-crop");
+  if (saveCropBtn) saveCropBtn.addEventListener("click", _cropAndUpload);
+  if (cancelCropBtn) cancelCropBtn.addEventListener("click", _hideCropUI);
+
+  // Start crop drag
+  const cropViewport = $("#profile-avatar-crop-viewport");
+  if (cropViewport) _startCropDrag(cropViewport);
+
+  // Click on avatar circle to trigger upload
+  const avatarCircle = $("#profile-avatar-circle");
+  if (avatarCircle) {
+    avatarCircle.addEventListener("click", () => {
+      if (avatarUploadBtn && !avatarUploadBtn.classList.contains("has-photo")) {
+        avatarInput?.click();
+      }
+    });
+  }
+
+  // Change password button
+  const changePwBtn = $("#profile-change-pw-btn");
+  if (changePwBtn) changePwBtn.addEventListener("click", _profileSave);
+
+  // Save button
+  const saveBtn = $("#profile-save-btn");
+  if (saveBtn) saveBtn.addEventListener("click", _profileSave);
+
+  // Escape key
+  const modal = $("#profile-modal");
+  if (modal) {
+    modal.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeProfileModal();
+    });
+  }
+}
+
 async function init() {
   // Attach login handler as early as possible so form submit never causes native refresh
   const loginForm = $("#login-form");
@@ -23749,6 +24229,7 @@ async function init() {
   bindMessagesPopup();
   bindDashboardActivityTracking();
   bindFeedHiddenModal();
+  _setupProfileEvents();
   bindNotesArchiveRestoreModal();
   bindEventLogModal();
   bindBotCustomersModal();
@@ -23821,6 +24302,273 @@ document.addEventListener("click", function (e) {
     document.execCommand(cmd, false, val);
   }
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// Notification Drawer
+// ════════════════════════════════════════════════════════════════════════════
+
+let _notificationDrawerOpen = false;
+let _notificationPopout = false;
+let _notificationBadgePollTimer = null;
+let _notificationCache = [];
+
+function openNotificationDrawer() {
+  const drawer = $("#notification-drawer");
+  const backdrop = $("#notification-drawer-backdrop");
+  if (!drawer || !backdrop) return;
+  _notificationDrawerOpen = true;
+  drawer.classList.remove("drawer-hidden");
+  backdrop.classList.remove("hidden");
+  _loadNotificationDrawerList();
+}
+
+function closeNotificationDrawer() {
+  const drawer = $("#notification-drawer");
+  const backdrop = $("#notification-drawer-backdrop");
+  if (!drawer || !backdrop) return;
+  _notificationDrawerOpen = false;
+  drawer.classList.add("drawer-hidden");
+  backdrop.classList.add("hidden");
+}
+
+function toggleNotificationDrawer() {
+  if (_notificationDrawerOpen) closeNotificationDrawer();
+  else openNotificationDrawer();
+}
+
+function toggleNotificationPopout() {
+  const drawer = $("#notification-drawer");
+  const btn = $("#notification-popout-btn");
+  if (!drawer || !btn) return;
+  _notificationPopout = !_notificationPopout;
+  drawer.classList.toggle("popout-mode", _notificationPopout);
+  btn.classList.toggle("popout-active", _notificationPopout);
+  btn.title = _notificationPopout ? "Collapse" : "Expand";
+  const expandIcon = btn.querySelector(".notification-popout-icon-expand");
+  const collapseIcon = btn.querySelector(".notification-popout-icon-collapse");
+  if (expandIcon) expandIcon.style.display = _notificationPopout ? "none" : "";
+  if (collapseIcon) collapseIcon.style.display = _notificationPopout ? "" : "none";
+}
+
+async function _loadNotificationDrawerList() {
+  const list = $("#notification-drawer-list");
+  if (!list) return;
+  list.innerHTML = `<div class="notification-drawer-empty">Loading…</div>`;
+  try {
+    const rows = await api("/api/v2/notifications");
+    _notificationCache = rows || [];
+    _renderNotificationDrawerList();
+  } catch (err) {
+    list.innerHTML = `<div class="notification-drawer-empty">Failed to load notifications.</div>`;
+  }
+}
+
+function _renderNotificationDrawerList() {
+  const list = $("#notification-drawer-list");
+  if (!list) return;
+  if (!_notificationCache.length) {
+    list.innerHTML = `<div class="notification-drawer-empty">No notifications yet.</div>`;
+    return;
+  }
+  list.innerHTML = "";
+  for (const n of _notificationCache) {
+    list.appendChild(_renderNotificationDrawerItem(n));
+  }
+}
+
+function _notifTypeIcon(type) {
+  if (type === "task_assigned") {
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 5h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2h-2"/><path d="M9 14l2 2 4 -4"/></svg>`;
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M8 9l3 3l-2 1"/><path d="M10.5 17.5l-3.5 -2l-2 1"/><path d="M17 3l4 4"/><path d="M21 7l-6 6"/><path d="M16 3l0 5l5 0"/></svg>`;
+}
+
+function _renderNotificationDrawerItem(n) {
+  const el = document.createElement("div");
+  el.className = "notification-drawer-item" + (n.isRead ? "" : " unread");
+  el.dataset.notifId = n.id;
+
+  const typeIcon = _notifTypeIcon(n.type);
+  const actor = escapeHtml(n.actor || "Someone");
+  const msg = escapeHtml(n.message || "");
+  const projectTitle = n.projectTitle || "";
+  const time = _notifTimeAgo(n.created);
+  const hasPayload = n.type === "note_tagged" && n.payload && n.payload.event_id && n.opportunityId;
+
+  el.innerHTML = `
+    <div class="notification-drawer-item-row">
+      <div class="notification-drawer-item-icon">${typeIcon}</div>
+      <div class="notification-drawer-item-body">
+        <div class="notification-drawer-item-actor">${actor}</div>
+        <div class="notification-drawer-item-message">${msg}</div>
+        ${projectTitle ? `<a class="notification-drawer-item-project" href="#" data-notif-project="${n.opportunityId || ""}" data-notif-title="${escapeHtml(projectTitle)}">${escapeHtml(projectTitle)}</a>` : ""}
+      </div>
+      <div class="notification-drawer-item-time">${time}</div>
+    </div>
+    ${hasPayload ? `<button class="notification-drawer-item-expand" data-notif-expand="${n.id}" data-notif-event="${n.payload.event_id}" data-notif-opp="${n.opportunityId}">Show note</button>` : ""}
+  `;
+
+  // Mark as read on click
+  el.addEventListener("click", (e) => {
+    if (e.target.closest(".notification-drawer-item-expand") || e.target.closest(".notification-drawer-item-project")) return;
+    if (!n.isRead) {
+      n.isRead = true;
+      el.classList.remove("unread");
+      api(`/api/v2/notifications/${n.id}/read`, { method: "PUT" }).catch(() => {});
+      _updateNotificationBadge();
+    }
+  });
+
+  // Project link opens preview
+  const projectLink = el.querySelector(".notification-drawer-item-project");
+  if (projectLink) {
+    projectLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const oppId = parseInt(projectLink.dataset.notifProject, 10);
+      if (oppId) openOpportunityPreviewModal(oppId, projectLink.dataset.notifTitle || "");
+    });
+  }
+
+  // Expand button for full note
+  const expandBtn = el.querySelector(".notification-drawer-item-expand");
+  if (expandBtn) {
+    expandBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const existing = el.querySelector(".notification-drawer-item-expanded");
+      if (existing) {
+        existing.remove();
+        expandBtn.textContent = "Show note";
+        return;
+      }
+      expandBtn.textContent = "Loading…";
+      try {
+        const oppId = parseInt(expandBtn.dataset.notifOpp, 10);
+        const eventId = parseInt(expandBtn.dataset.notifEvent, 10);
+        const history = await api(`/api/v2/projects/${oppId}/history`);
+        const event = (history || []).find((h) => h.id === eventId);
+        const content = event ? (event.content || event.text || event.message || "No content available.") : "Could not load note.";
+        const div = document.createElement("div");
+        div.className = "notification-drawer-item-expanded";
+        div.textContent = content;
+        el.appendChild(div);
+        expandBtn.textContent = "Hide note";
+      } catch {
+        expandBtn.textContent = "Show note";
+      }
+    });
+  }
+
+  return el;
+}
+
+function _notifTimeAgo(isoStr) {
+  if (!isoStr) return "";
+  const diff = Date.now() - new Date(isoStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "now";
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d`;
+  return new Date(isoStr).toLocaleDateString();
+}
+
+// ── Badge polling ──────────────────────────────────────────────────────────
+
+async function _pollNotificationBadge() {
+  try {
+    const res = await api("/api/v2/notifications/unread-count");
+    _updateNotificationBadgeUI(res.count || 0);
+  } catch { /* silent */ }
+}
+
+function _updateNotificationBadge() {
+  // Optimistic update: count unread items in cache
+  const unread = _notificationCache.filter((n) => !n.isRead).length;
+  _updateNotificationBadgeUI(unread);
+}
+
+function _updateNotificationBadgeUI(count) {
+  const badge = $("#notification-unread-badge");
+  if (!badge) return;
+  if (count > 0) {
+    badge.textContent = count > 99 ? "99+" : String(count);
+    badge.classList.remove("hidden");
+  } else {
+    badge.classList.add("hidden");
+  }
+}
+
+function startNotificationBadgePoll() {
+  _pollNotificationBadge();
+  _notificationBadgePollTimer = setInterval(() => {
+    if (!document.hidden) _pollNotificationBadge();
+  }, 60000);
+}
+
+function stopNotificationBadgePoll() {
+  if (_notificationBadgePollTimer) {
+    clearInterval(_notificationBadgePollTimer);
+    _notificationBadgePollTimer = null;
+  }
+}
+
+// ── Mark all read ──────────────────────────────────────────────────────────
+
+async function _markAllNotificationsRead() {
+  const unread = _notificationCache.filter((n) => !n.isRead).length;
+  if (unread === 0) return;
+  const ok = await confirmDialog({
+    title: "Mark all as read",
+    message: `Mark all ${unread} unread notification${unread === 1 ? "" : "s"} as read?`,
+    confirmLabel: "Mark all read",
+    danger: false,
+  });
+  if (!ok) return;
+  try {
+    await api("/api/v2/notifications/read-all", { method: "PUT" });
+    for (const n of _notificationCache) n.isRead = true;
+    _renderNotificationDrawerList();
+    _updateNotificationBadge();
+  } catch (err) {
+    showToast("Failed to mark notifications as read.", true);
+  }
+}
+
+// ── Bind events ────────────────────────────────────────────────────────────
+
+function bindNotificationDrawer() {
+  const bellBtn = $("#notification-bell-btn");
+  const closeBtn = $("#notification-drawer-close");
+  const backdrop = $("#notification-drawer-backdrop");
+  const markAllBtn = $("#notification-mark-all-btn");
+  const popoutBtn = $("#notification-popout-btn");
+
+  if (bellBtn) bellBtn.addEventListener("click", toggleNotificationDrawer);
+  if (closeBtn) closeBtn.addEventListener("click", closeNotificationDrawer);
+  if (backdrop) backdrop.addEventListener("click", closeNotificationDrawer);
+  if (markAllBtn) markAllBtn.addEventListener("click", _markAllNotificationsRead);
+  if (popoutBtn) popoutBtn.addEventListener("click", toggleNotificationPopout);
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && _notificationDrawerOpen) closeNotificationDrawer();
+  });
+}
+
+// Initialize on DOM ready
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => {
+    bindNotificationDrawer();
+    startNotificationBadgePoll();
+  });
+} else {
+  bindNotificationDrawer();
+  startNotificationBadgePoll();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 
 // Safety net: if *both* login and app screens are still hidden long after load
 // (e.g. early JS error or init never reached a showApp/showLogin decision),

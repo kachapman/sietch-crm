@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=1.87.30" />
+  <link rel="stylesheet" href="styles.css?v=2.1.0" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
 </head>
 <body>
@@ -84,6 +84,22 @@
   <div id="app" class="app hidden">
     <header class="hero">
       <div class="hero-header-actions">
+        <button type="button" id="notification-bell-btn" class="btn btn-secondary btn-icon-only header-control-btn" title="Notifications" aria-label="Notifications">
+          <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+            <path d="M10 5a2 2 0 1 1 4 0a7 7 0 0 1 4 6v3a4 4 0 0 0 2 3h-16a4 4 0 0 0 2 -3v-3a7 7 0 0 1 4 -6" />
+            <path d="M9 17v1a3 3 0 0 0 6 0v-1" />
+          </svg>
+          <span id="notification-unread-badge" class="notification-unread-badge hidden">0</span>
+        </button>
+        <button type="button" id="profile-btn" class="btn btn-secondary btn-icon-only header-control-btn" title="Profile" aria-label="Profile">
+          <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+            <path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"/>
+            <path d="M9 10a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/>
+            <path d="M6.168 18.849a4 4 0 0 1 3.832 -2.849h4a4 4 0 0 1 3.834 2.855"/>
+          </svg>
+        </button>
         <button type="button" id="admin-console-btn" class="btn btn-secondary btn-icon-only header-control-btn hidden" title="Admin Console" aria-label="Admin Console">
           <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="3"/>
@@ -249,6 +265,33 @@
         </div>
         <div id="bookmark-sidebar-tabs" class="bookmark-sidebar-tabs"></div>
       </div>
+    </div>
+
+    <!-- Notification drawer — slides in from the right -->
+    <div id="notification-drawer-backdrop" class="notification-drawer-backdrop hidden"></div>
+    <div id="notification-drawer" class="notification-drawer drawer-hidden" role="dialog" aria-label="Notifications">
+      <div class="notification-drawer-header">
+        <h3 class="notification-drawer-title">Notifications</h3>
+        <div class="notification-drawer-actions">
+          <button type="button" id="notification-mark-all-btn" class="btn btn-ghost btn-sm">Mark all read</button>
+          <button type="button" id="notification-popout-btn" class="notification-popout-btn" title="Expand" aria-label="Expand notifications">
+            <svg class="notification-popout-icon-expand" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+              <path d="M4 6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2l0 -12" />
+              <path d="M15 4v16" />
+              <path d="M10 10l-2 2l2 2" />
+            </svg>
+            <svg class="notification-popout-icon-collapse" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:none">
+              <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+              <path d="M4 6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2l0 -12" />
+              <path d="M9 4v16" />
+              <path d="M14 10l2 2l-2 2" />
+            </svg>
+          </button>
+          <button type="button" id="notification-drawer-close" class="btn btn-icon-only modal-header-control" title="Close" aria-label="Close notifications"><i class="ti ti-x"></i></button>
+        </div>
+      </div>
+      <div id="notification-drawer-list" class="notification-drawer-list" aria-live="polite"></div>
     </div>
 
     <!-- Sietch CRM Footer -->
@@ -674,18 +717,6 @@
     </div>
   </div>
 
-  <div id="feed-hidden-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="feed-hidden-modal-title">
-    <div class="modal-backdrop" data-feed-hidden-dismiss></div>
-    <div class="modal-card modal-card-feed-hidden">
-      <h2 id="feed-hidden-modal-title" class="modal-title">Hidden notifications</h2>
-      <p class="modal-sub feed-hidden-hint">Notifications you hide stay on the server for 30 days, then are removed automatically.</p>
-      <ul id="feed-hidden-list" class="feed-hidden-list" aria-live="polite"></ul>
-      <div class="modal-actions">
-        <button type="button" id="feed-hidden-close" class="btn btn-secondary">Close</button>
-      </div>
-    </div>
-  </div>
-
   <div id="opp-preview-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="opp-preview-title">
     <div class="modal-backdrop" data-opp-preview-dismiss></div>
     <div class="modal-card modal-card-opp-preview">
@@ -806,20 +837,18 @@
                <button type="button" class="note-format-btn" data-cmd="underline" title="Underline">U</button>
                <button type="button" class="note-format-btn" data-cmd="hiliteColor" title="Highlight (light green)">H</button>
                <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear">⌫</button>
-             </div>
-                 <div id="deal-edit-note-body" class="note-editor" contenteditable="true" data-placeholder="Well go on, write the note already"></div>
-                 <input type="date" id="deal-edit-note-created" class="note-backdate-input" />
+              </div>
+                   <div class="note-editor-wrap">
+                    <div id="deal-edit-note-body" class="note-editor" contenteditable="true" data-placeholder="Well go on, write the note already"></div>
+                    <div id="deal-edit-mention-dropdown" class="mention-dropdown hidden"></div>
+                    <input type="date" id="deal-edit-note-created" class="note-backdate-input" />
+                  </div>
                  <div class="field note-attachments-field">
                 <label>Attachments <span class="field-hint-inline">(max 25 MB each)</span></label>
                 <input type="file" id="deal-edit-note-attachments" multiple class="note-attachments-input" />
                 <div id="deal-edit-selected-attachments" class="selected-attachments"></div>
               </div>
             </div>
-          <div class="field">
-            <label for="deal-edit-notify">Notify users</label>
-            <select id="deal-edit-notify" name="notifyUsers" multiple size="4"></select>
-            <span class="field-hint">Hold Ctrl/Cmd to select multiple</span>
-          </div>
         </fieldset>
         <div class="deal-edit-user-fields-bar">
           <button type="button" id="deal-edit-toggle-fields" class="btn btn-ghost btn-small">Show User Fields</button>
@@ -875,20 +904,18 @@
                <button type="button" class="note-format-btn" data-cmd="underline" title="Underline">U</button>
                <button type="button" class="note-format-btn" data-cmd="hiliteColor" title="Highlight (light green)">H</button>
                <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear">⌫</button>
-             </div>
-                 <div id="quick-note-note-body" class="note-editor" contenteditable="true" data-placeholder="Enter activity note…"></div>
-                 <input type="date" id="quick-note-note-created" class="note-backdate-input" />
+              </div>
+                 <div class="note-editor-wrap">
+                    <div id="quick-note-note-body" class="note-editor" contenteditable="true" data-placeholder="Enter activity note…"></div>
+                    <div id="quick-note-mention-dropdown" class="mention-dropdown hidden"></div>
+                    <input type="date" id="quick-note-note-created" class="note-backdate-input" />
+                  </div>
                  <div class="field note-attachments-field">
                 <label>Attachments <span class="field-hint-inline">(max 25 MB each)</span></label>
                 <input type="file" id="quick-note-note-attachments" multiple class="note-attachments-input" />
                 <div id="quick-note-selected-attachments" class="selected-attachments"></div>
               </div>
             </div>
-          <div class="field">
-            <label for="quick-note-notify">Notify users</label>
-            <select id="quick-note-notify" name="notifyUsers" multiple size="4"></select>
-            <span class="field-hint">Hold Ctrl/Cmd to select multiple</span>
-          </div>
         </fieldset>
         <p id="quick-note-error" class="modal-error hidden" role="alert"></p>
       </form>
@@ -1482,7 +1509,94 @@
     </div>
   </div>
 
+  <!-- Profile Modal (Phase 2G) -->
+  <div id="profile-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title">
+    <div class="modal-backdrop" data-profile-dismiss></div>
+    <div class="modal-card" role="document">
+      <header class="modal-header">
+        <h2 id="profile-modal-title" class="modal-title">Your Profile</h2>
+        <button type="button" class="btn btn-icon-only modal-header-control" title="Close" data-profile-dismiss>
+          <i class="ti ti-x"></i>
+        </button>
+      </header>
+      <div class="modal-body profile-modal-body">
+        <div class="profile-avatar-section">
+          <div class="profile-avatar-wrap">
+            <div class="profile-avatar-circle" id="profile-avatar-circle" title="Click to upload photo">A</div>
+            <div class="profile-avatar-crop hidden" id="profile-avatar-crop">
+              <div class="profile-avatar-crop-viewport" id="profile-avatar-crop-viewport">
+                <img id="profile-avatar-crop-img" class="profile-avatar-crop-img" alt="" draggable="false" />
+              </div>
+            </div>
+          </div>
+          <input type="file" id="profile-avatar-input" accept="image/*" class="visually-hidden" />
+          <div class="profile-avatar-actions">
+            <button type="button" id="profile-avatar-upload-btn" class="btn btn-ghost btn-sm profile-upload-btn" title="Upload Photo">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"/><path d="M7 9l5 -5l5 5"/><path d="M12 4l0 11"/></svg>
+              Upload Photo
+            </button>
+            <button type="button" id="profile-avatar-save-crop" class="btn btn-primary btn-sm hidden" title="Save crop">Save</button>
+            <button type="button" id="profile-avatar-cancel-crop" class="btn btn-ghost btn-sm hidden" title="Cancel">Cancel</button>
+          </div>
+        </div>
+
+        <fieldset class="profile-fieldset">
+          <legend class="profile-legend">Personal Info</legend>
+          <div class="profile-field">
+            <label for="profile-display-name">Display name</label>
+            <input type="text" id="profile-display-name" class="form-control" maxlength="100" />
+          </div>
+          <div class="profile-field">
+            <label for="profile-email">Email</label>
+            <input type="email" id="profile-email" class="form-control" disabled />
+            <span class="profile-field-hint">Contact an admin to change your email.</span>
+          </div>
+        </fieldset>
+
+        <fieldset class="profile-fieldset">
+          <legend class="profile-legend">Change Password</legend>
+          <div class="profile-field">
+            <label for="profile-current-password">Current password</label>
+            <input type="password" id="profile-current-password" class="form-control" autocomplete="current-password" />
+          </div>
+          <div class="profile-field">
+            <label for="profile-new-password">New password</label>
+            <input type="password" id="profile-new-password" class="form-control" autocomplete="new-password" />
+          </div>
+          <div class="profile-field">
+            <label for="profile-confirm-password">Confirm new password</label>
+            <input type="password" id="profile-confirm-password" class="form-control" autocomplete="new-password" />
+          </div>
+          <button type="button" id="profile-change-pw-btn" class="btn btn-primary btn-sm">Change Password</button>
+        </fieldset>
+
+        <fieldset class="profile-fieldset">
+          <legend class="profile-legend">Notification Preferences</legend>
+          <p class="profile-field-hint">Control where you receive notifications. Changes take effect immediately.</p>
+          <div class="profile-toggle-row">
+            <label class="profile-toggle-label" for="pref-in-dashboard">In-dashboard feed</label>
+            <input type="checkbox" id="pref-in-dashboard" class="toggle-input" checked />
+          </div>
+          <div class="profile-toggle-row">
+            <label class="profile-toggle-label" for="pref-telegram">Telegram</label>
+            <input type="checkbox" id="pref-telegram" class="toggle-input" checked disabled title="Coming soon — Telegram notifications are being integrated" />
+            <span class="profile-field-hint">Telegram notifications are coming soon.</span>
+          </div>
+          <div class="profile-toggle-row">
+            <label class="profile-toggle-label" for="pref-email">Email</label>
+            <input type="checkbox" id="pref-email" class="toggle-input" checked disabled title="Coming soon — Email notifications are being integrated" />
+            <span class="profile-field-hint">Email notifications are coming soon.</span>
+          </div>
+        </fieldset>
+      </div>
+      <div class="modal-actions">
+        <button type="button" id="profile-save-btn" class="btn btn-primary">Save Changes</button>
+        <button type="button" data-profile-dismiss class="btn btn-ghost">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
-  <script src="app.js?v=1.95.17" type="module"></script>
+  <script src="app.js?v=2.1.0" type="module"></script>
 </body>
 </html>

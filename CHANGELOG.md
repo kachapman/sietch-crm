@@ -2,6 +2,31 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 2G — User Profile + Notifications ✅ COMPLETE
+
+Target release on `new-crm` branch.
+
+### Phase 2G (2026-07-24)
+- **Fixed @-mention notifications never being created.** `isGuid()` filter on `notifyUserList` silently rejected integer user IDs (old OnlyOffice UUID format). Now accepts both GUIDs and numeric IDs. This was the root cause of @-mentions not generating `note_tagged` notifications.
+- **Fixed dashboard tile grid snapping.** Panel tiles (feed/tasks/presence) had `min-height: 0` which let them shrink below the 400px grid row. Restored `min-height: var(--tile-row-height)` so they fill a full row like notes/calendar tiles. Group tiles capped at `max-height: var(--tile-row-height)` with scrollable filter header and board — entire tile scrolls internally instead of overflowing the grid.
+- **Multi-row tile resize.** Tiles can now be resized to 3, 4, or up to 8 rows tall (was binary: normal/double). Resize drag uses continuous row count based on CSS `--tile-row-height` variable. Ghost preview and layout classes (`tile-triple`, `tile-quad`) support arbitrary row counts. Tall button toggles between 1 and 2 rows.
+- **Three-column width.** Tiles can now be 3 columns wide (was: 1/2/4 only). Removed the explicit span-3 ban in resize logic. `tile-three` CSS class now functional.
+- **Cleaned up @-mention dead code.** Removed `_mentionSyncHidden()` (no-op), `.mention-chips` containers and hidden inputs from HTML, `.mention-chips` CSS. Mentions are now inline `<span class="mention-inline">` in the editor content.
+- **Fixed bot user display names.** `bot@vanguardadj.com` → "CRM Bot", `test@example.com` → "Test User" (were empty/null, causing @-mention dropdown to show numeric IDs).
+- **Files:** `public/app.js` (isGuid fix, tileHeight/setTileHeight numeric, tileWidth/setTileWidth "three", applyTileLayoutClasses multi-row, resize continuous rows, mention cleanup), `public/styles.css` (panel min-height, group tile max-height, tile-triple/tile-quad, multi-row overrides), `public/index.html` (removed mention-chips containers and hidden inputs).
+- Cache-bust bumped to `app.js?v=2.1.0`, `styles.css?v=2.1.0`.
+
+### Phase 2G (2026-07-23)
+- **User Profile Modal.** New profile button (user-square-rounded icon) in header opens modal with: avatar upload (Pillow 200×200 thumbnail), display name edit, email (read-only), password change (uses existing `/api/v2/auth/change-password` endpoint).
+- **Avatar storage.** Profile pictures stored in `data/avatars/{user_id}/avatar.jpg` with 64×64 thumbnail. Initials circle fallback with name-hash color. Endpoints: `GET/POST/DELETE /api/v2/my/avatar`.
+- **@-mention autocomplete.** Replaced old `<select multiple>` notify selects with modern @-mention autocomplete in note editors (deal-edit + quick-note). Type `@` → dropdown filters portal users → select inserts styled chip → on submit, `extractMentionsFromContent()` parses chips → user IDs sent as `notifyUserList`.
+- **Notification preferences.** New `GET/PUT /api/v2/me/notification-prefs` endpoints. Frontend toggles for in-dashboard and Telegram notifications. Telegram checkbox is dormant until new system is fully active.
+- **Feed tile updated.** Now tries `/api/v2/notifications` first (only @-mentions + task assignments), falls back to old history scan if endpoint unavailable.
+- **Notification dispatcher updated.** Checks `notification_preferences.telegram` before sending, skips customers, adds project link (`{DASHBOARD_URL}/project/{id}?event={event_id}`) in Telegram messages.
+- **Lightweight project detail page.** New `public/project.html` — requires session cookie auth, shows full project details + event history. `?event={event_id}` param highlights specific event. URL rewrite: `/project/{id}` → `project.html?id={id}`.
+- **Files:** `init.sql` (avatar_url column), `server.py` (avatar/preferences endpoints, project rewrite), `notification_dispatcher.py` (preference checks, project links), `public/app.js` (profile modal, @-mention, feed rewrite), `public/index.html` (profile button + modal, hidden inputs), `public/styles.css` (profile modal, mention chips), `public/project.html` (new), `AGENTS.md`, `CHANGELOG.md`.
+- Cache-bust bumped to `app.js?v=2.0.0`, `styles.css?v=2.0.0`.
+
 ## Phase 2E — Photo gallery ✅ COMPLETE
 
 Target release v2.2.5 on `new-crm` branch.
