@@ -4729,6 +4729,7 @@ body {
 }
 
 .opp-preview-field-chk {
+  flex-direction: row;
   align-items: center;
   gap: 0.4rem;
 }
@@ -4774,8 +4775,8 @@ body {
 
 .opp-preview-field {
   display: flex;
-  align-items: baseline;
-  gap: 0.15rem 0.75rem;
+  flex-direction: column;
+  gap: 0.25rem;
   padding: 0.5rem 0.7rem;
   font-size: 0.84rem;
   background: var(--surface-2);
@@ -4788,8 +4789,6 @@ body {
   margin: 0;
   font-weight: 600;
   color: var(--muted);
-  flex-shrink: 0;
-  white-space: nowrap;
 }
 
 .opp-preview-field dd {

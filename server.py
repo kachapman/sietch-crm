@@ -11,6 +11,7 @@ import collections
 import base64
 import gzip
 import sys
+import traceback
 import hashlib
 import hmac
 import io
@@ -1727,8 +1728,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                            FROM users u, opportunities p WHERE p.id = %s AND u.id = %s""",
                         (int(uid), opp_id, user["id"], event_id, opp_id, user["id"]),
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[WARN] Failed to create notification for user {uid}: {e}", file=sys.stderr)
+                    traceback.print_exc(file=sys.stderr)
         # Link uploaded document IDs as history attachments
         file_ids = payload.get("fileIds") or []
         for fid in file_ids:
