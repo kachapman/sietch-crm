@@ -1609,12 +1609,13 @@ body {
     order: 10;
     flex-basis: 100%;
   }
-  /* Group tiles: deal count + filter summary + tools (filter/template) row 2 */
+  /* Group tiles: deal count + filter summary drop to row 2 on narrow tiles.
+     Filter toggle and template buttons stay on row 1 with the title. */
   .board-group-tile .tile-toolbar-count,
   .board-group-tile .group-tile-count,
-  .board-group-tile .group-filter-summary-compact,
-  .board-group-tile .tile-toolbar-tools {
+  .board-group-tile .group-filter-summary-compact {
     order: 10;
+    flex-basis: 100%;
   }
   /* Generic tiles: tools row 2 */
   .tile-toolbar-tools {

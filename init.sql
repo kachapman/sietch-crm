@@ -19,6 +19,7 @@ CREATE TABLE users (
     last_name TEXT,
     is_admin BOOLEAN DEFAULT FALSE,
     is_active BOOLEAN DEFAULT TRUE,
+    avatar_url TEXT,
     created_at TIMESTAMP DEFAULT NOW(),
     last_login TIMESTAMP
 );
@@ -316,31 +317,9 @@ CREATE TABLE telegram_notification_log (
 CREATE INDEX idx_telegram_notification_log_notification ON telegram_notification_log(notification_id);
 CREATE INDEX idx_telegram_notification_log_chat ON telegram_notification_log(chat_id, sent_at DESC);
 
--- Auto-create notifications when users are tagged in notes
-CREATE OR REPLACE FUNCTION create_tag_notifications()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF NEW.category_id IN (SELECT id FROM history_categories WHERE title IN ('Note', 'Comment')) THEN
-        INSERT INTO notifications (user_id, type, opportunity_id, actor_user_id, message, payload, created_at)
-        SELECT
-            nu.user_id,
-            'note_tagged',
-            NEW.opportunity_id,
-            NEW.created_by,
-            (SELECT u.display_name || ' tagged you in a note on Project ' || p.title
-             FROM users u JOIN opportunities p ON p.id = NEW.opportunity_id
-             WHERE u.id = NEW.created_by),
-            jsonb_build_object('event_id', NEW.id, 'event_category', 'note'),
-            NOW()
-        FROM history_notify_users nu WHERE nu.event_id = NEW.id;
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER trigger_create_tag_notifications
-    AFTER INSERT ON history_events
-    FOR EACH ROW EXECUTE FUNCTION create_tag_notifications();
+-- Drop old note-tag trigger (replaced by Python notification creation in server.py)
+DROP TRIGGER IF EXISTS trigger_create_tag_notifications ON history_events;
+DROP FUNCTION IF EXISTS create_tag_notifications();
 
 -- Auto-create notifications when tasks are assigned
 CREATE OR REPLACE FUNCTION create_task_notifications()
@@ -658,5 +637,11 @@ INSERT INTO system_settings (key, value, description) VALUES
 -- Default stage (New Lead) so the system is usable on first boot
 INSERT INTO stages (title, color, sort_order, stage_type, probability, is_active) VALUES
     ('New Lead', '#3498db', 0, 0, 0, TRUE);
+
+-- Migration 2026-07-23: Phase 2G — avatar_url on users (idempotent for existing DBs)
+DO $$ BEGIN
+    ALTER TABLE users ADD COLUMN avatar_url TEXT;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
 
 COMMIT;

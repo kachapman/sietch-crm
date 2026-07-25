@@ -109,6 +109,7 @@ PRESENCE_AUTO_STATUS_TIMEOUT_S = 300
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 PHOTO_STORAGE_PATH = Path(os.getenv("PHOTO_STORAGE_PATH", str(DATA_DIR / "photos")))
 DOCUMENT_STORAGE_PATH = Path(os.getenv("DOCUMENT_STORAGE_PATH", str(DATA_DIR / "documents")))
+AVATAR_STORAGE_PATH = Path(os.getenv("AVATAR_STORAGE_PATH", str(DATA_DIR / "avatars")))
 DOCS_JWT_SECRET = os.environ.get("DOCS_JWT_SECRET", "")
 DOCS_INTERNAL_URL = os.environ.get("DOCS_INTERNAL_URL", "").rstrip("/")
 DOCS_PUBLIC_URL = os.environ.get("DOCS_PUBLIC_URL", "").rstrip("/")
@@ -453,6 +454,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if self.path.startswith("/api/"):
             self._handle_api_get()
             return
+        # Rewrite /project/{id} → /project.html?id={id}
+        import re as _re
+        proj_match = _re.match(r"^/project/(\d+)(?:\?.*)?$", urlparse(self.path).path)
+        if proj_match:
+            proj_id = proj_match.group(1)
+            qs = urlparse(self.path).query
+            self.path = f"/project.html?id={proj_id}" + (f"&{qs}" if qs else "")
         super().do_GET()
 
     def send_head(self):
@@ -858,8 +866,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/me":
             self._handle_me_get()
             return
+        if api_path == "/api/v2/my/avatar":
+            self._handle_avatar_get()
+            return
+        if api_path == "/api/v2/me/notification-prefs":
+            self._handle_notification_prefs_get()
+            return
         if api_path == "/api/v2/notifications":
             self._handle_notifications_get(qs)
+            return
+        if api_path == "/api/v2/notifications/unread-count":
+            self._handle_notifications_unread_count()
             return
         if api_path == "/api/v2/history-categories":
             self._handle_history_categories_get()
@@ -950,6 +967,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if api_path == "/api/v2/auth/change-password" and method == "POST":
             self._handle_change_password()
+            return
+
+        # ── Profile (own) ──
+        if api_path == "/api/v2/me" and method == "PUT":
+            self._handle_me_put()
+            return
+        if api_path == "/api/v2/my/avatar" and method == "POST":
+            self._handle_avatar_upload()
+            return
+        if api_path == "/api/v2/my/avatar" and method == "DELETE":
+            self._handle_avatar_delete()
+            return
+        if api_path == "/api/v2/me/notification-prefs" and method == "PUT":
+            self._handle_notification_prefs_put()
             return
 
         # ── Branding (admin) ──
@@ -1682,6 +1713,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 )
             except (TypeError, ValueError):
                 pass
+        # Create notifications for tagged users (replaces the old DB trigger
+        # which had a timing race — it fired during insert_returning() before
+        # history_notify_users was populated).
+        if notify_list and int(category_id) in (1, 8):  # Note or Comment
+            for uid in notify_list:
+                try:
+                    db.execute(
+                        """INSERT INTO notifications (user_id, type, opportunity_id, actor_user_id, message, payload)
+                           SELECT %s, 'note_tagged', %s, %s,
+                                  u.display_name || ' tagged you in a note on ' || p.title,
+                                  jsonb_build_object('event_id', %s, 'event_category', 'note')
+                           FROM users u, opportunities p WHERE p.id = %s AND u.id = %s""",
+                        (int(uid), opp_id, user["id"], event_id, opp_id, user["id"]),
+                    )
+                except Exception:
+                    pass
         # Link uploaded document IDs as history attachments
         file_ids = payload.get("fileIds") or []
         for fid in file_ids:
@@ -2015,6 +2062,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_auth(self)
         if not user:
             return
+        # Fetch avatar_url from DB (not in session cache)
+        avatar_row = db.query_one("SELECT avatar_url FROM users WHERE id = %s", (user["id"],))
+        avatar_url = avatar_row.get("avatar_url") if avatar_row else None
         _json_response(self, 200, {
             "id": user.get("id"),
             "email": user.get("email"),
@@ -2023,7 +2073,177 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "lastName": user.get("last_name"),
             "isAdmin": user.get("is_admin", False),
             "mustChangePassword": user.get("must_change_password", False),
+            "avatarUrl": f"/api/v2/my/avatar" if avatar_url else None,
+            "thumbnailUrl": f"/api/v2/my/avatar?thumbnail=1" if avatar_url else None,
         })
+
+    def _handle_me_put(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        sets, params = [], []
+        for field, col in [("displayName", "display_name"), ("firstName", "first_name"), ("lastName", "last_name")]:
+            if field in payload:
+                sets.append(f"{col} = %s")
+                params.append(str(payload[field])[:100] if payload[field] is not None else None)
+        if sets:
+            params.append(user["id"])
+            db.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = %s", tuple(params))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_avatar_get(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        want_thumb = (qs.get("thumbnail") or [""])[0].lower() in ("1", "true")
+        row = db.query_one("SELECT avatar_url FROM users WHERE id = %s", (user["id"],))
+        avatar_url = row.get("avatar_url") if row else None
+        if not avatar_url:
+            self.send_error(404)
+            return
+        avatar_path = ROOT / avatar_url
+        if want_thumb:
+            thumb_path = avatar_path.parent / f"thumb_{avatar_path.name}"
+            if thumb_path.exists():
+                avatar_path = thumb_path
+        if not avatar_path.exists():
+            self.send_error(404)
+            return
+        data = avatar_path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "private, max-age=86400")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _handle_avatar_upload(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.startswith("multipart/form-data"):
+            _json_response(self, 400, {"error": "Expected multipart/form-data"})
+            return
+        try:
+            parsed = _parse_multipart(_read_body(self), content_type)
+        except Exception as exc:
+            _json_response(self, 400, {"error": f"Invalid multipart body: {exc}"})
+            return
+        file_info = parsed.get("file")
+        if not file_info:
+            _json_response(self, 400, {"error": "file field required"})
+            return
+        data = file_info["data"]
+        if len(data) > 5 * 1024 * 1024:
+            _json_response(self, 400, {"error": "File too large (max 5 MB)"})
+            return
+        mime_type = file_info.get("content-type") or ""
+        if not mime_type.startswith("image/"):
+            _json_response(self, 400, {"error": "Only image files are supported"})
+            return
+        user_dir = AVATAR_STORAGE_PATH / str(user["id"])
+        user_dir.mkdir(parents=True, exist_ok=True)
+        avatar_path = user_dir / "avatar.jpg"
+        thumb_path = user_dir / "thumb_avatar.jpg"
+        if Image:
+            try:
+                with Image.open(io.BytesIO(data)) as img:
+                    if img.mode in ("RGBA", "P"):
+                        bg = Image.new("RGB", img.size, (255, 255, 255))
+                        if img.mode == "P":
+                            img = img.convert("RGBA")
+                        bg.paste(img, mask=img.split()[3])
+                        img = bg
+                    elif img.mode != "RGB":
+                        img = img.convert("RGB")
+                    # Save full-size (max 400x400)
+                    full = img.copy()
+                    full.thumbnail((400, 400), Image.Resampling.LANCZOS)
+                    full.save(avatar_path, "JPEG", quality=92)
+                    # Thumbnail 96x96
+                    thumb = img.copy()
+                    thumb.thumbnail((96, 96), Image.Resampling.LANCZOS)
+                    thumb.save(thumb_path, "JPEG", quality=88)
+            except Exception as exc:
+                _json_response(self, 400, {"error": f"Failed to process image: {exc}"})
+                return
+        else:
+            avatar_path.write_bytes(data)
+            thumb_path = None
+        rel_path = str(avatar_path.relative_to(ROOT))
+        db.execute("UPDATE users SET avatar_url = %s WHERE id = %s", (rel_path, user["id"]))
+        _json_response(self, 200, {
+            "ok": True,
+            "avatarUrl": "/api/v2/my/avatar",
+            "thumbnailUrl": "/api/v2/my/avatar?thumbnail=1",
+        })
+
+    def _handle_avatar_delete(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        row = db.query_one("SELECT avatar_url FROM users WHERE id = %s", (user["id"],))
+        avatar_url = row.get("avatar_url") if row else None
+        if avatar_url:
+            old_path = ROOT / avatar_url
+            try:
+                old_path.unlink(missing_ok=True)
+                thumb = old_path.parent / f"thumb_{old_path.name}"
+                thumb.unlink(missing_ok=True)
+            except Exception:
+                pass
+        db.execute("UPDATE users SET avatar_url = NULL WHERE id = %s", (user["id"],))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_notification_prefs_get(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query(
+            "SELECT notification_type, enabled FROM notification_preferences WHERE user_id = %s",
+            (user["id"],),
+        )
+        prefs = {r[0]: r[1] for r in rows}
+        _json_response(self, 200, {
+            "inDashboard": prefs.get("in_dashboard", True),
+            "telegram": prefs.get("telegram", True),
+            "emailDigest": prefs.get("email_digest", "disabled"),
+        })
+
+    def _handle_notification_prefs_put(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        for key, json_key in [("in_dashboard", "inDashboard"), ("telegram", "telegram")]:
+            if json_key in payload:
+                val = bool(payload[json_key])
+                db.execute(
+                    """INSERT INTO notification_preferences (user_id, notification_type, enabled)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT (user_id, notification_type) DO UPDATE SET enabled = %s""",
+                    (user["id"], key, val, val),
+                )
+        if "emailDigest" in payload:
+            val = str(payload["emailDigest"])[:20]
+            db.execute(
+                """INSERT INTO notification_preferences (user_id, notification_type, enabled)
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (user_id, notification_type) DO UPDATE SET enabled = %s""",
+                (user["id"], "email_digest", val, val),
+            )
+        _json_response(self, 200, {"ok": True})
 
     def _handle_user_create(self) -> None:
         admin = _require_admin(self)
@@ -2099,6 +2319,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
              "actor": r[7], "projectTitle": r[8]}
             for r in rows
         ])
+
+    def _handle_notifications_unread_count(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query(
+            "SELECT COUNT(*) FROM notifications WHERE user_id = %s AND is_read = FALSE",
+            (user["id"],),
+        )
+        count = rows[0][0] if rows else 0
+        _json_response(self, 200, {"count": count})
 
     def _handle_notification_mark_read(self, notif_id: int) -> None:
         user = _require_auth(self)

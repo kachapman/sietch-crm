@@ -1858,18 +1858,17 @@ function bindGroupTileChrome(section, group, tileId) {
 
   const removeBtn = createTileRemoveButton("Remove this grouping from the board", "btn-remove-group");
 
-  const { tools, actions } = buildTileToolbarShell();
-  tools.appendChild(toggleFiltersBtn);
-  tools.appendChild(templateBtn);
-  tools.appendChild(templateDropdown);
+  const { actions } = buildTileToolbarShell();
   actions.appendChild(removeBtn);
 
   toolbar.appendChild(hint);
   toolbar.appendChild(nameDisplay);
   toolbar.appendChild(nameInput);
+  toolbar.appendChild(toggleFiltersBtn);
+  toolbar.appendChild(templateBtn);
+  toolbar.appendChild(templateDropdown);
   toolbar.appendChild(countEl);
   toolbar.appendChild(summaryCompactBar);
-  toolbar.appendChild(tools);
   toolbar.appendChild(actions);
 
   section.prepend(toolbar);
