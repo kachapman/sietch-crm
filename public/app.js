@@ -24388,19 +24388,24 @@ function _renderNotificationDrawerItem(n) {
   el.dataset.notifId = n.id;
 
   const typeIcon = _notifTypeIcon(n.type);
-  const msg = escapeHtml(n.message || "");
-  const snippet = escapeHtml(n.snippet || "");
   const projectTitle = n.projectTitle || "";
   const time = _notifTimeAgo(n.created);
   const hasPayload = n.type === "note_tagged" && n.payload && n.payload.event_id && n.opportunityId;
+  const snippet = escapeHtml(n.snippet || "");
+
+  let msgHtml = escapeHtml(n.message || "");
+  if (projectTitle && msgHtml.includes(escapeHtml(projectTitle))) {
+    const escapedTitle = escapeHtml(projectTitle);
+    const link = `<a href="#" class="notif-inline-link" data-notif-project="${n.opportunityId || ""}" data-notif-title="${escapedTitle}">${escapedTitle}</a>`;
+    msgHtml = msgHtml.replace(escapedTitle, link);
+  }
 
   el.innerHTML = `
     <div class="notification-drawer-item-row">
       <div class="notification-drawer-item-icon">${typeIcon}</div>
       <div class="notification-drawer-item-body">
-        <div class="notification-drawer-item-actor">${msg}</div>
+        <div class="notification-drawer-item-actor">${msgHtml}</div>
         ${snippet ? `<div class="notification-drawer-item-message">${snippet}…</div>` : ""}
-        ${projectTitle ? `<a class="notification-drawer-item-project" href="#" data-notif-project="${n.opportunityId || ""}" data-notif-title="${escapeHtml(projectTitle)}">${escapeHtml(projectTitle)}</a>` : ""}
       </div>
       <div class="notification-drawer-item-time">${time}</div>
     </div>
@@ -24409,7 +24414,7 @@ function _renderNotificationDrawerItem(n) {
 
   // Mark as read on click
   el.addEventListener("click", (e) => {
-    if (e.target.closest(".notification-drawer-item-expand") || e.target.closest(".notification-drawer-item-project")) return;
+    if (e.target.closest(".notification-drawer-item-expand") || e.target.closest(".notif-inline-link")) return;
     if (!n.isRead) {
       n.isRead = true;
       el.classList.remove("unread");
@@ -24419,7 +24424,7 @@ function _renderNotificationDrawerItem(n) {
   });
 
   // Project link opens preview
-  const projectLink = el.querySelector(".notification-drawer-item-project");
+  const projectLink = el.querySelector(".notif-inline-link");
   if (projectLink) {
     projectLink.addEventListener("click", (e) => {
       e.preventDefault();

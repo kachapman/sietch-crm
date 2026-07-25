@@ -1719,13 +1719,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # history_notify_users was populated).
         if notify_list and int(category_id) in (1, 8, 10):  # Note or Comment (1/8 old OnlyOffice, 10=new DB)
             import re
-            snippet = re.sub(r'<[^>]+>', '', content)[:120].strip()
+            snippet = re.sub(r'<[^>]+>', '', content)[:80].strip()
             for uid in notify_list:
                 try:
                     db.execute(
                         """INSERT INTO notifications (user_id, type, opportunity_id, actor_user_id, message, payload)
                            SELECT %s, 'note_tagged', %s, %s,
-                                  u.display_name || ' tagged you in a note on ' || p.title,
+                                  u.display_name || ' tagged you on ' || p.title,
                                   jsonb_build_object('event_id', %s, 'event_category', 'note', 'snippet', %s)
                            FROM users u, opportunities p WHERE p.id = %s AND u.id = %s""",
                         (int(uid), opp_id, user["id"], event_id, snippet, opp_id, user["id"]),
