@@ -24627,7 +24627,12 @@ function _showPreviewLinkInput(btn, editor) {
   document.body.appendChild(wrap);
   const r = btn.getBoundingClientRect();
   wrap.style.position = "fixed";
-  wrap.style.left = `${Math.min(r.left, window.innerWidth - 300)}px`;
+  const wrapWidth = wrap.offsetWidth || 320;
+  const maxLeft = window.innerWidth - wrapWidth - 8;
+  let left = r.left;
+  if (left > maxLeft) left = Math.max(8, maxLeft);
+  if (left < 8) left = 8;
+  wrap.style.left = `${left}px`;
   wrap.style.top = `${r.bottom + 4}px`;
   wrap.style.zIndex = "99999";
   input.focus();

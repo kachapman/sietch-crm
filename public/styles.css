@@ -10777,13 +10777,8 @@ body {
   margin: 0.15rem 0.2rem;
 }
 
-/* Fix positioning for backdate button in toolbar */
-.preview-note-editor-wrap .note-format-toolbar {
-  position: relative;
-}
+/* Backdate button in toolbar — directly after clear formatting, not far-right */
 .preview-note-editor-wrap .note-format-toolbar .note-backdate-btn {
-  margin-left: auto;
-  margin-right: 0;
   background: none;
   border: 1px solid var(--border);
   padding: 0.15rem 0.3rem;
