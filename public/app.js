@@ -21515,6 +21515,7 @@ function renderOpportunityPreviewContent(container, data) {
         '<div class="note-editor preview-note-editor" contenteditable="true" data-placeholder="Write a note\u2026"></div>' +
         '<div class="preview-mention-dropdown mention-dropdown hidden"></div>' +
       '</div>' +
+      '<input type="date" class="visually-hidden" />' +
       '<div class="preview-note-actions">' +
         '<button type="button" class="btn btn-primary btn-sm preview-note-submit">Add note</button>' +
         '<button type="button" class="btn btn-ghost btn-sm preview-note-cancel">Cancel</button>' +
@@ -21597,7 +21598,7 @@ function renderOpportunityPreviewContent(container, data) {
           return;
         }
         const notifyUserList = extractMentionsFromContent(ed).map(String);
-        const dt = editorWrap.querySelector(".note-backdate-input");
+        const dt = editorWrap.querySelector("input[type='date']");
         const created = dt?.value || null;
         submitBtn.disabled = true;
         try {
@@ -21609,8 +21610,6 @@ function renderOpportunityPreviewContent(container, data) {
           });
           ed.innerHTML = "";
           editorWrap.classList.remove("active");
-          const lbl = editorWrap.querySelector(".note-backdate-label");
-          if (lbl) lbl.textContent = "";
           if (dt) dt.value = "";
           showToast("Note added");
           // Refresh preview
