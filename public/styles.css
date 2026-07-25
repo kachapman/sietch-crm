@@ -6002,10 +6002,12 @@ body {
   min-height: 7.5rem; /* grow days for extra vertical space in double tiles */
 }
 
-/* Collapsed notes/calendar must actually shrink (their min-height rules override the
-   generic .tile-body-collapsed { min-height:0 } due to later cascade). */
+/* Collapsed notes/calendar/tasks/presence must actually shrink (their min-height rules
+   override the generic .tile-body-collapsed { min-height:0 } due to later cascade). */
 .dashboard-tile.calendar-tile.tile-body-collapsed,
-.dashboard-tile.notes-tile.tile-body-collapsed {
+.dashboard-tile.notes-tile.tile-body-collapsed,
+.dashboard-tile.tasks-panel.tile-body-collapsed,
+.dashboard-tile.presence-panel.tile-body-collapsed {
   min-height: 0 !important;
   height: auto;
 }
@@ -6031,13 +6033,17 @@ body {
 }
 
 /* Collapsed Team/Presence tile: hide tabs to match uniform toolbar height;
-   override panel-header padding to match .tile-toolbar (0.45rem 0.65rem). */
+   override panel-header padding to match .tile-toolbar (0.45rem 0.65rem);
+   override min-height on tile body so it collapses cleanly. */
 .dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-tabs-inline {
   display: none !important;
 }
 .dashboard-tile.presence-panel.tile-body-collapsed .panel-header {
   padding: 0.45rem 0.65rem;
   margin-bottom: 0;
+}
+.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-body {
+  min-height: 0 !important;
 }
 
 .calendar-tile-bar .calendar-month-nav {
@@ -6300,13 +6306,17 @@ body {
 }
 
 /* Collapsed Team/Presence tile: hide tabs to match uniform toolbar height;
-   override panel-header padding to match .tile-toolbar (0.45rem 0.65rem). */
+   override panel-header padding to match .tile-toolbar (0.45rem 0.65rem);
+   override min-height on tile body so it collapses cleanly. */
 .dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-tabs-inline {
   display: none !important;
 }
 .dashboard-tile.presence-panel.tile-body-collapsed .panel-header {
   padding: 0.45rem 0.65rem;
   margin-bottom: 0;
+}
+.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-body {
+  min-height: 0 !important;
 }
 
 .notes-editor {

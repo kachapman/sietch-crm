@@ -23774,13 +23774,13 @@ async function _profileLoadAvatar() {
   try {
     const me = await api("/api/v2/me");
     if (me.avatarUrl) {
-      circle.innerHTML = `<img src="${me.avatarUrl}?thumbnail=1" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" />`;
+      circle.innerHTML = `<img src="${me.avatarUrl}?thumbnail=1&_t=${Date.now()}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" />`;
       circle.classList.add("has-image");
       // Toggle button to delete-photo icon
       if (uploadBtn) {
         uploadBtn.classList.add("has-photo");
         uploadBtn.title = "Delete Photo";
-        uploadBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 8h.01"/><path d="M13 21h-7a3 3 0 0 1 -3 -3v-12a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v7"/><path d="M3 16l5 -5c.928 -.893 2.072 -.893 3 0l3 3"/><path d="M14 14l1 -1c.928 -.893 2.072 -.893 3 0"/><path d="M22 22l-5 -5"/><path d="M17 22l5 -5"/></svg> Delete Photo`;
+        uploadBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 8h.01"/><path d="M13 21h-7a3 3 0 0 1 -3 -3v-12a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v7"/><path d="M3 16l5 -5c.928 -.893 2.072 -.893 3 0l3 3"/><path d="M14 14l1 -1c.928 -.893 2.072 -.893 3 0"/><path d="M22 22l-5 -5"/><path d="M17 22l5 -5"/></svg>`;
       }
     } else {
       const initials = _profileGetInitials(state.currentUserName || "");
