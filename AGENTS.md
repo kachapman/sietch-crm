@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** 2026-07-24 session 20: (1) Added notification creation error logging — `except Exception: pass` replaced with `except Exception as e: print(...)` + `traceback.print_exc()` in `_handle_project_history_create()` to diagnose remaining silent failures. (2) Fixed preview modal field layout — `.opp-preview-field` changed from row to column flex direction, `dt` no longer nowrap/shrink, gap increased to 0.25rem. Checklist fields remain row. Files: `server.py`, `public/styles.css`. Cache-bust bumped to v2.1.1. NOT YET PUSHED.
+**Last session summary (for next resume):** 2026-07-24 session 21: Notification drawer fixes — (1) Removed "X minimized tile(s) skipped" from dashboard status text. (2) Badge now polls on drawer open so it syncs immediately. (3) Notification items show full message as primary text ("X tagged you in a note on Y") with a clean text snippet of the note below, and expand button for full note. (4) Expanded note renders HTML (mentions show as colored @Name) instead of raw tags. (5) Added @ icon for note_tagged notifications. (6) Server now stores stripped-HTML snippet in notification payload. (7) Fixed notification creation category filter (added category 10 = Note in new DB). Files: `server.py`, `public/app.js`, `public/styles.css`. Cache-bust bumped to v2.1.2. NOT YET PUSHED.
 
 - Known issue: server process dies when backgrounded from opencode shell (use `setsid` to detach — see ISSUE-012).
 - Known issue: server must be killed and restarted after opencode session exits (use `setsid` to detach — see ISSUE-012).

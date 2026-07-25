@@ -908,11 +908,7 @@ function showTileCollapsedHint(tileId, message) {
 function updateDashboardStatusText() {
   const openOpps = countOpenOpportunities();
   const openTasks = state.tasks.length;
-  const skipped = dashboardTileIdsForLoad().filter(
-    (id) => isCrmDataTileId(id) && tileBodyCollapsed(id)
-  ).length;
   let text = `${openOpps} open opportunities · ${openTasks} open tasks`;
-  if (skipped) text += ` · ${skipped} minimized tile${skipped === 1 ? "" : "s"} skipped`;
   const status = $("#status-text");
   if (status) status.textContent = text;
 }
@@ -24357,6 +24353,7 @@ async function _loadNotificationDrawerList() {
     const rows = await api("/api/v2/notifications");
     _notificationCache = rows || [];
     _renderNotificationDrawerList();
+    _pollNotificationBadge();
   } catch (err) {
     list.innerHTML = `<div class="notification-drawer-empty">Failed to load notifications.</div>`;
   }
@@ -24379,6 +24376,9 @@ function _notifTypeIcon(type) {
   if (type === "task_assigned") {
     return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 5h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2h-2"/><path d="M9 14l2 2 4 -4"/></svg>`;
   }
+  if (type === "note_tagged") {
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0"/><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0v-1.5a9 9 0 1 0 -5.5 8.28"/></svg>`;
+  }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M8 9l3 3l-2 1"/><path d="M10.5 17.5l-3.5 -2l-2 1"/><path d="M17 3l4 4"/><path d="M21 7l-6 6"/><path d="M16 3l0 5l5 0"/></svg>`;
 }
 
@@ -24388,8 +24388,8 @@ function _renderNotificationDrawerItem(n) {
   el.dataset.notifId = n.id;
 
   const typeIcon = _notifTypeIcon(n.type);
-  const actor = escapeHtml(n.actor || "Someone");
   const msg = escapeHtml(n.message || "");
+  const snippet = escapeHtml(n.snippet || "");
   const projectTitle = n.projectTitle || "";
   const time = _notifTimeAgo(n.created);
   const hasPayload = n.type === "note_tagged" && n.payload && n.payload.event_id && n.opportunityId;
@@ -24398,8 +24398,8 @@ function _renderNotificationDrawerItem(n) {
     <div class="notification-drawer-item-row">
       <div class="notification-drawer-item-icon">${typeIcon}</div>
       <div class="notification-drawer-item-body">
-        <div class="notification-drawer-item-actor">${actor}</div>
-        <div class="notification-drawer-item-message">${msg}</div>
+        <div class="notification-drawer-item-actor">${msg}</div>
+        ${snippet ? `<div class="notification-drawer-item-message">${snippet}…</div>` : ""}
         ${projectTitle ? `<a class="notification-drawer-item-project" href="#" data-notif-project="${n.opportunityId || ""}" data-notif-title="${escapeHtml(projectTitle)}">${escapeHtml(projectTitle)}</a>` : ""}
       </div>
       <div class="notification-drawer-item-time">${time}</div>
@@ -24449,7 +24449,7 @@ function _renderNotificationDrawerItem(n) {
         const content = event ? (event.content || event.text || event.message || "No content available.") : "Could not load note.";
         const div = document.createElement("div");
         div.className = "notification-drawer-item-expanded";
-        div.textContent = content;
+        div.innerHTML = content;
         el.appendChild(div);
         expandBtn.textContent = "Hide note";
       } catch {

@@ -1717,16 +1717,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # Create notifications for tagged users (replaces the old DB trigger
         # which had a timing race — it fired during insert_returning() before
         # history_notify_users was populated).
-        if notify_list and int(category_id) in (1, 8):  # Note or Comment
+        if notify_list and int(category_id) in (1, 8, 10):  # Note or Comment (1/8 old OnlyOffice, 10=new DB)
+            import re
+            snippet = re.sub(r'<[^>]+>', '', content)[:120].strip()
             for uid in notify_list:
                 try:
                     db.execute(
                         """INSERT INTO notifications (user_id, type, opportunity_id, actor_user_id, message, payload)
                            SELECT %s, 'note_tagged', %s, %s,
                                   u.display_name || ' tagged you in a note on ' || p.title,
-                                  jsonb_build_object('event_id', %s, 'event_category', 'note')
+                                  jsonb_build_object('event_id', %s, 'event_category', 'note', 'snippet', %s)
                            FROM users u, opportunities p WHERE p.id = %s AND u.id = %s""",
-                        (int(uid), opp_id, user["id"], event_id, opp_id, user["id"]),
+                        (int(uid), opp_id, user["id"], event_id, snippet, opp_id, user["id"]),
                     )
                 except Exception as e:
                     print(f"[WARN] Failed to create notification for user {uid}: {e}", file=sys.stderr)
@@ -2318,7 +2320,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         _json_response(self, 200, [
             {"id": r[0], "type": r[1], "opportunityId": r[2], "message": r[3],
              "payload": r[4], "isRead": r[5], "created": r[6].isoformat() if r[6] else None,
-             "actor": r[7], "projectTitle": r[8]}
+             "actor": r[7], "projectTitle": r[8],
+             "snippet": (r[4] or {}).get("snippet", "") if isinstance(r[4], dict) else ""}
             for r in rows
         ])
 
