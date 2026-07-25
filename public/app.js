@@ -24391,7 +24391,7 @@ function _renderNotificationDrawerItem(n) {
   const projectTitle = n.projectTitle || "";
   const time = _notifTimeAgo(n.created);
   const hasPayload = n.type === "note_tagged" && n.payload && n.payload.event_id && n.opportunityId;
-  const snippet = escapeHtml(n.snippet || "");
+  const snippet = escapeHtml((n.snippet || "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&"));
 
   let msgHtml = escapeHtml(n.message || "");
   if (projectTitle && msgHtml.includes(escapeHtml(projectTitle))) {
