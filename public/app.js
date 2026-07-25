@@ -24473,28 +24473,25 @@ document.addEventListener("click", function (e) {
 });
 
 // Backdate icon button: clicking the calendar icon opens the hidden date input.
-// On date change, shows the formatted date as a label next to the icon.
 document.addEventListener("click", function (e) {
   const btn = e.target.closest(".note-backdate-btn");
   if (!btn) return;
+  // Find the hidden date input — either in a .note-backdate-wrap (legacy) or
+  // as a sibling of the editor's parent (new layout: button in toolbar).
+  let input = null;
   const wrap = btn.closest(".note-backdate-wrap");
-  if (!wrap) return;
-  const input = wrap.querySelector(".note-backdate-input");
+  if (wrap) {
+    input = wrap.querySelector(".note-backdate-input");
+  } else {
+    const toolbar = btn.closest(".note-format-toolbar");
+    const editorWrap = toolbar && toolbar.parentElement;
+    if (editorWrap) input = editorWrap.querySelector("input[type='date']");
+  }
   if (input) input.click();
 });
 document.addEventListener("change", function (e) {
-  const input = e.target.closest(".note-backdate-input");
-  if (!input) return;
-  const wrap = input.closest(".note-backdate-wrap");
-  if (!wrap) return;
-  const label = wrap.querySelector(".note-backdate-label");
-  if (!label) return;
-  if (input.value) {
-    const d = new Date(input.value + "T00:00:00");
-    label.textContent = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  } else {
-    label.textContent = "";
-  }
+  const input = e.target.closest("input[type='date']");
+  if (!input || !input.classList.contains("visually-hidden")) return;
 });
 
 // ════════════════════════════════════════════════════════════════════════════
