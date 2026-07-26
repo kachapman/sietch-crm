@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Project — Sietch CRM</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    body { margin: 0; font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; }
+    .project-page { max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    .back-link { display: inline-flex; align-items: center; gap: 0.3rem; color: var(--accent); text-decoration: none; font-size: 0.85rem; font-weight: 500; margin-bottom: 1rem; }
+    .back-link:hover { text-decoration: underline; }
+    .project-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
+    .project-header h1 { margin: 0; font-size: 1.5rem; flex: 1; color: var(--text); }
+    .project-meta { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1.5rem; font-size: 0.85rem; }
+    .project-meta-item { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 0.3rem 0.7rem; color: var(--text); }
+    .project-desc { margin-bottom: 1.5rem; font-size: 0.9rem; line-height: 1.6; color: var(--text); }
+    .project-tags { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1.5rem; }
+    .project-tag { background: var(--accent-soft); color: var(--accent); padding: 0.2rem 0.6rem; border-radius: 12px; font-size: 0.8rem; font-weight: 500; }
+    .project-tag--hp { background: rgba(255, 183, 77, 0.2); color: #ffb74d; }
+    .project-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 1.5rem; }
+    .project-field { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.75rem; }
+    .project-field dt { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.2rem; }
+    .project-field dd { font-size: 0.9rem; color: var(--text); margin: 0; word-break: break-word; }
+    .project-section { margin-bottom: 1.5rem; }
+    .project-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
+    .project-section-head h2 { margin: 0; font-size: 1rem; font-weight: 600; }
+    .add-note-btn { display: inline-flex; align-items: center; gap: 0.3rem; background: none; border: 1px solid var(--border); border-radius: 6px; padding: 0.3rem 0.6rem; color: var(--muted); font-size: 0.8rem; cursor: pointer; transition: background 0.15s, color 0.15s; }
+    .add-note-btn:hover { background: var(--surface); color: var(--text); }
+    .event-list { list-style: none; padding: 0; margin: 0; }
+    .event-item { border-left: 3px solid var(--border); padding: 0.5rem 0.7rem; margin-bottom: 0.4rem; background: var(--surface); border-radius: 0 6px 6px 0; }
+    .event-item.event-highlighted { border-left-color: #6366f1; background: rgba(99, 102, 241, 0.1); }
+    .event-date { font-size: 0.75rem; color: var(--muted); }
+    .event-cat { font-size: 0.75rem; color: var(--muted); font-weight: 500; }
+    .event-author { font-size: 0.75rem; color: var(--muted); }
+    .event-body { font-size: 0.88rem; margin-top: 0.2rem; color: var(--text); }
+    .project-empty { color: var(--muted); font-style: italic; padding: 1rem 0; }
+    .auth-error { max-width: 400px; margin: 4rem auto; text-align: center; color: var(--muted); }
+    .auth-error a { color: var(--accent); }
+    .project-loading { text-align: center; padding: 3rem; color: var(--muted); }
+    .phtml-note-editor-wrap { display: none; margin-bottom: 1rem; }
+    .phtml-note-editor-wrap.active { display: block; }
+    .phtml-note-format-toolbar { display: flex; flex-wrap: wrap; gap: 0; margin-bottom: 0; border: 1px solid var(--border); border-bottom: none; border-radius: 6px 6px 0 0; background: var(--surface); padding: 0.25rem 0.3rem; }
+    .phtml-note-format-btn { background: none; border: none; color: var(--muted); font-size: 0.85rem; padding: 0.25rem 0.4rem; cursor: pointer; border-radius: 3px; min-width: 1.5rem; text-align: center; }
+    .phtml-note-format-btn:hover { background: var(--surface-2); color: var(--text); }
+    .phtml-note-sep { width: 1px; height: 18px; background: var(--border); margin: 0 0.2rem; align-self: center; }
+    .phtml-note-editor { min-height: 80px; max-height: 300px; overflow-y: auto; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-top: none; border-radius: 0 0 6px 6px; background: var(--surface-2, #1f2430); color: var(--text); font-family: var(--font); font-size: 0.9rem; outline: none; line-height: 1.5; }
+    .phtml-note-editor:focus { border-color: var(--accent); }
+    .phtml-note-editor:empty::before { content: attr(data-placeholder); color: var(--muted); pointer-events: none; }
+    .phtml-note-actions { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+    .phtml-note-submit { background: var(--accent); color: var(--accent-text, #fff); border: none; padding: 0.4rem 0.8rem; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 0.85rem; }
+    .phtml-note-submit:hover { opacity: 0.9; }
+    .phtml-note-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+    .phtml-note-cancel { background: none; color: var(--muted); border: 1px solid var(--border); padding: 0.4rem 0.8rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+    .phtml-note-cancel:hover { color: var(--text); border-color: var(--muted); }
+    .toast-phtml { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.6rem 1.2rem; border-radius: 8px; font-size: 0.85rem; z-index: 9999; box-shadow: var(--shadow); opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+    .toast-phtml.visible { opacity: 1; }
+    .toast-phtml.error { border-color: var(--danger); }
+    @media (max-width: 600px) {
+      .project-page { padding: 0 0.5rem; margin: 1rem auto; }
+      .project-fields { grid-template-columns: 1fr; }
+      .project-header h1 { font-size: 1.2rem; }
+    }
+  </style>
+</head>
+<body>
+  <div id="auth-screen" class="auth-error">
+    <h2>Sign in required</h2>
+    <p>You must be signed in to view project details.</p>
+    <a href="/">Back to dashboard</a>
+  </div>
+
+  <div id="project-page" class="project-page hidden">
+    <a href="/" class="back-link">&larr; Back to dashboard</a>
+    <div class="project-header">
+      <h1 id="project-title">Loading...</h1>
+    </div>
+    <div id="project-meta" class="project-meta"></div>
+    <div id="project-desc" class="project-desc hidden"></div>
+    <div id="project-tags" class="project-tags"></div>
+    <div id="project-fields" class="project-fields"></div>
+
+    <div class="project-section">
+      <div class="project-section-head">
+        <h2>History &amp; notes</h2>
+        <button type="button" id="phtml-add-note-btn" class="add-note-btn" title="Add note">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4"/><path d="M13.5 6.5l4 4"/></svg>
+          <span>add note</span>
+        </button>
+      </div>
+
+      <div id="phtml-note-editor-wrap" class="phtml-note-editor-wrap">
+        <div class="phtml-note-format-toolbar" aria-label="Formatting">
+          <button type="button" class="phtml-note-format-btn" data-cmd="bold" title="Bold"><b>B</b></button>
+          <button type="button" class="phtml-note-format-btn" data-cmd="italic" title="Italic"><i>I</i></button>
+          <button type="button" class="phtml-note-format-btn" data-cmd="underline" title="Underline"><u>U</u></button>
+          <button type="button" class="phtml-note-format-btn" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+          <span class="phtml-note-sep"></span>
+          <button type="button" class="phtml-note-format-btn" data-cmd="insertUnorderedList" title="Bullet list">&bull;</button>
+          <button type="button" class="phtml-note-format-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
+          <span class="phtml-note-sep"></span>
+          <button type="button" class="phtml-note-format-btn" data-cmd="removeFormat" title="Clear formatting">&#x232B;</button>
+        </div>
+        <div class="phtml-note-editor" contenteditable="true" data-placeholder="Write a note..." id="phtml-note-editor"></div>
+        <div class="phtml-note-actions">
+          <button type="button" id="phtml-note-submit" class="phtml-note-submit">Add note</button>
+          <button type="button" id="phtml-note-cancel" class="phtml-note-cancel">Cancel</button>
+        </div>
+      </div>
+
+      <ul id="project-events" class="event-list">
+        <li class="project-loading">Loading events...</li>
+      </ul>
+    </div>
+  </div>
+
+  <div id="phtml-toast" class="toast-phtml"></div>
+
+  <script>
+  (function() {
+    var params = new URLSearchParams(window.location.search);
+    var projectId = params.get("id");
+    var highlightEventId = params.get("event");
+    var opp = null;
+
+    function esc(s) {
+      var d = document.createElement("div");
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function showToast(msg, isError) {
+      var el = document.getElementById("phtml-toast");
+      if (!el) return;
+      el.textContent = msg;
+      el.className = "toast-phtml visible" + (isError ? " error" : "");
+      clearTimeout(el._timer);
+      el._timer = setTimeout(function() { el.className = "toast-phtml"; }, 3000);
+    }
+
+    function showPage() {
+      document.getElementById("auth-screen").classList.add("hidden");
+      document.getElementById("project-page").classList.remove("hidden");
+    }
+
+    function showAuth() {
+      document.getElementById("project-page").classList.add("hidden");
+      document.getElementById("auth-screen").classList.remove("hidden");
+    }
+
+    function showError(msg) {
+      document.getElementById("project-title").textContent = "Error loading project";
+      var meta = document.getElementById("project-meta");
+      meta.innerHTML = '<span class="project-meta-item" style="color:var(--danger);">' + esc(msg) + '</span>';
+    }
+
+    function formatDate(s) {
+      if (!s) return "";
+      try {
+        var d = new Date(s);
+        if (isNaN(d.getTime())) return String(s);
+        var months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        return months[d.getMonth()] + " " + d.getDate() + ", " + d.getFullYear();
+      } catch(e) { return String(s); }
+    }
+
+    function renderFields(data) {
+      var meta = document.getElementById("project-meta");
+      var items = [];
+      var stage = data.stage || data.Stage || "";
+      var value = data.value || data.Value || data.bidValue || data.BidValue || "";
+      var contact = data.contact || data.Contact || "";
+      var dueDate = data.dueDate || data.DueDate || data.expectedCloseDate || data.ExpectedCloseDate || "";
+      var responsible = data.responsibleUser || data.ResponsibleUser || data.responsible || "";
+      var created = data.created || data.Created || data.createdAt || data.CreatedAt || "";
+      var isPrivate = data.isPrivate || data.IsPrivate || false;
+
+      if (stage) items.push("Stage: " + String(stage));
+      if (value) items.push("Value: " + String(value));
+      if (contact) items.push("Contact: " + String(contact));
+      if (dueDate) items.push("Due: " + formatDate(dueDate));
+      if (responsible) {
+        var rName = typeof responsible === "object" ? (responsible.displayName || responsible.DisplayName || responsible.id || responsible.Id) : String(responsible);
+        items.push("Responsible: " + rName);
+      }
+      if (created) items.push("Created: " + formatDate(created));
+      if (isPrivate) items.push("Private");
+
+      meta.innerHTML = items.map(function(s) { return '<span class="project-meta-item">' + esc(s) + '</span>'; }).join("");
+
+      var desc = document.getElementById("project-desc");
+      var descText = data.description || data.Description || "";
+      if (descText) {
+        desc.innerHTML = descText;
+        desc.classList.remove("hidden");
+      } else {
+        desc.classList.add("hidden");
+      }
+
+      var tagsEl = document.getElementById("project-tags");
+      var tags = data.tags || data.Tags || [];
+      if (tags.length) {
+        tagsEl.innerHTML = tags.map(function(t) {
+          var title = typeof t === "string" ? t : (t.title || t.Title || "");
+          var color = (typeof t === "object" && (t.color || t.Color)) || "";
+          var isHP = title.toLowerCase().indexOf("high priority") !== -1;
+          var cls = isHP ? "project-tag project-tag--hp" : "project-tag";
+          var style = color ? 'background:' + esc(color) + ';color:#fff;' : "";
+          return '<span class="' + cls + '" style="' + style + '">' + esc(title) + '</span>';
+        }).join("");
+      }
+
+      var fieldsEl = document.getElementById("project-fields");
+      var customFields = data.customFieldValues || data.CustomFieldValues || [];
+      var allFields = [];
+      if (customFields.length) {
+        for (var i = 0; i < customFields.length; i++) {
+          var cf = customFields[i];
+          var label = cf.label || cf.Label || cf.fieldKey || cf.FieldKey || "";
+          var val = cf.value || cf.Value || cf.fieldValue || cf.FieldValue || "";
+          if (val) {
+            allFields.push('<div class="project-field"><dt>' + esc(String(label)) + '</dt><dd>' + esc(String(val)) + '</dd></div>');
+          }
+        }
+      }
+      if (allFields.length) {
+        fieldsEl.innerHTML = allFields.join("");
+      } else {
+        fieldsEl.style.display = "none";
+      }
+    }
+
+    function renderEvents(events) {
+      var list = document.getElementById("project-events");
+      if (!events || !events.length) {
+        list.innerHTML = '<li class="project-empty">No history events</li>';
+        return;
+      }
+      list.innerHTML = "";
+      for (var i = 0; i < events.length; i++) {
+        var ev = events[i];
+        var li = document.createElement("li");
+        var isHighlighted = highlightEventId && String(ev.id) === String(highlightEventId);
+        li.className = "event-item" + (isHighlighted ? " event-highlighted" : "");
+
+        var date = ev.createdOn || ev.created || ev.date || ev.CreatedOn || ev.Created || "";
+        var title = ev.title || ev.Title || "";
+        var category = ev.category || ev.Category || "";
+        var categoryLabel = "";
+        if (typeof category === "object" && category) {
+          categoryLabel = category.title || category.Title || "";
+        } else if (category) {
+          categoryLabel = String(category);
+        }
+        var body = ev.body || ev.Body || ev.content || ev.Content || "";
+        var author = ev.createdBy || ev.created_by || "";
+        var authorName = "";
+        if (typeof author === "object" && author) {
+          authorName = author.displayName || author.DisplayName || author.userName || author.UserName || "";
+        } else if (author) {
+          authorName = String(author);
+        }
+
+        var html = '<div class="event-date">' + esc(date ? formatDate(date) : "");
+        if (categoryLabel) html += ' &middot; <span class="event-cat">' + esc(categoryLabel) + '</span>';
+        if (authorName) html += ' &middot; <span class="event-author">' + esc(authorName) + '</span>';
+        html += '</div>';
+        if (title) html += '<div class="event-body"><strong>' + esc(title) + '</strong></div>';
+        if (body) html += '<div class="event-body">' + body + '</div>';
+
+        li.innerHTML = html;
+        list.appendChild(li);
+
+        if (isHighlighted) {
+          (function(el) {
+            setTimeout(function() { el.scrollIntoView({ behavior: "smooth", block: "center" }); }, 100);
+          })(li);
+        }
+      }
+    }
+
+    // --- Auth + Load ---
+    (async function() {
+      if (!projectId) {
+        document.getElementById("project-page").innerHTML = '<div class="auth-error"><h2>Missing project ID</h2><p>No project ID in URL.</p><a href="/">Back to dashboard</a></div>';
+        showPage();
+        return;
+      }
+
+      var me;
+      try {
+        var authResp = await fetch("/api/v2/me", { credentials: "same-origin" });
+        if (!authResp.ok) throw new Error("not authed");
+        me = await authResp.json();
+      } catch(e) {
+        showAuth();
+        return;
+      }
+
+      showPage();
+
+      try {
+        var projResp = await fetch("/api/v2/projects/" + projectId, { credentials: "same-origin" });
+        if (!projResp.ok) throw new Error("HTTP " + projResp.status);
+        var raw = await projResp.json();
+        opp = raw.data || raw;
+        document.getElementById("project-title").textContent = opp.title || opp.Title || "Project #" + projectId;
+        document.title = (opp.title || opp.Title || "Project") + " — Sietch CRM";
+        renderFields(opp);
+      } catch(err) {
+        showError(err.message || "Failed to load project");
+        return;
+      }
+
+      try {
+        var histResp = await fetch("/api/v2/projects/" + projectId + "/history?startIndex=0&count=50", { credentials: "same-origin" });
+        if (!histResp.ok) throw new Error("HTTP " + histResp.status);
+        var histRaw = await histResp.json();
+        var events = histRaw.data || histRaw.rows || histRaw || [];
+        renderEvents(events);
+      } catch(e) {
+        document.getElementById("project-events").innerHTML = '<li class="project-empty">Failed to load events</li>';
+      }
+    })();
+
+    // --- Add Note editor ---
+    document.getElementById("phtml-add-note-btn").addEventListener("click", function() {
+      var wrap = document.getElementById("phtml-note-editor-wrap");
+      var isOpen = wrap.classList.contains("active");
+      if (isOpen) {
+        wrap.classList.remove("active");
+      } else {
+        wrap.classList.add("active");
+        document.getElementById("phtml-note-editor").focus();
+      }
+    });
+
+    document.getElementById("phtml-note-cancel").addEventListener("click", function() {
+      document.getElementById("phtml-note-editor-wrap").classList.remove("active");
+      document.getElementById("phtml-note-editor").innerHTML = "";
+    });
+
+    document.querySelectorAll(".phtml-note-format-btn").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        var cmd = btn.getAttribute("data-cmd");
+        if (cmd) document.execCommand(cmd, false, null);
+      });
+    });
+
+    document.getElementById("phtml-note-submit").addEventListener("click", async function() {
+      var ed = document.getElementById("phtml-note-editor");
+      var content = (ed.innerHTML || "").trim();
+      if (!content || /^(<br\s*\/?>|\s*|<div>\s*<br\s*\/?>\s*<\/div>)$/i.test(content)) {
+        showToast("Please write a note first.", true);
+        return;
+      }
+      var submitBtn = document.getElementById("phtml-note-submit");
+      submitBtn.disabled = true;
+      try {
+        var resp = await fetch("/api/v2/projects/" + projectId + "/history", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ content: content, categoryId: "10" })
+        });
+        if (!resp.ok) {
+          var errBody;
+          try { errBody = await resp.json(); } catch(e) { errBody = {}; }
+          throw new Error(errBody.error || "HTTP " + resp.status);
+        }
+        ed.innerHTML = "";
+        document.getElementById("phtml-note-editor-wrap").classList.remove("active");
+        showToast("Note added");
+
+        var histResp = await fetch("/api/v2/projects/" + projectId + "/history?startIndex=0&count=50", { credentials: "same-origin" });
+        if (histResp.ok) {
+          var histRaw = await histResp.json();
+          var events = histRaw.data || histRaw.rows || histRaw || [];
+          renderEvents(events);
+        }
+      } catch(err) {
+        showToast("Failed to add note: " + (err.message || err), true);
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  })();
+  </script>
+</body>
+</html>

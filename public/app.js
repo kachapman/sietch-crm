@@ -441,11 +441,12 @@ const state = {
 };
 
 function crmOpportunityUrl(id) {
-  return "#";
+  return "/project/" + id;
 }
 
 function crmTaskUrl(task) {
-  return "#";
+  const oppId = task.opportunityId || task.opportunity_id || task.oppId || task.opp_id || "";
+  return oppId ? "/project/" + oppId : "#";
 }
 
 function groupFilterSummary(group) {
@@ -15854,7 +15855,7 @@ const SEARCH_POPUP_PAGE_SIZE = 50; // projects per page
 let searchPopupTotal = 0; // total matching projects (from count endpoint)
 let searchPopupQueryAbort = null; // debounce abort controller
 
-function createCrmOpenLink(oppId, { className = "crm-open-external", title = "Open in CRM" } = {}) {
+function createCrmOpenLink(oppId, { className = "crm-open-external", title = "Open Project" } = {}) {
   const a = document.createElement("a");
   a.href = crmOpportunityUrl(oppId);
   a.target = "_blank";
