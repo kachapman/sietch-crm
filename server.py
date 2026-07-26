@@ -1523,6 +1523,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 params.append(payload[field])
         params.append(opp_id)
         db.execute(f"UPDATE opportunities SET {', '.join(sets)} WHERE id = %s", (*params,))
+
+        # Handle customFieldList if present
+        custom_field_list = payload.get("customFieldList")
+        if isinstance(custom_field_list, list):
+            for cf in custom_field_list:
+                field_id = cf.get("fieldId") or cf.get("id")
+                value = cf.get("fieldValue") or cf.get("value") or ""
+                if field_id is not None:
+                    db.execute(
+                        """INSERT INTO opportunity_custom_field_values (opportunity_id, field_id, field_value)
+                           VALUES (%s, %s, %s)
+                           ON CONFLICT (opportunity_id, field_id)
+                           DO UPDATE SET field_value = EXCLUDED.field_value""",
+                        (opp_id, str(field_id), str(value)),
+                    )
+
         _json_response(self, 200, {"ok": True})
 
     def _handle_project_delete(self, opp_id: int) -> None:
