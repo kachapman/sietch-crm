@@ -10,6 +10,7 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Fixed `/project/{id}` URL rewrite.** Changed from silent internal rewrite to 302 redirect so the browser URL gets `?id=` in the query string (JS reads `window.location.search`).
 - **Fixed stage showing `[object Object]`.** `stage` field from API is `{ title, id }` — now extracts `.title` before display.
 - **Added @-mention autocomplete to project page note editor.** Fetches portal users, dropdown on `@`, keyboard nav (Enter/Tab/Escape), colored mention chips, extracts user IDs on submit and passes `notifyUserList` to API.
+- **Added user fields to project page.** Fetches field definitions from `/api/v2/custom-fields` and saved values from `/api/v2/projects/{id}/custom-fields`, cross-references by fieldId to get proper labels. Handles checkbox (Yes/No), heading skip, and orphan values without definitions.
 - **Files:** `public/project.html`, `server.py`.
 
 ## Phase 2G — User Profile + Notifications ✅ COMPLETE
