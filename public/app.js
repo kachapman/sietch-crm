@@ -11865,8 +11865,7 @@ function collectDealEditCustomFieldValues() {
 
     let raw;
     if (input.type === "checkbox") {
-      if (!input.checked) continue;
-      raw = "true";
+      raw = input.checked ? "true" : "false";
     } else {
       raw = String(input.value ?? "").trim();
       if (!raw) continue;
@@ -17350,8 +17349,7 @@ function collectPreviewCustomFieldValues(container) {
 
     let raw;
     if (input.type === "checkbox") {
-      if (!input.checked) continue;
-      raw = "true";
+      raw = input.checked ? "true" : "false";
     } else {
       raw = String(input.value ?? "").trim();
       if (!raw) continue;
