@@ -42,37 +42,41 @@ def _escape_html(text: str) -> str:
 
 # ── Notification formatting ─────────────────────────────────────────────────
 
-def _format_note_tagged(notification: dict, project_title: str, actor_name: str) -> str:
+def _format_note_tagged(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
     payload = notification.get("payload") or {}
     msg = _escape_html(notification.get("message") or "")
+    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
     return (
         f"\U0001f4cb <b>Note tagged you</b>\n\n"
         f"Project: <b>{_escape_html(project_title)}</b>\n"
         f"By: {_escape_html(actor_name)}\n\n"
         f"{_truncate(msg)}\n\n"
-        f"\u21a9\ufe0f Reply to add a note"
+        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
+        + f"\u21a9\ufe0f Reply to add a note"
     )
 
 
-def _format_task_assigned(notification: dict, project_title: str, actor_name: str) -> str:
+def _format_task_assigned(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
     payload = notification.get("payload") or {}
     task_title = _escape_html(payload.get("task_title") or "")
     due_date = payload.get("due_date") or "No due date"
+    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
     return (
         f"\u2705 <b>Task assigned to you</b>\n\n"
         f"Project: <b>{_escape_html(project_title)}</b>\n"
         f"Task: {task_title}\n"
         f"Due: {due_date}\n\n"
-        f"\u21a9\ufe0f Reply to add a note"
+        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
+        + f"\u21a9\ufe0f Reply to add a note"
     )
 
 
-def _format_notification(notification: dict, project_title: str, actor_name: str) -> str | None:
+def _format_notification(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str | None:
     ntype = notification.get("type")
     if ntype == "note_tagged":
-        return _format_note_tagged(notification, project_title, actor_name)
+        return _format_note_tagged(notification, project_title, actor_name, project_id)
     elif ntype == "task_assigned":
-        return _format_task_assigned(notification, project_title, actor_name)
+        return _format_task_assigned(notification, project_title, actor_name, project_id)
     return None
 
 
@@ -149,6 +153,16 @@ def _process_pending_notifications() -> int:
         notification_id = row["id"]
         user_id = row["user_id"]
 
+        # Check if user has Telegram notifications enabled
+        if not _user_telegram_enabled(user_id):
+            _mark_telegram_sent(notification_id)
+            continue
+
+        # Skip customers — only employees get Telegram notifications
+        if _is_customer(user_id):
+            _mark_telegram_sent(notification_id)
+            continue
+
         # Look up employee chat_id
         chat_id = _get_employee_chat_id(user_id)
         if not chat_id:
@@ -157,10 +171,12 @@ def _process_pending_notifications() -> int:
             continue
 
         # Format message
+        project_id = row.get("opportunity_id")
         text = _format_notification(
             row,
             row.get("project_title") or "Unknown Project",
             row.get("actor_name") or "Someone",
+            project_id,
         )
         if not text:
             _mark_telegram_sent(notification_id)
@@ -177,6 +193,29 @@ def _process_pending_notifications() -> int:
             logger.warning("Failed to send notification %s to chat %s", notification_id, chat_id)
 
     return sent_count
+
+
+def _user_telegram_enabled(user_id: int) -> bool:
+    """Check if user has Telegram notifications enabled in their preferences."""
+    try:
+        row = db.query_one(
+            "SELECT enabled FROM notification_preferences WHERE user_id = %s AND notification_type = 'telegram'",
+            (user_id,),
+        )
+        if row is None:
+            return True  # Default: enabled
+        return bool(row[0])
+    except Exception:
+        return True  # Default: enabled on error
+
+
+def _is_customer(user_id: int) -> bool:
+    """Check if user is a customer (not an employee) via crm_bot_store."""
+    mappings = crm_bot_store.list_mappings(PORTAL)
+    for m in mappings:
+        if m.get("userId") == user_id:
+            return not m.get("employee", False)
+    return False  # Not found in mappings — assume not customer
 
 
 def _mark_telegram_sent(notification_id: int) -> None:

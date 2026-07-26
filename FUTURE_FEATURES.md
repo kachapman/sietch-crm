@@ -555,6 +555,48 @@ Provide a **theme toggle** (dark ↔ light) that reskins the entire dashboard. T
 
 ---
 
+## Phase 2G — User Profile Modal + Notification System Overhaul
+
+**Status:** In progress on `new-crm` branch.
+
+### What it covers
+
+| Part | Description |
+|------|-------------|
+| **A. Profile modal** | Header button (user-square-rounded icon, left of sign-out) → modal with avatar, name/email, password change, notification prefs |
+| **B. Avatar upload** | Profile picture with Pillow thumbnail (200x200), initials fallback, stored in `data/avatars/{user_id}/` |
+| **C. @-mention system** | Replaces old `<select multiple>` notify list with inline `@username` autocomplete in note editors |
+| **D. Feed tile overhaul** | Shows only @-mentioned + task-assigned items via `GET /api/v2/notifications` (not all events) |
+| **E. Notification prefs** | Dormant toggles in profile modal (in-dashboard, Telegram), wired to `notification_preferences` table |
+| **F. Lightweight project page** | `public/project.html` — mobile-optimized page for Telegram notification links, requires auth, full project details + event history with `?event={id}` highlight |
+
+### Why the notification system changed
+
+The old system used a `<select multiple>` to pick notification recipients — clunky, too many users listed. Modern pattern: `@username` autocomplete inline in the note editor, like Slack/GitHub. Only @-mentioned users get notified. Task assignments also generate notifications.
+
+The old feed tile showed ALL history events from ALL projects. New feed shows only items relevant to the current user: @-mentions and assigned tasks.
+
+### Telegram integration
+
+The `notification_dispatcher.py` background thread already polls `notifications` table and sends Telegram messages. Changes:
+- Add project link to messages: `{DASHBOARD_URL}/project/{id}?event={event_id}`
+- Check `notification_preferences.telegram` before sending
+- The lightweight project page requires auth (session cookie) and shows full project details + highlighted event
+
+### Files
+
+| File | Changes |
+|------|---------|
+| `init.sql` | `avatar_url` column on `users` table |
+| `server.py` | PUT /api/v2/me, avatar endpoints, notification prefs, /project/{id} route |
+| `public/project.html` | New lightweight project detail page |
+| `public/index.html` | Profile button, profile modal, mention dropdown, remove old notify selects |
+| `public/app.js` | Profile modal JS, @-mention autocomplete, feed rewrite, remove old parsing |
+| `public/styles.css` | Profile modal, avatar, mention chips, project.html styles |
+| `notification_dispatcher.py` | Preference check, project link in messages |
+
+---
+
 ## Suggested implementation order
 
 1. **FEAT-001** — Preview popup (high user value, uses existing APIs).

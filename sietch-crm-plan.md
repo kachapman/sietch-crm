@@ -101,7 +101,7 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 | 2D: Tile layout refactoring | ✅ | CSS grid (spans, double-height, responsive), SortableJS drag-drop + ghost/chosen/drag classes + layout buttons; smooth collapse animation; terminal theme on data panes + admin modal; hover glow. |
 | 2E: Photo gallery | ✅ | Photos tab in preview modal with upload, thumbnail grid, quota display, delete, and lightbox. `POST /api/v2/projects/{id}/photos`, `GET /api/v2/photos/{id}` + `?thumbnail=1`, Pillow thumbnail + EXIF extraction. |
 | 2F: Notification drawer | 🔲 | Feed tile + keyword filter exists; no slide-out drawer with inline replies. |
-| 2G: User profile/account modal | 🔲 | /api/user-profile exists for sync; no dedicated modal for edit (name/email/pw/prefs/pic). |
+| 2G: User profile + notification overhaul | 🔲 | Profile modal (avatar, name, password, notification prefs), @-mention system replacing multi-select notify, feed tile shows only @-mentions + task assignments, lightweight project.html page for mobile Telegram links, notification dispatcher wired to preferences. |
 | 2H: Documents modal | ✅ | Full file manager: three scopes (project/personal/company), nested folders in personal/company, breadcrumb navigation, New button (Word/Excel/Folder), folder context menu (rename/delete with recursive CTE), inline rename, move/copy popup, batch ops, search, icon-only toolbar, sidebar toggle, drag-drop upload. Document Server used as editor with title-bar rename sync. |
 | 2I: Preview modal + tile revamp | ✅ | Description→top, "Project Fields" merged, Stage dropdown, "Follow-up Due Date", interactive Tags (add/remove), Checklist 3-col checkboxes, kanban created date + native tooltip. Inline project-fields editor added. Browser verified. |
 | 2J: Re-import CRM data | 🔲 | Re-run `migrate_from_onlyoffice.py` export script (with tasks and user/custom fields fixed) then import into new CRM to verify all data displays correctly in preview modals, deal tiles, kanban stages, tags, and custom fields. |
@@ -332,6 +332,132 @@ The Documents tab inside the opportunity preview modal gets the same file manage
 7. Batch operations: Delete, Move, Copy
 8. Context menu
 9. Overhaul existing Documents tab in project preview modal (same list UI + batch ops)
+
+### Phase 2G Details: User Profile Modal + Notification System Overhaul
+
+#### Overview
+
+A. Profile modal (avatar, name/email, password change, notification prefs)
+B. Profile picture upload with thumbnail generation
+C. @-mention autocomplete replacing old `<select multiple>` notify list
+D. Feed tile shows only @-mentioned + task-assigned items (not all events)
+E. Notification preferences wired to dispatcher (dormant until system active)
+F. Lightweight `project.html` page for mobile Telegram notification links
+
+#### Part A — Profile Modal
+
+**Header button:** `#profile-btn` in `.hero-header-actions`, left of sign-out. Uses `icon-tabler-user-square-rounded` SVG. Always visible when logged in (not admin-only).
+
+**Modal sections:**
+1. Avatar circle (initials fallback, or uploaded image) + display name + email
+2. Contact details form: Display Name, First Name, Last Name, Email (read-only)
+3. Change Password: Current + New + Confirm fields
+4. Notification Preferences: In-dashboard toggle, Telegram toggle (dormant)
+
+**Backend endpoints:**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET /api/v2/me` | Fetch current user | Extend to include `avatarUrl` |
+| `PUT /api/v2/me` | Update own profile | New — display_name, first_name, last_name |
+| `POST /api/v2/my/avatar` | Upload profile picture | New — multipart, Pillow 200x200 thumbnail |
+| `GET /api/v2/my/avatar` | Serve avatar | New — `?thumbnail=1` for 64x64 |
+| `DELETE /api/v2/my/avatar` | Remove avatar | New — reverts to initials |
+| `GET /api/v2/me/notification-prefs` | Fetch prefs | New — reads `notification_preferences` table |
+| `PUT /api/v2/me/notification-prefs` | Save prefs | New — upserts `notification_preferences` table |
+| `POST /api/v2/auth/change-password` | Change password | **Already exists** |
+
+#### Part B — Avatar Upload
+
+**DB migration:** `ALTER TABLE users ADD COLUMN avatar_url TEXT;`
+
+**Storage:** `data/avatars/{user_id}/avatar.jpg` (200x200) + `thumb_avatar.jpg` (64x64)
+
+**Handler reuses:** `_parse_multipart()`, Pillow thumbnail generation, `_json_response()`
+
+#### Part C — @-Mention System
+
+**Replaces:** `<select id="deal-edit-notify">`, `<select id="quick-note-notify">`, `populateNotifyUserSelect()` and wrappers, `#create-opp-notify` checkbox (dead code).
+
+**How it works:**
+1. User types `@` in note editor → dropdown appears at cursor
+2. Typing after `@` filters `state.portalUsers` by name prefix
+3. Selecting a user inserts a styled `@Username` chip (non-editable inline element)
+4. On submit, `extractMentionsFromContent(html)` parses chips → user IDs
+5. IDs sent as `notifyUserList` to `POST /api/v2/projects/{id}/history` (existing endpoint)
+
+**No backend changes needed** — existing `history_notify_users` + DB triggers handle notification creation.
+
+#### Part D — Feed Tile Overhaul
+
+**Current:** Fetches ALL history events via `/api/v2/projects/0/history`, shows everything.
+
+**New:** Fetches from `GET /api/v2/notifications` (existing endpoint), shows only:
+- `note_tagged` events (user was @-mentioned)
+- `task_assigned` events (user was assigned a task)
+
+**Changes:**
+- Replace `loadCrmRelationshipNotifyEventsBulk` with `GET /api/v2/notifications`
+- Remove ~200 lines of old feed parsing functions
+- Add mark-as-read on item click + mark-all-read button
+- Add unread count badge
+
+#### Part E — Notification Preferences
+
+**Table:** `notification_preferences` (already exists, unused).
+
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `in_dashboard` | `true` | Show in feed tile |
+| `telegram` | `true` | Send Telegram alerts |
+| `email_digest` | `disabled` | Future: daily/immediate |
+
+**Dispatcher integration:** Before sending Telegram message, check `notification_preferences.telegram` for recipient. If false, skip.
+
+#### Part F — Lightweight Project Detail Page
+
+**URL:** `/project/{id}` (serves `public/project.html`)
+**Auth:** Requires session cookie (same as dashboard)
+**Query params:** `?event={event_id}` to highlight specific event
+
+**Content:** Full project details (title, stage, value, contact, due date, tags, custom fields) + event history. Mobile-optimized, no tile grid.
+
+**Server route:** Serve static `project.html` for `/project/\d+` paths. Client-side JS reads the project ID from URL, fetches via existing API endpoints.
+
+**Telegram message format:**
+```
+📋 Ken Chapman tagged you in a note on Smith Roofing Claim
+"Inspection completed, photos uploaded..."
+🔗 View project → {DASHBOARD_URL}/project/1042?event=5678
+```
+
+#### Implementation Order
+
+1. DB migration (avatar_url column)
+2. Backend endpoints (PUT /api/v2/me, avatar, notification prefs)
+3. Profile modal HTML + CSS + JS
+4. Header button + early binding
+5. @-mention autocomplete component
+6. Remove old notify multi-selects + dead code
+7. Feed tile: switch to GET /api/v2/notifications
+8. Remove old feed parsing functions
+9. Lightweight project.html page + server route
+10. Notification dispatcher: preference check + project link
+11. CHANGELOG + AGENTS update
+
+#### Files Modified
+
+| File | Changes |
+|------|---------|
+| `init.sql` | `avatar_url` column migration |
+| `server.py` | PUT /api/v2/me, avatar endpoints, notification prefs endpoints, /project/{id} route |
+| `public/index.html` | #profile-btn header button, #profile-modal, mention dropdown, remove old notify selects |
+| `public/app.js` | Profile modal JS, @-mention autocomplete, feed tile rewrite, remove old feed parsing |
+| `public/styles.css` | Profile modal styles, avatar circle, mention dropdown/chips, project.html styles |
+| `public/project.html` | New lightweight project detail page |
+| `notification_dispatcher.py` | Preference check, project link in messages |
+| `CHANGELOG.md` | Release notes |
+| `AGENTS.md` | Session summary |
 
 ### Phase 3: Email + IMAP
 

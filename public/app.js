@@ -21222,7 +21222,7 @@ function renderOpportunityPreviewContent(container, data) {
       if (row.value === "Yes" || row.value === "No") {
         if (fieldNameMatches(row.label, ["PA CONTRACT"])) {
           const ico = document.createElement("span");
-          const checked = row.value === "Yes";
+        const checked = row.value === "Yes";
           ico.className = checked ? "opp-preview-chk-yes" : "opp-preview-chk-no";
           ico.textContent = checked ? "\u2713" : "\u2717";
           dd.appendChild(ico);
@@ -21257,7 +21257,7 @@ function renderOpportunityPreviewContent(container, data) {
         const field = document.createElement("div");
         field.className = "opp-preview-field opp-preview-field-chk";
         const ico = document.createElement("span");
-        const checked = row.value === "Yes";
+        const checked = row.value === "Yes" || String(row.value).toLowerCase() === "true";
         ico.className = checked ? "opp-preview-chk-yes" : "opp-preview-chk-no";
         ico.textContent = checked ? "\u2713" : "\u2717";
         const lbl = document.createElement("span");
