@@ -17,6 +17,10 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Fixed checkbox uncheck not persisting.** Both `collectPreviewCustomFieldValues` and `collectDealEditCustomFieldValues` now send `"false"` for unchecked checkboxes instead of skipping them entirely. Previously, unchecking a checkbox sent nothing, so the old `"true"` value remained in the DB.
 - **Files:** `public/project.html`, `server.py`.
 
+- **Phase 2G — project.html + Open Project button (2026-07-26)**
+
+- **Fixed checklist checkbox display in preview modal.** Root cause: `field_type='text'` in DB for Measurement Report, Insurance Documents, Inspection Photos (should be `'checkbox'`). Updated DB via SQL. CSS specificity bug: `.opp-preview-field-chk` (0,1,0) was overridden by `.opp-preview-field` (0,1,0) due to source order, making compact styles permanently invisible. Fixed both issues: changed selector to `.opp-preview-field.opp-preview-field-chk` (0,2,0) and `.opp-preview-field.opp-preview-field-chk .opp-preview-chk-yes/no` for full override. Also added safety net in checklist renderer to render `"true"` as checked. Commits `213298a`, `302e610`.
+
 ## Phase 2G — User Profile + Notifications ✅ COMPLETE
 
 Target release on `new-crm` branch.
