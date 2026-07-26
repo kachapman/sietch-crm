@@ -69,8 +69,8 @@ The name draws from Frank Herbert's Dune universe, where sietches were hidden tr
 ### Run Locally
 
 ```bash
-git clone https://github.com/kachapman/onlyoffice-crm-kanban.git
-cd onlyoffice-crm-kanban
+git clone https://github.com/kachapman/sietch-crm.git
+cd sietch-crm
 git checkout new-crm
 
 # Configure
