@@ -56,6 +56,13 @@
     .toast-phtml { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.6rem 1.2rem; border-radius: 8px; font-size: 0.85rem; z-index: 9999; box-shadow: var(--shadow); opacity: 0; transition: opacity 0.2s; pointer-events: none; }
     .toast-phtml.visible { opacity: 1; }
     .toast-phtml.error { border-color: var(--danger); }
+    .phtml-mention-wrap { position: relative; }
+    .phtml-mention-dropdown { position: absolute; z-index: 100; background: var(--surface, #181b24); border: 1px solid var(--border, #2a2e3a); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.35); max-height: 180px; overflow-y: auto; min-width: 160px; display: none; }
+    .phtml-mention-dropdown.open { display: block; }
+    .phtml-mention-item { padding: 0.35rem 0.6rem; cursor: pointer; font-size: 0.85rem; color: var(--text, #e0e0e0); }
+    .phtml-mention-item:hover, .phtml-mention-item.selected { background: var(--surface-2, #1f2430); }
+    .phtml-mention-chip { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 10px; font-size: 0.82rem; font-weight: 500; color: #fff; background: var(--mention-color, hsl(200, 55%, 42%)); }
+    .phtml-mention-inline { color: var(--mention-color, var(--accent, #4f8cff)); font-weight: 500; cursor: default; }
     @media (max-width: 600px) {
       .project-page { padding: 0 0.5rem; margin: 1rem auto; }
       .project-fields { grid-template-columns: 1fr; }
@@ -101,7 +108,10 @@
           <span class="phtml-note-sep"></span>
           <button type="button" class="phtml-note-format-btn" data-cmd="removeFormat" title="Clear formatting">&#x232B;</button>
         </div>
-        <div class="phtml-note-editor" contenteditable="true" data-placeholder="Write a note..." id="phtml-note-editor"></div>
+        <div class="phtml-mention-wrap">
+          <div class="phtml-note-editor" contenteditable="true" data-placeholder="Write a note... Type @ to mention someone." id="phtml-note-editor"></div>
+          <div class="phtml-mention-dropdown" id="phtml-mention-dropdown"></div>
+        </div>
         <div class="phtml-note-actions">
           <button type="button" id="phtml-note-submit" class="phtml-note-submit">Add note</button>
           <button type="button" id="phtml-note-cancel" class="phtml-note-cancel">Cancel</button>
@@ -122,6 +132,7 @@
     var projectId = params.get("id");
     var highlightEventId = params.get("event");
     var opp = null;
+    var portalUsers = [];
 
     function esc(s) {
       var d = document.createElement("div");
@@ -167,7 +178,8 @@
     function renderFields(data) {
       var meta = document.getElementById("project-meta");
       var items = [];
-      var stage = data.stage || data.Stage || "";
+      var stageObj = data.stage || data.Stage || null;
+      var stageTitle = stageObj ? (stageObj.title || stageObj.Title || "") : (typeof stageObj === "string" ? stageObj : "");
       var value = data.value || data.Value || data.bidValue || data.BidValue || "";
       var contact = data.contact || data.Contact || "";
       var dueDate = data.dueDate || data.DueDate || data.expectedCloseDate || data.ExpectedCloseDate || "";
@@ -175,7 +187,7 @@
       var created = data.created || data.Created || data.createdAt || data.CreatedAt || "";
       var isPrivate = data.isPrivate || data.IsPrivate || false;
 
-      if (stage) items.push("Stage: " + String(stage));
+      if (stageTitle) items.push("Stage: " + stageTitle);
       if (value) items.push("Value: " + String(value));
       if (contact) items.push("Contact: " + String(contact));
       if (dueDate) items.push("Due: " + formatDate(dueDate));
@@ -279,6 +291,154 @@
       }
     }
 
+    // --- @-mention autocomplete ---
+    async function fetchUsers() {
+      if (portalUsers.length) return;
+      try {
+        var resp = await fetch("/api/v2/users?startIndex=0&count=300", { credentials: "same-origin" });
+        if (!resp.ok) return;
+        var raw = await resp.json();
+        var list = (raw.data || raw.rows || raw || []);
+        portalUsers = list.map(function(u) {
+          return { id: u.id ?? u.ID, name: u.displayName || u.DisplayName || u.userName || u.UserName || String(u.id ?? u.ID) };
+        }).filter(function(u) { return u.id != null; });
+        portalUsers.sort(function(a, b) { return String(a.name).localeCompare(String(b.name)); });
+      } catch(e) { portalUsers = []; }
+    }
+
+    function mentionColor(name) {
+      var h = 0;
+      for (var i = 0; i < (name || "").length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+      return "hsl(" + (Math.abs(h) % 360) + ", 55%, 42%)";
+    }
+
+    function mentionInsertChip(dropdownEl, name, userId) {
+      var editorEl = dropdownEl.parentElement.querySelector(".phtml-note-editor");
+      if (!editorEl) return;
+      editorEl.focus();
+      var sel = window.getSelection();
+      if (!sel.rangeCount) return;
+
+      var span = document.createElement("span");
+      span.className = "phtml-mention-inline";
+      span.dataset.userId = userId;
+      span.setAttribute("contenteditable", "false");
+      span.style.setProperty("--mention-color", mentionColor(name));
+      span.textContent = "@" + name;
+
+      var range = sel.getRangeAt(0);
+      range.collapse(false);
+      range.insertNode(span);
+
+      range.setStartAfter(span);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+
+      var space = document.createTextNode("\u00A0");
+      range.insertNode(space);
+      range.setStartAfter(space);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+
+    function mentionRenderDropdown(dropdownEl, query) {
+      var q = (query || "").toLowerCase();
+      var matches = portalUsers
+        .filter(function(u) { return String(u.name).toLowerCase().indexOf(q) !== -1 || String(u.id) === q; })
+        .slice(0, 10);
+      dropdownEl.innerHTML = "";
+      if (!matches.length) {
+        dropdownEl.classList.remove("open");
+        return;
+      }
+      matches.forEach(function(u) {
+        var item = document.createElement("div");
+        item.className = "phtml-mention-item";
+        item.dataset.userId = u.id;
+        item.dataset.userName = u.name;
+        item.innerHTML = '<span class="phtml-mention-chip" style="--mention-color:' + mentionColor(u.name) + '">@' + esc(u.name) + '</span>';
+        item.addEventListener("mousedown", function(e) {
+          e.preventDefault();
+          var startNode = dropdownEl._mentionStartNode;
+          var startOffset = dropdownEl._mentionStartOffset;
+          if (startNode && startNode.nodeType === Node.TEXT_NODE) {
+            var text = startNode.textContent || "";
+            var curSel = window.getSelection();
+            var cursorOffset = curSel.rangeCount ? curSel.getRangeAt(0).startOffset : text.length;
+            var before = text.slice(0, startOffset);
+            var after = text.slice(cursorOffset);
+            startNode.textContent = before + after;
+            var r = document.createRange();
+            r.setStart(startNode, before.length);
+            r.collapse(true);
+            curSel.removeAllRanges();
+            curSel.addRange(r);
+          }
+          mentionInsertChip(dropdownEl, u.name, u.id);
+          dropdownEl.classList.remove("open");
+          dropdownEl._mentionQuery = null;
+        });
+        dropdownEl.appendChild(item);
+      });
+      dropdownEl.classList.add("open");
+    }
+
+    function setupMentionAutocomplete(editorEl, dropdownEl) {
+      if (!editorEl || !dropdownEl) return;
+
+      editorEl.addEventListener("input", function() {
+        var sel = window.getSelection();
+        if (!sel.rangeCount) return;
+        var range = sel.getRangeAt(0);
+        var node = range.startContainer;
+        if (node.nodeType !== Node.TEXT_NODE) { dropdownEl._mentionQuery = null; dropdownEl.classList.remove("open"); return; }
+        var text = node.textContent || "";
+        var cursor = range.startOffset;
+        var atPos = -1;
+        for (var i = cursor - 1; i >= 0; i--) {
+          if (text[i] === "@") { atPos = i; break; }
+          if (text[i] === " " || text[i] === "\n" || text[i] === "\t") break;
+        }
+        if (atPos < 0) { dropdownEl._mentionQuery = null; dropdownEl.classList.remove("open"); return; }
+        var query = text.slice(atPos + 1, cursor);
+        dropdownEl._mentionQuery = query;
+        dropdownEl._mentionStartNode = node;
+        dropdownEl._mentionStartOffset = atPos;
+        mentionRenderDropdown(dropdownEl, query);
+        var rect = range.getBoundingClientRect();
+        var editorRect = editorEl.getBoundingClientRect();
+        dropdownEl.style.top = (rect.bottom - editorRect.top + 4) + "px";
+        dropdownEl.style.left = (rect.left - editorRect.left) + "px";
+      });
+
+      editorEl.addEventListener("keydown", function(e) {
+        if (!dropdownEl.classList.contains("open")) return;
+        if (e.key === "Escape") { dropdownEl.classList.remove("open"); return; }
+        if (e.key === "Enter" || e.key === "Tab") {
+          var first = dropdownEl.querySelector(".phtml-mention-item");
+          if (first) {
+            e.preventDefault();
+            first.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+          }
+        }
+      });
+
+      editorEl.addEventListener("blur", function() {
+        setTimeout(function() { dropdownEl.classList.remove("open"); }, 150);
+      });
+    }
+
+    function extractMentions(editorEl) {
+      if (!editorEl) return [];
+      var spans = editorEl.querySelectorAll(".phtml-mention-inline[data-user-id]");
+      if (!spans || !spans.length) return [];
+      var ids = [];
+      spans.forEach(function(s) { var n = parseInt(s.dataset.userId, 10); if (n) ids.push(n); });
+      return [...new Set(ids)];
+    }
+
     // --- Auth + Load ---
     (async function() {
       if (!projectId) {
@@ -298,6 +458,9 @@
       }
 
       showPage();
+
+      // Pre-fetch portal users for @mentions
+      fetchUsers();
 
       try {
         var projResp = await fetch("/api/v2/projects/" + projectId, { credentials: "same-origin" });
@@ -347,6 +510,12 @@
       });
     });
 
+    // Wire @-mention autocomplete
+    setupMentionAutocomplete(
+      document.getElementById("phtml-note-editor"),
+      document.getElementById("phtml-mention-dropdown")
+    );
+
     document.getElementById("phtml-note-submit").addEventListener("click", async function() {
       var ed = document.getElementById("phtml-note-editor");
       var content = (ed.innerHTML || "").trim();
@@ -357,11 +526,14 @@
       var submitBtn = document.getElementById("phtml-note-submit");
       submitBtn.disabled = true;
       try {
+        var notifyUserList = extractMentions(ed).map(String);
+        var body = { content: content, categoryId: "10" };
+        if (notifyUserList.length) body.notifyUserList = notifyUserList;
         var resp = await fetch("/api/v2/projects/" + projectId + "/history", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "same-origin",
-          body: JSON.stringify({ content: content, categoryId: "10" })
+          body: JSON.stringify(body)
         });
         if (!resp.ok) {
           var errBody;

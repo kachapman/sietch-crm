@@ -456,12 +456,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_api_get()
             return
         # Rewrite /project/{id} → /project.html?id={id}
+        # Must redirect so the browser URL has ?id= (JS reads window.location.search)
         import re as _re
         proj_match = _re.match(r"^/project/(\d+)(?:\?.*)?$", urlparse(self.path).path)
         if proj_match:
             proj_id = proj_match.group(1)
             qs = urlparse(self.path).query
-            self.path = f"/project.html?id={proj_id}" + (f"&{qs}" if qs else "")
+            new_path = f"/project.html?id={proj_id}" + (f"&{qs}" if qs else "")
+            self.send_response(302)
+            self.send_header("Location", new_path)
+            self.end_headers()
+            return
         super().do_GET()
 
     def send_head(self):
