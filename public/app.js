@@ -10228,9 +10228,9 @@ async function openDealEditModal(opp, group) {
   setDealEditError("");
   form.reset();
 
-  // Reset native date input
-  const deCreated = $("#deal-edit-note-created");
-  if (deCreated) deCreated.value = "";
+  // Reset backdate value
+  const deBackdateBtn = $("#deal-edit-modal .note-backdate-btn");
+  if (deBackdateBtn) delete deBackdateBtn.dataset.backdateValue;
 
   if (!state.stages.length) await loadStages();
   if (!state.allTags.length) await loadAllTags();
@@ -10763,7 +10763,7 @@ async function submitDealEditForm(e) {
           }
         }
 
-        const createdDate = $("#deal-edit-note-created")?.value || "";
+        const createdDate = $("#deal-edit-modal .note-backdate-btn")?.dataset?.backdateValue || "";
         const noteResult = await createOpportunityHistoryEvent(oppId, {
           content: noteBody,
           categoryId,
@@ -11030,9 +11030,9 @@ async function openQuickNoteModal() {
   const noteBodyEl = $("#quick-note-note-body");
   if (noteBodyEl) noteBodyEl.innerHTML = "";
 
-  // Reset backdate date input (native)
-  const qnCreated = $("#quick-note-note-created");
-  if (qnCreated) qnCreated.value = "";
+  // Reset backdate value
+  const qnBackdateBtn = $("#quick-note-modal .note-backdate-btn");
+  if (qnBackdateBtn) delete qnBackdateBtn.dataset.backdateValue;
 
   await loadHistoryCategories();
   populateQuickNoteCategorySelect();
@@ -11150,7 +11150,7 @@ async function submitQuickNoteForm(e) {
         }
       }
 
-      const createdDate = $("#quick-note-note-created")?.value || "";
+      const createdDate = $("#quick-note-modal .note-backdate-btn")?.dataset?.backdateValue || "";
       const noteResult = await createOpportunityHistoryEvent(oppId, {
         content: noteBody,
         categoryId,
@@ -21515,7 +21515,7 @@ function renderOpportunityPreviewContent(container, data) {
         '<div class="note-editor preview-note-editor" contenteditable="true" data-placeholder="Write a note\u2026"></div>' +
         '<div class="preview-mention-dropdown mention-dropdown hidden"></div>' +
       '</div>' +
-      '<input type="date" class="visually-hidden" />' +
+      '</div>' +
       '<div class="preview-note-actions">' +
         '<button type="button" class="btn btn-primary btn-sm preview-note-submit">Add note</button>' +
         '<button type="button" class="btn btn-ghost btn-sm preview-note-cancel">Cancel</button>' +
@@ -21550,6 +21550,8 @@ function renderOpportunityPreviewContent(container, data) {
       editorWrap.classList.remove("active");
       const ed = editorWrap.querySelector(".note-editor");
       if (ed) ed.innerHTML = "";
+      const bdbtn = editorWrap.querySelector(".note-backdate-btn");
+      if (bdbtn) delete bdbtn.dataset.backdateValue;
     });
 
     // Wire @-mention autocomplete
@@ -21598,8 +21600,8 @@ function renderOpportunityPreviewContent(container, data) {
           return;
         }
         const notifyUserList = extractMentionsFromContent(ed).map(String);
-        const dt = editorWrap.querySelector("input[type='date']");
-        const created = dt?.value || null;
+        const bdbtn = editorWrap.querySelector(".note-backdate-btn");
+        const created = bdbtn?.dataset?.backdateValue || null;
         submitBtn.disabled = true;
         try {
           await createOpportunityHistoryEvent(opp.id ?? opp.ID, {
@@ -21610,7 +21612,7 @@ function renderOpportunityPreviewContent(container, data) {
           });
           ed.innerHTML = "";
           editorWrap.classList.remove("active");
-          if (dt) dt.value = "";
+          if (bdbtn) delete bdbtn.dataset.backdateValue;
           showToast("Note added");
           // Refresh preview
           const titleHint = opp.title || opp.Title || "";
@@ -24471,26 +24473,43 @@ document.addEventListener("click", function (e) {
   _showPreviewLinkInput(btn, editor);
 });
 
-// Backdate icon button: clicking the calendar icon opens the hidden date input.
+// Backdate icon button: dynamically creates a temp date input, positions it
+// over the button, and opens the native picker. Works on mobile where
+// input.click() on a visually-hidden element does not open the picker.
 document.addEventListener("click", function (e) {
   const btn = e.target.closest(".note-backdate-btn");
   if (!btn) return;
-  // Find the hidden date input — either in a .note-backdate-wrap (legacy) or
-  // as a sibling of the editor's parent (new layout: button in toolbar).
-  let input = null;
-  const wrap = btn.closest(".note-backdate-wrap");
-  if (wrap) {
-    input = wrap.querySelector(".note-backdate-input");
-  } else {
-    const toolbar = btn.closest(".note-format-toolbar");
-    const editorWrap = toolbar && toolbar.parentElement;
-    if (editorWrap) input = editorWrap.querySelector("input[type='date']");
-  }
-  if (input) input.click();
-});
-document.addEventListener("change", function (e) {
-  const input = e.target.closest("input[type='date']");
-  if (!input || !input.classList.contains("visually-hidden")) return;
+  e.stopPropagation();
+  e.preventDefault();
+  const temp = document.createElement("input");
+  temp.type = "date";
+  const r = btn.getBoundingClientRect();
+  Object.assign(temp.style, {
+    position: "fixed",
+    left: r.left + "px",
+    top: r.top + "px",
+    width: r.width + "px",
+    height: r.height + "px",
+    opacity: "0",
+    zIndex: "99999",
+    pointerEvents: "auto",
+  });
+  document.body.appendChild(temp);
+  const cleanup = () => { if (temp.parentNode) temp.remove(); };
+  const openPicker = () => {
+    try { if (temp.showPicker) { temp.showPicker(); return; } } catch (_) {}
+    temp.click();
+  };
+  requestAnimationFrame(() => {
+    openPicker();
+    setTimeout(openPicker, 50);
+  });
+  temp.addEventListener("change", () => {
+    btn.dataset.backdateValue = temp.value || "";
+    cleanup();
+  });
+  temp.addEventListener("blur", () => { setTimeout(cleanup, 200); });
+  setTimeout(cleanup, 5000);
 });
 
 // ════════════════════════════════════════════════════════════════════════════
