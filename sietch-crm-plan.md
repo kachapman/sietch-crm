@@ -1,6 +1,6 @@
 # Sietch CRM v3 Migration Plan
 
-**Branch:** `new-crm` (pushed to `git@github.com:kachapman/sietch-crm.git`)  
+**Branch:** `main` on `git@github.com:kachapman/sietch-crm.git`  
 **Target:** Fully replace the OnlyOffice CRM dependency with a self-contained PostgreSQL-backed Sietch CRM, then cut over from `main`.
 
 This document is the single source of truth for phases, progress, and open decisions. It is updated after every commit.
@@ -12,7 +12,7 @@ This document is the single source of truth for phases, progress, and open decis
 | Question | Answer |
 |----------|--------|
 | Plan file name | `sietch-crm-plan.md` (this file) |
-| Branch | `new-crm` until cutover |
+| Branch | `main` until cutover |
 | Card title click | Opens the preview modal. No CRM deep-link needed (we are migrating away from OnlyOffice CRM). |
 | Export format | One JSON file per entity type (`contacts.json`, `opportunities.json`, `stages.json`, `tags.json`, `tasks.json`, `history.json`, `files.json`). Easier to inspect, transfer, and retry partial imports. |
 | File attachments in export | Metadata + URLs by default. Downloads can be fetched during import if still reachable. |

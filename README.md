@@ -71,7 +71,7 @@ The name draws from Frank Herbert's Dune universe, where sietches were hidden tr
 ```bash
 git clone https://github.com/kachapman/sietch-crm.git
 cd sietch-crm
-git checkout new-crm
+git checkout main
 
 # Configure
 cp config.example.env .env
