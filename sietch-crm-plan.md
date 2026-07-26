@@ -1,6 +1,6 @@
 # Sietch CRM v3 Migration Plan
 
-**Branch:** `new-crm` (pushed to `git@github.com:kachapman/onlyoffice-crm-kanban.git`)  
+**Branch:** `new-crm` (pushed to `git@github.com:kachapman/sietch-crm.git`)  
 **Target:** Fully replace the OnlyOffice CRM dependency with a self-contained PostgreSQL-backed Sietch CRM, then cut over from `main`.
 
 This document is the single source of truth for phases, progress, and open decisions. It is updated after every commit.
