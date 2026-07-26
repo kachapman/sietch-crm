@@ -7527,7 +7527,7 @@ function customFieldLabel(field) {
 }
 
 function customFieldTypeCode(def) {
-  const ft = def?.fieldType ?? def?.FieldType ?? def?.fieldTypeTitle ?? def?.FieldTypeTitle;
+  const ft = def?.fieldType ?? def?.FieldType ?? def?.fieldTypeTitle ?? def?.FieldTypeTitle ?? def?.type ?? def?.Type;
   if (typeof ft === "number" && ft >= 0 && ft <= 5) return ft;
   if (typeof ft === "string") {
     const s = ft.toLowerCase().replace(/\s+/g, "");
