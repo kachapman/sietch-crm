@@ -222,24 +222,20 @@
         }).join("");
       }
 
+    }
+
+    function renderUserFields(userFieldRows) {
       var fieldsEl = document.getElementById("project-fields");
-      var customFields = data.customFieldValues || data.CustomFieldValues || [];
-      var allFields = [];
-      if (customFields.length) {
-        for (var i = 0; i < customFields.length; i++) {
-          var cf = customFields[i];
-          var label = cf.label || cf.Label || cf.fieldKey || cf.FieldKey || "";
-          var val = cf.value || cf.Value || cf.fieldValue || cf.FieldValue || "";
-          if (val) {
-            allFields.push('<div class="project-field"><dt>' + esc(String(label)) + '</dt><dd>' + esc(String(val)) + '</dd></div>');
-          }
-        }
-      }
-      if (allFields.length) {
-        fieldsEl.innerHTML = allFields.join("");
-      } else {
+      if (!userFieldRows || !userFieldRows.length) {
         fieldsEl.style.display = "none";
+        return;
       }
+      var html = "";
+      for (var i = 0; i < userFieldRows.length; i++) {
+        var row = userFieldRows[i];
+        html += '<div class="project-field"><dt>' + esc(row.label) + '</dt><dd>' + esc(row.value) + '</dd></div>';
+      }
+      fieldsEl.innerHTML = html;
     }
 
     function renderEvents(events) {
@@ -462,6 +458,22 @@
       // Pre-fetch portal users for @mentions
       fetchUsers();
 
+      // Load custom field definitions for user fields
+      var cfDefs = [];
+      var cfDefsById = {};
+      try {
+        var cfDefsResp = await fetch("/api/v2/custom-fields", { credentials: "same-origin" });
+        if (cfDefsResp.ok) {
+          var cfDefsRaw = await cfDefsResp.json();
+          cfDefs = (cfDefsRaw.data || cfDefsRaw.rows || cfDefsRaw || []);
+          for (var ci = 0; ci < cfDefs.length; ci++) {
+            var d = cfDefs[ci];
+            var did = d.id ?? d.ID ?? d.fieldId ?? d.FieldId;
+            if (did != null) cfDefsById[String(did)] = d;
+          }
+        }
+      } catch(e) { /* ignore */ }
+
       try {
         var projResp = await fetch("/api/v2/projects/" + projectId, { credentials: "same-origin" });
         if (!projResp.ok) throw new Error("HTTP " + projResp.status);
@@ -470,6 +482,69 @@
         document.getElementById("project-title").textContent = opp.title || opp.Title || "Project #" + projectId;
         document.title = (opp.title || opp.Title || "Project") + " — Sietch CRM";
         renderFields(opp);
+
+        // Fetch user field values and cross-reference with definitions
+        try {
+          var cfValsResp = await fetch("/api/v2/projects/" + projectId + "/custom-fields", { credentials: "same-origin" });
+          if (cfValsResp.ok) {
+            var cfValsRaw = await cfValsResp.json();
+            var cfValues = (cfValsRaw.data || cfValsRaw.rows || cfValsRaw || []);
+            var userFieldRows = [];
+            var seen = {};
+            // First: render fields that have definitions (gets proper labels)
+            for (var di = 0; di < cfDefs.length; di++) {
+              var def = cfDefs[di];
+              var defId = def.id ?? def.ID ?? def.fieldId ?? def.FieldId;
+              if (defId == null) continue;
+              var typeCode = (function(ft) {
+                if (typeof ft === "number") return ft;
+                if (typeof ft === "string") {
+                  var s = ft.toLowerCase().replace(/\s+/g, "");
+                  if (s.includes("textarea")) return 1;
+                  if (s.includes("selectbox") || s === "select") return 2;
+                  if (s.includes("checkbox") || s === "check") return 3;
+                  if (s.includes("heading") || s === "head") return 4;
+                  if (s.includes("date")) return 5;
+                }
+                return 0;
+              })(def.fieldType ?? def.FieldType ?? def.fieldTypeTitle ?? def.FieldTypeTitle);
+              if (typeCode === 4) continue; // skip headings
+              var key = String(defId);
+              seen[key] = true;
+              var defLabel = def.label ?? def.Label ?? def.title ?? def.Title ?? def.name ?? ("Field " + defId);
+              // Find matching value
+              var rawVal = "";
+              for (var vi = 0; vi < cfValues.length; vi++) {
+                var vId = cfValues[vi].id ?? cfValues[vi].ID ?? cfValues[vi].fieldId ?? cfValues[vi].FieldId;
+                if (String(vId) === key) {
+                  rawVal = cfValues[vi].fieldValue ?? cfValues[vi].FieldValue ?? cfValues[vi].value ?? cfValues[vi].Value ?? "";
+                  break;
+                }
+              }
+              var displayVal;
+              if (typeCode === 3) {
+                var t = String(rawVal).trim().toLowerCase();
+                displayVal = (t === "false" || t === "0" || t === "no" || t === "off" || t === "") ? "No" : "Yes";
+              } else {
+                displayVal = String(rawVal).trim();
+                if (!displayVal) continue;
+              }
+              userFieldRows.push({ label: String(defLabel), value: displayVal });
+            }
+            // Second: render remaining values without definitions
+            for (var vi2 = 0; vi2 < cfValues.length; vi2++) {
+              var item = cfValues[vi2];
+              var fid = item.id ?? item.ID ?? item.fieldId ?? item.FieldId;
+              if (fid == null || seen[String(fid)]) continue;
+              var lbl = item.label ?? item.Label ?? item.title ?? item.Title ?? ("Field " + fid);
+              var val = item.fieldValue ?? item.FieldValue ?? item.value ?? item.Value ?? "";
+              val = String(val).trim();
+              if (!val) continue;
+              userFieldRows.push({ label: String(lbl), value: val });
+            }
+            renderUserFields(userFieldRows);
+          }
+        } catch(e) { /* user fields non-critical */ }
       } catch(err) {
         showError(err.message || "Failed to load project");
         return;
