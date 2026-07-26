@@ -1511,35 +1511,42 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except json.JSONDecodeError:
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
-        sets = ["updated_at = NOW()", "updated_by = %s"]
-        params: list = [user["id"]]
-        for field, col in [("title", "title"), ("description", "description"), ("stageId", "stage_id"),
-                           ("bidValue", "bid_value"), ("contactId", "contact_id"),
-                           ("responsibleUserId", "responsible_user_id"), ("isPrivate", "is_private"),
-                           ("expectedCloseDate", "expected_close_date"), ("probability", "probability"),
-                           ("stageType", "stage_type")]:
-            if field in payload:
-                sets.append(f"{col} = %s")
-                params.append(payload[field])
-        params.append(opp_id)
-        db.execute(f"UPDATE opportunities SET {', '.join(sets)} WHERE id = %s", (*params,))
+        try:
+            sets = ["updated_at = NOW()", "updated_by = %s"]
+            params: list = [user["id"]]
+            for field, col in [("title", "title"), ("description", "description"), ("stageId", "stage_id"),
+                               ("bidValue", "bid_value"), ("contactId", "contact_id"),
+                               ("responsibleUserId", "responsible_user_id"), ("isPrivate", "is_private"),
+                               ("expectedCloseDate", "expected_close_date"), ("probability", "probability"),
+                               ("stageType", "stage_type")]:
+                if field in payload:
+                    sets.append(f"{col} = %s")
+                    params.append(payload[field])
+            params.append(opp_id)
+            db.execute(f"UPDATE opportunities SET {', '.join(sets)} WHERE id = %s", (*params,))
 
-        # Handle customFieldList if present
-        custom_field_list = payload.get("customFieldList")
-        if isinstance(custom_field_list, list):
-            for cf in custom_field_list:
-                field_id = cf.get("fieldId") or cf.get("id")
-                value = cf.get("fieldValue") or cf.get("value") or ""
-                if field_id is not None:
-                    db.execute(
-                        """INSERT INTO opportunity_custom_field_values (opportunity_id, field_id, field_value)
-                           VALUES (%s, %s, %s)
-                           ON CONFLICT (opportunity_id, field_id)
-                           DO UPDATE SET field_value = EXCLUDED.field_value""",
-                        (opp_id, str(field_id), str(value)),
-                    )
+            # Handle customFieldList if present
+            custom_field_list = payload.get("customFieldList")
+            if isinstance(custom_field_list, list):
+                for cf in custom_field_list:
+                    try:
+                        field_id = cf.get("fieldId") or cf.get("id")
+                        value = cf.get("fieldValue") or cf.get("value") or ""
+                        if field_id is not None:
+                            db.execute(
+                                """INSERT INTO opportunity_custom_field_values (opportunity_id, field_id, field_value)
+                                   VALUES (%s, %s, %s)
+                                   ON CONFLICT (opportunity_id, field_id)
+                                   DO UPDATE SET field_value = EXCLUDED.field_value""",
+                                (opp_id, str(field_id), str(value)),
+                            )
+                    except Exception as cf_err:
+                        logger.warning("Failed to save custom field %s for project %s: %s", field_id, opp_id, cf_err)
 
-        _json_response(self, 200, {"ok": True})
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            logger.exception("Failed to update project %s", opp_id)
+            _json_response(self, 500, {"error": str(e)})
 
     def _handle_project_delete(self, opp_id: int) -> None:
         user = _require_admin(self)
