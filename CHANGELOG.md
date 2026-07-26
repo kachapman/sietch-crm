@@ -11,6 +11,7 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Fixed stage showing `[object Object]`.** `stage` field from API is `{ title, id }` — now extracts `.title` before display.
 - **Added @-mention autocomplete to project page note editor.** Fetches portal users, dropdown on `@`, keyboard nav (Enter/Tab/Escape), colored mention chips, extracts user IDs on submit and passes `notifyUserList` to API.
 - **Added user fields to project page.** Fetches field definitions from `/api/v2/custom-fields` and saved values from `/api/v2/projects/{id}/custom-fields`, cross-references by fieldId to get proper labels. Handles checkbox (Yes/No), heading skip, and orphan values without definitions.
+- **Fixed user field save from deal-edit and preview modals.** `PUT /api/v2/projects/{id}` now processes `customFieldList` array — writes each field to `opportunity_custom_field_values` with upsert. Previously the server ignored `customFieldList` in the PUT body, so user field changes were silently dropped.
 - **Files:** `public/project.html`, `server.py`.
 
 ## Phase 2G — User Profile + Notifications ✅ COMPLETE
