@@ -7,7 +7,10 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Wired "Open in CRM" buttons to project detail page.** `crmOpportunityUrl(id)` now returns `/project/{id}` (was dead `#` stub). `crmTaskUrl(task)` extracts oppId from task and returns `/project/{oppId}`. All 5 call sites now open the standalone project page in a new tab.
 - **Renamed "Open in CRM" → "Open Project".** Updated `createCrmOpenLink()` default title, plus 3 HTML buttons (task preview modal, deal-edit modal, quick-note modal).
 - **Rewrote `public/project.html`** (390 lines). Dark theme via CSS variables from `styles.css`. Full project fields: stage, value, contact, due date, responsible, created, description, tags (High Priority highlight), custom fields (2-column grid). Add Note editor in "History & notes" section header — same location as preview modal. Contenteditable with format toolbar (B/I/U/S/lists/clear), submit to `POST /api/v2/projects/{id}/history` with `categoryId: 10`, re-fetches events after submit (no full reload). Mobile responsive (720px max-width, grid collapses).
-- **Files:** `public/app.js`, `public/index.html`, `public/project.html`.
+- **Fixed `/project/{id}` URL rewrite.** Changed from silent internal rewrite to 302 redirect so the browser URL gets `?id=` in the query string (JS reads `window.location.search`).
+- **Fixed stage showing `[object Object]`.** `stage` field from API is `{ title, id }` — now extracts `.title` before display.
+- **Added @-mention autocomplete to project page note editor.** Fetches portal users, dropdown on `@`, keyboard nav (Enter/Tab/Escape), colored mention chips, extracts user IDs on submit and passes `notifyUserList` to API.
+- **Files:** `public/project.html`, `server.py`.
 
 ## Phase 2G — User Profile + Notifications ✅ COMPLETE
 
