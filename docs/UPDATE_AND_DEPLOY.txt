@@ -1,6 +1,6 @@
 ================================================================================
   Sietch CRM Dashboard — Update & deploy workflow
-  Repo: https://github.com/kachapman/onlyoffice-crm-kanban
+  Repo: https://github.com/kachapman/sietch-crm
   Production: https://dashboard.publicadjustermidwest.com
 ================================================================================
 
@@ -48,8 +48,8 @@ PART A — ON YOUR DESKTOP (development machine)
 
    Notes:
    - Do NOT commit .env (secrets) or data/ (user profiles).
-   - SSH push: git@github.com:kachapman/onlyoffice-crm-kanban.git
-   - HTTPS push: https://github.com/kachapman/onlyoffice-crm-kanban.git
+- SSH push: git@github.com:kachapman/sietch-crm.git
+- HTTPS push: https://github.com/kachapman/sietch-crm.git
 
 
 --------------------------------------------------------------------------------
@@ -75,15 +75,15 @@ PART B — ON THE SERVER (DigitalOcean droplet)
 
 7. Backup user profiles (recommended)
 
-   cd /opt/vanguard/onlyoffice-crm-kanban
-   docker run --rm -v onlyoffice-crm-kanban_dashboard-data:/data -v $(pwd):/backup alpine \
+   cd /opt/vanguard/sietch-crm
+   docker run --rm -v sietch-crm_dashboard-data:/data -v $(pwd):/backup alpine \
      tar czf /backup/dashboard-data-$(date +%F).tar.gz -C /data .
 
    VERIFY: ls -lh /backup/dashboard-data-*.tar.gz shows a new non-zero file.
 
 8. Pull v1.4
 
-   cd /opt/vanguard/onlyoffice-crm-kanban
+   cd /opt/vanguard/sietch-crm
    git fetch origin
    git checkout main
    git pull --ff-only origin main
@@ -96,7 +96,7 @@ PART B — ON THE SERVER (DigitalOcean droplet)
    Only needed when new vars were added to config.example.env since last deploy.
    Do this BEFORE the docker compose build — the container reads .env at startup.
 
-   nano /opt/vanguard/onlyoffice-crm-kanban/.env
+   nano /opt/vanguard/sietch-crm/.env
 
    Document Server (OnlyOffice) — REQUIRED for document editing to work:
 
@@ -179,7 +179,7 @@ PART B — ON THE SERVER (DigitalOcean droplet)
           Message @vanguardupdates_bot on Telegram → expect a response.
 
     NOTE: The bot's required env var (TELEGRAM_BOT_TOKEN) must be in
-    /opt/vanguard/onlyoffice-crm-kanban/.env BEFORE the docker compose rebuild
+    /opt/vanguard/sietch-crm/.env BEFORE the docker compose rebuild
     (step 10), because the dashboard container reads .env at startup and uses
     TELEGRAM_BOT_TOKEN to authenticate bot API requests. If you forgot, run
     "docker compose up -d" (without --build) after adding it — Docker re-reads
@@ -286,7 +286,7 @@ List history: git log --oneline -15
 ROLLBACK — code on the server (to a previous commit or tag)
 
   ssh root@YOUR_DROPLET_IP
-  cd /opt/vanguard/onlyoffice-crm-kanban
+  cd /opt/vanguard/sietch-crm
 
   # See history
   git fetch origin
@@ -317,15 +317,15 @@ ROLLBACK — desktop clone only
 
 Optional: keep last Docker image before risky upgrade (on server)
 
-  docker tag onlyoffice-crm-kanban-dashboard:latest onlyoffice-crm-kanban-dashboard:backup-2026-06-05
+  docker tag sietch-crm-dashboard:latest sietch-crm-dashboard:backup-2026-06-05
   # Restore image later only if you did not rebuild from different code:
-  # docker tag onlyoffice-crm-kanban-dashboard:backup-2026-06-05 onlyoffice-crm-kanban-dashboard:latest
+  # docker tag sietch-crm-dashboard:backup-2026-06-05 sietch-crm-dashboard:latest
   # docker compose up -d
 
 Back up user profile data before major changes (server):
 
-  cd /opt/vanguard/onlyoffice-crm-kanban
-  docker run --rm -v onlyoffice-crm-kanban_dashboard-data:/data -v $(pwd):/backup alpine \
+  cd /opt/vanguard/sietch-crm
+  docker run --rm -v sietch-crm_dashboard-data:/data -v $(pwd):/backup alpine \
     tar czf /backup/dashboard-data-$(date +%F).tar.gz -C /data .
 
 
@@ -337,7 +337,7 @@ Desktop:
   cd ~/new-crm && git add -A && git commit -m "Describe change" && git push
 
 Server (dashboard, first time with bot):
-  cd /opt/vanguard/onlyoffice-crm-kanban && git pull
+  cd /opt/vanguard/sietch-crm && git pull
   # Edit .env to add TELEGRAM_BOT_TOKEN
   docker compose up -d --build
   # First-time bot setup:
@@ -345,7 +345,7 @@ Server (dashboard, first time with bot):
   systemctl daemon-reload && systemctl enable --now crm-telegram-bot
 
 Server (dashboard, normal update):
-  cd /opt/vanguard/onlyoffice-crm-kanban && git pull && docker compose up -d --build
+  cd /opt/vanguard/sietch-crm && git pull && docker compose up -d --build
 
 Server (Telegram bot, after dashboard deploy):
   systemctl restart crm-telegram-bot
