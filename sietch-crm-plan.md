@@ -43,7 +43,7 @@ This document is the single source of truth for phases, progress, and open decis
 
 ## Current state
 
-- `new-crm` is the working branch.
+- `main` is the working branch.
 - The dashboard runs standalone with PostgreSQL (sietch_crm), native auth, v2 API, Document Server.
 - One-time import of OnlyOffice data completed (1191 opps, 38898 history, 11 users, 16 contacts, 18 stages, 21 tags defs). Data KEPT (no wipe). Tags/tasks per-opp not transferred in bulk export; will be addressed via future read-only enrich/sync (not blocking functionality).
 - Focus: make Sietch fully functional standalone first (create/edit deals, no reliance on OO for core). Import diagnosis deprioritized; move through phases per plan, revisit import/sync later.
