@@ -14,6 +14,7 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Fixed user field save from deal-edit and preview modals.** `PUT /api/v2/projects/{id}` now processes `customFieldList` array — writes each field to `opportunity_custom_field_values` with upsert. Previously the server ignored `customFieldList` in the PUT body, so user field changes were silently dropped.
 - **Fixed FK constraint violation on project update.** `contactId: 0` and `responsibleUserId: 0` from the frontend are now converted to `NULL` before the DB UPDATE, preventing `opportunities_contact_id_fkey` violations when no contact/responsible user is set.
 - **Fixed checkbox user field display.** `customFieldTypeCode()` now also checks `def.type` (server returns `{ type: 3 }` not `{ fieldType: 3 }`). Previously checkboxes always returned type 0 (text), so `formatCustomFieldValueForDisplay` returned `"true"` instead of `"Yes"`, and the checklist renderer showed ✗ instead of ✓.
+- **Fixed checkbox uncheck not persisting.** Both `collectPreviewCustomFieldValues` and `collectDealEditCustomFieldValues` now send `"false"` for unchecked checkboxes instead of skipping them entirely. Previously, unchecking a checkbox sent nothing, so the old `"true"` value remained in the DB.
 - **Files:** `public/project.html`, `server.py`.
 
 ## Phase 2G — User Profile + Notifications ✅ COMPLETE
