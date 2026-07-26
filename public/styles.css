@@ -4751,7 +4751,7 @@ body {
   margin-top: 0.4rem;
 }
 
-.opp-preview-field-chk {
+.opp-preview-field.opp-preview-field-chk {
   flex-direction: row;
   align-items: center;
   gap: 0.2rem;
@@ -4760,14 +4760,14 @@ body {
   border-radius: var(--radius-sm, 4px);
   background: transparent;
 }
-.opp-preview-chk-yes {
+.opp-preview-field.opp-preview-field-chk .opp-preview-chk-yes {
   color: var(--success, #22c55e);
   font-size: 0.75rem;
   font-weight: 600;
   flex-shrink: 0;
   line-height: 1;
 }
-.opp-preview-chk-no {
+.opp-preview-field.opp-preview-field-chk .opp-preview-chk-no {
   color: var(--muted);
   font-size: 0.75rem;
   flex-shrink: 0;
