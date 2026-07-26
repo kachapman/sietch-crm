@@ -459,12 +459,31 @@ F. Lightweight `project.html` page for mobile Telegram notification links
 | `CHANGELOG.md` | Release notes |
 | `AGENTS.md` | Session summary |
 
-### Phase 3: Email + IMAP
+### Phase 3: Email + IMAP ✅ SCOPE DEFINED (awaiting start)
 
-- 3A: IMAP sync module (`imap_sync.py`, `mail_accounts`, `mail_messages`, `mail_deal_links`).
-- 3B: Mail UI tile, link to project, thread view.
+**Architecture:** Separate Docker container (`vanguard-mail-scanner`) running a Python IMAP daemon using `imap_tools`. Communicates with the dashboard via `POST /api/v2/mail/*` endpoints in `server.py`. Shares the `vanguard-internal` Docker network. Can be updated independently (separate compose file). Pulls the mature scanner daemon, classifier engine, and admin panel UI from the `email_scanner` branch (219 commits), adapting them for IMAP instead of CRM API calls.
 
-**Deferred until after deployment.**
+**Scope decisions:**
+- Both shared CRM inbox(es) + per-user inboxes (via `mail_accounts` table)
+- Full email storage in DB (all modules/shutdown of OnlyOffice — self-contained)
+- At least every 5 minutes polling (configurable)
+- Attachments stored in DB as base64 (self-contained, no file system)
+- Separate container so scanner/daemon/classifier can be updated independently
+- Inboxes/settings accessed via modal (not sidebar) — aligns with existing scanner admin panel pattern
+- Pagination on all mail API endpoints; UID watermark for incremental sync of large volumes
+- Per-account/inbox filtering; email tagging; templates; drafts
+
+- **3A: IMAP sync module.** Pull `mail_scanner.py` from `email_scanner` branch (classifier engine, action toggles, dedup logic). Replace CRM API mail calls with `imap_tools` IMAP fetch. Add pagination, UID watermark-based incremental sync for large volumes, `[#DEAL-ID]` subject auto-link regex, per-account folder filtering, attachment fetch/storage. New `mail_tags`, `mail_templates` tables in `init.sql`. Store full emails (body_html, body_text) in `mail_messages`.
+
+- **3B: Scanner admin panel UI.** Pull `scanner/scanner_service.py` from `email_scanner` branch. Adapt for IMAP account management: add/edit/delete mail accounts, inbox configuration, per-inbox filtering, tag management, templates, drafts compose. Modal-based (not sidebar). Includes connection indicator, log viewer, reprocess endpoint. Also pull `scanner/docker-compose.scanner.example.yml`, `scanner/.env.example`, adapt for IMAP settings.
+
+- **3C: Deal title tooltip + copy.** Small icon next to deal title in preview modal showing `project_number` as tooltip; click copies to clipboard. Users include `[#12345]` in email subject → auto-linked to that deal.
+
+- **3D: Universal CRM inbox UI.** Modal showing all emails from shared CRM inbox(es) for record keeping/linking. Access limited to select users (admins + designated staff). Reuses existing inbox modal pattern in `app.js`.
+
+**Not built yet:** ML classifier training (dry-run on `email_scanner` branch), OAuth2 (deferred), IMAP IDLE/push (polling only).
+
+**Deferred until Sietch deployment is ready and OnlyOffice CRM mail module shutdown is scheduled.**
 
 ### Phase 4: Bidirectional Sync
 
@@ -493,16 +512,21 @@ F. Lightweight `project.html` page for mobile Telegram notification links
 | `sietch-crm-plan.md` | This plan | ongoing |
 | `import_json_export.py` | Import exported JSON into PostgreSQL | 2 (export tooling) |
 | `sync_worker.py` | Hourly bidirectional sync | 4 |
-| `imap_sync.py` | IMAP email sync | 3 (deferred) |
+| `scanner/mail_scanner.py` | IMAP sync daemon + classifier engine (pulled from email_scanner branch) | 3 |
+| `scanner/scanner_service.py` | Scanner admin panel HTTP service (pulled from email_scanner branch) | 3 |
+| `scanner/Dockerfile` | Scanner container image (adapted from email_scanner branch) | 3 |
+| `scanner/docker-compose.scanner.yml` | Scanner compose file | 3 |
+| `scanner/.env.example` | Scanner env template (IMAP, poll interval, fetch limit) | 3 |
+| `init.sql` | Add `mail_tags`, `mail_tag_assignments`, `mail_templates` tables | 3 |
 
 ## Files to modify
 
 | File | Changes |
 |------|---------|
-| `public/app.js` | Phase 1 follow-up: kanban fields, `localeCompare`, card title click, active-user filter. Phase 2I: preview modal restructuring (description first, stage dropdown, tag add/remove, specialty checkbox 3-col). |
-| `server.py` | Phase 1 follow-up: move `POST /api/branding` to `_handle_api_post_put`. Phase 2C: admin handlers. Phase 2I: stage update endpoint for preview modal. Phase 4: sync endpoints. |
-| `public/index.html` | Phase 2C: Unified Admin Modal. Phase 2E: photo tab. Phase 2G: profile modal. Phase 2I: preview modal layout changes. |
-| `public/styles.css` | Phase 2C: admin theme. Phase 2D: grid layout. Phase 2I: preview modal field grid, specialty checkbox 3-col, discrete tooltip styling. |
+| `public/app.js` | Phase 1 follow-up: kanban fields, `localeCompare`, card title click, active-user filter. Phase 2I: preview modal restructuring (description first, stage dropdown, tag add/remove, specialty checkbox 3-col). Phase 3: inbox modal UI, pagination, tag filtering, template/draft compose, deal title tooltip+copy. |
+| `server.py` | Phase 1 follow-up: move `POST /api/branding` to `_handle_api_post_put`. Phase 2C: admin handlers. Phase 2I: stage update endpoint for preview modal. Phase 3: `/api/v2/mail/*` endpoints (inbox fetch, link email, tags, templates, drafts). Phase 4: sync endpoints. |
+| `public/index.html` | Phase 2C: Unified Admin Modal. Phase 2E: photo tab. Phase 2G: profile modal. Phase 2I: preview modal layout changes. Phase 3: inbox trigger (modal, not sidebar). |
+| `public/styles.css` | Phase 2C: admin theme. Phase 2D: grid layout. Phase 2I: preview modal field grid, specialty checkbox 3-col, discrete tooltip styling. Phase 3: inbox modal styles. |
 | `migrate_from_onlyoffice.py` | Phase 2: add `--export-only` mode. |
 | `migrate_dashboard_data.py` | Phase 2: fix user ID mapping. |
 | `AGENTS.md` | Updated after every session. |
