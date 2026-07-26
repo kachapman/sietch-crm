@@ -1520,8 +1520,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                ("expectedCloseDate", "expected_close_date"), ("probability", "probability"),
                                ("stageType", "stage_type")]:
                 if field in payload:
+                    val = payload[field]
+                    if field in ("contactId", "responsibleUserId") and (val == 0 or val == "0" or val == ""):
+                        val = None
                     sets.append(f"{col} = %s")
-                    params.append(payload[field])
+                    params.append(val)
             params.append(opp_id)
             db.execute(f"UPDATE opportunities SET {', '.join(sets)} WHERE id = %s", (*params,))
 
