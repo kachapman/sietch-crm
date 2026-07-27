@@ -14,16 +14,26 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Docs.** `docs/MAIL_SCANNER_PLAN.md` (detailed spec), `migrations/001_add_mail_tables.sql`.
 - **Files:** `server.py`, `db.py`, `notification_dispatcher.py`, `docker-compose.yml`, `config.example.env`, `init.sql`, `public/app.js`, `scanner/*`, `docs/MAIL_SCANNER_PLAN.md`, `import_email.py`, `migrations/001_add_mail_tables.sql`, `AGENTS.md`.
 
-## Phase 3 — Email Scanner (2026-07-26)
+## Phase 3 — Email Module (2026-07-26)
 
-- **Full email module build.** Modal renamed to "Email". Tabler icons throughout. Tab row for account switching with unread badges. Sidebar shows folders (Inbox/Sent/Outbox/Drafts/Templates) + tag list. Compose popup modal with To/Cc/Bcc/Subject/Deal-link-search/Body/Send. Link-to-deal moved to toolbar as dropdown. Mobile-responsive toolbar (flex-wrap, search-first on mobile, less-critical buttons hidden).
-- **Backend rename: `vanguard` → `sietch`.** All backend references updated: `SESSION_COOKIE` → `sietch_session`, portal name → `"sietch"` (30+ occurrences in `server.py`), Docker network `vanguard-internal` → `sietch-internal`, `notification_dispatcher.py` PORTAL → `"sietch"`, `db.py` fallback defaults → `sietch_crm`/`sietch`.
-- **New DB tables.** `mail_tags`, `mail_tag_assignments`, `mail_templates` (section 7.14–7.15), `mail_account_access` (account sharing), `mail_outgoing` (sent email tracking). Extended `mail_accounts` with SMTP columns + OAuth columns. Existing sections renumbered.
-- **20+ `/api/v2/mail/*` endpoints.** inbox, messages CRUD, mark read/unread, link-to-deal, tags, templates, accounts CRUD, sharing, unread-count, outgoing, send, status, log, config, reprocess. Account filtering by `account_id` and `folder` params.
-- **SMTP sending.** `send_email_from_account()` in `smtp_client.py` reads per-account SMTP config from DB. `POST /api/v2/mail/send` sends email, stores in `mail_outgoing`, links to deal if `deal_id` provided.
-- **Scanner module (`scanner/`).** IMAP polling via `imap_tools`, classifier pipeline from `email_scanner` branch, ML head support, `Dockerfile`, `docker-compose.scanner.yml`, `scanner_service.py`, `.env.example`, requirements.
-- **Frontend: account tabs, folders, tags, compose.** Tab row with account tabs + Compose + Scanner. Sidebar shows folder navigation with unread badges + tag list. Compose popup modal with deal-link search. Link-to-deal dropdown in toolbar (expands left, mobile-safe). Tabler icons on all buttons.
-- **Import script.** `import_email.py` — Phase 4 stub for old CRM email migration.
+- **Full email module build.** Modal renamed to "Email". Tabler icons throughout. Tabs in modal title bar (CRM Mail + user accounts + Admin). Compose button in toolbar with mail-plus SVG. Compact compose layout (fields < 1/3, body fills rest).
+- **Backend rename: `vanguard` → `sietch`.** All backend references updated: `SESSION_COOKIE` → `sietch_session`, portal name → `"sietch"`, Docker network `vanguard-internal` → `sietch-internal`.
+- **New DB tables.** `mail_tags`, `mail_tag_assignments`, `mail_templates`, `mail_account_access` (account sharing), `mail_outgoing` (sent tracking), `mail_contacts` (per-user). Extended `mail_accounts` with SMTP + OAuth + signature columns. Added `starred` to `mail_messages`, `attachments_json` to `mail_outgoing`.
+- **30+ `/api/v2/mail/*` endpoints.** inbox, messages CRUD, mark read/unread, star, archive, move, link-to-deal, tags, templates, accounts CRUD, sharing, unread-count, trash-count, outgoing, send, undo-send, drafts, signature, contacts CRUD, contacts import/export, threads, status, log, config, reprocess.
+- **SMTP sending with attachments.** `send_email_from_account()` in `smtp_client.py` reads per-account SMTP config from DB, supports file attachments (MIME multipart). `POST /api/v2/mail/send` sends email, stores in `mail_outgoing`, links to deal if `deal_id` provided. 5-second undo send with `POST /api/v2/mail/send/undo`.
+- **Reply / Reply All / Forward.** Buttons in email detail view. Pre-fills compose modal with recipients, `Re:`/`Fwd:` subject prefix, quoted original body.
+- **Per-account signatures.** Signature field in account settings modal (rich text). Auto-inserted in compose body on new messages.
+- **Star/Flag.** Clickable star per message in list. Star column in header. `PUT /api/v2/mail/messages/{id}/star` toggle.
+- **Archive.** Button in toolbar. `PUT /api/v2/mail/messages/{id}/archive`. Archive folder in sidebar.
+- **Move to folder.** Dropdown in toolbar. `PUT /api/v2/mail/messages/{id}/move` with target folder.
+- **Attachments.** File upload in compose (10MB per file, 25MB total). Base64 conversion and MIME attachment in SMTP send. Attachment metadata stored as JSONB.
+- **Drafts.** Save Draft button in compose. Drafts folder shows draft messages from `mail_outgoing WHERE status='draft'`.
+- **Templates.** Template picker dropdown in compose. Templates CRUD in Scanner Admin panel.
+- **Contact database.** Per-user `mail_contacts` table. Autocomplete in To/Cc/Bcc fields. Import from CSV, export to CSV.
+- **Conversation threading.** Group messages by `conversation_id`. Thread count badge. Toggle between flat and threaded views.
+- **Scanner module (`scanner/`).** IMAP polling via `imap_tools`, classifier pipeline from `email_scanner` branch, ML head support, Dockerfile, compose, scanner_service.
+- **Keyboard shortcuts.** `j`/`k` navigate, `Escape` deselect (only when email modal focused).
+- **Dark mode contrast.** Lower opacity on folder buttons, tag items, tabs, toolbar ghost buttons, dropdown elements.
 - **Files:** `server.py`, `db.py`, `notification_dispatcher.py`, `docker-compose.yml`, `config.example.env`, `init.sql`, `public/app.js`, `public/index.html`, `public/styles.css`, `scanner/*`, `smtp_client.py`, `docs/MAIL_SCANNER_PLAN.md`, `import_email.py`, `migrations/001_add_mail_tables.sql`, `AGENTS.md`.
 
 ## Phase 2G — project.html + Open Project button (2026-07-26)
