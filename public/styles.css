@@ -3936,6 +3936,24 @@ body {
   /* reuse some preview styles but scope for readability */
   font-size: 0.85rem;
 }
+/* Dark mode contrast adjustments for mail components */
+.mail-folder-btn { color: var(--text); opacity: 0.85; }
+.mail-folder-btn:hover { opacity: 1; }
+.mail-folder-btn.active { opacity: 1; }
+.mail-tag-item { color: var(--text); opacity: 0.85; }
+.mail-tag-item:hover { opacity: 1; }
+.mail-inbox-tab { color: var(--muted); }
+.mail-inbox-tab:hover { color: var(--text); opacity: 0.9; }
+.mail-inbox-tab.active { color: var(--accent); opacity: 1; }
+.mail-link-deal-dropdown input { background: var(--bg); color: var(--text); border-color: var(--border); }
+.mail-link-deal-dropdown button { color: var(--text); }
+.mail-link-deal-dropdown button:hover { background: var(--bg-elevated); }
+.mail-link-deal-dropdown button.selected { background: var(--accent-subtle); color: var(--accent); }
+#compose-body { background: var(--bg); color: var(--text); }
+.mail-toolbar .btn-ghost { color: var(--text); opacity: 0.8; }
+.mail-toolbar .btn-ghost:hover { opacity: 1; }
+.mail-toolbar .btn-ghost:disabled { opacity: 0.4; }
+.mail-toolbar input[type="search"] { background: var(--bg); color: var(--text); border-color: var(--border); }
 /* Emoji picker as a floating overlay (used by inline DM) */
 .presence-emoji-picker-overlay {
   position: fixed;

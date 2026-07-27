@@ -15218,6 +15218,7 @@ async function openMailInboxModal() {
   await renderMailTabs();
   await renderMailFolders();
   await renderMailUnreadBadge();
+  await updateTrashCount();
   attachMailModalListeners();
 }
 
@@ -15278,7 +15279,6 @@ function switchMailTab(btn) {
   const tabName = btn.dataset.mailtab;
 
   const inboxContainer = $('#mail-list-container');
-  const scannerAdmin = $('#mail-scanner-admin');
   const toolbar = $('.mail-toolbar');
   const sidebar = $('.mail-right-sidebar');
   const sidebarToggle = $('#mail-sidebar-toggle');
@@ -15286,7 +15286,6 @@ function switchMailTab(btn) {
 
   if (tabName === 'inbox') {
     if (inboxContainer) inboxContainer.classList.remove('hidden');
-    if (scannerAdmin) scannerAdmin.classList.add('hidden');
     if (toolbar) toolbar.classList.remove('hidden');
     if (sidebar) sidebar.parentElement?.classList.remove('hidden');
     if (sidebarToggle) sidebarToggle.classList.remove('hidden');
@@ -15304,26 +15303,18 @@ function switchMailTab(btn) {
     renderMailUnreadBadge();
   } else if (tabName === 'compose') {
     if (inboxContainer) inboxContainer.classList.add('hidden');
-    if (scannerAdmin) scannerAdmin.classList.add('hidden');
     if (toolbar) toolbar.classList.add('hidden');
     if (sidebar) sidebar.parentElement?.classList.add('hidden');
     if (sidebarToggle) sidebarToggle.classList.add('hidden');
     if (mailMainArea) mailMainArea.style.display = 'none';
     openComposeModal();
-  } else if (tabName === 'scanner-admin') {
-    if (inboxContainer) inboxContainer.classList.add('hidden');
-    if (scannerAdmin) scannerAdmin.classList.remove('hidden');
-    if (toolbar) toolbar.classList.add('hidden');
-    if (sidebar) sidebar.parentElement?.classList.add('hidden');
-    if (sidebarToggle) sidebarToggle.classList.add('hidden');
-    if (mailMainArea) mailMainArea.style.display = '';
-    populateEmailScannerTab();
   }
 }
 
 async function openComposeModal() {
   const modal = $('#compose-email-modal');
   if (!modal) return;
+  bindComposeEmailModal();
   modal.classList.remove('hidden');
 
   // Populate From dropdown
@@ -15388,7 +15379,7 @@ async function openComposeModal() {
       const cc = $('#compose-cc')?.value.trim() || null;
       const bcc = $('#compose-bcc')?.value.trim() || null;
       const subject = $('#compose-subject')?.value.trim();
-      const body = $('#compose-body')?.value;
+      const body = $('#compose-body')?.innerHTML || '';
       const dealId = parseInt($('#compose-deal-selected')?.dataset?.dealId) || null;
       if (!accountId || !to || !subject) { showToast('From, To, and Subject are required', true); return; }
       sendBtn.disabled = true;
@@ -15416,6 +15407,26 @@ async function openComposeModal() {
       }
     });
   }
+}
+
+function bindComposeEmailModal() {
+  const modal = $('#compose-email-modal');
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = '1';
+  modal.querySelectorAll('[data-compose-email-dismiss]').forEach(el => {
+    el.addEventListener('click', () => {
+      modal.classList.add('hidden');
+      const inboxTab = document.querySelector('.mail-inbox-tab[data-mailtab="inbox"]');
+      if (inboxTab) switchMailTab(inboxTab);
+    });
+  });
+  modal.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      modal.classList.add('hidden');
+      const inboxTab = document.querySelector('.mail-inbox-tab[data-mailtab="inbox"]');
+      if (inboxTab) switchMailTab(inboxTab);
+    }
+  });
 }
 
 function attachMailModalListeners() {
@@ -15660,33 +15671,27 @@ function attachMailModalListeners() {
       mailState.activeFolder = btn.dataset.folder || "INBOX";
       loadMailMessagesForModal();
     });
-  }
-
-  // scanner admin toggle
-  const scannerToggle = $("#mail-scanner-toggle");
-  if (scannerToggle && !scannerToggle.dataset.bound) {
-    scannerToggle.dataset.bound = "1";
-    scannerToggle.addEventListener("click", () => {
-      const adminPanel = $("#mail-scanner-admin");
-      const listContainer = $("#mail-list-container");
-      const sideBar2 = $(".mail-right-sidebar", modal);
-      const toggleBtn2 = $("#mail-sidebar-toggle");
-      if (!adminPanel) return;
-      const showing = !adminPanel.classList.contains("hidden");
-      if (showing) {
-        adminPanel.classList.add("hidden");
-        if (listContainer) listContainer.classList.remove("hidden");
-        if (sideBar2) sideBar2.parentElement?.querySelector(".mail-sidebar-toggle")?.classList.remove("hidden");
-        scannerToggle.innerHTML = '<i class="ti ti-settings"></i> Scanner';
-      } else {
-        adminPanel.classList.remove("hidden");
-        if (listContainer) listContainer.classList.add("hidden");
-        if (sideBar2) sideBar2.classList.add("mail-sidebar-collapsed");
-        if (toggleBtn2) toggleBtn2.classList.add("hidden");
-        scannerToggle.innerHTML = '<i class="ti ti-mail"></i> Inbox';
-        populateEmailScannerTab();
-      }
-    });
+    // Trash context menu
+    const trashBtn = folderList.querySelector('[data-folder="Trash"]');
+    const trashCtx = $('#mail-trash-context-menu');
+    if (trashBtn && trashCtx) {
+      trashBtn.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        trashCtx.style.display = 'block';
+        trashCtx.style.left = e.clientX + 'px';
+        trashCtx.style.top = e.clientY + 'px';
+      });
+      document.addEventListener('click', () => { trashCtx.style.display = 'none'; });
+      $('#mail-empty-trash-btn')?.addEventListener('click', async () => {
+        trashCtx.style.display = 'none';
+        try {
+          await api('/api/v2/mail/empty-trash', { method: 'POST' });
+          showToast('Trash emptied');
+          loadMailMessagesForModal();
+          updateTrashCount();
+        } catch (e) { showToast('Failed: ' + e.message, true); }
+      });
+    }
   }
 }
 
@@ -15764,6 +15769,17 @@ async function renderMailUnreadBadge() {
   if (!badge) return;
   try {
     const data = await api("/api/v2/mail/unread-count");
+    const count = data.count || 0;
+    badge.textContent = count > 0 ? count : '';
+    badge.style.display = count > 0 ? 'inline' : 'none';
+  } catch { badge.style.display = 'none'; }
+}
+
+async function updateTrashCount() {
+  const badge = $('#mail-trash-count');
+  if (!badge) return;
+  try {
+    const data = await api('/api/v2/mail/trash-count');
     const count = data.count || 0;
     badge.textContent = count > 0 ? count : '';
     badge.style.display = count > 0 ? 'inline' : 'none';

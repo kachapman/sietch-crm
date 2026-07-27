@@ -963,6 +963,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/mail/config":
             self._handle_mail_config()
             return
+        if api_path == "/api/v2/mail/trash-count":
+            self._handle_mail_trash_count()
+            return
 
         self.send_error(404)
 
@@ -1383,6 +1386,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # Send email
         if api_path == "/api/v2/mail/send" and method == "POST":
             self._handle_mail_send()
+            return
+        # Empty trash
+        if api_path == "/api/v2/mail/empty-trash" and method == "POST":
+            self._handle_mail_empty_trash()
             return
 
         self.send_error(404)
@@ -4784,10 +4791,26 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_message_delete(self, message_id: int) -> None:
         try:
-            db.execute("DELETE FROM mail_messages WHERE id = %s", (message_id,))
+            db.execute("UPDATE mail_messages SET folder = 'Trash' WHERE id = %s", (message_id,))
             _json_response(self, 200, {"ok": True})
         except Exception as e:
-            logger.exception("Failed to delete message %d", message_id)
+            logger.exception("Failed to trash message %d", message_id)
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_trash_count(self) -> None:
+        try:
+            row = db.query_one("SELECT COUNT(*) AS cnt FROM mail_messages WHERE folder = 'Trash'")
+            _json_response(self, 200, {"count": row["cnt"] if row else 0})
+        except Exception as e:
+            logger.exception("Failed to get trash count")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_empty_trash(self) -> None:
+        try:
+            result = db.execute("DELETE FROM mail_messages WHERE folder = 'Trash'")
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            logger.exception("Failed to empty trash")
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_message_add_tag(self, message_id: int) -> None:
