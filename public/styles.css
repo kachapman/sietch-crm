@@ -11194,4 +11194,17 @@ body {
   display: flex;
   flex-direction: column;
 }
+.mail-inline-reply {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.mail-inline-reply label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+}
 

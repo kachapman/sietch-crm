@@ -15319,20 +15319,25 @@ function switchMailTab(btn) {
     loadMailMessagesForModal();
     renderMailUnreadBadge();
   } else if (tabName === 'scanner-admin') {
-    if (inboxContainer) { inboxContainer.classList.add('hidden'); inboxContainer.style.flex = '0'; }
+    if (inboxContainer) inboxContainer.classList.add('hidden');
     if (toolbar) toolbar.classList.add('hidden');
-    if (scannerDiv) { scannerDiv.classList.remove('hidden'); scannerDiv.style.flex = '1'; }
+    if (scannerDiv) {
+      scannerDiv.classList.remove('hidden');
+      scannerDiv.style.flex = '1 1 0%';
+      scannerDiv.style.width = '100%';
+      scannerDiv.style.minWidth = '0';
+    }
     if (sidebar) sidebar.parentElement?.classList.add('hidden');
     if (sidebarToggle) sidebarToggle.classList.add('hidden');
-    if (mailMainArea) mailMainArea.style.display = '';
+    if (mailMainArea) { mailMainArea.style.display = 'flex'; mailMainArea.style.flexDirection = 'column'; }
     populateEmailScannerTab();
   } else if (tabName === 'add-account') {
-    // Open account settings modal in create mode
     openAccountSettingsModal();
-    // Re-activate the previous tab
+    // Re-activate CRM Mail tab
     tabs.forEach(t => t.classList.remove('active'));
-    const prevTab = tabsEl?.querySelector('.mail-inbox-tab.active') || tabsEl?.querySelector('[data-mailtab="inbox"]');
-    if (prevTab) prevTab.classList.add('active');
+    const crmTab = btn.parentElement?.querySelector('[data-account-id="crm"]');
+    if (crmTab) crmTab.classList.add('active');
+    else { const first = btn.parentElement?.querySelector('.mail-inbox-tab'); if (first) first.classList.add('active'); }
   }
 }
 
@@ -17700,6 +17705,93 @@ function normalizeMailMessage(mail) {
   return { subject, from, toList, htmlBody, textBody, date };
 }
 
+function renderInlineReply(panel, type, messageId, norm) {
+  // Remove any existing inline reply
+  const existing = panel.querySelector('.mail-inline-reply');
+  if (existing) { existing.remove(); return; }
+
+  const from = norm.from || "";
+  const subject = norm.subject || "";
+  const toList = norm.toList || "";
+  const date = norm.date || "";
+  const bodyPick = pickMailBodyForDisplay(norm);
+  const bodyText = bodyPick?.text || bodyPick?.html || "";
+
+  const replyDiv = document.createElement("div");
+  replyDiv.className = "mail-inline-reply";
+
+  let to = "", subjectLine = "", quotedBody = "";
+  if (type === "reply") {
+    to = from;
+    subjectLine = "Re: " + (subject.startsWith("Re:") ? subject.slice(3).trim() : subject);
+    quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
+  } else if (type === "reply-all") {
+    to = from;
+    subjectLine = "Re: " + (subject.startsWith("Re:") ? subject.slice(3).trim() : subject);
+    quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
+  } else {
+    to = "";
+    subjectLine = "Fwd: " + (subject.startsWith("Fwd:") ? subject.slice(4).trim() : subject);
+    quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;">---------- Forwarded message ----------<br>From: ${escapeHtml(from)}<br>Date: ${escapeHtml(date)}<br>Subject: ${escapeHtml(subject)}</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
+  }
+
+  replyDiv.innerHTML = `
+    <div style="display:flex; gap:0.5rem; margin-bottom:0.4rem;">
+      <label style="font-size:0.8rem; color:var(--muted); width:2rem;">To</label>
+      <input type="email" class="inline-reply-to" value="${escapeHtml(to)}" style="flex:1; padding:0.3rem 0.4rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem; background:var(--bg); color:var(--text);">
+    </div>
+    <div style="display:flex; gap:0.5rem; margin-bottom:0.4rem;">
+      <label style="font-size:0.8rem; color:var(--muted); width:2rem;">Subj</label>
+      <input type="text" class="inline-reply-subject" value="${escapeHtml(subjectLine)}" style="flex:1; padding:0.3rem 0.4rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem; background:var(--bg); color:var(--text);">
+    </div>
+    <div class="note-format-toolbar" aria-label="Formatting" style="flex-shrink:0; border:1px solid var(--border); border-bottom:none; border-radius:4px 4px 0 0; background:var(--bg-elevated);">
+      <button type="button" class="note-format-btn" data-cmd="bold" title="Bold"><b>B</b></button>
+      <button type="button" class="note-format-btn" data-cmd="italic" title="Italic"><i>I</i></button>
+      <button type="button" class="note-format-btn" data-cmd="underline" title="Underline"><u>U</u></button>
+      <span class="note-format-sep"></span>
+      <button type="button" class="note-format-btn" data-cmd="insertUnorderedList" title="Bullet list">•</button>
+      <button type="button" class="note-format-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
+      <button type="button" class="note-format-btn" data-cmd="formatBlock" data-val="blockquote" title="Quote" style="font-family:serif; font-style:italic;">"</button>
+      <span class="note-format-sep"></span>
+      <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear formatting">⌫</button>
+    </div>
+    <div class="inline-reply-body note-editor" contenteditable="true" data-placeholder="Write your reply..." style="min-height:120px; border:1px solid var(--border); border-radius:0 0 4px 4px; padding:0.5rem; background:var(--bg); color:var(--text); overflow-y:auto; max-height:300px;">${quotedBody}</div>
+    <div style="display:flex; gap:0.5rem; margin-top:0.5rem; justify-content:flex-end;">
+      <button type="button" class="btn btn-ghost btn-small inline-reply-cancel"><i class="ti ti-x"></i> Cancel</button>
+      <button type="button" class="btn btn-primary btn-small inline-reply-send"><i class="ti ti-send"></i> Send</button>
+    </div>
+  `;
+
+  panel.appendChild(replyDiv);
+
+  // Focus the body
+  const body = replyDiv.querySelector('.inline-reply-body');
+  if (body) { body.focus(); }
+
+  // Bind cancel
+  replyDiv.querySelector('.inline-reply-cancel').addEventListener("click", () => replyDiv.remove());
+
+  // Bind send
+  replyDiv.querySelector('.inline-reply-send').addEventListener("click", async () => {
+    const toVal = replyDiv.querySelector('.inline-reply-to').value.trim();
+    const subjectVal = replyDiv.querySelector('.inline-reply-subject').value.trim();
+    const bodyHtml = replyDiv.querySelector('.inline-reply-body').innerHTML;
+    if (!toVal || !subjectVal) { showToast("To and Subject are required", true); return; }
+    try {
+      // Find first available account for sending
+      const accounts = mailState.accounts || [];
+      const accountId = accounts.length > 0 ? accounts[0].id : null;
+      if (!accountId) { showToast("No mail account configured for sending", true); return; }
+      await api("/api/v2/mail/send", {
+        method: "POST",
+        body: JSON.stringify({ account_id: accountId, to: toVal, subject: subjectVal, body: bodyHtml })
+      });
+      showToast("Reply sent");
+      replyDiv.remove();
+    } catch (e) { showToast("Send failed: " + e.message, true); }
+  });
+}
+
 function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openUrl = "" } = {}) {
   panel.innerHTML = "";
   const norm = normalizeMailMessage(mail);
@@ -17802,7 +17894,7 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
   replyBtn.title = "Reply";
   replyBtn.innerHTML = '<i class="ti ti-arrow-back-up"></i> Reply';
   replyBtn.addEventListener("click", () => {
-    if (typeof openComposeModal === "function") openComposeModal();
+    renderInlineReply(panel, "reply", messageId, norm);
   });
   actionBtns.appendChild(replyBtn);
 
@@ -17812,7 +17904,7 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
   replyAllBtn.title = "Reply all";
   replyAllBtn.innerHTML = '<i class="ti ti-arrow-back-up"></i> Reply All';
   replyAllBtn.addEventListener("click", () => {
-    if (typeof openComposeModal === "function") openComposeModal();
+    renderInlineReply(panel, "reply-all", messageId, norm);
   });
   actionBtns.appendChild(replyAllBtn);
 
@@ -17822,7 +17914,7 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
   fwdBtn.title = "Forward";
   fwdBtn.innerHTML = '<i class="ti ti-arrow-forward-up"></i> Forward';
   fwdBtn.addEventListener("click", () => {
-    if (typeof openComposeModal === "function") openComposeModal();
+    renderInlineReply(panel, "forward", messageId, norm);
   });
   actionBtns.appendChild(fwdBtn);
 
