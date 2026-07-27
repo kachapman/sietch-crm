@@ -36,6 +36,16 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Dark mode contrast.** Lower opacity on folder buttons, tag items, tabs, toolbar ghost buttons, dropdown elements.
 - **Files:** `server.py`, `db.py`, `notification_dispatcher.py`, `docker-compose.yml`, `config.example.env`, `init.sql`, `public/app.js`, `public/index.html`, `public/styles.css`, `scanner/*`, `smtp_client.py`, `docs/MAIL_SCANNER_PLAN.md`, `import_email.py`, `migrations/001_add_mail_tables.sql`, `AGENTS.md`.
 
+## Phase 3.1 — Email Bug Fixes + Project Number (2026-07-26)
+
+- **Removed orphaned "Open in Mail" links** that caused 404 errors for Sietch DB emails. Replaced with plain text for attachments.
+- **Fixed threads error** (`invalid literal for int()` with 'crm'): `loadMailThreads()` now filters out 'crm' from `account_id`; server adds defensive parsing.
+- **Fixed linked email not showing**: Manual link via UI now creates a `history_events` entry on the deal (same as scanner auto-link). Linked deals display as badges in email detail footer.
+- **Fixed Admin tab blank**: Root cause was `sidebar.parentElement` targeting `.mail-main-area` instead of `.mail-right-sidebar`. CSS class `.mail-main-column` replaces inline `flex-direction: column` for clean state management.
+- **Fixed sidebar broken on tab switch**: Clear `flex-direction` in inbox case; all layout state reset in `openMailInboxModal()`.
+- **Fixed + tab crash**: `tabsEl` ReferenceError replaced with `btn.parentElement`.
+- **Project number** (`#1234`): Auto-assigned `SERIAL UNIQUE` on all opportunities. Displayed right of deal title in preview modal. Click to copy to clipboard. Shown in both email detail (linked deals) and deal preview.
+
 ## Phase 2G — project.html + Open Project button (2026-07-26)
 
 - **Wired "Open in CRM" buttons to project detail page.** `crmOpportunityUrl(id)` now returns `/project/{id}` (was dead `#` stub). `crmTaskUrl(task)` extracts oppId from task and returns `/project/{oppId}`. All 5 call sites now open the standalone project page in a new tab.
