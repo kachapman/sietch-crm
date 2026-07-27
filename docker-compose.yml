@@ -30,7 +30,7 @@ services:
     ports:
       - "0.0.0.0:8766:8766"
     networks:
-      - vanguard-internal
+      - sietch-internal
 
   db:
     image: docker.io/library/postgres:16-alpine
@@ -53,7 +53,7 @@ services:
       - db-data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
-      - vanguard-internal
+      - sietch-internal
 
   docserver:
     image: docker.io/onlyoffice/documentserver:latest
@@ -71,14 +71,14 @@ services:
     ports:
       - "0.0.0.0:9443:443"
     networks:
-      - vanguard-internal
+      - sietch-internal
 
   redis:
     image: docker.io/library/redis:7-alpine
     container_name: sietch-redis
     restart: unless-stopped
     networks:
-      - vanguard-internal
+      - sietch-internal
 
 volumes:
   dashboard-data:
@@ -88,5 +88,5 @@ volumes:
   docserver-logs:
 
 networks:
-  vanguard-internal:
+  sietch-internal:
     driver: bridge

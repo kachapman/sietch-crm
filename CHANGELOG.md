@@ -2,6 +2,30 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — Email Scanner (2026-07-26)
+
+- **Backend rename: `vanguard` → `sietch`.** All backend references updated: `SESSION_COOKIE` → `sietch_session`, portal name → `"sietch"` (30+ occurrences in `server.py`), Docker network `vanguard-internal` → `sietch-internal`, `notification_dispatcher.py` PORTAL → `"sietch"`, `db.py` fallback defaults → `sietch_crm`/`sietch`. Cold migration strategy — all existing sessions invalidated on deploy.
+- **New DB tables.** Added `mail_tags`, `mail_tag_assignments`, `mail_templates` to `init.sql` (sections 7.14–7.15). Existing sections renumbered (7.13 Sync → 7.16, 7.14 Email Classifier → 7.17, 7.15 User Profiles → 7.18, 7.16 Branding → 7.19).
+- **Scanner module (`scanner/`).** IMAP polling daemon using `imap_tools`, adapted from `email_scanner` branch classifier pipeline. Stores full emails in DB, classifies via rule-based pipeline with optional ML head (`sentence-transformers` + logistic/kNN). Files: `mail_scanner.py`, `train_ml_head.py`, `Dockerfile`, `docker-compose.scanner.yml`, `scanner_service.py`, `.env.example`, `requirements.txt`, `requirements-ml.txt`.
+- **New API endpoints.** 15 `/api/v2/mail/*` routes added to `server.py`: inbox/messages CRUD, mark read/unread, link-to-deal, tag management, templates, accounts, scanner status/log/config/reprocess. All inside `KanbanHandler` class.
+- **Frontend mail modal connected.** All stub functions in `app.js` replaced with real API calls: `loadMailMessagesForModal`, `loadMailAccountsForModal`, `fetchMailMessage`, `markMailMessageRead`, delete, mark-unread, link-to-deal. The existing modal scaffold (minimize-to-sidebar, search, select-all, expand/collapse) now functional.
+- **Scanner admin panel (3B).** New "Email Scanner" tab in admin console: scanner status indicator, IMAP account list + add form, behavior toggles (create deals/tasks/notes/notify), scanner log viewer, reprocess endpoint. All connected to `/api/v2/mail/*` endpoints.
+- **Import script.** `import_email.py` — Phase 4 stub for migrating old OnlyOffice CRM email data. Schema-compatible, no changes needed when migration time comes.
+- **Docs.** `docs/MAIL_SCANNER_PLAN.md` (detailed spec), `migrations/001_add_mail_tables.sql`.
+- **Files:** `server.py`, `db.py`, `notification_dispatcher.py`, `docker-compose.yml`, `config.example.env`, `init.sql`, `public/app.js`, `scanner/*`, `docs/MAIL_SCANNER_PLAN.md`, `import_email.py`, `migrations/001_add_mail_tables.sql`, `AGENTS.md`.
+
+## Phase 3 — Email Scanner (2026-07-26)
+
+- **Full email module build.** Modal renamed to "Email". Tabler icons throughout. Tab row for account switching with unread badges. Sidebar shows folders (Inbox/Sent/Outbox/Drafts/Templates) + tag list. Compose popup modal with To/Cc/Bcc/Subject/Deal-link-search/Body/Send. Link-to-deal moved to toolbar as dropdown. Mobile-responsive toolbar (flex-wrap, search-first on mobile, less-critical buttons hidden).
+- **Backend rename: `vanguard` → `sietch`.** All backend references updated: `SESSION_COOKIE` → `sietch_session`, portal name → `"sietch"` (30+ occurrences in `server.py`), Docker network `vanguard-internal` → `sietch-internal`, `notification_dispatcher.py` PORTAL → `"sietch"`, `db.py` fallback defaults → `sietch_crm`/`sietch`.
+- **New DB tables.** `mail_tags`, `mail_tag_assignments`, `mail_templates` (section 7.14–7.15), `mail_account_access` (account sharing), `mail_outgoing` (sent email tracking). Extended `mail_accounts` with SMTP columns + OAuth columns. Existing sections renumbered.
+- **20+ `/api/v2/mail/*` endpoints.** inbox, messages CRUD, mark read/unread, link-to-deal, tags, templates, accounts CRUD, sharing, unread-count, outgoing, send, status, log, config, reprocess. Account filtering by `account_id` and `folder` params.
+- **SMTP sending.** `send_email_from_account()` in `smtp_client.py` reads per-account SMTP config from DB. `POST /api/v2/mail/send` sends email, stores in `mail_outgoing`, links to deal if `deal_id` provided.
+- **Scanner module (`scanner/`).** IMAP polling via `imap_tools`, classifier pipeline from `email_scanner` branch, ML head support, `Dockerfile`, `docker-compose.scanner.yml`, `scanner_service.py`, `.env.example`, requirements.
+- **Frontend: account tabs, folders, tags, compose.** Tab row with account tabs + Compose + Scanner. Sidebar shows folder navigation with unread badges + tag list. Compose popup modal with deal-link search. Link-to-deal dropdown in toolbar (expands left, mobile-safe). Tabler icons on all buttons.
+- **Import script.** `import_email.py` — Phase 4 stub for old CRM email migration.
+- **Files:** `server.py`, `db.py`, `notification_dispatcher.py`, `docker-compose.yml`, `config.example.env`, `init.sql`, `public/app.js`, `public/index.html`, `public/styles.css`, `scanner/*`, `smtp_client.py`, `docs/MAIL_SCANNER_PLAN.md`, `import_email.py`, `migrations/001_add_mail_tables.sql`, `AGENTS.md`.
+
 ## Phase 2G — project.html + Open Project button (2026-07-26)
 
 - **Wired "Open in CRM" buttons to project detail page.** `crmOpportunityUrl(id)` now returns `/project/{id}` (was dead `#` stub). `crmTaskUrl(task)` extracts oppId from task and returns `/project/{oppId}`. All 5 call sites now open the standalone project page in a new tab.

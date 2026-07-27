@@ -23,11 +23,11 @@ logger = logging.getLogger("notification_dispatcher")
 # ── Config ──────────────────────────────────────────────────────────────────
 
 DASHBOARD_URL = os.getenv("DASHBOARD_URL", "http://127.0.0.1:8766")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_NOTIFY_ENABLED = os.getenv("TELEGRAM_NOTIFY_ENABLED", "true").lower() == "true"
 POLL_INTERVAL = int(os.getenv("TELEGRAM_NOTIFY_POLL_INTERVAL", "5"))
 BATCH_SIZE = int(os.getenv("TELEGRAM_NOTIFY_BATCH_SIZE", "10"))
-PORTAL = "vanguard"  # TODO: make configurable per deployment
+PORTAL = "sietch"  # TODO: make configurable per deployment
 
 
 def _truncate(text: str, max_len: int = 500) -> str:

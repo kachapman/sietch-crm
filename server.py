@@ -32,6 +32,11 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse, urlencode
 
 try:
+    import mail_scanner
+except Exception:  # pragma: no cover - scanner module may not be installed
+    mail_scanner = None  # type: ignore[assignment]
+
+try:
     from PIL import Image
 except Exception:  # pragma: no cover - Pillow is optional in dev, present in Docker
     Image = None
@@ -103,7 +108,7 @@ def _load_env_file() -> None:
 _load_env_file()
 
 PORT = int(os.environ.get("PORT", "8766"))
-SESSION_COOKIE = "vanguard_session"
+SESSION_COOKIE = "sietch_session"
 DATA_DIR = ROOT / "data"
 COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
 PRESENCE_AUTO_STATUS_TIMEOUT_S = 300
@@ -923,6 +928,42 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_batch_opportunity_tags()
             return
 
+        # ── Mail Scanner ──
+        if api_path == "/api/v2/mail/inbox":
+            self._handle_mail_inbox()
+            return
+        if api_path == "/api/v2/mail/messages":
+            self._handle_mail_messages()
+            return
+        m = re.match(r"^/api/v2/mail/messages/(\d+)$", api_path)
+        if m:
+            self._handle_mail_message(int(m.group(1)))
+            return
+        if api_path == "/api/v2/mail/tags":
+            self._handle_mail_tags()
+            return
+        if api_path == "/api/v2/mail/templates":
+            self._handle_mail_templates()
+            return
+        if api_path == "/api/v2/mail/accounts":
+            self._handle_mail_accounts()
+            return
+        if api_path == "/api/v2/mail/unread-count":
+            self._handle_mail_unread_count()
+            return
+        if api_path == "/api/v2/mail/outgoing":
+            self._handle_mail_outgoing()
+            return
+        if api_path == "/api/v2/mail/status":
+            self._handle_mail_status()
+            return
+        if api_path == "/api/v2/mail/log":
+            self._handle_mail_log()
+            return
+        if api_path == "/api/v2/mail/config":
+            self._handle_mail_config()
+            return
+
         self.send_error(404)
 
     # ── API POST/PUT/DELETE Router ──────────────────────────────────────────
@@ -1287,6 +1328,61 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if api_path == "/api/v2/notifications/read-all" and method == "PUT":
             self._handle_notifications_mark_all_read()
+            return
+
+        # ── Mail Scanner ──
+        if api_path == "/api/v2/mail/messages" and method == "POST":
+            self._handle_mail_message_create()
+            return
+        m = re.match(r"^/api/v2/mail/messages/(\d+)/read$", api_path)
+        if m and method == "PUT":
+            self._handle_mail_message_mark_read(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/mail/messages/(\d+)/unread$", api_path)
+        if m and method == "PUT":
+            self._handle_mail_message_mark_unread(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/mail/messages/(\d+)$", api_path)
+        if m and method == "DELETE":
+            self._handle_mail_message_delete(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/mail/messages/(\d+)/tags$", api_path)
+        if m and method == "POST":
+            self._handle_mail_message_add_tag(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/mail/messages/(\d+)/link$", api_path)
+        if m and method == "POST":
+            self._handle_mail_link(int(m.group(1)))
+            return
+        if api_path == "/api/v2/mail/reprocess" and method == "POST":
+            self._handle_mail_reprocess()
+            return
+        if api_path == "/api/v2/mail/config" and method == "PUT":
+            self._handle_mail_config_put()
+            return
+        # Account CRUD
+        if api_path == "/api/v2/mail/accounts" and method == "POST":
+            self._handle_mail_account_create()
+            return
+        m = re.match(r"^/api/v2/mail/accounts/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_mail_account_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_mail_account_delete(int(m.group(1)))
+            return
+        # Account sharing
+        m = re.match(r"^/api/v2/mail/accounts/(\d+)/share$", api_path)
+        if m and method == "POST":
+            self._handle_mail_account_share(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/mail/accounts/(\d+)/share/(\d+)$", api_path)
+        if m and method == "DELETE":
+            self._handle_mail_account_unshare(int(m.group(1)), int(m.group(2)))
+            return
+        # Send email
+        if api_path == "/api/v2/mail/send" and method == "POST":
+            self._handle_mail_send()
             return
 
         self.send_error(404)
@@ -3998,7 +4094,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_auth(self)
         if not user:
             return
-        profile = load_user_profile("vanguard", str(user["id"]))
+        profile = load_user_profile("sietch", str(user["id"]))
         _json_response(self, 200, profile)
 
     def _handle_user_profile_put(self) -> None:
@@ -4013,14 +4109,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not isinstance(payload, dict):
             _json_response(self, 400, {"error": "Profile object is required"})
             return
-        profile = save_user_profile("vanguard", str(user["id"]), payload)
+        profile = save_user_profile("sietch", str(user["id"]), payload)
         _json_response(self, 200, {"ok": True, **profile})
 
     def _handle_dashboard_notes_get(self) -> None:
         user = _require_auth(self)
         if not user:
             return
-        profile = load_user_profile("vanguard", str(user["id"]))
+        profile = load_user_profile("sietch", str(user["id"]))
         _json_response(self, 200, {"tiles": profile.get("notesTiles", [])})
 
     def _handle_dashboard_notes_put(self) -> None:
@@ -4036,9 +4132,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not isinstance(tiles, list):
             _json_response(self, 400, {"error": "tiles array is required"})
             return
-        existing = load_user_profile("vanguard", str(user["id"]))
+        existing = load_user_profile("sietch", str(user["id"]))
         existing["notesTiles"] = tiles
-        save_user_profile("vanguard", str(user["id"]), existing)
+        save_user_profile("sietch", str(user["id"]), existing)
         _json_response(self, 200, {"ok": True, "tiles": tiles})
 
     # ── Event Log (local store, unchanged) ──────────────────────────────────
@@ -4047,7 +4143,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_auth(self)
         if not user:
             return
-        events = load_event_log("vanguard", str(user["id"]))
+        events = load_event_log("sietch", str(user["id"]))
         _json_response(self, 200, {"events": events})
 
     def _handle_event_log_put(self) -> None:
@@ -4063,14 +4159,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not isinstance(entries, list):
             _json_response(self, 400, {"error": "events array is required"})
             return
-        events = append_event_log("vanguard", str(user["id"]), entries)
+        events = append_event_log("sietch", str(user["id"]), entries)
         _json_response(self, 200, {"ok": True, "events": events})
 
     def _handle_event_log_users(self) -> None:
         user = _require_admin(self)
         if not user:
             return
-        users = list_users_with_logs("vanguard")
+        users = list_users_with_logs("sietch")
         _json_response(self, 200, {"users": users})
 
     def _handle_event_log_admin_get(self) -> None:
@@ -4082,7 +4178,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not target_user:
             _json_response(self, 400, {"error": "userId is required"})
             return
-        events = load_event_log("vanguard", target_user)
+        events = load_event_log("sietch", target_user)
         _json_response(self, 200, {"events": events})
 
     # ── Bot Endpoints (DB-backed, no CRM proxy needed) ──────────────────────
@@ -4091,8 +4187,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_admin(self)
         if not user:
             return
-        mappings = list_mappings("vanguard")
-        pending = get_pending_codes("vanguard")
+        mappings = list_mappings("sietch")
+        pending = get_pending_codes("sietch")
         _json_response(self, 200, {"mappings": mappings, "pendingCodes": pending})
 
     def _handle_bot_customers_post_put(self, method: str) -> None:
@@ -4114,7 +4210,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not employee and not contact_id:
                 _json_response(self, 400, {"error": "contactId is required"})
                 return
-            result = generate_code("vanguard", int(contact_id) if contact_id else None,
+            result = generate_code("sietch", int(contact_id) if contact_id else None,
                                    contact_name, int(notes_category_id) if notes_category_id else None,
                                    nickname, employee=bool(employee))
             _json_response(self, 200, result)
@@ -4131,9 +4227,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             contact_id = payload.get("contactId")
             code = str(payload.get("code") or "").strip()
             if contact_id:
-                ok = cancel_code("vanguard", int(contact_id))
+                ok = cancel_code("sietch", int(contact_id))
             elif code:
-                ok = cancel_code_by_value("vanguard", code)
+                ok = cancel_code_by_value("sietch", code)
             else:
                 _json_response(self, 400, {"error": "contactId or code is required"})
                 return
@@ -4155,7 +4251,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             code = str(payload.get("code") or "").strip()
             chat_id = payload.get("chatId")
-            portal = str(payload.get("portal") or "vanguard").strip()
+            portal = str(payload.get("portal") or "sietch").strip()
             if not code or not chat_id:
                 _json_response(self, 400, {"error": "code and chatId are required"})
                 return
@@ -4177,7 +4273,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             chat_id_raw = (qs.get("chatId") or [""])[0]
             if chat_id_raw:
                 try:
-                    ok = remove_mapping_by_chat("vanguard", int(chat_id_raw))
+                    ok = remove_mapping_by_chat("sietch", int(chat_id_raw))
                 except (TypeError, ValueError):
                     _json_response(self, 400, {"error": "Invalid chatId"})
                     return
@@ -4196,7 +4292,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             contact_id = payload.get("contactId")
             nickname = str(payload.get("nickname") or "").strip()
-            ok = set_nickname("vanguard", int(contact_id) if contact_id else None, nickname)
+            ok = set_nickname("sietch", int(contact_id) if contact_id else None, nickname)
             _json_response(self, 200, {"ok": ok})
             return
         self.send_error(404)
@@ -4215,8 +4311,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not raw_chat:
                 _json_response(self, 400, {"error": "chatId is required"})
                 return
-            track_request("vanguard", int(raw_chat), "me")
-            mapping = get_mapping_by_chat("vanguard", int(raw_chat))
+            track_request("sietch", int(raw_chat), "me")
+            mapping = get_mapping_by_chat("sietch", int(raw_chat))
             if not mapping:
                 _json_response(self, 404, {"error": "Not found"})
                 return
@@ -4226,7 +4322,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/bot/deals":
             raw_chat_deals = (qs.get("chatId") or [""])[0]
             if raw_chat_deals:
-                track_request("vanguard", int(raw_chat_deals), "deals")
+                track_request("sietch", int(raw_chat_deals), "deals")
             is_employee = (qs.get("employee") or [""])[0].lower() == "true"
             raw_contact = (qs.get("contactId") or [""])[0]
             if not is_employee and not raw_contact:
@@ -4279,7 +4375,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             user = _require_admin(self)
             if not user:
                 return
-            stats = get_usage_stats("vanguard")
+            stats = get_usage_stats("sietch")
             _json_response(self, 200, stats)
             return
 
@@ -4382,8 +4478,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 500, {"error": "Internal error"})
             return
 
-        self.send_error(404)
-
     # ── Presence (local store, ported from v2 — unchanged) ──────────────────
 
     def _handle_presence_users(self) -> None:
@@ -4401,7 +4495,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_auth(self)
         if not user:
             return
-        portal = "vanguard"
+        portal = "sietch"
         overlays = get_portal_presence_snapshot(portal)
         clean_stale_presence_records(portal)
         now = datetime.now(timezone.utc)
@@ -4455,7 +4549,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 visible = bool(payload.get("visible"))
         except (json.JSONDecodeError, ValueError):
             pass
-        touch_heartbeat("vanguard", str(user["id"]), offline=offline, visible=visible)
+        touch_heartbeat("sietch", str(user["id"]), offline=offline, visible=visible)
         _json_response(self, 200, {"ok": True})
 
     def _handle_presence_status(self) -> None:
@@ -4471,7 +4565,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         status_text = str(payload.get("status") or "")[:200] if has_status else None
         auto_status = payload.get("autoStatus")
         inferred = bool(payload.get("inferred"))
-        rec = set_status("vanguard", str(user["id"]), status_text, inferred=inferred, autoStatus=auto_status)
+        rec = set_status("sietch", str(user["id"]), status_text, inferred=inferred, autoStatus=auto_status)
         _json_response(self, 200, {"ok": True, "status": rec.get("status", ""), "inferred": rec.get("inferred", False)})
 
     def _handle_presence_last_read(self) -> None:
@@ -4488,7 +4582,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not other:
             _json_response(self, 400, {"error": "with=<userId> is required"})
             return
-        set_last_read_dm("vanguard", str(user["id"]), other, at or None)
+        set_last_read_dm("sietch", str(user["id"]), other, at or None)
         _json_response(self, 200, {"ok": True})
 
     def _handle_presence_dm_get(self) -> None:
@@ -4500,8 +4594,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not with_id:
             _json_response(self, 400, {"error": "with=<userId> is required"})
             return
-        mark_messages_read("vanguard", str(user["id"]), with_id)
-        msgs, has_more = get_conversation("vanguard", str(user["id"]), with_id)
+        mark_messages_read("sietch", str(user["id"]), with_id)
+        msgs, has_more = get_conversation("sietch", str(user["id"]), with_id)
         _json_response(self, 200, {"messages": msgs, "has_more": has_more})
 
     def _handle_presence_dm_post(self) -> None:
@@ -4518,7 +4612,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not to_id or not text:
             _json_response(self, 400, {"error": "to and text are required"})
             return
-        msg = append_dm("vanguard", str(user["id"]), to_id, text, payload.get("reply_to"), payload.get("reply_text"))
+        msg = append_dm("sietch", str(user["id"]), to_id, text, payload.get("reply_to"), payload.get("reply_text"))
         _json_response(self, 200, {"ok": True, "message": msg})
 
     def _handle_presence_dm_clear(self) -> None:
@@ -4530,11 +4624,469 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not with_id:
             _json_response(self, 400, {"error": "with=<userId> is required"})
             return
-        clear_conversation("vanguard", str(user["id"]), with_id)
+        clear_conversation("sietch", str(user["id"]), with_id)
         _json_response(self, 200, {"ok": True})
 
+    # ── Mail Scanner Handlers ──────────────────────────────────────
 
-# ── Main ───────────────────────────────────────────────────────────────────────
+    def _link_email_to_deal(self, message_id: int, opp_id: int, linked_by: int | None = None) -> bool:
+        try:
+            existing = db.query_one(
+                "SELECT id FROM mail_deal_links WHERE message_id = %s AND opportunity_id = %s",
+                (message_id, opp_id),
+            )
+            if existing:
+                return False
+            db.execute(
+                "INSERT INTO mail_deal_links (message_id, opportunity_id, linked_by_user_id) VALUES (%s, %s, %s)",
+                (message_id, opp_id, linked_by),
+            )
+            return True
+        except Exception as e:
+            logger.error("Failed to link email %d to deal %d: %s", message_id, opp_id, e)
+            return False
+
+    def _add_tag_to_message(self, message_id: int, tag_title: str, assigned_by: int | None = None) -> bool:
+        try:
+            existing = db.query_one("SELECT id FROM mail_tags WHERE title = %s", (tag_title,))
+            if existing:
+                tag_id = existing["id"]
+            else:
+                result = db.query_one(
+                    "INSERT INTO mail_tags (title, created_by) VALUES (%s, %s) RETURNING id",
+                    (tag_title, assigned_by),
+                )
+                tag_id = result["id"] if result else None
+            if tag_id is None:
+                return False
+            existing_assignment = db.query_one(
+                "SELECT id FROM mail_tag_assignments WHERE message_id = %s AND tag_id = %s",
+                (message_id, tag_id),
+            )
+            if existing_assignment:
+                return False
+            db.execute(
+                "INSERT INTO mail_tag_assignments (message_id, tag_id, assigned_by) VALUES (%s, %s, %s)",
+                (message_id, tag_id, assigned_by),
+            )
+            return True
+        except Exception as e:
+            logger.error("Failed to tag message %d with %s: %s", message_id, tag_title, e)
+            return False
+
+    def _handle_mail_inbox(self) -> None:
+        qs = parse_qs(urlparse(self.path).query)
+        page = int(qs.get("page", ["1"])[0])
+        page_size = int(qs.get("page_size", ["50"])[0])
+        folder = qs.get("folder", ["INBOX"])[0].strip()
+        try:
+            rows = db.query_dicts(
+                "SELECT m.*, a.email AS account_email FROM mail_messages m "
+                "LEFT JOIN mail_accounts a ON m.account_id = a.id "
+                "WHERE m.folder = %s ORDER BY m.date_received DESC LIMIT %s OFFSET %s",
+                (folder, page_size, (page - 1) * page_size),
+            )
+            _json_response(self, 200, {"messages": rows, "page": page, "page_size": page_size})
+        except Exception as e:
+            logger.exception("Failed to fetch inbox")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_messages(self) -> None:
+        qs = parse_qs(urlparse(self.path).query)
+        page = int(qs.get("page", ["1"])[0])
+        page_size = int(qs.get("page_size", ["50"])[0])
+        search = qs.get("search", [""])[0].strip()
+        folder = qs.get("folder", ["INBOX"])[0].strip()
+        account_id = qs.get("account_id", [None])[0]
+        try:
+            where = ["m.folder = %s"]
+            params: list[Any] = [folder]
+            if account_id:
+                where.append("m.account_id = %s")
+                params.append(int(account_id))
+            if search:
+                where.append("(m.subject ILIKE %s OR m.from_addr ILIKE %s)")
+                params.extend([f"%{search}%", f"%{search}%"])
+            q = " AND ".join(where)
+            rows = db.query_dicts(
+                "SELECT m.*, a.email AS account_email FROM mail_messages m "
+                "LEFT JOIN mail_accounts a ON m.account_id = a.id "
+                "WHERE " + q + " ORDER BY m.date_received DESC LIMIT %s OFFSET %s",
+                tuple(params) + (page_size, (page - 1) * page_size),
+            )
+            total = db.query_one(
+                "SELECT COUNT(*) AS cnt FROM mail_messages m WHERE " + q,
+                tuple(params),
+            )
+            _json_response(self, 200, {"messages": rows, "page": page, "page_size": page_size, "total": total["cnt"] if total else 0})
+        except Exception as e:
+            logger.exception("Failed to fetch messages")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_message(self, message_id: int) -> None:
+        try:
+            row = db.query_one(
+                "SELECT m.*, a.email AS account_email FROM mail_messages m "
+                "LEFT JOIN mail_accounts a ON m.account_id = a.id WHERE m.id = %s",
+                (message_id,),
+            )
+            if not row:
+                _json_response(self, 404, {"error": "Message not found"})
+                return
+            row_dict = dict(row)
+            tags = db.query(
+                "SELECT t.id, t.title, t.color FROM mail_tag_assignments ta "
+                "JOIN mail_tags t ON ta.tag_id = t.id WHERE ta.message_id = %s",
+                (message_id,),
+            )
+            links = db.query(
+                "SELECT o.id AS opportunity_id, o.title AS opportunity_title FROM mail_deal_links dl "
+                "JOIN opportunities o ON dl.opportunity_id = o.id WHERE dl.message_id = %s",
+                (message_id,),
+            )
+            row_dict["tags"] = [dict(t) for t in tags]
+            row_dict["linked_deals"] = [dict(l) for l in links]
+            _json_response(self, 200, row_dict)
+        except Exception as e:
+            logger.exception("Failed to fetch message %d", message_id)
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_link(self, message_id: int) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            opp_id = payload.get("opportunityId") or payload.get("oppId")
+            if not opp_id:
+                _json_response(self, 400, {"error": "opportunityId required"})
+                return
+            user = _require_auth(self)
+            linked_by = user["id"] if user else None
+            ok = self._link_email_to_deal(message_id, int(opp_id), linked_by)
+            _json_response(self, 200, {"ok": True, "linked": ok})
+        except Exception as e:
+            logger.exception("Failed to link message %d", message_id)
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_message_mark_read(self, message_id: int) -> None:
+        try:
+            db.execute("UPDATE mail_messages SET is_read = TRUE WHERE id = %s", (message_id,))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            logger.exception("Failed to mark message %d read", message_id)
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_message_mark_unread(self, message_id: int) -> None:
+        try:
+            db.execute("UPDATE mail_messages SET is_read = FALSE WHERE id = %s", (message_id,))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            logger.exception("Failed to mark message %d unread", message_id)
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_message_delete(self, message_id: int) -> None:
+        try:
+            db.execute("DELETE FROM mail_messages WHERE id = %s", (message_id,))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            logger.exception("Failed to delete message %d", message_id)
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_message_add_tag(self, message_id: int) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            tag_title = payload.get("title") or payload.get("tag")
+            if not tag_title:
+                _json_response(self, 400, {"error": "title required"})
+                return
+            user = _require_auth(self)
+            assigned_by = user["id"] if user else None
+            ok = self._add_tag_to_message(message_id, tag_title, assigned_by)
+            _json_response(self, 200, {"ok": ok})
+        except Exception as e:
+            logger.exception("Failed to add tag to message %d", message_id)
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_message_create(self) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            imap_uid = payload.get("imap_uid") or str(int(time.time() * 1000))
+            result = db.query_one(
+                """INSERT INTO mail_messages
+                   (account_id, imap_uid, message_id, from_addr, to_addr, cc_addr,
+                    subject, body_text, body_html, date_received, folder, is_read, is_flagged)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (
+                    payload.get("account_id"),
+                    imap_uid,
+                    payload.get("message_id"),
+                    payload.get("from_addr"),
+                    payload.get("to_addr"),
+                    payload.get("cc_addr"),
+                    payload.get("subject"),
+                    payload.get("body_text"),
+                    payload.get("body_html"),
+                    payload.get("date_received"),
+                    payload.get("folder", "INBOX"),
+                    payload.get("is_read", False),
+                    payload.get("is_flagged", False),
+                ),
+            )
+            _json_response(self, 201, {"id": result["id"]})
+        except Exception as e:
+            logger.exception("Failed to create message")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_tags(self) -> None:
+        qs = parse_qs(urlparse(self.path).query)
+        page = int(qs.get("page", ["1"])[0])
+        page_size = int(qs.get("page_size", ["50"])[0])
+        try:
+            rows = db.query_dicts("SELECT * FROM mail_tags ORDER BY title LIMIT %s OFFSET %s", (page_size, (page - 1) * page_size))
+            _json_response(self, 200, {"tags": rows, "page": page, "page_size": page_size})
+        except Exception as e:
+            logger.exception("Failed to fetch tags")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_templates(self) -> None:
+        qs = parse_qs(urlparse(self.path).query)
+        page = int(qs.get("page", ["1"])[0])
+        page_size = int(qs.get("page_size", ["50"])[0])
+        try:
+            rows = db.query_dicts("SELECT * FROM mail_templates ORDER BY title LIMIT %s OFFSET %s", (page_size, (page - 1) * page_size))
+            _json_response(self, 200, {"templates": rows, "page": page, "page_size": page_size})
+        except Exception as e:
+            logger.exception("Failed to fetch templates")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_accounts(self) -> None:
+        try:
+            rows = db.query_dicts("SELECT * FROM mail_accounts ORDER BY email")
+            _json_response(self, 200, {"accounts": rows})
+        except Exception as e:
+            logger.exception("Failed to fetch mail accounts")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_status(self) -> None:
+        _json_response(self, 200, mail_scanner.get_scanner_status() if mail_scanner else {"enabled": False})
+
+    def _handle_mail_log(self) -> None:
+        qs = parse_qs(urlparse(self.path).query)
+        limit = int(qs.get("limit", ["200"])[0])
+        _json_response(self, 200, {"entries": mail_scanner.get_scanner_log(limit) if mail_scanner else []})
+
+    def _handle_mail_reprocess(self) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            ids = payload.get("conversation_ids") or payload.get("ids") or []
+            results = mail_scanner.reprocess_conversations([int(x) for x in ids])
+            _json_response(self, 200, {"results": results})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_config(self) -> None:
+        _json_response(self, 200, mail_scanner.get_contractors() if mail_scanner else {})
+
+    def _handle_mail_config_put(self) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            result = mail_scanner.update_contractors(payload) if mail_scanner else payload
+            _json_response(self, 200, result)
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_unread_count(self) -> None:
+        qs = parse_qs(urlparse(self.path).query)
+        account_id = qs.get("account_id", [None])[0]
+        try:
+            where = "m.is_read = FALSE"
+            params: tuple = ()
+            if account_id:
+                where += " AND m.account_id = %s"
+                params = (int(account_id),)
+            row = db.query_one(f"SELECT COUNT(*) AS cnt FROM mail_messages m WHERE {where}", params)
+            _json_response(self, 200, {"count": row["cnt"] if row else 0})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_outgoing(self) -> None:
+        qs = parse_qs(urlparse(self.path).query)
+        page = int(qs.get("page", ["1"])[0])
+        page_size = int(qs.get("page_size", ["50"])[0])
+        try:
+            rows = db.query_dicts(
+                "SELECT o.*, a.email AS account_email FROM mail_outgoing o "
+                "LEFT JOIN mail_accounts a ON o.account_id = a.id "
+                "ORDER BY o.created_at DESC LIMIT %s OFFSET %s",
+                (page_size, (page - 1) * page_size),
+            )
+            _json_response(self, 200, {"messages": rows, "page": page, "page_size": page_size})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_account_create(self) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            user = _require_auth(self)
+            result = db.query_one(
+                """INSERT INTO mail_accounts
+                   (email, imap_host, imap_port, password_encrypted, owner_user_id,
+                    smtp_host, smtp_port, smtp_user, smtp_password_encrypted,
+                    smtp_use_tls, smtp_from_name, oauth_provider)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (
+                    payload.get("email"),
+                    payload.get("imap_host"),
+                    int(payload.get("imap_port", 993)),
+                    payload.get("password", ""),
+                    user["id"] if user else None,
+                    payload.get("smtp_host"),
+                    int(payload.get("smtp_port", 587)) if payload.get("smtp_host") else None,
+                    payload.get("smtp_user"),
+                    payload.get("smtp_password"),
+                    payload.get("smtp_use_tls", True),
+                    payload.get("smtp_from_name"),
+                    payload.get("oauth_provider"),
+                ),
+            )
+            _json_response(self, 201, {"id": result["id"]})
+        except Exception as e:
+            logger.exception("Failed to create mail account")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_account_update(self, account_id: int) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            fields = []
+            params: list[Any] = []
+            for key in ("email", "imap_host", "smtp_host", "smtp_user", "smtp_from_name", "oauth_provider"):
+                if key in payload:
+                    fields.append(f"{key} = %s")
+                    params.append(payload[key])
+            for key in ("imap_port", "smtp_port"):
+                if key in payload:
+                    fields.append(f"{key} = %s")
+                    params.append(int(payload[key]))
+            for key in ("password", "password_encrypted"):
+                if key in payload:
+                    fields.append("password_encrypted = %s")
+                    params.append(payload[key])
+            if "smtp_password" in payload:
+                fields.append("smtp_password_encrypted = %s")
+                params.append(payload["smtp_password"])
+            if "smtp_use_tls" in payload:
+                fields.append("smtp_use_tls = %s")
+                params.append(bool(payload["smtp_use_tls"]))
+            if "sync_enabled" in payload:
+                fields.append("sync_enabled = %s")
+                params.append(bool(payload["sync_enabled"]))
+            if not fields:
+                _json_response(self, 400, {"error": "No fields to update"})
+                return
+            params.append(account_id)
+            db.execute(f"UPDATE mail_accounts SET {', '.join(fields)} WHERE id = %s", tuple(params))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            logger.exception("Failed to update mail account %d", account_id)
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_account_delete(self, account_id: int) -> None:
+        try:
+            db.execute("DELETE FROM mail_accounts WHERE id = %s", (account_id,))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_account_share(self, account_id: int) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            share_user_id = int(payload.get("user_id"))
+            user = _require_auth(self)
+            granted_by = user["id"] if user else None
+            db.execute(
+                "INSERT INTO mail_account_access (account_id, user_id, granted_by) VALUES (%s, %s, %s) ON CONFLICT (account_id, user_id) DO NOTHING",
+                (account_id, share_user_id, granted_by),
+            )
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_account_unshare(self, account_id: int, user_id: int) -> None:
+        try:
+            db.execute(
+                "DELETE FROM mail_account_access WHERE account_id = %s AND user_id = %s",
+                (account_id, user_id),
+            )
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_send(self) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            user = _require_auth(self)
+            account_id = int(payload.get("account_id"))
+            to_addr = payload.get("to", "")
+            cc_addr = payload.get("cc")
+            bcc_addr = payload.get("bcc")
+            subject = payload.get("subject", "")
+            body_html = payload.get("body", "")
+            body_text = payload.get("body_text")
+            deal_id = int(payload["deal_id"]) if payload.get("deal_id") else None
+
+            acct = db.query_one("SELECT * FROM mail_accounts WHERE id = %s", (account_id,))
+            if not acct:
+                _json_response(self, 404, {"error": "Account not found"})
+                return
+
+            from smtp_client import send_email_from_account
+            ok, err = send_email_from_account(
+                smtp_host=acct["smtp_host"] or "",
+                smtp_port=int(acct["smtp_port"] or 587),
+                smtp_user=acct["smtp_user"] or acct["email"],
+                smtp_password=acct["smtp_password_encrypted"] or "",
+                from_name=acct["smtp_from_name"],
+                from_addr=acct["email"],
+                to_addr=to_addr,
+                subject=subject,
+                html_body=body_html,
+                text_body=body_text,
+                cc_addr=cc_addr,
+                bcc_addr=bcc_addr,
+                use_tls=bool(acct["smtp_use_tls"]),
+            )
+
+            result = db.query_one(
+                """INSERT INTO mail_outgoing
+                   (account_id, from_addr, to_addr, cc_addr, bcc_addr, subject,
+                    body_text, body_html, deal_id, status, sent_at, created_by)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (
+                    account_id, acct["email"], to_addr, cc_addr, bcc_addr,
+                    subject, body_text, body_html, deal_id,
+                    "sent" if ok else "failed",
+                    datetime.now(timezone.utc) if ok else None,
+                    user["id"] if user else None,
+                ),
+            )
+
+            if ok and deal_id:
+                db.execute(
+                    "INSERT INTO mail_deal_links (message_id, opportunity_id, linked_by_user_id) "
+                    "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                    (result["id"], deal_id, user["id"] if user else None),
+                )
+
+            if ok:
+                _json_response(self, 200, {"ok": True, "id": result["id"]})
+            else:
+                _json_response(self, 500, {"ok": False, "error": err or "Send failed"})
+        except Exception as e:
+            logger.exception("Failed to send mail")
+            _json_response(self, 500, {"error": str(e)})
+
+# ── Main ───────────────────────────────────────────────────────────────
 
 def _lan_urls(port):
     addrs = ["127.0.0.1"]

@@ -1,0 +1,22 @@
+services:
+  sietch-mail-scanner:
+    build:
+      context: .
+      dockerfile: scanner/Dockerfile
+      args:
+        INSTALL_ML: "0"
+    container_name: sietch-mail-scanner
+    restart: unless-stopped
+    env_file:
+      - scanner/.env
+    volumes:
+      - scanner-data:/app/data
+    networks:
+      - sietch-internal
+
+volumes:
+  scanner-data:
+
+networks:
+  sietch-internal:
+    external: true

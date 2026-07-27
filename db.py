@@ -20,8 +20,8 @@ def init_db() -> None:
         maxconn=10,
         host=os.getenv("DB_HOST", "db"),
         port=os.getenv("DB_PORT", "5432"),
-        dbname=os.getenv("DB_NAME", "vanguard"),
-        user=os.getenv("DB_USER", "vanguard"),
+        dbname=os.getenv("DB_NAME", "sietch_crm"),
+        user=os.getenv("DB_USER", "sietch"),
         password=os.getenv("DB_PASSWORD", ""),
     )
 
@@ -141,6 +141,24 @@ def row_to_dict(row, columns: list[str] | None = None) -> dict:
     if columns:
         return {columns[i]: row[i] for i in range(len(row))}
     return {f"col_{i}": v for i, v in enumerate(row)}
+
+
+def query_dicts(sql: str, params: tuple | None = None) -> list[dict]:
+    """Execute a query and return results as a list of dicts."""
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, params or ())
+        rows = cur.fetchall()
+        columns = [desc[0] for desc in cur.description] if cur.description else []
+        conn.commit()
+        return [row_to_dict(r, columns) for r in rows]
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        put_conn(conn)
 
 
 def rows_to_dicts(rows: list, columns: list[str]) -> list[dict]:

@@ -318,7 +318,7 @@ docker exec sietch-crm /bin/sh -c 'python3 -c "import urllib.request; print(urll
 curl -s -k -o /dev/null -w "%{http_code}\n" https://docs.publicadjustermidwest.com/healthcheck
 
 # Editor config contains a plain-string document.key (requires authenticated session)
-# curl -s -b "vanguard_session=..." https://dashboard.publicadjustermidwest.com/api/v2/documents/1/editor-config | python3 -m json.tool
+# curl -s -b "sietch_session=..." https://dashboard.publicadjustermidwest.com/api/v2/documents/1/editor-config | python3 -m json.tool
 
 # CRM must be reachable from Document Server container for downloads/callbacks
 docker exec onlyoffice-docserver /bin/sh -c 'curl -s -o /dev/null -w "%{http_code}\n" https://dashboard.publicadjustermidwest.com/api/config'

@@ -15199,12 +15199,11 @@ function bindMailInboxButton() {
   if (btn) btn.dataset.bound = "1";  // mark as done
 }
 
-function resetQuickLinkSidebar() {
-  const ds = $("#mail-deal-search"); if (ds) ds.value = "";
-  const dr = $("#mail-deal-results"); if (dr) dr.innerHTML = "";
-  if (dr) dr.dataset.selectedDealId = "";
-  const lb = $("#mail-link-btn"); if (lb) lb.disabled = true;
-  const si = $("#mail-selected-info"); if (si) si.textContent = "";
+function resetLinkDealDropdown() {
+  const ds = $("#mail-link-deal-search"); if (ds) ds.value = "";
+  const dr = $("#mail-link-deal-results"); if (dr) { dr.innerHTML = ""; dr.dataset.selectedDealId = ""; }
+  const lb = $("#mail-link-deal-submit"); if (lb) lb.disabled = true;
+  const dd = $("#mail-link-deal-dropdown"); if (dd) dd.classList.add("hidden");
 }
 
 async function openMailInboxModal() {
@@ -15212,11 +15211,211 @@ async function openMailInboxModal() {
   if (!modal) return;
   modal.classList.remove("hidden");
   loadMailDashboardReadIds();
-  resetQuickLinkSidebar();
-  mailState = { accounts: [], messages: [], pageSize: 50, search: '', selected: new Set() };
+  resetLinkDealDropdown();
+  mailState = { accounts: [], messages: [], pageSize: 50, search: '', selected: new Set(), activeAccount: null, activeFolder: 'INBOX', activeTag: null };
   $("#mail-search-input").value = "";
-  await loadMailMessagesForModal();
+  await loadMailAccountsForModal();
+  await renderMailTabs();
+  await renderMailFolders();
+  await renderMailUnreadBadge();
   attachMailModalListeners();
+}
+
+async function renderMailTabs() {
+  const tabsEl = $("#mail-inbox-tabs");
+  if (!tabsEl) return;
+  try {
+    const data = await api("/api/v2/mail/accounts");
+    const accounts = data.accounts || [];
+    mailState.accounts = accounts;
+
+    let html = '';
+    for (const acct of accounts) {
+      const isActive = mailState.activeAccount === acct.id;
+      html += `<button type="button" class="mail-inbox-tab ${isActive ? 'active' : ''}" data-mailtab="inbox" data-account-id="${acct.id}">`;
+      html += `<i class="ti ti-mail" style="margin-right:0.3rem;"></i>${escapeHtml(acct.email)}`;
+      html += `<span class="mail-tab-badge" data-account-badge="${acct.id}"></span>`;
+      html += `</button>`;
+    }
+    html += `<button type="button" class="mail-inbox-tab" data-mailtab="compose"><i class="ti ti-pencil" style="margin-right:0.3rem;"></i>Compose</button>`;
+    html += `<button type="button" class="mail-inbox-tab" data-mailtab="scanner-admin"><i class="ti ti-settings" style="margin-right:0.3rem;"></i>Scanner</button>`;
+    tabsEl.innerHTML = html;
+
+    // Bind tab clicks
+    tabsEl.querySelectorAll('.mail-inbox-tab').forEach(btn => {
+      btn.addEventListener('click', () => switchMailTab(btn));
+    });
+
+    // Update unread badges
+    for (const acct of accounts) {
+      try {
+        const udata = await api(`/api/v2/mail/unread-count?account_id=${acct.id}`);
+        const badge = $(`[data-account-badge="${acct.id}"]`);
+        if (badge) {
+          const count = udata.count || 0;
+          badge.textContent = count > 0 ? count : '';
+          badge.style.display = count > 0 ? 'inline' : 'none';
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    // Default to first account if none selected
+    if (!mailState.activeAccount && accounts.length > 0) {
+      mailState.activeAccount = accounts[0].id;
+      const firstTab = tabsEl.querySelector('.mail-inbox-tab[data-account-id]');
+      if (firstTab) firstTab.classList.add('active');
+      await loadMailMessagesForModal();
+    }
+  } catch (e) {
+    tabsEl.innerHTML = '<button type="button" class="mail-inbox-tab active" data-mailtab="inbox"><i class="ti ti-mail" style="margin-right:0.3rem;"></i>Inbox</button>';
+  }
+}
+
+function switchMailTab(btn) {
+  const tabs = btn.parentElement.querySelectorAll('.mail-inbox-tab');
+  tabs.forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  const tabName = btn.dataset.mailtab;
+
+  const inboxContainer = $('#mail-list-container');
+  const scannerAdmin = $('#mail-scanner-admin');
+  const toolbar = $('.mail-toolbar');
+  const sidebar = $('.mail-right-sidebar');
+  const sidebarToggle = $('#mail-sidebar-toggle');
+  const mailMainArea = $('.mail-main-area');
+
+  if (tabName === 'inbox') {
+    if (inboxContainer) inboxContainer.classList.remove('hidden');
+    if (scannerAdmin) scannerAdmin.classList.add('hidden');
+    if (toolbar) toolbar.classList.remove('hidden');
+    if (sidebar) sidebar.parentElement?.classList.remove('hidden');
+    if (sidebarToggle) sidebarToggle.classList.remove('hidden');
+    if (mailMainArea) mailMainArea.style.display = '';
+    mailState.activeAccount = parseInt(btn.dataset.accountId) || null;
+    mailState.activeFolder = 'INBOX';
+    // Reset folder active state
+    const folderList = $('#mail-folder-list');
+    if (folderList) {
+      folderList.querySelectorAll('.mail-folder-btn').forEach(b => b.classList.remove('active'));
+      const inboxBtn = folderList.querySelector('[data-folder="INBOX"]');
+      if (inboxBtn) inboxBtn.classList.add('active');
+    }
+    loadMailMessagesForModal();
+    renderMailUnreadBadge();
+  } else if (tabName === 'compose') {
+    if (inboxContainer) inboxContainer.classList.add('hidden');
+    if (scannerAdmin) scannerAdmin.classList.add('hidden');
+    if (toolbar) toolbar.classList.add('hidden');
+    if (sidebar) sidebar.parentElement?.classList.add('hidden');
+    if (sidebarToggle) sidebarToggle.classList.add('hidden');
+    if (mailMainArea) mailMainArea.style.display = 'none';
+    openComposeModal();
+  } else if (tabName === 'scanner-admin') {
+    if (inboxContainer) inboxContainer.classList.add('hidden');
+    if (scannerAdmin) scannerAdmin.classList.remove('hidden');
+    if (toolbar) toolbar.classList.add('hidden');
+    if (sidebar) sidebar.parentElement?.classList.add('hidden');
+    if (sidebarToggle) sidebarToggle.classList.add('hidden');
+    if (mailMainArea) mailMainArea.style.display = '';
+    populateEmailScannerTab();
+  }
+}
+
+async function openComposeModal() {
+  const modal = $('#compose-email-modal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+
+  // Populate From dropdown
+  const fromSelect = $('#compose-from-account');
+  if (fromSelect && mailState.accounts.length > 0) {
+    fromSelect.innerHTML = mailState.accounts.map(a =>
+      `<option value="${a.id}">${escapeHtml(a.smtp_from_name || a.email)} &lt;${escapeHtml(a.email)}&gt;</option>`
+    ).join('');
+  }
+
+  // Bind deal search
+  const dealSearch = $('#compose-deal-search');
+  if (dealSearch && !dealSearch.dataset.bound) {
+    dealSearch.dataset.bound = '1';
+    let dealT = null;
+    dealSearch.addEventListener('input', () => {
+      clearTimeout(dealT);
+      dealT = setTimeout(async () => {
+        const q = dealSearch.value.trim();
+        const results = $('#compose-deal-results');
+        if (!results) return;
+        if (q.length < 1) { results.style.display = 'none'; return; }
+        try {
+          const opps = await searchOpportunitiesByTitle(q, { limit: 8 });
+          results.style.display = 'block';
+          results.innerHTML = opps.length
+            ? opps.map(o => `<button type="button" style="display:block;width:100%;text-align:left;padding:4px 8px;border:none;background:none;cursor:pointer;color:var(--text);" data-deal-id="${o.id}" data-deal-title="${escapeHtml(o.title)}">${escapeHtml(o.title)}</button>`).join('')
+            : '<div style="padding:4px 8px;color:var(--muted);font-size:0.85rem;">No matches</div>';
+          results.querySelectorAll('button[data-deal-id]').forEach(b => {
+            b.addEventListener('click', () => {
+              const selected = $('#compose-deal-selected');
+              if (selected) {
+                selected.innerHTML = `<span style="background:var(--bg-elevated);padding:2px 6px;border-radius:3px;font-size:0.85rem;">${escapeHtml(b.dataset.dealTitle)} <button type="button" class="compose-deal-clear" style="border:none;background:none;cursor:pointer;color:var(--muted);">&times;</button></span>`;
+                selected.dataset.dealId = b.dataset.dealId;
+                selected.querySelector('.compose-deal-clear')?.addEventListener('click', () => {
+                  selected.innerHTML = '';
+                  delete selected.dataset.dealId;
+                });
+              }
+              results.style.display = 'none';
+              dealSearch.value = b.dataset.dealTitle;
+            });
+          });
+        } catch { results.style.display = 'none'; }
+      }, 300);
+    });
+    document.addEventListener('click', (e) => {
+      if (!dealSearch.contains(e.target) && !$('#compose-deal-results')?.contains(e.target)) {
+        const r = $('#compose-deal-results');
+        if (r) r.style.display = 'none';
+      }
+    });
+  }
+
+  // Bind send button
+  const sendBtn = $('#compose-send-btn');
+  if (sendBtn && !sendBtn.dataset.bound) {
+    sendBtn.dataset.bound = '1';
+    sendBtn.addEventListener('click', async () => {
+      const accountId = parseInt($('#compose-from-account')?.value);
+      const to = $('#compose-to')?.value.trim();
+      const cc = $('#compose-cc')?.value.trim() || null;
+      const bcc = $('#compose-bcc')?.value.trim() || null;
+      const subject = $('#compose-subject')?.value.trim();
+      const body = $('#compose-body')?.value;
+      const dealId = parseInt($('#compose-deal-selected')?.dataset?.dealId) || null;
+      if (!accountId || !to || !subject) { showToast('From, To, and Subject are required', true); return; }
+      sendBtn.disabled = true;
+      sendBtn.innerHTML = '<i class="ti ti-loader" style="margin-right:0.3rem;"></i>Sending...';
+      try {
+        await api('/api/v2/mail/send', {
+          method: 'POST',
+          body: JSON.stringify({ account_id: accountId, to, cc, bcc, subject, body, deal_id: dealId })
+        });
+        showToast('Email sent');
+        modal.classList.add('hidden');
+        // Reset form
+        $('#compose-to').value = '';
+        $('#compose-cc').value = '';
+        $('#compose-bcc').value = '';
+        $('#compose-subject').value = '';
+        $('#compose-body').value = '';
+        const dealSel = $('#compose-deal-selected');
+        if (dealSel) { dealSel.innerHTML = ''; delete dealSel.dataset.dealId; }
+      } catch (e) {
+        showToast('Send failed: ' + e.message, true);
+      } finally {
+        sendBtn.disabled = false;
+        sendBtn.innerHTML = '<i class="ti ti-send" style="margin-right:0.3rem;"></i>Send';
+      }
+    });
+  }
 }
 
 function attachMailModalListeners() {
@@ -15283,63 +15482,94 @@ function attachMailModalListeners() {
     markBtn.addEventListener("click", async () => {
       if (!mailState.selected.size) return;
       const ids = Array.from(mailState.selected);
-      const idsStr = ids.map(String);
-      idsStr.forEach(sid => mailDashboardReadIds.add(sid));
-      saveMailDashboardReadIds();
+      let ok = 0;
+      for (const mid of ids) {
+        try {
+          await api(`/api/v2/mail/messages/${mid}/read`, { method: "PUT" });
+          ok++;
+        } catch { /* best-effort */ }
+        mailDashboardReadIds.add(String(mid));
+        saveMailDashboardReadIds();
+      }
       mailState.messages.forEach(m => {
         const mid = String(m.id || m.ID);
-        if (idsStr.includes(mid)) m.read = true;
+        if (ids.includes(mid)) m.read = true;
       });
       mailState.selected.clear();
       renderMailList(mailState.messages);
       updateMailSelectedInfo();
-      showToast(`Marked ${ids.length} conversation(s) as read (local only)`);
+      showToast(`Marked ${ok} of ${ids.length} conversation(s) as read`);
     });
   }
 
-  // mark unread // Mail API removed in v2 — local only
+  // mark unread
   const markUnreadBtn = $("#mail-mark-unread");
   if (markUnreadBtn) {
     markUnreadBtn.addEventListener("click", async () => {
       if (!mailState.selected.size) return;
       const ids = Array.from(mailState.selected);
-      const idsStr = ids.map(String);
-      idsStr.forEach(sid => mailDashboardReadIds.delete(sid));
-      saveMailDashboardReadIds();
+      let ok = 0;
+      for (const mid of ids) {
+        try {
+          await api(`/api/v2/mail/messages/${mid}/unread`, { method: "PUT" });
+          ok++;
+        } catch { /* best-effort */ }
+        mailDashboardReadIds.delete(String(mid));
+        saveMailDashboardReadIds();
+      }
       mailState.messages.forEach(m => {
         const mid = String(m.id || m.ID);
-        if (idsStr.includes(mid)) m.read = false;
+        if (ids.includes(mid)) m.read = false;
       });
       mailState.selected.clear();
       renderMailList(mailState.messages);
       updateMailSelectedInfo();
-      showToast(`Marked ${ids.length} conversation(s) as unread (local only)`);
+      showToast(`Marked ${ok} of ${ids.length} conversation(s) as unread`);
     });
   }
 
-  // delete // Mail API removed in v2 — local only
+  // delete
   const delBtn = $("#mail-delete");
   if (delBtn) {
     delBtn.addEventListener("click", async () => {
       if (!mailState.selected.size) return;
       if (!confirm(`Delete ${mailState.selected.size} conversation(s)?`)) return;
       const ids = Array.from(mailState.selected);
-      showToast(`Removed ${ids.length} conversation(s) from view (local only)`);
+      let ok = 0;
+      for (const mid of ids) {
+        try {
+          await api(`/api/v2/mail/messages/${mid}`, { method: "DELETE" });
+          ok++;
+        } catch (e) {
+          console.warn("[mail-inbox] delete failed for", mid, e);
+        }
+      }
+      showToast(`Deleted ${ok} of ${ids.length} conversation(s)`);
       mailState.selected.clear();
+      await loadMailMessagesForModal();
     });
   }
 
-  // mark all loaded as read // Mail API removed in v2 — local only
+  // mark all loaded as read
   const markAllBtn = $("#mail-mark-all-read");
   if (markAllBtn) {
     markAllBtn.addEventListener("click", async () => {
       const ids = mailState.messages.map(m => String(m.id || m.ID)).filter(Boolean);
       if (!ids.length) return;
-      ids.forEach(sid => mailDashboardReadIds.add(sid));
-      saveMailDashboardReadIds();
+      let ok = 0;
+      for (const mid of ids) {
+        try {
+          await api(`/api/v2/mail/messages/${mid}/read`, { method: "PUT" });
+          ok++;
+        } catch {
+          // best-effort
+        }
+        mailDashboardReadIds.add(mid);
+        saveMailDashboardReadIds();
+      }
       mailState.messages.forEach(m => { m.read = true; });
       renderMailList(mailState.messages);
-      showToast(`Marked all ${ids.length} loaded as read (local only)`);
+      showToast(`Marked ${ok} of ${ids.length} as read`);
     });
   }
 
@@ -15349,8 +15579,26 @@ function attachMailModalListeners() {
     refBtn.addEventListener("click", () => loadMailMessagesForModal());
   }
 
-  // quick link search
-  const dealSearch = $("#mail-deal-search");
+  // link to deal dropdown
+  const linkDealBtn = $("#mail-link-deal-btn");
+  const linkDealDropdown = $("#mail-link-deal-dropdown");
+  if (linkDealBtn && linkDealDropdown) {
+    linkDealBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      linkDealDropdown.classList.toggle("hidden");
+      if (!linkDealDropdown.classList.contains("hidden")) {
+        const search = $("#mail-link-deal-search");
+        if (search) search.focus();
+      }
+    });
+    document.addEventListener("click", (e) => {
+      if (!linkDealBtn.contains(e.target) && !linkDealDropdown.contains(e.target)) {
+        linkDealDropdown.classList.add("hidden");
+      }
+    });
+  }
+
+  const dealSearch = $("#mail-link-deal-search");
   let dealT = null;
   if (dealSearch) {
     dealSearch.addEventListener("input", () => {
@@ -15359,40 +15607,33 @@ function attachMailModalListeners() {
     });
   }
 
-  const linkBtn = $("#mail-link-btn");
-  if (linkBtn) {
-    linkBtn.addEventListener("click", async () => {
-      const results = $("#mail-deal-results");
+  const linkSubmitBtn = $("#mail-link-deal-submit");
+  if (linkSubmitBtn) {
+    linkSubmitBtn.addEventListener("click", async () => {
+      const results = $("#mail-link-deal-results");
       const dealId = results && results.dataset.selectedDealId;
       if (!dealId || !mailState.selected.size) return;
       const ids = Array.from(mailState.selected);
       let ok = 0;
       for (const mid of ids) {
         try {
-          // Mail CRM link API removed in v2
-          console.warn('[mail-inbox] CRM link not available in v2 API');
+          await api(`/api/v2/mail/messages/${mid}/link`, {
+            method: "POST",
+            body: JSON.stringify({ opportunityId: Number(dealId) })
+          });
           ok++;
         } catch (e) {
-          const msg = (e.message || e || "").toString().toLowerCase();
-          if (msg.includes("duplicate entry") || msg.includes("duplicate") || msg.includes("already linked")) {
-            console.warn('[mail-inbox] link: conv', mid, 'already linked to deal', dealId);
-            ok++;
-          } else {
-            console.warn('[mail-inbox] link endpoint failed for conv', mid, e);
-          }
+          console.warn('[mail-inbox] link failed for', mid, e);
         }
       }
       showToast(ok ? `Linked ${ok} email(s) to deal` : "Link failed (see console)");
-      // also mark linked as read
       const idsToMark = Array.from(mailState.selected);
       for (const mid of idsToMark) {
         await markMailMessageRead(mid).catch(() => {});
       }
       mailState.selected.clear();
-      $("#mail-deal-results").innerHTML = "";
-      $("#mail-deal-results").dataset.selectedDealId = "";
-      linkBtn.disabled = true;
-      $("#mail-selected-info").textContent = "";
+      resetLinkDealDropdown();
+      updateMailSelectedInfo();
       await loadMailMessagesForModal();
     });
   }
@@ -15403,7 +15644,49 @@ function attachMailModalListeners() {
   if (toggleBtn && sideBar) {
     toggleBtn.addEventListener("click", () => {
       const collapsed = sideBar.classList.toggle("mail-sidebar-collapsed");
-      toggleBtn.textContent = collapsed ? "◀" : "▶";
+      toggleBtn.innerHTML = collapsed ? '<i class="ti ti-chevron-left"></i>' : '<i class="ti ti-chevron-right"></i>';
+    });
+  }
+
+  // folder click handlers
+  const folderList = $("#mail-folder-list");
+  if (folderList && !folderList.dataset.bound) {
+    folderList.dataset.bound = "1";
+    folderList.addEventListener("click", (e) => {
+      const btn = e.target.closest(".mail-folder-btn");
+      if (!btn) return;
+      folderList.querySelectorAll(".mail-folder-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      mailState.activeFolder = btn.dataset.folder || "INBOX";
+      loadMailMessagesForModal();
+    });
+  }
+}
+
+  // scanner admin toggle
+  const scannerToggle = $("#mail-scanner-toggle");
+  if (scannerToggle && !scannerToggle.dataset.bound) {
+    scannerToggle.dataset.bound = "1";
+    scannerToggle.addEventListener("click", () => {
+      const adminPanel = $("#mail-scanner-admin");
+      const listContainer = $("#mail-list-container");
+      const sideBar2 = $(".mail-right-sidebar", modal);
+      const toggleBtn2 = $("#mail-sidebar-toggle");
+      if (!adminPanel) return;
+      const showing = !adminPanel.classList.contains("hidden");
+      if (showing) {
+        adminPanel.classList.add("hidden");
+        if (listContainer) listContainer.classList.remove("hidden");
+        if (sideBar2) sideBar2.parentElement?.querySelector(".mail-sidebar-toggle")?.classList.remove("hidden");
+        scannerToggle.innerHTML = '<i class="ti ti-settings"></i> Scanner';
+      } else {
+        adminPanel.classList.remove("hidden");
+        if (listContainer) listContainer.classList.add("hidden");
+        if (sideBar2) sideBar2.classList.add("mail-sidebar-collapsed");
+        if (toggleBtn2) toggleBtn2.classList.add("hidden");
+        scannerToggle.innerHTML = '<i class="ti ti-mail"></i> Inbox';
+        populateEmailScannerTab();
+      }
     });
   }
 }
@@ -15411,13 +15694,81 @@ function attachMailModalListeners() {
 async function loadMailAccountsForModal() {
   const sel = $("#mail-account-select");
   if (!sel) return;
-  sel.innerHTML = '<option value="">Mail not available in v2</option>';
+  try {
+    const data = await api("/api/v2/mail/accounts");
+    const accounts = data.accounts || [];
+    if (!accounts.length) {
+      sel.innerHTML = '<option value="">No mail accounts configured</option>';
+      return;
+    }
+    sel.innerHTML = accounts
+      .map(a => `<option value="${escapeHtml(String(a.id))}">${escapeHtml(a.email || a.email_address || "Account")}</option>`)
+      .join("");
+  } catch (e) {
+    sel.innerHTML = '<option value="">Mail unavailable</option>';
+  }
 }
 
 async function loadMailMessagesForModal() {
   const list = $("#mail-list");
   if (!list) return;
-  list.innerHTML = '<div class="mail-empty">Mail not available in v2 API.</div>';
+  list.innerHTML = '<div class="mail-empty">Loading emails…</div>';
+  try {
+    let url = "/api/v2/mail/messages";
+    const params = [];
+    if (mailState.activeAccount) params.push(`account_id=${mailState.activeAccount}`);
+    if (mailState.activeFolder && mailState.activeFolder !== "INBOX") params.push(`folder=${encodeURIComponent(mailState.activeFolder)}`);
+    if (mailState.search) params.push(`search=${encodeURIComponent(mailState.search)}`);
+    if (params.length) url += '?' + params.join('&');
+    const data = await api(url);
+    mailState.messages = data.messages || [];
+    mailState.page = data.page || 1;
+    mailState.pages = Math.ceil((data.total || mailState.messages.length) / mailState.pageSize);
+    renderMailList(mailState.messages);
+  } catch (e) {
+    list.innerHTML = `<div class="mail-empty">Failed to load emails: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function renderMailFolders() {
+  const tagList = $("#mail-tag-list");
+  if (!tagList) return;
+  try {
+    const data = await api("/api/v2/mail/tags");
+    const tags = data.tags || [];
+    if (!tags.length) {
+      tagList.innerHTML = '<p style="font-size:0.75rem; color:var(--muted); padding:0.25rem 0.5rem;">No tags yet</p>';
+      return;
+    }
+    tagList.innerHTML = tags.map(t => `
+      <div class="mail-tag-item" data-tag-id="${t.id}" data-tag-title="${escapeHtml(t.title)}">
+        <span class="mail-tag-dot" style="background:${escapeHtml(t.color || '#6c757d')}"></span>
+        ${escapeHtml(t.title)}
+      </div>
+    `).join("");
+    tagList.querySelectorAll(".mail-tag-item").forEach(el => {
+      el.addEventListener("click", () => {
+        tagList.querySelectorAll(".mail-tag-item").forEach(x => x.classList.remove("active"));
+        el.classList.add("active");
+        mailState.activeTag = el.dataset.tagTitle;
+        // Filter inbox by tag — reload with tag filter
+        loadMailMessagesForModal();
+      });
+    });
+  } catch (e) {
+    tagList.innerHTML = '<p style="font-size:0.75rem; color:var(--muted); padding:0.25rem 0.5rem;">Tags unavailable</p>';
+  }
+}
+
+async function renderMailUnreadBadge() {
+  const badge = $("#mail-inbox-unread");
+  if (!badge) return;
+  try {
+    const data = await api("/api/v2/mail/unread-count");
+    const count = data.count || 0;
+    badge.textContent = count > 0 ? count : '';
+    badge.style.display = count > 0 ? 'inline' : 'none';
+  } catch { badge.style.display = 'none'; }
 }
 
 function renderMailList(msgs) {
@@ -15486,8 +15837,8 @@ function renderMailList(msgs) {
     const expBtn = document.createElement("button");
     expBtn.type = "button";
     expBtn.className = "mail-expand-btn";
-    expBtn.textContent = "View";
-    expBtn.title = "Expand to view full email";
+    expBtn.innerHTML = '<i class="ti ti-eye"></i>';
+    expBtn.title = "View email";
     row.appendChild(expBtn);
 
     const cb = row.querySelector(".mail-cb");
@@ -15556,23 +15907,17 @@ function renderMailList(msgs) {
 
 function updateMailSelectedInfo() {
   const n = mailState.selected.size;
-  // Enable toolbar action buttons (mark read/unread) for the viewer when items selected.
-  // (delete is hidden in viewer-only mode)
   const hasSel = n > 0;
   const markReadBtn = $("#mail-mark-read");
   const markUnreadBtn = $("#mail-mark-unread");
   const delBtn = $("#mail-delete");
   const clearSelBtn = $("#mail-clear-selection");
+  const linkDealBtn = $("#mail-link-deal-btn");
   if (markReadBtn) markReadBtn.disabled = !hasSel;
   if (markUnreadBtn) markUnreadBtn.disabled = !hasSel;
   if (delBtn) delBtn.disabled = !hasSel;
   if (clearSelBtn) clearSelBtn.disabled = !hasSel;
-
-  const info = $("#mail-selected-info");
-  const linkBtn = $("#mail-link-btn");
-  if (!info) return;
-  info.textContent = n ? `${n} selected` : "";
-  if (linkBtn) linkBtn.disabled = n === 0 || !$("#mail-deal-results")?.dataset?.selectedDealId;
+  if (linkDealBtn) linkDealBtn.disabled = !hasSel;
 }
 
 async function markMailMessageRead(messageId) {
@@ -15584,25 +15929,26 @@ async function markMailMessageRead(messageId) {
       if (String(m.id || m.ID) === id) m.read = true;
     });
   }
-  // Mail API removed in v2 — local only
+  try {
+    await api(`/api/v2/mail/messages/${id}/read`, { method: "PUT" });
+  } catch {
+    // best-effort, server mark is non-blocking
+  }
 }
 
-async function searchDealsForMailLink(query) {
-  const resEl = $("#mail-deal-results");
-  const linkBtn = $("#mail-link-btn");
+ async function searchDealsForMailLink(query) {
+  const resEl = $("#mail-link-deal-results");
+  const linkBtn = $("#mail-link-deal-submit");
   if (!resEl) return;
   resEl.innerHTML = "";
   resEl.dataset.selectedDealId = "";
-  resEl.dataset.selectedDealTitle = "";
   if (linkBtn) linkBtn.disabled = true;
   const q = (query || "").trim();
   if (q.length < 1) {
-    resEl.classList.add("hidden");
     return;
   }
   try {
     const opps = await searchOpportunitiesByTitle(q, { limit: 8 });
-    resEl.classList.remove("hidden");
     if (!opps.length) {
       const b = document.createElement("button");
       b.type = "button";
@@ -15619,14 +15965,13 @@ async function searchDealsForMailLink(query) {
         resEl.querySelectorAll("button").forEach(x => x.classList.remove("selected"));
         b.classList.add("selected");
         resEl.dataset.selectedDealId = String(opp.id);
-        resEl.dataset.selectedDealTitle = opp.title;
         if (linkBtn) linkBtn.disabled = mailState.selected.size === 0;
-        updateMailSelectedInfo();
       });
       resEl.appendChild(b);
     });
   } catch (err) {
     showToast("Deal search failed: " + (err.message || err), true);
+  }
     resEl.classList.add("hidden");
   }
 }
@@ -16791,7 +17136,8 @@ function renderHistoryNoteBody(container, ev) {
 }
 
 async function fetchMailMessage(messageId) {
-  throw new Error("Mail not available in v2 API");
+  const data = await api(`/api/v2/mail/messages/${messageId}`);
+  return data;
 }
 
 function normalizeMailMessage(mail) {
@@ -20075,6 +20421,166 @@ async function refreshInfraLog() {
     }).join("");
   } catch (e) {
     listEl.innerHTML = `<p class="event-log-empty">Failed to load infra log: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function populateEmailScannerTab() {
+  // Status
+  const statusBox = $("#scanner-status-box");
+  if (statusBox) {
+    try {
+      const s = await api("/api/v2/mail/status");
+      const enabled = s.enabled;
+      statusBox.innerHTML = `
+        <span class="${enabled ? 'status-ok' : 'status-fail'}">${enabled ? '● Scanner enabled' : '● Scanner disabled'}</span>
+        &nbsp;· IMAP: ${escapeHtml(s.imap_host || 'not configured')} (${s.imap_port || 993})
+        &nbsp;· Processed: ${s.processed_count || 0}
+        &nbsp;· Poll: ${s.poll_interval || 300}s`;
+    } catch (e) {
+      statusBox.innerHTML = `<span class="status-fail">● Failed to load: ${escapeHtml(e.message)}</span>`;
+    }
+  }
+
+  // Accounts
+  const acctList = $("#scanner-accounts-list");
+  if (acctList) {
+    try {
+      const data = await api("/api/v2/mail/accounts");
+      const accounts = data.accounts || [];
+      if (!accounts.length) {
+        acctList.innerHTML = '<p style="color:var(--muted);font-size:0.85rem;">No IMAP accounts configured.</p>';
+      } else {
+        acctList.innerHTML = accounts.map(a => `
+          <div style="padding:4px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+            <span>${escapeHtml(a.email || '')} — ${escapeHtml(a.imap_host || '')}:${a.imap_port || 993}</span>
+            <span style="font-size:0.75rem; color:${a.sync_enabled ? 'var(--accent)' : 'var(--muted)'};">${a.sync_enabled ? '● Active' : '○ Disabled'}</span>
+          </div>`).join("");
+      }
+    } catch (e) {
+      acctList.innerHTML = `<p style="color:var(--muted);">Failed to load accounts: ${escapeHtml(e.message)}</p>`;
+    }
+  }
+
+  // Behavior toggles
+  const togglesBox = $("#scanner-toggles");
+  if (togglesBox) {
+    try {
+      const cfg = await api("/api/v2/mail/config");
+      const sb = cfg.scanner_behavior || cfg;
+      if (sb) {
+        const set = (id, val) => { const el = $(id); if (el) el.checked = !!val; };
+        set("#scanner-toggle-create-deals", sb.create_deals);
+        set("#scanner-toggle-create-tasks", sb.create_tasks);
+        set("#scanner-toggle-post-notes", sb.post_notes);
+        set("#scanner-toggle-notify-users", sb.notify_users);
+      }
+    } catch { /* toggles default unchecked */ }
+  }
+
+  // Log
+  const logList = $("#scanner-log-list");
+  if (logList) {
+    try {
+      const data = await api("/api/v2/mail/log?limit=50");
+      const entries = data.entries || [];
+      if (!entries.length) {
+        logList.innerHTML = '<p style="color:var(--muted);font-size:0.85rem;">No scanner log entries yet.</p>';
+      } else {
+        logList.innerHTML = entries.slice().reverse().map(e => {
+          const cls = e.status === 'processed' ? '' : e.status === 'error' ? 'fail' : '';
+          return `<div class="event-log-entry ${cls}"><span class="event-log-entry-body"><span class="event-log-entry-msg">${escapeHtml(e.classification || e.status || '—')}: ${escapeHtml((e.subject || '').slice(0, 60))}</span></span><span class="event-log-entry-time">${escapeHtml(e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : '')}</span></div>`;
+        }).join("");
+      }
+    } catch (e) {
+      logList.innerHTML = `<p style="color:var(--muted);">Failed to load log: ${escapeHtml(e.message)}</p>`;
+    }
+  }
+
+  // Bind buttons (only once)
+  bindScannerAdminButtons();
+}
+
+function bindScannerAdminButtons() {
+  // Add account
+  const addBtn = $("#scanner-account-add");
+  const form = $("#scanner-account-form");
+  if (addBtn && form && !addBtn.dataset.bound) {
+    addBtn.dataset.bound = "1";
+    addBtn.addEventListener("click", () => form.classList.toggle("hidden"));
+    const cancelBtn = $("#scanner-acct-cancel");
+    if (cancelBtn) cancelBtn.addEventListener("click", () => form.classList.add("hidden"));
+    const saveBtn = $("#scanner-acct-save");
+    if (saveBtn) saveBtn.addEventListener("click", async () => {
+      const email = $("#scanner-acct-email")?.value.trim();
+      const host = $("#scanner-acct-host")?.value.trim();
+      const port = parseInt($("#scanner-acct-port")?.value) || 993;
+      const password = $("#scanner-acct-password")?.value;
+      const folder = $("#scanner-acct-folder")?.value.trim() || "INBOX";
+      if (!email || !host || !password) { showToast("Email, host, and password required", true); return; }
+      try {
+        await api("/api/v2/mail/messages", { method: "POST", body: JSON.stringify({ email, host, port, password, folder }) });
+        showToast("Account saved (note: full IMAP account CRUD coming soon)");
+        form.classList.add("hidden");
+        populateEmailScannerTab();
+      } catch (e) { showToast("Failed: " + e.message, true); }
+    });
+  }
+
+  // Refresh accounts
+  const acctRefresh = $("#scanner-accounts-refresh");
+  if (acctRefresh && !acctRefresh.dataset.bound) {
+    acctRefresh.dataset.bound = "1";
+    acctRefresh.addEventListener("click", () => populateEmailScannerTab());
+  }
+
+  // Save toggles
+  const togglesSave = $("#scanner-toggles-save");
+  if (togglesSave && !togglesSave.dataset.bound) {
+    togglesSave.dataset.bound = "1";
+    togglesSave.addEventListener("click", async () => {
+      const statusEl = $("#scanner-toggles-status");
+      try {
+        await api("/api/v2/mail/config", {
+          method: "PUT",
+          body: JSON.stringify({
+            create_deals: $("#scanner-toggle-create-deals")?.checked || false,
+            create_tasks: $("#scanner-toggle-create-tasks")?.checked || false,
+            post_notes: $("#scanner-toggle-post-notes")?.checked || false,
+            notify_users: $("#scanner-toggle-notify-users")?.checked || false,
+          })
+        });
+        if (statusEl) { statusEl.textContent = "✓ Saved"; statusEl.className = "event-log-health-status ok"; }
+        setTimeout(() => { if (statusEl) statusEl.textContent = ""; }, 3000);
+      } catch (e) {
+        if (statusEl) { statusEl.textContent = e.message; statusEl.className = "event-log-health-status fail"; }
+      }
+    });
+  }
+
+  // Log refresh
+  const logRefresh = $("#scanner-log-refresh");
+  if (logRefresh && !logRefresh.dataset.bound) {
+    logRefresh.dataset.bound = "1";
+    logRefresh.addEventListener("click", () => populateEmailScannerTab());
+  }
+
+  // Reprocess
+  const reprocessBtn = $("#scanner-reprocess-btn");
+  if (reprocessBtn && !reprocessBtn.dataset.bound) {
+    reprocessBtn.dataset.bound = "1";
+    reprocessBtn.addEventListener("click", async () => {
+      const idsStr = $("#scanner-reprocess-ids")?.value.trim();
+      const statusEl = $("#scanner-reprocess-status");
+      if (!idsStr) { showToast("Enter message IDs to reprocess", true); return; }
+      const ids = idsStr.split(",").map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+      if (!ids.length) { showToast("No valid IDs", true); return; }
+      try {
+        await api("/api/v2/mail/reprocess", { method: "POST", body: JSON.stringify({ conversation_ids: ids }) });
+        if (statusEl) { statusEl.textContent = `✓ Reprocessed ${ids.length} message(s)`; statusEl.className = "event-log-health-status ok"; }
+      } catch (e) {
+        if (statusEl) { statusEl.textContent = e.message; statusEl.className = "event-log-health-status fail"; }
+      }
+    });
   }
 }
 
