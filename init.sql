@@ -146,7 +146,8 @@ CREATE TABLE opportunities (
     created_at TIMESTAMP DEFAULT NOW(),
     created_by INTEGER REFERENCES users(id),
     updated_at TIMESTAMP DEFAULT NOW(),
-    updated_by INTEGER REFERENCES users(id)
+    updated_by INTEGER REFERENCES users(id),
+    project_number SERIAL UNIQUE
 );
 
 CREATE INDEX idx_opportunities_stage ON opportunities(stage_id);

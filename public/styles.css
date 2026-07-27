@@ -11170,6 +11170,10 @@ body {
 }
 
 /* ── Compose compact fields ───────────────────────────────────────────── */
+.opp-project-number-badge:hover {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
 .compose-fields-section {
   flex-shrink: 0;
   padding: 0.5rem 0.75rem;

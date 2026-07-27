@@ -1632,7 +1632,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                       o.is_private, o.created_at, o.created_by, o.updated_at,
                       s.title, s.color,
                       u1.display_name, u2.display_name,
-                      c.first_name, c.last_name, c.company, c.email, c.phone
+                      c.first_name, c.last_name, c.company, c.email, c.phone,
+                      o.project_number
                FROM opportunities o
                LEFT JOIN stages s ON o.stage_id = s.id
                LEFT JOIN users u1 ON o.created_by = u1.id
@@ -1654,6 +1655,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "stage": {"title": row[14], "color": row[15]} if row[14] else None,
             "responsible": {"displayName": row[17]} if row[17] else None,
             "contact": {"displayName": f"{row[18] or ''} {row[19] or ''}".strip(), "company": row[20], "email": row[21], "phone": row[22]} if row[18] or row[19] else None,
+            "project_number": row[23],
         })
 
     def _handle_project_create(self) -> None:
@@ -4850,6 +4852,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             user = _require_auth(self)
             linked_by = user["id"] if user else None
             ok = self._link_email_to_deal(message_id, int(opp_id), linked_by)
+            # Create history event so the link appears in the deal timeline
+            if ok:
+                msg = db.query_one("SELECT subject, from_addr, body_html, body_text FROM mail_messages WHERE id = %s", (message_id,))
+                if msg:
+                    from_addr = msg["from_addr"] or "Unknown"
+                    subject = msg["subject"] or "(no subject)"
+                    body_preview = re.sub(r"<[^>]+>", "", msg.get("body_html") or "")[:2000] if msg.get("body_html") else (msg.get("body_text") or "")[:2000]
+                    note_content = f"Email linked: {subject}\nFrom: {from_addr}\n\n{body_preview[:2000]}"
+                    db.execute(
+                        "INSERT INTO history_events (opportunity_id, user_id, category, content, created_at) "
+                        "VALUES (%s, %s, %s, %s, NOW())",
+                        (int(opp_id), linked_by, "Email", note_content),
+                    )
             _json_response(self, 200, {"ok": True, "linked": ok})
         except Exception as e:
             logger.exception("Failed to link message %d", message_id)
@@ -5469,9 +5484,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         try:
             where = "m.folder != 'Trash'"
             params: tuple = ()
-            if account_id:
-                where += " AND m.account_id = %s"
-                params = (int(account_id),)
+            if account_id and account_id != 'crm':
+                try:
+                    where += " AND m.account_id = %s"
+                    params = (int(account_id),)
+                except (ValueError, TypeError):
+                    pass
             rows = db.query_dicts(
                 f"SELECT m.conversation_id, COUNT(*) AS message_count, "
                 f"MAX(m.date_received) AS latest_date, "

@@ -16249,7 +16249,7 @@ async function loadMailThreads() {
   try {
     let url = "/api/v2/mail/threads";
     const params = [];
-    if (mailState.activeAccount) params.push(`account_id=${mailState.activeAccount}`);
+    if (mailState.activeAccount && mailState.activeAccount !== 'crm') params.push(`account_id=${mailState.activeAccount}`);
     if (params.length) url += '?' + params.join('&');
     const data = await api(url);
     const threads = data.threads || [];
@@ -17899,7 +17899,7 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
     pre.textContent = bodyPick.content;
     bodyWrap.appendChild(pre);
   } else {
-    bodyWrap.innerHTML = '<p class="opp-preview-empty">No readable message body. Open in Mail for the full message.</p>';
+    bodyWrap.innerHTML = '<p class="opp-preview-empty">No readable message body available.</p>';
   }
 
   panel.appendChild(head);
@@ -17910,20 +17910,13 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
   if (atts.length) {
     const attBar = document.createElement("div");
     attBar.className = "mail-attachments-panel";
-    const mailUrl = portalMailMessageUrl(messageId) || `${state.portalUrl}/addons/mail/Default.aspx#conversation/${messageId}`;
     attBar.innerHTML = "<strong>Attachments:</strong> ";
     atts.forEach((a) => {
       const fileName = a.fileName || a.title || a.storedFileName || "file";
+      const fileSize = a.size ? ` (${a.size} KB)` : "";
       const wrap = document.createElement("span");
       wrap.className = "mail-attachment-link";
-      wrap.textContent = fileName + " (";
-      const openLink = document.createElement("a");
-      openLink.href = mailUrl;
-      openLink.target = "_blank";
-      openLink.rel = "noopener noreferrer";
-      openLink.textContent = "Open in Mail";
-      wrap.appendChild(openLink);
-      wrap.appendChild(document.createTextNode(")"));
+      wrap.textContent = fileName + fileSize;
       attBar.appendChild(document.createTextNode(" "));
       attBar.appendChild(wrap);
     });
@@ -17933,14 +17926,6 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
   const foot = document.createElement("div");
   foot.className = "opp-preview-mail-foot";
   foot.style.cssText = "display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; padding:0.5rem 0;";
-
-  const open = document.createElement("a");
-  open.href = openUrl || crmPayload?.messageUrl || portalMailMessageUrl(messageId);
-  open.target = "_blank";
-  open.rel = "noopener noreferrer";
-  open.textContent = "Open in Mail";
-  open.className = "btn btn-ghost btn-small";
-  foot.appendChild(open);
 
   const actionBtns = document.createElement("div");
   actionBtns.style.cssText = "display:flex; gap:0.3rem; margin-left:auto;";
@@ -18006,6 +17991,15 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
     } catch (e) { showToast("Failed to archive: " + (e.message || e), true); }
   });
   actionBtns.appendChild(archiveBtn);
+
+  // Linked deals badges
+  if (mail.linked_deals && mail.linked_deals.length > 0) {
+    const linkedDiv = document.createElement("div");
+    linkedDiv.style.cssText = "margin-top:0.5rem; padding:0.4rem 0.5rem; background:var(--bg-elevated); border-radius:4px; font-size:0.8rem;";
+    linkedDiv.innerHTML = '<i class="ti ti-link" style="margin-right:0.3rem;"></i>Linked to: ' +
+      mail.linked_deals.map(d => `<span style="background:var(--accent-subtle); color:var(--accent); padding:0.1rem 0.4rem; border-radius:3px; margin-right:0.3rem;">${escapeHtml(d.opportunity_title || 'Deal #' + d.opportunity_id)}</span>`).join("");
+    foot.appendChild(linkedDiv);
+  }
 
   foot.appendChild(actionBtns);
   panel.appendChild(foot);
@@ -18918,6 +18912,23 @@ async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, 
     const resolvedGroup = group || findGroupForOpportunity(id);
     setOpportunityPreviewContext(id, data.opp, resolvedGroup);
     titleEl.textContent = data.opp.title || data.opp.Title || titleHint || `Opportunity #${id}`;
+
+    // Project number badge
+    const existingBadge = titleEl.parentElement?.querySelector('.opp-project-number-badge');
+    if (existingBadge) existingBadge.remove();
+    const projNum = data.opp.project_number;
+    if (projNum) {
+      const badge = document.createElement("span");
+      badge.className = "opp-project-number-badge";
+      badge.textContent = `#${projNum}`;
+      badge.title = "Click to copy project number";
+      badge.style.cssText = "background:var(--bg-elevated); padding:0.2rem 0.5rem; border-radius:4px; cursor:pointer; font-size:0.85rem; color:var(--muted); margin-left:0.5rem;";
+      badge.addEventListener("click", () => {
+        navigator.clipboard.writeText(`#${projNum}`).then(() => showToast("Copied to clipboard")).catch(() => {});
+      });
+      titleEl.parentElement.insertBefore(badge, titleEl.parentElement.querySelector('.opp-preview-head-actions'));
+    }
+
     renderOpportunityPreviewBody(data);
     linkifyPhonesAndEmails(body);
     updateInferredStatus("preview", data.opp.title || data.opp.Title || titleHint || "");
