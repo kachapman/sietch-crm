@@ -15299,16 +15299,17 @@ function switchMailTab(btn) {
   const sidebar = $('.mail-right-sidebar');
   const sidebarToggle = $('#mail-sidebar-toggle');
   const mailMainArea = $('.mail-main-area');
+  const scannerDiv = $('#mail-scanner-admin');
 
   if (tabName === 'inbox') {
-    if (inboxContainer) inboxContainer.classList.remove('hidden');
+    if (inboxContainer) { inboxContainer.classList.remove('hidden'); inboxContainer.style.flex = ''; }
     if (toolbar) toolbar.classList.remove('hidden');
     if (sidebar) sidebar.parentElement?.classList.remove('hidden');
     if (sidebarToggle) sidebarToggle.classList.remove('hidden');
+    if (scannerDiv) scannerDiv.classList.add('hidden');
     if (mailMainArea) mailMainArea.style.display = '';
-    mailState.activeAccount = parseInt(btn.dataset.accountId) || null;
+    mailState.activeAccount = btn.dataset.accountId || 'crm';
     mailState.activeFolder = 'INBOX';
-    // Reset folder active state
     const folderList = $('#mail-folder-list');
     if (folderList) {
       folderList.querySelectorAll('.mail-folder-btn').forEach(b => b.classList.remove('active'));
@@ -15318,14 +15319,20 @@ function switchMailTab(btn) {
     loadMailMessagesForModal();
     renderMailUnreadBadge();
   } else if (tabName === 'scanner-admin') {
-    if (inboxContainer) inboxContainer.classList.add('hidden');
+    if (inboxContainer) { inboxContainer.classList.add('hidden'); inboxContainer.style.flex = '0'; }
     if (toolbar) toolbar.classList.add('hidden');
-    const scannerDiv = $('#mail-scanner-admin');
-    if (scannerDiv) scannerDiv.classList.remove('hidden');
+    if (scannerDiv) { scannerDiv.classList.remove('hidden'); scannerDiv.style.flex = '1'; }
     if (sidebar) sidebar.parentElement?.classList.add('hidden');
     if (sidebarToggle) sidebarToggle.classList.add('hidden');
     if (mailMainArea) mailMainArea.style.display = '';
     populateEmailScannerTab();
+  } else if (tabName === 'add-account') {
+    // Open account settings modal in create mode
+    openAccountSettingsModal();
+    // Re-activate the previous tab
+    tabs.forEach(t => t.classList.remove('active'));
+    const prevTab = tabsEl?.querySelector('.mail-inbox-tab.active') || tabsEl?.querySelector('[data-mailtab="inbox"]');
+    if (prevTab) prevTab.classList.add('active');
   }
 }
 
@@ -15624,6 +15631,100 @@ async function openReplyCompose(messageId, type = 'reply') {
     });
   } catch (e) {
     showToast('Failed to load message: ' + e.message, true);
+  }
+}
+
+function openAccountSettingsModal(editAccountId) {
+  const modal = $('#account-settings-modal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  
+  const titleEl = $('#account-settings-title');
+  const deleteBtn = $('#account-settings-delete');
+  const idField = $('#account-settings-id');
+  
+  if (editAccountId) {
+    if (titleEl) titleEl.textContent = 'Edit Mail Account';
+    if (deleteBtn) deleteBtn.style.display = '';
+    if (idField) idField.value = editAccountId;
+    // Load account data
+    api(`/api/v2/mail/accounts`).then(data => {
+      const acct = (data.accounts || []).find(a => a.id == editAccountId);
+      if (acct) {
+        $('#account-settings-name').value = acct.display_name || '';
+        $('#account-settings-email').value = acct.email || '';
+        $('#account-settings-imap-host').value = acct.imap_host || '';
+        $('#account-settings-imap-port').value = acct.imap_port || 993;
+        $('#account-settings-smtp-host').value = acct.smtp_host || '';
+        $('#account-settings-smtp-port').value = acct.smtp_port || 587;
+        $('#account-settings-from-name').value = acct.smtp_from_name || '';
+      }
+    }).catch(() => {});
+  } else {
+    if (titleEl) titleEl.textContent = 'Add Mail Account';
+    if (deleteBtn) deleteBtn.style.display = 'none';
+    if (idField) idField.value = '';
+    // Clear all fields
+    ['account-settings-name','account-settings-email','account-settings-imap-host','account-settings-imap-password','account-settings-smtp-host','account-settings-smtp-password','account-settings-from-name'].forEach(id => {
+      const el = $(`#${id}`);
+      if (el) el.value = '';
+    });
+    $('#account-settings-imap-port').value = 993;
+    $('#account-settings-smtp-port').value = 587;
+  }
+  
+  // Bind dismiss
+  modal.querySelectorAll('[data-account-settings-dismiss]').forEach(el => {
+    el.addEventListener('click', () => modal.classList.add('hidden'), { once: true });
+  });
+  
+  // Bind save
+  const saveBtn = $('#account-settings-save');
+  if (saveBtn && !saveBtn.dataset.bound) {
+    saveBtn.dataset.bound = '1';
+    saveBtn.addEventListener('click', async () => {
+      const id = $('#account-settings-id').value;
+      const payload = {
+        display_name: $('#account-settings-name').value.trim(),
+        email: $('#account-settings-email').value.trim(),
+        imap_host: $('#account-settings-imap-host').value.trim(),
+        imap_port: parseInt($('#account-settings-imap-port').value) || 993,
+        password: $('#account-settings-imap-password').value,
+        smtp_host: $('#account-settings-smtp-host').value.trim(),
+        smtp_port: parseInt($('#account-settings-smtp-port').value) || 587,
+        smtp_password: $('#account-settings-smtp-password').value,
+        smtp_from_name: $('#account-settings-from-name').value.trim(),
+      };
+      if (!payload.email || !payload.imap_host) { showToast('Email and IMAP host required', true); return; }
+      try {
+        if (id) {
+          await api(`/api/v2/mail/accounts/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
+          showToast('Account updated');
+        } else {
+          await api('/api/v2/mail/accounts', { method: 'POST', body: JSON.stringify(payload) });
+          showToast('Account added');
+        }
+        modal.classList.add('hidden');
+        await renderMailTabs();
+      } catch (e) { showToast('Failed: ' + e.message, true); }
+    });
+  }
+  
+  // Bind delete
+  const delBtn = $('#account-settings-delete');
+  if (delBtn && !delBtn.dataset.bound) {
+    delBtn.dataset.bound = '1';
+    delBtn.addEventListener('click', async () => {
+      const id = $('#account-settings-id').value;
+      if (!id) return;
+      if (!confirm('Delete this mail account? All messages will be removed.')) return;
+      try {
+        await api(`/api/v2/mail/accounts/${id}`, { method: 'DELETE' });
+        showToast('Account deleted');
+        modal.classList.add('hidden');
+        await renderMailTabs();
+      } catch (e) { showToast('Failed: ' + e.message, true); }
+    });
   }
 }
 

@@ -3495,15 +3495,17 @@ body {
   flex-shrink: 0;
 }
 .mail-inbox-tab {
-  padding: 0.5rem 0.75rem;
-  border: none;
-  background: none;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: var(--bg);
   color: var(--muted);
   font-size: 0.85rem;
   cursor: pointer;
   white-space: nowrap;
-  border-bottom: 2px solid transparent;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  margin-right: -1px;
 }
 .mail-inbox-tab:hover {
   color: var(--text);
@@ -3511,8 +3513,12 @@ body {
 }
 .mail-inbox-tab.active {
   color: var(--accent);
-  border-bottom-color: var(--accent);
+  background: var(--surface);
+  border-color: var(--border);
+  border-bottom: 2px solid var(--surface);
   font-weight: 500;
+  position: relative;
+  z-index: 1;
 }
 .mail-tab-badge {
   display: inline-block;
@@ -4023,8 +4029,8 @@ body {
 
 /* Small button variant used inside the modal */
 .btn-small {
-  font-size: 0.82rem;
-  padding: 0.3rem 0.6rem;
+  font-size: 0.88rem;
+  padding: 0.35rem 0.65rem;
 }
 
 /* The pinned presence tile uses normal tile styles + a compact list inside the body */
