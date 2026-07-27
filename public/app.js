@@ -15210,6 +15210,26 @@ async function openMailInboxModal() {
   const modal = $("#mail-inbox-modal");
   if (!modal) return;
   modal.classList.remove("hidden");
+  // Reset layout state
+  const mailMainArea = $('.mail-main-area');
+  if (mailMainArea) {
+    mailMainArea.style.display = '';
+    mailMainArea.style.flexDirection = '';
+    mailMainArea.classList.remove('hidden', 'mail-main-column');
+  }
+  const scannerDiv = $('#mail-scanner-admin');
+  if (scannerDiv) {
+    scannerDiv.classList.add('hidden');
+    scannerDiv.style.flex = '';
+    scannerDiv.style.width = '';
+    scannerDiv.style.minWidth = '';
+  }
+  const sidebar = $('.mail-right-sidebar');
+  if (sidebar) sidebar.classList.remove('hidden');
+  const sidebarToggle = $('#mail-sidebar-toggle');
+  if (sidebarToggle) sidebarToggle.classList.remove('hidden');
+  const inboxContainer = $('#mail-list-container');
+  if (inboxContainer) { inboxContainer.classList.remove('hidden'); inboxContainer.style.flex = ''; }
   loadMailDashboardReadIds();
   resetLinkDealDropdown();
   mailState = { accounts: [], messages: [], pageSize: 50, search: '', selected: new Set(), activeAccount: null, activeFolder: 'INBOX', activeTag: null, threaded: false };
@@ -15302,12 +15322,25 @@ function switchMailTab(btn) {
   const scannerDiv = $('#mail-scanner-admin');
 
   if (tabName === 'inbox') {
+    // Show inbox content
     if (inboxContainer) { inboxContainer.classList.remove('hidden'); inboxContainer.style.flex = ''; }
     if (toolbar) toolbar.classList.remove('hidden');
-    if (sidebar) sidebar.parentElement?.classList.remove('hidden');
+    // Show sidebar directly (not parent)
+    if (sidebar) sidebar.classList.remove('hidden');
     if (sidebarToggle) sidebarToggle.classList.remove('hidden');
-    if (scannerDiv) scannerDiv.classList.add('hidden');
-    if (mailMainArea) mailMainArea.style.display = '';
+    // Hide scanner
+    if (scannerDiv) {
+      scannerDiv.classList.add('hidden');
+      scannerDiv.style.flex = '';
+      scannerDiv.style.width = '';
+      scannerDiv.style.minWidth = '';
+    }
+    // Reset layout
+    if (mailMainArea) {
+      mailMainArea.style.display = '';
+      mailMainArea.style.flexDirection = '';
+      mailMainArea.classList.remove('mail-main-column');
+    }
     mailState.activeAccount = btn.dataset.accountId || 'crm';
     mailState.activeFolder = 'INBOX';
     const folderList = $('#mail-folder-list');
@@ -15319,20 +15352,44 @@ function switchMailTab(btn) {
     loadMailMessagesForModal();
     renderMailUnreadBadge();
   } else if (tabName === 'scanner-admin') {
+    // Hide inbox content
     if (inboxContainer) inboxContainer.classList.add('hidden');
     if (toolbar) toolbar.classList.add('hidden');
+    // Show scanner
     if (scannerDiv) {
       scannerDiv.classList.remove('hidden');
       scannerDiv.style.flex = '1 1 0%';
       scannerDiv.style.width = '100%';
       scannerDiv.style.minWidth = '0';
     }
-    if (sidebar) sidebar.parentElement?.classList.add('hidden');
+    // Hide sidebar directly (not parent)
+    if (sidebar) sidebar.classList.add('hidden');
     if (sidebarToggle) sidebarToggle.classList.add('hidden');
-    if (mailMainArea) { mailMainArea.style.display = 'flex'; mailMainArea.style.flexDirection = 'column'; }
+    // Layout: column for scanner scroll
+    if (mailMainArea) {
+      mailMainArea.classList.add('mail-main-column');
+    }
     populateEmailScannerTab();
   } else if (tabName === 'add-account') {
     openAccountSettingsModal();
+    // Switch to inbox view first (replicate inbox case show/hide)
+    if (inboxContainer) { inboxContainer.classList.remove('hidden'); inboxContainer.style.flex = ''; }
+    if (toolbar) toolbar.classList.remove('hidden');
+    if (sidebar) sidebar.classList.remove('hidden');
+    if (sidebarToggle) sidebarToggle.classList.remove('hidden');
+    if (scannerDiv) {
+      scannerDiv.classList.add('hidden');
+      scannerDiv.style.flex = '';
+      scannerDiv.style.width = '';
+      scannerDiv.style.minWidth = '';
+    }
+    if (mailMainArea) {
+      mailMainArea.style.display = '';
+      mailMainArea.style.flexDirection = '';
+      mailMainArea.classList.remove('mail-main-column');
+    }
+    mailState.activeAccount = 'crm';
+    mailState.activeFolder = 'INBOX';
     // Re-activate CRM Mail tab
     tabs.forEach(t => t.classList.remove('active'));
     const crmTab = btn.parentElement?.querySelector('[data-account-id="crm"]');
