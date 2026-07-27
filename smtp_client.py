@@ -5,8 +5,10 @@ from __future__ import annotations
 import logging
 import os
 import smtplib
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email import encoders
 
 logger = logging.getLogger("sietch.smtp")
 
@@ -57,6 +59,7 @@ def send_email_from_account(
     cc_addr: str | None = None,
     bcc_addr: str | None = None,
     use_tls: bool = True,
+    attachments: list[dict] | None = None,
 ) -> tuple[bool, str | None]:
     """Send email via per-account SMTP settings. Returns (success, error_message)."""
     if not smtp_host or not smtp_user:
@@ -73,6 +76,23 @@ def send_email_from_account(
     if text_body:
         msg.attach(MIMEText(text_body, "plain"))
     msg.attach(MIMEText(html_body, "html"))
+
+    if attachments:
+        # Switch to multipart/mixed so we can attach binary files alongside the alternative part
+        mixed = MIMEMultipart("mixed")
+        mixed["From"] = msg["From"]
+        mixed["To"] = msg["To"]
+        mixed["Subject"] = msg["Subject"]
+        if cc_addr:
+            mixed["Cc"] = msg["Cc"]
+        mixed.attach(msg)
+        for att in attachments:
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(att["content"])
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", f'attachment; filename="{att["filename"]}"')
+            mixed.attach(part)
+        msg = mixed
 
     all_recipients = [to_addr]
     if cc_addr:

@@ -963,6 +963,42 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/mail/config":
             self._handle_mail_config()
             return
+        # Star/Archive/Move/Reply/Forward
+        m = re.match(r"^/api/v2/mail/messages/(\d+)/star$", api_path)
+        if m and method == "GET":
+            self._handle_mail_message_star(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/mail/messages/(\d+)/reply$", api_path)
+        if m and method == "GET":
+            self._handle_mail_message_reply(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/mail/messages/(\d+)/forward$", api_path)
+        if m and method == "GET":
+            self._handle_mail_message_forward(int(m.group(1)))
+            return
+        # Contacts
+        if api_path == "/api/v2/mail/contacts":
+            self._handle_mail_contacts()
+            return
+        if api_path == "/api/v2/mail/contacts/search":
+            self._handle_mail_contacts_search()
+            return
+        if api_path == "/api/v2/mail/contacts/export":
+            self._handle_mail_contacts_export()
+            return
+        m = re.match(r"^/api/v2/mail/contacts/(\d+)$", api_path)
+        if m and method == "GET":
+            self._handle_mail_contact_get(int(m.group(1)))
+            return
+        # Signature
+        m = re.match(r"^/api/v2/mail/accounts/(\d+)/signature$", api_path)
+        if m and method == "GET":
+            self._handle_mail_account_signature_get(int(m.group(1)))
+            return
+        # Threads
+        if api_path == "/api/v2/mail/threads":
+            self._handle_mail_threads()
+            return
         if api_path == "/api/v2/mail/trash-count":
             self._handle_mail_trash_count()
             return
@@ -1386,6 +1422,52 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # Send email
         if api_path == "/api/v2/mail/send" and method == "POST":
             self._handle_mail_send()
+            return
+        if api_path == "/api/v2/mail/send/undo" and method == "POST":
+            self._handle_mail_send_undo()
+            return
+        # Drafts
+        if api_path == "/api/v2/mail/drafts" and method == "POST":
+            self._handle_mail_draft_save()
+            return
+        m = re.match(r"^/api/v2/mail/drafts/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_mail_draft_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_mail_draft_delete(int(m.group(1)))
+            return
+        # Star/Archive/Move
+        m = re.match(r"^/api/v2/mail/messages/(\d+)/star$", api_path)
+        if m and method == "PUT":
+            self._handle_mail_message_toggle_star(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/mail/messages/(\d+)/archive$", api_path)
+        if m and method == "PUT":
+            self._handle_mail_message_archive(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/mail/messages/(\d+)/move$", api_path)
+        if m and method == "PUT":
+            self._handle_mail_message_move(int(m.group(1)))
+            return
+        # Contacts
+        if api_path == "/api/v2/mail/contacts" and method == "POST":
+            self._handle_mail_contact_create()
+            return
+        if api_path == "/api/v2/mail/contacts/import" and method == "POST":
+            self._handle_mail_contacts_import()
+            return
+        m = re.match(r"^/api/v2/mail/contacts/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_mail_contact_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_mail_contact_delete(int(m.group(1)))
+            return
+        # Signature
+        m = re.match(r"^/api/v2/mail/accounts/(\d+)/signature$", api_path)
+        if m and method == "PUT":
+            self._handle_mail_account_signature_put(int(m.group(1)))
             return
         # Empty trash
         if api_path == "/api/v2/mail/empty-trash" and method == "POST":
@@ -5057,6 +5139,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             body_text = payload.get("body_text")
             deal_id = int(payload["deal_id"]) if payload.get("deal_id") else None
 
+            decoded_attachments = []
+            if payload.get("attachments"):
+                import base64
+                for att in payload["attachments"]:
+                    decoded_attachments.append({
+                        "filename": att.get("filename", "file"),
+                        "content": base64.b64decode(att.get("content", "")),
+                        "mime_type": att.get("mime_type", "application/octet-stream"),
+                    })
+
             acct = db.query_one("SELECT * FROM mail_accounts WHERE id = %s", (account_id,))
             if not acct:
                 _json_response(self, 404, {"error": "Account not found"})
@@ -5077,17 +5169,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 cc_addr=cc_addr,
                 bcc_addr=bcc_addr,
                 use_tls=bool(acct["smtp_use_tls"]),
+                attachments=decoded_attachments if decoded_attachments else None,
             )
+
+            attachments_json = json.dumps([{"filename": a.get("filename"), "mime_type": a.get("mime_type"), "size": len(a.get("content", ""))} for a in (payload.get("attachments") or [])]) if payload.get("attachments") else None
 
             result = db.query_one(
                 """INSERT INTO mail_outgoing
                    (account_id, from_addr, to_addr, cc_addr, bcc_addr, subject,
-                    body_text, body_html, deal_id, status, sent_at, created_by)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    body_text, body_html, deal_id, attachments_json, status, sent_at, created_by)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
                     account_id, acct["email"], to_addr, cc_addr, bcc_addr,
-                    subject, body_text, body_html, deal_id,
+                    subject, body_text, body_html, deal_id, attachments_json,
                     "sent" if ok else "failed",
                     datetime.now(timezone.utc) if ok else None,
                     user["id"] if user else None,
@@ -5107,6 +5202,288 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 500, {"ok": False, "error": err or "Send failed"})
         except Exception as e:
             logger.exception("Failed to send mail")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_send_undo(self) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            outgoing_id = int(payload.get("id"))
+            db.execute("DELETE FROM mail_outgoing WHERE id = %s AND status = 'queued'", (outgoing_id,))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_message_star(self, message_id: int) -> None:
+        try:
+            row = db.query_one("SELECT starred FROM mail_messages WHERE id = %s", (message_id,))
+            _json_response(self, 200, {"starred": row["starred"] if row else False})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_message_toggle_star(self, message_id: int) -> None:
+        try:
+            db.execute("UPDATE mail_messages SET starred = NOT starred WHERE id = %s", (message_id,))
+            row = db.query_one("SELECT starred FROM mail_messages WHERE id = %s", (message_id,))
+            _json_response(self, 200, {"starred": row["starred"] if row else False})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_message_archive(self, message_id: int) -> None:
+        try:
+            db.execute("UPDATE mail_messages SET is_archived = TRUE WHERE id = %s", (message_id,))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_message_move(self, message_id: int) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            folder = payload.get("folder", "INBOX")
+            db.execute("UPDATE mail_messages SET folder = %s WHERE id = %s", (folder, message_id))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_message_reply(self, message_id: int) -> None:
+        try:
+            row = db.query_one("SELECT * FROM mail_messages WHERE id = %s", (message_id,))
+            if not row:
+                _json_response(self, 404, {"error": "Message not found"})
+                return
+            _json_response(self, 200, {
+                "to": row["from_addr"] or "",
+                "cc": "",
+                "subject": "Re: " + (row["subject"] or ""),
+                "body": f'<blockquote>{row["body_html"] or row["body_text"] or ""}</blockquote>',
+                "original_from": row["from_addr"],
+                "original_subject": row["subject"],
+                "original_date": str(row["date_received"]) if row["date_received"] else "",
+            })
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_message_forward(self, message_id: int) -> None:
+        try:
+            row = db.query_one("SELECT * FROM mail_messages WHERE id = %s", (message_id,))
+            if not row:
+                _json_response(self, 404, {"error": "Message not found"})
+                return
+            _json_response(self, 200, {
+                "to": "",
+                "cc": "",
+                "subject": "Fwd: " + (row["subject"] or ""),
+                "body": f'<p>---------- Forwarded message ----------</p><p>From: {row["from_addr"] or ""}<br>Date: {row["date_received"] or ""}<br>Subject: {row["subject"] or ""}</p><blockquote>{row["body_html"] or row["body_text"] or ""}</blockquote>',
+                "original_from": row["from_addr"],
+                "original_subject": row["subject"],
+                "original_date": str(row["date_received"]) if row["date_received"] else "",
+            })
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_draft_save(self) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            user = _require_auth(self)
+            result = db.query_one(
+                """INSERT INTO mail_outgoing
+                   (account_id, to_addr, cc_addr, bcc_addr, subject, body_html, deal_id, status, created_by)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, 'draft', %s)
+                   RETURNING id""",
+                (payload.get("account_id"), payload.get("to"), payload.get("cc"),
+                 payload.get("bcc"), payload.get("subject"), payload.get("body"),
+                 payload.get("deal_id"), user["id"] if user else None),
+            )
+            _json_response(self, 201, {"id": result["id"]})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_draft_update(self, draft_id: int) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            db.execute(
+                "UPDATE mail_outgoing SET to_addr=%s, cc_addr=%s, bcc_addr=%s, subject=%s, body_html=%s WHERE id=%s",
+                (payload.get("to"), payload.get("cc"), payload.get("bcc"),
+                 payload.get("subject"), payload.get("body"), draft_id),
+            )
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_draft_delete(self, draft_id: int) -> None:
+        try:
+            db.execute("DELETE FROM mail_outgoing WHERE id = %s AND status = 'draft'", (draft_id,))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_contacts(self) -> None:
+        qs = parse_qs(urlparse(self.path).query)
+        user = _require_auth(self)
+        if not user:
+            _json_response(self, 401, {"error": "Unauthorized"})
+            return
+        try:
+            rows = db.query_dicts(
+                "SELECT * FROM mail_contacts WHERE user_id = %s ORDER BY name, email",
+                (user["id"],),
+            )
+            _json_response(self, 200, {"contacts": rows})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_contacts_search(self) -> None:
+        qs = parse_qs(urlparse(self.path).query)
+        q = qs.get("q", [""])[0].strip()
+        user = _require_auth(self)
+        if not user:
+            _json_response(self, 401, {"error": "Unauthorized"})
+            return
+        try:
+            if q:
+                rows = db.query_dicts(
+                    "SELECT * FROM mail_contacts WHERE user_id = %s AND (name ILIKE %s OR email ILIKE %s) ORDER BY name LIMIT 10",
+                    (user["id"], f"%{q}%", f"%{q}%"),
+                )
+            else:
+                rows = db.query_dicts(
+                    "SELECT * FROM mail_contacts WHERE user_id = %s ORDER BY name LIMIT 10",
+                    (user["id"],),
+                )
+            _json_response(self, 200, {"contacts": rows})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_contact_get(self, contact_id: int) -> None:
+        try:
+            row = db.query_one("SELECT * FROM mail_contacts WHERE id = %s", (contact_id,))
+            if not row:
+                _json_response(self, 404, {"error": "Contact not found"})
+                return
+            _json_response(self, 200, row)
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_contact_create(self) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            user = _require_auth(self)
+            result = db.query_one(
+                """INSERT INTO mail_contacts (user_id, email, name, company, phone, notes)
+                   VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+                (user["id"] if user else None, payload.get("email"), payload.get("name", ""),
+                 payload.get("company", ""), payload.get("phone", ""), payload.get("notes", "")),
+            )
+            _json_response(self, 201, {"id": result["id"]})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_contact_update(self, contact_id: int) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            db.execute(
+                "UPDATE mail_contacts SET email=%s, name=%s, company=%s, phone=%s, notes=%s, updated_at=NOW() WHERE id=%s",
+                (payload.get("email"), payload.get("name"), payload.get("company"),
+                 payload.get("phone"), payload.get("notes"), contact_id),
+            )
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_contact_delete(self, contact_id: int) -> None:
+        try:
+            db.execute("DELETE FROM mail_contacts WHERE id = %s", (contact_id,))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_contacts_import(self) -> None:
+        try:
+            user = _require_auth(self)
+            content = _read_body(self)
+            import csv
+            import io
+            reader = csv.DictReader(io.StringIO(content.decode("utf-8")))
+            count = 0
+            for row in reader:
+                email = row.get("email", "").strip()
+                if not email:
+                    continue
+                db.execute(
+                    """INSERT INTO mail_contacts (user_id, email, name, company, phone, notes)
+                       VALUES (%s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (user_id, email) DO UPDATE SET name=EXCLUDED.name, company=EXCLUDED.company""",
+                    (user["id"], email, row.get("name", ""), row.get("company", ""),
+                     row.get("phone", ""), row.get("notes", "")),
+                )
+                count += 1
+            _json_response(self, 200, {"ok": True, "imported": count})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_contacts_export(self) -> None:
+        try:
+            user = _require_auth(self)
+            rows = db.query_dicts(
+                "SELECT name, email, company, phone, notes FROM mail_contacts WHERE user_id = %s ORDER BY name",
+                (user["id"],),
+            )
+            import csv
+            import io
+            output = io.StringIO()
+            writer = csv.DictWriter(output, fieldnames=["name", "email", "company", "phone", "notes"])
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv")
+            self.send_header("Content-Disposition", 'attachment; filename="contacts.csv"')
+            self.end_headers()
+            self.wfile.write(output.getvalue().encode("utf-8"))
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_account_signature_get(self, account_id: int) -> None:
+        try:
+            row = db.query_one("SELECT signature_html, signature_text FROM mail_accounts WHERE id = %s", (account_id,))
+            if not row:
+                _json_response(self, 404, {"error": "Account not found"})
+                return
+            _json_response(self, 200, {"signature_html": row["signature_html"] or "", "signature_text": row["signature_text"] or ""})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_account_signature_put(self, account_id: int) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            db.execute(
+                "UPDATE mail_accounts SET signature_html=%s, signature_text=%s WHERE id=%s",
+                (payload.get("signature_html", ""), payload.get("signature_text", ""), account_id),
+            )
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_threads(self) -> None:
+        qs = parse_qs(urlparse(self.path).query)
+        account_id = qs.get("account_id", [None])[0]
+        try:
+            where = "m.folder != 'Trash'"
+            params: tuple = ()
+            if account_id:
+                where += " AND m.account_id = %s"
+                params = (int(account_id),)
+            rows = db.query_dicts(
+                f"SELECT m.conversation_id, COUNT(*) AS message_count, "
+                f"MAX(m.date_received) AS latest_date, "
+                f"MAX(m.subject) AS subject, "
+                f"MAX(m.from_addr) AS from_addr, "
+                f"BOOL_OR(NOT m.is_read) AS has_unread "
+                f"FROM mail_messages m WHERE {where} AND m.conversation_id IS NOT NULL "
+                f"GROUP BY m.conversation_id ORDER BY latest_date DESC LIMIT 50",
+                params,
+            )
+            _json_response(self, 200, {"threads": rows})
+        except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 
 # ── Main ───────────────────────────────────────────────────────────────

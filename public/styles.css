@@ -11113,3 +11113,79 @@ body {
   right: auto;
 }
 
+/* ── Compose: tabs in title bar ───────────────────────────────────────── */
+.mail-inbox-header .modal-title {
+  flex-shrink: 0;
+}
+.mail-inbox-header .mail-inbox-tabs {
+  flex: 1;
+  overflow-x: auto;
+  border-bottom: none;
+}
+.mail-inbox-header .mail-header-actions {
+  flex-shrink: 0;
+}
+
+/* ── Star column ──────────────────────────────────────────────────────── */
+.mail-star {
+  flex-shrink: 0;
+  width: 24px;
+  text-align: center;
+  cursor: pointer;
+}
+
+/* ── Attachment list in compose ───────────────────────────────────────── */
+.compose-attachment-item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0;
+  font-size: 0.8rem;
+}
+
+/* ── Undo send banner ─────────────────────────────────────────────────── */
+.undo-send-banner {
+  position: fixed;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 0.75rem 1.5rem;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+/* ── Compose compact fields ───────────────────────────────────────────── */
+.compose-fields-section {
+  flex-shrink: 0;
+  padding: 0.5rem 0.75rem;
+  overflow-y: auto;
+  max-height: 35%;
+}
+.compose-fields-section label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  display: block;
+  margin-bottom: 0.15rem;
+}
+.compose-fields-section input,
+.compose-fields-section select {
+  width: 100%;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+.compose-body-section {
+  flex: 1;
+  min-height: 0;
+  padding: 0 0.75rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+}
+

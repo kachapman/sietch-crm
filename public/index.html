@@ -467,7 +467,10 @@
     <div class="modal-backdrop" data-mail-inbox-dismiss></div>
     <div class="modal-card mail-inbox-card">
       <div class="mail-inbox-header">
-        <h2 id="mail-inbox-title" class="modal-title">Email</h2>
+        <h2 id="mail-inbox-title" class="modal-title" style="white-space:nowrap;">Email</h2>
+        <div class="mail-inbox-tabs" id="mail-inbox-tabs">
+          <!-- tabs populated by JS based on accounts -->
+        </div>
         <div class="mail-header-actions">
           <button type="button" id="mail-inbox-minimize" class="btn btn-icon-only modal-header-control modal-minimize-btn" title="Minimize to sidebar">
             <i class="ti ti-window-minimize"></i>
@@ -478,10 +481,6 @@
         </div>
       </div>
 
-      <div class="mail-inbox-tabs" id="mail-inbox-tabs">
-        <!-- tabs populated by JS based on accounts -->
-      </div>
-
       <div class="mail-toolbar">
         <input type="search" id="mail-search-input" class="mail-search" placeholder="Search subject or from..." autocomplete="off" />
         <button type="button" id="mail-select-all" class="btn btn-ghost btn-small" title="Select all"><i class="ti ti-checkbox"></i></button>
@@ -490,7 +489,26 @@
         <button type="button" id="mail-delete" class="btn btn-ghost btn-small" disabled title="Delete selected"><i class="ti ti-trash"></i></button>
         <button type="button" id="mail-clear-selection" class="btn btn-ghost btn-small" disabled title="Clear selection"><i class="ti ti-x"></i></button>
         <button type="button" id="mail-mark-all-read" class="btn btn-ghost btn-small" title="Mark all loaded as read"><i class="ti ti-mail-opened"></i></button>
+        <button type="button" id="mail-star" class="btn btn-ghost btn-small" disabled title="Star/flag"><i class="ti ti-star"></i></button>
+        <button type="button" id="mail-archive" class="btn btn-ghost btn-small" disabled title="Archive"><i class="ti ti-archive"></i></button>
+        <select id="mail-move-folder" class="btn btn-ghost btn-small" disabled title="Move to folder" style="padding:0.2rem 0.3rem; font-size:0.8rem;">
+          <option value="">Move to...</option>
+          <option value="INBOX">Inbox</option>
+          <option value="Sent">Sent</option>
+          <option value="Archive">Archive</option>
+          <option value="Trash">Trash</option>
+        </select>
         <button type="button" id="mail-refresh" class="btn btn-ghost btn-small" title="Refresh"><i class="ti ti-refresh"></i></button>
+        <button type="button" id="mail-thread-toggle" class="btn btn-ghost btn-small" title="Toggle threaded view"><i class="ti ti-message"></i></button>
+        <button type="button" id="mail-compose-btn" class="btn btn-ghost btn-small" title="Compose email">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-mail-plus">
+            <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+            <path d="M12 19h-7a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v5.5" />
+            <path d="M16 19h6" />
+            <path d="M19 16v6" />
+            <path d="M3 7l9 6l9 -6" />
+          </svg>
+        </button>
         <div style="position:relative; margin-left:0.25rem;">
           <button type="button" id="mail-link-deal-btn" class="btn btn-ghost btn-small" title="Link to deal" disabled><i class="ti ti-link"></i></button>
           <div id="mail-link-deal-dropdown" class="mail-link-deal-dropdown hidden">
@@ -594,47 +612,48 @@
   <!-- Compose Email popup modal -->
   <div id="compose-email-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="compose-email-title">
     <div class="modal-backdrop" data-compose-email-dismiss></div>
-    <div class="modal-card" style="max-width:700px; width:95vw; max-height:85vh; display:flex; flex-direction:column;">
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:0.75rem 1rem; border-bottom:1px solid var(--border);">
-        <h2 id="compose-email-title" class="modal-title" style="margin:0; font-size:1.1rem;">Compose Email</h2>
+    <div class="modal-card" style="max-width:700px; width:95vw; max-height:85vh; display:flex; flex-direction:column; padding:0;">
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:0.5rem 0.75rem; border-bottom:1px solid var(--border);">
+        <h2 id="compose-email-title" class="modal-title" style="margin:0; font-size:1rem;">Compose Email</h2>
         <div style="display:flex; gap:0.5rem;">
           <button type="button" class="btn btn-icon-only modal-header-control" title="Close" data-compose-email-dismiss>
             <i class="ti ti-x"></i>
           </button>
         </div>
       </div>
-      <div style="padding:1rem; overflow-y:auto; flex:1;">
-        <div style="margin-bottom:0.5rem;">
-          <label style="font-size:0.85rem; color:var(--muted); display:block; margin-bottom:0.2rem;">From</label>
-          <select id="compose-from-account" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text);"></select>
-        </div>
-        <div style="margin-bottom:0.5rem;">
-          <label style="font-size:0.85rem; color:var(--muted); display:block; margin-bottom:0.2rem;">To</label>
-          <input type="email" id="compose-to" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text);" placeholder="recipient@example.com">
-        </div>
-        <div style="display:flex; gap:0.5rem; margin-bottom:0.5rem;">
-          <div style="flex:1;">
-            <label style="font-size:0.85rem; color:var(--muted); display:block; margin-bottom:0.2rem;">Cc</label>
-            <input type="email" id="compose-cc" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text);">
+      <div style="display:flex; flex-direction:column; flex:1; min-height:0; overflow:hidden;">
+        <div style="flex-shrink:0; padding:0.5rem 0.75rem; overflow-y:auto; max-height:35%;">
+          <div style="margin-bottom:0.5rem;">
+            <label style="font-size:0.85rem; color:var(--muted); display:block; margin-bottom:0.2rem;">From</label>
+            <select id="compose-from-account" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text);"></select>
           </div>
-          <div style="flex:1;">
-            <label style="font-size:0.85rem; color:var(--muted); display:block; margin-bottom:0.2rem;">Bcc</label>
-            <input type="email" id="compose-bcc" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text);">
+          <div style="margin-bottom:0.5rem;">
+            <label style="font-size:0.85rem; color:var(--muted); display:block; margin-bottom:0.2rem;">To</label>
+            <input type="email" id="compose-to" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text);" placeholder="recipient@example.com">
+          </div>
+          <div style="display:flex; gap:0.5rem; margin-bottom:0.5rem;">
+            <div style="flex:1;">
+              <label style="font-size:0.85rem; color:var(--muted); display:block; margin-bottom:0.2rem;">Cc</label>
+              <input type="email" id="compose-cc" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text);">
+            </div>
+            <div style="flex:1;">
+              <label style="font-size:0.85rem; color:var(--muted); display:block; margin-bottom:0.2rem;">Bcc</label>
+              <input type="email" id="compose-bcc" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text);">
+            </div>
+          </div>
+          <div style="margin-bottom:0.5rem;">
+            <label style="font-size:0.85rem; color:var(--muted); display:block; margin-bottom:0.2rem;">Subject</label>
+            <input type="text" id="compose-subject" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text);">
+          </div>
+          <div style="margin-bottom:0.5rem;">
+            <label style="font-size:0.85rem; color:var(--muted); display:block; margin-bottom:0.2rem;">Link to deal</label>
+            <input type="search" id="compose-deal-search" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text);" placeholder="Search deals..." autocomplete="off">
+            <div id="compose-deal-results" style="max-height:120px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; display:none;"></div>
+            <div id="compose-deal-selected" style="font-size:0.85rem; margin-top:0.3rem;"></div>
           </div>
         </div>
-        <div style="margin-bottom:0.5rem;">
-          <label style="font-size:0.85rem; color:var(--muted); display:block; margin-bottom:0.2rem;">Subject</label>
-          <input type="text" id="compose-subject" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text);">
-        </div>
-        <div style="margin-bottom:0.5rem;">
-          <label style="font-size:0.85rem; color:var(--muted); display:block; margin-bottom:0.2rem;">Link to deal</label>
-          <input type="search" id="compose-deal-search" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text);" placeholder="Search deals..." autocomplete="off">
-          <div id="compose-deal-results" style="max-height:120px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; display:none;"></div>
-          <div id="compose-deal-selected" style="font-size:0.85rem; margin-top:0.3rem;"></div>
-        </div>
-        <div style="margin-bottom:0.5rem;">
-          <label style="font-size:0.85rem; color:var(--muted); display:block; margin-bottom:0.2rem;">Body</label>
-          <div class="note-format-toolbar" aria-label="Formatting" style="border:1px solid var(--border); border-bottom:none; border-radius:4px 4px 0 0; background:var(--bg-elevated);">
+        <div style="flex:1; min-height:0; padding:0 0.75rem 0.5rem; display:flex; flex-direction:column;">
+          <div class="note-format-toolbar" aria-label="Formatting" style="flex-shrink:0; border:1px solid var(--border); border-bottom:none; border-radius:4px 4px 0 0; background:var(--bg-elevated);">
             <button type="button" class="note-format-btn" data-cmd="bold" title="Bold"><b>B</b></button>
             <button type="button" class="note-format-btn" data-cmd="italic" title="Italic"><i>I</i></button>
             <button type="button" class="note-format-btn" data-cmd="underline" title="Underline"><u>U</u></button>
@@ -649,12 +668,25 @@
             <span class="note-format-sep"></span>
             <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear formatting">⌫</button>
           </div>
-          <div id="compose-body" class="note-editor" contenteditable="true" data-placeholder="Write your email..." style="min-height:200px; border:1px solid var(--border); border-radius:0 0 4px 4px; padding:0.5rem; background:var(--bg); color:var(--text);"></div>
+          <div id="compose-body" class="note-editor" contenteditable="true" data-placeholder="Write your email..." style="flex:1; overflow-y:auto; min-height:200px; border:1px solid var(--border); border-radius:0 0 4px 4px; padding:0.5rem; background:var(--bg); color:var(--text);"></div>
+        </div>
+        <div style="flex-shrink:0; padding:0 0.75rem 0.5rem;">
+          <label style="font-size:0.8rem; color:var(--muted); cursor:pointer;">
+            <i class="ti ti-paperclip"></i> Attach files
+            <input type="file" id="compose-attachments" multiple style="display:none;" accept="*/*">
+          </label>
+          <div id="compose-attachment-list" style="font-size:0.8rem; margin-top:0.3rem;"></div>
         </div>
       </div>
-      <div style="display:flex; justify-content:flex-end; gap:0.5rem; padding:0.75rem 1rem; border-top:1px solid var(--border);">
-        <button type="button" id="compose-send-btn" class="btn btn-primary"><i class="ti ti-send" style="margin-right:0.3rem;"></i>Send</button>
-        <button type="button" class="btn btn-ghost" data-compose-email-dismiss><i class="ti ti-x"></i> Cancel</button>
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:0.5rem 0.75rem; border-top:1px solid var(--border);">
+        <div style="display:flex; gap:0.5rem;">
+          <button type="button" id="compose-template-btn" class="btn btn-ghost btn-small" title="Insert template"><i class="ti ti-file-text" style="margin-right:0.2rem;"></i>Templates</button>
+          <button type="button" id="compose-save-draft" class="btn btn-ghost btn-small" title="Save as draft"><i class="ti ti-device-floppy" style="margin-right:0.2rem;"></i>Save Draft</button>
+        </div>
+        <div style="display:flex; gap:0.5rem;">
+          <button type="button" id="compose-send-btn" class="btn btn-primary"><i class="ti ti-send" style="margin-right:0.3rem;"></i>Send</button>
+          <button type="button" class="btn btn-ghost" data-compose-email-dismiss><i class="ti ti-x"></i> Cancel</button>
+        </div>
       </div>
     </div>
   </div>

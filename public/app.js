@@ -15212,7 +15212,7 @@ async function openMailInboxModal() {
   modal.classList.remove("hidden");
   loadMailDashboardReadIds();
   resetLinkDealDropdown();
-  mailState = { accounts: [], messages: [], pageSize: 50, search: '', selected: new Set(), activeAccount: null, activeFolder: 'INBOX', activeTag: null };
+  mailState = { accounts: [], messages: [], pageSize: 50, search: '', selected: new Set(), activeAccount: null, activeFolder: 'INBOX', activeTag: null, threaded: false };
   $("#mail-search-input").value = "";
   await loadMailAccountsForModal();
   await renderMailTabs();
@@ -15238,7 +15238,6 @@ async function renderMailTabs() {
       html += `<span class="mail-tab-badge" data-account-badge="${acct.id}"></span>`;
       html += `</button>`;
     }
-    html += `<button type="button" class="mail-inbox-tab" data-mailtab="compose"><i class="ti ti-pencil" style="margin-right:0.3rem;"></i>Compose</button>`;
     html += `<button type="button" class="mail-inbox-tab" data-mailtab="scanner-admin"><i class="ti ti-settings" style="margin-right:0.3rem;"></i>Scanner</button>`;
     tabsEl.innerHTML = html;
 
@@ -15301,17 +15300,19 @@ function switchMailTab(btn) {
     }
     loadMailMessagesForModal();
     renderMailUnreadBadge();
-  } else if (tabName === 'compose') {
+  } else if (tabName === 'scanner-admin') {
     if (inboxContainer) inboxContainer.classList.add('hidden');
     if (toolbar) toolbar.classList.add('hidden');
+    const scannerDiv = $('#mail-scanner-admin');
+    if (scannerDiv) scannerDiv.classList.remove('hidden');
     if (sidebar) sidebar.parentElement?.classList.add('hidden');
     if (sidebarToggle) sidebarToggle.classList.add('hidden');
-    if (mailMainArea) mailMainArea.style.display = 'none';
-    openComposeModal();
+    if (mailMainArea) mailMainArea.style.display = '';
+    populateEmailScannerTab();
   }
 }
 
-async function openComposeModal() {
+async function openComposeModal(opts = {}) {
   const modal = $('#compose-email-modal');
   if (!modal) return;
   bindComposeEmailModal();
@@ -15323,6 +15324,107 @@ async function openComposeModal() {
     fromSelect.innerHTML = mailState.accounts.map(a =>
       `<option value="${a.id}">${escapeHtml(a.smtp_from_name || a.email)} &lt;${escapeHtml(a.email)}&gt;</option>`
     ).join('');
+  }
+
+  // Pre-fill for reply/forward
+  const toInput = $('#compose-to');
+  const subjectInput = $('#compose-subject');
+  const bodyDiv = $('#compose-body');
+  const titleEl = $('#compose-email-title');
+
+  if (opts.to && toInput) toInput.value = opts.to;
+  if (opts.cc) { const ccInput = $('#compose-cc'); if (ccInput) ccInput.value = opts.cc; }
+  if (opts.subject && subjectInput) subjectInput.value = opts.subject;
+  if (opts.body && bodyDiv) bodyDiv.innerHTML = opts.body;
+  if (opts.title && titleEl) titleEl.textContent = opts.title;
+
+  // Load signature if available (not for reply/forward which already have body)
+  if (!opts.body && fromSelect && fromSelect.value) {
+    try {
+      const sig = await api(`/api/v2/mail/accounts/${fromSelect.value}/signature`);
+      if (sig.signature_html && bodyDiv) {
+        bodyDiv.innerHTML = `<br><br><div style="border-top:1px solid var(--border); padding-top:0.5rem; color:var(--muted); font-size:0.85rem;">${sig.signature_html}</div>`;
+      }
+    } catch { /* no signature */ }
+  }
+
+  // Contact autocomplete on To/Cc/Bcc
+  function setupContactAutocomplete(inputId) {
+    const input = $(inputId);
+    if (!input || input.dataset.autocompleteBound) return;
+    input.dataset.autocompleteBound = '1';
+    let contactT = null;
+    let dropdown = null;
+
+    input.addEventListener('input', () => {
+      clearTimeout(contactT);
+      contactT = setTimeout(async () => {
+        const parts = input.value.split(',');
+        const lastPart = parts[parts.length - 1].trim();
+        if (lastPart.length < 2) { if (dropdown) dropdown.remove(); return; }
+        try {
+          const data = await api(`/api/v2/mail/contacts/search?q=${encodeURIComponent(lastPart)}`);
+          const contacts = data.contacts || [];
+          if (dropdown) dropdown.remove();
+          if (!contacts.length) return;
+          dropdown = document.createElement('div');
+          dropdown.className = 'mail-link-deal-dropdown';
+          dropdown.style.cssText = 'position:absolute; top:100%; left:0; right:0; z-index:100;';
+          dropdown.innerHTML = contacts.map(c =>
+            `<button type="button" class="contact-pick-btn" style="display:block;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;font-size:0.85rem;">${escapeHtml(c.name || c.email)} &lt;${escapeHtml(c.email)}&gt;</button>`
+          ).join('');
+          input.parentElement.style.position = 'relative';
+          input.parentElement.appendChild(dropdown);
+          dropdown.querySelectorAll('.contact-pick-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+              parts[parts.length - 1] = btn.textContent.match(/<(.+?)>/)?.[1] || btn.textContent;
+              input.value = parts.join(', ');
+              dropdown.remove();
+              dropdown = null;
+            });
+          });
+        } catch {}
+      }, 300);
+    });
+    document.addEventListener('click', (e) => {
+      if (!input.contains(e.target) && dropdown && !dropdown.contains(e.target)) {
+        dropdown.remove();
+        dropdown = null;
+      }
+    });
+  }
+  setupContactAutocomplete('#compose-to');
+  setupContactAutocomplete('#compose-cc');
+  setupContactAutocomplete('#compose-bcc');
+
+  // File upload handling
+  const fileInput = $('#compose-attachments');
+  const attachmentList = $('#compose-attachment-list');
+  let composeAttachments = [];
+
+  if (fileInput && !fileInput.dataset.bound) {
+    fileInput.dataset.bound = '1';
+    fileInput.addEventListener('change', () => {
+      for (const file of fileInput.files) {
+        if (file.size > 10 * 1024 * 1024) { showToast(`${file.name} exceeds 10MB limit`, true); continue; }
+        composeAttachments.push(file);
+      }
+      renderComposeAttachments();
+      fileInput.value = '';
+    });
+  }
+
+  function renderComposeAttachments() {
+    if (!attachmentList) return;
+    attachmentList.innerHTML = composeAttachments.map((f, i) =>
+      `<div class="compose-attachment-item"><i class="ti ti-paperclip"></i> ${escapeHtml(f.name)} <span style="color:var(--muted); font-size:0.75rem;">(${Math.round(f.size/1024)}KB)</span> <button type="button" class="btn btn-ghost btn-small compose-attach-remove" data-idx="${i}" style="padding:0 0.2rem;"><i class="ti ti-x"></i></button></div>`
+    ).join('');
+    attachmentList.querySelectorAll('.compose-attach-remove').forEach(btn => {
+      btn.addEventListener('click', () => {
+        composeAttachments.splice(parseInt(btn.dataset.idx), 1);
+        renderComposeAttachments();
+      });
+    });
   }
 
   // Bind deal search
@@ -15385,9 +15487,20 @@ async function openComposeModal() {
       sendBtn.disabled = true;
       sendBtn.innerHTML = '<i class="ti ti-loader" style="margin-right:0.3rem;"></i>Sending...';
       try {
-        await api('/api/v2/mail/send', {
+        const attachments = [];
+        for (const file of composeAttachments) {
+          const reader = new FileReader();
+          const b64 = await new Promise(resolve => {
+            reader.onload = () => resolve(reader.result.split(',')[1]);
+            reader.readAsDataURL(file);
+          });
+          attachments.push({ filename: file.name, content: b64, mime_type: file.type || 'application/octet-stream' });
+        }
+        const payload = { account_id: accountId, to, cc, bcc, subject, body, deal_id: dealId };
+        if (attachments.length > 0) payload.attachments = attachments;
+        const result = await api('/api/v2/mail/send', {
           method: 'POST',
-          body: JSON.stringify({ account_id: accountId, to, cc, bcc, subject, body, deal_id: dealId })
+          body: JSON.stringify(payload)
         });
         showToast('Email sent');
         modal.classList.add('hidden');
@@ -15397,8 +15510,29 @@ async function openComposeModal() {
         $('#compose-bcc').value = '';
         $('#compose-subject').value = '';
         $('#compose-body').value = '';
+        composeAttachments = [];
+        renderComposeAttachments();
         const dealSel = $('#compose-deal-selected');
         if (dealSel) { dealSel.innerHTML = ''; delete dealSel.dataset.dealId; }
+
+        // Show undo banner
+        const undoBanner = document.createElement("div");
+        undoBanner.className = "undo-send-banner";
+        undoBanner.innerHTML = `<span>Email sent</span><button class="btn btn-primary btn-small" id="undo-send-btn">Undo</button>`;
+        document.body.appendChild(undoBanner);
+
+        const undoBtn = undoBanner.querySelector("#undo-send-btn");
+        let undoTimeout = setTimeout(() => undoBanner.remove(), 5000);
+        undoBtn.addEventListener("click", async () => {
+          clearTimeout(undoTimeout);
+          undoBanner.remove();
+          try {
+            await api("/api/v2/mail/send/undo", { method: "POST", body: JSON.stringify({ id: result.id }) });
+            showToast("Send undone");
+          } catch (e) {
+            showToast("Could not undo: " + e.message, true);
+          }
+        });
       } catch (e) {
         showToast('Send failed: ' + e.message, true);
       } finally {
@@ -15406,6 +15540,73 @@ async function openComposeModal() {
         sendBtn.innerHTML = '<i class="ti ti-send" style="margin-right:0.3rem;"></i>Send';
       }
     });
+  }
+
+  // Bind Save Draft button
+  const draftBtn = $('#compose-save-draft');
+  if (draftBtn && !draftBtn.dataset.bound) {
+    draftBtn.dataset.bound = '1';
+    draftBtn.addEventListener('click', async () => {
+      const accountId = parseInt($('#compose-from-account')?.value);
+      const to = $('#compose-to')?.value.trim();
+      const subject = $('#compose-subject')?.value.trim();
+      const body = $('#compose-body')?.innerHTML || '';
+      try {
+        await api('/api/v2/mail/drafts', {
+          method: 'POST',
+          body: JSON.stringify({ account_id: accountId, to, subject, body })
+        });
+        showToast('Draft saved');
+        modal.classList.add('hidden');
+      } catch (e) { showToast('Failed to save draft: ' + e.message, true); }
+    });
+  }
+
+  // Bind Templates button
+  const templateBtn = $('#compose-template-btn');
+  if (templateBtn && !templateBtn.dataset.bound) {
+    templateBtn.dataset.bound = '1';
+    templateBtn.addEventListener('click', async () => {
+      try {
+        const data = await api('/api/v2/mail/templates');
+        const templates = data.templates || [];
+        const picker = document.createElement('div');
+        picker.className = 'mail-link-deal-dropdown';
+        picker.style.cssText = 'position:absolute; top:100%; left:0; z-index:100;';
+        picker.innerHTML = templates.length
+          ? templates.map(t => `<button type="button" class="template-pick-btn" data-template-id="${t.id}" style="display:block;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;">${escapeHtml(t.title)}</button>`).join('')
+          : '<div style="padding:0.5rem; color:var(--muted);">No templates saved</div>';
+        templateBtn.parentElement.style.position = 'relative';
+        templateBtn.parentElement.appendChild(picker);
+        picker.querySelectorAll('.template-pick-btn').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const tid = parseInt(btn.dataset.templateId);
+            const tpl = templates.find(t => t.id === tid);
+            if (tpl) {
+              if (tpl.subject) $('#compose-subject').value = tpl.subject;
+              if (tpl.body_html) $('#compose-body').innerHTML = tpl.body_html;
+            }
+            picker.remove();
+          });
+        });
+      } catch (e) { showToast('Failed to load templates: ' + e.message, true); }
+    });
+  }
+}
+
+async function openReplyCompose(messageId, type = 'reply') {
+  try {
+    const endpoint = type === 'forward' ? 'forward' : 'reply';
+    const data = await api(`/api/v2/mail/messages/${messageId}/${endpoint}`);
+    openComposeModal({
+      to: data.to || '',
+      cc: data.cc || '',
+      subject: data.subject || '',
+      body: data.body || '',
+      title: type === 'forward' ? 'Forward Email' : 'Reply to Email',
+    });
+  } catch (e) {
+    showToast('Failed to load message: ' + e.message, true);
   }
 }
 
@@ -15590,6 +15791,24 @@ function attachMailModalListeners() {
     refBtn.addEventListener("click", () => loadMailMessagesForModal());
   }
 
+  // compose button
+  const composeBtn = $("#mail-compose-btn");
+  if (composeBtn) {
+    composeBtn.addEventListener("click", () => openComposeModal());
+  }
+
+  // thread view toggle
+  const threadToggle = $("#mail-thread-toggle");
+  if (threadToggle && !threadToggle.dataset.bound) {
+    threadToggle.dataset.bound = "1";
+    threadToggle.addEventListener("click", () => {
+      mailState.threaded = !mailState.threaded;
+      threadToggle.classList.toggle("active", mailState.threaded);
+      if (mailState.threaded) loadMailThreads();
+      else loadMailMessagesForModal();
+    });
+  }
+
   // link to deal dropdown
   const linkDealBtn = $("#mail-link-deal-btn");
   const linkDealDropdown = $("#mail-link-deal-dropdown");
@@ -15648,6 +15867,90 @@ function attachMailModalListeners() {
       await loadMailMessagesForModal();
     });
   }
+
+  // Star button
+  const starBtn = $("#mail-star");
+  if (starBtn) {
+    starBtn.addEventListener("click", async () => {
+      if (!mailState.selected.size) return;
+      for (const mid of mailState.selected) {
+        try { await api(`/api/v2/mail/messages/${mid}/star`, { method: 'PUT' }); } catch {}
+      }
+      await loadMailMessagesForModal();
+    });
+  }
+
+  // Archive button
+  const archiveBtn = $("#mail-archive");
+  if (archiveBtn) {
+    archiveBtn.addEventListener("click", async () => {
+      if (!mailState.selected.size) return;
+      for (const mid of mailState.selected) {
+        try { await api(`/api/v2/mail/messages/${mid}/archive`, { method: 'PUT' }); } catch {}
+      }
+      mailState.selected.clear();
+      await loadMailMessagesForModal();
+    });
+  }
+
+  // Move folder select
+  const moveFolder = $("#mail-move-folder");
+  if (moveFolder) {
+    moveFolder.addEventListener("change", async () => {
+      const folder = moveFolder.value;
+      if (!folder || !mailState.selected.size) return;
+      for (const mid of mailState.selected) {
+        try { await api(`/api/v2/mail/messages/${mid}/move`, { method: 'PUT', body: JSON.stringify({ folder }) }); } catch {}
+      }
+      mailState.selected.clear();
+      moveFolder.value = '';
+      await loadMailMessagesForModal();
+    });
+  }
+
+  // Keyboard shortcuts
+  document.addEventListener("keydown", (e) => {
+    if (!modal || modal.classList.contains("hidden")) return;
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable) return;
+
+    if (e.key === "j" || e.key === "k") {
+      const items = Array.from(modal.querySelectorAll(".mail-item .mail-row"));
+      if (!items.length) return;
+      let currentIdx = -1;
+      items.forEach((row, idx) => {
+        if (row.classList.contains("selected") || row.querySelector(".mail-cb")?.checked) currentIdx = idx;
+      });
+      const nextIdx = e.key === "j"
+        ? Math.min(currentIdx + 1, items.length - 1)
+        : Math.max(currentIdx - 1, 0);
+      if (currentIdx >= 0) {
+        const prevRow = items[currentIdx];
+        const prevCb = prevRow.querySelector(".mail-cb");
+        const prevId = prevCb?.dataset.id;
+        if (prevId) {
+          mailState.selected.delete(prevId);
+          prevRow.classList.remove("selected");
+          if (prevCb) prevCb.checked = false;
+        }
+      }
+      const row = items[nextIdx];
+      const cb = row.querySelector(".mail-cb");
+      const id = cb?.dataset.id;
+      if (id) {
+        mailState.selected.add(id);
+        row.classList.add("selected");
+        if (cb) cb.checked = true;
+      }
+      row.scrollIntoView({ block: "nearest" });
+      updateMailSelectedInfo();
+    }
+
+    if (e.key === "Escape") {
+      mailState.selected.clear();
+      renderMailList(mailState.messages);
+      updateMailSelectedInfo();
+    }
+  });
 
   // sidebar toggle
   const toggleBtn = $("#mail-sidebar-toggle");
@@ -15714,9 +16017,34 @@ async function loadMailAccountsForModal() {
 }
 
 async function loadMailMessagesForModal() {
+  if (mailState.threaded) return loadMailThreads();
   const list = $("#mail-list");
   if (!list) return;
   list.innerHTML = '<div class="mail-empty">Loading emails…</div>';
+
+  // Handle Drafts folder — load from drafts endpoint
+  if (mailState.activeFolder === 'Drafts') {
+    try {
+      const params = [];
+      if (mailState.activeAccount) params.push(`account_id=${mailState.activeAccount}`);
+      const url = '/api/v2/mail/drafts' + (params.length ? '?' + params.join('&') : '');
+      const data = await api(url);
+      const drafts = data.drafts || [];
+      mailState.messages = drafts.map(d => ({
+        id: d.id,
+        from: d.from_addr || '',
+        subject: d.subject || '(no subject)',
+        date: d.created_at || d.updated_at || '',
+        isDraft: true,
+        body: d.body || '',
+      }));
+      renderMailList(mailState.messages);
+    } catch (e) {
+      list.innerHTML = `<div class="mail-empty">Failed to load drafts: ${escapeHtml(e.message)}</div>`;
+    }
+    return;
+  }
+
   try {
     let url = "/api/v2/mail/messages";
     const params = [];
@@ -15731,6 +16059,34 @@ async function loadMailMessagesForModal() {
     renderMailList(mailState.messages);
   } catch (e) {
     list.innerHTML = `<div class="mail-empty">Failed to load emails: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function loadMailThreads() {
+  const list = $("#mail-list");
+  if (!list) return;
+  list.innerHTML = '<div class="mail-empty">Loading threads…</div>';
+  try {
+    let url = "/api/v2/mail/threads";
+    const params = [];
+    if (mailState.activeAccount) params.push(`account_id=${mailState.activeAccount}`);
+    if (params.length) url += '?' + params.join('&');
+    const data = await api(url);
+    const threads = data.threads || [];
+    if (!threads.length) {
+      list.innerHTML = '<div class="mail-empty">No conversations yet</div>';
+      return;
+    }
+    list.innerHTML = threads.map(t => `
+      <div class="mail-row" data-conversation-id="${escapeHtml(t.conversation_id)}">
+        <div class="mail-star"></div>
+        <div class="mail-from" title="${escapeHtml(t.from_addr || '')}">${escapeHtml((t.from_addr || '').slice(0, 28))}</div>
+        <div class="mail-subject" title="${escapeHtml(t.subject || '')}">${escapeHtml((t.subject || '').slice(0, 80))}</div>
+        <div class="mail-date">${t.message_count > 1 ? `<span style="color:var(--muted);">(${t.message_count})</span> ` : ''}${escapeHtml(t.latest_date ? new Date(t.latest_date).toLocaleDateString() : '')}</div>
+      </div>
+    `).join('');
+  } catch (e) {
+    list.innerHTML = `<div class="mail-empty">Failed to load threads: ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -15800,6 +16156,7 @@ function renderMailList(msgs) {
   header.className = "mail-row mail-header";
   header.innerHTML = `
     <input type="checkbox" id="mail-cb-all" />
+    <div class="mail-star"></div>
     <div class="mail-from"><strong>From</strong></div>
     <div class="mail-subject"><strong>Subject</strong></div>
     <div class="mail-date"><strong>Date</strong></div>
@@ -15843,10 +16200,39 @@ function renderMailList(msgs) {
 
     row.innerHTML = `
       <input type="checkbox" class="mail-cb" data-id="${escapeHtml(id)}" ${mailState.selected.has(id) ? "checked" : ""} />
-      <div class="mail-from" title="${escapeHtml(from)}">${escapeHtml(from).slice(0,28)}</div>
-      <div class="mail-subject" title="${escapeHtml(subj)}">${escapeHtml(subj).slice(0,80)}</div>
-      <div class="mail-date">${escapeHtml(dateStr)}</div>
     `;
+
+    // Star indicator
+    const starEl = document.createElement("div");
+    starEl.className = "mail-star";
+    starEl.innerHTML = m.starred ? '<i class="ti ti-star-filled" style="color:var(--accent);"></i>' : '<i class="ti ti-star" style="opacity:0.3;"></i>';
+    starEl.style.cursor = "pointer";
+    starEl.style.flexShrink = "0";
+    starEl.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        const res = await api(`/api/v2/mail/messages/${id}/star`, { method: 'PUT' });
+        starEl.innerHTML = res.starred ? '<i class="ti ti-star-filled" style="color:var(--accent);"></i>' : '<i class="ti ti-star" style="opacity:0.3;"></i>';
+      } catch {}
+    });
+    row.appendChild(starEl);
+
+    const fromDiv = document.createElement("div");
+    fromDiv.className = "mail-from";
+    fromDiv.title = from;
+    fromDiv.textContent = from.slice(0, 28);
+    row.appendChild(fromDiv);
+
+    const subjDiv = document.createElement("div");
+    subjDiv.className = "mail-subject";
+    subjDiv.title = subj;
+    subjDiv.textContent = subj.slice(0, 80);
+    row.appendChild(subjDiv);
+
+    const dateDiv = document.createElement("div");
+    dateDiv.className = "mail-date";
+    dateDiv.textContent = dateStr;
+    row.appendChild(dateDiv);
 
     // Expand button for viewing full email (lazy load, copy from deal preview modal)
     const expBtn = document.createElement("button");
@@ -15928,11 +16314,17 @@ function updateMailSelectedInfo() {
   const delBtn = $("#mail-delete");
   const clearSelBtn = $("#mail-clear-selection");
   const linkDealBtn = $("#mail-link-deal-btn");
+  const starBtn = $("#mail-star");
+  const archiveBtn = $("#mail-archive");
+  const moveFolder = $("#mail-move-folder");
   if (markReadBtn) markReadBtn.disabled = !hasSel;
   if (markUnreadBtn) markUnreadBtn.disabled = !hasSel;
   if (delBtn) delBtn.disabled = !hasSel;
   if (clearSelBtn) clearSelBtn.disabled = !hasSel;
   if (linkDealBtn) linkDealBtn.disabled = !hasSel;
+  if (starBtn) starBtn.disabled = !hasSel;
+  if (archiveBtn) archiveBtn.disabled = !hasSel;
+  if (moveFolder) moveFolder.disabled = !hasSel;
 }
 
 async function markMailMessageRead(messageId) {
@@ -17273,12 +17665,82 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
 
   const foot = document.createElement("div");
   foot.className = "opp-preview-mail-foot";
+  foot.style.cssText = "display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; padding:0.5rem 0;";
+
   const open = document.createElement("a");
   open.href = openUrl || crmPayload?.messageUrl || portalMailMessageUrl(messageId);
   open.target = "_blank";
   open.rel = "noopener noreferrer";
   open.textContent = "Open in Mail";
+  open.className = "btn btn-ghost btn-small";
   foot.appendChild(open);
+
+  const actionBtns = document.createElement("div");
+  actionBtns.style.cssText = "display:flex; gap:0.3rem; margin-left:auto;";
+
+  const replyBtn = document.createElement("button");
+  replyBtn.type = "button";
+  replyBtn.className = "btn btn-ghost btn-small";
+  replyBtn.title = "Reply";
+  replyBtn.innerHTML = '<i class="ti ti-arrow-back-up"></i> Reply';
+  replyBtn.addEventListener("click", () => {
+    if (typeof openComposeModal === "function") openComposeModal();
+  });
+  actionBtns.appendChild(replyBtn);
+
+  const replyAllBtn = document.createElement("button");
+  replyAllBtn.type = "button";
+  replyAllBtn.className = "btn btn-ghost btn-small";
+  replyAllBtn.title = "Reply all";
+  replyAllBtn.innerHTML = '<i class="ti ti-arrow-back-up"></i> Reply All';
+  replyAllBtn.addEventListener("click", () => {
+    if (typeof openComposeModal === "function") openComposeModal();
+  });
+  actionBtns.appendChild(replyAllBtn);
+
+  const fwdBtn = document.createElement("button");
+  fwdBtn.type = "button";
+  fwdBtn.className = "btn btn-ghost btn-small";
+  fwdBtn.title = "Forward";
+  fwdBtn.innerHTML = '<i class="ti ti-arrow-forward-up"></i> Forward';
+  fwdBtn.addEventListener("click", () => {
+    if (typeof openComposeModal === "function") openComposeModal();
+  });
+  actionBtns.appendChild(fwdBtn);
+
+  const starBtn = document.createElement("button");
+  starBtn.type = "button";
+  starBtn.className = "btn btn-ghost btn-small";
+  starBtn.title = "Star / unstar";
+  starBtn.innerHTML = '<i class="ti ti-star"></i>';
+  starBtn.addEventListener("click", async () => {
+    try {
+      await api(`/api/v2/mail/messages/${encodeURIComponent(messageId)}/star`, { method: "POST" });
+      starBtn.innerHTML = '<i class="ti ti-star-filled"></i>';
+      showToast("Message starred");
+    } catch (e) { showToast("Failed to star message: " + (e.message || e), true); }
+  });
+  actionBtns.appendChild(starBtn);
+
+  const archiveBtn = document.createElement("button");
+  archiveBtn.type = "button";
+  archiveBtn.className = "btn btn-ghost btn-small";
+  archiveBtn.title = "Archive";
+  archiveBtn.innerHTML = '<i class="ti ti-archive"></i>';
+  archiveBtn.addEventListener("click", async () => {
+    try {
+      await api(`/api/v2/mail/messages/${encodeURIComponent(messageId)}/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder: "Archive" }),
+      });
+      showToast("Message archived");
+      panel.innerHTML = '<p class="opp-preview-empty">Message archived.</p>';
+    } catch (e) { showToast("Failed to archive: " + (e.message || e), true); }
+  });
+  actionBtns.appendChild(archiveBtn);
+
+  foot.appendChild(actionBtns);
   panel.appendChild(foot);
 }
 

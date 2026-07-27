@@ -477,7 +477,9 @@ CREATE TABLE mail_accounts (
     oauth_access_token TEXT,
     oauth_refresh_token TEXT,
     oauth_token_expires TIMESTAMP,
-    oauth_scopes TEXT
+    oauth_scopes TEXT,
+    signature_html TEXT,
+    signature_text TEXT
 );
 
 CREATE TABLE mail_messages (
@@ -498,6 +500,7 @@ CREATE TABLE mail_messages (
     is_archived BOOLEAN DEFAULT FALSE,
     folder TEXT DEFAULT 'INBOX',
     conversation_id TEXT,
+    starred BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT NOW(),
     UNIQUE(account_id, imap_uid, folder)
 );
@@ -593,7 +596,8 @@ CREATE TABLE mail_outgoing (
     status TEXT DEFAULT 'queued',
     sent_at TIMESTAMP,
     created_by INTEGER REFERENCES users(id),
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMP DEFAULT NOW(),
+    attachments_json JSONB
 );
 
 CREATE INDEX idx_mail_outgoing_deal ON mail_outgoing(deal_id);
@@ -661,7 +665,27 @@ CREATE TABLE classifier_training_data (
 );
 
 -- ============================================================================
--- 7.20 User Profiles (Migrated from JSON Immediately)
+-- 7.20 Mail Contacts (Per-User)
+-- ============================================================================
+
+CREATE TABLE mail_contacts (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,
+    name TEXT DEFAULT '',
+    company TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(user_id, email)
+);
+
+CREATE INDEX idx_mail_contacts_user ON mail_contacts(user_id);
+CREATE INDEX idx_mail_contacts_email ON mail_contacts(user_id, email);
+
+-- ============================================================================
+-- 7.21 User Profiles (Migrated from JSON Immediately)
 -- ============================================================================
 
 CREATE TABLE user_profiles (
