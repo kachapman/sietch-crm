@@ -15661,7 +15661,6 @@ function attachMailModalListeners() {
       loadMailMessagesForModal();
     });
   }
-}
 
   // scanner admin toggle
   const scannerToggle = $("#mail-scanner-toggle");
@@ -15971,8 +15970,6 @@ async function markMailMessageRead(messageId) {
     });
   } catch (err) {
     showToast("Deal search failed: " + (err.message || err), true);
-  }
-    resEl.classList.add("hidden");
   }
 }
 
