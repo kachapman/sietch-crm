@@ -15222,7 +15222,7 @@ async function openMailInboxModal() {
   attachMailModalListeners();
 }
 
-async function renderMailTabs() {
+ async function renderMailTabs() {
   const tabsEl = $("#mail-inbox-tabs");
   if (!tabsEl) return;
   try {
@@ -15231,14 +15231,29 @@ async function renderMailTabs() {
     mailState.accounts = accounts;
 
     let html = '';
+
+    // CRM Mail tab (always present — shared company inbox)
+    const crmActive = !mailState.activeAccount || mailState.activeAccount === 'crm';
+    html += `<button type="button" class="mail-inbox-tab ${crmActive ? 'active' : ''}" data-mailtab="inbox" data-account-id="crm">`;
+    html += `<i class="ti ti-building" style="margin-right:0.3rem;"></i>CRM Mail`;
+    html += `<span class="mail-tab-badge" data-account-badge="crm"></span>`;
+    html += `</button>`;
+
+    // User account tabs
     for (const acct of accounts) {
       const isActive = mailState.activeAccount === acct.id;
+      const label = acct.display_name || acct.email;
       html += `<button type="button" class="mail-inbox-tab ${isActive ? 'active' : ''}" data-mailtab="inbox" data-account-id="${acct.id}">`;
-      html += `<i class="ti ti-mail" style="margin-right:0.3rem;"></i>${escapeHtml(acct.email)}`;
+      html += `<i class="ti ti-user" style="margin-right:0.3rem;"></i>${escapeHtml(label)}`;
       html += `<span class="mail-tab-badge" data-account-badge="${acct.id}"></span>`;
       html += `</button>`;
     }
-    html += `<button type="button" class="mail-inbox-tab" data-mailtab="scanner-admin"><i class="ti ti-settings" style="margin-right:0.3rem;"></i>Scanner</button>`;
+
+    // Add account button
+    html += `<button type="button" class="mail-inbox-tab" data-mailtab="add-account" title="Add mail account"><i class="ti ti-plus"></i></button>`;
+
+    // Admin tab
+    html += `<button type="button" class="mail-inbox-tab" data-mailtab="scanner-admin"><i class="ti ti-settings" style="margin-right:0.3rem;"></i>Admin</button>`;
     tabsEl.innerHTML = html;
 
     // Bind tab clicks
@@ -15259,15 +15274,17 @@ async function renderMailTabs() {
       } catch { /* non-fatal */ }
     }
 
-    // Default to first account if none selected
-    if (!mailState.activeAccount && accounts.length > 0) {
-      mailState.activeAccount = accounts[0].id;
-      const firstTab = tabsEl.querySelector('.mail-inbox-tab[data-account-id]');
-      if (firstTab) firstTab.classList.add('active');
+    // Default to CRM Mail if none selected
+    if (!mailState.activeAccount) {
+      mailState.activeAccount = 'crm';
       await loadMailMessagesForModal();
     }
   } catch (e) {
-    tabsEl.innerHTML = '<button type="button" class="mail-inbox-tab active" data-mailtab="inbox"><i class="ti ti-mail" style="margin-right:0.3rem;"></i>Inbox</button>';
+    tabsEl.innerHTML = `<button type="button" class="mail-inbox-tab active" data-mailtab="inbox" data-account-id="crm"><i class="ti ti-building" style="margin-right:0.3rem;"></i>CRM Mail</button><button type="button" class="mail-inbox-tab" data-mailtab="scanner-admin"><i class="ti ti-settings" style="margin-right:0.3rem;"></i>Admin</button>`;
+    tabsEl.querySelectorAll('.mail-inbox-tab').forEach(btn => {
+      btn.addEventListener('click', () => switchMailTab(btn));
+    });
+    mailState.activeAccount = 'crm';
   }
 }
 
@@ -16026,7 +16043,7 @@ async function loadMailMessagesForModal() {
   if (mailState.activeFolder === 'Drafts') {
     try {
       const params = [];
-      if (mailState.activeAccount) params.push(`account_id=${mailState.activeAccount}`);
+      if (mailState.activeAccount && mailState.activeAccount !== 'crm') params.push(`account_id=${mailState.activeAccount}`);
       const url = '/api/v2/mail/drafts' + (params.length ? '?' + params.join('&') : '');
       const data = await api(url);
       const drafts = data.drafts || [];
@@ -16048,7 +16065,7 @@ async function loadMailMessagesForModal() {
   try {
     let url = "/api/v2/mail/messages";
     const params = [];
-    if (mailState.activeAccount) params.push(`account_id=${mailState.activeAccount}`);
+    if (mailState.activeAccount && mailState.activeAccount !== 'crm') params.push(`account_id=${mailState.activeAccount}`);
     if (mailState.activeFolder && mailState.activeFolder !== "INBOX") params.push(`folder=${encodeURIComponent(mailState.activeFolder)}`);
     if (mailState.search) params.push(`search=${encodeURIComponent(mailState.search)}`);
     if (params.length) url += '?' + params.join('&');

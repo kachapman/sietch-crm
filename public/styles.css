@@ -2661,10 +2661,10 @@ body {
 
 .note-format-btn {
   font: inherit;
-  font-size: 0.68rem;
+  font-size: 0.8rem;
   font-weight: 700;
   line-height: 1;
-  padding: 0.1rem 0.3rem;
+  padding: 0.2rem 0.4rem;
   border: 1px solid var(--border);
   border-radius: 3px;
   background: var(--surface);
@@ -4023,8 +4023,8 @@ body {
 
 /* Small button variant used inside the modal */
 .btn-small {
-  font-size: 0.72rem;
-  padding: 0.2rem 0.5rem;
+  font-size: 0.82rem;
+  padding: 0.3rem 0.6rem;
 }
 
 /* The pinned presence tile uses normal tile styles + a compact list inside the body */
