@@ -46,6 +46,16 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Fixed + tab crash**: `tabsEl` ReferenceError replaced with `btn.parentElement`.
 - **Project number** (`#1234`): Auto-assigned `SERIAL UNIQUE` on all opportunities. Displayed right of deal title in preview modal. Click to copy to clipboard. Shown in both email detail (linked deals) and deal preview.
 
+## Phase 3.2 — IMAP Folder Sync + Folder Management (2026-07-26)
+
+- **IMAP folder sync.** Scanner now lists folders from IMAP server via `mailbox.folder.list()` and syncs to `mail_folders` table. Fixed imap_tools 1.14.0 bugs: `MailBox`/`MailMessage` imports, `MailBox(host, port=...)` + `login()` connection, `mailbox.fetch()` method. Refactored scanner to read from `mail_accounts` table (not env vars).
+- **Folder management.** New `mail_folders` table (system/imap/local types). Server: GET/POST/PUT/DELETE folder CRUD endpoints. Frontend: dynamic folder list from API, "New Folder" button, double-click rename, right-click context menu for rename/delete, move dropdown populated from folder list.
+- **Star icon fix.** `ti-star-filled` does not exist in Tabler webfont (v3.45.0). Both states now use `ti-star`, distinguished by color: amber (#f59e0b) for starred, `var(--muted)` for unstarred.
+- **Email body fix.** `normalizeMailMessage` now reads `body_text` and `body_html` (actual snake_case DB column names). Expanded email view and inline reply/forward now show body content correctly.
+- **Star removed from expanded email view** — star only appears in message list row.
+- **Star state** updated in `mailState.messages` on toggle to prevent re-render revert.
+- **Bug fixes:** from field (`m.from_addr`), body snippet in message list, star POST→PUT, `method` variable undefined in GET handler routes, clipboard fallback for non-HTTPS contexts, contrast fixes (checkboxes, accent-subtle, badge text).
+
 ## Phase 2G — project.html + Open Project button (2026-07-26)
 
 - **Wired "Open in CRM" buttons to project detail page.** `crmOpportunityUrl(id)` now returns `/project/{id}` (was dead `#` stub). `crmTaskUrl(task)` extracts oppId from task and returns `/project/{oppId}`. All 5 call sites now open the standalone project page in a new tab.
