@@ -21655,18 +21655,31 @@ async function populateEmailScannerTab() {
     try {
       const data = await api("/api/v2/mail/contractors");
       const contractors = data.contractors || [];
+      const actionLabels = { link_only: 'Link to deal', create_deal: 'Create deal', create_task: 'Create task', post_note: 'Post note' };
       if (!contractors.length) {
-        ctrList.innerHTML = '<p style="color:var(--muted); font-size:0.8rem;">No contractors configured.</p>';
+        ctrList.innerHTML = '<p style="color:var(--muted); font-size:0.8rem;">No routing rules configured. Click "New Routing Rule" to create one.</p>';
       } else {
-        ctrList.innerHTML = contractors.map(c => `
+        ctrList.innerHTML = contractors.map(c => {
+          const acct = c.imap_account_id || c.imap_account || '';
+          const folder = c.folder || 'INBOX';
+          const action = actionLabels[c.action] || c.action || 'Link to deal';
+          const desc = `From ${acct ? 'account #' + acct : 'all accounts'} in ${folder} → ${action}`;
+          return `
           <div style="padding:4px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
-            <span>${escapeHtml(c.name)} <span style="color:var(--muted); font-size:0.75rem;">[${escapeHtml(c.action || 'link_only')}]</span></span>
-            <span style="display:flex; gap:0.3rem;">
-              <button type="button" class="btn btn-ghost btn-sm scanner-ctr-edit" data-id="${c.id}" data-name="${escapeHtml(c.name)}" data-account="${c.imap_account_id || ''}" data-folder="${escapeHtml(c.folder || 'INBOX')}" data-action="${escapeHtml(c.action || 'link_only')}" data-user="${c.responsible_user_id || ''}" data-priority="${c.priority || 0}" style="font-size:0.75rem;"><i class="ti ti-pencil"></i></button>
+            <div>
+              <div style="font-weight:500;">${escapeHtml(c.name)}</div>
+              <div style="color:var(--muted); font-size:0.72rem;">${escapeHtml(desc)}</div>
+            </div>
+            <span style="display:flex; gap:0.3rem; flex-shrink:0;">
+              <button type="button" class="btn btn-ghost btn-sm scanner-ctr-edit" data-id="${c.id}" data-name="${escapeHtml(c.name)}" data-account="${acct}" data-folder="${escapeHtml(folder)}" data-action="${escapeHtml(c.action || 'link_only')}" data-user="${c.responsible_user_id || ''}" data-priority="${c.priority || 0}" style="font-size:0.75rem;"><i class="ti ti-pencil"></i></button>
               <button type="button" class="btn btn-ghost btn-sm scanner-ctr-delete" data-id="${c.id}" data-name="${escapeHtml(c.name)}" style="font-size:0.75rem; color:var(--danger);"><i class="ti ti-trash"></i></button>
             </span>
-          </div>`).join("");
+          </div>`;
+        }).join("");
       }
+    } catch (e) {
+      ctrList.innerHTML = `<p style="color:var(--muted);">Failed to load contractors: ${escapeHtml(e.message)}</p>`;
+    }
     } catch (e) {
       ctrList.innerHTML = `<p style="color:var(--muted);">Failed to load contractors: ${escapeHtml(e.message)}</p>`;
     }
@@ -21678,17 +21691,28 @@ async function populateEmailScannerTab() {
     try {
       const data = await api("/api/v2/mail/classification-rules");
       const rules = data.rules || [];
+      const typeLabels = { subject_regex: 'Subject matches', sender_domain: 'Sender domain is', body_regex: 'Body matches' };
+      const actionLabels = { tag: 'Tag as', link: 'Link to deal #', skip: 'Skip (ignore)' };
       if (!rules.length) {
-        rulesList.innerHTML = '<p style="color:var(--muted); font-size:0.8rem;">No classification rules.</p>';
+        rulesList.innerHTML = '<p style="color:var(--muted); font-size:0.8rem;">No classification rules. Click "New Rule" to create one.</p>';
       } else {
-        rulesList.innerHTML = rules.map(r => `
+        rulesList.innerHTML = rules.map(r => {
+          const typeLabel = typeLabels[r.rule_type] || r.rule_type;
+          const actionLabel = actionLabels[r.action] || r.action;
+          const target = r.action_target ? ` "${escapeHtml(r.action_target)}"` : '';
+          const desc = `${typeLabel} ${escapeHtml(r.pattern || '').slice(0, 40)} → ${actionLabel}${target}`;
+          return `
           <div style="padding:4px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
-            <span>${escapeHtml(r.rule_name)} <span style="color:var(--muted); font-size:0.75rem;">[${escapeHtml(r.rule_type)}] ${escapeHtml(r.pattern).slice(0, 30)}</span></span>
-            <span style="display:flex; gap:0.3rem;">
+            <div>
+              <div style="font-weight:500;">${escapeHtml(r.rule_name)}</div>
+              <div style="color:var(--muted); font-size:0.72rem;">${desc}</div>
+            </div>
+            <span style="display:flex; gap:0.3rem; flex-shrink:0;">
               <button type="button" class="btn btn-ghost btn-sm scanner-rule-edit" data-id="${r.id}" data-name="${escapeHtml(r.rule_name)}" data-type="${escapeHtml(r.rule_type)}" data-pattern="${escapeHtml(r.pattern)}" data-action="${escapeHtml(r.action || 'tag')}" data-target="${escapeHtml(r.action_target || '')}" data-priority="${r.priority || 0}" style="font-size:0.75rem;"><i class="ti ti-pencil"></i></button>
               <button type="button" class="btn btn-ghost btn-sm scanner-rule-delete" data-id="${r.id}" data-name="${escapeHtml(r.rule_name)}" style="font-size:0.75rem; color:var(--danger);"><i class="ti ti-trash"></i></button>
             </span>
-          </div>`).join("");
+          </div>`;
+        }).join("");
       }
     } catch (e) {
       rulesList.innerHTML = `<p style="color:var(--muted);">Failed to load rules: ${escapeHtml(e.message)}</p>`;
@@ -21866,27 +21890,23 @@ function bindScannerAdminButtons() {
       $("#scanner-ctr-folder").value = "INBOX";
       $("#scanner-ctr-action").value = "link_only";
       $("#scanner-ctr-priority").value = "0";
-      // Populate account dropdown
+      // Toggle form immediately
+      ctrForm.classList.remove("hidden");
+      // Populate dropdowns async (non-blocking)
       const acctSel = $("#scanner-ctr-account");
-      if (acctSel) {
-        try {
-          const data = await api("/api/v2/mail/accounts");
-          const accounts = data.accounts || [];
-          acctSel.innerHTML = '<option value="">All accounts</option>' +
-            accounts.map(a => `<option value="${a.id}">${escapeHtml(a.email || '')}</option>`).join("");
-        } catch { acctSel.innerHTML = '<option value="">All accounts</option>'; }
-      }
-      // Populate user dropdown
       const userSel = $("#scanner-ctr-user");
-      if (userSel) {
-        try {
-          const data = await api("/api/v2/users");
-          const users = unwrap(data) || data || [];
-          userSel.innerHTML = '<option value="">None</option>' +
+      Promise.all([
+        api("/api/v2/mail/accounts").then(d => {
+          const accounts = d.accounts || [];
+          if (acctSel) acctSel.innerHTML = '<option value="">All accounts</option>' +
+            accounts.map(a => `<option value="${a.id}">${escapeHtml(a.email || '')}</option>`).join("");
+        }).catch(() => { if (acctSel) acctSel.innerHTML = '<option value="">All accounts</option>'; }),
+        api("/api/v2/users").then(d => {
+          const users = unwrap(d) || d || [];
+          if (userSel) userSel.innerHTML = '<option value="">None</option>' +
             (users || []).map(u => `<option value="${u.id}">${escapeHtml(u.displayName || u.email || '')}</option>`).join("");
-        } catch { userSel.innerHTML = '<option value="">None</option>'; }
-      }
-      ctrForm.classList.toggle("hidden");
+        }).catch(() => { if (userSel) userSel.innerHTML = '<option value="">None</option>'; }),
+      ]);
     });
     $("#scanner-ctr-cancel")?.addEventListener("click", () => ctrForm.classList.add("hidden"));
     $("#scanner-ctr-save")?.addEventListener("click", async () => {
@@ -21955,7 +21975,7 @@ function bindScannerAdminButtons() {
       $("#scanner-rule-action").value = "tag";
       $("#scanner-rule-target").value = "";
       $("#scanner-rule-priority").value = "0";
-      ruleForm.classList.toggle("hidden");
+      ruleForm.classList.remove("hidden");
     });
     $("#scanner-rule-cancel")?.addEventListener("click", () => ruleForm.classList.add("hidden"));
     $("#scanner-rule-save")?.addEventListener("click", async () => {
@@ -22030,6 +22050,117 @@ function bindScannerAdminButtons() {
       }
     });
   }
+
+  // Help buttons
+  document.querySelectorAll('.scanner-help-btn').forEach(btn => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => showScannerHelp(btn.dataset.help));
+  });
+}
+
+function showScannerHelp(topic) {
+  const helpContent = {
+    routing: `
+      <h3 style="margin:0 0 0.75rem;">Routing Rules — How They Work</h3>
+      <p style="margin:0 0 0.75rem; color:var(--muted);">Routing rules tell the scanner what to do with emails from specific accounts/folders. Each rule matches emails from a specific IMAP account and folder, then performs an action.</p>
+      <h4 style="margin:0 0 0.5rem;">Fields Explained</h4>
+      <ul style="margin:0 0 0.75rem; padding-left:1.2rem; font-size:0.85rem;">
+        <li><b>Name:</b> A descriptive label (e.g. "Claims Inbox", "Office365 Sent")</li>
+        <li><b>IMAP Account:</b> Which email account this rule applies to. Leave empty for "all accounts".</li>
+        <li><b>Folder:</b> Which folder to monitor (e.g. INBOX, Sent, Claims). Default: INBOX.</li>
+        <li><b>Action:</b> What happens when an email matches:
+          <ul style="margin:0.25rem 0 0; padding-left:1rem;">
+            <li><b>Link only</b> — Links the email to a matched deal (no other action)</li>
+            <li><b>Create deal</b> — Auto-creates a new opportunity if no match found</li>
+            <li><b>Create task</b> — Creates a follow-up task for the assignee</li>
+            <li><b>Post note</b> — Posts the email body to the matched deal's history</li>
+          </ul>
+        </li>
+        <li><b>Assignee:</b> Who gets notified / assigned tasks. Leave empty for no one.</li>
+        <li><b>Priority:</b> Higher numbers = evaluated first. Default: 0.</li>
+      </ul>
+      <h4 style="margin:0 0 0.5rem;">Example Scenarios</h4>
+      <div style="font-size:0.85rem; background:var(--bg); padding:0.5rem; border-radius:4px; margin-bottom:0.5rem;">
+        <b>Scenario 1: Auto-link all claims emails</b><br>
+        Account: claims@yourcompany.com | Folder: INBOX | Action: Link only<br>
+        <span style="color:var(--muted);">→ Any email with [#1234] in the subject gets linked to that project.</span>
+      </div>
+      <div style="font-size:0.85rem; background:var(--bg); padding:0.5rem; border-radius:4px; margin-bottom:0.5rem;">
+        <b>Scenario 2: Track sent emails as notes</b><br>
+        Account: (all) | Folder: Sent | Action: Post note | Assignee: Office Manager<br>
+        <span style="color:var(--muted);">→ Every sent email is posted to the matched deal's history.</span>
+      </div>
+      <div style="font-size:0.85rem; background:var(--bg); padding:0.5rem; border-radius:4px;">
+        <b>Scenario 3: Create tasks from a specific inbox</b><br>
+        Account: intake@yourcompany.com | Folder: INBOX | Action: Create task | Assignee: John Smith<br>
+        <span style="color:var(--muted);">→ Each email creates a task assigned to John for follow-up.</span>
+      </div>
+    `,
+    classification: `
+      <h3 style="margin:0 0 0.75rem;">Classification Rules — How They Work</h3>
+      <p style="margin:0 0 0.75rem; color:var(--muted);">Classification rules let you define custom patterns that the scanner looks for in incoming emails. When a rule matches, it performs the specified action. Rules are evaluated <b>before</b> the built-in patterns (like [#PROJECTID] linking).</p>
+      <h4 style="margin:0 0 0.5rem;">Fields Explained</h4>
+      <ul style="margin:0 0 0.75rem; padding-left:1.2rem; font-size:0.85rem;">
+        <li><b>Rule Name:</b> A descriptive label (e.g. "Insurance carrier emails")</li>
+        <li><b>Type:</b> What to match against:
+          <ul style="margin:0.25rem 0 0; padding-left:1rem;">
+            <li><b>Subject regex</b> — Regular expression on the email subject line</li>
+            <li><b>Sender domain</b> — Matches part of the sender's email domain</li>
+            <li><b>Body regex</b> — Regular expression on the email body (first 5000 chars)</li>
+          </ul>
+        </li>
+        <li><b>Pattern:</b> The pattern to match. For regex: valid JavaScript regex (e.g. <code>claim|policy|supplement</code>). For domain: part of domain name (e.g. <code>statefarm.com</code>).</li>
+        <li><b>Action:</b> What to do when matched:
+          <ul style="margin:0.25rem 0 0; padding-left:1rem;">
+            <li><b>Tag</b> — Add a tag to the email (enter tag name in Target)</li>
+            <li><b>Link</b> — Link to a specific deal (enter deal ID in Target)</li>
+            <li><b>Skip</b> — Ignore this email entirely</li>
+          </ul>
+        </li>
+        <li><b>Action Target:</b> For "Tag": the tag name to apply. For "Link": the deal/project ID.</li>
+        <li><b>Priority:</b> Higher numbers = evaluated first. Default: 0.</li>
+      </ul>
+      <h4 style="margin:0 0 0.5rem;">Example Scenarios</h4>
+      <div style="font-size:0.85rem; background:var(--bg); padding:0.5rem; border-radius:4px; margin-bottom:0.5rem;">
+        <b>Scenario 1: Tag all insurance carrier emails</b><br>
+        Type: Sender domain | Pattern: statefarm.com | Action: Tag | Target: carrier<br>
+        <span style="color:var(--muted);">→ Any email from @statefarm.com gets tagged "carrier".</span>
+      </div>
+      <div style="font-size:0.85rem; background:var(--bg); padding:0.5rem; border-radius:4px; margin-bottom:0.5rem;">
+        <b>Scenario 2: Skip automated notifications</b><br>
+        Type: Subject regex | Pattern: ^\\[Auto\\]|noreply|do-not-reply | Action: Skip<br>
+        <span style="color:var(--muted);">→ Automated emails are ignored by the scanner.</span>
+      </div>
+      <div style="font-size:0.85rem; background:var(--bg); padding:0.5rem; border-radius:4px;">
+        <b>Scenario 3: Tag supplement requests</b><br>
+        Type: Body regex | Pattern: supplement|additional.?document|missing.?item | Action: Tag | Target: supplement-request<br>
+        <span style="color:var(--muted);">→ Emails mentioning supplements get tagged for follow-up.</span>
+      </div>
+      <h4 style="margin:0.75rem 0 0.5rem;">Evaluation Order</h4>
+      <ol style="margin:0; padding-left:1.2rem; font-size:0.85rem;">
+        <li>User-defined classification rules (this section) — by priority</li>
+        <li><b>Auto-link by [#PROJECTID]</b> toggle (if enabled)</li>
+        <li>Built-in claim code patterns</li>
+        <li>ML classification (if enabled)</li>
+      </ol>
+    `,
+  };
+
+  const content = helpContent[topic] || '<p>No help available for this topic.</p>';
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed; inset:0; z-index:10000; background:rgba(0,0,0,0.6); display:flex; align-items:center; justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:1.25rem; max-width:650px; width:90%; max-height:80vh; overflow:auto;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+        <span></span>
+        <button class="btn btn-ghost btn-small help-close" style="font-size:0.85rem;"><i class="ti ti-x"></i> Close</button>
+      </div>
+      ${content}
+    </div>`;
+  overlay.querySelector('.help-close').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
 }
 
 async function populateAdminUsersList() {
