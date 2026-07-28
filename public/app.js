@@ -15387,6 +15387,7 @@ function switchMailTab(btn) {
       mailMainArea.classList.add('mail-main-column');
     }
     populateEmailScannerTab();
+    bindScannerAdminButtons();
   } else if (tabName === 'add-account') {
     openAccountSettingsModal();
     // Switch to inbox view first (replicate inbox case show/hide)
@@ -21715,9 +21716,6 @@ async function populateEmailScannerTab() {
       rulesList.innerHTML = `<p style="color:var(--muted);">Failed to load rules: ${escapeHtml(e.message)}</p>`;
     }
   }
-
-  // Bind buttons (only once)
-  bindScannerAdminButtons();
 }
 
 function bindScannerAdminButtons() {
