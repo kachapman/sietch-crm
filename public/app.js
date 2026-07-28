@@ -16385,14 +16385,16 @@ function renderMailList(msgs) {
     // Star indicator
     const starEl = document.createElement("div");
     starEl.className = "mail-star";
-    starEl.innerHTML = m.starred ? '<i class="ti ti-star-filled" style="color:#f59e0b;"></i>' : '<i class="ti ti-star" style="opacity:0.4;"></i>';
+    starEl.innerHTML = m.starred ? '<i class="ti ti-star-filled"></i>' : '<i class="ti ti-star"></i>';
+    if (m.starred) starEl.classList.add('starred');
     starEl.style.cursor = "pointer";
     starEl.style.flexShrink = "0";
     starEl.addEventListener("click", async (e) => {
       e.stopPropagation();
       try {
         const res = await api(`/api/v2/mail/messages/${id}/star`, { method: 'PUT' });
-        starEl.innerHTML = res.starred ? '<i class="ti ti-star-filled" style="color:#f59e0b;"></i>' : '<i class="ti ti-star" style="opacity:0.4;"></i>';
+        starEl.innerHTML = res.starred ? '<i class="ti ti-star-filled"></i>' : '<i class="ti ti-star"></i>';
+        if (res.starred) starEl.classList.add('starred'); else starEl.classList.remove('starred');
       } catch {}
     });
     row.appendChild(starEl);
@@ -18916,7 +18918,7 @@ async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, 
     // Project number badge
     const existingBadge = titleEl.parentElement?.querySelector('.opp-project-number-badge');
     if (existingBadge) existingBadge.remove();
-    const projNum = data.opp.project_number;
+    const projNum = data.opp.project_number || id;
     if (projNum) {
       const badge = document.createElement("span");
       badge.className = "opp-project-number-badge";
@@ -18926,7 +18928,9 @@ async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, 
       badge.addEventListener("click", () => {
         navigator.clipboard.writeText(`#${projNum}`).then(() => showToast("Copied to clipboard")).catch(() => {});
       });
-      titleEl.parentElement.insertBefore(badge, titleEl.parentElement.querySelector('.opp-preview-head-actions'));
+      const actionsEl = titleEl.parentElement?.querySelector('.opp-preview-head-actions');
+      if (actionsEl) titleEl.parentElement.insertBefore(badge, actionsEl);
+      else titleEl.parentElement.appendChild(badge);
     }
 
     renderOpportunityPreviewBody(data);

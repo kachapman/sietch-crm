@@ -11142,7 +11142,7 @@ body {
   text-align: center;
   cursor: pointer;
   opacity: 0.5;
-  transition: opacity 0.15s;
+  transition: opacity 0.15s, color 0.15s;
 }
 .mail-star:hover {
   opacity: 1;
