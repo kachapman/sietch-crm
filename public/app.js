@@ -21845,7 +21845,8 @@ function bindScannerAdminButtons() {
       } catch (e) { showToast("Failed: " + e.message, true); }
     });
     // Edit/delete via event delegation
-    tplList?.addEventListener("click", async (e) => {
+    const tplListEl = $("#scanner-templates-list");
+    tplListEl?.addEventListener("click", async (e) => {
       const editBtn = e.target.closest(".scanner-tpl-edit");
       const delBtn = e.target.closest(".scanner-tpl-delete");
       if (editBtn) {
