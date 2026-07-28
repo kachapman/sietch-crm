@@ -11144,7 +11144,8 @@ body {
   width: 24px;
   text-align: center;
   cursor: pointer;
-  opacity: 0.5;
+  opacity: 0.65;
+  color: var(--muted);
   transition: opacity 0.15s, color 0.15s;
 }
 .mail-star:hover {
@@ -11153,6 +11154,15 @@ body {
 .mail-star.starred {
   opacity: 1;
   color: #f59e0b;
+}
+.mail-snippet {
+  flex: 2;
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 /* ── Attachment list in compose ───────────────────────────────────────── */

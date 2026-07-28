@@ -581,18 +581,13 @@
           <div class="mail-right-sidebar" style="width:180px; min-width:180px; max-width:200px;">
            <div class="mail-sidebar-content">
               <h4 style="margin:0 0 0.4rem 0; font-size:0.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em;">Folders</h4>
-              <div id="mail-folder-list">
-                <button type="button" class="mail-folder-btn active" data-folder="INBOX"><i class="ti ti-mail"></i> Inbox <span class="mail-folder-badge" id="mail-inbox-unread"></span></button>
-                <button type="button" class="mail-folder-btn" data-folder="Sent"><i class="ti ti-send"></i> Sent</button>
-                <button type="button" class="mail-folder-btn" data-folder="Outbox"><i class="ti ti-mail-forward"></i> Outbox</button>
-                <button type="button" class="mail-folder-btn" data-folder="Drafts"><i class="ti ti-file"></i> Drafts</button>
-                <button type="button" class="mail-folder-btn" data-folder="Templates"><i class="ti ti-file-text"></i> Templates</button>
-                <hr style="margin:0.3rem 0; border:none; border-top:1px solid var(--border);" />
-                <button type="button" class="mail-folder-btn" data-folder="Trash"><i class="ti ti-trash"></i> Trash <span class="mail-folder-badge" id="mail-trash-count"></span></button>
-              </div>
-              <div id="mail-trash-context-menu" style="display:none; position:fixed; z-index:9999; background:var(--surface); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,0.25); padding:0.25rem 0; min-width:140px;">
-                <button type="button" id="mail-empty-trash-btn" style="display:block; width:100%; text-align:left; padding:0.4rem 0.75rem; border:none; background:none; cursor:pointer; color:var(--danger); font-size:0.85rem;">Empty Trash</button>
-              </div>
+               <div id="mail-folder-list">
+                 <!-- populated dynamically by renderMailFolderList() -->
+               </div>
+               <div id="mail-trash-context-menu" style="display:none; position:fixed; z-index:9999; background:var(--surface); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,0.25); padding:0.25rem 0; min-width:140px;">
+                 <button type="button" id="mail-folder-rename-btn" style="display:block; width:100%; text-align:left; padding:0.4rem 0.75rem; border:none; background:none; cursor:pointer; font-size:0.85rem;"><i class="ti ti-pencil"></i> Rename</button>
+                 <button type="button" id="mail-folder-delete-btn" style="display:block; width:100%; text-align:left; padding:0.4rem 0.75rem; border:none; background:none; cursor:pointer; color:var(--danger); font-size:0.85rem;"><i class="ti ti-trash"></i> Delete</button>
+               </div>
               <hr style="margin:0.5rem 0; border:none; border-top:1px solid var(--border);" />
               <h4 style="margin:0 0 0.4rem 0; font-size:0.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em;">Tags</h4>
               <div id="mail-tag-list" style="max-height:150px; overflow-y:auto;">

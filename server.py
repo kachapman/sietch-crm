@@ -1005,6 +1005,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/mail/drafts":
             self._handle_mail_drafts_get()
             return
+        if api_path == "/api/v2/mail/folders":
+            self._handle_mail_folders()
+            return
 
         self.send_error(404)
 
@@ -1475,6 +1478,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # Empty trash
         if api_path == "/api/v2/mail/empty-trash" and method == "POST":
             self._handle_mail_empty_trash()
+            return
+        # Folders
+        if api_path == "/api/v2/mail/folders" and method == "POST":
+            self._handle_mail_folder_create()
+            return
+        m = re.match(r"^/api/v2/mail/folders/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_mail_folder_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_mail_folder_delete(int(m.group(1)))
             return
 
         self.send_error(404)
@@ -5524,6 +5538,68 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 params,
             )
             _json_response(self, 200, {"threads": rows})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_folders(self) -> None:
+        try:
+            rows = db.query_dicts(
+                "SELECT * FROM mail_folders ORDER BY sort_order, name"
+            )
+            _json_response(self, 200, {"folders": rows})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_folder_create(self) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            name = payload.get("name", "").strip()
+            if not name:
+                _json_response(self, 400, {"error": "Name required"})
+                return
+            user = _require_auth(self)
+            result = db.query_one(
+                "INSERT INTO mail_folders (name, user_id) VALUES (%s, %s) RETURNING id",
+                (name, user["id"] if user else None),
+            )
+            _json_response(self, 201, {"id": result["id"]})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_folder_update(self, folder_id: int) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            name = payload.get("name", "").strip()
+            if not name:
+                _json_response(self, 400, {"error": "Name required"})
+                return
+            folder = db.query_one("SELECT name, is_system FROM mail_folders WHERE id = %s", (folder_id,))
+            if not folder:
+                _json_response(self, 404, {"error": "Folder not found"})
+                return
+            if folder["is_system"]:
+                _json_response(self, 400, {"error": "Cannot rename system folder"})
+                return
+            # Update messages in this folder
+            db.execute("UPDATE mail_messages SET folder = %s WHERE folder = %s", (name, folder["name"]))
+            db.execute("UPDATE mail_folders SET name = %s WHERE id = %s", (name, folder_id))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_folder_delete(self, folder_id: int) -> None:
+        try:
+            folder = db.query_one("SELECT name, is_system FROM mail_folders WHERE id = %s", (folder_id,))
+            if not folder:
+                _json_response(self, 404, {"error": "Folder not found"})
+                return
+            if folder["is_system"]:
+                _json_response(self, 400, {"error": "Cannot delete system folder"})
+                return
+            # Move messages in this folder to INBOX
+            db.execute("UPDATE mail_messages SET folder = 'INBOX' WHERE folder = %s", (folder["name"],))
+            db.execute("DELETE FROM mail_folders WHERE id = %s", (folder_id,))
+            _json_response(self, 200, {"ok": True})
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 

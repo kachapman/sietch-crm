@@ -15250,7 +15250,7 @@ async function openMailInboxModal() {
   $("#mail-search-input").value = "";
   await loadMailAccountsForModal();
   await renderMailTabs();
-  await renderMailFolders();
+  await renderMailFolderList();
   await renderMailUnreadBadge();
   await updateTrashCount();
   attachMailModalListeners();
@@ -16168,24 +16168,26 @@ function attachMailModalListeners() {
       mailState.activeFolder = btn.dataset.folder || "INBOX";
       loadMailMessagesForModal();
     });
-    // Trash context menu
-    const trashBtn = folderList.querySelector('[data-folder="Trash"]');
-    const trashCtx = $('#mail-trash-context-menu');
-    if (trashBtn && trashCtx) {
-      trashBtn.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        trashCtx.style.display = 'block';
-        trashCtx.style.left = e.clientX + 'px';
-        trashCtx.style.top = e.clientY + 'px';
+    // Folder context menu
+    const folderCtx = $('#mail-trash-context-menu');
+    if (folderCtx) {
+      document.addEventListener('click', () => { folderCtx.style.display = 'none'; });
+      $('#mail-folder-rename-btn')?.addEventListener('click', () => {
+        const id = folderCtx.dataset.folderId;
+        const btn = folderList.querySelector(`[data-folder-id="${id}"]`);
+        folderCtx.style.display = 'none';
+        if (btn) startFolderRename(btn);
       });
-      document.addEventListener('click', () => { trashCtx.style.display = 'none'; });
-      $('#mail-empty-trash-btn')?.addEventListener('click', async () => {
-        trashCtx.style.display = 'none';
+      $('#mail-folder-delete-btn')?.addEventListener('click', async () => {
+        const id = folderCtx.dataset.folderId;
+        const name = folderCtx.dataset.folderName;
+        folderCtx.style.display = 'none';
+        if (!id) return;
+        if (!confirm(`Delete folder "${name}"? Messages will be moved to Inbox.`)) return;
         try {
-          await api('/api/v2/mail/empty-trash', { method: 'POST' });
-          showToast('Trash emptied');
-          loadMailMessagesForModal();
-          updateTrashCount();
+          await api(`/api/v2/mail/folders/${id}`, { method: 'DELETE' });
+          showToast('Folder deleted');
+          await renderMailFolderList();
         } catch (e) { showToast('Failed: ' + e.message, true); }
       });
     }
@@ -16314,6 +16316,90 @@ async function renderMailFolders() {
   }
 }
 
+async function renderMailFolderList() {
+  const folderList = $("#mail-folder-list");
+  if (!folderList) return;
+  try {
+    const data = await api("/api/v2/mail/folders");
+    const folders = data.folders || [];
+    folderList.innerHTML = folders.map(f => {
+      const icon = f.icon || 'folder';
+      const isSystem = f.is_system;
+      const activeClass = mailState.activeFolder === f.name ? ' active' : '';
+      return `<button type="button" class="mail-folder-btn${activeClass}" data-folder="${escapeHtml(f.name)}" data-folder-id="${f.id}" ${isSystem ? 'data-system="true"' : ''}>
+        <i class="ti ti-${icon}"></i> ${escapeHtml(f.name)}
+        ${f.name === 'INBOX' ? '<span class="mail-folder-badge" id="mail-inbox-unread"></span>' : ''}
+        ${f.name === 'Trash' ? '<span class="mail-folder-badge" id="mail-trash-count"></span>' : ''}
+      </button>`;
+    }).join('') + '<button type="button" id="mail-folder-add-btn" class="btn btn-ghost btn-small" style="margin-top:0.3rem; font-size:0.75rem;"><i class="ti ti-plus"></i> New Folder</button>';
+    folderList.querySelectorAll('.mail-folder-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        folderList.querySelectorAll('.mail-folder-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        mailState.activeFolder = btn.dataset.folder || 'INBOX';
+        loadMailMessagesForModal();
+      });
+      if (!btn.dataset.system) {
+        btn.addEventListener('dblclick', () => startFolderRename(btn));
+        btn.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          const ctx = $('#mail-trash-context-menu');
+          if (ctx) {
+            ctx.style.display = 'block';
+            ctx.style.left = e.clientX + 'px';
+            ctx.style.top = e.clientY + 'px';
+            ctx.dataset.folderId = btn.dataset.folderId;
+            ctx.dataset.folderName = btn.dataset.folder;
+          }
+        });
+      }
+    });
+    const addBtn = $('#mail-folder-add-btn');
+    if (addBtn) addBtn.addEventListener('click', () => createNewFolder());
+    const moveSelect = $('#mail-move-folder');
+    if (moveSelect) {
+      moveSelect.innerHTML = '<option value="">Move to...</option>' +
+        folders.map(f => `<option value="${escapeHtml(f.name)}">${escapeHtml(f.name)}</option>`).join('');
+    }
+    renderMailUnreadBadge();
+    updateTrashCount();
+  } catch (e) {
+    folderList.innerHTML = '<p style="font-size:0.75rem; color:var(--muted);">Failed to load folders</p>';
+  }
+}
+
+function startFolderRename(btn) {
+  const name = btn.dataset.folder;
+  const id = btn.dataset.folderId;
+  if (!id || !name) return;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = name;
+  input.style.cssText = 'width:100%; padding:0.2rem 0.3rem; font-size:0.82rem; border:1px solid var(--accent); border-radius:3px; background:var(--bg); color:var(--text);';
+  btn.textContent = '';
+  btn.appendChild(input);
+  input.focus();
+  input.select();
+  const save = async () => {
+    const newName = input.value.trim();
+    if (newName && newName !== name) {
+      try { await api(`/api/v2/mail/folders/${id}`, { method: 'PUT', body: JSON.stringify({ name: newName }) }); } catch (e) { showToast('Failed to rename: ' + e.message, true); }
+    }
+    await renderMailFolderList();
+  };
+  input.addEventListener('blur', save);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') renderMailFolderList(); });
+}
+
+async function createNewFolder() {
+  const name = prompt('Folder name:');
+  if (!name || !name.trim()) return;
+  try {
+    await api('/api/v2/mail/folders', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
+    await renderMailFolderList();
+  } catch (e) { showToast('Failed to create folder: ' + e.message, true); }
+}
+
 async function renderMailUnreadBadge() {
   const badge = $("#mail-inbox-unread");
   if (!badge) return;
@@ -16373,7 +16459,7 @@ function renderMailList(msgs) {
 
   msgs.forEach(m => {
     const id = String(m.id || m.ID);
-    const from = (typeof m.from === "string" ? m.from : (m.from && (m.from.email || m.from.name)) || m.fromEmail || "").toString();
+    const from = (m.from_addr || m.from || m.fromEmail || "").toString();
     const subj = (m.subject || m.Subject || "(no subject)").toString();
     const date = m.date || m.receivedDate || m.Date || "";
     const dateStr = date ? new Date(date).toLocaleDateString() + " " + new Date(date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : "";
@@ -16424,6 +16510,15 @@ function renderMailList(msgs) {
     subjDiv.title = subj;
     subjDiv.textContent = subj.slice(0, 80);
     row.appendChild(subjDiv);
+
+    // Body snippet
+    const snippet = (m.body_text || "").replace(/<[^>]+>/g, "").trim().slice(0, 60);
+    if (snippet) {
+      const snippetDiv = document.createElement("div");
+      snippetDiv.className = "mail-snippet";
+      snippetDiv.textContent = snippet;
+      row.appendChild(snippetDiv);
+    }
 
     const dateDiv = document.createElement("div");
     dateDiv.className = "mail-date";
@@ -17975,20 +18070,6 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
     renderInlineReply(panel, "forward", messageId, norm);
   });
   actionBtns.appendChild(fwdBtn);
-
-  const starBtn = document.createElement("button");
-  starBtn.type = "button";
-  starBtn.className = "btn btn-ghost btn-small";
-  starBtn.title = "Star / unstar";
-  starBtn.innerHTML = '<i class="ti ti-star"></i>';
-  starBtn.addEventListener("click", async () => {
-    try {
-      await api(`/api/v2/mail/messages/${encodeURIComponent(messageId)}/star`, { method: "PUT" });
-      starBtn.innerHTML = '<i class="ti ti-star-filled"></i>';
-      showToast("Message starred");
-    } catch (e) { showToast("Failed to star message: " + (e.message || e), true); }
-  });
-  actionBtns.appendChild(starBtn);
 
   const archiveBtn = document.createElement("button");
   archiveBtn.type = "button";

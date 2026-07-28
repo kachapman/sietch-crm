@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from imap_tools import Mailbox, MailBoxMessage
+from imap_tools import MailBox, MailMessage, MailBoxFolderManager
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -252,61 +252,120 @@ def _is_processed(conv_id: str) -> bool:
 
 
 def _get_mailboxes() -> list[dict[str, Any]]:
+    # Try env vars first (for standalone/testing)
     host = os.environ.get("SCANNER_IMAP_HOST", "")
     port = int(os.environ.get("SCANNER_IMAP_PORT", str(IMAP_PORT_SSL)))
     user = os.environ.get("SCANNER_IMAP_USER", "")
     password = os.environ.get("SCANNER_IMAP_PASSWORD", "")
     inbox = os.environ.get("SCANNER_INBOX", "INBOX")
-    if not host or not user or not password:
+    if host and user and password:
+        return [{"host": host, "port": port, "user": user, "password": password,
+                 "inbox": inbox, "use_ssl": port == IMAP_PORT_SSL, "account_id": None}]
+
+    # Fall back to mail_accounts table
+    try:
+        rows = db.query_dicts(
+            "SELECT id, email, imap_host, imap_port, password_encrypted, sync_enabled "
+            "FROM mail_accounts WHERE sync_enabled = TRUE"
+        )
+        results = []
+        for row in rows:
+            if not row.get("imap_host") or not row.get("email"):
+                continue
+            results.append({
+                "host": row["imap_host"],
+                "port": int(row.get("imap_port", 993)),
+                "user": row["email"],
+                "password": row.get("password_encrypted", ""),
+                "inbox": "INBOX",
+                "use_ssl": int(row.get("imap_port", 993)) == IMAP_PORT_SSL,
+                "account_id": row.get("id"),
+            })
+        return results
+    except Exception as e:
+        logger.error("Failed to load mail accounts: %s", e)
         return []
-    return [
-        {
-            "host": host,
-            "port": port,
-            "user": user,
-            "password": password,
-            "inbox": inbox,
-            "use_ssl": port == IMAP_PORT_SSL,
-        }
-    ]
 
 
 def _fetch_messages(mailbox_cfg: dict[str, Any], since: datetime | None = None) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     try:
-        with Mailbox(
-            mailbox_cfg["host"],
-            mailbox_cfg["user"],
-            mailbox_cfg["password"],
-            port=mailbox_cfg["port"],
-            ssl=mailbox_cfg["use_ssl"],
-        ) as mailbox:
-            criterion = None
-            if since:
-                criterion = {"seen": False, "date": since}
-            else:
-                criterion = {"seen": False}
-            for msg in mailbox.iter(
-                criteria=criterion,
-                mark_seen=False,
-                bulk=False,
-            ):
-                messages.append({
-                    "uid": msg.uid,
-                    "message_id": msg.message_id,
-                    "from": msg.from_values.email if msg.from_values else "",
-                    "from_name": msg.from_values.name if msg.from_values else "",
-                    "to": msg.to_values[0].email if msg.to_values else "",
-                    "subject": msg.subject or "",
-                    "date": msg.date.isoformat() if msg.date else "",
-                    "body_text": msg.text or "",
-                    "body_html": msg.html or "",
-                    "flags": list(msg.flags) if msg.flags else [],
-                    "folder": mailbox_cfg["inbox"],
-                })
+        mailbox = MailBox(mailbox_cfg["host"], port=mailbox_cfg["port"])
+        mailbox.login(mailbox_cfg["user"], mailbox_cfg["password"])
+        
+        folder = mailbox_cfg.get("inbox", "INBOX")
+        mailbox.folder.set(folder)
+        
+        criterion = {}
+        if since:
+            criterion = {"date": since}
+        
+        for msg in mailbox.fetch(criteria=criterion, mark_seen=False, bulk=False):
+            messages.append({
+                "uid": msg.uid,
+                "message_id": msg.message_id,
+                "from": msg.from_values.email if msg.from_values else "",
+                "from_name": msg.from_values.name if msg.from_values else "",
+                "to": msg.to_values[0].email if msg.to_values else "",
+                "subject": msg.subject or "",
+                "date": msg.date.isoformat() if msg.date else "",
+                "body_text": msg.text or "",
+                "body_html": msg.html or "",
+                "flags": list(msg.flags) if msg.flags else [],
+                "folder": folder,
+            })
+        
+        mailbox.logout()
     except Exception as e:
         logger.error("IMAP fetch error: %s", e)
     return messages
+
+
+def _list_imap_folders(mailbox_cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    folders = []
+    try:
+        mailbox = MailBox(mailbox_cfg["host"], port=mailbox_cfg["port"])
+        mailbox.login(mailbox_cfg["user"], mailbox_cfg["password"])
+        for folder_info in mailbox.folder.list():
+            folders.append({
+                "name": folder_info.name,
+                "flags": list(folder_info.flags) if hasattr(folder_info, 'flags') else [],
+            })
+        mailbox.logout()
+    except Exception as e:
+        logger.error("IMAP folder list error: %s", e)
+    return folders
+
+
+def _sync_imap_folders(mailbox_cfg: dict[str, Any]) -> int:
+    imap_folders = _list_imap_folders(mailbox_cfg)
+    account_id = mailbox_cfg.get("account_id")
+    if not imap_folders or not account_id:
+        return 0
+    count = 0
+    for f in imap_folders:
+        name = f["name"]
+        flags = f.get("flags", [])
+        icon = "folder"
+        if "\\Sent" in str(flags): icon = "send"
+        elif "\\Drafts" in str(flags): icon = "file"
+        elif "\\Trash" in str(flags): icon = "trash"
+        elif "\\Junk" in str(flags): icon = "alert-triangle"
+        elif "\\Archive" in str(flags): icon = "archive"
+        existing = db.query_one(
+            "SELECT id FROM mail_folders WHERE imap_account_id = %s AND imap_path = %s",
+            (account_id, name),
+        )
+        if existing:
+            db.execute("UPDATE mail_folders SET last_sync = NOW(), icon = %s WHERE id = %s", (icon, existing["id"]))
+        else:
+            db.execute(
+                "INSERT INTO mail_folders (name, icon, folder_type, imap_account_id, imap_path) "
+                "VALUES (%s, %s, 'imap', %s, %s)",
+                (name, icon, account_id, name),
+            )
+        count += 1
+    return count
 
 
 def _ensure_tag(tag_title: str, created_by: int | None = None) -> int | None:
@@ -577,6 +636,11 @@ def _poll_mailboxes() -> list[dict[str, Any]]:
     for cfg in mailboxes:
         logger.info("Polling mailbox %s@%s", cfg["user"], cfg["host"])
         try:
+            # Sync folder list first
+            folder_count = _sync_imap_folders(cfg)
+            if folder_count:
+                logger.info("Synced %d IMAP folders", folder_count)
+            
             msgs = _fetch_messages(cfg)
             for msg in msgs:
                 result = _process_message(msg, cfg)
