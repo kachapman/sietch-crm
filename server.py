@@ -4825,18 +4825,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 404, {"error": "Message not found"})
                 return
             row_dict = dict(row)
-            tags = db.query(
+            tags = db.query_dicts(
                 "SELECT t.id, t.title, t.color FROM mail_tag_assignments ta "
                 "JOIN mail_tags t ON ta.tag_id = t.id WHERE ta.message_id = %s",
                 (message_id,),
             )
-            links = db.query(
+            links = db.query_dicts(
                 "SELECT o.id AS opportunity_id, o.title AS opportunity_title FROM mail_deal_links dl "
                 "JOIN opportunities o ON dl.opportunity_id = o.id WHERE dl.message_id = %s",
                 (message_id,),
             )
-            row_dict["tags"] = [dict(t) for t in tags]
-            row_dict["linked_deals"] = [dict(l) for l in links]
+            row_dict["tags"] = tags
+            row_dict["linked_deals"] = links
             _json_response(self, 200, row_dict)
         except Exception as e:
             logger.exception("Failed to fetch message %d", message_id)

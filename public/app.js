@@ -16254,7 +16254,7 @@ async function loadMailThreads() {
     const data = await api(url);
     const threads = data.threads || [];
     if (!threads.length) {
-      list.innerHTML = '<div class="mail-empty">No conversations yet</div>';
+      list.innerHTML = '<div class="mail-empty">No conversations yet. Emails with matching subjects or In-Reply-To headers are grouped into threads.</div>';
       return;
     }
     list.innerHTML = threads.map(t => `
@@ -16385,14 +16385,14 @@ function renderMailList(msgs) {
     // Star indicator
     const starEl = document.createElement("div");
     starEl.className = "mail-star";
-    starEl.innerHTML = m.starred ? '<i class="ti ti-star-filled" style="color:var(--accent);"></i>' : '<i class="ti ti-star" style="opacity:0.3;"></i>';
+    starEl.innerHTML = m.starred ? '<i class="ti ti-star-filled" style="color:#f59e0b;"></i>' : '<i class="ti ti-star" style="opacity:0.4;"></i>';
     starEl.style.cursor = "pointer";
     starEl.style.flexShrink = "0";
     starEl.addEventListener("click", async (e) => {
       e.stopPropagation();
       try {
         const res = await api(`/api/v2/mail/messages/${id}/star`, { method: 'PUT' });
-        starEl.innerHTML = res.starred ? '<i class="ti ti-star-filled" style="color:var(--accent);"></i>' : '<i class="ti ti-star" style="opacity:0.3;"></i>';
+        starEl.innerHTML = res.starred ? '<i class="ti ti-star-filled" style="color:#f59e0b;"></i>' : '<i class="ti ti-star" style="opacity:0.4;"></i>';
       } catch {}
     });
     row.appendChild(starEl);

@@ -4032,8 +4032,8 @@ body {
 
 /* Small button variant used inside the modal */
 .btn-small {
-  font-size: 0.88rem;
-  padding: 0.35rem 0.65rem;
+  font-size: 0.92rem;
+  padding: 0.4rem 0.7rem;
 }
 
 /* The pinned presence tile uses normal tile styles + a compact list inside the body */
@@ -11141,6 +11141,15 @@ body {
   width: 24px;
   text-align: center;
   cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 0.15s;
+}
+.mail-star:hover {
+  opacity: 1;
+}
+.mail-star.starred {
+  opacity: 1;
+  color: #f59e0b;
 }
 
 /* ── Attachment list in compose ───────────────────────────────────────── */
