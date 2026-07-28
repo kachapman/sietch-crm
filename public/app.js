@@ -16278,11 +16278,9 @@ function attachMailModalListeners() {
         overflowMenu.classList.add("hidden");
       }
     });
-    // Wire overflow menu items to actual toolbar buttons
-    $("#ovf-star")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-star")?.click(); });
-    $("#ovf-archive")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-archive")?.click(); });
+    // Wire overflow menu items
     $("#ovf-thread")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-thread-toggle")?.click(); });
-    $("#ovf-link")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-link-deal-btn")?.click(); });
+    $("#ovf-mark-all-read")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-mark-all-read")?.click(); });
   }
 
   // --- Mobile: Collapsible search ---
@@ -16295,15 +16293,38 @@ function attachMailModalListeners() {
   // --- Mobile: Folder/tag bottom sheet ---
   const foldersToggle = $("#mail-folders-toggle");
   const sideBarMobile = $(".mail-right-sidebar", modal);
+  const mobileFolderName = $("#mail-mobile-folder-name");
+  const mobileFolderLabel = $("#mail-mobile-folder-label");
+
+  function openMobileFolders() {
+    if (sideBarMobile) sideBarMobile.classList.add("mobile-open");
+  }
+  function closeMobileFolders() {
+    if (sideBarMobile) sideBarMobile.classList.remove("mobile-open");
+  }
+  function updateMobileFolderLabel(name) {
+    if (mobileFolderLabel) mobileFolderLabel.textContent = name || "Inbox";
+  }
+
   if (foldersToggle && sideBarMobile) {
-    foldersToggle.addEventListener("click", () => {
-      sideBarMobile.classList.toggle("mobile-open");
-    });
-    // Close bottom sheet when a folder or tag is clicked
+    foldersToggle.addEventListener("click", openMobileFolders);
     sideBarMobile.addEventListener("click", (e) => {
       if (e.target.closest(".mail-folder-btn") || e.target.closest(".mail-tag-item")) {
-        sideBarMobile.classList.remove("mobile-open");
+        closeMobileFolders();
       }
+    });
+  }
+  if (mobileFolderName) {
+    mobileFolderName.addEventListener("click", openMobileFolders);
+  }
+
+  // Update folder label when folder changes
+  const origFolderClick = folderList?.addEventListener;
+  if (folderList && !folderList.dataset.labelBound) {
+    folderList.dataset.labelBound = "1";
+    folderList.addEventListener("click", (e) => {
+      const btn = e.target.closest(".mail-folder-btn");
+      if (btn) updateMobileFolderLabel(btn.dataset.folder);
     });
   }
 }
@@ -16826,7 +16847,7 @@ function renderMailList(msgs) {
           overlay.className = 'mail-mobile-email-overlay';
           const backHeader = document.createElement('div');
           backHeader.style.cssText = 'display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.6rem; border-bottom:1px solid var(--border); background:var(--surface); flex-shrink:0;';
-          backHeader.innerHTML = '<button class="btn btn-ghost btn-small" id="mail-mobile-back"><i class="ti ti-arrow-left"></i><span class="btn-label"> Back</span></button><span style="font-weight:600; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(norm.subject || '') + '</span>';
+          backHeader.innerHTML = '<button class="btn btn-ghost btn-small" id="mail-mobile-back"><i class="ti ti-arrow-left"></i><span class="btn-label"> Back</span></button><span style="font-weight:600; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(fullMail.subject || fullMail.Subject || '') + '</span>';
           overlay.appendChild(backHeader);
           const content = document.createElement('div');
           content.style.cssText = 'flex:1; overflow-y:auto; padding:0.5rem;';

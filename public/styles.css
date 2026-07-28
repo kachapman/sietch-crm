@@ -3792,23 +3792,22 @@ body {
 .mail-toolbar .mail-folders-toggle { display: none; }
 
 @media (max-width: 600px) {
-  /* --- Fix 4: Card layout for mail rows --- */
+  /* --- Fix 4: Compact inline layout for mail rows --- */
   .mail-row.mail-header { display: none; }
   .mail-row {
-    flex-wrap: wrap;
-    gap: 0.15rem 0.4rem;
+    gap: 0.2rem 0.4rem;
     padding: 0.35rem 0.4rem;
     font-size: 0.82rem;
   }
   .mail-from {
-    width: 100%;
-    min-width: 0;
-    flex-basis: 100%;
+    width: 110px;
+    min-width: 60px;
+    flex-shrink: 1;
     font-size: 0.82rem;
   }
   .mail-subject {
-    width: 100%;
-    flex-basis: 100%;
+    flex: 1;
+    min-width: 0;
     font-size: 0.85rem;
   }
   .mail-snippet { display: none; }
@@ -3889,6 +3888,8 @@ body {
 
   /* --- Fix 8: Folder/tag bottom sheet --- */
   .mail-folders-toggle { display: flex; }
+  .mail-mobile-folder-name { display: flex !important; }
+  .mail-inbox-header .modal-title { display: none; }
   .mail-main-area { position: relative; }
   .mail-right-sidebar {
     position: fixed !important;
