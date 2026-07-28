@@ -15254,6 +15254,7 @@ async function openMailInboxModal() {
   await renderMailFolderList();
   await renderMailFolders();
   await renderMailTemplates();
+  await renderMailContacts();
   await renderMailUnreadBadge();
   await updateTrashCount();
   attachMailModalListeners();
@@ -16320,62 +16321,6 @@ function attachMailModalListeners() {
       if (!searchInput.value) searchInput.classList.remove("expanded");
     });
   }
-
-  // --- Mobile: Folder/tag bottom sheet ---
-  const foldersToggle = $("#mail-folders-toggle");
-  const sideBarMobile = $(".mail-right-sidebar", modal);
-  const mobileFolderName = $("#mail-mobile-folder-name");
-  const mobileFolderLabel = $("#mail-mobile-folder-label");
-
-  function updateMobileFolderLabel(name) {
-    if (mobileFolderLabel) mobileFolderLabel.textContent = name || "Inbox";
-  }
-
-  function openMobileFolders() {
-    let sheet = document.getElementById("mail-mobile-folders-sheet");
-    if (!sheet) {
-      sheet = document.createElement("div");
-      sheet.id = "mail-mobile-folders-sheet";
-      sheet.style.cssText = "position:fixed; bottom:0; left:0; right:0; z-index:10000; background:var(--surface); border-top:2px solid var(--border); border-radius:12px 12px 0 0; max-height:55vh; overflow-y:auto; transform:translateY(100%); transition:transform 0.25s ease;";
-      // Clone the sidebar content
-      const sidebar = $(".mail-right-sidebar");
-      if (sidebar) {
-        const content = sidebar.querySelector(".mail-sidebar-content");
-        if (content) sheet.appendChild(content.cloneNode(true));
-      }
-      document.body.appendChild(sheet);
-      // Wire folder clicks
-      sheet.querySelectorAll(".mail-folder-btn").forEach(btn => {
-        btn.addEventListener("click", () => {
-          mailState.activeFolder = btn.dataset.folder || "INBOX";
-          loadMailMessagesForModal();
-          sheet.style.transform = "translateY(100%)";
-          updateMobileFolderLabel(btn.dataset.folder);
-        });
-      });
-      // Wire tag clicks
-      sheet.querySelectorAll(".mail-tag-item").forEach(el => {
-        el.addEventListener("click", () => {
-          mailState.activeTag = el.dataset.tagTitle;
-          loadMailMessagesForModal();
-          sheet.style.transform = "translateY(100%)";
-        });
-      });
-    }
-    requestAnimationFrame(() => { sheet.style.transform = "translateY(0)"; });
-  }
-
-  function closeMobileFolders() {
-    const sheet = document.getElementById("mail-mobile-folders-sheet");
-    if (sheet) sheet.style.transform = "translateY(100%)";
-  }
-
-  if (foldersToggle) {
-    foldersToggle.addEventListener("click", openMobileFolders);
-  }
-  if (mobileFolderName) {
-    mobileFolderName.addEventListener("click", openMobileFolders);
-  }
 }
 
 async function loadMailAccountsForModal() {
@@ -16609,6 +16554,121 @@ async function renderMailTemplates() {
     });
   } catch (e) {
     tplList.innerHTML = '<p style="font-size:0.75rem; color:var(--muted);">Templates unavailable</p>';
+  }
+}
+
+async function renderMailContacts() {
+  const crmList = $("#crm-contact-list");
+  const userList = $("#mail-contact-list");
+
+  // Fetch both sources in parallel
+  const [crmData, userData] = await Promise.all([
+    api("/api/v2/contacts").catch(() => ({ contacts: [] })),
+    api("/api/v2/mail/contacts").catch(() => ({ contacts: [] })),
+  ]);
+
+  // Render CRM contacts
+  const crmContacts = crmData.contacts || crmData || [];
+  if (crmList) {
+    const list = Array.isArray(crmContacts) ? crmContacts : [];
+    crmList.innerHTML = list.length
+      ? list.map(c => {
+          const name = [c.first_name, c.last_name].filter(Boolean).join(" ") || c.displayName || c.email || "";
+          return `<div class="mail-contact-item" data-email="${escapeHtml(c.email || "")}" data-name="${escapeHtml(name)}">
+            <div class="mail-contact-name">${escapeHtml(name || c.email || "")}</div>
+            <div class="mail-contact-email">${escapeHtml(c.email || "")}</div>
+          </div>`;
+        }).join("")
+      : '<p style="color:var(--muted);font-size:0.7rem;">No CRM contacts</p>';
+  }
+
+  // Render user contacts
+  const userContacts = userData.contacts || [];
+  if (userList) {
+    userList.innerHTML = userContacts.length
+      ? userContacts.map(c => `
+          <div class="mail-contact-item" data-email="${escapeHtml(c.email || "")}" data-name="${escapeHtml(c.name || c.email || "")}">
+            <div class="mail-contact-name">${escapeHtml(c.name || c.email || "")}</div>
+            <div class="mail-contact-email">${escapeHtml(c.email || "")}</div>
+          </div>`).join("")
+      : '<p style="color:var(--muted);font-size:0.7rem;">No contacts yet</p>';
+  }
+
+  // Wire click handlers
+  document.querySelectorAll(".mail-contact-item").forEach(item => {
+    item.addEventListener("click", () => {
+      const email = item.dataset.email;
+      const name = item.dataset.name;
+      if (!email) return;
+      const addr = name ? `${name} <${email}>` : email;
+
+      const composeModal = $("#compose-email-modal");
+      if (composeModal && !composeModal.classList.contains("hidden")) {
+        // Compose is open — insert into focused field
+        const active = document.activeElement;
+        if (active && (active.id === "compose-to" || active.id === "compose-cc" || active.id === "compose-bcc")) {
+          const parts = active.value.split(",").map(s => s.trim());
+          parts[parts.length - 1] = parts[parts.length - 1] ? parts[parts.length - 1] + ", " + addr : addr;
+          active.value = parts.join(", ");
+        } else {
+          const toInput = $("#compose-to");
+          if (toInput) toInput.value = toInput.value ? toInput.value + ", " + addr : addr;
+        }
+      } else {
+        openComposeModal({ to: addr });
+      }
+    });
+  });
+
+  // Wire import/export/add buttons
+  const importBtn = $("#mail-contact-import");
+  if (importBtn && !importBtn.dataset.bound) {
+    importBtn.dataset.bound = "1";
+    importBtn.addEventListener("click", () => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = ".csv";
+      input.addEventListener("change", async () => {
+        const file = input.files[0];
+        if (!file) return;
+        const text = await file.text();
+        try {
+          const result = await api("/api/v2/mail/contacts/import", {
+            method: "POST",
+            body: JSON.stringify({ csv: text }),
+          });
+          showToast(`Imported ${result.imported || 0} contacts`);
+          renderMailContacts();
+        } catch (e) { showToast("Import failed: " + e.message, true); }
+      });
+      input.click();
+    });
+  }
+
+  const exportBtn = $("#mail-contact-export");
+  if (exportBtn && !exportBtn.dataset.bound) {
+    exportBtn.dataset.bound = "1";
+    exportBtn.addEventListener("click", () => {
+      window.open("/api/v2/mail/contacts/export", "_blank");
+    });
+  }
+
+  const addBtn = $("#mail-contact-add");
+  if (addBtn && !addBtn.dataset.bound) {
+    addBtn.dataset.bound = "1";
+    addBtn.addEventListener("click", async () => {
+      const email = prompt("Email address:");
+      if (!email || !email.includes("@")) return;
+      const name = prompt("Name (optional):");
+      try {
+        await api("/api/v2/mail/contacts", {
+          method: "POST",
+          body: JSON.stringify({ email, name: name || "" }),
+        });
+        showToast("Contact added");
+        renderMailContacts();
+      } catch (e) { showToast("Failed: " + e.message, true); }
+    });
   }
 }
 

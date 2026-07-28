@@ -3789,8 +3789,6 @@ body {
 }
 /* Desktop: overflow + folder button hidden */
 .mail-toolbar .toolbar-overflow-btn { display: none; }
-.mail-toolbar .mail-folders-toggle { display: none; }
-.mail-toolbar .mail-mobile-folder-name { display: none; }
 .mail-toolbar .mail-search-icon { display: none; }
 
 @media (max-width: 600px) {
@@ -3889,11 +3887,23 @@ body {
     pointer-events: auto;
   }
 
-  /* --- Fix 8: Folder/tag bottom sheet --- */
-  .mail-folders-toggle { display: flex; }
-  .mail-mobile-folder-name { display: flex !important; }
-  .mail-inbox-header .modal-title { display: none; }
-  .mail-sidebar-toggle { display: none !important; }
+  /* --- Mobile sidebar: starts collapsed, expandable via toggle --- */
+  .mail-right-sidebar {
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    padding: 0 !important;
+    overflow: hidden;
+    border-left: none;
+  }
+  .mail-right-sidebar:not(.mail-sidebar-collapsed) {
+    width: 180px !important;
+    min-width: 180px !important;
+    max-width: 200px !important;
+    padding: 0.5rem !important;
+    overflow: auto;
+    border-left: 1px solid var(--border);
+  }
 
   /* --- Fix 5: Full-screen overlay base (JS creates it) --- */
   .mail-header { font-size: 0.78rem; }
@@ -3902,6 +3912,28 @@ body {
 /* --- Fix 5: Desktop overlay safety --- */
 @media (min-width: 601px) {
   .mail-mobile-email-overlay { display: none !important; }
+}
+.mail-contact-item {
+  padding: 3px 0.4rem;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.mail-contact-item:hover {
+  background: var(--hover);
+}
+.mail-contact-name {
+  font-size: 0.78rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-contact-email {
+  font-size: 0.68rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .scanner-log {
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
