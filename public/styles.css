@@ -3908,7 +3908,17 @@ body {
   .mail-header { font-size: 0.78rem; }
 }
 
-/* --- Fix 5: Desktop overlay safety --- */
+/* Mobile email overlay — base styles */
+.mail-mobile-email-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* Desktop: hide overlay */
 @media (min-width: 601px) {
   .mail-mobile-email-overlay { display: none !important; }
 }

@@ -5714,16 +5714,32 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             import io
             reader = csv.DictReader(io.StringIO(content.decode("utf-8")))
             count = 0
+            is_gmail = "E-mail 1 - Value" in (reader.fieldnames or [])
             for row in reader:
-                email = row.get("email", "").strip()
-                if not email:
-                    continue
+                if is_gmail:
+                    email = (row.get("E-mail 1 - Value") or "").strip()
+                    if not email:
+                        continue
+                    first = (row.get("First Name") or "").strip()
+                    middle = (row.get("Middle Name") or "").strip()
+                    last = (row.get("Last Name") or "").strip()
+                    name = " ".join(filter(None, [first, middle, last]))
+                    company = (row.get("Organization Name") or "").strip()
+                    phone = (row.get("Phone 1 - Value") or "").strip()
+                    notes = (row.get("Notes") or "").strip()
+                else:
+                    email = (row.get("email") or "").strip()
+                    if not email:
+                        continue
+                    name = (row.get("name") or "").strip()
+                    company = (row.get("company") or "").strip()
+                    phone = (row.get("phone") or "").strip()
+                    notes = (row.get("notes") or "").strip()
                 db.execute(
                     """INSERT INTO mail_contacts (user_id, email, name, company, phone, notes)
                        VALUES (%s, %s, %s, %s, %s, %s)
                        ON CONFLICT (user_id, email) DO UPDATE SET name=EXCLUDED.name, company=EXCLUDED.company""",
-                    (user["id"], email, row.get("name", ""), row.get("company", ""),
-                     row.get("phone", ""), row.get("notes", "")),
+                    (user["id"], email, name, company, phone, notes),
                 )
                 count += 1
             _json_response(self, 200, {"ok": True, "imported": count})
