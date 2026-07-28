@@ -3484,7 +3484,7 @@ body {
     max-width: none;
     order: -1;
   }
-  #mail-mark-read, #mail-mark-unread, #mail-clear-selection {
+  #mail-mark-read, #mail-mark-unread, #mail-delete {
     display: none;
   }
 }
@@ -3790,6 +3790,8 @@ body {
 /* Desktop: overflow + folder button hidden */
 .mail-toolbar .toolbar-overflow-btn { display: none; }
 .mail-toolbar .mail-folders-toggle { display: none; }
+.mail-toolbar .mail-mobile-folder-name { display: none; }
+.mail-toolbar .mail-search-icon { display: none; }
 
 @media (max-width: 600px) {
   /* --- Fix 4: Compact inline layout for mail rows --- */
@@ -3870,49 +3872,27 @@ body {
   }
 
   /* --- Fix 7: Collapsible search --- */
+  .mail-search-icon { display: flex; }
   .mail-search {
-    flex: 0 0 auto;
-    width: 36px;
-    min-width: 0;
-    padding: 0;
-    overflow: hidden;
-    transition: width 0.2s, padding 0.2s;
+    position: absolute;
+    left: 0; top: 0; right: 0;
+    width: 100%;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s;
+    z-index: 10;
+    flex: none;
+    max-width: none;
   }
-  .mail-search:focus-within,
   .mail-search.expanded {
-    flex: 1 1 100%;
-    width: auto;
-    order: -1;
-    padding: 0.3rem 0.5rem;
+    opacity: 1;
+    pointer-events: auto;
   }
 
   /* --- Fix 8: Folder/tag bottom sheet --- */
   .mail-folders-toggle { display: flex; }
   .mail-mobile-folder-name { display: flex !important; }
   .mail-inbox-header .modal-title { display: none; }
-  .mail-main-area { position: relative; }
-  .mail-right-sidebar {
-    position: fixed !important;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    top: auto !important;
-    width: 100% !important;
-    min-width: 0 !important;
-    max-width: 100% !important;
-    max-height: 55vh;
-    transform: translateY(100%);
-    transition: transform 0.25s ease;
-    z-index: 9999;
-    border-top: 2px solid var(--border);
-    border-left: none;
-    background: var(--surface);
-    overflow-y: auto;
-    border-radius: 12px 12px 0 0;
-  }
-  .mail-right-sidebar.mobile-open {
-    transform: translateY(0);
-  }
   .mail-sidebar-toggle { display: none !important; }
 
   /* --- Fix 5: Full-screen overlay base (JS creates it) --- */

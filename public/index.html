@@ -468,9 +468,6 @@
     <div class="modal-card mail-inbox-card">
       <div class="mail-inbox-header">
         <h2 id="mail-inbox-title" class="modal-title" style="white-space:nowrap;">Email</h2>
-        <button type="button" id="mail-mobile-folder-name" class="btn btn-ghost btn-small mail-mobile-folder-name" style="display:none; font-weight:600; font-size:0.9rem;">
-          <i class="ti ti-folder" style="margin-right:0.2rem;"></i><span id="mail-mobile-folder-label">Inbox</span> <i class="ti ti-chevron-down" style="font-size:0.7rem;"></i>
-        </button>
         <div class="mail-inbox-tabs" id="mail-inbox-tabs">
           <!-- tabs populated by JS based on accounts -->
         </div>
@@ -494,23 +491,35 @@
             <path d="M3 7l9 6l9 -6" />
           </svg>
         </button>
-        <input type="search" id="mail-search-input" class="mail-search" placeholder="Search subject or from..." autocomplete="off" />
+        <div style="position:relative;">
+          <button type="button" id="mail-search-icon" class="btn btn-ghost btn-small mail-search-icon" title="Search">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M11 19h-6a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v4.5"/><path d="M15 18a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M20.2 20.2l1.8 1.8"/><path d="M3 7l9 6l9 -6"/></svg>
+          </button>
+          <input type="search" id="mail-search-input" class="mail-search" placeholder="Search subject or from..." autocomplete="off" />
+        </div>
         <button type="button" id="mail-select-all" class="btn btn-ghost btn-small" title="Select all"><i class="ti ti-checkbox"></i></button>
+        <button type="button" id="mail-clear-selection" class="btn btn-ghost btn-small" disabled title="Clear selection"><i class="ti ti-x"></i></button>
         <button type="button" id="mail-mark-read" class="btn btn-ghost btn-small" disabled title="Mark read"><i class="ti ti-mail-open"></i></button>
         <button type="button" id="mail-mark-unread" class="btn btn-ghost btn-small" disabled title="Mark unread"><i class="ti ti-mail"></i></button>
         <button type="button" id="mail-delete" class="btn btn-ghost btn-small" disabled title="Delete selected"><i class="ti ti-trash"></i></button>
-        <button type="button" id="mail-clear-selection" class="btn btn-ghost btn-small" disabled title="Clear selection"><i class="ti ti-x"></i></button>
         <button type="button" id="mail-mark-all-read" class="btn btn-ghost btn-small" title="Mark all loaded as read"><i class="ti ti-mail-opened"></i></button>
-        <button type="button" id="mail-star" class="btn btn-ghost btn-small" disabled title="Star/flag"><i class="ti ti-star"></i></button>
-        <button type="button" id="mail-archive" class="btn btn-ghost btn-small" disabled title="Archive"><i class="ti ti-archive"></i></button>
-        <select id="mail-move-folder" class="btn btn-ghost btn-small" disabled title="Move to folder" style="padding:0.2rem 0.3rem; font-size:0.8rem;">
-          <option value="">Move to...</option>
-          <option value="INBOX">Inbox</option>
-          <option value="Sent">Sent</option>
-          <option value="Archive">Archive</option>
-          <option value="Trash">Trash</option>
-        </select>
+        <button type="button" id="mail-star" class="btn btn-ghost btn-small toolbar-secondary" disabled title="Star/flag"><i class="ti ti-star"></i></button>
+        <button type="button" id="mail-archive" class="btn btn-ghost btn-small toolbar-secondary" disabled title="Archive"><i class="ti ti-archive"></i></button>
+        <div style="position:relative;">
+          <button type="button" id="mail-move-folder-btn" class="btn btn-ghost btn-small" disabled title="Move to folder">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M6 6v6a3 3 0 0 0 3 3h10l-4 -4m0 8l4 -4"/></svg><span class="btn-label"> Move to...</span>
+          </button>
+          <div id="mail-move-dropdown" class="mail-link-deal-dropdown hidden" style="min-width:140px;">
+            <button type="button" class="move-folder-option" data-folder="INBOX" style="display:block;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;font-size:0.85rem;color:var(--text);">Inbox</button>
+            <button type="button" class="move-folder-option" data-folder="Sent" style="display:block;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;font-size:0.85rem;color:var(--text);">Sent</button>
+            <button type="button" class="move-folder-option" data-folder="Archive" style="display:block;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;font-size:0.85rem;color:var(--text);">Archive</button>
+            <button type="button" class="move-folder-option" data-folder="Trash" style="display:block;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;font-size:0.85rem;color:var(--text);">Trash</button>
+          </div>
+        </div>
         <button type="button" id="mail-refresh" class="btn btn-ghost btn-small" title="Refresh"><i class="ti ti-refresh"></i></button>
+        <button type="button" id="mail-mobile-folder-name" class="btn btn-ghost btn-small mail-mobile-folder-name" style="display:none; font-weight:600;">
+          <i class="ti ti-folder"></i> <span id="mail-mobile-folder-label">Inbox</span> <i class="ti ti-chevron-down" style="font-size:0.6rem;"></i>
+        </button>
         <button type="button" id="mail-thread-toggle" class="btn btn-ghost btn-small toolbar-secondary" title="Toggle threaded view"><i class="ti ti-message"></i></button>
         <div style="position:relative; margin-left:0.25rem;">
           <button type="button" id="mail-link-deal-btn" class="btn btn-ghost btn-small" title="Link to deal" disabled><i class="ti ti-link"></i></button>
@@ -524,6 +533,8 @@
         <div style="position:relative;">
           <button type="button" id="mail-toolbar-overflow" class="btn btn-ghost btn-small toolbar-overflow-btn" title="More actions"><i class="ti ti-dots-vertical"></i></button>
           <div id="mail-toolbar-overflow-menu" class="toolbar-overflow-dropdown hidden">
+            <button type="button" id="ovf-star"><i class="ti ti-star"></i> Star</button>
+            <button type="button" id="ovf-archive"><i class="ti ti-archive"></i> Archive</button>
             <button type="button" id="ovf-thread"><i class="ti ti-message"></i> Threads</button>
             <button type="button" id="ovf-mark-all-read"><i class="ti ti-mail-opened"></i> Mark all read</button>
           </div>

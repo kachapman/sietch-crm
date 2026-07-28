@@ -16159,18 +16159,26 @@ function attachMailModalListeners() {
     });
   }
 
-  // Move folder select
-  const moveFolder = $("#mail-move-folder");
-  if (moveFolder) {
-    moveFolder.addEventListener("change", async () => {
-      const folder = moveFolder.value;
-      if (!folder || !mailState.selected.size) return;
-      for (const mid of mailState.selected) {
-        try { await api(`/api/v2/mail/messages/${mid}/move`, { method: 'PUT', body: JSON.stringify({ folder }) }); } catch {}
-      }
-      mailState.selected.clear();
-      moveFolder.value = '';
-      await loadMailMessagesForModal();
+  // Move folder dropdown
+  const moveBtn = $("#mail-move-folder-btn");
+  const moveDropdown = $("#mail-move-dropdown");
+  if (moveBtn && moveDropdown) {
+    moveBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      moveDropdown.classList.toggle("hidden");
+    });
+    document.addEventListener("click", () => moveDropdown.classList.add("hidden"));
+    moveDropdown.querySelectorAll(".move-folder-option").forEach(opt => {
+      opt.addEventListener("click", async () => {
+        const folder = opt.dataset.folder;
+        moveDropdown.classList.add("hidden");
+        if (!folder || !mailState.selected.size) return;
+        for (const mid of mailState.selected) {
+          try { await api(`/api/v2/mail/messages/${mid}/move`, { method: 'PUT', body: JSON.stringify({ folder }) }); } catch {}
+        }
+        mailState.selected.clear();
+        await loadMailMessagesForModal();
+      });
     });
   }
 
@@ -16279,15 +16287,38 @@ function attachMailModalListeners() {
       }
     });
     // Wire overflow menu items
+    $("#ovf-star")?.addEventListener("click", async () => {
+      overflowMenu.classList.add("hidden");
+      if (!mailState.selected.size) return;
+      for (const mid of mailState.selected) {
+        try { await api(`/api/v2/mail/messages/${mid}/star`, { method: 'PUT' }); } catch {}
+      }
+      loadMailMessagesForModal();
+    });
+    $("#ovf-archive")?.addEventListener("click", async () => {
+      overflowMenu.classList.add("hidden");
+      if (!mailState.selected.size) return;
+      for (const mid of mailState.selected) {
+        try { await api(`/api/v2/mail/messages/${mid}/archive`, { method: 'PUT' }); } catch {}
+      }
+      mailState.selected.clear();
+      loadMailMessagesForModal();
+    });
     $("#ovf-thread")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-thread-toggle")?.click(); });
     $("#ovf-mark-all-read")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-mark-all-read")?.click(); });
   }
 
   // --- Mobile: Collapsible search ---
+  const searchIcon = $("#mail-search-icon");
   const searchInput = $("#mail-search-input");
-  if (searchInput) {
-    searchInput.addEventListener("focus", () => searchInput.classList.add("expanded"));
-    searchInput.addEventListener("blur", () => { if (!searchInput.value) searchInput.classList.remove("expanded"); });
+  if (searchIcon && searchInput) {
+    searchIcon.addEventListener("click", () => {
+      searchInput.classList.add("expanded");
+      searchInput.focus();
+    });
+    searchInput.addEventListener("blur", () => {
+      if (!searchInput.value) searchInput.classList.remove("expanded");
+    });
   }
 
   // --- Mobile: Folder/tag bottom sheet ---
@@ -16296,36 +16327,54 @@ function attachMailModalListeners() {
   const mobileFolderName = $("#mail-mobile-folder-name");
   const mobileFolderLabel = $("#mail-mobile-folder-label");
 
-  function openMobileFolders() {
-    if (sideBarMobile) sideBarMobile.classList.add("mobile-open");
-  }
-  function closeMobileFolders() {
-    if (sideBarMobile) sideBarMobile.classList.remove("mobile-open");
-  }
   function updateMobileFolderLabel(name) {
     if (mobileFolderLabel) mobileFolderLabel.textContent = name || "Inbox";
   }
 
-  if (foldersToggle && sideBarMobile) {
-    foldersToggle.addEventListener("click", openMobileFolders);
-    sideBarMobile.addEventListener("click", (e) => {
-      if (e.target.closest(".mail-folder-btn") || e.target.closest(".mail-tag-item")) {
-        closeMobileFolders();
+  function openMobileFolders() {
+    let sheet = document.getElementById("mail-mobile-folders-sheet");
+    if (!sheet) {
+      sheet = document.createElement("div");
+      sheet.id = "mail-mobile-folders-sheet";
+      sheet.style.cssText = "position:fixed; bottom:0; left:0; right:0; z-index:10000; background:var(--surface); border-top:2px solid var(--border); border-radius:12px 12px 0 0; max-height:55vh; overflow-y:auto; transform:translateY(100%); transition:transform 0.25s ease;";
+      // Clone the sidebar content
+      const sidebar = $(".mail-right-sidebar");
+      if (sidebar) {
+        const content = sidebar.querySelector(".mail-sidebar-content");
+        if (content) sheet.appendChild(content.cloneNode(true));
       }
-    });
+      document.body.appendChild(sheet);
+      // Wire folder clicks
+      sheet.querySelectorAll(".mail-folder-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          mailState.activeFolder = btn.dataset.folder || "INBOX";
+          loadMailMessagesForModal();
+          sheet.style.transform = "translateY(100%)";
+          updateMobileFolderLabel(btn.dataset.folder);
+        });
+      });
+      // Wire tag clicks
+      sheet.querySelectorAll(".mail-tag-item").forEach(el => {
+        el.addEventListener("click", () => {
+          mailState.activeTag = el.dataset.tagTitle;
+          loadMailMessagesForModal();
+          sheet.style.transform = "translateY(100%)";
+        });
+      });
+    }
+    requestAnimationFrame(() => { sheet.style.transform = "translateY(0)"; });
+  }
+
+  function closeMobileFolders() {
+    const sheet = document.getElementById("mail-mobile-folders-sheet");
+    if (sheet) sheet.style.transform = "translateY(100%)";
+  }
+
+  if (foldersToggle) {
+    foldersToggle.addEventListener("click", openMobileFolders);
   }
   if (mobileFolderName) {
     mobileFolderName.addEventListener("click", openMobileFolders);
-  }
-
-  // Update folder label when folder changes
-  const origFolderClick = folderList?.addEventListener;
-  if (folderList && !folderList.dataset.labelBound) {
-    folderList.dataset.labelBound = "1";
-    folderList.addEventListener("click", (e) => {
-      const btn = e.target.closest(".mail-folder-btn");
-      if (btn) updateMobileFolderLabel(btn.dataset.folder);
-    });
   }
 }
 
@@ -16831,39 +16880,43 @@ function renderMailList(msgs) {
         } catch (err) { showToast('Failed to load draft: ' + err.message, true); }
         return;
       }
-      // Mobile: full-screen overlay
+      // Fetch once, then branch mobile/desktop
       const isMobile = window.innerWidth <= 600;
+      let fullMail;
       try {
-        const fullMail = await fetchMailMessage(id);
-        if (getMailMessageIsRead(fullMail)) {
-          mailDashboardReadIds.add(id);
-          saveMailDashboardReadIds();
-        }
-        markMailMessageRead(id).catch(() => {});
-        row.classList.add('mail-row-read');
-
-        if (isMobile) {
-          const overlay = document.createElement('div');
-          overlay.className = 'mail-mobile-email-overlay';
-          const backHeader = document.createElement('div');
-          backHeader.style.cssText = 'display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.6rem; border-bottom:1px solid var(--border); background:var(--surface); flex-shrink:0;';
-          backHeader.innerHTML = '<button class="btn btn-ghost btn-small" id="mail-mobile-back"><i class="ti ti-arrow-left"></i><span class="btn-label"> Back</span></button><span style="font-weight:600; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(fullMail.subject || fullMail.Subject || '') + '</span>';
-          overlay.appendChild(backHeader);
-          const content = document.createElement('div');
-          content.style.cssText = 'flex:1; overflow-y:auto; padding:0.5rem;';
-          const embed = document.createElement('div');
-          embed.className = 'opp-preview-mail-embed';
-          content.appendChild(embed);
-          overlay.appendChild(content);
-          document.body.appendChild(overlay);
-          renderMailEmbedPanel(embed, fullMail, id, { openUrl: portalMailMessageUrl(id) });
-          backHeader.querySelector('#mail-mobile-back').addEventListener('click', () => overlay.remove());
-          const closeH = (ev) => { if (ev.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', closeH); } };
-          document.addEventListener('keydown', closeH);
-          return;
-        }
+        fullMail = await fetchMailMessage(id);
       } catch (err) {
-        if (isMobile) { showToast('Failed to load: ' + err.message, true); return; }
+        if (isMobile) showToast('Failed to load: ' + err.message, true);
+        else detail.innerHTML = `<div class="mail-empty">Failed to load: ${escapeHtml(err.message || err)}</div>`;
+        return;
+      }
+      if (getMailMessageIsRead(fullMail)) {
+        mailDashboardReadIds.add(id);
+        saveMailDashboardReadIds();
+      }
+      markMailMessageRead(id).catch(() => {});
+      row.classList.add('mail-row-read');
+
+      if (isMobile) {
+        // Mobile: full-screen overlay
+        const overlay = document.createElement('div');
+        overlay.className = 'mail-mobile-email-overlay';
+        const backHeader = document.createElement('div');
+        backHeader.style.cssText = 'display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.6rem; border-bottom:1px solid var(--border); background:var(--surface); flex-shrink:0;';
+        backHeader.innerHTML = '<button class="btn btn-ghost btn-small" id="mail-mobile-back"><i class="ti ti-arrow-left"></i><span class="btn-label"> Back</span></button><span style="font-weight:600; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(fullMail.subject || fullMail.Subject || '') + '</span>';
+        overlay.appendChild(backHeader);
+        const content = document.createElement('div');
+        content.style.cssText = 'flex:1; overflow-y:auto; padding:0.5rem;';
+        const embed = document.createElement('div');
+        embed.className = 'opp-preview-mail-embed';
+        content.appendChild(embed);
+        overlay.appendChild(content);
+        document.body.appendChild(overlay);
+        renderMailEmbedPanel(embed, fullMail, id, { openUrl: portalMailMessageUrl(id) });
+        backHeader.querySelector('#mail-mobile-back').addEventListener('click', () => overlay.remove());
+        const closeH = (ev) => { if (ev.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', closeH); } };
+        document.addEventListener('keydown', closeH);
+        return;
       }
 
       // Desktop: inline expansion
@@ -16872,28 +16925,11 @@ function renderMailList(msgs) {
       if (!isHidden) return;
       if (item._mailLoaded) return;
       item._mailLoaded = true;
-      detail.innerHTML = '<div class="mail-loading">Loading full email…</div>';
-      try {
-        if (!isMobile) {
-          // fullMail already fetched above for mobile path, re-fetch for desktop
-          const fullMail2 = await fetchMailMessage(id);
-          detail.innerHTML = "";
-          const embed2 = document.createElement("div");
-          embed2.className = "opp-preview-mail-embed";
-          detail.appendChild(embed2);
-          renderMailEmbedPanel(embed2, fullMail2, id, {
-            openUrl: portalMailMessageUrl(id)
-          });
-          if (getMailMessageIsRead(fullMail2)) {
-            mailDashboardReadIds.add(id);
-            saveMailDashboardReadIds();
-          }
-          markMailMessageRead(id).catch(() => {});
-          row.classList.add('mail-row-read');
-        }
-      } catch (e) {
-        detail.innerHTML = `<div class="mail-empty">Failed to load full email: ${escapeHtml(e.message || e)}</div>`;
-      }
+      detail.innerHTML = "";
+      const embed = document.createElement("div");
+      embed.className = "opp-preview-mail-embed";
+      detail.appendChild(embed);
+      renderMailEmbedPanel(embed, fullMail, id, { openUrl: portalMailMessageUrl(id) });
     });
 
     list.appendChild(item);
@@ -16910,7 +16946,7 @@ function updateMailSelectedInfo() {
   const linkDealBtn = $("#mail-link-deal-btn");
   const starBtn = $("#mail-star");
   const archiveBtn = $("#mail-archive");
-  const moveFolder = $("#mail-move-folder");
+  const moveBtn = $("#mail-move-folder-btn");
   if (markReadBtn) markReadBtn.disabled = !hasSel;
   if (markUnreadBtn) markUnreadBtn.disabled = !hasSel;
   if (delBtn) delBtn.disabled = !hasSel;
@@ -16918,7 +16954,7 @@ function updateMailSelectedInfo() {
   if (linkDealBtn) linkDealBtn.disabled = !hasSel;
   if (starBtn) starBtn.disabled = !hasSel;
   if (archiveBtn) archiveBtn.disabled = !hasSel;
-  if (moveFolder) moveFolder.disabled = !hasSel;
+  if (moveBtn) moveBtn.disabled = !hasSel;
 }
 
 async function markMailMessageRead(messageId) {
