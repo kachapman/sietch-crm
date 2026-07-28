@@ -7,6 +7,7 @@
   --muted: #8b95a8;
   --accent: #4f8cff;
   --accent-soft: rgba(79, 140, 255, 0.15);
+  --accent-subtle: rgba(79, 140, 255, 0.1);
   --accent-text: #fff;
   --success: #3ecf8e;
   --warn: #f0b429;
@@ -3689,6 +3690,7 @@ body {
 .mail-row input[type="checkbox"] {
   margin-top: 0.2rem;
   flex-shrink: 0;
+  accent-color: var(--accent);
 }
 .mail-from {
   width: 160px;
@@ -3962,6 +3964,7 @@ body {
 .mail-toolbar .btn-ghost { color: var(--text); opacity: 0.8; }
 .mail-toolbar .btn-ghost:hover { opacity: 1; }
 .mail-toolbar .btn-ghost:disabled { opacity: 0.4; }
+.mail-toolbar .btn-ghost i { font-size: 1.125rem; }
 .mail-toolbar input[type="search"] { background: var(--bg); color: var(--text); border-color: var(--border); }
 /* Emoji picker as a floating overlay (used by inline DM) */
 .presence-emoji-picker-overlay {

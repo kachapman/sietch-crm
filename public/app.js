@@ -5479,7 +5479,7 @@ ${preview.innerHTML}
 
 async function copyNotesClipboard(text, okMessage) {
   try {
-    await navigator.clipboard.writeText(text);
+    await safeCopyToClipboard(text);
     showToast(okMessage || "Copied to clipboard");
   } catch {
     showToast("Could not copy to clipboard", true);
@@ -15115,6 +15115,20 @@ function bindMessagesPopup() {
 // Expose a tiny helper so other code (e.g. after a successful login) can kick the feature
 window.__ensurePresenceOnLogin = ensurePresenceOnLogin;
 
+function safeCopyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text);
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand("copy");
+  document.body.removeChild(ta);
+  return Promise.resolve();
+}
+
 /* ==================== CRM Mail Inbox (large popup with list, pagination, actions, quick link) ==================== */
 let mailState = {
   accounts: [],
@@ -17969,7 +17983,7 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
   starBtn.innerHTML = '<i class="ti ti-star"></i>';
   starBtn.addEventListener("click", async () => {
     try {
-      await api(`/api/v2/mail/messages/${encodeURIComponent(messageId)}/star`, { method: "POST" });
+      await api(`/api/v2/mail/messages/${encodeURIComponent(messageId)}/star`, { method: "PUT" });
       starBtn.innerHTML = '<i class="ti ti-star-filled"></i>';
       showToast("Message starred");
     } catch (e) { showToast("Failed to star message: " + (e.message || e), true); }
@@ -18924,9 +18938,9 @@ async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, 
       badge.className = "opp-project-number-badge";
       badge.textContent = `#${projNum}`;
       badge.title = "Click to copy project number";
-      badge.style.cssText = "background:var(--bg-elevated); padding:0.2rem 0.5rem; border-radius:4px; cursor:pointer; font-size:0.85rem; color:var(--muted); margin-left:0.5rem;";
+      badge.style.cssText = "background:var(--bg-elevated); padding:0.2rem 0.5rem; border-radius:4px; cursor:pointer; font-size:0.85rem; color:var(--text); margin-left:0.5rem;";
       badge.addEventListener("click", () => {
-        navigator.clipboard.writeText(`#${projNum}`).then(() => showToast("Copied to clipboard")).catch(() => {});
+        safeCopyToClipboard(`#${projNum}`).then(() => showToast("Copied to clipboard")).catch(() => {});
       });
       const actionsEl = titleEl.parentElement?.querySelector('.opp-preview-head-actions');
       if (actionsEl) titleEl.parentElement.insertBefore(badge, actionsEl);
@@ -21937,7 +21951,7 @@ function bindBotCustomersModal() {
   $("#bot-code-copy-btn")?.addEventListener("click", () => {
     const val = $("#bot-code-value");
     if (!val || !val.textContent) return;
-    navigator.clipboard.writeText(val.textContent).then(() => {
+    safeCopyToClipboard(val.textContent).then(() => {
       showToast("Copied!");
     }).catch(() => {
       showToast("Failed to copy", true);

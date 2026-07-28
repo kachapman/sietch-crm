@@ -965,15 +965,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         # Star/Archive/Move/Reply/Forward
         m = re.match(r"^/api/v2/mail/messages/(\d+)/star$", api_path)
-        if m and method == "GET":
+        if m:
             self._handle_mail_message_star(int(m.group(1)))
             return
         m = re.match(r"^/api/v2/mail/messages/(\d+)/reply$", api_path)
-        if m and method == "GET":
+        if m:
             self._handle_mail_message_reply(int(m.group(1)))
             return
         m = re.match(r"^/api/v2/mail/messages/(\d+)/forward$", api_path)
-        if m and method == "GET":
+        if m:
             self._handle_mail_message_forward(int(m.group(1)))
             return
         # Contacts
@@ -987,12 +987,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_mail_contacts_export()
             return
         m = re.match(r"^/api/v2/mail/contacts/(\d+)$", api_path)
-        if m and method == "GET":
+        if m:
             self._handle_mail_contact_get(int(m.group(1)))
             return
         # Signature
         m = re.match(r"^/api/v2/mail/accounts/(\d+)/signature$", api_path)
-        if m and method == "GET":
+        if m:
             self._handle_mail_account_signature_get(int(m.group(1)))
             return
         # Threads
@@ -1001,6 +1001,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if api_path == "/api/v2/mail/trash-count":
             self._handle_mail_trash_count()
+            return
+        if api_path == "/api/v2/mail/drafts":
+            self._handle_mail_drafts_get()
             return
 
         self.send_error(404)
@@ -4900,6 +4903,26 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"count": row["cnt"] if row else 0})
         except Exception as e:
             logger.exception("Failed to get trash count")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_drafts_get(self) -> None:
+        qs = parse_qs(urlparse(self.path).query)
+        account_id = qs.get("account_id", [None])[0]
+        try:
+            where = "status = 'draft'"
+            params: tuple = ()
+            if account_id and account_id != 'crm':
+                try:
+                    where += " AND account_id = %s"
+                    params = (int(account_id),)
+                except (ValueError, TypeError):
+                    pass
+            rows = db.query_dicts(
+                f"SELECT * FROM mail_outgoing WHERE {where} ORDER BY created_at DESC LIMIT 50",
+                params,
+            )
+            _json_response(self, 200, {"drafts": rows})
+        except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_empty_trash(self) -> None:
