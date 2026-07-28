@@ -16101,7 +16101,10 @@ function attachMailModalListeners() {
   const starBtn = $("#mail-star");
   if (starBtn) {
     starBtn.addEventListener("click", async () => {
-      if (!mailState.selected.size) return;
+      if (!mailState.selected.size) {
+        showToast("Select messages first (click checkboxes)");
+        return;
+      }
       for (const mid of mailState.selected) {
         try { await api(`/api/v2/mail/messages/${mid}/star`, { method: 'PUT' }); } catch {}
       }
