@@ -2,6 +2,17 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — Final Polish & Bug Fixes (2026-07-28)
+
+- **Duplicate folders fixed (root cause).** Database had 12 rows (two identical sets of 6 system folders). Cleaned to 6 rows. Added missing columns (`imap_account_id`, `folder_type`, `imap_path`, `last_sync`) to `mail_folders` table. Server uses `DISTINCT ON (name)` to prevent future duplicates.
+- **Scanner log terminal UI.** Log entries now formatted as `[HH:MM:SS] STATUS: subject` with monospace font, dark background (#0d1117), and color coding (green=processed, red=error, yellow=skipped, purple=rule match).
+- **Template dropdown fix.** Click-outside now closes the picker. Re-clicking the Templates button removes previous picker instead of stacking.
+- **Dark mode contrast fix.** Removed `color: #222` override from `.mail-detail` scoped styles (was near-black text on dark background). Defined `--bg-elevated` CSS variable. "Linked to:" badge now renders correctly.
+- **[#PROJECTID] auto-link wired.** `DEAL_LINK_RE` (matching `[#12345]`) now used in `_classify_message()`. Both `[#PROJECTID]` and `[#DEAL-NNN]` formats work. New "Auto-link by project ID" toggle (ON by default) gates the auto-link behavior.
+- **CRM Mail Accounts.** Renamed "IMAP Accounts" to "CRM Mail Accounts" in scanner admin. Added SMTP fields (Host, Port, Password, From Name) to the quick-add form. Accounts can now send email immediately after creation.
+- **Helper tooltips.** Added `title=` tooltips to all contractor form fields (Name, Account, Folder, Action, Assignee, Priority) and classification rule form fields (Rule Name, Type, Pattern, Action, Target, Priority).
+- **Files:** `public/app.js`, `public/index.html`, `public/styles.css`, `scanner/mail_scanner.py`, `server.py`.
+
 ## Phase 3 — Bug Fixes & Feature Wiring (2026-07-28)
 
 - **New Tag button fixed.** `renderMailFolders()` now called on modal open, so the click handler is properly bound.
