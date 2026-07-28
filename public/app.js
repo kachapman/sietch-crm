@@ -16485,7 +16485,7 @@ function renderMailList(msgs) {
     // Star indicator
     const starEl = document.createElement("div");
     starEl.className = "mail-star";
-    starEl.innerHTML = m.starred ? '<i class="ti ti-star-filled"></i>' : '<i class="ti ti-star"></i>';
+    starEl.innerHTML = '<i class="ti ti-star"></i>';
     if (m.starred) starEl.classList.add('starred');
     starEl.style.cursor = "pointer";
     starEl.style.flexShrink = "0";
@@ -16493,7 +16493,7 @@ function renderMailList(msgs) {
       e.stopPropagation();
       try {
         const res = await api(`/api/v2/mail/messages/${id}/star`, { method: 'PUT' });
-        starEl.innerHTML = res.starred ? '<i class="ti ti-star-filled"></i>' : '<i class="ti ti-star"></i>';
+        starEl.innerHTML = '<i class="ti ti-star"></i>';
         if (res.starred) starEl.classList.add('starred'); else starEl.classList.remove('starred');
       } catch {}
     });
@@ -17849,6 +17849,7 @@ function normalizeMailMessage(mail) {
     mail.HtmlBody ||
     mail.bodyHtml ||
     mail.BodyHtml ||
+    mail.body_html ||
     mail.body?.html ||
     mail.Body?.Html ||
     "";
@@ -17859,6 +17860,7 @@ function normalizeMailMessage(mail) {
     mail.PlainText ||
     mail.bodyText ||
     mail.BodyText ||
+    mail.body_text ||
     mail.body?.text ||
     mail.Body?.Text ||
     "";
@@ -17883,7 +17885,7 @@ function renderInlineReply(panel, type, messageId, norm) {
   const toList = norm.toList || "";
   const date = norm.date || "";
   const bodyPick = pickMailBodyForDisplay(norm);
-  const bodyText = bodyPick?.text || bodyPick?.html || "";
+  const bodyText = bodyPick?.content || "";
 
   const replyDiv = document.createElement("div");
   replyDiv.className = "mail-inline-reply";
