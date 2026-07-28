@@ -21680,9 +21680,6 @@ async function populateEmailScannerTab() {
     } catch (e) {
       ctrList.innerHTML = `<p style="color:var(--muted);">Failed to load contractors: ${escapeHtml(e.message)}</p>`;
     }
-    } catch (e) {
-      ctrList.innerHTML = `<p style="color:var(--muted);">Failed to load contractors: ${escapeHtml(e.message)}</p>`;
-    }
   }
 
   // Classification rules
