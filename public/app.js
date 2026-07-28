@@ -16558,53 +16558,101 @@ async function renderMailTemplates() {
 }
 
 async function renderMailContacts() {
-  const crmList = $("#crm-contact-list");
-  const userList = $("#mail-contact-list");
+  // Wire collapsible toggle headers
+  document.querySelectorAll(".mail-contacts-toggle").forEach(btn => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => {
+      const targetId = btn.dataset.target;
+      const list = document.getElementById(targetId);
+      if (!list) return;
+      const isExpanded = list.classList.contains("expanded");
+      if (isExpanded) {
+        list.classList.remove("expanded");
+        list.style.maxHeight = "0";
+        btn.setAttribute("aria-expanded", "false");
+      } else {
+        // Lazy load contacts on first expand
+        if (!list.dataset.loaded) {
+          list.dataset.loaded = "1";
+          if (targetId === "crm-contact-list") loadCrmContacts(list);
+          else loadUserContacts(list);
+        }
+        list.classList.add("expanded");
+        btn.setAttribute("aria-expanded", "true");
+      }
+    });
+  });
 
-  // Fetch both sources in parallel
-  const [crmData, userData] = await Promise.all([
-    api("/api/v2/contacts").catch(() => ({ contacts: [] })),
-    api("/api/v2/mail/contacts").catch(() => ({ contacts: [] })),
-  ]);
-
-  // Render CRM contacts
-  const crmContacts = crmData.contacts || crmData || [];
-  if (crmList) {
-    const list = Array.isArray(crmContacts) ? crmContacts : [];
-    crmList.innerHTML = list.length
-      ? list.map(c => {
-          const name = [c.first_name, c.last_name].filter(Boolean).join(" ") || c.displayName || c.email || "";
-          return `<div class="mail-contact-item" data-email="${escapeHtml(c.email || "")}" data-name="${escapeHtml(name)}">
-            <div class="mail-contact-name">${escapeHtml(name || c.email || "")}</div>
-            <div class="mail-contact-email">${escapeHtml(c.email || "")}</div>
-          </div>`;
-        }).join("")
-      : '<p style="color:var(--muted);font-size:0.7rem;">No CRM contacts</p>';
+  // Wire import/export/add buttons
+  const importBtn = $("#mail-contact-import");
+  if (importBtn && !importBtn.dataset.bound) {
+    importBtn.dataset.bound = "1";
+    importBtn.addEventListener("click", () => importMailContacts());
   }
-
-  // Render user contacts
-  const userContacts = userData.contacts || [];
-  if (userList) {
-    userList.innerHTML = userContacts.length
-      ? userContacts.map(c => `
-          <div class="mail-contact-item" data-email="${escapeHtml(c.email || "")}" data-name="${escapeHtml(c.name || c.email || "")}">
-            <div class="mail-contact-name">${escapeHtml(c.name || c.email || "")}</div>
-            <div class="mail-contact-email">${escapeHtml(c.email || "")}</div>
-          </div>`).join("")
-      : '<p style="color:var(--muted);font-size:0.7rem;">No contacts yet</p>';
+  const exportBtn = $("#mail-contact-export");
+  if (exportBtn && !exportBtn.dataset.bound) {
+    exportBtn.dataset.bound = "1";
+    exportBtn.addEventListener("click", () => exportMailContacts());
   }
+  const addBtn = $("#mail-contact-add");
+  if (addBtn && !addBtn.dataset.bound) {
+    addBtn.dataset.bound = "1";
+    addBtn.addEventListener("click", () => addNewContact());
+  }
+}
 
-  // Wire click handlers
-  document.querySelectorAll(".mail-contact-item").forEach(item => {
+async function loadCrmContacts(listEl) {
+  listEl.innerHTML = '<p style="color:var(--muted);font-size:0.7rem;padding:0.2rem 0.4rem;">Loading…</p>';
+  try {
+    const data = await api("/api/v2/contacts");
+    const contacts = Array.isArray(data) ? data : (data.contacts || data || []);
+    if (!contacts.length) {
+      listEl.innerHTML = '<p style="color:var(--muted);font-size:0.7rem;padding:0.2rem 0.4rem;">No CRM contacts</p>';
+      return;
+    }
+    listEl.innerHTML = contacts.map(c => {
+      const name = [c.first_name, c.last_name].filter(Boolean).join(" ") || c.displayName || c.email || "";
+      return `<div class="mail-contact-item" data-email="${escapeHtml(c.email || "")}" data-name="${escapeHtml(name)}">
+        <div class="mail-contact-name">${escapeHtml(name || c.email || "")}</div>
+        <div class="mail-contact-email">${escapeHtml(c.email || "")}</div>
+      </div>`;
+    }).join("");
+    wireContactClicks(listEl);
+  } catch (e) {
+    listEl.innerHTML = `<p style="color:var(--danger);font-size:0.7rem;padding:0.2rem 0.4rem;">Failed to load</p>`;
+  }
+}
+
+async function loadUserContacts(listEl) {
+  listEl.innerHTML = '<p style="color:var(--muted);font-size:0.7rem;padding:0.2rem 0.4rem;">Loading…</p>';
+  try {
+    const data = await api("/api/v2/mail/contacts");
+    const contacts = data.contacts || [];
+    if (!contacts.length) {
+      listEl.innerHTML = '<p style="color:var(--muted);font-size:0.7rem;padding:0.2rem 0.4rem;">No contacts yet</p>';
+      return;
+    }
+    listEl.innerHTML = contacts.map(c => `
+      <div class="mail-contact-item" data-email="${escapeHtml(c.email || "")}" data-name="${escapeHtml(c.name || c.email || "")}">
+        <div class="mail-contact-name">${escapeHtml(c.name || c.email || "")}</div>
+        <div class="mail-contact-email">${escapeHtml(c.email || "")}</div>
+      </div>`).join("");
+    wireContactClicks(listEl);
+  } catch (e) {
+    listEl.innerHTML = `<p style="color:var(--danger);font-size:0.7rem;padding:0.2rem 0.4rem;">Failed to load</p>`;
+  }
+}
+
+function wireContactClicks(container) {
+  container.querySelectorAll(".mail-contact-item").forEach(item => {
     item.addEventListener("click", () => {
       const email = item.dataset.email;
       const name = item.dataset.name;
       if (!email) return;
       const addr = name ? `${name} <${email}>` : email;
-
       const composeModal = $("#compose-email-modal");
       if (composeModal && !composeModal.classList.contains("hidden")) {
-        // Compose is open — insert into focused field
         const active = document.activeElement;
         if (active && (active.id === "compose-to" || active.id === "compose-cc" || active.id === "compose-bcc")) {
           const parts = active.value.split(",").map(s => s.trim());
@@ -16619,57 +16667,68 @@ async function renderMailContacts() {
       }
     });
   });
+}
 
-  // Wire import/export/add buttons
-  const importBtn = $("#mail-contact-import");
-  if (importBtn && !importBtn.dataset.bound) {
-    importBtn.dataset.bound = "1";
-    importBtn.addEventListener("click", () => {
-      const input = document.createElement("input");
-      input.type = "file";
-      input.accept = ".csv";
-      input.addEventListener("change", async () => {
-        const file = input.files[0];
-        if (!file) return;
-        const text = await file.text();
-        try {
-          const result = await api("/api/v2/mail/contacts/import", {
-            method: "POST",
-            body: JSON.stringify({ csv: text }),
-          });
-          showToast(`Imported ${result.imported || 0} contacts`);
-          renderMailContacts();
-        } catch (e) { showToast("Import failed: " + e.message, true); }
+function importMailContacts() {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".csv";
+  input.addEventListener("change", async () => {
+    const file = input.files[0];
+    if (!file) return;
+    const text = await file.text();
+    try {
+      const result = await api("/api/v2/mail/contacts/import", {
+        method: "POST",
+        body: JSON.stringify({ csv: text }),
       });
-      input.click();
-    });
-  }
+      showToast(`Imported ${result.imported || 0} contacts`);
+      // Reload expanded lists
+      const userList = $("#mail-contact-list");
+      if (userList && userList.dataset.loaded) loadUserContacts(userList);
+    } catch (e) { showToast("Import failed: " + e.message, true); }
+  });
+  input.click();
+}
 
-  const exportBtn = $("#mail-contact-export");
-  if (exportBtn && !exportBtn.dataset.bound) {
-    exportBtn.dataset.bound = "1";
-    exportBtn.addEventListener("click", () => {
-      window.open("/api/v2/mail/contacts/export", "_blank");
-    });
-  }
+function exportMailContacts() {
+  window.open("/api/v2/mail/contacts/export", "_blank");
+}
 
-  const addBtn = $("#mail-contact-add");
-  if (addBtn && !addBtn.dataset.bound) {
-    addBtn.dataset.bound = "1";
-    addBtn.addEventListener("click", async () => {
-      const email = prompt("Email address:");
-      if (!email || !email.includes("@")) return;
-      const name = prompt("Name (optional):");
-      try {
-        await api("/api/v2/mail/contacts", {
-          method: "POST",
-          body: JSON.stringify({ email, name: name || "" }),
-        });
-        showToast("Contact added");
-        renderMailContacts();
-      } catch (e) { showToast("Failed: " + e.message, true); }
-    });
-  }
+function addNewContact() {
+  // Create inline form in the My Contacts list
+  const listEl = $("#mail-contact-list");
+  if (!listEl) return;
+  // Remove existing form if any
+  const existing = listEl.querySelector(".mail-contact-add-form");
+  if (existing) { existing.remove(); return; }
+  const form = document.createElement("div");
+  form.className = "mail-contact-add-form";
+  form.style.cssText = "padding:0.3rem 0.4rem; border-bottom:1px solid var(--border);";
+  form.innerHTML = `
+    <input type="email" placeholder="Email" style="width:100%;font-size:0.75rem;padding:0.2rem;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--text);margin-bottom:0.2rem;" class="new-contact-email">
+    <input type="text" placeholder="Name (optional)" style="width:100%;font-size:0.75rem;padding:0.2rem;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--text);margin-bottom:0.2rem;" class="new-contact-name">
+    <div style="display:flex;gap:0.3rem;">
+      <button type="button" class="btn btn-primary btn-small new-contact-save" style="font-size:0.7rem;padding:0.15rem 0.4rem;">Save</button>
+      <button type="button" class="btn btn-ghost btn-small new-contact-cancel" style="font-size:0.7rem;padding:0.15rem 0.4rem;">Cancel</button>
+    </div>`;
+  listEl.prepend(form);
+  form.querySelector(".new-contact-email").focus();
+  form.querySelector(".new-contact-save").addEventListener("click", async () => {
+    const email = form.querySelector(".new-contact-email").value.trim();
+    const name = form.querySelector(".new-contact-name").value.trim();
+    if (!email || !email.includes("@")) { showToast("Valid email required", true); return; }
+    try {
+      await api("/api/v2/mail/contacts", {
+        method: "POST",
+        body: JSON.stringify({ email, name }),
+      });
+      showToast("Contact added");
+      form.remove();
+      loadUserContacts(listEl);
+    } catch (e) { showToast("Failed: " + e.message, true); }
+  });
+  form.querySelector(".new-contact-cancel").addEventListener("click", () => form.remove());
 }
 
 async function renderMailFolderList() {
