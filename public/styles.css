@@ -3820,10 +3820,9 @@ body {
   .mail-star { order: -1; }
   .mail-expand-btn {
     min-width: auto;
-    width: 28px;
-    height: 28px;
+    width: 22px;
+    height: 22px;
     padding: 0;
-    font-size: 0.8rem;
   }
 
   /* --- Fix 3: Icon-only action buttons --- */
@@ -4135,13 +4134,18 @@ body {
   font-size: 0.9rem;
 }
 .mail-expand-btn {
-  font-size: 0.75rem;
-  padding: 0 0.5rem;
-  min-width: 70px; /* wider as requested */
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  min-width: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin-left: auto;
   flex-shrink: 0;
   background: transparent;
   border: 1px solid var(--border);
+  border-radius: 4px;
   color: var(--text);
   cursor: pointer;
   text-align: center;
