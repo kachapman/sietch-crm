@@ -476,6 +476,48 @@ def _post_note_to_deal(opp_id: int, content: str, notify_users: list[str] | None
         return False
 
 
+def _evaluate_classification_rules(subject: str, body: str, from_email: str) -> dict[str, Any] | None:
+    """Evaluate user-defined classification rules from DB. Returns first matching rule or None."""
+    try:
+        rules = db.query_dicts(
+            "SELECT * FROM mail_classification_rules WHERE enabled = TRUE ORDER BY priority DESC, id"
+        )
+    except Exception:
+        return None
+    for rule in rules:
+        rule_type = rule.get("rule_type", "")
+        pattern = rule.get("pattern", "")
+        action = rule.get("action", "tag")
+        action_target = rule.get("action_target", "")
+        matched = False
+        try:
+            if rule_type == "subject_regex":
+                matched = bool(re.search(pattern, subject, re.IGNORECASE))
+            elif rule_type == "sender_domain":
+                sender_domain = from_email.split("@")[-1].lower() if "@" in from_email else ""
+                matched = pattern.lower() in sender_domain
+            elif rule_type == "body_regex":
+                matched = bool(re.search(pattern, body[:5000], re.IGNORECASE))
+        except re.error:
+            logger.warning("Invalid regex in classification rule %s: %s", rule.get("id"), pattern)
+            continue
+        if matched:
+            result = {
+                "classification": f"rule_{rule.get('id')}",
+                "action": action,
+                "rule_id": rule.get("id"),
+                "rule_name": rule.get("rule_name"),
+            }
+            if action == "link" and action_target:
+                try:
+                    deal_id = int(action_target)
+                    result["linked_deal_id"] = deal_id
+                except ValueError:
+                    pass
+            return result
+    return None
+
+
 def _classify_message(msg: dict[str, Any]) -> dict[str, Any]:
     subject = msg.get("subject") or ""
     body_text = msg.get("body_text") or ""
@@ -490,6 +532,15 @@ def _classify_message(msg: dict[str, Any]) -> dict[str, Any]:
     action = "link_only"
     linked_deal_id: int | None = None
     deal = None
+
+    # Evaluate user-defined classification rules first
+    rule_result = _evaluate_classification_rules(subject, body, from_email)
+    if rule_result:
+        classification = rule_result["classification"]
+        match_strength = "rule_match"
+        action = rule_result["action"]
+        if rule_result.get("linked_deal_id"):
+            linked_deal_id = rule_result["linked_deal_id"]
 
     claim_match = None
     for m in DEAL_ID_RE.finditer(subject):
@@ -646,10 +697,14 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
     log_entry["match_strength"] = classification["match_strength"]
     log_entry["action"] = classification["action"]
 
+    # Read behavior toggles from config
+    config = get_contractors()
+    toggles = config.get("scanner_behavior", {})
+
     if classification["action"] == "link_deal" and classification["linked_deal_id"]:
         linked = _link_email_to_deal(msg_id, classification["linked_deal_id"])
         log_entry["deal_linked"] = linked
-        if linked:
+        if linked and toggles.get("post_notes", False):
             deal = _find_opportunity_by_deal_id(classification["linked_deal_id"])
             if deal:
                 body_text = _email_body_for_note(msg)
@@ -659,6 +714,7 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
                     f"{body_text[:2000]}"
                 )
                 _post_note_to_deal(deal["id"], note_content)
+                log_entry["note_posted"] = True
 
     if classification["classification"] == "claim_code_no_deal":
         log_entry["status"] = "linked_no_deal"
@@ -746,6 +802,9 @@ def get_scanner_log(limit: int = 200) -> list[dict[str, Any]]:
 
 def get_contractors() -> dict[str, Any]:
     """Get contractors from DB, falling back to file-based config."""
+    # Read toggles from file (saved by admin UI)
+    file_config = _read_json(CONTRACTORS_FILE, default=DEFAULT_CONTRACTORS)
+    toggles = file_config.get("scanner_behavior", DEFAULT_CONTRACTORS["scanner_behavior"])
     try:
         rows = db.query_dicts("SELECT * FROM mail_contractors WHERE enabled = TRUE ORDER BY priority DESC, name")
         if rows:
@@ -761,12 +820,12 @@ def get_contractors() -> dict[str, Any]:
                 })
             return {
                 "contractors": contractors,
-                "scanner_behavior": DEFAULT_CONTRACTORS["scanner_behavior"],
-                "action_toggles": DEFAULT_CONTRACTORS["action_toggles"],
+                "scanner_behavior": toggles,
+                "action_toggles": toggles,
             }
     except Exception as e:
         logger.warning("Failed to load contractors from DB, falling back to file: %s", e)
-    return _read_json(CONTRACTORS_FILE, default=DEFAULT_CONTRACTORS)
+    return file_config
 
 
 def update_contractors(data: dict[str, Any]) -> dict[str, Any]:

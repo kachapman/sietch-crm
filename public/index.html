@@ -529,136 +529,152 @@
         <!-- Scanner Admin Panel (hidden by default) -->
         <div id="mail-scanner-admin" class="mail-list-container hidden" style="padding:1rem; overflow-y:auto;">
           <h3 style="margin-top:0;">Email Scanner Settings</h3>
-          <div class="infra-section">
-            <h4>Scanner Status</h4>
-            <div id="scanner-status-box" class="infra-status-box">Loading…</div>
-          </div>
-          <div class="infra-section">
-            <h4>IMAP Accounts</h4>
-            <div id="scanner-accounts-list" style="max-height:180px; overflow-y:auto;">Loading…</div>
-            <div style="margin-top:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
-              <button type="button" id="scanner-account-add" class="btn btn-secondary btn-sm"><i class="ti ti-plus"></i> Add</button>
-              <button type="button" id="scanner-accounts-refresh" class="btn btn-ghost btn-sm"><i class="ti ti-refresh"></i></button>
-            </div>
-            <div id="scanner-account-form" class="hidden" style="margin-top:0.5rem; padding:0.5rem; background:var(--bg-elevated); border-radius:4px;">
-              <label>Email<br><input id="scanner-acct-email" type="email" style="width:100%;"></label>
-              <label style="margin-top:0.4rem;">IMAP Host<br><input id="scanner-acct-host" type="text" placeholder="imap.example.com" style="width:100%;"></label>
-              <label style="margin-top:0.4rem;">IMAP Port<br><input id="scanner-acct-port" type="number" value="993" style="width:100px;"></label>
-              <label style="margin-top:0.4rem;">Password<br><input id="scanner-acct-password" type="password" style="width:100%;"></label>
-              <label style="margin-top:0.4rem;">Folder<br><input id="scanner-acct-folder" type="text" value="INBOX" style="width:100px;"></label>
-              <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
-                <button type="button" id="scanner-acct-save" class="btn btn-primary btn-sm"><i class="ti ti-device-floppy"></i> Save</button>
-                <button type="button" id="scanner-acct-cancel" class="btn btn-ghost btn-sm"><i class="ti ti-x"></i></button>
+          <div class="scanner-admin-grid">
+            <!-- LEFT COLUMN -->
+            <div class="scanner-admin-col">
+              <div class="infra-section">
+                <h4>Scanner Status</h4>
+                <div id="scanner-status-box" class="infra-status-box">Loading…</div>
+              </div>
+              <div class="infra-section">
+                <h4>IMAP Accounts</h4>
+                <div id="scanner-accounts-list" style="max-height:180px; overflow-y:auto;">Loading…</div>
+                <div style="margin-top:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
+                  <button type="button" id="scanner-account-add" class="btn btn-secondary btn-sm"><i class="ti ti-plus"></i> Add</button>
+                  <button type="button" id="scanner-accounts-refresh" class="btn btn-ghost btn-sm"><i class="ti ti-refresh"></i></button>
+                </div>
+                <div id="scanner-account-form" class="hidden" style="margin-top:0.5rem; padding:0.5rem; background:var(--bg-elevated); border-radius:4px;">
+                  <label>Email<br><input id="scanner-acct-email" type="email" style="width:100%;"></label>
+                  <label style="margin-top:0.4rem;">IMAP Host<br><input id="scanner-acct-host" type="text" placeholder="imap.example.com" style="width:100%;"></label>
+                  <label style="margin-top:0.4rem;">IMAP Port<br><input id="scanner-acct-port" type="number" value="993" style="width:100px;"></label>
+                  <label style="margin-top:0.4rem;">Password<br><input id="scanner-acct-password" type="password" style="width:100%;"></label>
+                  <label style="margin-top:0.4rem;">Folder<br><input id="scanner-acct-folder" type="text" value="INBOX" style="width:100px;"></label>
+                  <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
+                    <button type="button" id="scanner-acct-save" class="btn btn-primary btn-sm"><i class="ti ti-device-floppy"></i> Save</button>
+                    <button type="button" id="scanner-acct-cancel" class="btn btn-ghost btn-sm"><i class="ti ti-x"></i></button>
+                  </div>
+                </div>
+              </div>
+              <div class="infra-section">
+                <h4>Behavior Toggles</h4>
+                <div id="scanner-toggles" style="font-size:0.85rem;">
+                  <label style="display:flex; gap:0.5rem; align-items:center; margin:0.3rem 0;"><input type="checkbox" id="scanner-toggle-create-deals"> Create deals (auto-create new opportunity on strong match)</label>
+                  <label style="display:flex; gap:0.5rem; align-items:center; margin:0.3rem 0;"><input type="checkbox" id="scanner-toggle-create-tasks"> Create tasks (auto-create review/follow-up tasks)</label>
+                  <label style="display:flex; gap:0.5rem; align-items:center; margin:0.3rem 0;"><input type="checkbox" id="scanner-toggle-post-notes"> Post notes (attach email body to matched deal history)</label>
+                  <label style="display:flex; gap:0.5rem; align-items:center; margin:0.3rem 0;"><input type="checkbox" id="scanner-toggle-notify-users"> Notify users (Telegram notification on action)</label>
+                </div>
+                <button type="button" id="scanner-toggles-save" class="btn btn-primary btn-sm" style="margin-top:0.5rem;"><i class="ti ti-device-floppy"></i> Save</button>
+                <span id="scanner-toggles-status" style="margin-left:0.5rem; font-size:0.8rem;"></span>
+              </div>
+              <div class="infra-section">
+                <h4>Email Templates</h4>
+                <div id="scanner-templates-list" style="max-height:200px; overflow-y:auto; font-size:0.85rem;">Loading…</div>
+                <div style="margin-top:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
+                  <button type="button" id="scanner-template-add" class="btn btn-secondary btn-sm"><i class="ti ti-plus"></i> New Template</button>
+                  <button type="button" id="scanner-templates-refresh" class="btn btn-ghost btn-sm"><i class="ti ti-refresh"></i></button>
+                </div>
+                <div id="scanner-template-form" class="hidden" style="margin-top:0.5rem; padding:0.5rem; background:var(--bg-elevated); border-radius:4px;">
+                  <label>Title<br><input id="scanner-tpl-title" type="text" style="width:100%;"></label>
+                  <label style="margin-top:0.4rem;">Subject<br><input id="scanner-tpl-subject" type="text" style="width:100%;"></label>
+                  <label style="margin-top:0.4rem;">Body (HTML)<br><textarea id="scanner-tpl-body" rows="4" style="width:100%; font-family:monospace; font-size:0.8rem;"></textarea></label>
+                  <input type="hidden" id="scanner-tpl-edit-id" value="">
+                  <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
+                    <button type="button" id="scanner-tpl-save" class="btn btn-primary btn-sm"><i class="ti ti-device-floppy"></i> Save</button>
+                    <button type="button" id="scanner-tpl-cancel" class="btn btn-ghost btn-sm"><i class="ti ti-x"></i></button>
+                  </div>
+                </div>
+              </div>
+              <div class="infra-section">
+                <h4>Routing Rules</h4>
+                <div id="scanner-contractors-list" style="max-height:200px; overflow-y:auto; font-size:0.85rem;">Loading…</div>
+                <div style="margin-top:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
+                  <button type="button" id="scanner-contractor-add" class="btn btn-secondary btn-sm"><i class="ti ti-plus"></i> New Routing Rule</button>
+                  <button type="button" id="scanner-contractors-refresh" class="btn btn-ghost btn-sm"><i class="ti ti-refresh"></i></button>
+                </div>
+                <div id="scanner-contractor-form" class="hidden" style="margin-top:0.5rem; padding:0.5rem; background:var(--bg-elevated); border-radius:4px;">
+                  <label>Name<br><input id="scanner-ctr-name" type="text" style="width:100%;" placeholder="e.g. Claims inbox"></label>
+                  <label style="margin-top:0.4rem;">IMAP Account<br>
+                    <select id="scanner-ctr-account" style="width:100%;">
+                      <option value="">All accounts</option>
+                    </select>
+                  </label>
+                  <label style="margin-top:0.4rem;">Folder<br><input id="scanner-ctr-folder" type="text" value="INBOX" style="width:100px;"></label>
+                  <label style="margin-top:0.4rem;">Action<br>
+                    <select id="scanner-ctr-action" style="width:100%;">
+                      <option value="link_only">Link only</option>
+                      <option value="create_deal">Create deal</option>
+                      <option value="create_task">Create task</option>
+                      <option value="post_note">Post note</option>
+                    </select>
+                  </label>
+                  <label style="margin-top:0.4rem;">Assignee<br>
+                    <select id="scanner-ctr-user" style="width:100%;">
+                      <option value="">None</option>
+                    </select>
+                  </label>
+                  <label style="margin-top:0.4rem;">Priority<br><input id="scanner-ctr-priority" type="number" value="0" style="width:80px;"></label>
+                  <input type="hidden" id="scanner-ctr-edit-id" value="">
+                  <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
+                    <button type="button" id="scanner-ctr-save" class="btn btn-primary btn-sm"><i class="ti ti-device-floppy"></i> Save</button>
+                    <button type="button" id="scanner-ctr-cancel" class="btn btn-ghost btn-sm"><i class="ti ti-x"></i></button>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-          <div class="infra-section">
-            <h4>Behavior Toggles</h4>
-            <div id="scanner-toggles" style="font-size:0.85rem;">
-              <label style="display:flex; gap:0.5rem; align-items:center; margin:0.3rem 0;"><input type="checkbox" id="scanner-toggle-create-deals"> Create deals (auto-create new opportunity on strong match)</label>
-              <label style="display:flex; gap:0.5rem; align-items:center; margin:0.3rem 0;"><input type="checkbox" id="scanner-toggle-create-tasks"> Create tasks (auto-create review/follow-up tasks)</label>
-              <label style="display:flex; gap:0.5rem; align-items:center; margin:0.3rem 0;"><input type="checkbox" id="scanner-toggle-post-notes"> Post notes (attach email body to matched deal history)</label>
-              <label style="display:flex; gap:0.5rem; align-items:center; margin:0.3rem 0;"><input type="checkbox" id="scanner-toggle-notify-users"> Notify users (Telegram notification on action)</label>
-            </div>
-            <button type="button" id="scanner-toggles-save" class="btn btn-primary btn-sm" style="margin-top:0.5rem;"><i class="ti ti-device-floppy"></i> Save</button>
-            <span id="scanner-toggles-status" style="margin-left:0.5rem; font-size:0.8rem;"></span>
-          </div>
-          <div class="infra-section">
-            <h4>Scanner Log</h4>
-            <div id="scanner-log-list" style="max-height:250px; overflow-y:auto; font-size:0.8rem;">Loading…</div>
-            <button type="button" id="scanner-log-refresh" class="btn btn-secondary btn-sm" style="margin-top:0.5rem;"><i class="ti ti-refresh"></i></button>
-          </div>
-          <div class="infra-section" style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid var(--border);">
-            <h4>Reprocess</h4>
-            <p style="font-size:0.8rem; color:var(--muted); margin:0 0 0.4rem;">Reprocess messages by ID (comma-separated) through the classifier pipeline.</p>
-            <input type="text" id="scanner-reprocess-ids" placeholder="e.g. 1234,5678" style="width:200px;">
-            <button type="button" id="scanner-reprocess-btn" class="btn btn-secondary btn-sm" style="margin-left:0.5rem;"><i class="ti ti-reload"></i> Reprocess</button>
-            <span id="scanner-reprocess-status" style="margin-left:0.5rem; font-size:0.8rem;"></span>
-          </div>
-          <div class="infra-section" style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid var(--border);">
-            <h4>Email Templates</h4>
-            <div id="scanner-templates-list" style="max-height:200px; overflow-y:auto; font-size:0.85rem;">Loading…</div>
-            <div style="margin-top:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
-              <button type="button" id="scanner-template-add" class="btn btn-secondary btn-sm"><i class="ti ti-plus"></i> New Template</button>
-              <button type="button" id="scanner-templates-refresh" class="btn btn-ghost btn-sm"><i class="ti ti-refresh"></i></button>
-            </div>
-            <div id="scanner-template-form" class="hidden" style="margin-top:0.5rem; padding:0.5rem; background:var(--bg-elevated); border-radius:4px;">
-              <label>Title<br><input id="scanner-tpl-title" type="text" style="width:100%;"></label>
-              <label style="margin-top:0.4rem;">Subject<br><input id="scanner-tpl-subject" type="text" style="width:100%;"></label>
-              <label style="margin-top:0.4rem;">Body (HTML)<br><textarea id="scanner-tpl-body" rows="4" style="width:100%; font-family:monospace; font-size:0.8rem;"></textarea></label>
-              <input type="hidden" id="scanner-tpl-edit-id" value="">
-              <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
-                <button type="button" id="scanner-tpl-save" class="btn btn-primary btn-sm"><i class="ti ti-device-floppy"></i> Save</button>
-                <button type="button" id="scanner-tpl-cancel" class="btn btn-ghost btn-sm"><i class="ti ti-x"></i></button>
+            <!-- RIGHT COLUMN: Classifier -->
+            <div class="scanner-admin-col">
+              <div class="infra-section">
+                <h4>Classification Rules</h4>
+                <div id="scanner-rules-list" style="max-height:200px; overflow-y:auto; font-size:0.85rem;">Loading…</div>
+                <div style="margin-top:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
+                  <button type="button" id="scanner-rule-add" class="btn btn-secondary btn-sm"><i class="ti ti-plus"></i> New Rule</button>
+                  <button type="button" id="scanner-rules-refresh" class="btn btn-ghost btn-sm"><i class="ti ti-refresh"></i></button>
+                </div>
+                <div id="scanner-rule-form" class="hidden" style="margin-top:0.5rem; padding:0.5rem; background:var(--bg-elevated); border-radius:4px;">
+                  <label>Rule Name<br><input id="scanner-rule-name" type="text" style="width:100%;"></label>
+                  <label style="margin-top:0.4rem;">Type<br>
+                    <select id="scanner-rule-type" style="width:100%;">
+                      <option value="subject_regex">Subject regex</option>
+                      <option value="sender_domain">Sender domain</option>
+                      <option value="body_regex">Body regex</option>
+                    </select>
+                  </label>
+                  <label style="margin-top:0.4rem;">Pattern<br><input id="scanner-rule-pattern" type="text" style="width:100%;" placeholder="regex or domain"></label>
+                  <label style="margin-top:0.4rem;">Action<br>
+                    <select id="scanner-rule-action" style="width:100%;">
+                      <option value="tag">Tag</option>
+                      <option value="link">Link to deal</option>
+                      <option value="skip">Skip</option>
+                    </select>
+                  </label>
+                  <label style="margin-top:0.4rem;">Action Target<br><input id="scanner-rule-target" type="text" style="width:100%;" placeholder="tag name or deal ID"></label>
+                  <label style="margin-top:0.4rem;">Priority<br><input id="scanner-rule-priority" type="number" value="0" style="width:80px;"></label>
+                  <input type="hidden" id="scanner-rule-edit-id" value="">
+                  <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
+                    <button type="button" id="scanner-rule-save" class="btn btn-primary btn-sm"><i class="ti ti-device-floppy"></i> Save</button>
+                    <button type="button" id="scanner-rule-cancel" class="btn btn-ghost btn-sm"><i class="ti ti-x"></i></button>
+                  </div>
+                </div>
+              </div>
+              <div class="infra-section">
+                <h4>ML Training</h4>
+                <p style="font-size:0.8rem; color:var(--muted); margin:0 0 0.4rem;">Retrain the classifier head using approved feedback data.</p>
+                <button type="button" id="scanner-retrain-btn" class="btn btn-secondary btn-sm"><i class="ti ti-brain"></i> Retrain ML</button>
+                <span id="scanner-retrain-status" style="margin-left:0.5rem; font-size:0.8rem;"></span>
+              </div>
+              <div class="infra-section">
+                <h4>Scanner Log</h4>
+                <div id="scanner-log-list" style="max-height:250px; overflow-y:auto; font-size:0.8rem;">Loading…</div>
+                <button type="button" id="scanner-log-refresh" class="btn btn-secondary btn-sm" style="margin-top:0.5rem;"><i class="ti ti-refresh"></i></button>
+              </div>
+              <div class="infra-section">
+                <h4>Reprocess</h4>
+                <p style="font-size:0.8rem; color:var(--muted); margin:0 0 0.4rem;">Reprocess messages by ID (comma-separated) through the classifier pipeline.</p>
+                <input type="text" id="scanner-reprocess-ids" placeholder="e.g. 1234,5678" style="width:200px;">
+                <button type="button" id="scanner-reprocess-btn" class="btn btn-secondary btn-sm" style="margin-left:0.5rem;"><i class="ti ti-reload"></i> Reprocess</button>
+                <span id="scanner-reprocess-status" style="margin-left:0.5rem; font-size:0.8rem;"></span>
               </div>
             </div>
-          </div>
-          <div class="infra-section" style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid var(--border);">
-            <h4>Contractors (Routing Rules)</h4>
-            <div id="scanner-contractors-list" style="max-height:200px; overflow-y:auto; font-size:0.85rem;">Loading…</div>
-            <div style="margin-top:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
-              <button type="button" id="scanner-contractor-add" class="btn btn-secondary btn-sm"><i class="ti ti-plus"></i> New Contractor</button>
-              <button type="button" id="scanner-contractors-refresh" class="btn btn-ghost btn-sm"><i class="ti ti-refresh"></i></button>
-            </div>
-            <div id="scanner-contractor-form" class="hidden" style="margin-top:0.5rem; padding:0.5rem; background:var(--bg-elevated); border-radius:4px;">
-              <label>Name<br><input id="scanner-ctr-name" type="text" style="width:100%;"></label>
-              <label style="margin-top:0.4rem;">IMAP Account ID<br><input id="scanner-ctr-account" type="number" style="width:100px;" placeholder="all"></label>
-              <label style="margin-top:0.4rem;">Folder<br><input id="scanner-ctr-folder" type="text" value="INBOX" style="width:100px;"></label>
-              <label style="margin-top:0.4rem;">Action<br>
-                <select id="scanner-ctr-action" style="width:100%;">
-                  <option value="link_only">Link only</option>
-                  <option value="create_deal">Create deal</option>
-                  <option value="create_task">Create task</option>
-                  <option value="post_note">Post note</option>
-                </select>
-              </label>
-              <label style="margin-top:0.4rem;">Assignee User ID<br><input id="scanner-ctr-user" type="number" style="width:100px;" placeholder="none"></label>
-              <label style="margin-top:0.4rem;">Priority<br><input id="scanner-ctr-priority" type="number" value="0" style="width:80px;"></label>
-              <input type="hidden" id="scanner-ctr-edit-id" value="">
-              <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
-                <button type="button" id="scanner-ctr-save" class="btn btn-primary btn-sm"><i class="ti ti-device-floppy"></i> Save</button>
-                <button type="button" id="scanner-ctr-cancel" class="btn btn-ghost btn-sm"><i class="ti ti-x"></i></button>
-              </div>
-            </div>
-          </div>
-          <div class="infra-section" style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid var(--border);">
-            <h4>Classification Rules</h4>
-            <div id="scanner-rules-list" style="max-height:200px; overflow-y:auto; font-size:0.85rem;">Loading…</div>
-            <div style="margin-top:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
-              <button type="button" id="scanner-rule-add" class="btn btn-secondary btn-sm"><i class="ti ti-plus"></i> New Rule</button>
-              <button type="button" id="scanner-rules-refresh" class="btn btn-ghost btn-sm"><i class="ti ti-refresh"></i></button>
-            </div>
-            <div id="scanner-rule-form" class="hidden" style="margin-top:0.5rem; padding:0.5rem; background:var(--bg-elevated); border-radius:4px;">
-              <label>Rule Name<br><input id="scanner-rule-name" type="text" style="width:100%;"></label>
-              <label style="margin-top:0.4rem;">Type<br>
-                <select id="scanner-rule-type" style="width:100%;">
-                  <option value="subject_regex">Subject regex</option>
-                  <option value="sender_domain">Sender domain</option>
-                  <option value="body_regex">Body regex</option>
-                </select>
-              </label>
-              <label style="margin-top:0.4rem;">Pattern<br><input id="scanner-rule-pattern" type="text" style="width:100%;" placeholder="regex or domain"></label>
-              <label style="margin-top:0.4rem;">Action<br>
-                <select id="scanner-rule-action" style="width:100%;">
-                  <option value="tag">Tag</option>
-                  <option value="link">Link to deal</option>
-                  <option value="skip">Skip</option>
-                </select>
-              </label>
-              <label style="margin-top:0.4rem;">Action Target<br><input id="scanner-rule-target" type="text" style="width:100%;" placeholder="tag name or deal pattern"></label>
-              <label style="margin-top:0.4rem;">Priority<br><input id="scanner-rule-priority" type="number" value="0" style="width:80px;"></label>
-              <input type="hidden" id="scanner-rule-edit-id" value="">
-              <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
-                <button type="button" id="scanner-rule-save" class="btn btn-primary btn-sm"><i class="ti ti-device-floppy"></i> Save</button>
-                <button type="button" id="scanner-rule-cancel" class="btn btn-ghost btn-sm"><i class="ti ti-x"></i></button>
-              </div>
-            </div>
-          </div>
-          <div class="infra-section" style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid var(--border);">
-            <h4>ML Training</h4>
-            <p style="font-size:0.8rem; color:var(--muted); margin:0 0 0.4rem;">Retrain the classifier head using approved feedback data.</p>
-            <button type="button" id="scanner-retrain-btn" class="btn btn-secondary btn-sm"><i class="ti ti-brain"></i> Retrain ML</button>
-            <span id="scanner-retrain-status" style="margin-left:0.5rem; font-size:0.8rem;"></span>
           </div>
         </div>
 
@@ -678,10 +694,15 @@
               <div id="mail-tag-list" style="max-height:150px; overflow-y:auto;">
                 <!-- populated by JS -->
               </div>
-              <button type="button" id="mail-tag-add-btn" class="btn btn-ghost btn-small" style="margin-top:0.3rem; font-size:0.75rem;"><i class="ti ti-plus"></i> New Tag</button>
+               <button type="button" id="mail-tag-add-btn" class="btn btn-ghost btn-small" style="margin-top:0.3rem; font-size:0.75rem;"><i class="ti ti-plus"></i> New Tag</button>
               <div id="mail-tag-context-menu" style="display:none; position:fixed; z-index:9999; background:var(--surface); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,0.25); padding:0.25rem 0; min-width:140px;">
                 <button type="button" id="mail-tag-edit-btn" style="display:block; width:100%; text-align:left; padding:0.4rem 0.75rem; border:none; background:none; cursor:pointer; font-size:0.85rem;"><i class="ti ti-pencil"></i> Edit</button>
                 <button type="button" id="mail-tag-delete-btn" style="display:block; width:100%; text-align:left; padding:0.4rem 0.75rem; border:none; background:none; cursor:pointer; color:var(--danger); font-size:0.85rem;"><i class="ti ti-trash"></i> Delete</button>
+              </div>
+              <hr style="margin:0.5rem 0; border:none; border-top:1px solid var(--border);" />
+              <h4 style="margin:0 0 0.4rem 0; font-size:0.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em;">Templates</h4>
+              <div id="mail-template-list" style="max-height:120px; overflow-y:auto; font-size:0.8rem;">
+                <!-- populated by JS -->
               </div>
       </div>
       </div>
@@ -766,6 +787,7 @@
       <div style="display:flex; justify-content:space-between; align-items:center; padding:0.5rem 0.75rem; border-top:1px solid var(--border);">
         <div style="display:flex; gap:0.5rem;">
           <button type="button" id="compose-template-btn" class="btn btn-ghost btn-small" title="Insert template"><i class="ti ti-file-text" style="margin-right:0.2rem;"></i>Templates</button>
+          <button type="button" id="compose-save-template" class="btn btn-ghost btn-small" title="Save as template"><i class="ti ti-bookmark" style="margin-right:0.2rem;"></i>Save as Template</button>
           <button type="button" id="compose-save-draft" class="btn btn-ghost btn-small" title="Save as draft"><i class="ti ti-device-floppy" style="margin-right:0.2rem;"></i>Save Draft</button>
         </div>
         <div style="display:flex; gap:0.5rem;">

@@ -15252,6 +15252,8 @@ async function openMailInboxModal() {
   await loadMailAccountsForModal();
   await renderMailTabs();
   await renderMailFolderList();
+  await renderMailFolders();
+  await renderMailTemplates();
   await renderMailUnreadBadge();
   await updateTrashCount();
   attachMailModalListeners();
@@ -15691,6 +15693,25 @@ async function openComposeModal(opts = {}) {
           });
         });
       } catch (e) { showToast('Failed to load templates: ' + e.message, true); }
+    });
+  }
+
+  // Bind Save as Template button
+  const saveTplBtn = $('#compose-save-template');
+  if (saveTplBtn && !saveTplBtn.dataset.bound) {
+    saveTplBtn.dataset.bound = '1';
+    saveTplBtn.addEventListener('click', async () => {
+      const subject = $('#compose-subject')?.value.trim();
+      const body = $('#compose-body')?.innerHTML || '';
+      const title = prompt('Template name:');
+      if (!title || !title.trim()) return;
+      try {
+        await api('/api/v2/mail/templates', {
+          method: 'POST',
+          body: JSON.stringify({ title: title.trim(), subject, body_html: body })
+        });
+        showToast('Template saved');
+      } catch (e) { showToast('Failed to save template: ' + e.message, true); }
     });
   }
 }
@@ -16415,6 +16436,54 @@ async function renderMailFolders() {
         await renderMailFolders();
       } catch (e) { showToast("Failed: " + e.message, true); }
     });
+  }
+}
+
+async function renderMailTemplates() {
+  const tplList = $("#mail-template-list");
+  if (!tplList) return;
+  try {
+    const data = await api("/api/v2/mail/templates");
+    const templates = data.templates || [];
+    if (!templates.length) {
+      tplList.innerHTML = '<p style="font-size:0.75rem; color:var(--muted); padding:0.25rem 0.5rem;">No templates yet</p>';
+      return;
+    }
+    tplList.innerHTML = templates.map(t => `
+      <div class="mail-template-item" data-template-id="${t.id}" style="display:flex; justify-content:space-between; align-items:center; padding:2px 0.5rem; cursor:pointer; border-radius:3px;" title="${escapeHtml(t.subject || '')}">
+        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(t.title)}</span>
+        <button type="button" class="btn btn-ghost btn-small mail-tpl-delete" data-id="${t.id}" data-title="${escapeHtml(t.title)}" style="font-size:0.65rem; padding:0; color:var(--danger); flex-shrink:0;"><i class="ti ti-x"></i></button>
+      </div>
+    `).join("");
+    tplList.querySelectorAll(".mail-template-item").forEach(el => {
+      el.addEventListener("click", async (e) => {
+        if (e.target.closest(".mail-tpl-delete")) return;
+        const tid = parseInt(el.dataset.templateId);
+        const tpl = templates.find(t => t.id === tid);
+        if (tpl) {
+          openComposeModal({
+            subject: tpl.subject || "",
+            body: tpl.body_html || "",
+            title: "New email from template",
+          });
+        }
+      });
+    });
+    tplList.querySelectorAll(".mail-tpl-delete").forEach(btn => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        const title = btn.dataset.title;
+        if (!confirm(`Delete template "${title}"?`)) return;
+        try {
+          await api(`/api/v2/mail/templates/${id}`, { method: "DELETE" });
+          showToast("Template deleted");
+          await renderMailTemplates();
+        } catch (e) { showToast("Failed: " + e.message, true); }
+      });
+    });
+  } catch (e) {
+    tplList.innerHTML = '<p style="font-size:0.75rem; color:var(--muted);">Templates unavailable</p>';
   }
 }
 
@@ -18116,9 +18185,10 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
     iframe.addEventListener("load", () => {
       try {
         const doc = iframe.contentDocument;
-        const h = doc?.body?.scrollHeight;
-        if (h && h > 80) {
-          iframe.style.height = `${Math.min(Math.max(h + 20, 240), 1400)}px`;
+        if (!doc || !doc.body) return;
+        const h = doc.body.scrollHeight;
+        if (h > 10) {
+          iframe.style.height = `${Math.min(Math.max(h + 4, 40), 900)}px`;
         }
       } catch {
         /* ignore */
@@ -21761,14 +21831,32 @@ function bindScannerAdminButtons() {
   const ctrForm = $("#scanner-contractor-form");
   if (ctrAdd && ctrForm && !ctrAdd.dataset.bound) {
     ctrAdd.dataset.bound = "1";
-    ctrAdd.addEventListener("click", () => {
+    ctrAdd.addEventListener("click", async () => {
       $("#scanner-ctr-edit-id").value = "";
       $("#scanner-ctr-name").value = "";
-      $("#scanner-ctr-account").value = "";
       $("#scanner-ctr-folder").value = "INBOX";
       $("#scanner-ctr-action").value = "link_only";
-      $("#scanner-ctr-user").value = "";
       $("#scanner-ctr-priority").value = "0";
+      // Populate account dropdown
+      const acctSel = $("#scanner-ctr-account");
+      if (acctSel) {
+        try {
+          const data = await api("/api/v2/mail/accounts");
+          const accounts = data.accounts || [];
+          acctSel.innerHTML = '<option value="">All accounts</option>' +
+            accounts.map(a => `<option value="${a.id}">${escapeHtml(a.email || '')}</option>`).join("");
+        } catch { acctSel.innerHTML = '<option value="">All accounts</option>'; }
+      }
+      // Populate user dropdown
+      const userSel = $("#scanner-ctr-user");
+      if (userSel) {
+        try {
+          const data = await api("/api/v2/users");
+          const users = unwrap(data) || data || [];
+          userSel.innerHTML = '<option value="">None</option>' +
+            (users || []).map(u => `<option value="${u.id}">${escapeHtml(u.displayName || u.email || '')}</option>`).join("");
+        } catch { userSel.innerHTML = '<option value="">None</option>'; }
+      }
       ctrForm.classList.toggle("hidden");
     });
     $("#scanner-ctr-cancel")?.addEventListener("click", () => ctrForm.classList.add("hidden"));

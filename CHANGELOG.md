@@ -2,6 +2,18 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — Bug Fixes & Feature Wiring (2026-07-28)
+
+- **New Tag button fixed.** `renderMailFolders()` now called on modal open, so the click handler is properly bound.
+- **Duplicate folders fixed.** Server now uses `DISTINCT ON (name)` to deduplicate folder rows across IMAP accounts. Supports `?account_id=` filter.
+- **Email body iframe height fixed.** Removed `min-height: 240px` CSS. JS height formula lowered: floor 40px, +4px padding, cap 900px. Short emails no longer have giant empty space.
+- **Behavior toggles wired.** Scanner now reads `post_notes` toggle from config before posting notes to deals. Toggles were previously UI-only decorations.
+- **Classification rules wired to scanner.** New `_evaluate_classification_rules()` function queries `mail_classification_rules` table and evaluates rules (subject_regex, sender_domain, body_regex) before hardcoded patterns. Rules are now functional.
+- **Template management for users.** Added "Save as Template" button in compose modal. Added templates section in email sidebar (click to compose from template, delete via × button).
+- **Contractor form UX.** Replaced raw "IMAP Account ID" number input with account dropdown (populated from loaded accounts). Replaced "Assignee User ID" with user dropdown. Renamed "New Contractor" to "New Routing Rule".
+- **Admin panel two-column layout.** Scanner admin now uses CSS Grid with two columns on desktop (left: accounts/toggles/templates/routing, right: classifier/log). Collapses to single column below 900px.
+- **Files:** `public/app.js`, `public/index.html`, `public/styles.css`, `scanner/mail_scanner.py`, `server.py`.
+
 ## Phase 3 — Email Module Polish & Scanner Admin Full Port (2026-07-28)
 
 - **Schema fixes.** Added `mail_folders` table to init.sql and new migration `002_add_mail_folders_and_indexes.sql` (was missing despite code referencing it). Added `mail_attachments` table, `mail_contractors` table, `mail_classification_rules` table. Added `raw_headers` and `attachments_json` columns to `mail_messages`.

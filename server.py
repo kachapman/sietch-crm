@@ -5821,9 +5821,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_folders(self) -> None:
         try:
-            rows = db.query_dicts(
-                "SELECT * FROM mail_folders ORDER BY sort_order, name"
-            )
+            qs = parse_qs(urlparse(self.path).query)
+            account_id = qs.get("account_id", [None])[0]
+            if account_id:
+                rows = db.query_dicts(
+                    "SELECT * FROM mail_folders WHERE imap_account_id = %s OR imap_account_id IS NULL ORDER BY sort_order, name",
+                    (int(account_id),),
+                )
+            else:
+                rows = db.query_dicts(
+                    "SELECT DISTINCT ON (name) * FROM mail_folders ORDER BY name, sort_order, id"
+                )
             _json_response(self, 200, {"folders": rows})
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})

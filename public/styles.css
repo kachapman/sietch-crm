@@ -3767,6 +3767,22 @@ body {
   overflow: hidden;
   border-left: none;
 }
+.scanner-admin-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+.scanner-admin-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+@media (max-width: 900px) {
+  .scanner-admin-grid {
+    grid-template-columns: 1fr;
+  }
+}
 .mail-viewer-warning-content {
   position: relative;
 }
@@ -5464,8 +5480,7 @@ body {
 .opp-preview-mail-iframe {
   display: block;
   width: 100%;
-  min-height: 240px;
-  height: 360px;
+  height: auto;
   border: none;
   background: #181b24;
 }
