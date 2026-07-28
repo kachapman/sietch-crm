@@ -3787,32 +3787,140 @@ body {
     grid-template-columns: 1fr;
   }
 }
+/* Desktop: overflow + folder button hidden */
+.mail-toolbar .toolbar-overflow-btn { display: none; }
+.mail-toolbar .mail-folders-toggle { display: none; }
+
 @media (max-width: 600px) {
+  /* --- Fix 4: Card layout for mail rows --- */
+  .mail-row.mail-header { display: none; }
   .mail-row {
-    gap: 0.3rem;
-    padding: 0.3rem 0.4rem;
+    flex-wrap: wrap;
+    gap: 0.15rem 0.4rem;
+    padding: 0.35rem 0.4rem;
     font-size: 0.82rem;
   }
   .mail-from {
-    width: 100px;
-    min-width: 60px;
+    width: 100%;
+    min-width: 0;
+    flex-basis: 100%;
+    font-size: 0.82rem;
   }
+  .mail-subject {
+    width: 100%;
+    flex-basis: 100%;
+    font-size: 0.85rem;
+  }
+  .mail-snippet { display: none; }
   .mail-date {
     width: auto;
-    min-width: 50px;
-    font-size: 0.72rem;
+    min-width: auto;
+    margin-left: auto;
+    font-size: 0.7rem;
   }
+  .mail-star { order: -1; }
+  .mail-expand-btn {
+    min-width: auto;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    font-size: 0.8rem;
+  }
+
+  /* --- Fix 3: Icon-only action buttons --- */
   .opp-preview-mail-foot {
-    gap: 0.15rem;
-    padding: 0.1rem 0;
+    gap: 0.1rem;
+    padding: 0.05rem 0;
   }
   .opp-preview-mail-foot .btn {
-    padding: 0.2rem 0.4rem;
-    font-size: 0.75rem;
+    padding: 0.15rem 0.3rem;
+    font-size: 0.72rem;
   }
-  .mail-header {
-    font-size: 0.78rem;
+  .opp-preview-mail-foot .btn .btn-label { display: none; }
+
+  /* --- Fix 6: Toolbar overflow menu --- */
+  .mail-toolbar .toolbar-overflow-btn { display: flex; }
+  .mail-toolbar .toolbar-secondary { display: none; }
+  .toolbar-overflow-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 100;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    padding: 0.25rem 0;
+    min-width: 140px;
   }
+  .toolbar-overflow-dropdown button {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+    padding: 0.4rem 0.75rem;
+    border: none;
+    background: none;
+    color: var(--text);
+    font-size: 0.85rem;
+    cursor: pointer;
+    text-align: left;
+  }
+  .toolbar-overflow-dropdown button:hover {
+    background: var(--hover);
+  }
+
+  /* --- Fix 7: Collapsible search --- */
+  .mail-search {
+    flex: 0 0 auto;
+    width: 36px;
+    min-width: 0;
+    padding: 0;
+    overflow: hidden;
+    transition: width 0.2s, padding 0.2s;
+  }
+  .mail-search:focus-within,
+  .mail-search.expanded {
+    flex: 1 1 100%;
+    width: auto;
+    order: -1;
+    padding: 0.3rem 0.5rem;
+  }
+
+  /* --- Fix 8: Folder/tag bottom sheet --- */
+  .mail-folders-toggle { display: flex; }
+  .mail-main-area { position: relative; }
+  .mail-right-sidebar {
+    position: fixed !important;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    top: auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    max-height: 55vh;
+    transform: translateY(100%);
+    transition: transform 0.25s ease;
+    z-index: 9999;
+    border-top: 2px solid var(--border);
+    border-left: none;
+    background: var(--surface);
+    overflow-y: auto;
+    border-radius: 12px 12px 0 0;
+  }
+  .mail-right-sidebar.mobile-open {
+    transform: translateY(0);
+  }
+  .mail-sidebar-toggle { display: none !important; }
+
+  /* --- Fix 5: Full-screen overlay base (JS creates it) --- */
+  .mail-header { font-size: 0.78rem; }
+}
+
+/* --- Fix 5: Desktop overlay safety --- */
+@media (min-width: 601px) {
+  .mail-mobile-email-overlay { display: none !important; }
 }
 .scanner-log {
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
@@ -4120,7 +4228,7 @@ body {
 /* Small button variant used inside the modal */
 .btn-small {
   font-size: 0.92rem;
-  padding: 0.4rem 0.7rem;
+  padding: 0.25rem 0.5rem;
 }
 
 /* The pinned presence tile uses normal tile styles + a compact list inside the body */
@@ -5565,7 +5673,7 @@ body {
 }
 
 .opp-preview-mail-foot {
-  margin-top: 0.35rem;
+  margin-top: 0.1rem;
   font-size: 0.72rem;
 }
 

@@ -16264,6 +16264,48 @@ function attachMailModalListeners() {
       });
     }
   }
+
+  // --- Mobile: Toolbar overflow menu ---
+  const overflowBtn = $("#mail-toolbar-overflow");
+  const overflowMenu = $("#mail-toolbar-overflow-menu");
+  if (overflowBtn && overflowMenu) {
+    overflowBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      overflowMenu.classList.toggle("hidden");
+    });
+    document.addEventListener("click", (e) => {
+      if (!overflowBtn.contains(e.target) && !overflowMenu.contains(e.target)) {
+        overflowMenu.classList.add("hidden");
+      }
+    });
+    // Wire overflow menu items to actual toolbar buttons
+    $("#ovf-star")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-star")?.click(); });
+    $("#ovf-archive")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-archive")?.click(); });
+    $("#ovf-thread")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-thread-toggle")?.click(); });
+    $("#ovf-link")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-link-deal-btn")?.click(); });
+  }
+
+  // --- Mobile: Collapsible search ---
+  const searchInput = $("#mail-search-input");
+  if (searchInput) {
+    searchInput.addEventListener("focus", () => searchInput.classList.add("expanded"));
+    searchInput.addEventListener("blur", () => { if (!searchInput.value) searchInput.classList.remove("expanded"); });
+  }
+
+  // --- Mobile: Folder/tag bottom sheet ---
+  const foldersToggle = $("#mail-folders-toggle");
+  const sideBarMobile = $(".mail-right-sidebar", modal);
+  if (foldersToggle && sideBarMobile) {
+    foldersToggle.addEventListener("click", () => {
+      sideBarMobile.classList.toggle("mobile-open");
+    });
+    // Close bottom sheet when a folder or tag is clicked
+    sideBarMobile.addEventListener("click", (e) => {
+      if (e.target.closest(".mail-folder-btn") || e.target.closest(".mail-tag-item")) {
+        sideBarMobile.classList.remove("mobile-open");
+      }
+    });
+  }
 }
 
 async function loadMailAccountsForModal() {
@@ -16768,27 +16810,66 @@ function renderMailList(msgs) {
         } catch (err) { showToast('Failed to load draft: ' + err.message, true); }
         return;
       }
-      const isHidden = detail.classList.contains("hidden");
-      detail.classList.toggle("hidden");
-      if (!isHidden) return; // was shown, now hiding
-      if (item._mailLoaded) return;
-      item._mailLoaded = true;
-      detail.innerHTML = '<div class="mail-loading">Loading full email…</div>';
+      // Mobile: full-screen overlay
+      const isMobile = window.innerWidth <= 600;
       try {
         const fullMail = await fetchMailMessage(id);
-        detail.innerHTML = "";
-        const embed = document.createElement("div");
-        embed.className = "opp-preview-mail-embed";
-        detail.appendChild(embed);
-        renderMailEmbedPanel(embed, fullMail, id, {
-          openUrl: portalMailMessageUrl(id)
-        });
         if (getMailMessageIsRead(fullMail)) {
           mailDashboardReadIds.add(id);
           saveMailDashboardReadIds();
         }
         markMailMessageRead(id).catch(() => {});
         row.classList.add('mail-row-read');
+
+        if (isMobile) {
+          const overlay = document.createElement('div');
+          overlay.className = 'mail-mobile-email-overlay';
+          const backHeader = document.createElement('div');
+          backHeader.style.cssText = 'display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.6rem; border-bottom:1px solid var(--border); background:var(--surface); flex-shrink:0;';
+          backHeader.innerHTML = '<button class="btn btn-ghost btn-small" id="mail-mobile-back"><i class="ti ti-arrow-left"></i><span class="btn-label"> Back</span></button><span style="font-weight:600; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(norm.subject || '') + '</span>';
+          overlay.appendChild(backHeader);
+          const content = document.createElement('div');
+          content.style.cssText = 'flex:1; overflow-y:auto; padding:0.5rem;';
+          const embed = document.createElement('div');
+          embed.className = 'opp-preview-mail-embed';
+          content.appendChild(embed);
+          overlay.appendChild(content);
+          document.body.appendChild(overlay);
+          renderMailEmbedPanel(embed, fullMail, id, { openUrl: portalMailMessageUrl(id) });
+          backHeader.querySelector('#mail-mobile-back').addEventListener('click', () => overlay.remove());
+          const closeH = (ev) => { if (ev.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', closeH); } };
+          document.addEventListener('keydown', closeH);
+          return;
+        }
+      } catch (err) {
+        if (isMobile) { showToast('Failed to load: ' + err.message, true); return; }
+      }
+
+      // Desktop: inline expansion
+      const isHidden = detail.classList.contains("hidden");
+      detail.classList.toggle("hidden");
+      if (!isHidden) return;
+      if (item._mailLoaded) return;
+      item._mailLoaded = true;
+      detail.innerHTML = '<div class="mail-loading">Loading full email…</div>';
+      try {
+        if (!isMobile) {
+          // fullMail already fetched above for mobile path, re-fetch for desktop
+          const fullMail2 = await fetchMailMessage(id);
+          detail.innerHTML = "";
+          const embed2 = document.createElement("div");
+          embed2.className = "opp-preview-mail-embed";
+          detail.appendChild(embed2);
+          renderMailEmbedPanel(embed2, fullMail2, id, {
+            openUrl: portalMailMessageUrl(id)
+          });
+          if (getMailMessageIsRead(fullMail2)) {
+            mailDashboardReadIds.add(id);
+            saveMailDashboardReadIds();
+          }
+          markMailMessageRead(id).catch(() => {});
+          row.classList.add('mail-row-read');
+        }
       } catch (e) {
         detail.innerHTML = `<div class="mail-empty">Failed to load full email: ${escapeHtml(e.message || e)}</div>`;
       }
@@ -18250,7 +18331,7 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
   replyBtn.type = "button";
   replyBtn.className = "btn btn-ghost btn-small";
   replyBtn.title = "Reply";
-  replyBtn.innerHTML = '<i class="ti ti-arrow-back-up"></i> Reply';
+  replyBtn.innerHTML = '<i class="ti ti-arrow-back-up"></i><span class="btn-label"> Reply</span>';
   replyBtn.addEventListener("click", () => {
     renderInlineReply(panel, "reply", messageId, norm);
   });
@@ -18260,7 +18341,7 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
   replyAllBtn.type = "button";
   replyAllBtn.className = "btn btn-ghost btn-small";
   replyAllBtn.title = "Reply all";
-  replyAllBtn.innerHTML = '<i class="ti ti-arrow-back-up"></i> Reply All';
+  replyAllBtn.innerHTML = '<i class="ti ti-arrow-back-up"></i><span class="btn-label"> Reply All</span>';
   replyAllBtn.addEventListener("click", () => {
     renderInlineReply(panel, "reply-all", messageId, norm);
   });
@@ -18270,7 +18351,7 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
   fwdBtn.type = "button";
   fwdBtn.className = "btn btn-ghost btn-small";
   fwdBtn.title = "Forward";
-  fwdBtn.innerHTML = '<i class="ti ti-arrow-forward-up"></i> Forward';
+  fwdBtn.innerHTML = '<i class="ti ti-arrow-forward-up"></i><span class="btn-label"> Forward</span>';
   fwdBtn.addEventListener("click", () => {
     renderInlineReply(panel, "forward", messageId, norm);
   });
@@ -21719,6 +21800,8 @@ async function populateEmailScannerTab() {
 }
 
 function bindScannerAdminButtons() {
+  const ctrList = $("#scanner-contractors-list");
+  const rulesList = $("#scanner-rules-list");
   // Add account
   const addBtn = $("#scanner-account-add");
   const form = $("#scanner-account-form");
