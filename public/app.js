@@ -18241,7 +18241,7 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
 
   const foot = document.createElement("div");
   foot.className = "opp-preview-mail-foot";
-  foot.style.cssText = "display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; padding:0.5rem 0;";
+  foot.style.cssText = "display:flex; align-items:center; gap:0.25rem; flex-wrap:wrap; padding:0.15rem 0;";
 
   const actionBtns = document.createElement("div");
   actionBtns.style.cssText = "display:flex; gap:0.3rem; margin-left:auto;";

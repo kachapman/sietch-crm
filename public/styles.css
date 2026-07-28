@@ -3695,24 +3695,27 @@ body {
 }
 .mail-from {
   width: 160px;
-  flex-shrink: 0;
+  min-width: 80px;
+  flex-shrink: 1;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #aaa; /* less bright grey for dark bg */
+  color: #aaa;
 }
 .mail-subject {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #aaa; /* less bright grey instead of white */
+  color: #aaa;
   font-weight: 600;
 }
 .mail-date {
   width: 90px;
-  flex-shrink: 0;
+  min-width: 50px;
+  flex-shrink: 1;
   text-align: right;
   color: #666;
   font-size: 0.8rem;
@@ -3782,6 +3785,33 @@ body {
 @media (max-width: 900px) {
   .scanner-admin-grid {
     grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 600px) {
+  .mail-row {
+    gap: 0.3rem;
+    padding: 0.3rem 0.4rem;
+    font-size: 0.82rem;
+  }
+  .mail-from {
+    width: 100px;
+    min-width: 60px;
+  }
+  .mail-date {
+    width: auto;
+    min-width: 50px;
+    font-size: 0.72rem;
+  }
+  .opp-preview-mail-foot {
+    gap: 0.15rem;
+    padding: 0.1rem 0;
+  }
+  .opp-preview-mail-foot .btn {
+    padding: 0.2rem 0.4rem;
+    font-size: 0.75rem;
+  }
+  .mail-header {
+    font-size: 0.78rem;
   }
 }
 .scanner-log {
