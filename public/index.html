@@ -537,18 +537,28 @@
                 <div id="scanner-status-box" class="infra-status-box">Loading…</div>
               </div>
               <div class="infra-section">
-                <h4>IMAP Accounts</h4>
+                <h4>CRM Mail Accounts</h4>
                 <div id="scanner-accounts-list" style="max-height:180px; overflow-y:auto;">Loading…</div>
                 <div style="margin-top:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
-                  <button type="button" id="scanner-account-add" class="btn btn-secondary btn-sm"><i class="ti ti-plus"></i> Add</button>
+                  <button type="button" id="scanner-account-add" class="btn btn-secondary btn-sm"><i class="ti ti-plus"></i> Add Account</button>
                   <button type="button" id="scanner-accounts-refresh" class="btn btn-ghost btn-sm"><i class="ti ti-refresh"></i></button>
                 </div>
                 <div id="scanner-account-form" class="hidden" style="margin-top:0.5rem; padding:0.5rem; background:var(--bg-elevated); border-radius:4px;">
-                  <label>Email<br><input id="scanner-acct-email" type="email" style="width:100%;"></label>
-                  <label style="margin-top:0.4rem;">IMAP Host<br><input id="scanner-acct-host" type="text" placeholder="imap.example.com" style="width:100%;"></label>
-                  <label style="margin-top:0.4rem;">IMAP Port<br><input id="scanner-acct-port" type="number" value="993" style="width:100px;"></label>
-                  <label style="margin-top:0.4rem;">Password<br><input id="scanner-acct-password" type="password" style="width:100%;"></label>
-                  <label style="margin-top:0.4rem;">Folder<br><input id="scanner-acct-folder" type="text" value="INBOX" style="width:100px;"></label>
+                  <label>Email Address<br><input id="scanner-acct-email" type="email" style="width:100%;" placeholder="user@example.com"></label>
+                  <div style="display:flex; gap:0.5rem; margin-top:0.4rem;">
+                    <div style="flex:2;"><label title="IMAP server for receiving mail">IMAP Host<br><input id="scanner-acct-host" type="text" placeholder="imap.example.com" style="width:100%;"></label></div>
+                    <div style="flex:1;"><label title="Port 993 for SSL, 143 for STARTTLS">IMAP Port<br><input id="scanner-acct-port" type="number" value="993" style="width:100%;"></label></div>
+                  </div>
+                  <label style="margin-top:0.4rem;" title="IMAP login password (stored encrypted)">IMAP Password<br><input id="scanner-acct-password" type="password" style="width:100%;"></label>
+                  <label style="margin-top:0.4rem;" title="IMAP folder to sync from">Folder<br><input id="scanner-acct-folder" type="text" value="INBOX" style="width:100px;"></label>
+                  <hr style="margin:0.5rem 0; border:none; border-top:1px solid var(--border);">
+                  <div style="font-size:0.8rem; color:var(--accent); margin-bottom:0.3rem;"><i class="ti ti-send"></i> SMTP (Sending)</div>
+                  <div style="display:flex; gap:0.5rem;">
+                    <div style="flex:2;"><label title="SMTP server for sending mail">SMTP Host<br><input id="scanner-acct-smtp-host" type="text" placeholder="smtp.example.com" style="width:100%;"></label></div>
+                    <div style="flex:1;"><label title="Port 587 for TLS, 465 for SSL">SMTP Port<br><input id="scanner-acct-smtp-port" type="number" value="587" style="width:100%;"></label></div>
+                  </div>
+                  <label style="margin-top:0.4rem;" title="SMTP login password (stored encrypted)">SMTP Password<br><input id="scanner-acct-smtp-password" type="password" style="width:100%;"></label>
+                  <label style="margin-top:0.4rem;" title="Name shown as sender on outgoing emails">From Name<br><input id="scanner-acct-from-name" type="text" style="width:100%;" placeholder="John Smith"></label>
                   <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
                     <button type="button" id="scanner-acct-save" class="btn btn-primary btn-sm"><i class="ti ti-device-floppy"></i> Save</button>
                     <button type="button" id="scanner-acct-cancel" class="btn btn-ghost btn-sm"><i class="ti ti-x"></i></button>
@@ -558,6 +568,7 @@
               <div class="infra-section">
                 <h4>Behavior Toggles</h4>
                 <div id="scanner-toggles" style="font-size:0.85rem;">
+                  <label style="display:flex; gap:0.5rem; align-items:center; margin:0.3rem 0; font-weight:600;"><input type="checkbox" id="scanner-toggle-auto-link" checked> Auto-link emails by [#PROJECTID] in subject (primary classifier function)</label>
                   <label style="display:flex; gap:0.5rem; align-items:center; margin:0.3rem 0;"><input type="checkbox" id="scanner-toggle-create-deals"> Create deals (auto-create new opportunity on strong match)</label>
                   <label style="display:flex; gap:0.5rem; align-items:center; margin:0.3rem 0;"><input type="checkbox" id="scanner-toggle-create-tasks"> Create tasks (auto-create review/follow-up tasks)</label>
                   <label style="display:flex; gap:0.5rem; align-items:center; margin:0.3rem 0;"><input type="checkbox" id="scanner-toggle-post-notes"> Post notes (attach email body to matched deal history)</label>
@@ -592,14 +603,14 @@
                   <button type="button" id="scanner-contractors-refresh" class="btn btn-ghost btn-sm"><i class="ti ti-refresh"></i></button>
                 </div>
                 <div id="scanner-contractor-form" class="hidden" style="margin-top:0.5rem; padding:0.5rem; background:var(--bg-elevated); border-radius:4px;">
-                  <label>Name<br><input id="scanner-ctr-name" type="text" style="width:100%;" placeholder="e.g. Claims inbox"></label>
-                  <label style="margin-top:0.4rem;">IMAP Account<br>
+                  <label title="A descriptive name for this routing rule">Name<br><input id="scanner-ctr-name" type="text" style="width:100%;" placeholder="e.g. Claims inbox"></label>
+                  <label style="margin-top:0.4rem;" title="Which IMAP account to apply this rule to (leave empty for all)">IMAP Account<br>
                     <select id="scanner-ctr-account" style="width:100%;">
                       <option value="">All accounts</option>
                     </select>
                   </label>
-                  <label style="margin-top:0.4rem;">Folder<br><input id="scanner-ctr-folder" type="text" value="INBOX" style="width:100px;"></label>
-                  <label style="margin-top:0.4rem;">Action<br>
+                  <label style="margin-top:0.4rem;" title="IMAP folder to monitor (e.g. INBOX, Sent, Claims)">Folder<br><input id="scanner-ctr-folder" type="text" value="INBOX" style="width:100px;"></label>
+                  <label style="margin-top:0.4rem;" title="What to do when an email matches: link_only = link to deal, create_deal = auto-create opportunity, create_task = create follow-up task, post_note = post email body to deal history">Action<br>
                     <select id="scanner-ctr-action" style="width:100%;">
                       <option value="link_only">Link only</option>
                       <option value="create_deal">Create deal</option>
@@ -607,12 +618,12 @@
                       <option value="post_note">Post note</option>
                     </select>
                   </label>
-                  <label style="margin-top:0.4rem;">Assignee<br>
+                  <label style="margin-top:0.4rem;" title="Assign matched emails to this user (for tasks and notifications)">Assignee<br>
                     <select id="scanner-ctr-user" style="width:100%;">
                       <option value="">None</option>
                     </select>
                   </label>
-                  <label style="margin-top:0.4rem;">Priority<br><input id="scanner-ctr-priority" type="number" value="0" style="width:80px;"></label>
+                  <label style="margin-top:0.4rem;" title="Higher priority rules are evaluated first (0 = default)"><b>Priority</b><br><input id="scanner-ctr-priority" type="number" value="0" style="width:80px;"></label>
                   <input type="hidden" id="scanner-ctr-edit-id" value="">
                   <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
                     <button type="button" id="scanner-ctr-save" class="btn btn-primary btn-sm"><i class="ti ti-device-floppy"></i> Save</button>
@@ -631,24 +642,24 @@
                   <button type="button" id="scanner-rules-refresh" class="btn btn-ghost btn-sm"><i class="ti ti-refresh"></i></button>
                 </div>
                 <div id="scanner-rule-form" class="hidden" style="margin-top:0.5rem; padding:0.5rem; background:var(--bg-elevated); border-radius:4px;">
-                  <label>Rule Name<br><input id="scanner-rule-name" type="text" style="width:100%;"></label>
-                  <label style="margin-top:0.4rem;">Type<br>
+                  <label title="Descriptive name for this classification rule">Rule Name<br><input id="scanner-rule-name" type="text" style="width:100%;"></label>
+                  <label style="margin-top:0.4rem;" title="What to match against: subject_regex = regex on email subject, sender_domain = match sender email domain, body_regex = regex on email body">Type<br>
                     <select id="scanner-rule-type" style="width:100%;">
                       <option value="subject_regex">Subject regex</option>
                       <option value="sender_domain">Sender domain</option>
                       <option value="body_regex">Body regex</option>
                     </select>
                   </label>
-                  <label style="margin-top:0.4rem;">Pattern<br><input id="scanner-rule-pattern" type="text" style="width:100%;" placeholder="regex or domain"></label>
-                  <label style="margin-top:0.4rem;">Action<br>
+                  <label style="margin-top:0.4rem;" title="Pattern to match. For regex: valid JavaScript regex (e.g. claim|policy). For domain: part of domain name (e.g. insurance.com)">Pattern<br><input id="scanner-rule-pattern" type="text" style="width:100%;" placeholder="regex or domain"></label>
+                  <label style="margin-top:0.4rem;" title="What to do when this rule matches: tag = add a tag, link = link to a deal by ID, skip = ignore this email">Action<br>
                     <select id="scanner-rule-action" style="width:100%;">
                       <option value="tag">Tag</option>
                       <option value="link">Link to deal</option>
                       <option value="skip">Skip</option>
                     </select>
                   </label>
-                  <label style="margin-top:0.4rem;">Action Target<br><input id="scanner-rule-target" type="text" style="width:100%;" placeholder="tag name or deal ID"></label>
-                  <label style="margin-top:0.4rem;">Priority<br><input id="scanner-rule-priority" type="number" value="0" style="width:80px;"></label>
+                  <label style="margin-top:0.4rem;" title="For 'tag' action: tag name to apply. For 'link' action: deal/project ID to link to">Action Target<br><input id="scanner-rule-target" type="text" style="width:100%;" placeholder="tag name or deal ID"></label>
+                  <label style="margin-top:0.4rem;" title="Higher priority rules are evaluated first (0 = default)">Priority<br><input id="scanner-rule-priority" type="number" value="0" style="width:80px;"></label>
                   <input type="hidden" id="scanner-rule-edit-id" value="">
                   <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
                     <button type="button" id="scanner-rule-save" class="btn btn-primary btn-sm"><i class="ti ti-device-floppy"></i> Save</button>
@@ -664,7 +675,7 @@
               </div>
               <div class="infra-section">
                 <h4>Scanner Log</h4>
-                <div id="scanner-log-list" style="max-height:250px; overflow-y:auto; font-size:0.8rem;">Loading…</div>
+                <div id="scanner-log-list" class="scanner-log" style="max-height:300px; overflow-y:auto;">Loading…</div>
                 <button type="button" id="scanner-log-refresh" class="btn btn-secondary btn-sm" style="margin-top:0.5rem;"><i class="ti ti-refresh"></i></button>
               </div>
               <div class="infra-section">

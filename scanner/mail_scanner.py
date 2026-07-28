@@ -53,6 +53,7 @@ DEFAULT_CONTRACTORS = {
         },
     ],
     "scanner_behavior": {
+        "auto_link_project_id": True,
         "create_deals": False,
         "create_tasks": False,
         "post_notes": False,
@@ -542,27 +543,48 @@ def _classify_message(msg: dict[str, Any]) -> dict[str, Any]:
         if rule_result.get("linked_deal_id"):
             linked_deal_id = rule_result["linked_deal_id"]
 
-    claim_match = None
-    for m in DEAL_ID_RE.finditer(subject):
-        claim_match = m.group(1)
-        break
+    # Check auto-link toggle
+    config = get_contractors()
+    toggles = config.get("scanner_behavior", {})
+    auto_link_enabled = toggles.get("auto_link_project_id", True)
 
-    if claim_match:
-        deal = _find_opportunity_by_claim_code(claim_match)
-        if deal:
-            classification = "claim_code_deal_link"
-            match_strength = "strong"
-            action = "link_deal"
-            linked_deal_id = deal["id"]
-        else:
-            for m in DEAL_ID_RE.finditer(body):
-                deal = _find_opportunity_by_claim_code(m.group(1))
-                if deal:
-                    classification = "claim_code_deal_link"
-                    match_strength = "strong"
-                    action = "link_deal"
-                    linked_deal_id = deal["id"]
-                    break
+    # Try [#PROJECTID] format first (DEAL_LINK_RE)
+    if auto_link_enabled and classification == "uncertain":
+        link_match = DEAL_LINK_RE.search(subject)
+        if not link_match:
+            link_match = DEAL_LINK_RE.search(body[:5000])
+        if link_match:
+            project_id = int(link_match.group(1))
+            deal = _find_opportunity_by_deal_id(project_id)
+            if deal:
+                classification = "project_id_deal_link"
+                match_strength = "strong"
+                action = "link_deal"
+                linked_deal_id = deal["id"]
+
+    # Try [#DEAL-NNN] format (DEAL_ID_RE)
+    if auto_link_enabled and classification == "uncertain":
+        claim_match = None
+        for m in DEAL_ID_RE.finditer(subject):
+            claim_match = m.group(1)
+            break
+
+        if claim_match:
+            deal = _find_opportunity_by_claim_code(claim_match)
+            if deal:
+                classification = "claim_code_deal_link"
+                match_strength = "strong"
+                action = "link_deal"
+                linked_deal_id = deal["id"]
+            else:
+                for m in DEAL_ID_RE.finditer(body):
+                    deal = _find_opportunity_by_claim_code(m.group(1))
+                    if deal:
+                        classification = "claim_code_deal_link"
+                        match_strength = "strong"
+                        action = "link_deal"
+                        linked_deal_id = deal["id"]
+                        break
 
     if classification == "uncertain" and DEAL_ID_RE.search(subject):
         classification = "claim_code_deal_link"

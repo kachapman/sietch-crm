@@ -1,5 +1,6 @@
 :root {
   --bg: #0f1117;
+  --bg-elevated: #1a1e2a;
   --surface: #181b24;
   --surface-2: #1f2430;
   --border: #2a3142;
@@ -3783,6 +3784,44 @@ body {
     grid-template-columns: 1fr;
   }
 }
+.scanner-log {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  background: #0d1117;
+  color: #c9d1d9;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid #21262d;
+}
+.scanner-log:empty::before {
+  content: '$ tail -f scanner.log';
+  color: #484f58;
+}
+.scanner-log .log-entry {
+  padding: 1px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scanner-log .log-entry .log-ts {
+  color: #484f58;
+}
+.scanner-log .log-entry.log-processed .log-status {
+  color: #3fb950;
+}
+.scanner-log .log-entry.log-error .log-status {
+  color: #f85149;
+}
+.scanner-log .log-entry.log-skipped .log-status {
+  color: #d29922;
+}
+.scanner-log .log-entry.log-rule .log-status {
+  color: #a371f7;
+}
+.scanner-log .log-entry .log-msg {
+  color: #c9d1d9;
+}
 .mail-viewer-warning-content {
   position: relative;
 }
@@ -3951,9 +3990,8 @@ body {
 .mail-detail .opp-preview-mail-embed,
 .mail-detail .opp-preview-mail-text,
 .mail-detail .opp-preview-mail-iframe {
-  /* follow deal/other tiles contrast: darker bg for container, much darker text for body readability */
   background: #24272e;
-  color: #222; /* dark text, not light grey */
+  color: var(--text);
   border-color: var(--border);
 }
 .mail-detail .opp-preview-mail-text {

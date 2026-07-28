@@ -15670,12 +15670,15 @@ async function openComposeModal(opts = {}) {
   if (templateBtn && !templateBtn.dataset.bound) {
     templateBtn.dataset.bound = '1';
     templateBtn.addEventListener('click', async () => {
+      // Remove previous picker if open
+      const oldPicker = templateBtn.parentElement?.querySelector('.mail-link-deal-dropdown');
+      if (oldPicker) { oldPicker.remove(); return; }
       try {
         const data = await api('/api/v2/mail/templates');
         const templates = data.templates || [];
         const picker = document.createElement('div');
         picker.className = 'mail-link-deal-dropdown';
-        picker.style.cssText = 'position:absolute; top:100%; left:0; z-index:100;';
+        picker.style.cssText = 'position:absolute; top:100%; left:0; z-index:100; max-height:200px; overflow-y:auto;';
         picker.innerHTML = templates.length
           ? templates.map(t => `<button type="button" class="template-pick-btn" data-template-id="${t.id}" style="display:block;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;">${escapeHtml(t.title)}</button>`).join('')
           : '<div style="padding:0.5rem; color:var(--muted);">No templates saved</div>';
@@ -15692,6 +15695,15 @@ async function openComposeModal(opts = {}) {
             picker.remove();
           });
         });
+        // Click-outside to close
+        setTimeout(() => {
+          document.addEventListener('click', function closePicker(ev) {
+            if (!picker.contains(ev.target) && ev.target !== templateBtn) {
+              picker.remove();
+              document.removeEventListener('click', closePicker);
+            }
+          });
+        }, 0);
       } catch (e) { showToast('Failed to load templates: ' + e.message, true); }
     });
   }
@@ -21582,6 +21594,7 @@ async function populateEmailScannerTab() {
       const sb = cfg.scanner_behavior || cfg;
       if (sb) {
         const set = (id, val) => { const el = $(id); if (el) el.checked = !!val; };
+        set("#scanner-toggle-auto-link", sb.auto_link_project_id !== false);
         set("#scanner-toggle-create-deals", sb.create_deals);
         set("#scanner-toggle-create-tasks", sb.create_tasks);
         set("#scanner-toggle-post-notes", sb.post_notes);
@@ -21597,15 +21610,19 @@ async function populateEmailScannerTab() {
       const data = await api("/api/v2/mail/log?limit=50");
       const entries = data.entries || [];
       if (!entries.length) {
-        logList.innerHTML = '<p style="color:var(--muted);font-size:0.85rem;">No scanner log entries yet.</p>';
+        logList.innerHTML = '<div style="color:#484f58;">$ tail -f scanner.log<br>No entries yet.</div>';
       } else {
         logList.innerHTML = entries.slice().reverse().map(e => {
-          const cls = e.status === 'processed' ? '' : e.status === 'error' ? 'fail' : '';
-          return `<div class="event-log-entry ${cls}"><span class="event-log-entry-body"><span class="event-log-entry-msg">${escapeHtml(e.classification || e.status || '—')}: ${escapeHtml((e.subject || '').slice(0, 60))}</span></span><span class="event-log-entry-time">${escapeHtml(e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : '')}</span></div>`;
+          const ts = e.timestamp ? new Date(e.timestamp).toLocaleTimeString('en-US', {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'}) : '--:--:--';
+          const status = (e.status || 'unknown').toUpperCase();
+          const cls = e.status === 'processed' ? 'log-processed' : e.status === 'error' ? 'log-error' : e.status === 'skipped' || e.status === 'already_processed' ? 'log-skipped' : e.classification && e.classification.startsWith('rule_') ? 'log-rule' : '';
+          const subj = (e.subject || '').slice(0, 50);
+          const from = e.from ? ` <${e.from}>` : '';
+          return `<div class="log-entry ${cls}"><span class="log-ts">[${ts}]</span> <span class="log-status">${escapeHtml(status)}</span> <span class="log-msg">${escapeHtml(subj)}${escapeHtml(from)}</span></div>`;
         }).join("");
       }
     } catch (e) {
-      logList.innerHTML = `<p style="color:var(--muted);">Failed to load log: ${escapeHtml(e.message)}</p>`;
+      logList.innerHTML = `<div style="color:#f85149;">$ ERROR: ${escapeHtml(e.message)}</div>`;
     }
   }
 
@@ -21698,9 +21715,20 @@ function bindScannerAdminButtons() {
       const port = parseInt($("#scanner-acct-port")?.value) || 993;
       const password = $("#scanner-acct-password")?.value;
       const folder = $("#scanner-acct-folder")?.value.trim() || "INBOX";
-      if (!email || !host || !password) { showToast("Email, host, and password required", true); return; }
+      const smtpHost = $("#scanner-acct-smtp-host")?.value.trim() || null;
+      const smtpPort = parseInt($("#scanner-acct-smtp-port")?.value) || 587;
+      const smtpPassword = $("#scanner-acct-smtp-password")?.value || null;
+      const fromName = $("#scanner-acct-from-name")?.value.trim() || null;
+      if (!email || !host || !password) { showToast("Email, IMAP host, and password required", true); return; }
       try {
-        await api("/api/v2/mail/accounts", { method: "POST", body: JSON.stringify({ email, imap_host: host, imap_port: port, password, folder }) });
+        const payload = { email, imap_host: host, imap_port: port, password, folder };
+        if (smtpHost) {
+          payload.smtp_host = smtpHost;
+          payload.smtp_port = smtpPort;
+          payload.smtp_password = smtpPassword;
+          payload.smtp_from_name = fromName;
+        }
+        await api("/api/v2/mail/accounts", { method: "POST", body: JSON.stringify(payload) });
         showToast("Account saved");
         form.classList.add("hidden");
         populateEmailScannerTab();
@@ -21725,6 +21753,7 @@ function bindScannerAdminButtons() {
         await api("/api/v2/mail/config", {
           method: "PUT",
           body: JSON.stringify({
+            auto_link_project_id: $("#scanner-toggle-auto-link")?.checked !== false,
             create_deals: $("#scanner-toggle-create-deals")?.checked || false,
             create_tasks: $("#scanner-toggle-create-tasks")?.checked || false,
             post_notes: $("#scanner-toggle-post-notes")?.checked || false,
