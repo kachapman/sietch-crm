@@ -2,6 +2,23 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — Email Module Polish & Scanner Admin Full Port (2026-07-28)
+
+- **Schema fixes.** Added `mail_folders` table to init.sql and new migration `002_add_mail_folders_and_indexes.sql` (was missing despite code referencing it). Added `mail_attachments` table, `mail_contractors` table, `mail_classification_rules` table. Added `raw_headers` and `attachments_json` columns to `mail_messages`.
+- **Tag CRUD.** Full create/read/update/delete for email tags. Backend: POST/PUT/DELETE `/api/v2/mail/tags/{id}`. Frontend: "New Tag" button in sidebar wired, right-click context menu for edit/delete on tags. Tag filter now wired to API — clicking a tag filters the inbox.
+- **Template CRUD.** Full create/read/update/delete for email templates. Backend: POST/PUT/DELETE `/api/v2/mail/templates/{id}`. Frontend: Template management UI in scanner admin (list + create/edit/delete form).
+- **Scanner admin account management.** Fixed wrong endpoint (was POST `/messages`, now POST `/accounts`). Added edit/delete buttons per account row in scanner admin. Edit opens the account settings modal.
+- **Attachment storage.** Scanner now fetches attachment metadata during IMAP sync (filename, MIME type, size). Stored in new `mail_attachments` table. Email detail view shows attachment chips with filenames and sizes.
+- **Raw email headers.** Scanner stores raw headers during IMAP fetch. New endpoint `GET /api/v2/mail/messages/{id}/headers`. "View Headers" button in email detail footer shows full headers in overlay modal.
+- **Contractors CRUD (scanner admin).** New `mail_contractors` table replaces file-based `contractors.json`. Full CRUD in scanner admin: name, linked IMAP account, folder, action type, assignee user, priority. Scanner reads from DB with file fallback.
+- **Classification rules editor.** New `mail_classification_rules` table. Full CRUD in scanner admin: rule name, type (subject_regex/sender_domain/body_regex), pattern, action, target, priority, enabled toggle.
+- **ML retrain button.** Wired the retrain button in scanner admin to `POST /api/v2/mail/retrain` endpoint. Calls `retrain_classifier_head()` in scanner.
+- **Feedback review.** New `GET /api/v2/mail/feedback` endpoint and `POST /api/v2/mail/feedback/{id}/review` for approving/rejecting classifications as training data.
+- **Drafts full polish.** Auto-save every 30 seconds while composing (with "Draft auto-saved" toast). Discard confirmation when closing compose with content. Draft list shows "To:" recipient, "Draft" badge, and body snippet. Clicking a draft row opens compose pre-filled with draft content.
+- **Email hover tooltip.** Subject line shows multi-line tooltip with From, Subject, and body snippet on hover.
+- **Print view.** Print button in email detail footer opens a new window with formatted email for printing.
+- **Files:** `init.sql`, `migrations/002_add_mail_folders_and_indexes.sql`, `server.py`, `public/app.js`, `public/index.html`, `scanner/mail_scanner.py`.
+
 ## Phase 3 — Email Scanner (2026-07-26)
 
 - **Backend rename: `vanguard` → `sietch`.** All backend references updated: `SESSION_COOKIE` → `sietch_session`, portal name → `"sietch"` (30+ occurrences in `server.py`), Docker network `vanguard-internal` → `sietch-internal`, `notification_dispatcher.py` PORTAL → `"sietch"`, `db.py` fallback defaults → `sietch_crm`/`sietch`. Cold migration strategy — all existing sessions invalidated on deploy.

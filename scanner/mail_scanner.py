@@ -301,6 +301,25 @@ def _fetch_messages(mailbox_cfg: dict[str, Any], since: datetime | None = None) 
             criterion = {"date": since}
         
         for msg in mailbox.fetch(criteria=criterion, mark_seen=False, bulk=False):
+            attachments = []
+            if msg.attachments:
+                for att in msg.attachments:
+                    attachments.append({
+                        "filename": att.filename or "unnamed",
+                        "mime_type": att.content_type or "application/octet/octet-stream",
+                        "size_bytes": len(att.payload) if att.payload else 0,
+                        "part_id": att.part or "",
+                    })
+            # Build raw headers string from imap_tools headers object
+            raw_headers = ""
+            if hasattr(msg, "headers") and msg.headers:
+                header_lines = []
+                for key in ("from", "to", "cc", "subject", "date", "message-id", "in-reply-to", "references", "content-type"):
+                    val = msg.headers.get(key)
+                    if val:
+                        header_lines.append(f"{key}: {val}")
+                raw_headers = "\n".join(header_lines)
+
             messages.append({
                 "uid": msg.uid,
                 "message_id": msg.message_id,
@@ -313,6 +332,8 @@ def _fetch_messages(mailbox_cfg: dict[str, Any], since: datetime | None = None) 
                 "body_html": msg.html or "",
                 "flags": list(msg.flags) if msg.flags else [],
                 "folder": folder,
+                "attachments": attachments,
+                "raw_headers": raw_headers,
             })
         
         mailbox.logout()
@@ -539,14 +560,19 @@ def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | No
         if existing:
             return existing["id"]
 
+        account_id = mailbox_cfg.get("account_id")
+        attachments = msg.get("attachments", [])
+        attachments_json = json.dumps(attachments) if attachments else None
+
         result = db.query_one(
             """INSERT INTO mail_messages
                (account_id, imap_uid, message_id, from_addr, to_addr, subject,
-                body_text, body_html, date_received, folder, is_read, is_archived)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                body_text, body_html, date_received, folder, is_read, is_archived,
+                attachments_json, raw_headers)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING id""",
             (
-                None,
+                account_id,
                 str(msg.get("uid") or ""),
                 msg.get("message_id") or "",
                 msg.get("from") or "",
@@ -558,15 +584,34 @@ def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | No
                 msg.get("folder") or "INBOX",
                 False,
                 False,
+                attachments_json,
+                msg.get("raw_headers"),
             ),
         )
         msg_id = result["id"] if result else None
         if msg_id:
             _mark_processed(str(msg.get("uid") or msg_id))
+            # Store attachment records and optionally download files
+            if attachments and account_id:
+                _store_attachments(msg_id, account_id, attachments, msg)
         return msg_id
     except Exception as e:
         logger.error("Failed to store message: %s", e)
         return None
+
+
+def _store_attachments(message_id: int, account_id: int, attachments: list[dict], msg: dict[str, Any]) -> None:
+    """Store attachment metadata in mail_attachments table."""
+    for att in attachments:
+        try:
+            db.execute(
+                "INSERT INTO mail_attachments (message_id, filename, mime_type, size_bytes, imap_part_id) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (message_id, att.get("filename", "unnamed"), att.get("mime_type", "application/octet/octet-stream"),
+                 att.get("size_bytes", 0), att.get("part_id", "")),
+            )
+        except Exception as e:
+            logger.error("Failed to store attachment metadata: %s", e)
 
 
 def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[str, Any]:
@@ -700,10 +745,32 @@ def get_scanner_log(limit: int = 200) -> list[dict[str, Any]]:
 
 
 def get_contractors() -> dict[str, Any]:
+    """Get contractors from DB, falling back to file-based config."""
+    try:
+        rows = db.query_dicts("SELECT * FROM mail_contractors WHERE enabled = TRUE ORDER BY priority DESC, name")
+        if rows:
+            contractors = []
+            for r in rows:
+                contractors.append({
+                    "id": str(r["id"]),
+                    "name": r["name"],
+                    "imap_account": r.get("imap_account_id") or "",
+                    "folder": r.get("folder") or "INBOX",
+                    "action": r.get("action") or "link_only",
+                    "responsible": r.get("responsible_user_id") or "",
+                })
+            return {
+                "contractors": contractors,
+                "scanner_behavior": DEFAULT_CONTRACTORS["scanner_behavior"],
+                "action_toggles": DEFAULT_CONTRACTORS["action_toggles"],
+            }
+    except Exception as e:
+        logger.warning("Failed to load contractors from DB, falling back to file: %s", e)
     return _read_json(CONTRACTORS_FILE, default=DEFAULT_CONTRACTORS)
 
 
 def update_contractors(data: dict[str, Any]) -> dict[str, Any]:
+    """Update contractors — writes to file (DB managed via CRM admin API)."""
     _write_json(CONTRACTORS_FILE, data)
     return data
 

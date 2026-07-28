@@ -15140,6 +15140,7 @@ let mailState = {
   search: '',
   selected: new Set(),
 };
+let composeAutoSaveTimer = null;
 
 // Dashboard-side read/unread overrides for the mail inbox list.
 // Used because the CRM /mail/messages/markread endpoint currently returns HTML error pages
@@ -15810,18 +15811,52 @@ function bindComposeEmailModal() {
   modal.dataset.bound = '1';
   modal.querySelectorAll('[data-compose-email-dismiss]').forEach(el => {
     el.addEventListener('click', () => {
+      // Discard confirmation if content exists
+      const to = $('#compose-to')?.value.trim();
+      const subject = $('#compose-subject')?.value.trim();
+      const body = $('#compose-body')?.innerText?.trim();
+      if ((to || subject || body) && !confirm('Discard unsaved draft?')) return;
       modal.classList.add('hidden');
+      clearInterval(composeAutoSaveTimer);
+      composeAutoSaveTimer = null;
       const inboxTab = document.querySelector('.mail-inbox-tab[data-mailtab="inbox"]');
       if (inboxTab) switchMailTab(inboxTab);
     });
   });
   modal.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      const to = $('#compose-to')?.value.trim();
+      const subject = $('#compose-subject')?.value.trim();
+      const body = $('#compose-body')?.innerText?.trim();
+      if ((to || subject || body) && !confirm('Discard unsaved draft?')) return;
       modal.classList.add('hidden');
+      clearInterval(composeAutoSaveTimer);
+      composeAutoSaveTimer = null;
       const inboxTab = document.querySelector('.mail-inbox-tab[data-mailtab="inbox"]');
       if (inboxTab) switchMailTab(inboxTab);
     }
   });
+
+  // Auto-save draft every 30 seconds if content changed
+  if (composeAutoSaveTimer) clearInterval(composeAutoSaveTimer);
+  let lastAutoSaveContent = '';
+  composeAutoSaveTimer = setInterval(async () => {
+    const to = $('#compose-to')?.value.trim();
+    const subject = $('#compose-subject')?.value.trim();
+    const body = $('#compose-body')?.innerHTML || '';
+    const current = `${to}|${subject}|${body}`;
+    if (!to && !subject && !body) return; // nothing to save
+    if (current === lastAutoSaveContent) return; // no change
+    lastAutoSaveContent = current;
+    try {
+      const accountId = parseInt($('#compose-from-account')?.value) || null;
+      await api('/api/v2/mail/drafts', {
+        method: 'POST',
+        body: JSON.stringify({ account_id: accountId, to, subject, body })
+      });
+      showToast('Draft auto-saved');
+    } catch { /* silent */ }
+  }, 30000);
 }
 
 function attachMailModalListeners() {
@@ -16228,11 +16263,12 @@ async function loadMailMessagesForModal() {
       const drafts = data.drafts || [];
       mailState.messages = drafts.map(d => ({
         id: d.id,
-        from: d.from_addr || '',
+        from: d.to_addr ? `To: ${d.to_addr}` : (d.from_addr || ''),
         subject: d.subject || '(no subject)',
         date: d.created_at || d.updated_at || '',
         isDraft: true,
-        body: d.body || '',
+        body: d.body_text || d.body_html || '',
+        snippet: (d.body_text || '').slice(0, 80),
       }));
       renderMailList(mailState.messages);
     } catch (e) {
@@ -16247,6 +16283,7 @@ async function loadMailMessagesForModal() {
     if (mailState.activeAccount && mailState.activeAccount !== 'crm') params.push(`account_id=${mailState.activeAccount}`);
     if (mailState.activeFolder && mailState.activeFolder !== "INBOX") params.push(`folder=${encodeURIComponent(mailState.activeFolder)}`);
     if (mailState.search) params.push(`search=${encodeURIComponent(mailState.search)}`);
+    if (mailState.activeTag) params.push(`tag=${encodeURIComponent(mailState.activeTag)}`);
     if (params.length) url += '?' + params.join('&');
     const data = await api(url);
     mailState.messages = data.messages || [];
@@ -16294,25 +16331,87 @@ async function renderMailFolders() {
     const tags = data.tags || [];
     if (!tags.length) {
       tagList.innerHTML = '<p style="font-size:0.75rem; color:var(--muted); padding:0.25rem 0.5rem;">No tags yet</p>';
-      return;
-    }
-    tagList.innerHTML = tags.map(t => `
-      <div class="mail-tag-item" data-tag-id="${t.id}" data-tag-title="${escapeHtml(t.title)}">
-        <span class="mail-tag-dot" style="background:${escapeHtml(t.color || '#6c757d')}"></span>
-        ${escapeHtml(t.title)}
-      </div>
-    `).join("");
-    tagList.querySelectorAll(".mail-tag-item").forEach(el => {
-      el.addEventListener("click", () => {
-        tagList.querySelectorAll(".mail-tag-item").forEach(x => x.classList.remove("active"));
-        el.classList.add("active");
-        mailState.activeTag = el.dataset.tagTitle;
-        // Filter inbox by tag — reload with tag filter
-        loadMailMessagesForModal();
+    } else {
+      tagList.innerHTML = tags.map(t => `
+        <div class="mail-tag-item" data-tag-id="${t.id}" data-tag-title="${escapeHtml(t.title)}" data-tag-color="${escapeHtml(t.color || '#6c757d')}">
+          <span class="mail-tag-dot" style="background:${escapeHtml(t.color || '#6c757d')}"></span>
+          ${escapeHtml(t.title)}
+        </div>
+      `).join("");
+      tagList.querySelectorAll(".mail-tag-item").forEach(el => {
+        el.addEventListener("click", () => {
+          tagList.querySelectorAll(".mail-tag-item").forEach(x => x.classList.remove("active"));
+          el.classList.add("active");
+          mailState.activeTag = el.dataset.tagTitle;
+          loadMailMessagesForModal();
+        });
+        el.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          const ctx = $("#mail-tag-context-menu");
+          if (!ctx) return;
+          ctx.dataset.tagId = el.dataset.tagId;
+          ctx.dataset.tagTitle = el.dataset.tagTitle;
+          ctx.dataset.tagColor = el.dataset.tagColor;
+          ctx.style.display = "block";
+          ctx.style.left = e.clientX + "px";
+          ctx.style.top = e.clientY + "px";
+        });
       });
-    });
+    }
   } catch (e) {
     tagList.innerHTML = '<p style="font-size:0.75rem; color:var(--muted); padding:0.25rem 0.5rem;">Tags unavailable</p>';
+  }
+
+  // Tag context menu handlers
+  const tagCtx = $("#mail-tag-context-menu");
+  if (tagCtx && !tagCtx.dataset.bound) {
+    tagCtx.dataset.bound = "1";
+    document.addEventListener("click", () => { tagCtx.style.display = "none"; });
+    $("#mail-tag-edit-btn")?.addEventListener("click", async () => {
+      const id = tagCtx.dataset.tagId;
+      const oldTitle = tagCtx.dataset.tagTitle;
+      const oldColor = tagCtx.dataset.tagColor;
+      tagCtx.style.display = "none";
+      if (!id) return;
+      const newTitle = prompt("Rename tag:", oldTitle);
+      if (newTitle === null || !newTitle.trim()) return;
+      const newColor = prompt("Tag color (hex):", oldColor);
+      try {
+        await api(`/api/v2/mail/tags/${id}`, { method: "PUT", body: JSON.stringify({ title: newTitle.trim(), color: newColor || oldColor }) });
+        showToast("Tag updated");
+        await renderMailFolders();
+      } catch (e) { showToast("Failed: " + e.message, true); }
+    });
+    $("#mail-tag-delete-btn")?.addEventListener("click", async () => {
+      const id = tagCtx.dataset.tagId;
+      const title = tagCtx.dataset.tagTitle;
+      tagCtx.style.display = "none";
+      if (!id) return;
+      if (!confirm(`Delete tag "${title}"?`)) return;
+      try {
+        await api(`/api/v2/mail/tags/${id}`, { method: "DELETE" });
+        showToast("Tag deleted");
+        if (mailState.activeTag === title) mailState.activeTag = null;
+        await renderMailFolders();
+        await loadMailMessagesForModal();
+      } catch (e) { showToast("Failed: " + e.message, true); }
+    });
+  }
+
+  // New Tag button
+  const addBtn = $("#mail-tag-add-btn");
+  if (addBtn && !addBtn.dataset.bound) {
+    addBtn.dataset.bound = "1";
+    addBtn.addEventListener("click", async () => {
+      const title = prompt("Tag name:");
+      if (!title || !title.trim()) return;
+      const color = prompt("Tag color (hex):", "#6c757d");
+      try {
+        await api("/api/v2/mail/tags", { method: "POST", body: JSON.stringify({ title: title.trim(), color: color || "#6c757d" }) });
+        showToast("Tag created");
+        await renderMailFolders();
+      } catch (e) { showToast("Failed: " + e.message, true); }
+    });
   }
 }
 
@@ -16501,14 +16600,17 @@ function renderMailList(msgs) {
 
     const fromDiv = document.createElement("div");
     fromDiv.className = "mail-from";
+    const fromSnippet = from.slice(0, 28);
     fromDiv.title = from;
-    fromDiv.textContent = from.slice(0, 28);
+    fromDiv.textContent = fromSnippet;
     row.appendChild(fromDiv);
 
     const subjDiv = document.createElement("div");
     subjDiv.className = "mail-subject";
-    subjDiv.title = subj;
-    subjDiv.textContent = subj.slice(0, 80);
+    const draftBadge = m.isDraft ? '<span style="background:var(--warning-subtle,#fef3c7); color:var(--warning,#d97706); padding:0.1rem 0.3rem; border-radius:3px; font-size:0.7rem; margin-right:0.3rem;">Draft</span>' : '';
+    const bodySnippet = (m.body_text || m.snippet || '').replace(/<[^>]+>/g, '').trim().slice(0, 100);
+    subjDiv.title = `${from}\n${subj}\n${bodySnippet}`;
+    subjDiv.innerHTML = draftBadge + escapeHtml(subj.slice(0, 80));
     row.appendChild(subjDiv);
 
     // Body snippet
@@ -16567,6 +16669,20 @@ function renderMailList(msgs) {
 
     expBtn.addEventListener("click", async (e) => {
       e.stopImmediatePropagation();
+      // Drafts: open compose pre-filled
+      if (m.isDraft) {
+        try {
+          const draft = await api(`/api/v2/mail/drafts/${id}`);
+          openComposeModal({
+            to: draft.to_addr || '',
+            subject: draft.subject || '',
+            body: draft.body_html || draft.body_text || '',
+            title: 'Edit Draft',
+            draftId: draft.id,
+          });
+        } catch (err) { showToast('Failed to load draft: ' + err.message, true); }
+        return;
+      }
       const isHidden = detail.classList.contains("hidden");
       detail.classList.toggle("hidden");
       if (!isHidden) return; // was shown, now hiding
@@ -18025,8 +18141,9 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
     attBar.className = "mail-attachments-panel";
     attBar.innerHTML = "<strong>Attachments:</strong> ";
     atts.forEach((a) => {
-      const fileName = a.fileName || a.title || a.storedFileName || "file";
-      const fileSize = a.size ? ` (${a.size} KB)` : "";
+      const fileName = a.filename || a.fileName || a.title || a.storedFileName || "file";
+      const sizeBytes = a.size_bytes || a.size || 0;
+      const fileSize = sizeBytes > 1024 * 1024 ? ` (${(sizeBytes / 1024 / 1024).toFixed(1)} MB)` : sizeBytes > 1024 ? ` (${Math.round(sizeBytes / 1024)} KB)` : sizeBytes ? ` (${sizeBytes} B)` : "";
       const wrap = document.createElement("span");
       wrap.className = "mail-attachment-link";
       wrap.textContent = fileName + fileSize;
@@ -18090,6 +18207,56 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
     } catch (e) { showToast("Failed to archive: " + (e.message || e), true); }
   });
   actionBtns.appendChild(archiveBtn);
+
+  const headersBtn = document.createElement("button");
+  headersBtn.type = "button";
+  headersBtn.className = "btn btn-ghost btn-small";
+  headersBtn.title = "View Headers";
+  headersBtn.innerHTML = '<i class="ti ti-file-code"></i>';
+  headersBtn.addEventListener("click", async () => {
+    try {
+      const data = await api(`/api/v2/mail/messages/${encodeURIComponent(messageId)}/headers`);
+      const headers = data.headers || "(no headers)";
+      const overlay = document.createElement("div");
+      overlay.style.cssText = "position:fixed; inset:0; z-index:10000; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center;";
+      overlay.innerHTML = `<div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:1rem; max-width:700px; width:90%; max-height:80vh; overflow:auto;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+          <strong>Email Headers</strong>
+          <button class="btn btn-ghost btn-small headers-close"><i class="ti ti-x"></i></button>
+        </div>
+        <pre style="font-size:0.75rem; white-space:pre-wrap; word-break:break-all; margin:0; color:var(--text);">${escapeHtml(headers)}</pre>
+      </div>`;
+      overlay.querySelector(".headers-close").addEventListener("click", () => overlay.remove());
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
+    } catch (e) { showToast("Failed to load headers: " + e.message, true); }
+  });
+  actionBtns.appendChild(headersBtn);
+
+  const printBtn = document.createElement("button");
+  printBtn.type = "button";
+  printBtn.className = "btn btn-ghost btn-small";
+  printBtn.title = "Print";
+  printBtn.innerHTML = '<i class="ti ti-printer"></i>';
+  printBtn.addEventListener("click", () => {
+    const printWin = window.open("", "_blank", "width=800,height=600");
+    const subject = norm.subject || "";
+    const from = norm.from || "";
+    const toList = norm.toList || "";
+    const date = norm.date ? formatPreviewDateTime(norm.date) || norm.date : "";
+    const bodyPick = pickMailBodyForDisplay(norm, { allowIntroFallback: false, crmPayload });
+    const bodyContent = bodyPick.mode === "html" ? bodyPick.content : `<pre style="white-space:pre-wrap;">${escapeHtml(bodyPick.content || "")}</pre>`;
+    printWin.document.write(`<!DOCTYPE html><html><head><title>${escapeHtml(subject)}</title>
+      <style>body{font-family:sans-serif;margin:2rem;color:#222;}h1{font-size:1.2rem;}pre{font-size:0.85rem;}</style>
+      </head><body>
+      <h1>${escapeHtml(subject)}</h1>
+      <p><strong>From:</strong> ${escapeHtml(from)}<br><strong>To:</strong> ${escapeHtml(toList)}<br><strong>Date:</strong> ${escapeHtml(date)}</p>
+      <hr>${bodyContent}</body></html>`);
+    printWin.document.close();
+    printWin.focus();
+    printWin.print();
+  });
+  actionBtns.appendChild(printBtn);
 
   // Linked deals badges
   if (mail.linked_deals && mail.linked_deals.length > 0) {
@@ -21307,8 +21474,27 @@ async function populateEmailScannerTab() {
         acctList.innerHTML = accounts.map(a => `
           <div style="padding:4px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
             <span>${escapeHtml(a.email || '')} — ${escapeHtml(a.imap_host || '')}:${a.imap_port || 993}</span>
-            <span style="font-size:0.75rem; color:${a.sync_enabled ? 'var(--accent)' : 'var(--muted)'};">${a.sync_enabled ? '● Active' : '○ Disabled'}</span>
+            <span style="display:flex; gap:0.3rem; align-items:center;">
+              <span style="font-size:0.75rem; color:${a.sync_enabled ? 'var(--accent)' : 'var(--muted)'};">${a.sync_enabled ? '● Active' : '○ Disabled'}</span>
+              <button type="button" class="btn btn-ghost btn-sm scanner-acct-edit" data-id="${a.id}" style="font-size:0.75rem;"><i class="ti ti-pencil"></i></button>
+              <button type="button" class="btn btn-ghost btn-sm scanner-acct-delete" data-id="${a.id}" data-email="${escapeHtml(a.email || '')}" style="font-size:0.75rem; color:var(--danger);"><i class="ti ti-trash"></i></button>
+            </span>
           </div>`).join("");
+        acctList.querySelectorAll(".scanner-acct-edit").forEach(btn => {
+          btn.addEventListener("click", () => openAccountSettingsModal(parseInt(btn.dataset.id)));
+        });
+        acctList.querySelectorAll(".scanner-acct-delete").forEach(btn => {
+          btn.addEventListener("click", async () => {
+            const id = btn.dataset.id;
+            const email = btn.dataset.email;
+            if (!confirm(`Delete account "${email}"? This cannot be undone.`)) return;
+            try {
+              await api(`/api/v2/mail/accounts/${id}`, { method: "DELETE" });
+              showToast("Account deleted");
+              populateEmailScannerTab();
+            } catch (e) { showToast("Failed: " + e.message, true); }
+          });
+        });
       }
     } catch (e) {
       acctList.innerHTML = `<p style="color:var(--muted);">Failed to load accounts: ${escapeHtml(e.message)}</p>`;
@@ -21350,6 +21536,75 @@ async function populateEmailScannerTab() {
     }
   }
 
+  // Templates
+  const tplList = $("#scanner-templates-list");
+  if (tplList) {
+    try {
+      const data = await api("/api/v2/mail/templates");
+      const templates = data.templates || [];
+      if (!templates.length) {
+        tplList.innerHTML = '<p style="color:var(--muted); font-size:0.8rem;">No templates yet.</p>';
+      } else {
+        tplList.innerHTML = templates.map(t => `
+          <div style="padding:4px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+            <span>${escapeHtml(t.title)}${t.subject ? ' — ' + escapeHtml(t.subject.slice(0, 40)) : ''}</span>
+            <span style="display:flex; gap:0.3rem;">
+              <button type="button" class="btn btn-ghost btn-sm scanner-tpl-edit" data-id="${t.id}" data-title="${escapeHtml(t.title)}" data-subject="${escapeHtml(t.subject || '')}" data-body="${escapeHtml(t.body_html || '')}" style="font-size:0.75rem;"><i class="ti ti-pencil"></i></button>
+              <button type="button" class="btn btn-ghost btn-sm scanner-tpl-delete" data-id="${t.id}" data-title="${escapeHtml(t.title)}" style="font-size:0.75rem; color:var(--danger);"><i class="ti ti-trash"></i></button>
+            </span>
+          </div>`).join("");
+      }
+    } catch (e) {
+      tplList.innerHTML = `<p style="color:var(--muted);">Failed to load templates: ${escapeHtml(e.message)}</p>`;
+    }
+  }
+
+  // Contractors
+  const ctrList = $("#scanner-contractors-list");
+  if (ctrList) {
+    try {
+      const data = await api("/api/v2/mail/contractors");
+      const contractors = data.contractors || [];
+      if (!contractors.length) {
+        ctrList.innerHTML = '<p style="color:var(--muted); font-size:0.8rem;">No contractors configured.</p>';
+      } else {
+        ctrList.innerHTML = contractors.map(c => `
+          <div style="padding:4px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+            <span>${escapeHtml(c.name)} <span style="color:var(--muted); font-size:0.75rem;">[${escapeHtml(c.action || 'link_only')}]</span></span>
+            <span style="display:flex; gap:0.3rem;">
+              <button type="button" class="btn btn-ghost btn-sm scanner-ctr-edit" data-id="${c.id}" data-name="${escapeHtml(c.name)}" data-account="${c.imap_account_id || ''}" data-folder="${escapeHtml(c.folder || 'INBOX')}" data-action="${escapeHtml(c.action || 'link_only')}" data-user="${c.responsible_user_id || ''}" data-priority="${c.priority || 0}" style="font-size:0.75rem;"><i class="ti ti-pencil"></i></button>
+              <button type="button" class="btn btn-ghost btn-sm scanner-ctr-delete" data-id="${c.id}" data-name="${escapeHtml(c.name)}" style="font-size:0.75rem; color:var(--danger);"><i class="ti ti-trash"></i></button>
+            </span>
+          </div>`).join("");
+      }
+    } catch (e) {
+      ctrList.innerHTML = `<p style="color:var(--muted);">Failed to load contractors: ${escapeHtml(e.message)}</p>`;
+    }
+  }
+
+  // Classification rules
+  const rulesList = $("#scanner-rules-list");
+  if (rulesList) {
+    try {
+      const data = await api("/api/v2/mail/classification-rules");
+      const rules = data.rules || [];
+      if (!rules.length) {
+        rulesList.innerHTML = '<p style="color:var(--muted); font-size:0.8rem;">No classification rules.</p>';
+      } else {
+        rulesList.innerHTML = rules.map(r => `
+          <div style="padding:4px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+            <span>${escapeHtml(r.rule_name)} <span style="color:var(--muted); font-size:0.75rem;">[${escapeHtml(r.rule_type)}] ${escapeHtml(r.pattern).slice(0, 30)}</span></span>
+            <span style="display:flex; gap:0.3rem;">
+              <button type="button" class="btn btn-ghost btn-sm scanner-rule-edit" data-id="${r.id}" data-name="${escapeHtml(r.rule_name)}" data-type="${escapeHtml(r.rule_type)}" data-pattern="${escapeHtml(r.pattern)}" data-action="${escapeHtml(r.action || 'tag')}" data-target="${escapeHtml(r.action_target || '')}" data-priority="${r.priority || 0}" style="font-size:0.75rem;"><i class="ti ti-pencil"></i></button>
+              <button type="button" class="btn btn-ghost btn-sm scanner-rule-delete" data-id="${r.id}" data-name="${escapeHtml(r.rule_name)}" style="font-size:0.75rem; color:var(--danger);"><i class="ti ti-trash"></i></button>
+            </span>
+          </div>`).join("");
+      }
+    } catch (e) {
+      rulesList.innerHTML = `<p style="color:var(--muted);">Failed to load rules: ${escapeHtml(e.message)}</p>`;
+    }
+  }
+
   // Bind buttons (only once)
   bindScannerAdminButtons();
 }
@@ -21372,8 +21627,8 @@ function bindScannerAdminButtons() {
       const folder = $("#scanner-acct-folder")?.value.trim() || "INBOX";
       if (!email || !host || !password) { showToast("Email, host, and password required", true); return; }
       try {
-        await api("/api/v2/mail/messages", { method: "POST", body: JSON.stringify({ email, host, port, password, folder }) });
-        showToast("Account saved (note: full IMAP account CRUD coming soon)");
+        await api("/api/v2/mail/accounts", { method: "POST", body: JSON.stringify({ email, imap_host: host, imap_port: port, password, folder }) });
+        showToast("Account saved");
         form.classList.add("hidden");
         populateEmailScannerTab();
       } catch (e) { showToast("Failed: " + e.message, true); }
@@ -21431,6 +21686,225 @@ function bindScannerAdminButtons() {
       try {
         await api("/api/v2/mail/reprocess", { method: "POST", body: JSON.stringify({ conversation_ids: ids }) });
         if (statusEl) { statusEl.textContent = `✓ Reprocessed ${ids.length} message(s)`; statusEl.className = "event-log-health-status ok"; }
+      } catch (e) {
+        if (statusEl) { statusEl.textContent = e.message; statusEl.className = "event-log-health-status fail"; }
+      }
+    });
+  }
+
+  // Template CRUD
+  const tplAdd = $("#scanner-template-add");
+  const tplForm = $("#scanner-template-form");
+  if (tplAdd && tplForm && !tplAdd.dataset.bound) {
+    tplAdd.dataset.bound = "1";
+    tplAdd.addEventListener("click", () => {
+      $("#scanner-tpl-edit-id").value = "";
+      $("#scanner-tpl-title").value = "";
+      $("#scanner-tpl-subject").value = "";
+      $("#scanner-tpl-body").value = "";
+      tplForm.classList.toggle("hidden");
+    });
+    $("#scanner-tpl-cancel")?.addEventListener("click", () => tplForm.classList.add("hidden"));
+    $("#scanner-tpl-save")?.addEventListener("click", async () => {
+      const title = $("#scanner-tpl-title")?.value.trim();
+      const subject = $("#scanner-tpl-subject")?.value.trim();
+      const body_html = $("#scanner-tpl-body")?.value;
+      const editId = $("#scanner-tpl-edit-id")?.value;
+      if (!title) { showToast("Title required", true); return; }
+      try {
+        if (editId) {
+          await api(`/api/v2/mail/templates/${editId}`, { method: "PUT", body: JSON.stringify({ title, subject, body_html }) });
+          showToast("Template updated");
+        } else {
+          await api("/api/v2/mail/templates", { method: "POST", body: JSON.stringify({ title, subject, body_html }) });
+          showToast("Template created");
+        }
+        tplForm.classList.add("hidden");
+        populateEmailScannerTab();
+      } catch (e) { showToast("Failed: " + e.message, true); }
+    });
+    // Edit/delete via event delegation
+    tplList?.addEventListener("click", async (e) => {
+      const editBtn = e.target.closest(".scanner-tpl-edit");
+      const delBtn = e.target.closest(".scanner-tpl-delete");
+      if (editBtn) {
+        $("#scanner-tpl-edit-id").value = editBtn.dataset.id;
+        $("#scanner-tpl-title").value = editBtn.dataset.title || "";
+        $("#scanner-tpl-subject").value = editBtn.dataset.subject || "";
+        $("#scanner-tpl-body").value = editBtn.dataset.body || "";
+        tplForm.classList.remove("hidden");
+      }
+      if (delBtn) {
+        const id = delBtn.dataset.id;
+        const name = delBtn.dataset.title;
+        if (!confirm(`Delete template "${name}"?`)) return;
+        try {
+          await api(`/api/v2/mail/templates/${id}`, { method: "DELETE" });
+          showToast("Template deleted");
+          populateEmailScannerTab();
+        } catch (e) { showToast("Failed: " + e.message, true); }
+      }
+    });
+  }
+  // Template refresh
+  const tplRefresh = $("#scanner-templates-refresh");
+  if (tplRefresh && !tplRefresh.dataset.bound) {
+    tplRefresh.dataset.bound = "1";
+    tplRefresh.addEventListener("click", () => populateEmailScannerTab());
+  }
+
+  // Contractor CRUD
+  const ctrAdd = $("#scanner-contractor-add");
+  const ctrForm = $("#scanner-contractor-form");
+  if (ctrAdd && ctrForm && !ctrAdd.dataset.bound) {
+    ctrAdd.dataset.bound = "1";
+    ctrAdd.addEventListener("click", () => {
+      $("#scanner-ctr-edit-id").value = "";
+      $("#scanner-ctr-name").value = "";
+      $("#scanner-ctr-account").value = "";
+      $("#scanner-ctr-folder").value = "INBOX";
+      $("#scanner-ctr-action").value = "link_only";
+      $("#scanner-ctr-user").value = "";
+      $("#scanner-ctr-priority").value = "0";
+      ctrForm.classList.toggle("hidden");
+    });
+    $("#scanner-ctr-cancel")?.addEventListener("click", () => ctrForm.classList.add("hidden"));
+    $("#scanner-ctr-save")?.addEventListener("click", async () => {
+      const name = $("#scanner-ctr-name")?.value.trim();
+      const editId = $("#scanner-ctr-edit-id")?.value;
+      if (!name) { showToast("Name required", true); return; }
+      const body = {
+        name,
+        imap_account_id: $("#scanner-ctr-account")?.value ? parseInt($("#scanner-ctr-account").value) : null,
+        folder: $("#scanner-ctr-folder")?.value.trim() || "INBOX",
+        action: $("#scanner-ctr-action")?.value || "link_only",
+        responsible_user_id: $("#scanner-ctr-user")?.value ? parseInt($("#scanner-ctr-user").value) : null,
+        priority: parseInt($("#scanner-ctr-priority")?.value) || 0,
+      };
+      try {
+        if (editId) {
+          await api(`/api/v2/mail/contractors/${editId}`, { method: "PUT", body: JSON.stringify(body) });
+          showToast("Contractor updated");
+        } else {
+          await api("/api/v2/mail/contractors", { method: "POST", body: JSON.stringify(body) });
+          showToast("Contractor created");
+        }
+        ctrForm.classList.add("hidden");
+        populateEmailScannerTab();
+      } catch (e) { showToast("Failed: " + e.message, true); }
+    });
+    ctrList?.addEventListener("click", async (e) => {
+      const editBtn = e.target.closest(".scanner-ctr-edit");
+      const delBtn = e.target.closest(".scanner-ctr-delete");
+      if (editBtn) {
+        $("#scanner-ctr-edit-id").value = editBtn.dataset.id;
+        $("#scanner-ctr-name").value = editBtn.dataset.name || "";
+        $("#scanner-ctr-account").value = editBtn.dataset.account || "";
+        $("#scanner-ctr-folder").value = editBtn.dataset.folder || "INBOX";
+        $("#scanner-ctr-action").value = editBtn.dataset.action || "link_only";
+        $("#scanner-ctr-user").value = editBtn.dataset.user || "";
+        $("#scanner-ctr-priority").value = editBtn.dataset.priority || "0";
+        ctrForm.classList.remove("hidden");
+      }
+      if (delBtn) {
+        if (!confirm(`Delete contractor "${delBtn.dataset.name}"?`)) return;
+        try {
+          await api(`/api/v2/mail/contractors/${delBtn.dataset.id}`, { method: "DELETE" });
+          showToast("Contractor deleted");
+          populateEmailScannerTab();
+        } catch (e) { showToast("Failed: " + e.message, true); }
+      }
+    });
+  }
+  const ctrRefresh = $("#scanner-contractors-refresh");
+  if (ctrRefresh && !ctrRefresh.dataset.bound) {
+    ctrRefresh.dataset.bound = "1";
+    ctrRefresh.addEventListener("click", () => populateEmailScannerTab());
+  }
+
+  // Classification rules CRUD
+  const ruleAdd = $("#scanner-rule-add");
+  const ruleForm = $("#scanner-rule-form");
+  if (ruleAdd && ruleForm && !ruleAdd.dataset.bound) {
+    ruleAdd.dataset.bound = "1";
+    ruleAdd.addEventListener("click", () => {
+      $("#scanner-rule-edit-id").value = "";
+      $("#scanner-rule-name").value = "";
+      $("#scanner-rule-type").value = "subject_regex";
+      $("#scanner-rule-pattern").value = "";
+      $("#scanner-rule-action").value = "tag";
+      $("#scanner-rule-target").value = "";
+      $("#scanner-rule-priority").value = "0";
+      ruleForm.classList.toggle("hidden");
+    });
+    $("#scanner-rule-cancel")?.addEventListener("click", () => ruleForm.classList.add("hidden"));
+    $("#scanner-rule-save")?.addEventListener("click", async () => {
+      const rule_name = $("#scanner-rule-name")?.value.trim();
+      const rule_type = $("#scanner-rule-type")?.value;
+      const pattern = $("#scanner-rule-pattern")?.value.trim();
+      const editId = $("#scanner-rule-edit-id")?.value;
+      if (!rule_name || !pattern) { showToast("Name and pattern required", true); return; }
+      const body = {
+        rule_name, rule_type, pattern,
+        action: $("#scanner-rule-action")?.value || "tag",
+        action_target: $("#scanner-rule-target")?.value.trim() || null,
+        priority: parseInt($("#scanner-rule-priority")?.value) || 0,
+      };
+      try {
+        if (editId) {
+          await api(`/api/v2/mail/classification-rules/${editId}`, { method: "PUT", body: JSON.stringify(body) });
+          showToast("Rule updated");
+        } else {
+          await api("/api/v2/mail/classification-rules", { method: "POST", body: JSON.stringify(body) });
+          showToast("Rule created");
+        }
+        ruleForm.classList.add("hidden");
+        populateEmailScannerTab();
+      } catch (e) { showToast("Failed: " + e.message, true); }
+    });
+    rulesList?.addEventListener("click", async (e) => {
+      const editBtn = e.target.closest(".scanner-rule-edit");
+      const delBtn = e.target.closest(".scanner-rule-delete");
+      if (editBtn) {
+        $("#scanner-rule-edit-id").value = editBtn.dataset.id;
+        $("#scanner-rule-name").value = editBtn.dataset.name || "";
+        $("#scanner-rule-type").value = editBtn.dataset.type || "subject_regex";
+        $("#scanner-rule-pattern").value = editBtn.dataset.pattern || "";
+        $("#scanner-rule-action").value = editBtn.dataset.action || "tag";
+        $("#scanner-rule-target").value = editBtn.dataset.target || "";
+        $("#scanner-rule-priority").value = editBtn.dataset.priority || "0";
+        ruleForm.classList.remove("hidden");
+      }
+      if (delBtn) {
+        if (!confirm(`Delete rule "${delBtn.dataset.name}"?`)) return;
+        try {
+          await api(`/api/v2/mail/classification-rules/${delBtn.dataset.id}`, { method: "DELETE" });
+          showToast("Rule deleted");
+          populateEmailScannerTab();
+        } catch (e) { showToast("Failed: " + e.message, true); }
+      }
+    });
+  }
+  const rulesRefresh = $("#scanner-rules-refresh");
+  if (rulesRefresh && !rulesRefresh.dataset.bound) {
+    rulesRefresh.dataset.bound = "1";
+    rulesRefresh.addEventListener("click", () => populateEmailScannerTab());
+  }
+
+  // ML Retrain
+  const retrainBtn = $("#scanner-retrain-btn");
+  if (retrainBtn && !retrainBtn.dataset.bound) {
+    retrainBtn.dataset.bound = "1";
+    retrainBtn.addEventListener("click", async () => {
+      const statusEl = $("#scanner-retrain-status");
+      try {
+        if (statusEl) { statusEl.textContent = "Retraining…"; statusEl.className = ""; }
+        const result = await api("/api/v2/mail/retrain", { method: "POST" });
+        if (result.ok) {
+          if (statusEl) { statusEl.textContent = "✓ Retrained"; statusEl.className = "event-log-health-status ok"; }
+        } else {
+          if (statusEl) { statusEl.textContent = result.message || "Retrain failed"; statusEl.className = "event-log-health-status fail"; }
+        }
       } catch (e) {
         if (statusEl) { statusEl.textContent = e.message; statusEl.className = "event-log-health-status fail"; }
       }

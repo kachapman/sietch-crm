@@ -511,6 +511,9 @@ CREATE INDEX idx_mail_date ON mail_messages(date_received DESC);
 CREATE INDEX idx_mail_read ON mail_messages(is_read);
 CREATE INDEX idx_mail_conversation ON mail_messages(conversation_id);
 
+ALTER TABLE mail_messages ADD COLUMN raw_headers TEXT;
+ALTER TABLE mail_messages ADD COLUMN attachments_json JSONB;
+
 CREATE TABLE mail_deal_links (
     id SERIAL PRIMARY KEY,
     message_id INTEGER REFERENCES mail_messages(id) ON DELETE CASCADE,
@@ -605,6 +608,44 @@ CREATE INDEX idx_mail_outgoing_deal ON mail_outgoing(deal_id);
 CREATE INDEX idx_mail_outgoing_status ON mail_outgoing(status);
 
 -- ============================================================================
+-- 7.17b Mail Folders (IMAP sync + local folders)
+-- ============================================================================
+
+CREATE TABLE mail_folders (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    icon TEXT DEFAULT 'folder',
+    folder_type TEXT DEFAULT 'local',
+    imap_account_id INTEGER REFERENCES mail_accounts(id) ON DELETE CASCADE,
+    imap_path TEXT,
+    last_sync TIMESTAMP,
+    user_id INTEGER REFERENCES users(id),
+    is_system BOOLEAN DEFAULT FALSE,
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_mail_folders_account ON mail_folders(imap_account_id);
+CREATE INDEX idx_mail_folders_user ON mail_folders(user_id);
+
+-- ============================================================================
+-- 7.17c Mail Attachments (IMAP incoming)
+-- ============================================================================
+
+CREATE TABLE mail_attachments (
+    id SERIAL PRIMARY KEY,
+    message_id INTEGER REFERENCES mail_messages(id) ON DELETE CASCADE,
+    filename TEXT NOT NULL,
+    mime_type TEXT DEFAULT 'application/octet/octet-stream',
+    size_bytes INTEGER DEFAULT 0,
+    imap_part_id TEXT,
+    stored_path TEXT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_mail_attachments_msg ON mail_attachments(message_id);
+
+-- ============================================================================
 -- 7.18 Sync Tracking (Bidirectional with OnlyOffice — transition only)
 -- ============================================================================
 
@@ -663,6 +704,40 @@ CREATE TABLE classifier_training_data (
     correct_project_id INTEGER,
     correct_action_type TEXT,
     created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 7.19b Mail Contractors (Scanner routing rules)
+-- ============================================================================
+
+CREATE TABLE mail_contractors (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    imap_account_id INTEGER REFERENCES mail_accounts(id) ON DELETE SET NULL,
+    folder TEXT DEFAULT 'INBOX',
+    action TEXT DEFAULT 'link_only',
+    responsible_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    enabled BOOLEAN DEFAULT TRUE,
+    priority INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 7.19c Mail Classification Rules
+-- ============================================================================
+
+CREATE TABLE mail_classification_rules (
+    id SERIAL PRIMARY KEY,
+    rule_name TEXT NOT NULL,
+    rule_type TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    action TEXT DEFAULT 'tag',
+    action_target TEXT,
+    priority INTEGER DEFAULT 0,
+    enabled BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
 );
 
 -- ============================================================================

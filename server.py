@@ -942,8 +942,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/mail/tags":
             self._handle_mail_tags()
             return
+        m = re.match(r"^/api/v2/mail/tags/(\d+)$", api_path)
+        if m:
+            self._handle_mail_tag_get(int(m.group(1)))
+            return
         if api_path == "/api/v2/mail/templates":
             self._handle_mail_templates()
+            return
+        m = re.match(r"^/api/v2/mail/templates/(\d+)$", api_path)
+        if m:
+            self._handle_mail_template_get(int(m.group(1)))
             return
         if api_path == "/api/v2/mail/accounts":
             self._handle_mail_accounts()
@@ -995,6 +1003,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if m:
             self._handle_mail_account_signature_get(int(m.group(1)))
             return
+        # Attachments
+        m = re.match(r"^/api/v2/mail/messages/(\d+)/attachments$", api_path)
+        if m:
+            self._handle_mail_message_attachments(int(m.group(1)))
+            return
+        # Headers
+        m = re.match(r"^/api/v2/mail/messages/(\d+)/headers$", api_path)
+        if m:
+            self._handle_mail_message_headers(int(m.group(1)))
+            return
         # Threads
         if api_path == "/api/v2/mail/threads":
             self._handle_mail_threads()
@@ -1007,6 +1025,26 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if api_path == "/api/v2/mail/folders":
             self._handle_mail_folders()
+            return
+        # Contractors
+        if api_path == "/api/v2/mail/contractors":
+            self._handle_mail_contractors()
+            return
+        m = re.match(r"^/api/v2/mail/contractors/(\d+)$", api_path)
+        if m:
+            self._handle_mail_contractor_get(int(m.group(1)))
+            return
+        # Classification rules
+        if api_path == "/api/v2/mail/classification-rules":
+            self._handle_mail_classification_rules()
+            return
+        m = re.match(r"^/api/v2/mail/classification-rules/(\d+)$", api_path)
+        if m:
+            self._handle_mail_classification_rule_get(int(m.group(1)))
+            return
+        # Feedback
+        if api_path == "/api/v2/mail/feedback":
+            self._handle_mail_feedback()
             return
 
         self.send_error(404)
@@ -1395,12 +1433,31 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if m and method == "POST":
             self._handle_mail_message_add_tag(int(m.group(1)))
             return
+        # Tag CRUD
+        if api_path == "/api/v2/mail/tags" and method == "POST":
+            self._handle_mail_tag_create()
+            return
+        m = re.match(r"^/api/v2/mail/tags/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_mail_tag_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_mail_tag_delete(int(m.group(1)))
+            return
+        # Message tag remove
+        m = re.match(r"^/api/v2/mail/messages/(\d+)/tags/(\d+)$", api_path)
+        if m and method == "DELETE":
+            self._handle_mail_message_remove_tag(int(m.group(1)), int(m.group(2)))
+            return
         m = re.match(r"^/api/v2/mail/messages/(\d+)/link$", api_path)
         if m and method == "POST":
             self._handle_mail_link(int(m.group(1)))
             return
         if api_path == "/api/v2/mail/reprocess" and method == "POST":
             self._handle_mail_reprocess()
+            return
+        if api_path == "/api/v2/mail/retrain" and method == "POST":
+            self._handle_mail_retrain()
             return
         if api_path == "/api/v2/mail/config" and method == "PUT":
             self._handle_mail_config_put()
@@ -1442,6 +1499,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if m and method == "DELETE":
             self._handle_mail_draft_delete(int(m.group(1)))
+            return
+        # Template CRUD
+        if api_path == "/api/v2/mail/templates" and method == "POST":
+            self._handle_mail_template_create()
+            return
+        m = re.match(r"^/api/v2/mail/templates/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_mail_template_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_mail_template_delete(int(m.group(1)))
             return
         # Star/Archive/Move
         m = re.match(r"^/api/v2/mail/messages/(\d+)/star$", api_path)
@@ -1489,6 +1557,33 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if m and method == "DELETE":
             self._handle_mail_folder_delete(int(m.group(1)))
+            return
+        # Contractors
+        if api_path == "/api/v2/mail/contractors" and method == "POST":
+            self._handle_mail_contractor_create()
+            return
+        m = re.match(r"^/api/v2/mail/contractors/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_mail_contractor_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_mail_contractor_delete(int(m.group(1)))
+            return
+        # Classification rules
+        if api_path == "/api/v2/mail/classification-rules" and method == "POST":
+            self._handle_mail_classification_rule_create()
+            return
+        m = re.match(r"^/api/v2/mail/classification-rules/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_mail_classification_rule_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_mail_classification_rule_delete(int(m.group(1)))
+            return
+        # Feedback review
+        m = re.match(r"^/api/v2/mail/feedback/(\d+)/review$", api_path)
+        if m and method == "POST":
+            self._handle_mail_feedback_review(int(m.group(1)))
             return
 
         self.send_error(404)
@@ -4806,24 +4901,30 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         search = qs.get("search", [""])[0].strip()
         folder = qs.get("folder", ["INBOX"])[0].strip()
         account_id = qs.get("account_id", [None])[0]
+        tag = qs.get("tag", [None])[0]
         try:
             where = ["m.folder = %s"]
             params: list[Any] = [folder]
+            join = ""
             if account_id:
                 where.append("m.account_id = %s")
                 params.append(int(account_id))
             if search:
                 where.append("(m.subject ILIKE %s OR m.from_addr ILIKE %s)")
                 params.extend([f"%{search}%", f"%{search}%"])
+            if tag:
+                join = "JOIN mail_tag_assignments ta ON m.id = ta.message_id JOIN mail_tags t ON ta.tag_id = t.id"
+                where.append("t.title = %s")
+                params.append(tag)
             q = " AND ".join(where)
             rows = db.query_dicts(
                 "SELECT m.*, a.email AS account_email FROM mail_messages m "
                 "LEFT JOIN mail_accounts a ON m.account_id = a.id "
-                "WHERE " + q + " ORDER BY m.date_received DESC LIMIT %s OFFSET %s",
+                + join + " WHERE " + q + " ORDER BY m.date_received DESC LIMIT %s OFFSET %s",
                 tuple(params) + (page_size, (page - 1) * page_size),
             )
             total = db.query_one(
-                "SELECT COUNT(*) AS cnt FROM mail_messages m WHERE " + q,
+                "SELECT COUNT(*) AS cnt FROM mail_messages m " + join + " WHERE " + q,
                 tuple(params),
             )
             _json_response(self, 200, {"messages": rows, "page": page, "page_size": page_size, "total": total["cnt"] if total else 0})
@@ -4852,6 +4953,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "JOIN opportunities o ON dl.opportunity_id = o.id WHERE dl.message_id = %s",
                 (message_id,),
             )
+            # Attachments — prefer mail_attachments table, fallback to attachments_json
+            att_rows = db.query_dicts(
+                "SELECT * FROM mail_attachments WHERE message_id = %s ORDER BY filename",
+                (message_id,),
+            )
+            if att_rows:
+                row_dict["attachments"] = att_rows
+            elif row_dict.get("attachments_json"):
+                row_dict["attachments"] = row_dict["attachments_json"]
+            else:
+                row_dict["attachments"] = []
             row_dict["tags"] = tags
             row_dict["linked_deals"] = links
             _json_response(self, 200, row_dict)
@@ -5004,6 +5116,77 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             logger.exception("Failed to fetch tags")
             _json_response(self, 500, {"error": str(e)})
 
+    def _handle_mail_tag_get(self, tag_id: int) -> None:
+        try:
+            row = db.query_one("SELECT * FROM mail_tags WHERE id = %s", (tag_id,))
+            if not row:
+                _json_response(self, 404, {"error": "Tag not found"})
+                return
+            _json_response(self, 200, dict(row))
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_tag_create(self) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            title = (payload.get("title") or "").strip()
+            color = (payload.get("color") or "#6c757d").strip()
+            if not title:
+                _json_response(self, 400, {"error": "title required"})
+                return
+            user = _require_auth(self)
+            created_by = user["id"] if user else None
+            result = db.query_one(
+                "INSERT INTO mail_tags (title, color, created_by) VALUES (%s, %s, %s) RETURNING id",
+                (title, color, created_by),
+            )
+            _json_response(self, 201, {"id": result["id"], "title": title, "color": color})
+        except Exception as e:
+            if "unique" in str(e).lower():
+                _json_response(self, 409, {"error": "Tag already exists"})
+            else:
+                logger.exception("Failed to create tag")
+                _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_tag_update(self, tag_id: int) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            title = (payload.get("title") or "").strip()
+            color = payload.get("color")
+            existing = db.query_one("SELECT id FROM mail_tags WHERE id = %s", (tag_id,))
+            if not existing:
+                _json_response(self, 404, {"error": "Tag not found"})
+                return
+            if title:
+                db.execute("UPDATE mail_tags SET title = %s, color = COALESCE(%s, color) WHERE id = %s", (title, color, tag_id))
+            elif color:
+                db.execute("UPDATE mail_tags SET color = %s WHERE id = %s", (color, tag_id))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            if "unique" in str(e).lower():
+                _json_response(self, 409, {"error": "Tag name already exists"})
+            else:
+                _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_tag_delete(self, tag_id: int) -> None:
+        try:
+            existing = db.query_one("SELECT id FROM mail_tags WHERE id = %s", (tag_id,))
+            if not existing:
+                _json_response(self, 404, {"error": "Tag not found"})
+                return
+            db.execute("DELETE FROM mail_tag_assignments WHERE tag_id = %s", (tag_id,))
+            db.execute("DELETE FROM mail_tags WHERE id = %s", (tag_id,))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_message_remove_tag(self, message_id: int, tag_id: int) -> None:
+        try:
+            db.execute("DELETE FROM mail_tag_assignments WHERE message_id = %s AND tag_id = %s", (message_id, tag_id))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
     def _handle_mail_templates(self) -> None:
         qs = parse_qs(urlparse(self.path).query)
         page = int(qs.get("page", ["1"])[0])
@@ -5013,6 +5196,74 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"templates": rows, "page": page, "page_size": page_size})
         except Exception as e:
             logger.exception("Failed to fetch templates")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_template_get(self, template_id: int) -> None:
+        try:
+            row = db.query_one("SELECT * FROM mail_templates WHERE id = %s", (template_id,))
+            if not row:
+                _json_response(self, 404, {"error": "Template not found"})
+                return
+            _json_response(self, 200, dict(row))
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_template_create(self) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            title = (payload.get("title") or "").strip()
+            if not title:
+                _json_response(self, 400, {"error": "title required"})
+                return
+            user = _require_auth(self)
+            created_by = user["id"] if user else None
+            result = db.query_one(
+                "INSERT INTO mail_templates (title, subject, body_html, created_by) VALUES (%s, %s, %s, %s) RETURNING id",
+                (title, payload.get("subject", ""), payload.get("body_html", ""), created_by),
+            )
+            _json_response(self, 201, {"id": result["id"]})
+        except Exception as e:
+            logger.exception("Failed to create template")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_template_update(self, template_id: int) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            existing = db.query_one("SELECT id FROM mail_templates WHERE id = %s", (template_id,))
+            if not existing:
+                _json_response(self, 404, {"error": "Template not found"})
+                return
+            title = (payload.get("title") or "").strip()
+            subject = payload.get("subject")
+            body_html = payload.get("body_html")
+            sets = []
+            params: list[Any] = []
+            if title:
+                sets.append("title = %s")
+                params.append(title)
+            if subject is not None:
+                sets.append("subject = %s")
+                params.append(subject)
+            if body_html is not None:
+                sets.append("body_html = %s")
+                params.append(body_html)
+            if sets:
+                sets.append("updated_at = NOW()")
+                params.append(template_id)
+                db.execute("UPDATE mail_templates SET " + ", ".join(sets) + " WHERE id = %s", tuple(params))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_template_delete(self, template_id: int) -> None:
+        try:
+            existing = db.query_one("SELECT id FROM mail_templates WHERE id = %s", (template_id,))
+            if not existing:
+                _json_response(self, 404, {"error": "Template not found"})
+                return
+            db.execute("DELETE FROM mail_templates WHERE id = %s", (template_id,))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_accounts(self) -> None:
@@ -5037,6 +5288,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             ids = payload.get("conversation_ids") or payload.get("ids") or []
             results = mail_scanner.reprocess_conversations([int(x) for x in ids])
             _json_response(self, 200, {"results": results})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_retrain(self) -> None:
+        try:
+            result = mail_scanner.retrain_classifier_head() if mail_scanner else {"ok": False, "message": "Scanner not available"}
+            _json_response(self, 200, result)
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 
@@ -5515,6 +5773,26 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 
+    def _handle_mail_message_attachments(self, message_id: int) -> None:
+        try:
+            rows = db.query_dicts(
+                "SELECT * FROM mail_attachments WHERE message_id = %s ORDER BY filename",
+                (message_id,),
+            )
+            _json_response(self, 200, {"attachments": rows})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_message_headers(self, message_id: int) -> None:
+        try:
+            row = db.query_one("SELECT raw_headers FROM mail_messages WHERE id = %s", (message_id,))
+            if not row:
+                _json_response(self, 404, {"error": "Message not found"})
+                return
+            _json_response(self, 200, {"headers": row["raw_headers"] or ""})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
     def _handle_mail_threads(self) -> None:
         qs = parse_qs(urlparse(self.path).query)
         account_id = qs.get("account_id", [None])[0]
@@ -5599,6 +5877,171 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             # Move messages in this folder to INBOX
             db.execute("UPDATE mail_messages SET folder = 'INBOX' WHERE folder = %s", (folder["name"],))
             db.execute("DELETE FROM mail_folders WHERE id = %s", (folder_id,))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    # ── Contractors ───────────────────────────────────────────────────────
+
+    def _handle_mail_contractors(self) -> None:
+        try:
+            rows = db.query_dicts("SELECT * FROM mail_contractors ORDER BY priority DESC, name")
+            _json_response(self, 200, {"contractors": rows})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_contractor_get(self, contractor_id: int) -> None:
+        try:
+            row = db.query_one("SELECT * FROM mail_contractors WHERE id = %s", (contractor_id,))
+            if not row:
+                _json_response(self, 404, {"error": "Contractor not found"})
+                return
+            _json_response(self, 200, dict(row))
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_contractor_create(self) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            name = (payload.get("name") or "").strip()
+            if not name:
+                _json_response(self, 400, {"error": "name required"})
+                return
+            result = db.query_one(
+                "INSERT INTO mail_contractors (name, imap_account_id, folder, action, responsible_user_id, enabled, priority) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                (name, payload.get("imap_account_id"), payload.get("folder", "INBOX"),
+                 payload.get("action", "link_only"), payload.get("responsible_user_id"),
+                 payload.get("enabled", True), payload.get("priority", 0)),
+            )
+            _json_response(self, 201, {"id": result["id"]})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_contractor_update(self, contractor_id: int) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            existing = db.query_one("SELECT id FROM mail_contractors WHERE id = %s", (contractor_id,))
+            if not existing:
+                _json_response(self, 404, {"error": "Contractor not found"})
+                return
+            sets, params_list = [], []
+            for field in ("name", "imap_account_id", "folder", "action", "responsible_user_id", "enabled", "priority"):
+                if field in payload:
+                    sets.append(f"{field} = %s")
+                    params_list.append(payload[field])
+            if sets:
+                sets.append("updated_at = NOW()")
+                params_list.append(contractor_id)
+                db.execute("UPDATE mail_contractors SET " + ", ".join(sets) + " WHERE id = %s", tuple(params_list))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_contractor_delete(self, contractor_id: int) -> None:
+        try:
+            existing = db.query_one("SELECT id FROM mail_contractors WHERE id = %s", (contractor_id,))
+            if not existing:
+                _json_response(self, 404, {"error": "Contractor not found"})
+                return
+            db.execute("DELETE FROM mail_contractors WHERE id = %s", (contractor_id,))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    # ── Classification Rules ──────────────────────────────────────────────
+
+    def _handle_mail_classification_rules(self) -> None:
+        try:
+            rows = db.query_dicts("SELECT * FROM mail_classification_rules ORDER BY priority DESC, rule_name")
+            _json_response(self, 200, {"rules": rows})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_classification_rule_get(self, rule_id: int) -> None:
+        try:
+            row = db.query_one("SELECT * FROM mail_classification_rules WHERE id = %s", (rule_id,))
+            if not row:
+                _json_response(self, 404, {"error": "Rule not found"})
+                return
+            _json_response(self, 200, dict(row))
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_classification_rule_create(self) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            rule_name = (payload.get("rule_name") or "").strip()
+            rule_type = (payload.get("rule_type") or "").strip()
+            pattern = (payload.get("pattern") or "").strip()
+            if not rule_name or not rule_type or not pattern:
+                _json_response(self, 400, {"error": "rule_name, rule_type, and pattern required"})
+                return
+            result = db.query_one(
+                "INSERT INTO mail_classification_rules (rule_name, rule_type, pattern, action, action_target, priority, enabled) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                (rule_name, rule_type, pattern, payload.get("action", "tag"),
+                 payload.get("action_target"), payload.get("priority", 0), payload.get("enabled", True)),
+            )
+            _json_response(self, 201, {"id": result["id"]})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_classification_rule_update(self, rule_id: int) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            existing = db.query_one("SELECT id FROM mail_classification_rules WHERE id = %s", (rule_id,))
+            if not existing:
+                _json_response(self, 404, {"error": "Rule not found"})
+                return
+            sets, params_list = [], []
+            for field in ("rule_name", "rule_type", "pattern", "action", "action_target", "priority", "enabled"):
+                if field in payload:
+                    sets.append(f"{field} = %s")
+                    params_list.append(payload[field])
+            if sets:
+                sets.append("updated_at = NOW()")
+                params_list.append(rule_id)
+                db.execute("UPDATE mail_classification_rules SET " + ", ".join(sets) + " WHERE id = %s", tuple(params_list))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_classification_rule_delete(self, rule_id: int) -> None:
+        try:
+            existing = db.query_one("SELECT id FROM mail_classification_rules WHERE id = %s", (rule_id,))
+            if not existing:
+                _json_response(self, 404, {"error": "Rule not found"})
+                return
+            db.execute("DELETE FROM mail_classification_rules WHERE id = %s", (rule_id,))
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    # ── Feedback ──────────────────────────────────────────────────────────
+
+    def _handle_mail_feedback(self) -> None:
+        try:
+            entries = mail_scanner.get_feedback_entries(200) if mail_scanner else []
+            _json_response(self, 200, {"entries": entries})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_feedback_review(self, feedback_id: int) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            approved = payload.get("approved", False)
+            user = _require_auth(self)
+            reviewed_by = user["id"] if user else None
+            # Store as training data if approved
+            if approved:
+                db.execute(
+                    "INSERT INTO classifier_training_data (message_subject, sender_email, correct_classification, correct_project_id, correct_action_type) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (payload.get("subject", ""), payload.get("sender", ""),
+                     payload.get("classification", ""), payload.get("project_id"),
+                     payload.get("action_type", "")),
+                )
             _json_response(self, 200, {"ok": True})
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
