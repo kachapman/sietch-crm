@@ -5718,22 +5718,35 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             import csv
             import io
+            import re
             reader = csv.DictReader(io.StringIO(csv_text))
             count = 0
             is_gmail = "E-mail 1 - Value" in (reader.fieldnames or [])
-            for row in reader:
-                if is_gmail:
-                    email = (row.get("E-mail 1 - Value") or "").strip()
-                    if not email:
-                        continue
-                    first = (row.get("First Name") or "").strip()
-                    middle = (row.get("Middle Name") or "").strip()
-                    last = (row.get("Last Name") or "").strip()
-                    name = " ".join(filter(None, [first, middle, last]))
-                    company = (row.get("Organization Name") or "").strip()
-                    phone = (row.get("Phone 1 - Value") or "").strip()
-                    notes = (row.get("Notes") or "").strip()
-                else:
+            if is_gmail:
+                # Gmail CSV has unquoted commas in Labels field that break column parsing.
+                # Extract emails and names from raw text using regex.
+                email_re = re.compile(r'[\w.+-]+@[\w.-]+\.\w+')
+                name_re = re.compile(r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)', re.MULTILINE)
+                for line in csv_text.splitlines():
+                    emails_found = email_re.findall(line)
+                    for email in emails_found:
+                        email = email.strip()
+                        if not email or email.endswith(('.com', '.net', '.org')) and len(email) < 5:
+                            continue
+                        # Try to extract name from the line
+                        name = ""
+                        name_match = name_re.match(line)
+                        if name_match:
+                            name = name_match.group(1)
+                        db.execute(
+                            """INSERT INTO mail_contacts (user_id, email, name, company, phone, notes)
+                               VALUES (%s, %s, %s, %s, %s, %s)
+                               ON CONFLICT (user_id, email) DO UPDATE SET name=EXCLUDED.name, company=EXCLUDED.company""",
+                            (user["id"], email, name, "", "", ""),
+                        )
+                        count += 1
+            else:
+                for row in reader:
                     email = (row.get("email") or "").strip()
                     if not email:
                         continue
@@ -5741,13 +5754,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     company = (row.get("company") or "").strip()
                     phone = (row.get("phone") or "").strip()
                     notes = (row.get("notes") or "").strip()
-                db.execute(
-                    """INSERT INTO mail_contacts (user_id, email, name, company, phone, notes)
-                       VALUES (%s, %s, %s, %s, %s, %s)
-                       ON CONFLICT (user_id, email) DO UPDATE SET name=EXCLUDED.name, company=EXCLUDED.company""",
-                    (user["id"], email, name, company, phone, notes),
-                )
-                count += 1
+                    db.execute(
+                        """INSERT INTO mail_contacts (user_id, email, name, company, phone, notes)
+                           VALUES (%s, %s, %s, %s, %s, %s)
+                           ON CONFLICT (user_id, email) DO UPDATE SET name=EXCLUDED.name, company=EXCLUDED.company""",
+                        (user["id"], email, name, company, phone, notes),
+                    )
+                    count += 1
             _json_response(self, 200, {"ok": True, "imported": count})
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
