@@ -17876,15 +17876,18 @@ function renderMailList(msgs) {
     const bodySnippet = (m.body_text || m.snippet || '').replace(/<[^>]+>/g, '').trim().slice(0, 100);
     subjDiv.title = `${from}\n${subj}\n${bodySnippet}`;
     subjDiv.innerHTML = draftBadge + escapeHtml(subj.slice(0, 80));
-    // Tag dots
+    // Tag badges
     if (m.tags && m.tags.length) {
-      m.tags.slice(0, 4).forEach(t => {
-        const dot = document.createElement('span');
-        dot.className = 'mail-tag-dot-inline';
-        dot.style.cssText = `width:6px; height:6px; border-radius:50%; background:${escapeHtml(t.color || '#6c757d')}; flex-shrink:0; display:inline-block; margin-left:3px; vertical-align:middle;`;
-        dot.title = escapeHtml(t.title);
-        subjDiv.appendChild(dot);
+      const tagsWrap = document.createElement('span');
+      tagsWrap.className = 'mail-row-tags';
+      m.tags.slice(0, 3).forEach(t => {
+        const badge = document.createElement('span');
+        badge.className = 'mail-tag-badge-inline';
+        badge.style.cssText = `background:${escapeHtml(t.color || '#6c757d')}; color:#fff; font-size:0.6rem; padding:0.05rem 0.35rem; border-radius:3px; margin-left:4px; vertical-align:middle; font-weight:500; line-height:1.2;`;
+        badge.textContent = t.title;
+        tagsWrap.appendChild(badge);
       });
+      subjDiv.appendChild(tagsWrap);
     }
     row.appendChild(subjDiv);
 

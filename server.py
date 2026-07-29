@@ -4942,17 +4942,28 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 where.append("t.title = %s")
                 params.append(tag)
             q = " AND ".join(where)
-            tag_subquery = (
-                "(SELECT COALESCE(json_agg(json_build_object('title', t2.title, 'color', t2.color)), '[]'::json) "
-                "FROM mail_tag_assignments ta2 JOIN mail_tags t2 ON ta2.tag_id = t2.id "
-                "WHERE ta2.message_id = m.id) AS tags"
-            )
             rows = db.query_dicts(
-                "SELECT m.*, a.email AS account_email, " + tag_subquery + " FROM mail_messages m "
+                "SELECT m.*, a.email AS account_email FROM mail_messages m "
                 "LEFT JOIN mail_accounts a ON m.account_id = a.id "
                 + join + " WHERE " + q + " ORDER BY m.date_received DESC LIMIT %s OFFSET %s",
                 tuple(params) + (page_size, (page - 1) * page_size),
             )
+            # Fetch tags for each message in a single batch query
+            if rows:
+                msg_ids = [r["id"] for r in rows]
+                tag_rows = db.query_dicts(
+                    "SELECT ta.message_id, t.title, t.color FROM mail_tag_assignments ta "
+                    "JOIN mail_tags t ON ta.tag_id = t.id WHERE ta.message_id = ANY(%s)",
+                    (msg_ids,),
+                )
+                tags_by_msg = {}
+                for tr in tag_rows:
+                    mid = tr["message_id"]
+                    if mid not in tags_by_msg:
+                        tags_by_msg[mid] = []
+                    tags_by_msg[mid].append({"title": tr["title"], "color": tr["color"]})
+                for r in rows:
+                    r["tags"] = tags_by_msg.get(r["id"], [])
             total = db.query_one(
                 "SELECT COUNT(*) AS cnt FROM mail_messages m " + join + " WHERE " + q,
                 tuple(params),
