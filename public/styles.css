@@ -3922,6 +3922,9 @@ body {
 @media (min-width: 601px) {
   .mail-mobile-email-overlay { display: none !important; }
 }
+#mail-contact-context-menu button:hover {
+  background: var(--hover);
+}
 .mail-contact-item {
   padding: 3px 0.4rem;
   cursor: pointer;
@@ -3951,7 +3954,7 @@ body {
   transition: max-height 0.25s ease;
 }
 .mail-contacts-list.expanded {
-  max-height: 50vh !important;
+  max-height: 200px !important;
   overflow-y: auto;
 }
 .scanner-log {

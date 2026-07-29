@@ -16654,6 +16654,59 @@ async function renderMailContacts() {
     addBtn.dataset.bound = "1";
     addBtn.addEventListener("click", () => addNewContact());
   }
+
+  // Contact context menu
+  const contactCtx = $("#mail-contact-context-menu");
+  if (contactCtx && !contactCtx.dataset.bound) {
+    contactCtx.dataset.bound = "1";
+    document.addEventListener("click", () => { contactCtx.style.display = "none"; });
+    $("#mail-contact-edit-btn")?.addEventListener("click", async () => {
+      const id = contactCtx.dataset.contactId;
+      const oldEmail = contactCtx.dataset.contactEmail;
+      const oldName = contactCtx.dataset.contactName;
+      contactCtx.style.display = "none";
+      if (!id) return;
+      const listEl = $("#mail-contact-list");
+      listEl?.querySelector(".contact-edit-form")?.remove();
+      const form = document.createElement("div");
+      form.className = "contact-edit-form";
+      form.style.cssText = "padding:0.3rem 0.4rem; border-bottom:1px solid var(--border);";
+      form.innerHTML = `
+        <input type="email" value="${escapeHtml(oldEmail)}" class="contact-edit-email" style="width:100%;font-size:0.75rem;padding:0.2rem;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--text);margin-bottom:0.2rem;">
+        <input type="text" value="${escapeHtml(oldName)}" class="contact-edit-name" style="width:100%;font-size:0.75rem;padding:0.2rem;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--text);margin-bottom:0.2rem;">
+        <div style="display:flex;gap:0.3rem;">
+          <button type="button" class="btn btn-primary btn-small contact-edit-save" style="font-size:0.7rem;padding:0.15rem 0.4rem;">Save</button>
+          <button type="button" class="btn btn-ghost btn-small contact-edit-cancel" style="font-size:0.7rem;padding:0.15rem 0.4rem;">Cancel</button>
+        </div>`;
+      const contactItem = listEl?.querySelector(`[data-contact-id="${id}"]`);
+      if (contactItem) contactItem.after(form);
+      form.querySelector(".contact-edit-save").addEventListener("click", async () => {
+        const email = form.querySelector(".contact-edit-email").value.trim();
+        const name = form.querySelector(".contact-edit-name").value.trim();
+        if (!email) { showToast("Email required", true); return; }
+        try {
+          await api(`/api/v2/mail/contacts/${id}`, { method: "PUT", body: JSON.stringify({ email, name }) });
+          showToast("Contact updated");
+          form.remove();
+          loadUserContacts(listEl);
+        } catch (e) { showToast("Failed: " + e.message, true); }
+      });
+      form.querySelector(".contact-edit-cancel").addEventListener("click", () => form.remove());
+    });
+    $("#mail-contact-delete-btn")?.addEventListener("click", async () => {
+      const id = contactCtx.dataset.contactId;
+      const email = contactCtx.dataset.contactEmail;
+      contactCtx.style.display = "none";
+      if (!id) return;
+      if (!confirm(`Delete contact "${email}"?`)) return;
+      try {
+        await api(`/api/v2/mail/contacts/${id}`, { method: "DELETE" });
+        showToast("Contact deleted");
+        const listEl = $("#mail-contact-list");
+        if (listEl) loadUserContacts(listEl);
+      } catch (e) { showToast("Failed: " + e.message, true); }
+    });
+  }
 }
 
 async function loadCrmContacts(listEl) {
@@ -16697,12 +16750,27 @@ async function loadUserContacts(listEl) {
     contacts.forEach(c => {
       const div = document.createElement("div");
       div.className = "mail-contact-item";
+      div.dataset.contactId = c.id || "";
       div.dataset.email = c.email || "";
       div.dataset.name = c.name || c.email || "";
       div.innerHTML = `<div class="mail-contact-name">${escapeHtml(c.name || c.email || "")}</div><div class="mail-contact-email">${escapeHtml(c.email || "")}</div>`;
       listEl.appendChild(div);
     });
     wireContactClicks(listEl);
+    // Add right-click context menu to contacts
+    listEl.querySelectorAll(".mail-contact-item").forEach(item => {
+      item.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        const ctx = $("#mail-contact-context-menu");
+        if (!ctx) return;
+        ctx.dataset.contactId = item.dataset.contactId;
+        ctx.dataset.contactEmail = item.dataset.email;
+        ctx.dataset.contactName = item.dataset.name;
+        ctx.style.display = "block";
+        ctx.style.left = e.clientX + "px";
+        ctx.style.top = e.clientY + "px";
+      });
+    });
   } catch (e) {
     listEl.querySelectorAll(".mail-contact-item, p").forEach(el => el.remove());
     const err = document.createElement("p");
