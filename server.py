@@ -4942,8 +4942,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 where.append("t.title = %s")
                 params.append(tag)
             q = " AND ".join(where)
+            tag_subquery = (
+                "(SELECT COALESCE(json_agg(json_build_object('title', t2.title, 'color', t2.color)), '[]'::json) "
+                "FROM mail_tag_assignments ta2 JOIN mail_tags t2 ON ta2.tag_id = t2.id "
+                "WHERE ta2.message_id = m.id) AS tags"
+            )
             rows = db.query_dicts(
-                "SELECT m.*, a.email AS account_email FROM mail_messages m "
+                "SELECT m.*, a.email AS account_email, " + tag_subquery + " FROM mail_messages m "
                 "LEFT JOIN mail_accounts a ON m.account_id = a.id "
                 + join + " WHERE " + q + " ORDER BY m.date_received DESC LIMIT %s OFFSET %s",
                 tuple(params) + (page_size, (page - 1) * page_size),

@@ -15661,6 +15661,36 @@ async function openComposeModal(opts = {}) {
     });
   }
 
+  // Attach dropdown button
+  const attachBtn = $('#compose-attach-btn');
+  const attachMenu = $('#compose-attach-menu');
+  if (attachBtn && attachMenu && !attachBtn.dataset.bound) {
+    attachBtn.dataset.bound = '1';
+    attachBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      attachMenu.classList.toggle('hidden');
+    });
+    document.addEventListener('click', () => attachMenu.classList.add('hidden'));
+    const attachComputer = $('#compose-attach-computer');
+    if (attachComputer) {
+      attachComputer.addEventListener('click', () => {
+        attachMenu.classList.add('hidden');
+        fileInput?.click();
+      });
+    }
+    const attachDocs = $('#compose-attach-documents');
+    if (attachDocs) {
+      attachDocs.addEventListener('click', () => {
+        attachMenu.classList.add('hidden');
+        openDocumentPickerModal((file) => {
+          if (file.size > 10 * 1024 * 1024) { showToast(`${file.name} exceeds 10MB limit`, true); return; }
+          composeAttachments.push(file);
+          renderComposeAttachments();
+        });
+      });
+    }
+  }
+
   function renderComposeAttachments() {
     if (!attachmentList) return;
     attachmentList.innerHTML = composeAttachments.map((f, i) => {
@@ -15981,12 +16011,16 @@ function renderComposeTabContent(container, tabId, opts = {}) {
       <div class="compose-tab-body note-editor" contenteditable="true" data-placeholder="Write your email..." style="flex:1; overflow-y:auto; min-height:200px; border:1px solid var(--border); border-radius:0 0 4px 4px; padding:0.5rem; background:var(--bg); color:var(--text);"></div>
     </div>
     <div style="flex-shrink:0; padding:0.4rem 0.75rem; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
-      <div>
-        <label style="font-size:0.8rem; color:var(--muted); cursor:pointer;">
-          <i class="ti ti-paperclip"></i> Attach files
-          <input type="file" class="compose-tab-attachments" multiple style="display:none;" accept="*/*">
-        </label>
-        <div class="compose-tab-attachment-list" style="font-size:0.8rem; margin-top:0.3rem;"></div>
+      <div style="display:flex; align-items:center; gap:0.5rem;">
+        <div style="position:relative; display:inline-block;">
+          <button type="button" class="btn btn-ghost btn-small compose-tab-attach-btn" style="font-size:0.8rem;"><i class="ti ti-paperclip"></i> Attach</button>
+          <div class="compose-tab-attach-menu hidden" style="position:absolute; bottom:100%; left:0; margin-bottom:4px; background:var(--surface); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,0.2); padding:0.25rem 0; min-width:180px; z-index:100;">
+            <button type="button" class="compose-tab-attach-computer" style="display:flex; align-items:center; gap:0.4rem; width:100%; padding:0.4rem 0.6rem; border:none; background:none; color:var(--text); cursor:pointer; font-size:0.82rem; text-align:left;"><i class="ti ti-upload"></i> File from Computer</button>
+            <button type="button" class="compose-tab-attach-docs" style="display:flex; align-items:center; gap:0.4rem; width:100%; padding:0.4rem 0.6rem; border:none; background:none; color:var(--text); cursor:pointer; font-size:0.82rem; text-align:left;"><i class="ti ti-folder"></i> File from Documents</button>
+          </div>
+        </div>
+        <input type="file" class="compose-tab-attachments" multiple style="display:none;" accept="*/*">
+        <div class="compose-tab-attachment-list" style="font-size:0.8rem;"></div>
       </div>
       <div style="display:flex; gap:0.5rem;">
         <button type="button" class="btn btn-primary btn-small compose-tab-send"><i class="ti ti-send" style="margin-right:0.3rem;"></i>Send</button>
@@ -16031,6 +16065,28 @@ function renderComposeTabContent(container, tabId, opts = {}) {
       }
       renderTabAttachments(attList, tabAttachments);
       fileInput.value = '';
+    });
+  }
+
+  // Compose tab attach dropdown
+  const tabAttachBtn = container.querySelector('.compose-tab-attach-btn');
+  const tabAttachMenu = container.querySelector('.compose-tab-attach-menu');
+  if (tabAttachBtn && tabAttachMenu) {
+    tabAttachBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      tabAttachMenu.classList.toggle('hidden');
+    });
+    container.querySelector('.compose-tab-attach-computer')?.addEventListener('click', () => {
+      tabAttachMenu.classList.add('hidden');
+      fileInput?.click();
+    });
+    container.querySelector('.compose-tab-attach-docs')?.addEventListener('click', () => {
+      tabAttachMenu.classList.add('hidden');
+      openDocumentPickerModal((file) => {
+        if (file.size > 10 * 1024 * 1024) { showToast(`${file.name} exceeds 10MB limit`, true); return; }
+        tabAttachments.push(file);
+        renderTabAttachments(attList, tabAttachments);
+      });
     });
   }
 
@@ -16127,6 +16183,138 @@ function renderComposeTabContent(container, tabId, opts = {}) {
         } catch { results.style.display = 'none'; }
       }, 300);
     });
+  }
+}
+
+// ── Document Picker Modal (attach files from Documents) ──────────────────
+let docPickerCallback = null;
+let docPickerScope = 'mydocs';
+let docPickerFolderId = null;
+let docPickerBreadcrumbs = [];
+
+function openDocumentPickerModal(callback) {
+  docPickerCallback = callback;
+  docPickerScope = 'mydocs';
+  docPickerFolderId = null;
+  docPickerBreadcrumbs = [];
+  const modal = $('#document-picker-modal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  // Bind dismiss
+  modal.querySelectorAll('[data-doc-picker-dismiss]').forEach(el => {
+    el.addEventListener('click', () => { modal.classList.add('hidden'); docPickerCallback = null; }, { once: true });
+  });
+  // Bind scope buttons
+  modal.querySelectorAll('.doc-picker-scope').forEach(btn => {
+    btn.addEventListener('click', () => {
+      modal.querySelectorAll('.doc-picker-scope').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      docPickerScope = btn.dataset.scope;
+      docPickerFolderId = null;
+      docPickerBreadcrumbs = [];
+      loadDocumentPickerList();
+    });
+  });
+  loadDocumentPickerList();
+}
+
+async function loadDocumentPickerList() {
+  const list = $('#doc-picker-list');
+  const breadcrumb = $('#doc-picker-breadcrumb');
+  if (!list) return;
+  list.innerHTML = '<div style="padding:1rem; color:var(--muted);">Loading...</div>';
+  try {
+    let docs = [], folders = [];
+    if (docPickerScope === 'mydocs') {
+      const params = docPickerFolderId ? `?folder_id=${docPickerFolderId}` : '';
+      const data = await api(`/api/v2/documents/personal${params}`);
+      docs = data.documents || [];
+      folders = data.folders || [];
+    } else if (docPickerScope === 'company') {
+      const params = docPickerFolderId ? `?folder_id=${docPickerFolderId}` : '';
+      const data = await api(`/api/v2/documents/company${params}`);
+      docs = data.documents || [];
+      folders = data.folders || [];
+    } else if (docPickerScope === 'projects') {
+      const data = await api('/api/v2/documents/search?q=');
+      const results = data.results || [];
+      docs = [];
+      results.forEach(r => { (r.documents || []).forEach(d => { d._projectTitle = r.project || r.projectTitle; docs.push(d); }); });
+    }
+    // Render breadcrumb
+    if (breadcrumb) {
+      breadcrumb.innerHTML = docPickerBreadcrumbs.map((b, i) =>
+        `<span class="doc-picker-bc-item" style="cursor:pointer; color:var(--accent);" data-idx="${i}">${escapeHtml(b.name)}</span>`
+      ).join('<span style="margin:0 0.2rem; color:var(--muted);">/</span>') || `<span style="font-weight:600;">${docPickerScope === 'mydocs' ? 'My Documents' : docPickerScope === 'company' ? 'Company' : 'Projects'}</span>`;
+      breadcrumb.querySelectorAll('.doc-picker-bc-item').forEach(el => {
+        el.addEventListener('click', () => {
+          const idx = parseInt(el.dataset.idx);
+          const target = docPickerBreadcrumbs[idx];
+          docPickerBreadcrumbs = docPickerBreadcrumbs.slice(0, idx);
+          docPickerFolderId = target ? target.id : null;
+          loadDocumentPickerList();
+        });
+      });
+    }
+    // Render list
+    let html = '';
+    // Folders first (skip for projects scope)
+    if (docPickerScope !== 'projects' && folders.length) {
+      folders.forEach(f => {
+        html += `<div class="doc-picker-folder" data-folder-id="${f.id}" data-folder-name="${escapeHtml(f.name)}" style="display:flex; align-items:center; gap:0.4rem; padding:0.35rem 0.5rem; border-radius:4px; cursor:pointer; font-size:0.85rem;">
+          <i class="ti ti-folder" style="color:var(--accent);"></i> ${escapeHtml(f.name)}
+        </div>`;
+      });
+    }
+    // Files
+    if (docs.length) {
+      docs.forEach(d => {
+        const title = d.title || d.name || 'Untitled';
+        const mime = d.mimeType || d.mime_type || '';
+        const size = d.fileSize || d.file_size || 0;
+        const sizeStr = size > 1024*1024 ? (size/1024/1024).toFixed(1)+' MB' : size > 1024 ? Math.round(size/1024)+' KB' : size+' B';
+        const projectLabel = d._projectTitle ? `<span style="color:var(--muted); font-size:0.72rem; margin-left:0.3rem;">${escapeHtml(d._projectTitle)}</span>` : '';
+        html += `<div class="doc-picker-file" data-doc-id="${d.id}" data-doc-title="${escapeHtml(title)}" data-doc-mime="${escapeHtml(mime)}" style="display:flex; align-items:center; gap:0.4rem; padding:0.35rem 0.5rem; border-radius:4px; cursor:pointer; font-size:0.85rem;">
+          <i class="ti ti-file" style="color:var(--muted);"></i> ${escapeHtml(title)}${projectLabel}
+          <span style="margin-left:auto; font-size:0.72rem; color:var(--muted);">${sizeStr}</span>
+        </div>`;
+      });
+    }
+    if (!html) {
+      html = '<div style="padding:1rem; color:var(--muted); text-align:center;">No files found</div>';
+    }
+    list.innerHTML = html;
+    // Bind folder clicks
+    list.querySelectorAll('.doc-picker-folder').forEach(el => {
+      el.addEventListener('click', () => {
+        docPickerBreadcrumbs.push({ id: docPickerFolderId, name: docPickerScope === 'mydocs' ? 'My Documents' : docPickerScope === 'company' ? 'Company' : 'Projects' });
+        docPickerFolderId = parseInt(el.dataset.folderId);
+        loadDocumentPickerList();
+      });
+      el.addEventListener('mouseenter', () => el.style.background = 'var(--hover)');
+      el.addEventListener('mouseleave', () => el.style.background = '');
+    });
+    // Bind file clicks — select and callback
+    list.querySelectorAll('.doc-picker-file').forEach(el => {
+      el.addEventListener('click', async () => {
+        const docId = el.dataset.docId;
+        const docTitle = el.dataset.docTitle;
+        try {
+          showToast('Downloading...');
+          const resp = await fetch(`/api/v2/documents/${docId}`);
+          if (!resp.ok) throw new Error('Download failed');
+          const blob = await resp.blob();
+          const file = new File([blob], docTitle, { type: blob.type || 'application/octet-stream' });
+          if (docPickerCallback) docPickerCallback(file);
+          $('#document-picker-modal')?.classList.add('hidden');
+          docPickerCallback = null;
+        } catch (e) { showToast('Failed to attach: ' + e.message, true); }
+      });
+      el.addEventListener('mouseenter', () => el.style.background = 'var(--hover)');
+      el.addEventListener('mouseleave', () => el.style.background = '');
+    });
+  } catch (e) {
+    list.innerHTML = `<div style="padding:1rem; color:var(--danger);">Failed to load: ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -17688,6 +17876,16 @@ function renderMailList(msgs) {
     const bodySnippet = (m.body_text || m.snippet || '').replace(/<[^>]+>/g, '').trim().slice(0, 100);
     subjDiv.title = `${from}\n${subj}\n${bodySnippet}`;
     subjDiv.innerHTML = draftBadge + escapeHtml(subj.slice(0, 80));
+    // Tag dots
+    if (m.tags && m.tags.length) {
+      m.tags.slice(0, 4).forEach(t => {
+        const dot = document.createElement('span');
+        dot.className = 'mail-tag-dot-inline';
+        dot.style.cssText = `width:6px; height:6px; border-radius:50%; background:${escapeHtml(t.color || '#6c757d')}; flex-shrink:0; display:inline-block; margin-left:3px; vertical-align:middle;`;
+        dot.title = escapeHtml(t.title);
+        subjDiv.appendChild(dot);
+      });
+    }
     row.appendChild(subjDiv);
 
     // Body snippet
@@ -17771,13 +17969,14 @@ function renderMailList(msgs) {
         { icon: 'ti ti-trash', label: 'Delete', click: async () => { if (!confirm('Delete this email?')) return; try { await api(`/api/v2/mail/messages/${id}`, { method: 'DELETE' }); loadMailMessagesForModal(); } catch {} } },
         'separator',
         { icon: 'ti ti-link', label: 'Link to deal', click: () => {
-          const linkBtn = document.querySelector('#mail-link-deal-btn');
-          const linkDropdown = document.querySelector('#mail-link-deal-dropdown');
-          if (linkBtn && linkDropdown) {
-            linkDropdown.classList.remove('hidden');
-            const search = document.querySelector('#mail-link-deal-search');
-            if (search) { search.value = ''; search.focus(); }
-          }
+          setTimeout(() => {
+            const linkDropdown = document.querySelector('#mail-link-deal-dropdown');
+            if (linkDropdown) {
+              linkDropdown.classList.remove('hidden');
+              const search = document.querySelector('#mail-link-deal-search');
+              if (search) { search.value = ''; search.focus(); }
+            }
+          }, 50);
         }},
         { icon: 'ti ti-tag', label: 'Tag', hasSubmenu: true, loadSubmenu: async (parentEl) => {
           try {
