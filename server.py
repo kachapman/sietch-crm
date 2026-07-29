@@ -5727,6 +5727,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 # Extract emails and names from raw text using regex.
                 email_re = re.compile(r'[\w.+-]+@[\w.-]+\.\w+')
                 name_re = re.compile(r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)', re.MULTILINE)
+                logger.info("Gmail CSV import: %d lines, first 200 chars: %s", len(csv_text.splitlines()), csv_text[:200])
                 for line in csv_text.splitlines():
                     emails_found = email_re.findall(line)
                     for email in emails_found:
