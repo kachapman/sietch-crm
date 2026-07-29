@@ -16113,13 +16113,12 @@ function switchToComposeTab(tabId) {
   const tabBtn = tabBar.querySelector(`[data-tab-id="${tabId}"]`);
   if (tabBtn) tabBtn.classList.add('active');
 
-  // Hide all content, show compose tab content
+  // Hide all normal mail content, show compose tab content
   const mailList = $('#mail-list-container');
   const scannerDiv = $('#mail-scanner-admin');
   const sidebar = $('.mail-right-sidebar');
   const sidebarToggle = $('#mail-sidebar-toggle');
   const toolbar = $('.mail-toolbar');
-  const composePane = $(`#mail-compose-tab-${tabId}`);
   const mailMainArea = $('.mail-main-area');
 
   if (mailList) mailList.classList.add('hidden');
@@ -16127,10 +16126,23 @@ function switchToComposeTab(tabId) {
   if (sidebar) sidebar.classList.add('hidden');
   if (sidebarToggle) sidebarToggle.classList.add('hidden');
   if (toolbar) toolbar.classList.add('hidden');
-  if (composePane) composePane.classList.remove('hidden');
+
+  // Show the compose content pane — find it by tabId or the base element
+  let composePane = $(`#mail-compose-tab-${tabId}`);
+  if (!composePane) composePane = $('#mail-compose-tab-content');
+  if (composePane) {
+    composePane.classList.remove('hidden');
+    composePane.style.flex = '1';
+    composePane.style.width = '100%';
+    composePane.style.minWidth = '0';
+  }
+
+  // Make main area full width column
   if (mailMainArea) {
     mailMainArea.style.display = 'flex';
     mailMainArea.style.flexDirection = 'column';
+    mailMainArea.style.flex = '1';
+    mailMainArea.style.minWidth = '0';
   }
 }
 
@@ -20801,7 +20813,28 @@ function minimizeEmailModal() {
   minimizedEmailState = {
     scroll: scrollEl ? scrollEl.scrollTop : 0,
     selectedId: selectedEl ? selectedEl.dataset.id || selectedEl.dataset.convId || null : null,
+    composeTabs: [],
   };
+  // Save open compose tabs
+  const tabBar = $('#mail-inbox-tabs');
+  if (tabBar) {
+    tabBar.querySelectorAll('.compose-tab').forEach(tabBtn => {
+      const tabId = tabBtn.dataset.tabId;
+      const pane = $(`#mail-compose-tab-${tabId}`);
+      if (pane) {
+        minimizedEmailState.composeTabs.push({
+          tabId,
+          from: pane.querySelector('.compose-tab-from')?.value || '',
+          to: pane.querySelector('.compose-tab-to')?.value || '',
+          cc: pane.querySelector('.compose-tab-cc')?.value || '',
+          bcc: pane.querySelector('.compose-tab-bcc')?.value || '',
+          subject: pane.querySelector('.compose-tab-subject')?.value || '',
+          body: pane.querySelector('.compose-tab-body')?.innerHTML || '',
+          dealId: pane.querySelector('.compose-tab-deal-selected')?.dataset?.dealId || null,
+        });
+      }
+    });
+  }
   try { localStorage.setItem(EMAIL_MINIMIZED_STORAGE_KEY, JSON.stringify(minimizedEmailState)); } catch {}
   modal.classList.add("hidden");
   const trigger = $("#email-trigger");
@@ -20821,13 +20854,43 @@ function restoreEmailModal() {
   try { localStorage.removeItem(EMAIL_MINIMIZED_STORAGE_KEY); } catch {}
   const trigger = $("#email-trigger");
   if (trigger) trigger.classList.add("trigger-hidden");
-  openMailInboxModal().then(() => {
+  openMailInboxModal().then(async () => {
     if (!state) return;
     const scrollEl = $("#mail-list-container");
     if (scrollEl && state.scroll) scrollEl.scrollTop = state.scroll;
     if (state.selectedId) {
       const row = document.querySelector(`.mail-list-row[data-id="${state.selectedId}"], .mail-row[data-id="${state.selectedId}"]`);
       if (row) row.click();
+    }
+    // Restore compose tabs
+    if (state.composeTabs && state.composeTabs.length) {
+      for (const ct of state.composeTabs) {
+        composeTabCounter++;
+        const newTabId = `compose-${composeTabCounter}`;
+        // Create tab button
+        const tabBar = $('#mail-inbox-tabs');
+        if (tabBar) {
+          const tabBtn = document.createElement('button');
+          tabBtn.className = 'mail-inbox-tab compose-tab';
+          tabBtn.dataset.mailtab = newTabId;
+          tabBtn.dataset.tabId = newTabId;
+          const tabTitle = ct.subject ? ct.subject.slice(0, 25) : `Compose ${composeTabCounter}`;
+          tabBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:0.2rem;vertical-align:middle;"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 7a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-10" /><path d="M6.36 5a2 2 0 0 1 1.962 1.608l.356 1.784a2 2 0 0 0 1.962 1.608h8.36a2 2 0 0 1 2 2" /><path d="M12.36 5a2 2 0 0 1 1.962 1.608l.356 1.784a2 2 0 0 0 1.962 1.608" /></svg><span class="compose-tab-title">${escapeHtml(tabTitle)}</span><button type="button" class="compose-tab-close" title="Close tab">&times;</button>`;
+          tabBtn.addEventListener('click', (e) => {
+            if (e.target.closest('.compose-tab-close')) { closeComposeTab(newTabId); return; }
+            switchToComposeTab(newTabId);
+          });
+          tabBar.appendChild(tabBtn);
+        }
+        // Create content pane — reuse the base element, change its ID
+        const contentPane = $('#mail-compose-tab-content');
+        if (contentPane) {
+          contentPane.id = `mail-compose-tab-${newTabId}`;
+          renderComposeTabContent(contentPane, newTabId, { from: ct.from, to: ct.to, cc: ct.cc, bcc: ct.bcc, subject: ct.subject, body: ct.body, dealId: ct.dealId });
+        }
+        // Activate the last restored tab
+        switchToComposeTab(newTabId);
+      }
     }
   }).catch(() => {});
 }

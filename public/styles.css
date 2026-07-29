@@ -11551,10 +11551,18 @@ body {
 }
 .compose-tab-content {
   background: var(--bg);
+  flex: 1 !important;
+  min-height: 0 !important;
+  width: 100% !important;
 }
 .mail-tab-content {
   flex: 1;
   min-height: 0;
+}
+/* When compose tab is active, hide sidebar and make main area full width */
+.mail-main-area:has(.compose-tab-content:not(.hidden)) .mail-right-sidebar,
+.mail-main-area:has(.compose-tab-content:not(.hidden)) #mail-sidebar-toggle {
+  display: none !important;
 }
 
 /* ── Attachment list in compose ───────────────────────────────────────── */

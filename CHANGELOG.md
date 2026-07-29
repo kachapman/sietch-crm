@@ -2,6 +2,12 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — Compose Tab Fixes (2026-07-28)
+
+- **Compose tab persists across minimize/restore.** Minimize now saves all open compose tabs (To, Cc, Bcc, Subject, Body, Deal selection). Restore recreates them with a new tab ID. Content is preserved.
+- **Compose tab layout fixed.** When compose tab is active, sidebar is hidden and compose content takes full width of the mail modal. CSS `:has()` rule hides sidebar when compose tab content is visible.
+- **Files:** `public/app.js`, `public/styles.css`.
+
 ## Phase 3 — Compose Tab Feature (2026-07-28)
 
 - **Move to tab button in compose modal.** New tab icon button (left of close button) moves the current compose to a dedicated tab in the mail inbox modal. The compose modal closes and the content appears in a full-featured compose tab that fills the mail inbox modal area.
