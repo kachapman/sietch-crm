@@ -16679,7 +16679,10 @@ async function renderMailContacts() {
           <button type="button" class="btn btn-ghost btn-small contact-edit-cancel" style="font-size:0.7rem;padding:0.15rem 0.4rem;">Cancel</button>
         </div>`;
       const contactItem = listEl?.querySelector(`[data-contact-id="${id}"]`);
-      if (contactItem) contactItem.after(form);
+      if (contactItem) {
+        contactItem.after(form);
+        form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
       form.querySelector(".contact-edit-save").addEventListener("click", async () => {
         const email = form.querySelector(".contact-edit-email").value.trim();
         const name = form.querySelector(".contact-edit-name").value.trim();

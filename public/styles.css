@@ -3954,8 +3954,7 @@ body {
   transition: max-height 0.25s ease;
 }
 .mail-contacts-list.expanded {
-  max-height: 200px !important;
-  overflow-y: auto;
+  overflow-y: visible;
 }
 .scanner-log {
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
