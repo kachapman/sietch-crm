@@ -10909,6 +10909,17 @@ body {
     width: 100%;
     border-radius: 0;
   }
+  #compose-email-modal .modal-card {
+    max-width: 100% !important;
+    width: 100% !important;
+    border-radius: 0;
+  }
+  #compose-email-modal {
+    padding: 0;
+  }
+  #compose-send-btn {
+    padding: 0.35rem 0.8rem;
+  }
   .documents-modal-card {
     width: 100%;
     height: 100%;

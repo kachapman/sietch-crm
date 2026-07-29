@@ -15669,12 +15669,11 @@ async function openComposeModal(opts = {}) {
     });
   }
 
-  // Bind Templates button
+  // Bind Templates button (includes Save as template at bottom of dropdown)
   const templateBtn = $('#compose-template-btn');
   if (templateBtn && !templateBtn.dataset.bound) {
     templateBtn.dataset.bound = '1';
     templateBtn.addEventListener('click', async () => {
-      // Remove previous picker if open
       const oldPicker = templateBtn.parentElement?.querySelector('.mail-link-deal-dropdown');
       if (oldPicker) { oldPicker.remove(); return; }
       try {
@@ -15682,10 +15681,16 @@ async function openComposeModal(opts = {}) {
         const templates = data.templates || [];
         const picker = document.createElement('div');
         picker.className = 'mail-link-deal-dropdown';
-        picker.style.cssText = 'position:absolute; top:100%; left:0; z-index:100; max-height:200px; overflow-y:auto;';
-        picker.innerHTML = templates.length
-          ? templates.map(t => `<button type="button" class="template-pick-btn" data-template-id="${t.id}" style="display:block;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;">${escapeHtml(t.title)}</button>`).join('')
-          : '<div style="padding:0.5rem; color:var(--muted);">No templates saved</div>';
+        picker.style.cssText = 'position:absolute; top:100%; left:0; z-index:100; max-height:220px; overflow-y:auto;';
+        if (templates.length) {
+          picker.innerHTML = templates.map(t => `<button type="button" class="template-pick-btn" data-template-id="${t.id}" style="display:block;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;">${escapeHtml(t.title)}</button>`).join('');
+          picker.innerHTML += '<div style="border-top:1px solid var(--border); margin:0.3rem 0;"></div>';
+          picker.innerHTML += '<button type="button" id="compose-save-template-dropdown" style="display:flex;align-items:center;gap:0.3rem;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;color:var(--text);"><i class="ti ti-bookmark" style="font-size:0.85rem;"></i> Save current as template</button>';
+        } else {
+          picker.innerHTML = '<div style="padding:0.5rem; color:var(--muted);">No templates saved</div>';
+          picker.innerHTML += '<div style="border-top:1px solid var(--border); margin:0.3rem 0;"></div>';
+          picker.innerHTML += '<button type="button" id="compose-save-template-dropdown" style="display:flex;align-items:center;gap:0.3rem;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;color:var(--text);"><i class="ti ti-bookmark" style="font-size:0.85rem;"></i> Save current as template</button>';
+        }
         templateBtn.parentElement.style.position = 'relative';
         templateBtn.parentElement.appendChild(picker);
         picker.querySelectorAll('.template-pick-btn').forEach(btn => {
@@ -15699,7 +15704,21 @@ async function openComposeModal(opts = {}) {
             picker.remove();
           });
         });
-        // Click-outside to close
+        // Save as template button at bottom of dropdown
+        picker.querySelector('#compose-save-template-dropdown')?.addEventListener('click', async () => {
+          const subject = $('#compose-subject')?.value.trim();
+          const body = $('#compose-body')?.innerHTML || '';
+          const title = prompt('Template name:');
+          if (!title || !title.trim()) return;
+          try {
+            await api('/api/v2/mail/templates', {
+              method: 'POST',
+              body: JSON.stringify({ title: title.trim(), subject, body_html: body })
+            });
+            showToast('Template saved');
+            picker.remove();
+          } catch (e) { showToast('Failed to save template: ' + e.message, true); }
+        });
         setTimeout(() => {
           document.addEventListener('click', function closePicker(ev) {
             if (!picker.contains(ev.target) && ev.target !== templateBtn) {
@@ -15709,25 +15728,6 @@ async function openComposeModal(opts = {}) {
           });
         }, 0);
       } catch (e) { showToast('Failed to load templates: ' + e.message, true); }
-    });
-  }
-
-  // Bind Save as Template button
-  const saveTplBtn = $('#compose-save-template');
-  if (saveTplBtn && !saveTplBtn.dataset.bound) {
-    saveTplBtn.dataset.bound = '1';
-    saveTplBtn.addEventListener('click', async () => {
-      const subject = $('#compose-subject')?.value.trim();
-      const body = $('#compose-body')?.innerHTML || '';
-      const title = prompt('Template name:');
-      if (!title || !title.trim()) return;
-      try {
-        await api('/api/v2/mail/templates', {
-          method: 'POST',
-          body: JSON.stringify({ title: title.trim(), subject, body_html: body })
-        });
-        showToast('Template saved');
-      } catch (e) { showToast('Failed to save template: ' + e.message, true); }
     });
   }
 }
