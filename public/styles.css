@@ -4151,54 +4151,6 @@ body {
   font-weight: 500;
 }
 
-.mail-hover-popover {
-  position: fixed;
-  z-index: 10000;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-  padding: 0.75rem;
-  max-width: 360px;
-  min-width: 240px;
-  pointer-events: none;
-}
-.mail-hover-from {
-  font-weight: 600;
-  font-size: 0.85rem;
-  color: var(--text);
-  margin-bottom: 0.2rem;
-}
-.mail-hover-subject {
-  font-size: 0.8rem;
-  color: var(--text);
-  margin-bottom: 0.15rem;
-  word-wrap: break-word;
-}
-.mail-hover-date {
-  font-size: 0.7rem;
-  color: var(--muted);
-  margin-bottom: 0.3rem;
-}
-.mail-hover-snippet {
-  font-size: 0.75rem;
-  color: var(--muted);
-  line-height: 1.4;
-  margin-bottom: 0.3rem;
-  word-wrap: break-word;
-}
-.mail-hover-tags {
-  display: flex;
-  gap: 0.3rem;
-  flex-wrap: wrap;
-}
-.mail-hover-tag {
-  font-size: 0.65rem;
-  background: var(--accent-subtle);
-  color: var(--accent);
-  padding: 0.1rem 0.4rem;
-  border-radius: 3px;
-}
 .mail-item {
   border-bottom: 1px solid var(--border);
 }
@@ -11526,6 +11478,80 @@ body {
   .email-preview-action[data-action="archive"] .btn-label,
   .email-preview-action[data-action="print"] .btn-label { display: none; }
   .email-preview-action { min-width: 36px; min-height: 36px; }
+}
+
+/* ── Right-click context menu for mail list ────────────────────────── */
+.mail-context-menu {
+  position: fixed;
+  z-index: 10001;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  padding: 0.25rem 0;
+  min-width: 170px;
+}
+.mail-context-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.4rem 0.75rem;
+  border: none;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.85rem;
+  text-align: left;
+  position: relative;
+}
+.mail-context-item:hover {
+  background: var(--hover);
+}
+.mail-context-item i {
+  font-size: 1rem;
+  width: 1.2rem;
+  text-align: center;
+  flex-shrink: 0;
+}
+.mail-context-separator {
+  height: 1px;
+  background: var(--border);
+  margin: 0.25rem 0;
+}
+.mail-context-submenu {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: -0.25rem;
+  z-index: 10002;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  padding: 0.25rem 0;
+  min-width: 150px;
+  max-height: 250px;
+  overflow-y: auto;
+}
+.mail-context-submenu.visible {
+  display: block;
+}
+.mail-context-subitem {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.35rem 0.6rem;
+  border: none;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.82rem;
+  text-align: left;
+}
+.mail-context-subitem:hover {
+  background: var(--hover);
 }
 
 /* ── Compose tab in mail inbox ──────────────────────────────────────── */

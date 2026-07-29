@@ -17750,40 +17750,108 @@ function renderMailList(msgs) {
     // Right-click context menu for email actions
     item.addEventListener('contextmenu', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       // Remove any existing context menu
       document.querySelectorAll('.mail-context-menu').forEach(m => m.remove());
+
+      // Select this message for link/tag operations
+      mailState.selected.add(id);
+      updateMailSelectedInfo();
+
       const menu = document.createElement('div');
       menu.className = 'mail-context-menu';
-      menu.style.cssText = 'position:fixed; z-index:10001; background:var(--surface); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,0.25); padding:0.25rem 0; min-width:160px;';
-      const actions = [
-        { icon: 'ti ti-arrow-back-up', label: 'Reply', action: () => { expBtn.click(); setTimeout(() => { const btn = document.querySelector('.email-preview-action[data-action="reply"]'); if (btn) btn.click(); }, 100); } },
-        { icon: 'ti ti-arrow-forward-up', label: 'Forward', action: () => { expBtn.click(); setTimeout(() => { const btn = document.querySelector('.email-preview-action[data-action="forward"]'); if (btn) btn.click(); }, 100); } },
-        { icon: null, label: '', action: null }, // separator
-        { icon: m.read ? 'ti ti-mail' : 'ti ti-mail-open', label: m.read ? 'Mark unread' : 'Mark read', action: async () => { await markMailMessageRead(id); } },
-        { icon: 'ti ti-star', label: 'Star', action: async () => { try { await api(`/api/v2/mail/messages/${id}/star`, { method: 'PUT' }); loadMailMessagesForModal(); } catch {} } },
-        { icon: 'ti ti-archive', label: 'Archive', action: async () => { try { await api(`/api/v2/mail/messages/${id}/move`, { method: 'POST', body: JSON.stringify({ folder: 'Archive' }) }); loadMailMessagesForModal(); } catch {} } },
-        { icon: 'ti ti-trash', label: 'Delete', action: async () => { if (!confirm('Delete this email?')) return; try { await api(`/api/v2/mail/messages/${id}`, { method: 'DELETE' }); loadMailMessagesForModal(); } catch {} } },
-        { icon: 'ti ti-link', label: 'Link to deal', action: () => { document.querySelector('#mail-link-deal-btn')?.click(); } },
-        { icon: 'ti ti-tag', label: 'Tag', action: () => { document.querySelector('#mail-tag-btn')?.click(); } },
+
+      const menuItems = [
+        { icon: 'ti ti-arrow-back-up', label: 'Reply', click: () => { openEmailPreviewModal(id); setTimeout(() => { const btn = document.querySelector('.email-preview-action[data-action="reply"]'); if (btn) btn.click(); }, 200); } },
+        { icon: 'ti ti-arrow-forward-up', label: 'Forward', click: () => { openEmailPreviewModal(id); setTimeout(() => { const btn = document.querySelector('.email-preview-action[data-action="forward"]'); if (btn) btn.click(); }, 200); } },
+        'separator',
+        { icon: m.read ? 'ti ti-mail' : 'ti ti-mail-open', label: m.read ? 'Mark unread' : 'Mark read', click: async () => { if (m.read) { try { await api(`/api/v2/mail/messages/${id}/unread`, { method: 'PUT' }); } catch {} } else { await markMailMessageRead(id); } loadMailMessagesForModal(); } },
+        { icon: 'ti ti-star', label: 'Star', click: async () => { try { await api(`/api/v2/mail/messages/${id}/star`, { method: 'PUT' }); loadMailMessagesForModal(); } catch {} } },
+        { icon: 'ti ti-archive', label: 'Archive', click: async () => { try { await api(`/api/v2/mail/messages/${id}/move`, { method: 'POST', body: JSON.stringify({ folder: 'Archive' }) }); loadMailMessagesForModal(); } catch {} } },
+        { icon: 'ti ti-trash', label: 'Delete', click: async () => { if (!confirm('Delete this email?')) return; try { await api(`/api/v2/mail/messages/${id}`, { method: 'DELETE' }); loadMailMessagesForModal(); } catch {} } },
+        'separator',
+        { icon: 'ti ti-link', label: 'Link to deal', click: () => {
+          const linkBtn = document.querySelector('#mail-link-deal-btn');
+          const linkDropdown = document.querySelector('#mail-link-deal-dropdown');
+          if (linkBtn && linkDropdown) {
+            linkDropdown.classList.remove('hidden');
+            const search = document.querySelector('#mail-link-deal-search');
+            if (search) { search.value = ''; search.focus(); }
+          }
+        }},
+        { icon: 'ti ti-tag', label: 'Tag', hasSubmenu: true, loadSubmenu: async (parentEl) => {
+          try {
+            const data = await api('/api/v2/mail/tags');
+            const tags = data.tags || [];
+            if (!tags.length) {
+              const empty = document.createElement('div');
+              empty.style.cssText = 'padding:0.4rem 0.75rem; color:var(--muted); font-size:0.8rem;';
+              empty.textContent = 'No tags yet';
+              parentEl.appendChild(empty);
+              return;
+            }
+            tags.forEach(tag => {
+              const btn = document.createElement('button');
+              btn.type = 'button';
+              btn.className = 'mail-context-subitem';
+              btn.innerHTML = `<span class="mail-tag-dot" style="background:${escapeHtml(tag.color || '#6c757d')}; width:8px; height:8px; border-radius:50%; flex-shrink:0;"></span>${escapeHtml(tag.title)}`;
+              btn.addEventListener('click', async (ev) => {
+                ev.stopPropagation();
+                try {
+                  await api(`/api/v2/mail/messages/${id}/tags`, {
+                    method: 'POST',
+                    body: JSON.stringify({ title: tag.title }),
+                  });
+                  showToast(`Tagged "${tag.title}"`);
+                  menu.remove();
+                  loadMailMessagesForModal();
+                } catch (err) { showToast('Failed to tag: ' + err.message, true); }
+              });
+              parentEl.appendChild(btn);
+            });
+          } catch { /* ignore */ }
+        }},
       ];
-      actions.forEach(a => {
-        if (!a.label) {
+
+      menuItems.forEach(item => {
+        if (item === 'separator') {
           const sep = document.createElement('div');
-          sep.style.cssText = 'height:1px; background:var(--border); margin:0.25rem 0;';
+          sep.className = 'mail-context-separator';
           menu.appendChild(sep);
           return;
         }
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.style.cssText = 'display:flex; align-items:center; gap:0.5rem; width:100%; padding:0.4rem 0.75rem; border:none; background:none; color:var(--text); cursor:pointer; font-size:0.85rem; text-align:left;';
-        btn.innerHTML = `<i class="${a.icon}" style="font-size:1rem;"></i>${a.label}`;
-        btn.addEventListener('mouseenter', () => btn.style.background = 'var(--hover)');
-        btn.addEventListener('mouseleave', () => btn.style.background = '');
-        btn.addEventListener('click', () => { menu.remove(); a.action(); });
+        btn.className = 'mail-context-item';
+        btn.innerHTML = `<i class="${item.icon}"></i><span>${item.label}</span>`;
+        if (item.hasSubmenu) {
+          const arrow = document.createElement('i');
+          arrow.className = 'ti ti-chevron-right';
+          arrow.style.cssText = 'margin-left:auto; font-size:0.7rem; opacity:0.5;';
+          btn.appendChild(arrow);
+          const submenu = document.createElement('div');
+          submenu.className = 'mail-context-submenu';
+          btn.addEventListener('mouseenter', () => {
+            submenu.innerHTML = '';
+            submenu.classList.add('visible');
+            item.loadSubmenu(submenu);
+          });
+          btn.addEventListener('mouseleave', () => {
+            setTimeout(() => { if (!submenu.matches(':hover')) submenu.classList.remove('visible'); }, 100);
+          });
+          submenu.addEventListener('mouseleave', () => {
+            setTimeout(() => { if (!btn.matches(':hover')) submenu.classList.remove('visible'); }, 100);
+          });
+          submenu.addEventListener('mouseenter', () => submenu.classList.add('visible'));
+          btn.appendChild(submenu);
+        } else {
+          btn.addEventListener('click', () => { menu.remove(); item.click(); });
+        }
         menu.appendChild(btn);
       });
-      menu.style.left = Math.min(e.clientX, window.innerWidth - 180) + 'px';
-      menu.style.top = Math.min(e.clientY, window.innerHeight - (actions.length * 32)) + 'px';
+
+      menu.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px';
+      menu.style.top = Math.min(e.clientY, window.innerHeight - 300) + 'px';
       document.body.appendChild(menu);
       const closeMenu = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', closeMenu); } };
       setTimeout(() => document.addEventListener('click', closeMenu), 0);
