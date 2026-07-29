@@ -2,6 +2,19 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — Follow-up Fixes (2026-07-29)
+
+- **Mail tag badges now appear in the email list.** Root cause was a stale server process running pre-fix code; restarted with `setsid` so the backend batch-tag query is active. Tags now return in `/api/v2/mail/messages` and render as colored badge pills.
+- **Tag actions refresh the email list.** Toolbar tag dropdown and right-click context-menu tag action now call `loadMailMessagesForModal()` after applying or removing tags, so badges update immediately.
+- **Document picker folder tree repositioned.** Tree container now inserts directly after the active scope button (My Documents / Company), matching the documents modal layout and keeping folder navigation under the correct section.
+- **Context menu hover highlight in dark mode.** Added `--hover: rgba(255, 255, 255, 0.08)` to `:root`; `.mail-context-item` and `.mail-context-subitem` hover backgrounds now produce a visible highlight.
+- **Tag badges moved to the right of the body snippet.** Tags are now rendered as a separate flex item after the body snippet, so the snippet stays next to the subject and tags sit to its right.
+- **Attachment size limit raised to 20MB.** All frontend file-size checks in compose and compose-tab attachment handlers updated from 10MB to 20MB.
+- **Attachments now carry over on Move to tab.** `renderComposeTabContent()` now calls `renderTabAttachments()` immediately after initializing `tabAttachments` from `opts.attachments`, so files attached in the compose modal appear in the new compose tab.
+- **Email preview modal uses full viewport on mobile.** Added `height: 100vh` and `max-height: 100vh !important` to the mobile media query so the preview fills the screen and large email bodies have more room.
+- **Email iframe sandbox allows scripts.** Added `allow-scripts` to the sandbox attribute on email body iframes (preview and inline embed) to eliminate the "Blocked script execution in 'about:srcdoc'" console error.
+- **Files:** `public/app.js`, `public/styles.css`, `AGENTS.md`, `CHANGELOG.md`.
+
 ## Phase 3 — Final Fixes & Polish (2026-07-28)
 
 - **Context menu dark mode styling.** Right-click menu uses CSS variables for proper dark mode support. Link-to-deal now works from context menu (setTimeout fixes click-away race condition).

@@ -13,6 +13,7 @@
   --success: #3ecf8e;
   --warn: #f0b429;
   --danger: #f07178;
+  --hover: rgba(255, 255, 255, 0.08);
   --radius: 12px;
   --shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
   --font: "DM Sans", system-ui, sans-serif;
@@ -3714,13 +3715,10 @@ body {
   min-width: 0;
   color: #aaa;
   font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 4px;
 }
 .mail-subject-text {
-  flex: 1;
-  min-width: 0;
+  display: block;
+  width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -11493,7 +11491,8 @@ body {
     max-width: 100% !important;
     width: 100% !important;
     border-radius: 0;
-    max-height: 100vh;
+    max-height: 100vh !important;
+    height: 100vh;
   }
   #email-preview-modal { padding: 0; }
   .email-preview-action[data-action="reply"] .btn-label,

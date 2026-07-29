@@ -15622,7 +15622,7 @@ async function openComposeModal(opts = {}) {
           e.preventDefault();
           const file = item.getAsFile();
           if (file) {
-            if (file.size > 10 * 1024 * 1024) { showToast(`${file.name} exceeds 10MB limit`, true); continue; }
+            if (file.size > 20 * 1024 * 1024) { showToast(`${file.name} exceeds 20MB limit`, true); continue; }
             composeAttachments.push(file);
             renderComposeAttachments();
             showToast('Image attached: ' + file.name);
@@ -15637,7 +15637,7 @@ async function openComposeModal(opts = {}) {
       if (!files || !files.length) return;
       for (const file of files) {
         if (file.type.startsWith('image/')) {
-          if (file.size > 10 * 1024 * 1024) { showToast(`${file.name} exceeds 10MB limit`, true); continue; }
+          if (file.size > 20 * 1024 * 1024) { showToast(`${file.name} exceeds 20MB limit`, true); continue; }
           composeAttachments.push(file);
         }
       }
@@ -15654,7 +15654,7 @@ async function openComposeModal(opts = {}) {
     fileInput.dataset.bound = '1';
     fileInput.addEventListener('change', () => {
       for (const file of fileInput.files) {
-        if (file.size > 10 * 1024 * 1024) { showToast(`${file.name} exceeds 10MB limit`, true); continue; }
+        if (file.size > 20 * 1024 * 1024) { showToast(`${file.name} exceeds 20MB limit`, true); continue; }
         composeAttachments.push(file);
       }
       renderComposeAttachments();
@@ -15684,7 +15684,7 @@ async function openComposeModal(opts = {}) {
       attachDocs.addEventListener('click', () => {
         attachMenu.classList.add('hidden');
         openDocumentPickerModal((file) => {
-          if (file.size > 10 * 1024 * 1024) { showToast(`${file.name} exceeds 10MB limit`, true); return; }
+          if (file.size > 20 * 1024 * 1024) { showToast(`${file.name} exceeds 20MB limit`, true); return; }
           composeAttachments.push(file);
           renderComposeAttachments();
         });
@@ -16059,10 +16059,11 @@ function renderComposeTabContent(container, tabId, opts = {}) {
   let tabAttachments = opts.attachments ? [...opts.attachments] : [];
   const fileInput = container.querySelector('.compose-tab-attachments');
   const attList = container.querySelector('.compose-tab-attachment-list');
+  renderTabAttachments(attList, tabAttachments);
   if (fileInput) {
     fileInput.addEventListener('change', () => {
       for (const file of fileInput.files) {
-        if (file.size > 10 * 1024 * 1024) { showToast(`${file.name} exceeds 10MB limit`, true); continue; }
+        if (file.size > 20 * 1024 * 1024) { showToast(`${file.name} exceeds 20MB limit`, true); continue; }
         tabAttachments.push(file);
       }
       renderTabAttachments(attList, tabAttachments);
@@ -16085,7 +16086,7 @@ function renderComposeTabContent(container, tabId, opts = {}) {
     container.querySelector('.compose-tab-attach-docs')?.addEventListener('click', () => {
       tabAttachMenu.classList.add('hidden');
       openDocumentPickerModal((file) => {
-        if (file.size > 10 * 1024 * 1024) { showToast(`${file.name} exceeds 10MB limit`, true); return; }
+        if (file.size > 20 * 1024 * 1024) { showToast(`${file.name} exceeds 20MB limit`, true); return; }
         tabAttachments.push(file);
         renderTabAttachments(attList, tabAttachments);
       });
@@ -16102,7 +16103,7 @@ function renderComposeTabContent(container, tabId, opts = {}) {
         if (items[i].type.startsWith('image/')) {
           e.preventDefault();
           const file = items[i].getAsFile();
-          if (file && file.size <= 10 * 1024 * 1024) {
+          if (file && file.size <= 20 * 1024 * 1024) {
             tabAttachments.push(file);
             renderTabAttachments(attList, tabAttachments);
           }
@@ -16115,7 +16116,7 @@ function renderComposeTabContent(container, tabId, opts = {}) {
       const files = e.dataTransfer?.files;
       if (!files) return;
       for (const file of files) {
-        if (file.type.startsWith('image/') && file.size <= 10 * 1024 * 1024) tabAttachments.push(file);
+        if (file.type.startsWith('image/') && file.size <= 20 * 1024 * 1024) tabAttachments.push(file);
       }
       if (files.length) renderTabAttachments(attList, tabAttachments);
     });
@@ -16483,23 +16484,35 @@ async function loadDocPickerFolderTree() {
 function renderDocPickerFolderTree() {
   const sidebar = $('#doc-picker-sidebar');
   if (!sidebar) return;
+  const isFolderScope = docPickerState.scope === 'mydocs' || docPickerState.scope === 'company';
   let treeEl = sidebar.querySelector('#doc-picker-tree');
-  // Create tree container with proper class if it doesn't exist
+
+  if (!isFolderScope) {
+    if (treeEl) treeEl.remove();
+    return;
+  }
+
   if (!treeEl) {
     treeEl = document.createElement('div');
     treeEl.id = 'doc-picker-tree';
     treeEl.className = 'documents-folder-tree';
-    sidebar.appendChild(treeEl);
   } else if (!treeEl.classList.contains('documents-folder-tree')) {
     treeEl.classList.add('documents-folder-tree');
   }
 
-  const isFolderScope = docPickerState.scope === 'mydocs' || docPickerState.scope === 'company';
-  if (!isFolderScope || !docPickerState.folderTree.length) {
-    treeEl.innerHTML = '';
+  // Always reposition under the active scope button to match the documents modal layout
+  const activeBtn = sidebar.querySelector('.documents-scope-btn.active');
+  if (activeBtn) {
+    activeBtn.parentNode.insertBefore(treeEl, activeBtn.nextSibling);
+  } else if (!treeEl.parentNode) {
+    sidebar.appendChild(treeEl);
+  }
+
+  const tree = buildFolderTreeNodes(docPickerState.folderTree, null);
+  if (tree.length === 0) {
+    treeEl.innerHTML = `<div style="padding:0.2rem 0.6rem;font-size:0.78rem;color:var(--muted);font-style:italic;">No folders yet</div>`;
     return;
   }
-  const tree = buildFolderTreeNodes(docPickerState.folderTree, null);
   function renderNode(node, depth) {
     const hasChildren = node.children.length > 0;
     const isExpanded = docPickerState.expandedFolders.has(node.id);
@@ -17096,7 +17109,8 @@ function attachMailModalListeners() {
             }
             showToast(ok ? `${currentlyHas ? "Removed" : "Added"} tag "${tagTitle}" from ${ok} message(s)` : "Failed to update tags");
             tagDropdown.classList.add("hidden");
-            // Refresh any open message detail panels
+            // Refresh list and any open detail panels
+            try { await loadMailMessagesForModal(); } catch (err) { console.error("Failed to refresh mail list", err); }
             refreshOpenMailPanels();
           });
         });
@@ -18114,7 +18128,18 @@ function renderMailList(msgs) {
     subjText.className = 'mail-subject-text';
     subjText.innerHTML = draftBadge + escapeHtml(subj.slice(0, 80));
     subjDiv.appendChild(subjText);
-    // Tag badges
+    row.appendChild(subjDiv);
+
+    // Body snippet
+    const snippet = (m.body_text || "").replace(/<[^>]+>/g, "").trim().slice(0, 60);
+    if (snippet) {
+      const snippetDiv = document.createElement("div");
+      snippetDiv.className = "mail-snippet";
+      snippetDiv.textContent = snippet;
+      row.appendChild(snippetDiv);
+    }
+
+    // Tag badges (to the right of the body snippet)
     if (m.tags && m.tags.length) {
       const tagsWrap = document.createElement('span');
       tagsWrap.className = 'mail-row-tags';
@@ -18125,17 +18150,7 @@ function renderMailList(msgs) {
         badge.textContent = t.title;
         tagsWrap.appendChild(badge);
       });
-      subjDiv.appendChild(tagsWrap);
-    }
-    row.appendChild(subjDiv);
-
-    // Body snippet
-    const snippet = (m.body_text || "").replace(/<[^>]+>/g, "").trim().slice(0, 60);
-    if (snippet) {
-      const snippetDiv = document.createElement("div");
-      snippetDiv.className = "mail-snippet";
-      snippetDiv.textContent = snippet;
-      row.appendChild(snippetDiv);
+      row.appendChild(tagsWrap);
     }
 
     const dateDiv = document.createElement("div");
@@ -18244,8 +18259,8 @@ function renderMailList(msgs) {
                   });
                   showToast(`Tagged "${tag.title}"`);
                   menu.remove();
-                  loadMailMessagesForModal();
-                } catch (err) { showToast('Failed to tag: ' + err.message, true); }
+                } catch (err) { showToast('Failed to tag: ' + err.message, true); return; }
+                try { await loadMailMessagesForModal(); } catch (err) { console.error('Failed to refresh mail list', err); }
               });
               parentEl.appendChild(btn);
             });
@@ -19632,7 +19647,7 @@ function openEmailPreviewModal(messageId) {
         bodyEl.innerHTML = '';
         const iframe = document.createElement('iframe');
         iframe.className = 'opp-preview-mail-iframe';
-        iframe.setAttribute('sandbox', 'allow-same-origin');
+        iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts');
         iframe.setAttribute('title', 'Email body');
         iframe.srcdoc = mailBodyIframeSrcdoc(bodyPick.content);
         iframe.addEventListener('load', () => {
@@ -19924,7 +19939,7 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
   if (bodyPick.mode === "html" && bodyPick.content) {
     const iframe = document.createElement("iframe");
     iframe.className = "opp-preview-mail-iframe";
-    iframe.setAttribute("sandbox", "allow-same-origin");
+    iframe.setAttribute("sandbox", "allow-same-origin allow-scripts");
     iframe.setAttribute("title", "Email body");
     iframe.srcdoc = mailBodyIframeSrcdoc(bodyPick.content);
     iframe.addEventListener("load", () => {
