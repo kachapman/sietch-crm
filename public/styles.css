@@ -11476,7 +11476,7 @@ body {
 #email-preview-modal .modal-card {
   max-width: 900px;
   width: 95vw;
-  max-height: 90vh;
+  max-height: 66vh;
 }
 #email-preview-head > div {
   line-height: 1.45;
@@ -11484,6 +11484,7 @@ body {
 #email-preview-head strong {
   color: var(--text);
   font-size: 0.85rem;
+  font-weight: 400;
 }
 .email-preview-action .btn-label {
   margin-left: 0.25rem;
@@ -11520,7 +11521,10 @@ body {
   }
   #email-preview-modal { padding: 0; }
   .email-preview-action[data-action="reply"] .btn-label,
-  .email-preview-action[data-action="forward"] .btn-label { display: none; }
+  .email-preview-action[data-action="forward"] .btn-label,
+  .email-preview-action[data-action="headers"] .btn-label,
+  .email-preview-action[data-action="archive"] .btn-label,
+  .email-preview-action[data-action="print"] .btn-label { display: none; }
   .email-preview-action { min-width: 36px; min-height: 36px; }
 }
 

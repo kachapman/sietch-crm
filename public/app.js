@@ -19063,10 +19063,10 @@ function openEmailPreviewModal(messageId) {
       const to = norm.toList || fullMail.to_addr || '';
       const date = norm.date || fullMail.date_received || '';
       headEl.innerHTML = `
-        <div><strong>${escapeHtml(subject)}</strong></div>
         <div>From: ${escapeHtml(from)}</div>
         ${to ? `<div>To: ${escapeHtml(to)}</div>` : ''}
         ${date ? `<div>${escapeHtml(formatPreviewDateTime(date) || date)}</div>` : ''}
+        <div style="margin-top:0.3rem;"><strong>${escapeHtml(subject)}</strong></div>
       `;
     }
 
@@ -19156,15 +19156,15 @@ function openEmailPreviewModal(messageId) {
           if (action === 'reply') {
             to = from;
             subjectLine = 'Re: ' + (subject.startsWith('Re:') ? subject.slice(3).trim() : subject);
-            quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
+            quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
           } else if (action === 'reply-all') {
             to = from;
             subjectLine = 'Re: ' + (subject.startsWith('Re:') ? subject.slice(3).trim() : subject);
-            quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
+            quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
           } else { // forward
             to = '';
             subjectLine = 'Fwd: ' + (subject.startsWith('Fwd:') ? subject.slice(4).trim() : subject);
-            quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;">---------- Forwarded message ----------<br>From: ${escapeHtml(from)}<br>Date: ${escapeHtml(date)}<br>Subject: ${escapeHtml(subject)}</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
+            quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">---------- Forwarded message ----------</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
           }
 
           openComposeModal({
@@ -19267,15 +19267,15 @@ function renderInlineReply(panel, type, messageId, norm) {
   if (type === "reply") {
     to = from;
     subjectLine = "Re: " + (subject.startsWith("Re:") ? subject.slice(3).trim() : subject);
-    quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
+    quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
   } else if (type === "reply-all") {
     to = from;
     subjectLine = "Re: " + (subject.startsWith("Re:") ? subject.slice(3).trim() : subject);
-    quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
+    quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
   } else {
     to = "";
     subjectLine = "Fwd: " + (subject.startsWith("Fwd:") ? subject.slice(4).trim() : subject);
-    quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;">---------- Forwarded message ----------<br>From: ${escapeHtml(from)}<br>Date: ${escapeHtml(date)}<br>Subject: ${escapeHtml(subject)}</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
+    quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">---------- Forwarded message ----------</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
   }
 
   replyDiv.innerHTML = `
@@ -19437,7 +19437,7 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
   replyAllBtn.type = "button";
   replyAllBtn.className = "btn btn-ghost btn-small";
   replyAllBtn.title = "Reply all";
-  replyAllBtn.innerHTML = '<i class="ti ti-arrow-back-up"></i><span class="btn-label"> Reply All</span>';
+  replyAllBtn.innerHTML = '<i class="ti ti-arrow-back-up"></i><span class="btn-label"> All</span>';
   replyAllBtn.addEventListener("click", () => {
     renderInlineReply(panel, "reply-all", messageId, norm);
   });
@@ -19452,124 +19452,6 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
     renderInlineReply(panel, "forward", messageId, norm);
   });
   actionBtns.appendChild(fwdBtn);
-
-  const noteBtn = document.createElement("button");
-  noteBtn.type = "button";
-  noteBtn.className = "btn btn-ghost btn-small";
-  noteBtn.title = "Create note from this email";
-  noteBtn.innerHTML = '<i class="ti ti-note"></i><span class="btn-label"> Note</span>';
-  noteBtn.addEventListener("click", () => {
-    const subject = norm.subject || crmPayload?.subject || "(no subject)";
-    const from = norm.from || crmPayload?.from || "unknown";
-    const date = norm.date || crmPayload?.date || "";
-    const bodyText = (norm.body_text || norm.snippet || "").replace(/<[^>]+>/g, '').trim().slice(0, 2000);
-    const noteContent = `<p><b>Email from: ${escapeHtml(from)}</b><br>Subject: ${escapeHtml(subject)}${date ? '<br>Date: ' + escapeHtml(date) : ''}</p><hr><p>${escapeHtml(bodyText)}</p>`;
-    const editorWrap = panel.closest('#opp-preview-body')?.querySelector('.preview-note-editor-wrap');
-    if (editorWrap) {
-      editorWrap.classList.add('active');
-      const ed = editorWrap.querySelector('.note-editor');
-      if (ed) {
-        ed.innerHTML = noteContent;
-        ed.focus();
-        editorWrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-    } else {
-      // Outside opp preview — open compose modal prefilled
-      openComposeModal({
-        subject: 'Note: ' + subject,
-        body: noteContent,
-        title: 'Compose Note',
-      });
-    }
-  });
-  actionBtns.appendChild(noteBtn);
-
-  const archiveBtn = document.createElement("button");
-  archiveBtn.type = "button";
-  archiveBtn.className = "btn btn-ghost btn-small";
-  archiveBtn.title = "Archive";
-  archiveBtn.innerHTML = '<i class="ti ti-archive"></i>';
-  archiveBtn.addEventListener("click", async () => {
-    try {
-      await api(`/api/v2/mail/messages/${encodeURIComponent(messageId)}/move`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ folder: "Archive" }),
-      });
-      showToast("Message archived");
-      panel.innerHTML = '<p class="opp-preview-empty">Message archived.</p>';
-    } catch (e) { showToast("Failed to archive: " + (e.message || e), true); }
-  });
-  actionBtns.appendChild(archiveBtn);
-
-  const headersBtn = document.createElement("button");
-  headersBtn.type = "button";
-  headersBtn.className = "btn btn-ghost btn-small";
-  headersBtn.title = "View Headers";
-  headersBtn.innerHTML = '<i class="ti ti-file-code"></i>';
-  headersBtn.addEventListener("click", async () => {
-    try {
-      const data = await api(`/api/v2/mail/messages/${encodeURIComponent(messageId)}/headers`);
-      const headers = data.headers || "(no headers)";
-      const overlay = document.createElement("div");
-      overlay.style.cssText = "position:fixed; inset:0; z-index:10000; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center;";
-      overlay.innerHTML = `<div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:1rem; max-width:700px; width:90%; max-height:80vh; overflow:auto;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
-          <strong>Email Headers</strong>
-          <button class="btn btn-ghost btn-small headers-close"><i class="ti ti-x"></i></button>
-        </div>
-        <pre style="font-size:0.75rem; white-space:pre-wrap; word-break:break-all; margin:0; color:var(--text);">${escapeHtml(headers)}</pre>
-      </div>`;
-      overlay.querySelector(".headers-close").addEventListener("click", () => overlay.remove());
-      overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
-      document.body.appendChild(overlay);
-    } catch (e) { showToast("Failed to load headers: " + e.message, true); }
-  });
-  actionBtns.appendChild(headersBtn);
-
-  const printBtn = document.createElement("button");
-  printBtn.type = "button";
-  printBtn.className = "btn btn-ghost btn-small";
-  printBtn.title = "Print";
-  printBtn.innerHTML = '<i class="ti ti-printer"></i>';
-  printBtn.addEventListener("click", () => {
-    const printWin = window.open("", "_blank", "width=800,height=600");
-    const subject = norm.subject || "";
-    const from = norm.from || "";
-    const toList = norm.toList || "";
-    const date = norm.date ? formatPreviewDateTime(norm.date) || norm.date : "";
-    const bodyPick = pickMailBodyForDisplay(norm, { allowIntroFallback: false, crmPayload });
-    const bodyContent = bodyPick.mode === "html" ? bodyPick.content : `<pre style="white-space:pre-wrap;">${escapeHtml(bodyPick.content || "")}</pre>`;
-    printWin.document.write(`<!DOCTYPE html><html><head><title>${escapeHtml(subject)}</title>
-      <style>body{font-family:sans-serif;margin:2rem;color:#222;}h1{font-size:1.2rem;}pre{font-size:0.85rem;}</style>
-      </head><body>
-      <h1>${escapeHtml(subject)}</h1>
-      <p><strong>From:</strong> ${escapeHtml(from)}<br><strong>To:</strong> ${escapeHtml(toList)}<br><strong>Date:</strong> ${escapeHtml(date)}</p>
-      <hr>${bodyContent}</body></html>`);
-    printWin.document.close();
-    printWin.focus();
-    printWin.print();
-  });
-  actionBtns.appendChild(printBtn);
-
-  // Linked deals badges
-  if (mail.linked_deals && mail.linked_deals.length > 0) {
-    const linkedDiv = document.createElement("div");
-    linkedDiv.style.cssText = "margin-top:0.5rem; padding:0.4rem 0.5rem; background:var(--bg-elevated); border-radius:4px; font-size:0.8rem;";
-    linkedDiv.innerHTML = '<i class="ti ti-link" style="margin-right:0.3rem;"></i>Linked to: ' +
-      mail.linked_deals.map(d => `<span style="background:var(--accent-subtle); color:var(--accent); padding:0.1rem 0.4rem; border-radius:3px; margin-right:0.3rem;">${escapeHtml(d.opportunity_title || 'Deal #' + d.opportunity_id)}</span>`).join("");
-    foot.appendChild(linkedDiv);
-  }
-
-  // Tags badges
-  if (mail.tags && mail.tags.length > 0) {
-    const tagsDiv = document.createElement("div");
-    tagsDiv.className = "mail-message-tags";
-    tagsDiv.style.cssText = "margin-top:0.3rem; display:flex; align-items:center; gap:0.3rem; flex-wrap:wrap; font-size:0.8rem;";
-    tagsDiv.innerHTML = '<i class="ti ti-tag" style="font-size:0.75rem; color:var(--muted);"></i> ' +
-      mail.tags.map(t => `<span style="display:inline-flex;align-items:center;gap:0.25rem;background:var(--bg-elevated);padding:0.1rem 0.4rem;border-radius:3px;font-size:0.75rem;"><span class="mail-tag-dot" style="background:${escapeHtml(t.color || '#6c757d')};width:6px;height:6px;border-radius:50%;display:inline-block;"></span>${escapeHtml(t.title)}</span>`).join("");
-    foot.appendChild(tagsDiv);
-  }
 
   foot.appendChild(actionBtns);
   panel.appendChild(foot);
@@ -20799,7 +20681,7 @@ function minimizeEmailModal() {
   if (!modal) return;
   const scrollEl = $("#mail-list-container");
   const selectedEl = document.querySelector(".mail-list-row.selected, .mail-row.selected");
-  minimizedEmailState = {
+      minimizedEmailState = {
     scroll: scrollEl ? scrollEl.scrollTop : 0,
     selectedId: selectedEl ? selectedEl.dataset.id || selectedEl.dataset.convId || null : null,
     composeTabs: [],
@@ -20813,6 +20695,7 @@ function minimizeEmailModal() {
       if (pane) {
         minimizedEmailState.composeTabs.push({
           tabId,
+          title: tabBtn.querySelector('.compose-tab-title')?.textContent || '',
           from: pane.querySelector('.compose-tab-from')?.value || '',
           to: pane.querySelector('.compose-tab-to')?.value || '',
           cc: pane.querySelector('.compose-tab-cc')?.value || '',
@@ -20863,7 +20746,7 @@ function restoreEmailModal() {
           tabBtn.className = 'mail-inbox-tab compose-tab';
           tabBtn.dataset.mailtab = newTabId;
           tabBtn.dataset.tabId = newTabId;
-          const tabTitle = ct.subject ? ct.subject.slice(0, 25) : `Compose ${composeTabCounter}`;
+          const tabTitle = ct.title || (ct.subject ? ct.subject.slice(0, 25) : `Compose ${composeTabCounter}`);
           tabBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:0.2rem;vertical-align:middle;"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 7a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-10" /><path d="M6.36 5a2 2 0 0 1 1.962 1.608l.356 1.784a2 2 0 0 0 1.962 1.608h8.36a2 2 0 0 1 2 2" /><path d="M12.36 5a2 2 0 0 1 1.962 1.608l.356 1.784a2 2 0 0 0 1.962 1.608" /></svg><span class="compose-tab-title">${escapeHtml(tabTitle)}</span><button type="button" class="compose-tab-close" title="Close tab">&times;</button>`;
           tabBtn.addEventListener('click', (e) => {
             if (e.target.closest('.compose-tab-close')) { closeComposeTab(newTabId); return; }
