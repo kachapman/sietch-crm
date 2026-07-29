@@ -16607,11 +16607,12 @@ async function loadCrmContacts(listEl) {
   try {
     const data = await api("/api/v2/contacts");
     const contacts = Array.isArray(data) ? data : (data.contacts || data || []);
-    if (!contacts.length) {
-      listEl.innerHTML = '<p style="color:var(--muted);font-size:0.7rem;padding:0.2rem 0.4rem;">No CRM contacts</p>';
+    const valid = contacts.filter(c => c.email && c.email.trim());
+    if (!valid.length) {
+      listEl.innerHTML = '<p style="color:var(--muted);font-size:0.7rem;padding:0.2rem 0.4rem;">No CRM contacts with email addresses</p>';
       return;
     }
-    listEl.innerHTML = contacts.map(c => {
+    listEl.innerHTML = valid.map(c => {
       const name = [c.first_name, c.last_name].filter(Boolean).join(" ") || c.displayName || c.email || "";
       return `<div class="mail-contact-item" data-email="${escapeHtml(c.email || "")}" data-name="${escapeHtml(name)}">
         <div class="mail-contact-name">${escapeHtml(name || c.email || "")}</div>
