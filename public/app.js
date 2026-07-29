@@ -15348,23 +15348,23 @@ function switchMailTab(btn) {
   const scannerDiv = $('#mail-scanner-admin');
 
   if (tabName === 'inbox') {
-    // Clear inline display styles set by switchToComposeTab
+    // Reset mailMainArea layout
     if (mailMainArea) {
-      Array.from(mailMainArea.children).forEach(child => { child.style.display = ''; });
       mailMainArea.style.display = '';
       mailMainArea.style.flexDirection = '';
       mailMainArea.style.height = '';
       mailMainArea.classList.remove('mail-main-column');
     }
     // Show inbox content
-    if (inboxContainer) { inboxContainer.classList.remove('hidden'); inboxContainer.style.flex = ''; }
+    if (inboxContainer) { inboxContainer.classList.remove('hidden'); inboxContainer.style.display = ''; inboxContainer.style.flex = ''; }
     if (toolbar) { toolbar.classList.remove('hidden'); toolbar.style.display = ''; }
     // Show sidebar directly (not parent)
-    if (sidebar) sidebar.classList.remove('hidden');
-    if (sidebarToggle) sidebarToggle.classList.remove('hidden');
+    if (sidebar) { sidebar.classList.remove('hidden'); sidebar.style.display = ''; }
+    if (sidebarToggle) { sidebarToggle.classList.remove('hidden'); sidebarToggle.style.display = ''; }
     // Hide scanner
     if (scannerDiv) {
       scannerDiv.classList.add('hidden');
+      scannerDiv.style.display = '';
       scannerDiv.style.flex = '';
       scannerDiv.style.width = '';
       scannerDiv.style.minWidth = '';
@@ -15386,26 +15386,26 @@ function switchMailTab(btn) {
     loadMailMessagesForModal();
     renderMailUnreadBadge();
   } else if (tabName === 'scanner-admin') {
-    // Clear inline display styles set by switchToComposeTab
+    // Reset mailMainArea layout
     if (mailMainArea) {
-      Array.from(mailMainArea.children).forEach(child => { child.style.display = ''; });
       mailMainArea.style.display = '';
       mailMainArea.style.flexDirection = '';
       mailMainArea.style.height = '';
     }
     // Hide inbox content
-    if (inboxContainer) inboxContainer.classList.add('hidden');
-    if (toolbar) toolbar.classList.add('hidden');
+    if (inboxContainer) { inboxContainer.classList.add('hidden'); inboxContainer.style.display = ''; }
+    if (toolbar) { toolbar.classList.add('hidden'); toolbar.style.display = ''; }
     // Show scanner
     if (scannerDiv) {
       scannerDiv.classList.remove('hidden');
+      scannerDiv.style.display = '';
       scannerDiv.style.flex = '1 1 0%';
       scannerDiv.style.width = '100%';
       scannerDiv.style.minWidth = '0';
     }
     // Hide sidebar directly (not parent)
-    if (sidebar) sidebar.classList.add('hidden');
-    if (sidebarToggle) sidebarToggle.classList.add('hidden');
+    if (sidebar) { sidebar.classList.add('hidden'); sidebar.style.display = ''; }
+    if (sidebarToggle) { sidebarToggle.classList.add('hidden'); sidebarToggle.style.display = ''; }
     // Layout: column for scanner scroll
     if (mailMainArea) {
       mailMainArea.classList.add('mail-main-column');
@@ -15902,10 +15902,12 @@ function createComposeTab(opts = {}) {
   });
   tabBar.appendChild(tabBtn);
 
-  // Create content pane
-  const contentPane = $('#mail-compose-tab-content');
+  // Create content pane — find existing compose pane or the base element
+  let contentPane = document.querySelector('.compose-tab-content');
+  if (!contentPane) contentPane = document.getElementById('mail-compose-tab-content');
   if (!contentPane) return;
   contentPane.id = `mail-compose-tab-${tabId}`;
+  contentPane.classList.remove('hidden');
   renderComposeTabContent(contentPane, tabId, opts);
 
   switchToComposeTab(tabId);
@@ -16128,35 +16130,40 @@ function switchToComposeTab(tabId) {
   const tabBtn = tabBar.querySelector(`[data-tab-id="${tabId}"]`);
   if (tabBtn) tabBtn.classList.add('active');
 
-  const mailMainArea = $('.mail-main-area');
-  if (!mailMainArea) return;
-
-  // Force hide ALL children of mail-main-area except the compose pane
-  Array.from(mailMainArea.children).forEach(child => {
-    if (child.id === `mail-compose-tab-${tabId}`) {
-      child.style.display = 'flex';
-      child.style.flex = '1';
-      child.style.width = '100%';
-      child.style.height = '100%';
-      child.style.minWidth = '0';
-      child.style.minHeight = '0';
-      child.style.flexDirection = 'column';
-      child.classList.remove('hidden');
-    } else {
-      child.style.display = 'none';
-    }
-  });
-
-  // Hide toolbar
+  // Hide specific mail elements by known selectors
+  const mailList = $('#mail-list-container');
+  const scannerDiv = $('#mail-scanner-admin');
+  const sidebar = $('.mail-right-sidebar');
+  const sidebarToggle = $('#mail-sidebar-toggle');
   const toolbar = $('.mail-toolbar');
-  if (toolbar) toolbar.style.display = 'none';
+  const mailMainArea = $('.mail-main-area');
 
-  // Make main area fill available space
-  mailMainArea.style.display = 'flex';
-  mailMainArea.style.flexDirection = 'column';
-  mailMainArea.style.flex = '1';
-  mailMainArea.style.minWidth = '0';
-  mailMainArea.style.height = '100%';
+  if (mailList) { mailList.style.display = 'none'; mailList.style.flex = ''; }
+  if (scannerDiv) { scannerDiv.style.display = 'none'; scannerDiv.style.flex = ''; }
+  if (sidebar) { sidebar.style.display = 'none'; }
+  if (sidebarToggle) { sidebarToggle.style.display = 'none'; }
+  if (toolbar) { toolbar.style.display = 'none'; }
+
+  // Show the compose content pane
+  const composePane = document.getElementById(`mail-compose-tab-${tabId}`);
+  if (composePane) {
+    composePane.style.display = 'flex';
+    composePane.style.flex = '1';
+    composePane.style.width = '100%';
+    composePane.style.height = '100%';
+    composePane.style.minWidth = '0';
+    composePane.style.flexDirection = 'column';
+    composePane.classList.remove('hidden');
+  }
+
+  // Make main area column layout
+  if (mailMainArea) {
+    mailMainArea.style.display = 'flex';
+    mailMainArea.style.flexDirection = 'column';
+    mailMainArea.style.flex = '1';
+    mailMainArea.style.minWidth = '0';
+    mailMainArea.style.height = '100%';
+  }
 }
 
 function closeComposeTab(tabId) {
@@ -16174,10 +16181,11 @@ function closeComposeTabNoConfirm(tabId) {
   // If no compose tabs remain, reset the content pane
   const remainingCompose = tabBar?.querySelector('.compose-tab');
   if (!remainingCompose) {
-    const composePane = $('#mail-compose-tab-content') || $(`#mail-compose-tab-${tabId}`);
+    const composePane = document.getElementById(`mail-compose-tab-${tabId}`) || document.querySelector('.compose-tab-content');
     if (composePane) {
       composePane.innerHTML = '';
       composePane.classList.add('hidden');
+      composePane.style.display = '';
       composePane.id = 'mail-compose-tab-content';
     }
   }
@@ -20767,10 +20775,13 @@ function restoreEmailModal() {
           });
           tabBar.appendChild(tabBtn);
         }
-        // Create content pane — reuse the base element, change its ID
-        const contentPane = $('#mail-compose-tab-content');
+        // Create content pane — find existing or use base element
+        let contentPane = document.getElementById(`mail-compose-tab-${newTabId}`);
+        if (!contentPane) contentPane = document.querySelector('.compose-tab-content');
+        if (!contentPane) contentPane = document.getElementById('mail-compose-tab-content');
         if (contentPane) {
           contentPane.id = `mail-compose-tab-${newTabId}`;
+          contentPane.classList.remove('hidden');
           renderComposeTabContent(contentPane, newTabId, { from: ct.from, to: ct.to, cc: ct.cc, bcc: ct.bcc, subject: ct.subject, body: ct.body, dealId: ct.dealId });
         }
         // Activate the last restored tab
