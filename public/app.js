@@ -16073,7 +16073,7 @@ function attachMailModalListeners() {
     });
   }
 
-  // link to deal dropdown
+  // Link to deal dropdown
   const linkDealBtn = $("#mail-link-deal-btn");
   const linkDealDropdown = $("#mail-link-deal-dropdown");
   if (linkDealBtn && linkDealDropdown) {
@@ -16088,6 +16088,73 @@ function attachMailModalListeners() {
     document.addEventListener("click", (e) => {
       if (!linkDealBtn.contains(e.target) && !linkDealDropdown.contains(e.target)) {
         linkDealDropdown.classList.add("hidden");
+      }
+    });
+  }
+
+  // Tag assignment dropdown
+  const tagBtn = $("#mail-tag-btn");
+  const tagDropdown = $("#mail-tag-dropdown");
+  if (tagBtn && tagDropdown) {
+    tagBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!mailState.selected.size) return;
+      tagDropdown.classList.toggle("hidden");
+      if (tagDropdown.classList.contains("hidden")) return;
+      try {
+        const [allData, msgData] = await Promise.all([
+          api("/api/v2/mail/tags"),
+          api(`/api/v2/mail/messages/${Array.from(mailState.selected)[0]}`),
+        ]);
+        const allTags = allData.tags || [];
+        const msgTagTitles = new Set((msgData.tags || []).map(t => t.title));
+        const list = $("#mail-tag-dropdown-list");
+        if (!list) return;
+        list.innerHTML = allTags.length
+          ? allTags.map(t => {
+              const has = msgTagTitles.has(t.title);
+              return `<button type="button" class="mail-tag-assign-btn" data-tag-id="${t.id}" data-tag-title="${escapeHtml(t.title)}" style="display:flex;align-items:center;gap:0.4rem;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;font-size:0.85rem;color:var(--text);">
+                <span class="mail-tag-dot" style="background:${escapeHtml(t.color || '#6c757d')};width:8px;height:8px;border-radius:50%;flex-shrink:0;"></span>
+                ${escapeHtml(t.title)}
+                ${has ? '<span style="margin-left:auto;font-size:0.7rem;color:var(--accent);">✓</span>' : ''}
+              </button>`;
+            }).join("")
+          : '<div style="padding:0.5rem;color:var(--muted);font-size:0.8rem;">No tags yet. Create one in the sidebar.</div>';
+        list.querySelectorAll(".mail-tag-assign-btn").forEach(btn => {
+          btn.addEventListener("click", async () => {
+            const tagTitle = btn.dataset.tagTitle;
+            const tagId = parseInt(btn.dataset.tagId);
+            const currentlyHas = btn.querySelector("span:last-child")?.textContent === "✓";
+            const ids = Array.from(mailState.selected);
+            let ok = 0;
+            for (const mid of ids) {
+              try {
+                if (currentlyHas) {
+                  await api(`/api/v2/mail/messages/${mid}/tags/${tagId}`, { method: "DELETE" });
+                } else {
+                  await api(`/api/v2/mail/messages/${mid}/tags`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ title: tagTitle }),
+                  });
+                }
+                ok++;
+              } catch (_) {}
+            }
+            showToast(ok ? `${currentlyHas ? "Removed" : "Added"} tag "${tagTitle}" from ${ok} message(s)` : "Failed to update tags");
+            tagDropdown.classList.add("hidden");
+            // Refresh any open message detail panels
+            refreshOpenMailPanels();
+          });
+        });
+      } catch (e) {
+        const list = $("#mail-tag-dropdown-list");
+        if (list) list.innerHTML = '<div style="padding:0.5rem;color:var(--danger);font-size:0.8rem;">Failed to load tags</div>';
+      }
+    });
+    document.addEventListener("click", (e) => {
+      if (!tagBtn.contains(e.target) && !tagDropdown.contains(e.target)) {
+        tagDropdown.classList.add("hidden");
       }
     });
   }
@@ -16307,6 +16374,7 @@ function attachMailModalListeners() {
     });
     $("#ovf-thread")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-thread-toggle")?.click(); });
     $("#ovf-mark-all-read")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-mark-all-read")?.click(); });
+    $("#ovf-tags")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-tag-btn")?.click(); });
   }
 
   // --- Mobile: Collapsible search ---
@@ -16434,9 +16502,14 @@ async function renderMailFolders() {
       `).join("");
       tagList.querySelectorAll(".mail-tag-item").forEach(el => {
         el.addEventListener("click", () => {
-          tagList.querySelectorAll(".mail-tag-item").forEach(x => x.classList.remove("active"));
-          el.classList.add("active");
-          mailState.activeTag = el.dataset.tagTitle;
+          if (el.classList.contains("active")) {
+            el.classList.remove("active");
+            mailState.activeTag = null;
+          } else {
+            tagList.querySelectorAll(".mail-tag-item").forEach(x => x.classList.remove("active"));
+            el.classList.add("active");
+            mailState.activeTag = el.dataset.tagTitle;
+          }
           loadMailMessagesForModal();
         });
         el.addEventListener("contextmenu", (e) => {
@@ -17213,6 +17286,14 @@ function updateMailSelectedInfo() {
   if (starBtn) starBtn.disabled = !hasSel;
   if (archiveBtn) archiveBtn.disabled = !hasSel;
   if (moveBtn) moveBtn.disabled = !hasSel;
+  const tagBtn = $("#mail-tag-btn");
+  if (tagBtn) {
+    tagBtn.disabled = !hasSel;
+    if (!hasSel) {
+      const tagDropdown = $("#mail-tag-dropdown");
+      if (tagDropdown) tagDropdown.classList.add("hidden");
+    }
+  }
 }
 
 async function markMailMessageRead(messageId) {
@@ -18749,8 +18830,35 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
     foot.appendChild(linkedDiv);
   }
 
+  // Tags badges
+  if (mail.tags && mail.tags.length > 0) {
+    const tagsDiv = document.createElement("div");
+    tagsDiv.className = "mail-message-tags";
+    tagsDiv.style.cssText = "margin-top:0.3rem; display:flex; align-items:center; gap:0.3rem; flex-wrap:wrap; font-size:0.8rem;";
+    tagsDiv.innerHTML = '<i class="ti ti-tag" style="font-size:0.75rem; color:var(--muted);"></i> ' +
+      mail.tags.map(t => `<span style="display:inline-flex;align-items:center;gap:0.25rem;background:var(--bg-elevated);padding:0.1rem 0.4rem;border-radius:3px;font-size:0.75rem;"><span class="mail-tag-dot" style="background:${escapeHtml(t.color || '#6c757d')};width:6px;height:6px;border-radius:50%;display:inline-block;"></span>${escapeHtml(t.title)}</span>`).join("");
+    foot.appendChild(tagsDiv);
+  }
+
   foot.appendChild(actionBtns);
   panel.appendChild(foot);
+}
+
+async function refreshOpenMailPanels() {
+  const msgIds = Array.from(mailState.selected);
+  if (!msgIds.length) return;
+  for (const mid of msgIds) {
+    try {
+      const fresh = await api(`/api/v2/mail/messages/${mid}`);
+      // Find all embed panels for this message ID
+      document.querySelectorAll(".opp-preview-mail-embed").forEach(el => {
+        const item = el.closest(".mail-item");
+        if (item && item.dataset.id === String(mid)) {
+          renderMailEmbedPanel(el, fresh, mid, { openUrl: "" });
+        }
+      });
+    } catch (_) {}
+  }
 }
 
 function renderHistoryAttachmentsAside(parent, attachments) {

@@ -3954,6 +3954,7 @@ body {
   transition: max-height 0.25s ease;
 }
 .mail-contacts-list.expanded {
+  max-height: none !important;
   overflow-y: visible;
 }
 .scanner-log {
