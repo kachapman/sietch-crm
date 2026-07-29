@@ -16467,14 +16467,41 @@ async function renderMailFolders() {
       const oldColor = tagCtx.dataset.tagColor;
       tagCtx.style.display = "none";
       if (!id) return;
-      const newTitle = prompt("Rename tag:", oldTitle);
-      if (newTitle === null || !newTitle.trim()) return;
-      const newColor = prompt("Tag color (hex):", oldColor);
-      try {
-        await api(`/api/v2/mail/tags/${id}`, { method: "PUT", body: JSON.stringify({ title: newTitle.trim(), color: newColor || oldColor }) });
-        showToast("Tag updated");
-        await renderMailFolders();
-      } catch (e) { showToast("Failed: " + e.message, true); }
+      const tagList = $("#mail-tag-list");
+      if (!tagList) return;
+      // Remove existing edit form
+      tagList.querySelector(".tag-edit-form")?.remove();
+      const form = document.createElement("div");
+      form.className = "tag-edit-form";
+      form.style.cssText = "padding:0.3rem 0.4rem; border-bottom:1px solid var(--border);";
+      form.innerHTML = `
+        <input type="text" value="${escapeHtml(oldTitle)}" class="tag-edit-title" style="width:100%;font-size:0.75rem;padding:0.2rem;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--text);margin-bottom:0.2rem;">
+        <div style="display:flex;gap:0.3rem;align-items:center;margin-bottom:0.2rem;">
+          <input type="color" class="tag-edit-color" value="${escapeHtml(oldColor || '#6c757d')}" style="width:24px;height:24px;padding:0;border:none;cursor:pointer;border-radius:3px;">
+          <span style="font-size:0.7rem;color:var(--muted);">${escapeHtml(oldColor || '#6c757d')}</span>
+        </div>
+        <div style="display:flex;gap:0.3rem;">
+          <button type="button" class="btn btn-primary btn-small tag-edit-save" style="font-size:0.7rem;padding:0.15rem 0.4rem;">Save</button>
+          <button type="button" class="btn btn-ghost btn-small tag-edit-cancel" style="font-size:0.7rem;padding:0.15rem 0.4rem;">Cancel</button>
+        </div>`;
+      const tagItem = tagList.querySelector(`[data-tag-id="${id}"]`);
+      if (tagItem) tagItem.after(form);
+      else tagList.prepend(form);
+      form.querySelector(".tag-edit-color").addEventListener("input", (e) => {
+        form.querySelector("span").textContent = e.target.value;
+      });
+      form.querySelector(".tag-edit-save").addEventListener("click", async () => {
+        const newTitle = form.querySelector(".tag-edit-title").value.trim();
+        const newColor = form.querySelector(".tag-edit-color").value;
+        if (!newTitle) { showToast("Tag name required", true); return; }
+        try {
+          await api(`/api/v2/mail/tags/${id}`, { method: "PUT", body: JSON.stringify({ title: newTitle, color: newColor }) });
+          showToast("Tag updated");
+          form.remove();
+          await renderMailFolders();
+        } catch (e) { showToast("Failed: " + e.message, true); }
+      });
+      form.querySelector(".tag-edit-cancel").addEventListener("click", () => form.remove());
     });
     $("#mail-tag-delete-btn")?.addEventListener("click", async () => {
       const id = tagCtx.dataset.tagId;
@@ -16497,14 +16524,41 @@ async function renderMailFolders() {
   if (addBtn && !addBtn.dataset.bound) {
     addBtn.dataset.bound = "1";
     addBtn.addEventListener("click", async () => {
-      const title = prompt("Tag name:");
-      if (!title || !title.trim()) return;
-      const color = prompt("Tag color (hex):", "#6c757d");
-      try {
-        await api("/api/v2/mail/tags", { method: "POST", body: JSON.stringify({ title: title.trim(), color: color || "#6c757d" }) });
-        showToast("Tag created");
-        await renderMailFolders();
-      } catch (e) { showToast("Failed: " + e.message, true); }
+      const tagList = $("#mail-tag-list");
+      if (!tagList) return;
+      // Remove existing form
+      tagList.querySelector(".tag-add-form")?.remove();
+      const form = document.createElement("div");
+      form.className = "tag-add-form";
+      form.style.cssText = "padding:0.3rem 0.4rem; border-bottom:1px solid var(--border);";
+      form.innerHTML = `
+        <input type="text" placeholder="Tag name" class="tag-add-title" style="width:100%;font-size:0.75rem;padding:0.2rem;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--text);margin-bottom:0.2rem;">
+        <div style="display:flex;gap:0.3rem;align-items:center;margin-bottom:0.2rem;">
+          <input type="color" class="tag-add-color" value="#6c757d" style="width:24px;height:24px;padding:0;border:none;cursor:pointer;border-radius:3px;">
+          <span style="font-size:0.7rem;color:var(--muted);">#6c757d</span>
+        </div>
+        <div style="display:flex;gap:0.3rem;">
+          <button type="button" class="btn btn-primary btn-small tag-add-save" style="font-size:0.7rem;padding:0.15rem 0.4rem;">Save</button>
+          <button type="button" class="btn btn-ghost btn-small tag-add-cancel" style="font-size:0.7rem;padding:0.15rem 0.4rem;">Cancel</button>
+        </div>`;
+      tagList.prepend(form);
+      form.querySelector(".tag-add-title").focus();
+      // Update color label on change
+      form.querySelector(".tag-add-color").addEventListener("input", (e) => {
+        form.querySelector("span").textContent = e.target.value;
+      });
+      form.querySelector(".tag-add-save").addEventListener("click", async () => {
+        const title = form.querySelector(".tag-add-title").value.trim();
+        const color = form.querySelector(".tag-add-color").value;
+        if (!title) { showToast("Tag name required", true); return; }
+        try {
+          await api("/api/v2/mail/tags", { method: "POST", body: JSON.stringify({ title, color }) });
+          showToast("Tag created");
+          form.remove();
+          await renderMailFolders();
+        } catch (e) { showToast("Failed: " + e.message, true); }
+      });
+      form.querySelector(".tag-add-cancel").addEventListener("click", () => form.remove());
     });
   }
 }
@@ -16986,17 +17040,8 @@ function renderMailList(msgs) {
 
     row.addEventListener("click", (e) => {
       if (e.target.tagName === "INPUT" || e.target.closest('.mail-expand-btn')) return;
-      // toggle selection on row click
-      if (mailState.selected.has(id)) {
-        mailState.selected.delete(id);
-        row.classList.remove("selected");
-        cb.checked = false;
-      } else {
-        mailState.selected.add(id);
-        row.classList.add("selected");
-        cb.checked = true;
-      }
-      updateMailSelectedInfo();
+      // Clicking row expands the email
+      expBtn.click();
     });
 
     // Note: attachments display handled inside renderMailEmbedPanel (expanded view)
