@@ -724,8 +724,11 @@
                 <span id="scanner-reprocess-status" style="margin-left:0.5rem; font-size:0.8rem;"></span>
               </div>
             </div>
-          </div>
-        </div>
+           </div>
+         </div>
+
+        <!-- Compose Tab Content (hidden by default, shown when compose tab is active) -->
+        <div id="mail-compose-tab-content" class="mail-tab-content compose-tab-content hidden" style="flex:1; display:flex; flex-direction:column; overflow:hidden;"></div>
 
           <button type="button" id="mail-sidebar-toggle" class="mail-sidebar-toggle" title="Toggle folders" aria-label="Toggle folders"><i class="ti ti-chevron-right"></i></button>
           <div class="mail-right-sidebar" style="width:180px; min-width:180px; max-width:200px;">
@@ -797,6 +800,10 @@
       <div style="display:flex; justify-content:space-between; align-items:center; padding:0.5rem 0.75rem; border-bottom:1px solid var(--border);">
         <h2 id="compose-email-title" class="modal-title" style="margin:0; font-size:1rem;">Compose Email</h2>
         <div style="display:flex; gap:0.5rem;">
+          <button type="button" class="btn btn-ghost btn-small" id="compose-move-to-tab" title="Move to tab">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 7a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-10" /><path d="M6.36 5a2 2 0 0 1 1.962 1.608l.356 1.784a2 2 0 0 0 1.962 1.608h8.36a2 2 0 0 1 2 2" /><path d="M12.36 5a2 2 0 0 1 1.962 1.608l.356 1.784a2 2 0 0 0 1.962 1.608" /></svg>
+            <span class="btn-label">Move to tab</span>
+          </button>
           <button type="button" class="btn btn-icon-only modal-header-control" title="Close" data-compose-email-dismiss>
             <i class="ti ti-x"></i>
           </button>

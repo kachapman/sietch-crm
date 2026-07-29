@@ -15334,6 +15334,12 @@ function switchMailTab(btn) {
   btn.classList.add('active');
   const tabName = btn.dataset.mailtab;
 
+  // Handle compose tabs
+  if (tabName && tabName.startsWith('compose-')) {
+    switchToComposeTab(tabName);
+    return;
+  }
+
   const inboxContainer = $('#mail-list-container');
   const toolbar = $('.mail-toolbar');
   const sidebar = $('.mail-right-sidebar');
@@ -15833,6 +15839,329 @@ async function openComposeModal(opts = {}) {
   }
 }
 
+let composeTabCounter = 0;
+
+function moveComposeToTab() {
+  const from = $('#compose-from-account')?.value;
+  const to = $('#compose-to')?.value || '';
+  const cc = $('#compose-cc')?.value || '';
+  const bcc = $('#compose-bcc')?.value || '';
+  const subject = $('#compose-subject')?.value || '';
+  const body = $('#compose-body')?.innerHTML || '';
+  const dealId = $('#compose-deal-selected')?.dataset?.dealId || null;
+
+  const modal = $('#compose-email-modal');
+  if (modal) modal.classList.add('hidden');
+
+  const mailModal = $('#mail-inbox-modal');
+  if (mailModal && mailModal.classList.contains('hidden')) {
+    openMailInboxModal();
+  }
+
+  createComposeTab({ from, to, cc, bcc, subject, body, dealId });
+}
+
+function createComposeTab(opts = {}) {
+  composeTabCounter++;
+  const tabId = `compose-${composeTabCounter}`;
+  const tabTitle = opts.subject ? opts.subject.slice(0, 25) : `Compose ${composeTabCounter}`;
+
+  const tabBar = $('#mail-inbox-tabs');
+  if (!tabBar) return;
+
+  // Remove active from all tabs
+  tabBar.querySelectorAll('.mail-inbox-tab').forEach(b => b.classList.remove('active'));
+
+  // Create tab button
+  const tabBtn = document.createElement('button');
+  tabBtn.className = 'mail-inbox-tab compose-tab active';
+  tabBtn.dataset.mailtab = tabId;
+  tabBtn.dataset.tabId = tabId;
+  tabBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:0.2rem;vertical-align:middle;"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 7a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-10" /><path d="M6.36 5a2 2 0 0 1 1.962 1.608l.356 1.784a2 2 0 0 0 1.962 1.608h8.36a2 2 0 0 1 2 2" /><path d="M12.36 5a2 2 0 0 1 1.962 1.608l.356 1.784a2 2 0 0 0 1.962 1.608" /></svg><span class="compose-tab-title">${escapeHtml(tabTitle)}</span><button type="button" class="compose-tab-close" title="Close tab">&times;</button>`;
+  tabBtn.addEventListener('click', (e) => {
+    if (e.target.closest('.compose-tab-close')) {
+      closeComposeTab(tabId);
+      return;
+    }
+    switchToComposeTab(tabId);
+  });
+  tabBar.appendChild(tabBtn);
+
+  // Create content pane
+  const contentPane = $('#mail-compose-tab-content');
+  if (!contentPane) return;
+  contentPane.id = `mail-compose-tab-${tabId}`;
+  renderComposeTabContent(contentPane, tabId, opts);
+
+  switchToComposeTab(tabId);
+}
+
+function renderComposeTabContent(container, tabId, opts = {}) {
+  container.innerHTML = `
+    <div style="flex-shrink:0; padding:0.5rem 0.75rem; border-bottom:1px solid var(--border); display:flex; gap:0.5rem; align-items:center;">
+      <div style="flex:1;">
+        <select class="compose-tab-from" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font-size:0.85rem;"></select>
+      </div>
+      <div style="flex:1;">
+        <input type="search" class="compose-tab-deal-search" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font-size:0.85rem;" placeholder="Link to deal..." autocomplete="off">
+        <div class="compose-tab-deal-results" style="max-height:120px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; display:none;"></div>
+        <div class="compose-tab-deal-selected" style="font-size:0.85rem; margin-top:0.3rem;"></div>
+      </div>
+    </div>
+    <div style="flex-shrink:0; padding:0.4rem 0.75rem; border-bottom:1px solid var(--border);">
+      <input type="email" class="compose-tab-to" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font-size:0.85rem; margin-bottom:0.3rem;" placeholder="To">
+      <div style="display:flex; gap:0.5rem;">
+        <input type="email" class="compose-tab-cc" style="flex:1; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font-size:0.85rem;" placeholder="Cc">
+        <input type="email" class="compose-tab-bcc" style="flex:1; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font-size:0.85rem;" placeholder="Bcc">
+      </div>
+    </div>
+    <div style="flex-shrink:0; padding:0.4rem 0.75rem; border-bottom:1px solid var(--border);">
+      <input type="text" class="compose-tab-subject" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font-size:0.85rem;" placeholder="Subject">
+    </div>
+    <div style="flex:1; min-height:0; padding:0.5rem 0.75rem; display:flex; flex-direction:column;">
+      <div class="note-format-toolbar" aria-label="Formatting" style="flex-shrink:0; border:1px solid var(--border); border-bottom:none; border-radius:4px 4px 0 0; background:var(--bg-elevated);">
+        <button type="button" class="note-format-btn" data-cmd="bold" title="Bold"><b>B</b></button>
+        <button type="button" class="note-format-btn" data-cmd="italic" title="Italic"><i>I</i></button>
+        <button type="button" class="note-format-btn" data-cmd="underline" title="Underline"><u>U</u></button>
+        <button type="button" class="note-format-btn" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+        <span class="note-format-sep"></span>
+        <button type="button" class="note-format-btn" data-cmd="insertUnorderedList" title="Bullet list">•</button>
+        <button type="button" class="note-format-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
+        <button type="button" class="note-format-btn" data-cmd="formatBlock" data-val="blockquote" title="Quote" style="font-family:serif; font-style:italic;">"</button>
+        <span class="note-format-sep"></span>
+        <button type="button" class="note-format-btn note-format-hilite-btn" title="Highlight color">🖍</button>
+        <button type="button" class="note-format-btn note-format-emoji-btn" title="Emoji">😀</button>
+        <button type="button" class="note-format-btn note-format-link-btn" title="Insert link">🔗</button>
+        <span class="note-format-sep"></span>
+        <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear formatting">⌫</button>
+      </div>
+      <div class="compose-tab-body note-editor" contenteditable="true" data-placeholder="Write your email..." style="flex:1; overflow-y:auto; min-height:200px; border:1px solid var(--border); border-radius:0 0 4px 4px; padding:0.5rem; background:var(--bg); color:var(--text);"></div>
+    </div>
+    <div style="flex-shrink:0; padding:0.4rem 0.75rem; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+      <div>
+        <label style="font-size:0.8rem; color:var(--muted); cursor:pointer;">
+          <i class="ti ti-paperclip"></i> Attach files
+          <input type="file" class="compose-tab-attachments" multiple style="display:none;" accept="*/*">
+        </label>
+        <div class="compose-tab-attachment-list" style="font-size:0.8rem; margin-top:0.3rem;"></div>
+      </div>
+      <div style="display:flex; gap:0.5rem;">
+        <button type="button" class="btn btn-primary btn-small compose-tab-send"><i class="ti ti-send" style="margin-right:0.3rem;"></i>Send</button>
+        <button type="button" class="btn btn-ghost btn-small compose-tab-cancel"><i class="ti ti-x"></i> Cancel</button>
+      </div>
+    </div>
+  `;
+
+  // Populate From dropdown
+  const fromSelect = container.querySelector('.compose-tab-from');
+  if (fromSelect && mailState.accounts.length > 0) {
+    fromSelect.innerHTML = mailState.accounts.map(a =>
+      `<option value="${a.id}">${escapeHtml(a.smtp_from_name || a.email)} &lt;${escapeHtml(a.email)}&gt;</option>`
+    ).join('');
+  }
+
+  // Apply opts
+  if (opts.to) container.querySelector('.compose-tab-to').value = opts.to;
+  if (opts.cc) container.querySelector('.compose-tab-cc').value = opts.cc;
+  if (opts.bcc) container.querySelector('.compose-tab-bcc').value = opts.bcc;
+  if (opts.subject) container.querySelector('.compose-tab-subject').value = opts.subject;
+  if (opts.body) container.querySelector('.compose-tab-body').innerHTML = opts.body;
+
+  // Bind formatting toolbar
+  container.querySelectorAll('.note-format-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const cmd = btn.dataset.cmd;
+      const val = btn.dataset.val || null;
+      if (cmd) document.execCommand(cmd, false, val);
+    });
+  });
+
+  // Bind file attachments
+  let tabAttachments = [];
+  const fileInput = container.querySelector('.compose-tab-attachments');
+  const attList = container.querySelector('.compose-tab-attachment-list');
+  if (fileInput) {
+    fileInput.addEventListener('change', () => {
+      for (const file of fileInput.files) {
+        if (file.size > 10 * 1024 * 1024) { showToast(`${file.name} exceeds 10MB limit`, true); continue; }
+        tabAttachments.push(file);
+      }
+      renderTabAttachments(attList, tabAttachments);
+      fileInput.value = '';
+    });
+  }
+
+  // Paste/drop image support
+  const bodyDiv = container.querySelector('.compose-tab-body');
+  if (bodyDiv) {
+    bodyDiv.addEventListener('paste', (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith('image/')) {
+          e.preventDefault();
+          const file = items[i].getAsFile();
+          if (file && file.size <= 10 * 1024 * 1024) {
+            tabAttachments.push(file);
+            renderTabAttachments(attList, tabAttachments);
+          }
+          return;
+        }
+      }
+    });
+    bodyDiv.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const files = e.dataTransfer?.files;
+      if (!files) return;
+      for (const file of files) {
+        if (file.type.startsWith('image/') && file.size <= 10 * 1024 * 1024) tabAttachments.push(file);
+      }
+      if (files.length) renderTabAttachments(attList, tabAttachments);
+    });
+  }
+
+  // Bind Send
+  container.querySelector('.compose-tab-send')?.addEventListener('click', async () => {
+    const accountId = parseInt(container.querySelector('.compose-tab-from')?.value);
+    const to = container.querySelector('.compose-tab-to')?.value.trim();
+    const cc = container.querySelector('.compose-tab-cc')?.value.trim() || null;
+    const bcc = container.querySelector('.compose-tab-bcc')?.value.trim() || null;
+    const subject = container.querySelector('.compose-tab-subject')?.value.trim();
+    const body = container.querySelector('.compose-tab-body')?.innerHTML || '';
+    const dealId = parseInt(container.querySelector('.compose-tab-deal-selected')?.dataset?.dealId) || null;
+    if (!accountId || !to || !subject) { showToast('From, To, and Subject are required', true); return; }
+    const sendBtn = container.querySelector('.compose-tab-send');
+    sendBtn.disabled = true;
+    sendBtn.innerHTML = '<i class="ti ti-loader" style="margin-right:0.3rem;"></i>Sending...';
+    try {
+      const attachments = [];
+      for (const file of tabAttachments) {
+        const reader = new FileReader();
+        const b64 = await new Promise(resolve => { reader.onload = () => resolve(reader.result.split(',')[1]); reader.readAsDataURL(file); });
+        attachments.push({ filename: file.name, content: b64, mime_type: file.type || 'application/octet-stream' });
+      }
+      const payload = { account_id: accountId, to, cc, bcc, subject, body, deal_id: dealId };
+      if (attachments.length > 0) payload.attachments = attachments;
+      await api('/api/v2/mail/send', { method: 'POST', body: JSON.stringify(payload) });
+      showToast('Email sent');
+      closeComposeTabNoConfirm(tabId);
+    } catch (e) { showToast('Send failed: ' + e.message, true); }
+    finally { sendBtn.disabled = false; sendBtn.innerHTML = '<i class="ti ti-send" style="margin-right:0.3rem;"></i>Send'; }
+  });
+
+  // Bind Cancel
+  container.querySelector('.compose-tab-cancel')?.addEventListener('click', () => closeComposeTab(tabId));
+
+  // Bind deal search
+  const dealSearch = container.querySelector('.compose-tab-deal-search');
+  if (dealSearch) {
+    let dealT = null;
+    dealSearch.addEventListener('input', () => {
+      clearTimeout(dealT);
+      dealT = setTimeout(async () => {
+        const q = dealSearch.value.trim();
+        const results = container.querySelector('.compose-tab-deal-results');
+        if (!results) return;
+        if (q.length < 1) { results.style.display = 'none'; return; }
+        try {
+          const opps = await searchOpportunitiesByTitle(q, { limit: 8 });
+          results.style.display = 'block';
+          results.innerHTML = opps.length
+            ? opps.map(o => `<button type="button" style="display:block;width:100%;text-align:left;padding:4px 8px;border:none;background:none;cursor:pointer;color:var(--text);" data-deal-id="${o.id}" data-deal-title="${escapeHtml(o.title)}">${escapeHtml(o.title)}</button>`).join('')
+            : '<div style="padding:4px 8px;color:var(--muted);font-size:0.85rem;">No matches</div>';
+          results.querySelectorAll('button[data-deal-id]').forEach(b => {
+            b.addEventListener('click', () => {
+              const selected = container.querySelector('.compose-tab-deal-selected');
+              if (selected) {
+                selected.innerHTML = `<span style="background:var(--bg-elevated);padding:2px 6px;border-radius:3px;font-size:0.85rem;">${escapeHtml(b.dataset.dealTitle)} <button type="button" class="compose-deal-clear" style="border:none;background:none;cursor:pointer;color:var(--muted);">&times;</button></span>`;
+                selected.dataset.dealId = b.dataset.dealId;
+                selected.querySelector('.compose-deal-clear')?.addEventListener('click', () => { selected.innerHTML = ''; delete selected.dataset.dealId; });
+              }
+              results.style.display = 'none';
+              dealSearch.value = b.dataset.dealTitle;
+            });
+          });
+        } catch { results.style.display = 'none'; }
+      }, 300);
+    });
+  }
+}
+
+function renderTabAttachments(attList, attachments) {
+  if (!attList) return;
+  attList.innerHTML = attachments.map((f, i) => {
+    const isImage = f.type && f.type.startsWith('image/');
+    const iconHtml = isImage ? '<i class="ti ti-photo" style="color:var(--accent);"></i>' : '<i class="ti ti-paperclip"></i>';
+    return `<div class="compose-attachment-item">${iconHtml} ${escapeHtml(f.name)} <span style="color:var(--muted); font-size:0.75rem;">(${Math.round(f.size/1024)}KB)</span> <button type="button" class="btn btn-ghost btn-small compose-attach-remove" data-idx="${i}" style="padding:0 0.2rem;"><i class="ti ti-x"></i></button></div>`;
+  }).join('');
+  attList.querySelectorAll('.compose-attach-remove').forEach(btn => {
+    btn.addEventListener('click', () => {
+      attachments.splice(parseInt(btn.dataset.idx), 1);
+      renderTabAttachments(attList, attachments);
+    });
+  });
+}
+
+function switchToComposeTab(tabId) {
+  const tabBar = $('#mail-inbox-tabs');
+  if (!tabBar) return;
+
+  // Deactivate all tabs
+  tabBar.querySelectorAll('.mail-inbox-tab').forEach(b => b.classList.remove('active'));
+
+  // Activate the compose tab
+  const tabBtn = tabBar.querySelector(`[data-tab-id="${tabId}"]`);
+  if (tabBtn) tabBtn.classList.add('active');
+
+  // Hide all content, show compose tab content
+  const mailList = $('#mail-list-container');
+  const scannerDiv = $('#mail-scanner-admin');
+  const sidebar = $('.mail-right-sidebar');
+  const sidebarToggle = $('#mail-sidebar-toggle');
+  const toolbar = $('.mail-toolbar');
+  const composePane = $(`#mail-compose-tab-${tabId}`);
+  const mailMainArea = $('.mail-main-area');
+
+  if (mailList) mailList.classList.add('hidden');
+  if (scannerDiv) scannerDiv.classList.add('hidden');
+  if (sidebar) sidebar.classList.add('hidden');
+  if (sidebarToggle) sidebarToggle.classList.add('hidden');
+  if (toolbar) toolbar.classList.add('hidden');
+  if (composePane) composePane.classList.remove('hidden');
+  if (mailMainArea) {
+    mailMainArea.style.display = 'flex';
+    mailMainArea.style.flexDirection = 'column';
+  }
+}
+
+function closeComposeTab(tabId) {
+  if (!confirm('Discard this draft?')) return;
+  closeComposeTabNoConfirm(tabId);
+}
+
+function closeComposeTabNoConfirm(tabId) {
+  const tabBar = $('#mail-inbox-tabs');
+  if (tabBar) {
+    const tabBtn = tabBar.querySelector(`[data-tab-id="${tabId}"]`);
+    if (tabBtn) tabBtn.remove();
+  }
+
+  // If no compose tabs remain, reset the content pane
+  const remainingCompose = tabBar?.querySelector('.compose-tab');
+  if (!remainingCompose) {
+    const composePane = $('#mail-compose-tab-content') || $(`#mail-compose-tab-${tabId}`);
+    if (composePane) {
+      composePane.innerHTML = '';
+      composePane.classList.add('hidden');
+      composePane.id = 'mail-compose-tab-content';
+    }
+  }
+
+  // Switch back to inbox
+  const inboxTab = tabBar?.querySelector('[data-mailtab="inbox"]');
+  if (inboxTab) switchMailTab(inboxTab);
+}
+
 async function openReplyCompose(messageId, type = 'reply') {
   try {
     const endpoint = type === 'forward' ? 'forward' : 'reply';
@@ -15965,6 +16294,13 @@ function bindComposeEmailModal() {
   const modal = $('#compose-email-modal');
   if (!modal || modal.dataset.bound) return;
   modal.dataset.bound = '1';
+
+  // Move to tab button
+  const moveToTabBtn = $('#compose-move-to-tab');
+  if (moveToTabBtn) {
+    moveToTabBtn.addEventListener('click', () => moveComposeToTab());
+  }
+
   modal.querySelectorAll('[data-compose-email-dismiss]').forEach(el => {
     el.addEventListener('click', () => {
       // Discard confirmation if content exists

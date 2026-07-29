@@ -11523,6 +11523,40 @@ body {
   .email-preview-action { min-width: 36px; min-height: 36px; }
 }
 
+/* ── Compose tab in mail inbox ──────────────────────────────────────── */
+.compose-tab {
+  background: var(--bg-elevated) !important;
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+  font-weight: 500;
+}
+.compose-tab .compose-tab-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 0.2rem;
+  font-size: 1.1rem;
+  line-height: 1;
+  margin-left: 0.3rem;
+}
+.compose-tab .compose-tab-close:hover {
+  color: var(--text);
+}
+.compose-tab-title {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.compose-tab-content {
+  background: var(--bg);
+}
+.mail-tab-content {
+  flex: 1;
+  min-height: 0;
+}
+
 /* ── Attachment list in compose ───────────────────────────────────────── */
 .compose-attachment-item {
   display: flex;

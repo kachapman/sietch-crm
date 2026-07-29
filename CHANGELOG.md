@@ -2,6 +2,15 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — Compose Tab Feature (2026-07-28)
+
+- **Move to tab button in compose modal.** New tab icon button (left of close button) moves the current compose to a dedicated tab in the mail inbox modal. The compose modal closes and the content appears in a full-featured compose tab that fills the mail inbox modal area.
+- **Multiple compose tabs.** Each "Move to tab" creates a new tab. Tabs show the subject (truncated to 25 chars) with a unique compose icon and close button (×).
+- **Full compose UI in tab.** Compose tab shows From, Link to deal, To, Cc/Bcc, Subject, formatting toolbar (bold/italic/underline/strikethrough/lists/quote/highlight/emoji/link/clear), contenteditable body, file attachments with image paste/drop support, Send and Cancel buttons.
+- **Tab close with discard prompt.** Cancel button and × close button prompt "Discard this draft?" before closing. Send closes the tab without prompt.
+- **Tab styling.** Compose tab has unique accent-colored background to set it apart from mail/inbox tabs. Tab title truncates with ellipsis if too long.
+- **Files:** `public/app.js`, `public/index.html`, `public/styles.css`.
+
 ## Phase 3 — Email Bug Fixes Round 2 (2026-07-28)
 
 - **Draft loading fixed (404).** Added `GET /api/v2/mail/drafts/{id}` route + handler to `server.py`. Frontend now correctly loads individual drafts for editing.
