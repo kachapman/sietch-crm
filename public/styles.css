@@ -3712,11 +3712,36 @@ body {
 .mail-subject {
   flex: 1;
   min-width: 0;
+  color: #aaa;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+.mail-subject-text {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #aaa;
-  font-weight: 600;
+}
+.mail-row-tags {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+  align-items: center;
+}
+.mail-tag-badge-inline {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  font-size: 0.6rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: #fff;
 }
 .mail-date {
   width: 90px;
@@ -11478,6 +11503,15 @@ body {
   .email-preview-action[data-action="archive"] .btn-label,
   .email-preview-action[data-action="print"] .btn-label { display: none; }
   .email-preview-action { min-width: 36px; min-height: 36px; }
+}
+
+/* ── Document picker file selection ────────────────────────────────── */
+.doc-picker-file-row.selected {
+  background: var(--accent-subtle) !important;
+  border-color: var(--accent) !important;
+}
+.doc-picker-file-row {
+  cursor: pointer;
 }
 
 /* ── Right-click context menu for mail list ────────────────────────── */

@@ -885,25 +885,33 @@
   <!-- Document Picker modal (for attaching files from Documents) -->
   <div id="document-picker-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="doc-picker-title">
     <div class="modal-backdrop" data-doc-picker-dismiss></div>
-    <div class="modal-card" style="max-width:800px; width:95vw; max-height:80vh; display:flex; flex-direction:column; padding:0;">
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:0.5rem 0.75rem; border-bottom:1px solid var(--border); flex-shrink:0;">
-        <h2 id="doc-picker-title" class="modal-title" style="margin:0; font-size:1rem;">Select a file from Documents</h2>
-        <button type="button" class="btn btn-icon-only modal-header-control" title="Close" data-doc-picker-dismiss><i class="ti ti-x"></i></button>
-      </div>
-      <div style="display:flex; flex:1; min-height:0; overflow:hidden;">
-        <div id="doc-picker-sidebar" style="width:160px; flex-shrink:0; border-right:1px solid var(--border); padding:0.5rem; overflow-y:auto; background:var(--surface);">
-          <button type="button" class="btn btn-ghost btn-small doc-picker-scope active" data-scope="mydocs" style="display:block; width:100%; text-align:left; margin-bottom:0.2rem;"><i class="ti ti-user" style="margin-right:0.3rem;"></i>My Documents</button>
-          <button type="button" class="btn btn-ghost btn-small doc-picker-scope" data-scope="company" style="display:block; width:100%; text-align:left; margin-bottom:0.2rem;"><i class="ti ti-building" style="margin-right:0.3rem;"></i>Company</button>
-          <button type="button" class="btn btn-ghost btn-small doc-picker-scope" data-scope="projects" style="display:block; width:100%; text-align:left; margin-bottom:0.2rem;"><i class="ti ti-briefcase" style="margin-right:0.3rem;"></i>Projects</button>
-          <div id="doc-picker-tree" style="margin-top:0.5rem;"></div>
+    <div class="modal-card documents-modal-card" style="max-width:800px;">
+      <div class="documents-modal-header">
+        <h2 id="doc-picker-title" class="modal-title">Select a file</h2>
+        <div class="documents-modal-search-wrap">
+          <input type="search" id="doc-picker-search" class="documents-search-input" placeholder="Search documents..." autocomplete="off" />
         </div>
-        <div style="flex:1; display:flex; flex-direction:column; min-width:0;">
-          <div id="doc-picker-breadcrumb" style="flex-shrink:0; padding:0.3rem 0.5rem; font-size:0.78rem; color:var(--muted); border-bottom:1px solid var(--border);"></div>
-          <div id="doc-picker-list" style="flex:1; overflow-y:auto; padding:0.3rem;"></div>
+        <div class="documents-modal-header-actions">
+          <button type="button" class="btn btn-icon-only modal-header-control" title="Close" data-doc-picker-dismiss><i class="ti ti-x"></i></button>
+        </div>
+      </div>
+      <div class="documents-modal-body">
+        <div class="documents-sidebar" id="doc-picker-sidebar">
+          <div class="documents-scope-list">
+            <button type="button" class="documents-scope-btn active" data-scope="mydocs"><i class="ti ti-user"></i> My Documents</button>
+            <button type="button" class="documents-scope-btn" data-scope="company"><i class="ti ti-building"></i> Company</button>
+            <button type="button" class="documents-scope-btn" data-scope="projects"><i class="ti ti-briefcase"></i> Projects</button>
+          </div>
+          <div id="doc-picker-tree"></div>
+        </div>
+        <div class="documents-main" style="display:flex; flex-direction:column;">
+          <div id="doc-picker-breadcrumb" class="documents-breadcrumb"></div>
+          <div id="doc-picker-list" class="documents-list" style="flex:1;"></div>
         </div>
       </div>
       <div style="display:flex; justify-content:flex-end; gap:0.5rem; padding:0.4rem 0.75rem; border-top:1px solid var(--border); flex-shrink:0;">
         <button type="button" class="btn btn-ghost btn-small" data-doc-picker-dismiss>Cancel</button>
+        <button type="button" id="doc-picker-select" class="btn btn-primary btn-small" disabled>Select</button>
       </div>
     </div>
   </div>

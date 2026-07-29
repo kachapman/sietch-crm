@@ -16188,134 +16188,340 @@ function renderComposeTabContent(container, tabId, opts = {}) {
 
 // ── Document Picker Modal (attach files from Documents) ──────────────────
 let docPickerCallback = null;
-let docPickerScope = 'mydocs';
-let docPickerFolderId = null;
-let docPickerBreadcrumbs = [];
+let docPickerState = {
+  scope: 'mydocs',
+  currentFolderId: null,
+  currentFolderPath: [],
+  folders: [],
+  documents: [],
+  folderTree: [],
+  expandedFolders: new Set(),
+  searchQuery: '',
+  selectedDocId: null,
+};
 
 function openDocumentPickerModal(callback) {
   docPickerCallback = callback;
-  docPickerScope = 'mydocs';
-  docPickerFolderId = null;
-  docPickerBreadcrumbs = [];
+  docPickerState = {
+    scope: 'mydocs',
+    currentFolderId: null,
+    currentFolderPath: [],
+    folders: [],
+    documents: [],
+    folderTree: [],
+    expandedFolders: new Set(),
+    searchQuery: '',
+    selectedDocId: null,
+  };
   const modal = $('#document-picker-modal');
   if (!modal) return;
   modal.classList.remove('hidden');
+
   // Bind dismiss
   modal.querySelectorAll('[data-doc-picker-dismiss]').forEach(el => {
-    el.addEventListener('click', () => { modal.classList.add('hidden'); docPickerCallback = null; }, { once: true });
+    el.addEventListener('click', () => {
+      modal.classList.add('hidden');
+      docPickerCallback = null;
+    }, { once: true });
   });
+
   // Bind scope buttons
-  modal.querySelectorAll('.doc-picker-scope').forEach(btn => {
-    btn.addEventListener('click', () => {
-      modal.querySelectorAll('.doc-picker-scope').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      docPickerScope = btn.dataset.scope;
-      docPickerFolderId = null;
-      docPickerBreadcrumbs = [];
-      loadDocumentPickerList();
+  const sidebar = $('#doc-picker-sidebar');
+  if (sidebar) {
+    sidebar.querySelectorAll('.documents-scope-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        sidebar.querySelectorAll('.documents-scope-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        docPickerState.scope = btn.dataset.scope;
+        docPickerState.currentFolderId = null;
+        docPickerState.currentFolderPath = [];
+        docPickerState.selectedDocId = null;
+        docPickerState.searchQuery = '';
+        const searchInput = $('#doc-picker-search');
+        if (searchInput) searchInput.value = '';
+        updateDocPickerSelectBtn();
+        loadDocPickerList();
+        loadDocPickerFolderTree();
+      });
     });
-  });
-  loadDocumentPickerList();
+  }
+
+  // Bind search
+  const searchInput = $('#doc-picker-search');
+  if (searchInput && !searchInput.dataset.bound) {
+    searchInput.dataset.bound = '1';
+    let searchT = null;
+    searchInput.addEventListener('input', () => {
+      clearTimeout(searchT);
+      searchT = setTimeout(() => {
+        docPickerState.searchQuery = searchInput.value.trim();
+        docPickerState.currentFolderId = null;
+        docPickerState.currentFolderPath = [];
+        loadDocPickerList();
+      }, 300);
+    });
+  }
+
+  // Bind select button
+  const selectBtn = $('#doc-picker-select');
+  if (selectBtn) {
+    selectBtn.onclick = async () => {
+      if (!docPickerState.selectedDocId || !docPickerCallback) return;
+      selectBtn.disabled = true;
+      selectBtn.textContent = 'Loading...';
+      try {
+        const resp = await fetch(`/api/v2/documents/${docPickerState.selectedDocId}`, { credentials: 'same-origin' });
+        if (!resp.ok) throw new Error('Download failed (' + resp.status + ')');
+        const blob = await resp.blob();
+        const doc = docPickerState.documents.find(d => d.id == docPickerState.selectedDocId);
+        const title = doc ? (doc.title || 'file') : 'file';
+        const file = new File([blob], title, { type: blob.type || 'application/octet-stream' });
+        docPickerCallback(file);
+        modal.classList.add('hidden');
+        docPickerCallback = null;
+      } catch (e) {
+        showToast('Failed to attach: ' + e.message, true);
+      } finally {
+        selectBtn.disabled = false;
+        selectBtn.textContent = 'Select';
+      }
+    };
+  }
+
+  loadDocPickerList();
+  loadDocPickerFolderTree();
 }
 
-async function loadDocumentPickerList() {
+function updateDocPickerSelectBtn() {
+  const btn = $('#doc-picker-select');
+  if (btn) btn.disabled = !docPickerState.selectedDocId;
+}
+
+async function loadDocPickerList() {
   const list = $('#doc-picker-list');
-  const breadcrumb = $('#doc-picker-breadcrumb');
   if (!list) return;
   list.innerHTML = '<div style="padding:1rem; color:var(--muted);">Loading...</div>';
+  docPickerState.selectedDocId = null;
+  updateDocPickerSelectBtn();
   try {
     let docs = [], folders = [];
-    if (docPickerScope === 'mydocs') {
-      const params = docPickerFolderId ? `?folder_id=${docPickerFolderId}` : '';
-      const data = await api(`/api/v2/documents/personal${params}`);
+    if (docPickerState.scope === 'mydocs') {
+      let url = '/api/v2/documents/personal';
+      if (docPickerState.currentFolderId) url += `?folder_id=${docPickerState.currentFolderId}`;
+      const data = await api(url);
       docs = data.documents || [];
       folders = data.folders || [];
-    } else if (docPickerScope === 'company') {
-      const params = docPickerFolderId ? `?folder_id=${docPickerFolderId}` : '';
-      const data = await api(`/api/v2/documents/company${params}`);
+    } else if (docPickerState.scope === 'company') {
+      let url = '/api/v2/documents/company';
+      if (docPickerState.currentFolderId) url += `?folder_id=${docPickerState.currentFolderId}`;
+      const data = await api(url);
       docs = data.documents || [];
       folders = data.folders || [];
-    } else if (docPickerScope === 'projects') {
-      const data = await api('/api/v2/documents/search?q=');
-      const results = data.results || [];
+    } else if (docPickerState.scope === 'projects') {
+      const data = await api('/api/v2/documents/search?q=' + encodeURIComponent(docPickerState.searchQuery || ''));
       docs = [];
-      results.forEach(r => { (r.documents || []).forEach(d => { d._projectTitle = r.project || r.projectTitle; docs.push(d); }); });
-    }
-    // Render breadcrumb
-    if (breadcrumb) {
-      breadcrumb.innerHTML = docPickerBreadcrumbs.map((b, i) =>
-        `<span class="doc-picker-bc-item" style="cursor:pointer; color:var(--accent);" data-idx="${i}">${escapeHtml(b.name)}</span>`
-      ).join('<span style="margin:0 0.2rem; color:var(--muted);">/</span>') || `<span style="font-weight:600;">${docPickerScope === 'mydocs' ? 'My Documents' : docPickerScope === 'company' ? 'Company' : 'Projects'}</span>`;
-      breadcrumb.querySelectorAll('.doc-picker-bc-item').forEach(el => {
-        el.addEventListener('click', () => {
-          const idx = parseInt(el.dataset.idx);
-          const target = docPickerBreadcrumbs[idx];
-          docPickerBreadcrumbs = docPickerBreadcrumbs.slice(0, idx);
-          docPickerFolderId = target ? target.id : null;
-          loadDocumentPickerList();
+      (data.results || []).forEach(r => {
+        (r.documents || []).forEach(d => {
+          d._projectTitle = r.project || r.projectTitle;
+          docs.push(d);
         });
       });
     }
-    // Render list
-    let html = '';
-    // Folders first (skip for projects scope)
-    if (docPickerScope !== 'projects' && folders.length) {
-      folders.forEach(f => {
-        html += `<div class="doc-picker-folder" data-folder-id="${f.id}" data-folder-name="${escapeHtml(f.name)}" style="display:flex; align-items:center; gap:0.4rem; padding:0.35rem 0.5rem; border-radius:4px; cursor:pointer; font-size:0.85rem;">
-          <i class="ti ti-folder" style="color:var(--accent);"></i> ${escapeHtml(f.name)}
-        </div>`;
-      });
-    }
-    // Files
-    if (docs.length) {
-      docs.forEach(d => {
-        const title = d.title || d.name || 'Untitled';
-        const mime = d.mimeType || d.mime_type || '';
-        const size = d.fileSize || d.file_size || 0;
-        const sizeStr = size > 1024*1024 ? (size/1024/1024).toFixed(1)+' MB' : size > 1024 ? Math.round(size/1024)+' KB' : size+' B';
-        const projectLabel = d._projectTitle ? `<span style="color:var(--muted); font-size:0.72rem; margin-left:0.3rem;">${escapeHtml(d._projectTitle)}</span>` : '';
-        html += `<div class="doc-picker-file" data-doc-id="${d.id}" data-doc-title="${escapeHtml(title)}" data-doc-mime="${escapeHtml(mime)}" style="display:flex; align-items:center; gap:0.4rem; padding:0.35rem 0.5rem; border-radius:4px; cursor:pointer; font-size:0.85rem;">
-          <i class="ti ti-file" style="color:var(--muted);"></i> ${escapeHtml(title)}${projectLabel}
-          <span style="margin-left:auto; font-size:0.72rem; color:var(--muted);">${sizeStr}</span>
-        </div>`;
-      });
-    }
-    if (!html) {
-      html = '<div style="padding:1rem; color:var(--muted); text-align:center;">No files found</div>';
-    }
-    list.innerHTML = html;
-    // Bind folder clicks
-    list.querySelectorAll('.doc-picker-folder').forEach(el => {
-      el.addEventListener('click', () => {
-        docPickerBreadcrumbs.push({ id: docPickerFolderId, name: docPickerScope === 'mydocs' ? 'My Documents' : docPickerScope === 'company' ? 'Company' : 'Projects' });
-        docPickerFolderId = parseInt(el.dataset.folderId);
-        loadDocumentPickerList();
-      });
-      el.addEventListener('mouseenter', () => el.style.background = 'var(--hover)');
-      el.addEventListener('mouseleave', () => el.style.background = '');
-    });
-    // Bind file clicks — select and callback
-    list.querySelectorAll('.doc-picker-file').forEach(el => {
-      el.addEventListener('click', async () => {
-        const docId = el.dataset.docId;
-        const docTitle = el.dataset.docTitle;
-        try {
-          showToast('Downloading...');
-          const resp = await fetch(`/api/v2/documents/${docId}`);
-          if (!resp.ok) throw new Error('Download failed');
-          const blob = await resp.blob();
-          const file = new File([blob], docTitle, { type: blob.type || 'application/octet-stream' });
-          if (docPickerCallback) docPickerCallback(file);
-          $('#document-picker-modal')?.classList.add('hidden');
-          docPickerCallback = null;
-        } catch (e) { showToast('Failed to attach: ' + e.message, true); }
-      });
-      el.addEventListener('mouseenter', () => el.style.background = 'var(--hover)');
-      el.addEventListener('mouseleave', () => el.style.background = '');
-    });
+    docPickerState.folders = folders;
+    docPickerState.documents = docs;
+    renderDocPickerList();
   } catch (e) {
     list.innerHTML = `<div style="padding:1rem; color:var(--danger);">Failed to load: ${escapeHtml(e.message)}</div>`;
   }
+}
+
+function renderDocPickerList() {
+  const list = $('#doc-picker-list');
+  const breadcrumb = $('#doc-picker-breadcrumb');
+  if (!list) return;
+  const isFolderScope = docPickerState.scope === 'mydocs' || docPickerState.scope === 'company';
+  let html = '';
+
+  // Breadcrumb
+  if (breadcrumb) {
+    if (isFolderScope) {
+      const scopeLabel = docPickerState.scope === 'mydocs' ? 'My Documents' : 'Company';
+      if (docPickerState.currentFolderPath.length === 0) {
+        breadcrumb.innerHTML = `<span class="documents-breadcrumb-item documents-breadcrumb-current">${escapeHtml(scopeLabel)}</span>`;
+      } else {
+        let bc = `<span class="documents-breadcrumb-item documents-breadcrumb-link" data-bc-root>${escapeHtml(scopeLabel)}</span>`;
+        docPickerState.currentFolderPath.forEach((seg, idx) => {
+          bc += '<span class="documents-breadcrumb-sep">/</span>';
+          if (idx === docPickerState.currentFolderPath.length - 1) {
+            bc += `<span class="documents-breadcrumb-item documents-breadcrumb-current">${escapeHtml(seg.name)}</span>`;
+          } else {
+            bc += `<span class="documents-breadcrumb-item documents-breadcrumb-link" data-bc-idx="${idx}">${escapeHtml(seg.name)}</span>`;
+          }
+        });
+        breadcrumb.innerHTML = bc;
+      }
+      breadcrumb.querySelectorAll('[data-bc-root]').forEach(el => {
+        el.addEventListener('click', () => {
+          docPickerState.currentFolderId = null;
+          docPickerState.currentFolderPath = [];
+          loadDocPickerList();
+        });
+      });
+      breadcrumb.querySelectorAll('[data-bc-idx]').forEach(el => {
+        el.addEventListener('click', () => {
+          const idx = parseInt(el.dataset.bcIdx);
+          docPickerState.currentFolderPath = docPickerState.currentFolderPath.slice(0, idx);
+          docPickerState.currentFolderId = docPickerState.currentFolderPath.length > 0
+            ? docPickerState.currentFolderPath[docPickerState.currentFolderPath.length - 1].id
+            : null;
+          loadDocPickerList();
+        });
+      });
+    } else {
+      breadcrumb.innerHTML = `<span class="documents-breadcrumb-item documents-breadcrumb-current">${docPickerState.scope === 'projects' ? 'Projects' : ''}</span>`;
+    }
+  }
+
+  // Folders
+  if (isFolderScope && docPickerState.folders.length) {
+    docPickerState.folders.forEach(f => {
+      html += `<div class="documents-list-row documents-folder-row" data-folder-id="${f.id}" data-folder-name="${escapeHtml(f.name)}">
+        <span class="documents-folder-icon"><i class="ti ti-folder"></i></span>
+        <span class="documents-folder-name">${escapeHtml(f.name)}</span>
+      </div>`;
+    });
+  }
+
+  // Files
+  if (docPickerState.documents.length) {
+    docPickerState.documents.forEach(d => {
+      const sel = docPickerState.selectedDocId == d.id ? ' selected' : '';
+      const title = d.title || d.name || 'Untitled';
+      const size = d.fileSize || d.file_size || 0;
+      const sizeStr = size > 1024*1024 ? (size/1024/1024).toFixed(1)+' MB' : size > 1024 ? Math.round(size/1024)+' KB' : size+' B';
+      const projectLabel = d._projectTitle ? `<span style="color:var(--muted); font-size:0.72rem; margin-left:0.3rem;">${escapeHtml(d._projectTitle)}</span>` : '';
+      html += `<div class="documents-list-row doc-picker-file-row${sel}" data-doc-id="${d.id}" data-doc-title="${escapeHtml(title)}">
+        ${docsIconForMime(d.mimeType)}
+        <span class="doc-doc-title">${escapeHtml(title)}${projectLabel}</span>
+        <span class="doc-doc-meta"><span class="doc-doc-size">${sizeStr}</span></span>
+      </div>`;
+    });
+  }
+
+  if (!html) {
+    html = '<div style="padding:2rem; color:var(--muted); text-align:center;">No files found</div>';
+  }
+  list.innerHTML = html;
+
+  // Bind folder clicks
+  list.querySelectorAll('.documents-folder-row').forEach(el => {
+    el.addEventListener('click', () => {
+      docPickerState.currentFolderPath.push({ id: docPickerState.currentFolderId, name: docPickerState.scope === 'mydocs' ? 'My Documents' : 'Company' });
+      docPickerState.currentFolderId = parseInt(el.dataset.folderId);
+      docPickerState.selectedDocId = null;
+      updateDocPickerSelectBtn();
+      loadDocPickerList();
+    });
+    el.addEventListener('mouseenter', () => el.style.background = 'var(--hover)');
+    el.addEventListener('mouseleave', () => el.style.background = '');
+  });
+
+  // Bind file clicks
+  list.querySelectorAll('.doc-picker-file-row').forEach(el => {
+    el.addEventListener('click', () => {
+      // Deselect all
+      list.querySelectorAll('.doc-picker-file-row').forEach(r => r.classList.remove('selected'));
+      el.classList.add('selected');
+      docPickerState.selectedDocId = el.dataset.docId;
+      updateDocPickerSelectBtn();
+    });
+    el.addEventListener('dblclick', () => {
+      docPickerState.selectedDocId = el.dataset.docId;
+      updateDocPickerSelectBtn();
+      $('#doc-picker-select')?.click();
+    });
+    el.addEventListener('mouseenter', () => { if (docPickerState.selectedDocId != el.dataset.docId) el.style.background = 'var(--hover)'; });
+    el.addEventListener('mouseleave', () => { if (docPickerState.selectedDocId != el.dataset.docId) el.style.background = ''; });
+  });
+}
+
+async function loadDocPickerFolderTree() {
+  const treeEl = $('#doc-picker-tree');
+  if (!treeEl) return;
+  const isFolderScope = docPickerState.scope === 'mydocs' || docPickerState.scope === 'company';
+  if (!isFolderScope) {
+    treeEl.innerHTML = '';
+    return;
+  }
+  try {
+    const scope = docPickerState.scope === 'company' ? 'company' : 'personal';
+    const data = await api(`/api/v2/documents/folders/tree?scope=${scope}`);
+    docPickerState.folderTree = data.folders || [];
+    renderDocPickerFolderTree();
+  } catch {
+    docPickerState.folderTree = [];
+    treeEl.innerHTML = '';
+  }
+}
+
+function renderDocPickerFolderTree() {
+  const treeEl = $('#doc-picker-tree');
+  if (!treeEl) return;
+  if (!docPickerState.folderTree.length) {
+    treeEl.innerHTML = '';
+    return;
+  }
+  const tree = buildFolderTreeNodes(docPickerState.folderTree, null);
+  function renderNode(node, depth) {
+    const hasChildren = node.children.length > 0;
+    const isExpanded = docPickerState.expandedFolders.has(node.id);
+    const isActive = docPickerState.currentFolderId === node.id;
+    let html = `<li class="documents-folder-tree-item">
+      <div class="documents-folder-tree-row${isActive ? ' active' : ''}" data-tree-id="${node.id}" data-tree-name="${escapeHtml(node.name)}" style="--tree-depth:${depth}">
+        <span class="documents-folder-tree-chevron${hasChildren ? (isExpanded ? ' expanded' : '') : ' no-children'}" data-tree-chevron="${node.id}">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+        </span>
+        <span class="documents-folder-tree-icon"><i class="ti ti-folder"></i></span>
+        <span class="documents-folder-tree-name" title="${escapeHtml(node.name)}">${escapeHtml(node.name)}</span>
+      </div>`;
+    if (hasChildren && isExpanded) {
+      html += `<ul class="documents-folder-tree-children">${node.children.map(c => renderNode(c, depth + 1)).join('')}</ul>`;
+    }
+    html += '</li>';
+    return html;
+  }
+  treeEl.innerHTML = `<ul class="documents-folder-tree-list">${tree.map(n => renderNode(n, 0)).join('')}</ul>`;
+
+  // Bind chevron toggle
+  treeEl.querySelectorAll('.documents-folder-tree-chevron').forEach(chevron => {
+    chevron.addEventListener('click', e => {
+      e.stopPropagation();
+      const fid = Number(chevron.dataset.treeChevron);
+      if (docPickerState.expandedFolders.has(fid)) docPickerState.expandedFolders.delete(fid);
+      else docPickerState.expandedFolders.add(fid);
+      renderDocPickerFolderTree();
+    });
+  });
+  // Bind folder row click
+  treeEl.querySelectorAll('.documents-folder-tree-row').forEach(row => {
+    row.addEventListener('click', e => {
+      e.stopPropagation();
+      const fid = Number(row.dataset.treeId);
+      const fname = row.dataset.treeName;
+      // Build full path
+      const path = [];
+      let cur = docPickerState.folderTree.find(f => f.id === fid);
+      while (cur) {
+        path.unshift({ id: cur.id, name: cur.name });
+        cur = cur.parentId ? docPickerState.folderTree.find(f => f.id === cur.parentId) : null;
+      }
+      docPickerState.currentFolderPath = path;
+      docPickerState.currentFolderId = fid;
+      docPickerState.selectedDocId = null;
+      updateDocPickerSelectBtn();
+      loadDocPickerList();
+    });
+  });
 }
 
 function renderTabAttachments(attList, attachments) {
@@ -17875,7 +18081,11 @@ function renderMailList(msgs) {
     const draftBadge = m.isDraft ? '<span style="background:var(--warning-subtle,#fef3c7); color:var(--warning,#d97706); padding:0.1rem 0.3rem; border-radius:3px; font-size:0.7rem; margin-right:0.3rem;">Draft</span>' : '';
     const bodySnippet = (m.body_text || m.snippet || '').replace(/<[^>]+>/g, '').trim().slice(0, 100);
     subjDiv.title = `${from}\n${subj}\n${bodySnippet}`;
-    subjDiv.innerHTML = draftBadge + escapeHtml(subj.slice(0, 80));
+    // Subject text (wrapped for ellipsis)
+    const subjText = document.createElement('span');
+    subjText.className = 'mail-subject-text';
+    subjText.innerHTML = draftBadge + escapeHtml(subj.slice(0, 80));
+    subjDiv.appendChild(subjText);
     // Tag badges
     if (m.tags && m.tags.length) {
       const tagsWrap = document.createElement('span');
@@ -17883,7 +18093,7 @@ function renderMailList(msgs) {
       m.tags.slice(0, 3).forEach(t => {
         const badge = document.createElement('span');
         badge.className = 'mail-tag-badge-inline';
-        badge.style.cssText = `background:${escapeHtml(t.color || '#6c757d')}; color:#fff; font-size:0.6rem; padding:0.05rem 0.35rem; border-radius:3px; margin-left:4px; vertical-align:middle; font-weight:500; line-height:1.2;`;
+        badge.style.cssText = `background:${escapeHtml(t.color || '#6c757d')};`;
         badge.textContent = t.title;
         tagsWrap.appendChild(badge);
       });
