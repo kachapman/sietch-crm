@@ -1034,6 +1034,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/mail/drafts":
             self._handle_mail_drafts_get()
             return
+        m = re.match(r"^/api/v2/mail/drafts/(\d+)$", api_path)
+        if m:
+            self._handle_mail_draft_get(int(m.group(1)))
+            return
         if api_path == "/api/v2/mail/folders":
             self._handle_mail_folders()
             return
@@ -5060,6 +5064,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"count": row["cnt"] if row else 0})
         except Exception as e:
             logger.exception("Failed to get trash count")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_draft_get(self, draft_id: int) -> None:
+        try:
+            row = db.query_one("SELECT * FROM mail_outgoing WHERE id = %s AND status = 'draft'", (draft_id,))
+            if not row:
+                _json_response(self, 404, {"error": "Draft not found"})
+                return
+            _json_response(self, 200, dict(row))
+        except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_drafts_get(self) -> None:

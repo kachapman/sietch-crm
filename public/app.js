@@ -15429,6 +15429,22 @@ async function openComposeModal(opts = {}) {
   const statusEl = $('#compose-save-status');
   if (statusEl) { statusEl.textContent = ''; }
 
+  // Clear all fields from previous opens
+  const toInput = $('#compose-to');
+  const ccInput = $('#compose-cc');
+  const bccInput = $('#compose-bcc');
+  const subjectInput = $('#compose-subject');
+  const bodyDiv = $('#compose-body');
+  const titleEl = $('#compose-email-title');
+  if (toInput) toInput.value = '';
+  if (ccInput) ccInput.value = '';
+  if (bccInput) bccInput.value = '';
+  if (subjectInput) subjectInput.value = '';
+  if (bodyDiv) bodyDiv.innerHTML = '';
+  if (titleEl) titleEl.textContent = 'Compose Email';
+  const dealSel = $('#compose-deal-selected');
+  if (dealSel) { dealSel.innerHTML = ''; delete dealSel.dataset.dealId; }
+
   // Populate From dropdown
   const fromSelect = $('#compose-from-account');
   if (fromSelect && mailState.accounts.length > 0) {
@@ -15437,14 +15453,10 @@ async function openComposeModal(opts = {}) {
     ).join('');
   }
 
-  // Pre-fill for reply/forward
-  const toInput = $('#compose-to');
-  const subjectInput = $('#compose-subject');
-  const bodyDiv = $('#compose-body');
-  const titleEl = $('#compose-email-title');
-
+  // Apply opts (pre-fill for reply/forward/draft)
   if (opts.to && toInput) toInput.value = opts.to;
-  if (opts.cc) { const ccInput = $('#compose-cc'); if (ccInput) ccInput.value = opts.cc; }
+  if (opts.cc && ccInput) ccInput.value = opts.cc;
+  if (opts.bcc && bccInput) bccInput.value = opts.bcc;
   if (opts.subject && subjectInput) subjectInput.value = opts.subject;
   if (opts.body && bodyDiv) bodyDiv.innerHTML = opts.body;
   if (opts.title && titleEl) titleEl.textContent = opts.title;
@@ -15552,8 +15564,7 @@ async function openComposeModal(opts = {}) {
 
   // Image paste/drag-drop in compose body
   const composeBody = $('#compose-body');
-  if (composeBody && !composeBody.dataset.pasteBound) {
-    composeBody.dataset.pasteBound = '1';
+  if (composeBody) {
     composeBody.addEventListener('paste', (e) => {
       const items = e.clipboardData?.items;
       if (!items) return;
@@ -16134,7 +16145,12 @@ function attachMailModalListeners() {
       let ok = 0;
       for (const mid of ids) {
         try {
-          await api(`/api/v2/mail/messages/${mid}`, { method: "DELETE" });
+          const msg = mailState.messages.find(m => String(m.id || m.ID) === String(mid));
+          if (msg && msg.isDraft) {
+            await api(`/api/v2/mail/drafts/${mid}`, { method: "DELETE" });
+          } else {
+            await api(`/api/v2/mail/messages/${mid}`, { method: "DELETE" });
+          }
           ok++;
         } catch (e) {
           console.warn("[mail-inbox] delete failed for", mid, e);
@@ -16500,6 +16516,7 @@ function attachMailModalListeners() {
       mailState.selected.clear();
       loadMailMessagesForModal();
     });
+    $("#ovf-delete")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-delete")?.click(); });
     $("#ovf-thread")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-thread-toggle")?.click(); });
     $("#ovf-mark-all-read")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-mark-all-read")?.click(); });
     $("#ovf-tags")?.addEventListener("click", () => { overflowMenu.classList.add("hidden"); $("#mail-tag-btn")?.click(); });
@@ -17312,8 +17329,27 @@ function renderMailList(msgs) {
 
     row.addEventListener("click", (e) => {
       if (e.target.tagName === "INPUT" || e.target.closest('.mail-expand-btn')) return;
-      // Clicking row expands the email
-      expBtn.click();
+      // Clicking row expands the email inline
+      const isHidden = detail.classList.contains("hidden");
+      detail.classList.toggle("hidden");
+      if (!isHidden) return;
+      if (item._mailLoaded) return;
+      item._mailLoaded = true;
+      fetchMailMessage(id).then(fullMail => {
+        if (getMailMessageIsRead(fullMail)) {
+          mailDashboardReadIds.add(id);
+          saveMailDashboardReadIds();
+        }
+        markMailMessageRead(id).catch(() => {});
+        row.classList.add('mail-row-read');
+        detail.innerHTML = "";
+        const embed = document.createElement("div");
+        embed.className = "opp-preview-mail-embed";
+        detail.appendChild(embed);
+        renderMailEmbedPanel(embed, fullMail, id, { openUrl: portalMailMessageUrl(id) });
+      }).catch(err => {
+        detail.innerHTML = `<div class="mail-empty">Failed to load: ${escapeHtml(err.message || err)}</div>`;
+      });
     });
 
     // Rich hover popover (disabled on mobile/touch)
@@ -18760,19 +18796,33 @@ function openEmailPreviewModal(messageId) {
       const action = btn.dataset.action;
       btn.addEventListener('click', () => {
         if (action === 'reply' || action === 'reply-all' || action === 'forward') {
-          renderInlineReply(replyArea || modal.querySelector('#email-preview-reply-area'), action, messageId, norm);
-        } else if (action === 'note') {
-          const bodyText = (norm.textBody || norm.body_text || '').replace(/<[^>]+>/g, '').trim().slice(0, 2000);
-          const noteContent = `<p><b>Email from: ${escapeHtml(norm.from || fullMail.from_addr || 'unknown')}</b><br>Subject: ${escapeHtml(subject)}</p><hr><p>${escapeHtml(bodyText)}</p>`;
-          // Try inline note editor first
-          const editorWrap = $('#email-preview-body')?.closest('#opp-preview-body')?.querySelector('.preview-note-editor-wrap');
-          if (editorWrap) {
-            editorWrap.classList.add('active');
-            const ed = editorWrap.querySelector('.note-editor');
-            if (ed) { ed.innerHTML = noteContent; ed.focus(); }
-          } else {
-            openComposeModal({ subject: 'Note: ' + subject, body: noteContent, title: 'Compose Note' });
+          // Close preview modal and open compose with pre-filled content
+          close();
+          const from = norm.from || '';
+          const subject = norm.subject || '';
+          const date = norm.date ? formatPreviewDateTime(norm.date) || norm.date : '';
+          const bodyPick = pickMailBodyForDisplay(norm);
+          const bodyText = bodyPick?.content || '';
+
+          let to = '', subjectLine = '', quotedBody = '';
+          if (action === 'reply') {
+            to = from;
+            subjectLine = 'Re: ' + (subject.startsWith('Re:') ? subject.slice(3).trim() : subject);
+            quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
+          } else if (action === 'reply-all') {
+            to = from;
+            subjectLine = 'Re: ' + (subject.startsWith('Re:') ? subject.slice(3).trim() : subject);
+            quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
+          } else { // forward
+            to = '';
+            subjectLine = 'Fwd: ' + (subject.startsWith('Fwd:') ? subject.slice(4).trim() : subject);
+            quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;">---------- Forwarded message ----------<br>From: ${escapeHtml(from)}<br>Date: ${escapeHtml(date)}<br>Subject: ${escapeHtml(subject)}</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
           }
+
+          openComposeModal({
+            to, subject: subjectLine, body: quotedBody,
+            title: action === 'forward' ? 'Forward Email' : 'Reply to Email',
+          });
         } else if (action === 'archive') {
           api(`/api/v2/mail/messages/${encodeURIComponent(messageId)}/move`, { method: 'POST', body: JSON.stringify({ folder: 'Archive' }) })
             .then(() => { showToast('Archived'); close(); })
@@ -18904,10 +18954,15 @@ function renderInlineReply(panel, type, messageId, norm) {
       <button type="button" class="note-format-btn" data-cmd="bold" title="Bold"><b>B</b></button>
       <button type="button" class="note-format-btn" data-cmd="italic" title="Italic"><i>I</i></button>
       <button type="button" class="note-format-btn" data-cmd="underline" title="Underline"><u>U</u></button>
+      <button type="button" class="note-format-btn" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
       <span class="note-format-sep"></span>
       <button type="button" class="note-format-btn" data-cmd="insertUnorderedList" title="Bullet list">•</button>
       <button type="button" class="note-format-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
       <button type="button" class="note-format-btn" data-cmd="formatBlock" data-val="blockquote" title="Quote" style="font-family:serif; font-style:italic;">"</button>
+      <span class="note-format-sep"></span>
+      <button type="button" class="note-format-btn note-format-hilite-btn" title="Highlight color">🖍</button>
+      <button type="button" class="note-format-btn note-format-emoji-btn" title="Emoji">😀</button>
+      <button type="button" class="note-format-btn note-format-link-btn" title="Insert link">🔗</button>
       <span class="note-format-sep"></span>
       <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear formatting">⌫</button>
     </div>

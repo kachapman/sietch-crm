@@ -2,6 +2,20 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — Email Bug Fixes Round 2 (2026-07-28)
+
+- **Draft loading fixed (404).** Added `GET /api/v2/mail/drafts/{id}` route + handler to `server.py`. Frontend now correctly loads individual drafts for editing.
+- **Draft delete fixed.** Frontend `mail-delete` handler now detects drafts (`isDraft` flag) and calls `DELETE /api/v2/mail/drafts/{id}` instead of `DELETE /api/v2/mail/messages/{id}`.
+- **Compose modal stale state fixed.** `openComposeModal()` now explicitly clears all fields (To, Cc, Bcc, Subject, Body, Deal selection, Attachments) before applying opts. Removed `pasteBound` guard on paste/drop handlers to fix closure mismatch.
+- **Email preview modal — reply/forward opens compose.** Clicking Reply/Reply All/Forward in the email preview modal now closes the modal and opens the compose modal pre-filled with the email content in standard reply/forward format (Re:/Fwd: prefix, quoted body with date + from + subject).
+- **Expand button behavior corrected.** Clicking an email row in the inbox list now does inline expansion (original behavior). Only the expand button (arrow icon at end of row) opens the full email preview modal.
+- **Compose modal UI compacted.** Field labels moved inside fields as placeholder text. From and Link to deal fields now side-by-side (half width each). Subject moved to last field. Body area gets more height (280px min-height).
+- **Note button removed from email preview modal.**
+- **Mobile toolbar delete button.** Added Delete option to the overflow menu (••• dots) on mobile.
+- **Inline reply full formatting toolbar.** Inline reply now includes strikethrough, highlight, emoji, and link buttons (matching compose modal).
+- **Formatting toolbar button padding.** Added `0.3rem` top/bottom padding to `.note-format-btn` (was `0.2rem`) — buttons no longer touch borders.
+- **Files:** `server.py`, `public/app.js`, `public/index.html`, `public/styles.css`.
+
 ## Phase 3 — Email Bug Fixes & Preview Modal (2026-07-28)
 
 - **Email link error handling improved.** Server now validates that `opportunityId` is valid integer and that the opportunity exists before linking. Returns specific error messages (400 for bad ID, 404 if opportunity not found, 500 if DB error). Frontend surfaces the actual server error in the toast instead of generic "see console".
