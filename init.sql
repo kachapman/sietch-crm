@@ -465,6 +465,7 @@ CREATE TABLE mail_accounts (
     password_encrypted TEXT NOT NULL,
     sync_enabled BOOLEAN DEFAULT TRUE,
     sync_interval_seconds INTEGER DEFAULT 180,
+    monitored_folders TEXT DEFAULT 'INBOX',
     last_sync TIMESTAMP,
     last_uid TEXT,
     owner_user_id INTEGER REFERENCES users(id),

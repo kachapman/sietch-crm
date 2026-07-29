@@ -129,6 +129,12 @@ import auth as auth_mod
 
 db.init_db()
 
+# ── Schema migrations ──────────────────────────────────────────────────────────
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS monitored_folders TEXT DEFAULT 'INBOX'")
+except Exception:
+    pass  # table may not exist yet
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
@@ -1007,6 +1013,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         m = re.match(r"^/api/v2/mail/messages/(\d+)/attachments$", api_path)
         if m:
             self._handle_mail_message_attachments(int(m.group(1)))
+            return
+        # Attachment download
+        m = re.match(r"^/api/v2/mail/messages/(\d+)/attachments/(\d+)/download$", api_path)
+        if m:
+            self._handle_mail_attachment_download(int(m.group(1)), int(m.group(2)))
             return
         # Headers
         m = re.match(r"^/api/v2/mail/messages/(\d+)/headers$", api_path)
@@ -4978,23 +4989,43 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not opp_id:
                 _json_response(self, 400, {"error": "opportunityId required"})
                 return
+            try:
+                opp_id = int(opp_id)
+            except (ValueError, TypeError):
+                _json_response(self, 400, {"error": "Invalid opportunityId"})
+                return
+            # Verify the opportunity exists
+            opp = db.query_one("SELECT id FROM opportunities WHERE id = %s", (opp_id,))
+            if not opp:
+                _json_response(self, 404, {"error": f"Opportunity {opp_id} not found"})
+                return
             user = _require_auth(self)
             linked_by = user["id"] if user else None
-            ok = self._link_email_to_deal(message_id, int(opp_id), linked_by)
+            ok = self._link_email_to_deal(message_id, opp_id, linked_by)
+            if not ok:
+                # Check if already linked
+                existing = db.query_one(
+                    "SELECT id FROM mail_deal_links WHERE message_id = %s AND opportunity_id = %s",
+                    (message_id, opp_id),
+                )
+                if existing:
+                    _json_response(self, 200, {"ok": True, "linked": False, "message": "Already linked"})
+                    return
+                _json_response(self, 500, {"error": "Failed to link email to deal"})
+                return
             # Create history event so the link appears in the deal timeline
-            if ok:
-                msg = db.query_one("SELECT subject, from_addr, body_html, body_text FROM mail_messages WHERE id = %s", (message_id,))
-                if msg:
-                    from_addr = msg["from_addr"] or "Unknown"
-                    subject = msg["subject"] or "(no subject)"
-                    body_preview = re.sub(r"<[^>]+>", "", msg.get("body_html") or "")[:2000] if msg.get("body_html") else (msg.get("body_text") or "")[:2000]
-                    note_content = f"Email linked: {subject}\nFrom: {from_addr}\n\n{body_preview[:2000]}"
-                    db.execute(
-                        "INSERT INTO history_events (opportunity_id, user_id, category, content, created_at) "
-                        "VALUES (%s, %s, %s, %s, NOW())",
-                        (int(opp_id), linked_by, "Email", note_content),
-                    )
-            _json_response(self, 200, {"ok": True, "linked": ok})
+            msg = db.query_one("SELECT subject, from_addr, body_html, body_text FROM mail_messages WHERE id = %s", (message_id,))
+            if msg:
+                from_addr = msg["from_addr"] or "Unknown"
+                subject = msg["subject"] or "(no subject)"
+                body_preview = re.sub(r"<[^>]+>", "", msg.get("body_html") or "")[:2000] if msg.get("body_html") else (msg.get("body_text") or "")[:2000]
+                note_content = f"Email linked: {subject}\nFrom: {from_addr}\n\n{body_preview[:2000]}"
+                db.execute(
+                    "INSERT INTO history_events (opportunity_id, user_id, category, content, created_at) "
+                    "VALUES (%s, %s, %s, %s, NOW())",
+                    (opp_id, linked_by, "Email", note_content),
+                )
+            _json_response(self, 200, {"ok": True, "linked": True})
         except Exception as e:
             logger.exception("Failed to link message %d", message_id)
             _json_response(self, 500, {"error": str(e)})
@@ -5342,12 +5373,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         try:
             payload = json.loads(_read_body(self) or b"{}")
             user = _require_auth(self)
+            folders_raw = payload.get("monitored_folders")
+            if isinstance(folders_raw, list):
+                folders_str = ",".join(folders_raw)
+            else:
+                folders_str = str(folders_raw or "INBOX")
             result = db.query_one(
                 """INSERT INTO mail_accounts
                    (email, imap_host, imap_port, password_encrypted, owner_user_id,
                     smtp_host, smtp_port, smtp_user, smtp_password_encrypted,
-                    smtp_use_tls, smtp_from_name, oauth_provider)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    smtp_use_tls, smtp_from_name, oauth_provider, monitored_folders)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
                     payload.get("email"),
@@ -5362,6 +5398,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     payload.get("smtp_use_tls", True),
                     payload.get("smtp_from_name"),
                     payload.get("oauth_provider"),
+                    folders_str,
                 ),
             )
             _json_response(self, 201, {"id": result["id"]})
@@ -5395,6 +5432,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if "sync_enabled" in payload:
                 fields.append("sync_enabled = %s")
                 params.append(bool(payload["sync_enabled"]))
+            if "monitored_folders" in payload:
+                raw = payload["monitored_folders"]
+                if isinstance(raw, list):
+                    raw = ",".join(raw)
+                fields.append("monitored_folders = %s")
+                params.append(str(raw))
             if not fields:
                 _json_response(self, 400, {"error": "No fields to update"})
                 return
@@ -5817,6 +5860,67 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             )
             _json_response(self, 200, {"attachments": rows})
         except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_attachment_download(self, message_id: int, attachment_id: int) -> None:
+        try:
+            att = db.query_one(
+                "SELECT * FROM mail_attachments WHERE id = %s AND message_id = %s",
+                (attachment_id, message_id),
+            )
+            if not att:
+                _json_response(self, 404, {"error": "Attachment not found"})
+                return
+            msg = db.query_one(
+                "SELECT m.imap_uid, m.folder, m.account_id FROM mail_messages m WHERE m.id = %s",
+                (message_id,),
+            )
+            if not msg:
+                _json_response(self, 404, {"error": "Message not found"})
+                return
+            acct = db.query_one(
+                "SELECT * FROM mail_accounts WHERE id = %s", (msg["account_id"],),
+            )
+            if not acct:
+                _json_response(self, 404, {"error": "Account not found"})
+                return
+            # Lazy-fetch attachment content from IMAP
+            try:
+                from imap_tools import MailBox
+                mailbox = MailBox(acct["imap_host"], port=acct["imap_port"])
+                mailbox.login(acct["email"], acct["password_encrypted"])
+                mailbox.folder.set(msg["folder"] or "INBOX")
+                uid = str(msg["imap_uid"])
+                msgs = list(mailbox.fetch(uid=uid, mark_seen=False, bulk=False))
+                if not msgs:
+                    _json_response(self, 404, {"error": "Message not found on IMAP server"})
+                    mailbox.logout()
+                    return
+                imap_msg = msgs[0]
+                content = None
+                part_id = str(att["imap_part_id"]) if att["imap_part_id"] else ""
+                for att_obj in (imap_msg.attachments or []):
+                    if part_id and str(att_obj.part or "") == part_id:
+                        content = att_obj.payload
+                        break
+                    if att_obj.filename == att["filename"]:
+                        content = att_obj.payload
+                mailbox.logout()
+                if content is None:
+                    _json_response(self, 404, {"error": "Attachment content not found on IMAP server"})
+                    return
+                # Stream binary content
+                self.send_response(200)
+                self.send_header("Content-Type", att["mime_type"] or "application/octet-stream")
+                self.send_header("Content-Disposition", f'attachment; filename="{att["filename"]}"')
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+            except Exception as imap_e:
+                logger.exception("IMAP fetch failed for attachment %d", attachment_id)
+                _json_response(self, 502, {"error": f"IMAP fetch failed: {imap_e}"})
+        except Exception as e:
+            logger.exception("Failed to download attachment %d", attachment_id)
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_message_headers(self, message_id: int) -> None:

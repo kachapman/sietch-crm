@@ -3831,16 +3831,19 @@ body {
     padding: 0;
   }
 
-  /* --- Fix 3: Icon-only action buttons --- */
+  /* --- Fix 3: Larger touch targets for action buttons --- */
   .opp-preview-mail-foot {
-    gap: 0.1rem;
-    padding: 0.05rem 0;
+    gap: 0.25rem;
+    padding: 0.1rem 0;
   }
   .opp-preview-mail-foot .btn {
-    padding: 0.15rem 0.3rem;
-    font-size: 0.72rem;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.85rem;
+    min-width: 36px;
+    min-height: 36px;
   }
   .opp-preview-mail-foot .btn .btn-label { display: none; }
+  .opp-preview-mail-foot .btn i { font-size: 1.1rem; }
 
   /* --- Fix 6: Toolbar overflow menu --- */
   .mail-toolbar .toolbar-overflow-btn { display: flex; }
@@ -4001,6 +4004,14 @@ body {
 .scanner-log .log-entry .log-msg {
   color: #c9d1d9;
 }
+.scanner-log .log-entry.log-feedback-pending {
+  border-left: 3px solid #d29922;
+  padding-left: 0.3rem;
+  margin-bottom: 0.15rem;
+  background: rgba(210, 153, 34, 0.05);
+  white-space: normal;
+  word-break: break-all;
+}
 .mail-viewer-warning-content {
   position: relative;
 }
@@ -4140,6 +4151,54 @@ body {
   font-weight: 500;
 }
 
+.mail-hover-popover {
+  position: fixed;
+  z-index: 10000;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  padding: 0.75rem;
+  max-width: 360px;
+  min-width: 240px;
+  pointer-events: none;
+}
+.mail-hover-from {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text);
+  margin-bottom: 0.2rem;
+}
+.mail-hover-subject {
+  font-size: 0.8rem;
+  color: var(--text);
+  margin-bottom: 0.15rem;
+  word-wrap: break-word;
+}
+.mail-hover-date {
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-bottom: 0.3rem;
+}
+.mail-hover-snippet {
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.4;
+  margin-bottom: 0.3rem;
+  word-wrap: break-word;
+}
+.mail-hover-tags {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+.mail-hover-tag {
+  font-size: 0.65rem;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+}
 .mail-item {
   border-bottom: 1px solid var(--border);
 }
@@ -11411,6 +11470,57 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+}
+
+/* ── Email preview modal ──────────────────────────────────────────────── */
+#email-preview-modal .modal-card {
+  max-width: 900px;
+  width: 95vw;
+  max-height: 90vh;
+}
+#email-preview-head > div {
+  line-height: 1.45;
+}
+#email-preview-head strong {
+  color: var(--text);
+  font-size: 0.85rem;
+}
+.email-preview-action .btn-label {
+  margin-left: 0.25rem;
+}
+#email-preview-attachments .mail-attachment-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  margin: 0.15rem 0.3rem 0.15rem 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.78rem;
+  cursor: pointer;
+  color: var(--text);
+  transition: background 0.15s;
+}
+#email-preview-attachments .mail-attachment-link:hover {
+  background: var(--hover);
+}
+#email-preview-attachments .mail-attachment-link a {
+  color: var(--accent);
+  text-decoration: none;
+}
+#email-preview-attachments .mail-attachment-link a:hover {
+  text-decoration: underline;
+}
+@media (max-width: 600px) {
+  #email-preview-modal .modal-card {
+    max-width: 100% !important;
+    width: 100% !important;
+    border-radius: 0;
+    max-height: 100vh;
+  }
+  #email-preview-modal { padding: 0; }
+  .email-preview-action .btn-label { display: none; }
+  .email-preview-action { min-width: 36px; min-height: 36px; }
 }
 
 /* ── Attachment list in compose ───────────────────────────────────────── */

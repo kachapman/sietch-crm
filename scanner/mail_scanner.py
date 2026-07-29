@@ -266,19 +266,22 @@ def _get_mailboxes() -> list[dict[str, Any]]:
     # Fall back to mail_accounts table
     try:
         rows = db.query_dicts(
-            "SELECT id, email, imap_host, imap_port, password_encrypted, sync_enabled "
+            "SELECT id, email, imap_host, imap_port, password_encrypted, sync_enabled, monitored_folders "
             "FROM mail_accounts WHERE sync_enabled = TRUE"
         )
         results = []
         for row in rows:
             if not row.get("imap_host") or not row.get("email"):
                 continue
+            raw = (row.get("monitored_folders") or "").strip()
+            folders = [f.strip() for f in raw.split(",") if f.strip()] if raw else ["INBOX"]
             results.append({
                 "host": row["imap_host"],
                 "port": int(row.get("imap_port", 993)),
                 "user": row["email"],
                 "password": row.get("password_encrypted", ""),
-                "inbox": "INBOX",
+                "inbox": folders[0],
+                "folders": folders,
                 "use_ssl": int(row.get("imap_port", 993)) == IMAP_PORT_SSL,
                 "account_id": row.get("id"),
             })
@@ -288,13 +291,13 @@ def _get_mailboxes() -> list[dict[str, Any]]:
         return []
 
 
-def _fetch_messages(mailbox_cfg: dict[str, Any], since: datetime | None = None) -> list[dict[str, Any]]:
+def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None, since: datetime | None = None) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     try:
         mailbox = MailBox(mailbox_cfg["host"], port=mailbox_cfg["port"])
         mailbox.login(mailbox_cfg["user"], mailbox_cfg["password"])
         
-        folder = mailbox_cfg.get("inbox", "INBOX")
+        folder = folder or mailbox_cfg.get("inbox", "INBOX")
         mailbox.folder.set(folder)
         
         criterion = {}
@@ -764,10 +767,13 @@ def _poll_mailboxes() -> list[dict[str, Any]]:
             if folder_count:
                 logger.info("Synced %d IMAP folders", folder_count)
             
-            msgs = _fetch_messages(cfg)
-            for msg in msgs:
-                result = _process_message(msg, cfg)
-                results.append(result)
+            folders = cfg.get("folders", [cfg.get("inbox", "INBOX")])
+            for folder in folders:
+                logger.info("Fetching folder %s for %s", folder, cfg["user"])
+                msgs = _fetch_messages(cfg, folder)
+                for msg in msgs:
+                    result = _process_message(msg, cfg)
+                    results.append(result)
         except Exception as e:
             logger.error("Polling error for %s: %s", cfg["host"], e)
 
@@ -888,8 +894,17 @@ def reprocess_conversations(conversation_ids: list[int]) -> list[dict[str, Any]]
     return results
 
 
-def retrain_classifier_head(mock_samples: int = 300, use_feedback: bool = True) -> dict[str, Any]:
-    return {"ok": False, "message": "ML retraining not fully implemented"}
+def retrain_classifier_head(mock_samples: int = 0, use_feedback: bool = True) -> dict[str, Any]:
+    try:
+        from .train_ml_head import train as _train_ml
+        result = _train_ml(mock_samples=mock_samples, use_feedback=use_feedback)
+        return result
+    except ImportError as e:
+        logger.warning("ML dependencies not available: %s", e)
+        return {"ok": False, "message": f"ML dependencies not installed: {e}"}
+    except Exception as e:
+        logger.exception("ML retraining failed")
+        return {"ok": False, "message": str(e)}
 
 
 if __name__ == "__main__":

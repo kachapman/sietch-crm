@@ -15425,6 +15425,10 @@ async function openComposeModal(opts = {}) {
   bindComposeEmailModal();
   modal.classList.remove('hidden');
 
+  // Clear save status
+  const statusEl = $('#compose-save-status');
+  if (statusEl) { statusEl.textContent = ''; }
+
   // Populate From dropdown
   const fromSelect = $('#compose-from-account');
   if (fromSelect && mailState.accounts.length > 0) {
@@ -15462,17 +15466,48 @@ async function openComposeModal(opts = {}) {
     input.dataset.autocompleteBound = '1';
     let contactT = null;
     let dropdown = null;
+    let highlightIndex = -1;
+
+    function removeDropdown() {
+      if (dropdown) { dropdown.remove(); dropdown = null; }
+      highlightIndex = -1;
+    }
+
+    function selectHighlighted() {
+      if (!dropdown || highlightIndex < 0) return;
+      const btns = dropdown.querySelectorAll('.contact-pick-btn');
+      if (highlightIndex >= btns.length) return;
+      const btn = btns[highlightIndex];
+      const parts = input.value.split(',');
+      parts[parts.length - 1] = btn.textContent.match(/<(.+?)>/)?.[1] || btn.textContent;
+      input.value = parts.join(', ');
+      removeDropdown();
+    }
+
+    function updateHighlight(direction) {
+      if (!dropdown) return;
+      const btns = dropdown.querySelectorAll('.contact-pick-btn');
+      if (!btns.length) return;
+      btns.forEach(b => b.classList.remove('selected'));
+      if (direction === 'down') {
+        highlightIndex = highlightIndex < btns.length - 1 ? highlightIndex + 1 : 0;
+      } else if (direction === 'up') {
+        highlightIndex = highlightIndex > 0 ? highlightIndex - 1 : btns.length - 1;
+      }
+      btns[highlightIndex].classList.add('selected');
+      btns[highlightIndex].scrollIntoView({ block: 'nearest' });
+    }
 
     input.addEventListener('input', () => {
       clearTimeout(contactT);
       contactT = setTimeout(async () => {
         const parts = input.value.split(',');
         const lastPart = parts[parts.length - 1].trim();
-        if (lastPart.length < 2) { if (dropdown) dropdown.remove(); return; }
+        if (lastPart.length < 2) { removeDropdown(); return; }
         try {
           const data = await api(`/api/v2/mail/contacts/search?q=${encodeURIComponent(lastPart)}`);
           const contacts = data.contacts || [];
-          if (dropdown) dropdown.remove();
+          removeDropdown();
           if (!contacts.length) return;
           dropdown = document.createElement('div');
           dropdown.className = 'mail-link-deal-dropdown';
@@ -15482,27 +15517,74 @@ async function openComposeModal(opts = {}) {
           ).join('');
           input.parentElement.style.position = 'relative';
           input.parentElement.appendChild(dropdown);
+          highlightIndex = 0;
+          const firstBtn = dropdown.querySelector('.contact-pick-btn');
+          if (firstBtn) firstBtn.classList.add('selected');
           dropdown.querySelectorAll('.contact-pick-btn').forEach(btn => {
             btn.addEventListener('click', () => {
+              const parts = input.value.split(',');
               parts[parts.length - 1] = btn.textContent.match(/<(.+?)>/)?.[1] || btn.textContent;
               input.value = parts.join(', ');
-              dropdown.remove();
-              dropdown = null;
+              removeDropdown();
             });
           });
-        } catch {}
+        } catch { removeDropdown(); }
       }, 300);
     });
+
+    input.addEventListener('keydown', (e) => {
+      if (!dropdown) return;
+      if (e.key === 'ArrowDown') { e.preventDefault(); updateHighlight('down'); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); updateHighlight('up'); }
+      else if (e.key === 'Enter') { e.preventDefault(); selectHighlighted(); }
+      else if (e.key === 'Escape') { e.preventDefault(); removeDropdown(); }
+    });
+
     document.addEventListener('click', (e) => {
       if (!input.contains(e.target) && dropdown && !dropdown.contains(e.target)) {
-        dropdown.remove();
-        dropdown = null;
+        removeDropdown();
       }
     });
   }
   setupContactAutocomplete('#compose-to');
   setupContactAutocomplete('#compose-cc');
   setupContactAutocomplete('#compose-bcc');
+
+  // Image paste/drag-drop in compose body
+  const composeBody = $('#compose-body');
+  if (composeBody && !composeBody.dataset.pasteBound) {
+    composeBody.dataset.pasteBound = '1';
+    composeBody.addEventListener('paste', (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith('image/')) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) {
+            if (file.size > 10 * 1024 * 1024) { showToast(`${file.name} exceeds 10MB limit`, true); continue; }
+            composeAttachments.push(file);
+            renderComposeAttachments();
+            showToast('Image attached: ' + file.name);
+          }
+          return;
+        }
+      }
+    });
+    composeBody.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const files = e.dataTransfer?.files;
+      if (!files || !files.length) return;
+      for (const file of files) {
+        if (file.type.startsWith('image/')) {
+          if (file.size > 10 * 1024 * 1024) { showToast(`${file.name} exceeds 10MB limit`, true); continue; }
+          composeAttachments.push(file);
+        }
+      }
+      if (files.length) renderComposeAttachments();
+    });
+  }
 
   // File upload handling
   const fileInput = $('#compose-attachments');
@@ -15523,9 +15605,11 @@ async function openComposeModal(opts = {}) {
 
   function renderComposeAttachments() {
     if (!attachmentList) return;
-    attachmentList.innerHTML = composeAttachments.map((f, i) =>
-      `<div class="compose-attachment-item"><i class="ti ti-paperclip"></i> ${escapeHtml(f.name)} <span style="color:var(--muted); font-size:0.75rem;">(${Math.round(f.size/1024)}KB)</span> <button type="button" class="btn btn-ghost btn-small compose-attach-remove" data-idx="${i}" style="padding:0 0.2rem;"><i class="ti ti-x"></i></button></div>`
-    ).join('');
+    attachmentList.innerHTML = composeAttachments.map((f, i) => {
+      const isImage = f.type && f.type.startsWith('image/');
+      const iconHtml = isImage ? '<i class="ti ti-photo" style="color:var(--accent);"></i>' : '<i class="ti ti-paperclip"></i>';
+      return `<div class="compose-attachment-item">${iconHtml} ${escapeHtml(f.name)} <span style="color:var(--muted); font-size:0.75rem;">(${Math.round(f.size/1024)}KB)</span> <button type="button" class="btn btn-ghost btn-small compose-attach-remove" data-idx="${i}" style="padding:0 0.2rem;"><i class="ti ti-x"></i></button></div>`;
+    }).join('');
     attachmentList.querySelectorAll('.compose-attach-remove').forEach(btn => {
       btn.addEventListener('click', () => {
         composeAttachments.splice(parseInt(btn.dataset.idx), 1);
@@ -15658,14 +15742,20 @@ async function openComposeModal(opts = {}) {
       const to = $('#compose-to')?.value.trim();
       const subject = $('#compose-subject')?.value.trim();
       const body = $('#compose-body')?.innerHTML || '';
+      const statusEl = $('#compose-save-status');
+      if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = 'var(--accent)'; }
       try {
         await api('/api/v2/mail/drafts', {
           method: 'POST',
           body: JSON.stringify({ account_id: accountId, to, subject, body })
         });
+        if (statusEl) { statusEl.textContent = 'Saved'; statusEl.style.color = '#3fb950'; }
         showToast('Draft saved');
         modal.classList.add('hidden');
-      } catch (e) { showToast('Failed to save draft: ' + e.message, true); }
+      } catch (e) {
+        if (statusEl) { statusEl.textContent = 'Save failed'; statusEl.style.color = '#f85149'; }
+        showToast('Failed to save draft: ' + e.message, true);
+      }
     });
   }
 
@@ -15772,6 +15862,14 @@ function openAccountSettingsModal(editAccountId) {
         $('#account-settings-smtp-host').value = acct.smtp_host || '';
         $('#account-settings-smtp-port').value = acct.smtp_port || 587;
         $('#account-settings-from-name').value = acct.smtp_from_name || '';
+        // Set folder checkboxes
+        const monitored = (acct.monitored_folders || 'INBOX').split(',').map(s => s.trim());
+        const folderContainer = $('#account-settings-folders');
+        if (folderContainer) {
+          folderContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+            cb.checked = monitored.includes(cb.value);
+          });
+        }
       }
     }).catch(() => {});
   } else {
@@ -15785,6 +15883,13 @@ function openAccountSettingsModal(editAccountId) {
     });
     $('#account-settings-imap-port').value = 993;
     $('#account-settings-smtp-port').value = 587;
+    // Reset folder checkboxes: only INBOX checked by default
+    const folderContainer = $('#account-settings-folders');
+    if (folderContainer) {
+      folderContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.checked = cb.value === 'INBOX';
+      });
+    }
   }
   
   // Bind dismiss
@@ -15798,6 +15903,8 @@ function openAccountSettingsModal(editAccountId) {
     saveBtn.dataset.bound = '1';
     saveBtn.addEventListener('click', async () => {
       const id = $('#account-settings-id').value;
+      const folderCbs = $('#account-settings-folders')?.querySelectorAll('input[type="checkbox"]:checked');
+      const folders = folderCbs ? Array.from(folderCbs).map(cb => cb.value) : ["INBOX"];
       const payload = {
         display_name: $('#account-settings-name').value.trim(),
         email: $('#account-settings-email').value.trim(),
@@ -15808,6 +15915,7 @@ function openAccountSettingsModal(editAccountId) {
         smtp_port: parseInt($('#account-settings-smtp-port').value) || 587,
         smtp_password: $('#account-settings-smtp-password').value,
         smtp_from_name: $('#account-settings-from-name').value.trim(),
+        monitored_folders: folders,
       };
       if (!payload.email || !payload.imap_host) { showToast('Email and IMAP host required', true); return; }
       try {
@@ -15885,14 +15993,19 @@ function bindComposeEmailModal() {
     if (!to && !subject && !body) return; // nothing to save
     if (current === lastAutoSaveContent) return; // no change
     lastAutoSaveContent = current;
+    const statusEl = $('#compose-save-status');
+    if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = 'var(--accent)'; }
     try {
       const accountId = parseInt($('#compose-from-account')?.value) || null;
       await api('/api/v2/mail/drafts', {
         method: 'POST',
         body: JSON.stringify({ account_id: accountId, to, subject, body })
       });
+      if (statusEl) { statusEl.textContent = 'Saved ' + new Date().toLocaleTimeString('en-US', {hour12:false, hour:'2-digit', minute:'2-digit'}); statusEl.style.color = '#3fb950'; }
       showToast('Draft auto-saved');
-    } catch { /* silent */ }
+    } catch {
+      if (statusEl) { statusEl.textContent = 'Save failed'; statusEl.style.color = '#f85149'; }
+    }
   }, 30000);
 }
 
@@ -16183,6 +16296,7 @@ function attachMailModalListeners() {
       if (!dealId || !mailState.selected.size) return;
       const ids = Array.from(mailState.selected);
       let ok = 0;
+      let lastErr = '';
       for (const mid of ids) {
         try {
           await api(`/api/v2/mail/messages/${mid}/link`, {
@@ -16191,10 +16305,17 @@ function attachMailModalListeners() {
           });
           ok++;
         } catch (e) {
-          console.warn('[mail-inbox] link failed for', mid, e);
+          lastErr = e.message || e.error || 'unknown error';
+          console.warn('[mail-inbox] link failed for', mid, lastErr);
         }
       }
-      showToast(ok ? `Linked ${ok} email(s) to deal` : "Link failed (see console)");
+      if (ok === ids.length) {
+        showToast(`Linked ${ok} email(s) to deal`);
+      } else if (ok > 0) {
+        showToast(`Linked ${ok}/${ids.length} — errors: ${lastErr}`, true);
+      } else {
+        showToast(`Link failed: ${lastErr}`, true);
+      }
       const idsToMark = Array.from(mailState.selected);
       for (const mid of idsToMark) {
         await markMailMessageRead(mid).catch(() => {});
@@ -17195,6 +17316,48 @@ function renderMailList(msgs) {
       expBtn.click();
     });
 
+    // Rich hover popover (disabled on mobile/touch)
+    let hoverTimer = null;
+    let popover = null;
+    item.addEventListener('mouseenter', () => {
+      if (window.innerWidth <= 600 || matchMedia('(pointer:coarse)').matches) return;
+      clearTimeout(hoverTimer);
+      hoverTimer = setTimeout(() => {
+        if (popover) popover.remove();
+        popover = document.createElement('div');
+        popover.className = 'mail-hover-popover';
+        const senderName = from;
+        const fullSubj = subj;
+        const snippetText = (m.body_text || m.snippet || '').replace(/<[^>]+>/g, '').trim().slice(0, 200);
+        const tagHtml = (m.tags && m.tags.length) ? m.tags.map(t => `<span class="mail-hover-tag">${escapeHtml(t)}</span>`).join('') : '';
+        popover.innerHTML = `
+          <div class="mail-hover-from">${escapeHtml(senderName)}</div>
+          <div class="mail-hover-subject">${escapeHtml(fullSubj)}</div>
+          <div class="mail-hover-date">${escapeHtml(dateStr)}</div>
+          ${snippetText ? `<div class="mail-hover-snippet">${escapeHtml(snippetText)}</div>` : ''}
+          ${tagHtml ? `<div class="mail-hover-tags">${tagHtml}</div>` : ''}
+        `;
+        document.body.appendChild(popover);
+        const rect = row.getBoundingClientRect();
+        const popRect = popover.getBoundingClientRect();
+        let left = rect.right + 8;
+        let top = rect.top;
+        if (left + popRect.width > window.innerWidth - 8) {
+          left = rect.left - popRect.width - 8;
+        }
+        if (top + popRect.height > window.innerHeight - 8) {
+          top = window.innerHeight - popRect.height - 8;
+        }
+        if (top < 8) top = 8;
+        popover.style.left = left + 'px';
+        popover.style.top = top + 'px';
+      }, 500);
+    });
+    item.addEventListener('mouseleave', () => {
+      clearTimeout(hoverTimer);
+      if (popover) { popover.remove(); popover = null; }
+    });
+
     // Note: attachments display handled inside renderMailEmbedPanel (expanded view)
 
     const detail = document.createElement("div");
@@ -17218,56 +17381,14 @@ function renderMailList(msgs) {
         } catch (err) { showToast('Failed to load draft: ' + err.message, true); }
         return;
       }
-      // Fetch once, then branch mobile/desktop
-      const isMobile = window.innerWidth <= 600;
-      let fullMail;
-      try {
-        fullMail = await fetchMailMessage(id);
-      } catch (err) {
-        if (isMobile) showToast('Failed to load: ' + err.message, true);
-        else detail.innerHTML = `<div class="mail-empty">Failed to load: ${escapeHtml(err.message || err)}</div>`;
-        return;
-      }
-      if (getMailMessageIsRead(fullMail)) {
+      // Open the full email preview modal
+      if (getMailMessageIsRead(m)) {
         mailDashboardReadIds.add(id);
         saveMailDashboardReadIds();
       }
       markMailMessageRead(id).catch(() => {});
       row.classList.add('mail-row-read');
-
-      if (isMobile) {
-        // Mobile: full-screen overlay
-        const overlay = document.createElement('div');
-        overlay.className = 'mail-mobile-email-overlay';
-        const backHeader = document.createElement('div');
-        backHeader.style.cssText = 'display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.6rem; border-bottom:1px solid var(--border); background:var(--surface); flex-shrink:0;';
-        backHeader.innerHTML = '<button class="btn btn-ghost btn-small" id="mail-mobile-back"><i class="ti ti-arrow-left"></i><span class="btn-label"> Back</span></button><span style="font-weight:600; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(fullMail.subject || fullMail.Subject || '') + '</span>';
-        overlay.appendChild(backHeader);
-        const content = document.createElement('div');
-        content.style.cssText = 'flex:1; overflow-y:auto; padding:0.5rem;';
-        const embed = document.createElement('div');
-        embed.className = 'opp-preview-mail-embed';
-        content.appendChild(embed);
-        overlay.appendChild(content);
-        document.body.appendChild(overlay);
-        renderMailEmbedPanel(embed, fullMail, id, { openUrl: portalMailMessageUrl(id) });
-        backHeader.querySelector('#mail-mobile-back').addEventListener('click', () => overlay.remove());
-        const closeH = (ev) => { if (ev.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', closeH); } };
-        document.addEventListener('keydown', closeH);
-        return;
-      }
-
-      // Desktop: inline expansion
-      const isHidden = detail.classList.contains("hidden");
-      detail.classList.toggle("hidden");
-      if (!isHidden) return;
-      if (item._mailLoaded) return;
-      item._mailLoaded = true;
-      detail.innerHTML = "";
-      const embed = document.createElement("div");
-      embed.className = "opp-preview-mail-embed";
-      detail.appendChild(embed);
-      renderMailEmbedPanel(embed, fullMail, id, { openUrl: portalMailMessageUrl(id) });
+      openEmailPreviewModal(id);
     });
 
     list.appendChild(item);
@@ -18516,6 +18637,186 @@ function renderHistoryNoteBody(container, ev) {
   container.textContent = raw;
 }
 
+function openEmailPreviewModal(messageId) {
+  const modal = $('#email-preview-modal');
+  if (!modal) return;
+  const fullMailPromise = fetchMailMessage(messageId);
+
+  // Bind dismiss
+  const close = () => modal.classList.add('hidden');
+  modal.querySelectorAll('[data-email-preview-dismiss]').forEach(el => el.addEventListener('click', close, { once: true }));
+  const escH = (e) => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', escH); } };
+  document.addEventListener('keydown', escH);
+
+  modal.classList.remove('hidden');
+
+  // Set title
+  const titleEl = $('#email-preview-title');
+  if (titleEl) titleEl.textContent = 'Loading...';
+
+  const headEl = $('#email-preview-head');
+  const bodyEl = $('#email-preview-body');
+  const attEl = $('#email-preview-attachments');
+  const linkedEl = $('#email-preview-linked');
+  const replyArea = $('#email-preview-reply-area');
+
+  fullMailPromise.then(fullMail => {
+    if (!fullMail) {
+      if (titleEl) titleEl.textContent = 'Failed to load email';
+      return;
+    }
+    const norm = normalizeMailMessage(fullMail);
+    if (!norm) {
+      if (titleEl) titleEl.textContent = 'Could not parse email';
+      return;
+    }
+    const subject = norm.subject || fullMail.subject || '(no subject)';
+    if (titleEl) titleEl.textContent = subject;
+
+    // Header info
+    if (headEl) {
+      const from = norm.from || fullMail.from_addr || 'unknown';
+      const to = norm.toList || fullMail.to_addr || '';
+      const date = norm.date || fullMail.date_received || '';
+      headEl.innerHTML = `
+        <div><strong>${escapeHtml(subject)}</strong></div>
+        <div>From: ${escapeHtml(from)}</div>
+        ${to ? `<div>To: ${escapeHtml(to)}</div>` : ''}
+        ${date ? `<div>${escapeHtml(formatPreviewDateTime(date) || date)}</div>` : ''}
+      `;
+    }
+
+    // Body
+    if (bodyEl) {
+      const bodyPick = pickMailBodyForDisplay(norm, { allowIntroFallback: false });
+      if (bodyPick.mode === 'html' && bodyPick.content) {
+        bodyEl.innerHTML = '';
+        const iframe = document.createElement('iframe');
+        iframe.className = 'opp-preview-mail-iframe';
+        iframe.setAttribute('sandbox', 'allow-same-origin');
+        iframe.setAttribute('title', 'Email body');
+        iframe.srcdoc = mailBodyIframeSrcdoc(bodyPick.content);
+        iframe.addEventListener('load', () => {
+          try {
+            const doc = iframe.contentDocument;
+            if (!doc || !doc.body) return;
+            const h = doc.body.scrollHeight;
+            if (h > 10) iframe.style.height = Math.min(Math.max(h + 4, 40), 2000) + 'px';
+          } catch {}
+        });
+        bodyEl.appendChild(iframe);
+      } else if (bodyPick.mode === 'text' && bodyPick.content) {
+        bodyEl.innerHTML = `<pre class="opp-preview-mail-text" style="max-height:70vh;overflow:auto;">${escapeHtml(bodyPick.content)}</pre>`;
+      } else {
+        bodyEl.innerHTML = '<p class="opp-preview-empty">No readable message body available.</p>';
+      }
+    }
+
+    // Attachments
+    if (attEl) {
+      const atts = Array.isArray(fullMail.attachments) ? fullMail.attachments : [];
+      if (atts.length) {
+        attEl.innerHTML = '<strong style="font-size:0.78rem;">Attachments:</strong> ';
+        atts.forEach(a => {
+          const aid = a.id || a.attachment_id;
+          const fileName = a.filename || a.fileName || 'file';
+          const sizeBytes = a.size_bytes || a.size || 0;
+          const fileSize = sizeBytes > 1024 * 1024 ? ` (${(sizeBytes / 1024 / 1024).toFixed(1)} MB)` : sizeBytes > 1024 ? ` (${Math.round(sizeBytes / 1024)} KB)` : sizeBytes ? ` (${sizeBytes} B)` : '';
+          const wrap = document.createElement('span');
+          wrap.className = 'mail-attachment-link';
+          if (aid) {
+            const link = document.createElement('a');
+            link.href = '#';
+            link.textContent = fileName + fileSize;
+            link.addEventListener('click', (e) => {
+              e.preventDefault();
+              const dlUrl = `/api/v2/mail/messages/${encodeURIComponent(messageId)}/attachments/${aid}/download`;
+              window.open(dlUrl, '_blank');
+            });
+            wrap.appendChild(link);
+          } else {
+            wrap.textContent = fileName + fileSize;
+          }
+          attEl.appendChild(wrap);
+          attEl.appendChild(document.createTextNode(' '));
+        });
+      } else {
+        attEl.innerHTML = '';
+      }
+    }
+
+    // Linked deals
+    if (linkedEl) {
+      const links = fullMail.linked_deals || [];
+      if (links.length) {
+        linkedEl.innerHTML = '<span style="font-weight:600;">Linked deals:</span> ' +
+          links.map(l => `<span style="background:var(--accent-subtle);padding:1px 6px;border-radius:3px;margin:0 0.15rem;">${escapeHtml(l.opportunity_title || l.title)}</span>`).join('') +
+          ' <button type="button" class="btn btn-ghost btn-small" onclick="searchDealsForMailLink(\'\')" style="font-size:0.72rem;padding:0.1rem 0.3rem;"><i class="ti ti-link"></i> Link to deal</button>';
+      }
+    }
+
+    // Action buttons
+    modal.querySelectorAll('.email-preview-action').forEach(btn => {
+      const action = btn.dataset.action;
+      btn.addEventListener('click', () => {
+        if (action === 'reply' || action === 'reply-all' || action === 'forward') {
+          renderInlineReply(replyArea || modal.querySelector('#email-preview-reply-area'), action, messageId, norm);
+        } else if (action === 'note') {
+          const bodyText = (norm.textBody || norm.body_text || '').replace(/<[^>]+>/g, '').trim().slice(0, 2000);
+          const noteContent = `<p><b>Email from: ${escapeHtml(norm.from || fullMail.from_addr || 'unknown')}</b><br>Subject: ${escapeHtml(subject)}</p><hr><p>${escapeHtml(bodyText)}</p>`;
+          // Try inline note editor first
+          const editorWrap = $('#email-preview-body')?.closest('#opp-preview-body')?.querySelector('.preview-note-editor-wrap');
+          if (editorWrap) {
+            editorWrap.classList.add('active');
+            const ed = editorWrap.querySelector('.note-editor');
+            if (ed) { ed.innerHTML = noteContent; ed.focus(); }
+          } else {
+            openComposeModal({ subject: 'Note: ' + subject, body: noteContent, title: 'Compose Note' });
+          }
+        } else if (action === 'archive') {
+          api(`/api/v2/mail/messages/${encodeURIComponent(messageId)}/move`, { method: 'POST', body: JSON.stringify({ folder: 'Archive' }) })
+            .then(() => { showToast('Archived'); close(); })
+            .catch(e => showToast('Archive failed: ' + e.message, true));
+        }
+      });
+    });
+
+    // Print button
+    const printBtn = $('#email-preview-print');
+    if (printBtn) {
+      printBtn.addEventListener('click', () => {
+        const content = $('#email-preview-body')?.innerHTML || '';
+        const w = window.open('', '', 'width=800,height=600');
+        if (w) {
+          w.document.write(`<html><head><style>body{font-family:sans-serif;padding:1rem;color:#000;background:#fff;}pre{white-space:pre-wrap;}</style></head><body>${content}</body></html>`);
+          w.document.close();
+          w.print();
+        }
+      });
+    }
+
+    // View headers button
+    const hdrBtn = $('#email-pview-headers');
+    if (hdrBtn) {
+      hdrBtn.addEventListener('click', async () => {
+        try {
+          const data = await api(`/api/v2/mail/messages/${messageId}/headers`);
+          const hdrText = data.headers || 'No headers available';
+          const w = window.open('', '', 'width=700,height=500');
+          if (w) {
+            w.document.write(`<html><head><style>body{font-family:monospace;font-size:0.75rem;padding:1rem;white-space:pre-wrap;color:#000;background:#fff;}</style></head><body>${escapeHtml(hdrText)}</body></html>`);
+            w.document.close();
+          }
+        } catch (e) { showToast('Failed to load headers: ' + e.message, true); }
+      });
+    }
+
+  }).catch(err => {
+    if (titleEl) titleEl.textContent = 'Failed to load email';
+    showToast('Failed to load email: ' + (err.message || err), true);
+  });
+}
+
 async function fetchMailMessage(messageId) {
   const data = await api(`/api/v2/mail/messages/${messageId}`);
   return data;
@@ -18759,6 +19060,37 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
     renderInlineReply(panel, "forward", messageId, norm);
   });
   actionBtns.appendChild(fwdBtn);
+
+  const noteBtn = document.createElement("button");
+  noteBtn.type = "button";
+  noteBtn.className = "btn btn-ghost btn-small";
+  noteBtn.title = "Create note from this email";
+  noteBtn.innerHTML = '<i class="ti ti-note"></i><span class="btn-label"> Note</span>';
+  noteBtn.addEventListener("click", () => {
+    const subject = norm.subject || crmPayload?.subject || "(no subject)";
+    const from = norm.from || crmPayload?.from || "unknown";
+    const date = norm.date || crmPayload?.date || "";
+    const bodyText = (norm.body_text || norm.snippet || "").replace(/<[^>]+>/g, '').trim().slice(0, 2000);
+    const noteContent = `<p><b>Email from: ${escapeHtml(from)}</b><br>Subject: ${escapeHtml(subject)}${date ? '<br>Date: ' + escapeHtml(date) : ''}</p><hr><p>${escapeHtml(bodyText)}</p>`;
+    const editorWrap = panel.closest('#opp-preview-body')?.querySelector('.preview-note-editor-wrap');
+    if (editorWrap) {
+      editorWrap.classList.add('active');
+      const ed = editorWrap.querySelector('.note-editor');
+      if (ed) {
+        ed.innerHTML = noteContent;
+        ed.focus();
+        editorWrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    } else {
+      // Outside opp preview — open compose modal prefilled
+      openComposeModal({
+        subject: 'Note: ' + subject,
+        body: noteContent,
+        title: 'Compose Note',
+      });
+    }
+  });
+  actionBtns.appendChild(noteBtn);
 
   const archiveBtn = document.createElement("button");
   archiveBtn.type = "button";
@@ -22070,15 +22402,21 @@ async function populateEmailScannerTab() {
       if (!accounts.length) {
         acctList.innerHTML = '<p style="color:var(--muted);font-size:0.85rem;">No IMAP accounts configured.</p>';
       } else {
-        acctList.innerHTML = accounts.map(a => `
-          <div style="padding:4px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
-            <span>${escapeHtml(a.email || '')} — ${escapeHtml(a.imap_host || '')}:${a.imap_port || 993}</span>
-            <span style="display:flex; gap:0.3rem; align-items:center;">
-              <span style="font-size:0.75rem; color:${a.sync_enabled ? 'var(--accent)' : 'var(--muted)'};">${a.sync_enabled ? '● Active' : '○ Disabled'}</span>
+        acctList.innerHTML = accounts.map(a => {
+          const monitoredFolders = (a.monitored_folders || 'INBOX').split(',').map(s => s.trim()).filter(Boolean);
+          const folderStr = monitoredFolders.length ? monitoredFolders.join(', ') : 'INBOX';
+          return `
+          <div style="padding:4px 0; border-bottom:1px solid var(--border);">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <span>${escapeHtml(a.email || '')} — ${escapeHtml(a.imap_host || '')}:${a.imap_port || 993}</span>
+              <span style="display:flex; gap:0.3rem; align-items:center;">
+                <span style="font-size:0.75rem; color:${a.sync_enabled ? 'var(--accent)' : 'var(--muted)'};">${a.sync_enabled ? '● Active' : '○ Disabled'}</span>
               <button type="button" class="btn btn-ghost btn-sm scanner-acct-edit" data-id="${a.id}" style="font-size:0.75rem;"><i class="ti ti-pencil"></i></button>
               <button type="button" class="btn btn-ghost btn-sm scanner-acct-delete" data-id="${a.id}" data-email="${escapeHtml(a.email || '')}" style="font-size:0.75rem; color:var(--danger);"><i class="ti ti-trash"></i></button>
             </span>
-          </div>`).join("");
+            </div>
+            <div style="font-size:0.7rem; color:var(--muted); margin-top:0.15rem;">Folders: ${escapeHtml(folderStr)}</div>
+          </div>`}).join("");
         acctList.querySelectorAll(".scanner-acct-edit").forEach(btn => {
           btn.addEventListener("click", () => openAccountSettingsModal(parseInt(btn.dataset.id)));
         });
@@ -22117,24 +22455,103 @@ async function populateEmailScannerTab() {
     } catch { /* toggles default unchecked */ }
   }
 
-  // Log
+  // Log + feedback review
   const logList = $("#scanner-log-list");
   if (logList) {
     try {
-      const data = await api("/api/v2/mail/log?limit=50");
-      const entries = data.entries || [];
-      if (!entries.length) {
-        logList.innerHTML = '<div style="color:#484f58;">$ tail -f scanner.log<br>No entries yet.</div>';
-      } else {
-        logList.innerHTML = entries.slice().reverse().map(e => {
+      const [logData, feedbackData] = await Promise.all([
+        api("/api/v2/mail/log?limit=50"),
+        api("/api/v2/mail/feedback").catch(() => ({ entries: [] }))
+      ]);
+      const entries = logData.entries || [];
+      const allFeedback = feedbackData.entries || [];
+      const pendingFeedback = allFeedback.filter(f => f.status !== 'reviewed');
+
+      let html = '';
+
+      if (pendingFeedback.length) {
+        html += '<div style="color:var(--warning); font-size:0.75rem; padding:0.15rem 0; border-bottom:1px solid var(--border); margin-bottom:0.25rem;">─── PENDING REVIEW (' + pendingFeedback.length + ') ───</div>';
+        pendingFeedback.forEach((f, i) => {
+          const ts = f.timestamp ? new Date(f.timestamp).toLocaleString() : '';
+          const subj = (f.subject || '').slice(0, 50);
+          const from = f.from ? ` <${f.from}>` : '';
+          const classification = f.classification || 'unknown';
+          const confidence = f.match_strength ? ` (${f.match_strength})` : '';
+          html += `<div class="log-entry log-feedback-pending">
+            <span class="log-ts">[${escapeHtml(ts)}]</span>
+            <span class="log-status" style="color:var(--warning);">PENDING</span>
+            <span class="log-msg">${escapeHtml(subj)}${escapeHtml(from)}</span>
+            <div style="font-size:0.7rem; color:var(--muted); margin-top:0.15rem;">
+              Classification: ${escapeHtml(classification)}${escapeHtml(confidence)}
+              <button type="button" class="btn btn-ghost btn-sm fb-approve" data-fb-idx="${i}" style="font-size:0.7rem; color:#3fb950; padding:0.1rem 0.3rem; min-width:auto;">✓ Approve</button>
+              <button type="button" class="btn btn-ghost btn-sm fb-reject" data-fb-idx="${i}" style="font-size:0.7rem; color:#f85149; padding:0.1rem 0.3rem; min-width:auto;">✗ Reject</button>
+            </div>
+          </div>`;
+        });
+        html += '<div style="height:0.25rem;"></div>';
+      }
+
+      if (!entries.length && !pendingFeedback.length) {
+        html = '<div style="color:#484f58;">$ tail -f scanner.log<br>No entries yet.</div>';
+      } else if (entries.length) {
+        html += entries.slice().reverse().map(e => {
           const ts = e.timestamp ? new Date(e.timestamp).toLocaleTimeString('en-US', {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'}) : '--:--:--';
           const status = (e.status || 'unknown').toUpperCase();
           const cls = e.status === 'processed' ? 'log-processed' : e.status === 'error' ? 'log-error' : e.status === 'skipped' || e.status === 'already_processed' ? 'log-skipped' : e.classification && e.classification.startsWith('rule_') ? 'log-rule' : '';
           const subj = (e.subject || '').slice(0, 50);
           const from = e.from ? ` <${e.from}>` : '';
           return `<div class="log-entry ${cls}"><span class="log-ts">[${ts}]</span> <span class="log-status">${escapeHtml(status)}</span> <span class="log-msg">${escapeHtml(subj)}${escapeHtml(from)}</span></div>`;
-        }).join("");
+        }).join('');
       }
+
+      logList.innerHTML = html;
+
+      logList.querySelectorAll('.fb-approve').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const idx = parseInt(btn.dataset.fbIdx);
+          const fb = pendingFeedback[idx];
+          if (!fb) return;
+          try {
+            await api(`/api/v2/mail/feedback/${idx}/review`, {
+              method: 'POST',
+              body: JSON.stringify({
+                approved: true,
+                subject: fb.subject || '',
+                sender: fb.from || '',
+                classification: fb.classification || '',
+                project_id: fb.linked_deal_id || null,
+                action_type: fb.action || ''
+              })
+            });
+            showToast('Feedback approved — added to training data');
+            populateEmailScannerTab();
+          } catch (e) { showToast('Failed: ' + e.message, true); }
+        });
+      });
+      logList.querySelectorAll('.fb-reject').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const idx = parseInt(btn.dataset.fbIdx);
+          const fb = pendingFeedback[idx];
+          if (!fb) return;
+          try {
+            await api(`/api/v2/mail/feedback/${idx}/review`, {
+              method: 'POST',
+              body: JSON.stringify({
+                approved: false,
+                subject: fb.subject || '',
+                sender: fb.from || '',
+                classification: fb.classification || '',
+                project_id: fb.linked_deal_id || null,
+                action_type: fb.action || ''
+              })
+            });
+            showToast('Feedback rejected');
+            populateEmailScannerTab();
+          } catch (e) { showToast('Failed: ' + e.message, true); }
+        });
+      });
     } catch (e) {
       logList.innerHTML = `<div style="color:#f85149;">$ ERROR: ${escapeHtml(e.message)}</div>`;
     }
@@ -22248,14 +22665,15 @@ function bindScannerAdminButtons() {
       const host = $("#scanner-acct-host")?.value.trim();
       const port = parseInt($("#scanner-acct-port")?.value) || 993;
       const password = $("#scanner-acct-password")?.value;
-      const folder = $("#scanner-acct-folder")?.value.trim() || "INBOX";
+      const folderCbs = $("#scanner-acct-folders")?.querySelectorAll('input[type="checkbox"]:checked');
+      const folders = folderCbs ? Array.from(folderCbs).map(cb => cb.value) : ["INBOX"];
       const smtpHost = $("#scanner-acct-smtp-host")?.value.trim() || null;
       const smtpPort = parseInt($("#scanner-acct-smtp-port")?.value) || 587;
       const smtpPassword = $("#scanner-acct-smtp-password")?.value || null;
       const fromName = $("#scanner-acct-from-name")?.value.trim() || null;
       if (!email || !host || !password) { showToast("Email, IMAP host, and password required", true); return; }
       try {
-        const payload = { email, imap_host: host, imap_port: port, password, folder };
+        const payload = { email, imap_host: host, imap_port: port, password, monitored_folders: folders };
         if (smtpHost) {
           payload.smtp_host = smtpHost;
           payload.smtp_port = smtpPort;

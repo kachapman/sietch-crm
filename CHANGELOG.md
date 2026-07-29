@@ -2,6 +2,29 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — Email Bug Fixes & Preview Modal (2026-07-28)
+
+- **Email link error handling improved.** Server now validates that `opportunityId` is valid integer and that the opportunity exists before linking. Returns specific error messages (400 for bad ID, 404 if opportunity not found, 500 if DB error). Frontend surfaces the actual server error in the toast instead of generic "see console".
+- **Hover popover disabled on mobile.** Mouseenter handler now checks `window.innerWidth <= 600` and `matchMedia('(pointer:coarse)')` before creating popover. Prevents cut-off popover on mobile email view.
+- **Mobile action buttons enlarged.** Reply, Reply All, Forward, Note buttons now have `min-width: 36px; min-height: 36px; font-size: 0.85rem` on mobile (≤600px). Labels hidden but icons are larger (1.1rem). Touch targets 2x previous size.
+- **Note button fallback to compose modal.** When the inline note editor is not available (e.g., viewing email from inbox list), the "Note" button now opens the compose modal pre-filled with "Note: [original subject]" as subject and the email content (from, subject, body) as HTML body.
+- **Full email preview popup modal.** New modal (`#email-preview-modal`) replaces both the mobile overlay and desktop inline expansion. Shows full email header (from/to/date/subject), body (HTML iframe or text), attachments with download links, linked deal badges. Toolbar: Reply, Reply All, Forward, Note, Archive, Print, View Headers. Action buttons work directly in the modal. Modal is responsive (full-screen on mobile).
+- **Attachment download endpoint.** New `GET /api/v2/mail/messages/{id}/attachments/{aid}/download` endpoint. Lazy-fetches attachment content from IMAP server using `imap_tools.MailBox`, extracts the specific part by `imap_part_id`, streams binary response with proper Content-Type/Content-Disposition headers.
+- **Expand button repurposed.** Clicking an email in the inbox now opens the full preview modal instead of inline expansion (desktop) or full-screen overlay (mobile). Drafts still open in compose modal.
+- **Image paste/drag-drop in compose.** Pasting images from clipboard into the compose body now detects them and adds to attachments. Dropping image files onto the compose body also adds them. Both show toast confirmation. Image attachments show photo icon (instead of paperclip) in the attachment list.
+- **Files:** `public/app.js`, `public/index.html`, `public/styles.css`, `server.py`.
+
+## Phase 3 — Email & Scanner Final Features (2026-07-28)
+
+- **Drafts auto-save visual indicator.** Green "Saved" text + timestamp in compose footer after auto-save; "Saving…" during request; red "Save failed" on error. Clears on modal open.
+- **Contact autocomplete keyboard nav.** Arrow Up/Down cycles through dropdown (wraps around, auto-scrolls into view); Enter selects highlighted; Escape dismisses. First result auto-highlighted.
+- **Rich email hover popover.** 500ms-delayed card showing sender, full subject, date, body snippet, and tags. Appears right of message row (flips left near edge). CSS: `.mail-hover-popover` with shadow, border-radius, pointer-events:none.
+- **Create note from email preview.** "Note" button in email action footer pre-fills the deal history note editor with email content (from, subject, date, body). Scrolls to editor and focuses it.
+- **Feedback review inline in scanner log.** Scanner admin log now fetches `GET /api/v2/mail/feedback` and shows pending entries with amber left border, classification, and ✓ Approve / ✗ Reject buttons. Approve inserts into `classifier_training_data`. Reject marks as read. Refreshes the tab on action.
+- **Multi-select folder picker for scanner accounts.** Replaced single `Folder` text input with checkbox picker (INBOX, Sent, Drafts, Spam, Trash, Archive) in both quick-add form and account settings modal. New `monitored_folders TEXT DEFAULT 'INBOX'` column on `mail_accounts`. Scanner polls each checked folder. Account display shows monitored folders list.
+- **ML training wired.** `retrain_classifier_head()` stub replaced with call to `train_ml_head.train()`. Gracefully returns error message if ML deps not installed. Dockerfile includes optional `sentence-transformers scikit-learn numpy` install.
+- **Files:** `public/app.js`, `public/index.html`, `public/styles.css`, `scanner/mail_scanner.py`, `scanner/train_ml_head.py`, `server.py`, `Dockerfile`, `init.sql`.
+
 ## Phase 3 — Final Polish & Bug Fixes (2026-07-28)
 
 - **Duplicate folders fixed (root cause).** Database had 12 rows (two identical sets of 6 system folders). Cleaned to 6 rows. Added missing columns (`imap_account_id`, `folder_type`, `imap_path`, `last_sync`) to `mail_folders` table. Server uses `DISTINCT ON (name)` to prevent future duplicates.
