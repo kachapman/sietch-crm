@@ -19175,39 +19175,28 @@ function openEmailPreviewModal(messageId) {
           api(`/api/v2/mail/messages/${encodeURIComponent(messageId)}/move`, { method: 'POST', body: JSON.stringify({ folder: 'Archive' }) })
             .then(() => { showToast('Archived'); close(); })
             .catch(e => showToast('Archive failed: ' + e.message, true));
+        } else if (action === 'headers') {
+          api(`/api/v2/mail/messages/${messageId}/headers`)
+            .then(data => {
+              const hdrText = data.headers || 'No headers available';
+              const w = window.open('', '', 'width=700,height=500');
+              if (w) {
+                w.document.write(`<html><head><style>body{font-family:monospace;font-size:0.75rem;padding:1rem;white-space:pre-wrap;color:#000;background:#fff;}</style></head><body>${escapeHtml(hdrText)}</body></html>`);
+                w.document.close();
+              }
+            })
+            .catch(e => showToast('Failed to load headers: ' + e.message, true));
+        } else if (action === 'print') {
+          const content = $('#email-preview-body')?.innerHTML || '';
+          const w = window.open('', '', 'width=800,height=600');
+          if (w) {
+            w.document.write(`<html><head><style>body{font-family:sans-serif;padding:1rem;color:#000;background:#fff;}pre{white-space:pre-wrap;}</style></head><body>${content}</body></html>`);
+            w.document.close();
+            w.print();
+          }
         }
       });
     });
-
-    // Print button
-    const printBtn = $('#email-preview-print');
-    if (printBtn) {
-      printBtn.addEventListener('click', () => {
-        const content = $('#email-preview-body')?.innerHTML || '';
-        const w = window.open('', '', 'width=800,height=600');
-        if (w) {
-          w.document.write(`<html><head><style>body{font-family:sans-serif;padding:1rem;color:#000;background:#fff;}pre{white-space:pre-wrap;}</style></head><body>${content}</body></html>`);
-          w.document.close();
-          w.print();
-        }
-      });
-    }
-
-    // View headers button
-    const hdrBtn = $('#email-pview-headers');
-    if (hdrBtn) {
-      hdrBtn.addEventListener('click', async () => {
-        try {
-          const data = await api(`/api/v2/mail/messages/${messageId}/headers`);
-          const hdrText = data.headers || 'No headers available';
-          const w = window.open('', '', 'width=700,height=500');
-          if (w) {
-            w.document.write(`<html><head><style>body{font-family:monospace;font-size:0.75rem;padding:1rem;white-space:pre-wrap;color:#000;background:#fff;}</style></head><body>${escapeHtml(hdrText)}</body></html>`);
-            w.document.close();
-          }
-        } catch (e) { showToast('Failed to load headers: ' + e.message, true); }
-      });
-    }
 
   }).catch(err => {
     if (titleEl) titleEl.textContent = 'Failed to load email';

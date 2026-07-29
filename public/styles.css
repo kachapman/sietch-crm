@@ -11519,7 +11519,8 @@ body {
     max-height: 100vh;
   }
   #email-preview-modal { padding: 0; }
-  .email-preview-action .btn-label { display: none; }
+  .email-preview-action[data-action="reply"] .btn-label,
+  .email-preview-action[data-action="forward"] .btn-label { display: none; }
   .email-preview-action { min-width: 36px; min-height: 36px; }
 }
 
