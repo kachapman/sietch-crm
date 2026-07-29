@@ -2,6 +2,19 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — Final Fixes & Polish (2026-07-28)
+
+- **Context menu dark mode styling.** Right-click menu uses CSS variables for proper dark mode support. Link-to-deal now works from context menu (setTimeout fixes click-away race condition).
+- **Tag submenu in context menu.** Tag action shows flyout submenu with all available tags fetched from API. Click to apply tag to selected message.
+- **Tags visible in email list.** Batch tag query fetches all tags for visible messages. Tags render as colored badge pills alongside subject text. Fixed CSS overflow clipping that was hiding tags.
+- **Document picker rebuilt.** Full-featured file picker with search, scope sidebar (My Docs/Company/Projects), folder tree, breadcrumb navigation, single-click select. Reuses documents modal CSS classes.
+- **Document picker search.** Client-side filtering for My Docs and Company scopes; server-side search for Projects scope.
+- **Compose attachments persist on move-to-tab.** `composeAttachments` moved to module-level. Move-to-tab passes attachments to the compose tab.
+- **Compose modal attach dropdown.** Attach button now has dropdown with "File from Computer" and "File from Documents" options.
+- **Hover popover removed.** Email list hover popover deleted (was not working correctly).
+- **Phase 3 status documented.** All active items complete. OAuth2, in-modal document editor, classification rules polish, light mode deferred.
+- **Files:** `public/app.js`, `public/index.html`, `public/styles.css`, `CHANGELOG.md`, `AGENTS.md`, `FUTURE_FEATURES.md`.
+
 ## Phase 3 — Compose Tab Fixes (2026-07-28)
 
 - **Compose tab persists across minimize/restore.** Minimize now saves all open compose tabs (To, Cc, Bcc, Subject, Body, Deal selection). Restore recreates them with a new tab ID. Content is preserved.

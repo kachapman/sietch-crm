@@ -599,11 +599,12 @@ The `notification_dispatcher.py` background thread already polls `notifications`
 
 ## Suggested implementation order
 
-1. **FEAT-001** — Preview popup (high user value, uses existing APIs).
-2. **FEAT-002** — Custom fields on create (unblock ISSUE-001).
-3. **FEAT-003** — Note attachments (needs API research).
-4. Pick items from **Toaster_Features** by priority.
-5. **FEAT-022** — In-modal document editor tab: implement after Document Server features (JWT, callbacks, co-edit) are fully unlocked and stable.
-6. **FEAT-024** — Native CRM iframe embed (investigated, not implemented — see above).
-7. **FEAT-025** — Project number + email auto-linking (after email modal is stable).
-8. **FEAT-026** — Full dashboard light mode (final cosmetic phase).
+1. **FEAT-001** — Preview popup ✅ Done.
+2. **FEAT-002** — Custom fields on create ✅ Done.
+3. **FEAT-003** — Note attachments ✅ Done.
+4. **FEAT-025** — Project number + email auto-linking ✅ Done.
+5. **OAuth2 for Outlook.com** — Next priority. DB columns exist but zero functional code. Full stack needed: Azure app registration, OAuth redirect/callback, token exchange/refresh, XOAUTH2 IMAP auth, OAuth2 SMTP auth, "Sign in with Microsoft" UI.
+6. **FEAT-022** — In-modal document editor tab (deferred — after Document Server features stable).
+7. **FEAT-024** — Native CRM iframe embed (investigated, not implemented — see above).
+8. **FEAT-026** — Full dashboard light mode (deferred — final cosmetic phase).
+9. Pick items from **Toaster_Features** by priority.
