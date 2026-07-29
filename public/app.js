@@ -5121,6 +5121,11 @@ function saveMinimizedSearchTabsToStorage() {
   const slim = (minimizedSearchTabs || []).map((t) => ({ oppId: t.oppId, title: t.title }));
   localStorage.setItem(SEARCH_MINIMIZED_STORAGE_KEY, JSON.stringify(slim));
   scheduleUserProfileSave();
+  // Save to server for cross-device persistence
+  api('/api/v2/minimized-state', {
+    method: 'PUT',
+    body: JSON.stringify({ search: { tabs: slim, minimized: searchMinimized } }),
+  }).catch(() => {});
 }
 
 const EVENT_LOG_KEY = "eventLog";
@@ -20750,6 +20755,11 @@ function minimizeEmailModal() {
     });
   }
   try { localStorage.setItem(EMAIL_MINIMIZED_STORAGE_KEY, JSON.stringify(minimizedEmailState)); } catch {}
+  // Save to server for cross-device persistence
+  api('/api/v2/minimized-state', {
+    method: 'PUT',
+    body: JSON.stringify({ email: minimizedEmailState }),
+  }).catch(() => {});
   modal.classList.add("hidden");
   const trigger = $("#email-trigger");
   if (trigger) {
@@ -20763,53 +20773,66 @@ function minimizeEmailModal() {
 }
 
 function restoreEmailModal() {
-  const state = minimizedEmailState;
+  let state = minimizedEmailState;
   minimizedEmailState = null;
   try { localStorage.removeItem(EMAIL_MINIMIZED_STORAGE_KEY); } catch {}
-  const trigger = $("#email-trigger");
-  if (trigger) trigger.classList.add("trigger-hidden");
-  openMailInboxModal().then(async () => {
-    if (!state) return;
-    const scrollEl = $("#mail-list-container");
-    if (scrollEl && state.scroll) scrollEl.scrollTop = state.scroll;
-    if (state.selectedId) {
-      const row = document.querySelector(`.mail-list-row[data-id="${state.selectedId}"], .mail-row[data-id="${state.selectedId}"]`);
-      if (row) row.click();
-    }
-    // Restore compose tabs
-    if (state.composeTabs && state.composeTabs.length) {
-      for (const ct of state.composeTabs) {
-        composeTabCounter++;
-        const newTabId = `compose-${composeTabCounter}`;
-        // Create tab button
-        const tabBar = $('#mail-inbox-tabs');
-        if (tabBar) {
-          const tabBtn = document.createElement('button');
-          tabBtn.className = 'mail-inbox-tab compose-tab';
-          tabBtn.dataset.mailtab = newTabId;
-          tabBtn.dataset.tabId = newTabId;
-          const tabTitle = ct.title || (ct.subject ? ct.subject.slice(0, 25) : `Compose ${composeTabCounter}`);
-          tabBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:0.2rem;vertical-align:middle;"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 7a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-10" /><path d="M6.36 5a2 2 0 0 1 1.962 1.608l.356 1.784a2 2 0 0 0 1.962 1.608h8.36a2 2 0 0 1 2 2" /><path d="M12.36 5a2 2 0 0 1 1.962 1.608l.356 1.784a2 2 0 0 0 1.962 1.608" /></svg><span class="compose-tab-title">${escapeHtml(tabTitle)}</span><button type="button" class="compose-tab-close" title="Close tab">&times;</button>`;
-          tabBtn.addEventListener('click', (e) => {
-            if (e.target.closest('.compose-tab-close')) { closeComposeTab(newTabId); return; }
-            switchToComposeTab(newTabId);
-          });
-          tabBar.appendChild(tabBtn);
-        }
-        // Create content pane — find existing or use base element
-        let contentPane = document.getElementById(`mail-compose-tab-${newTabId}`);
-        if (!contentPane) contentPane = document.querySelector('.compose-tab-content');
-        if (!contentPane) contentPane = document.getElementById('mail-compose-tab-content');
-        if (contentPane) {
-          contentPane.id = `mail-compose-tab-${newTabId}`;
-          contentPane.classList.remove('hidden');
-          renderComposeTabContent(contentPane, newTabId, { from: ct.from, to: ct.to, cc: ct.cc, bcc: ct.bcc, subject: ct.subject, body: ct.body, dealId: ct.dealId });
-        }
-        // Activate the last restored tab
-        switchToComposeTab(newTabId);
+  // If no local state, try loading from server (cross-device restore)
+  const doRestore = (s) => {
+    const trigger = $("#email-trigger");
+    if (trigger) trigger.classList.add("trigger-hidden");
+    openMailInboxModal().then(async () => {
+      if (!s) return;
+      const scrollEl = $("#mail-list-container");
+      if (scrollEl && s.scroll) scrollEl.scrollTop = s.scroll;
+      if (s.selectedId) {
+        const row = document.querySelector(`.mail-list-row[data-id="${s.selectedId}"], .mail-row[data-id="${s.selectedId}"]`);
+        if (row) row.click();
       }
-    }
-  }).catch(() => {});
+      // Restore compose tabs
+      if (s.composeTabs && s.composeTabs.length) {
+        for (const ct of s.composeTabs) {
+          composeTabCounter++;
+          const newTabId = `compose-${composeTabCounter}`;
+          const tabBar = $('#mail-inbox-tabs');
+          if (tabBar) {
+            const tabBtn = document.createElement('button');
+            tabBtn.className = 'mail-inbox-tab compose-tab';
+            tabBtn.dataset.mailtab = newTabId;
+            tabBtn.dataset.tabId = newTabId;
+            const tabTitle = ct.title || (ct.subject ? ct.subject.slice(0, 25) : `Compose ${composeTabCounter}`);
+            tabBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:0.2rem;vertical-align:middle;"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 7a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-10" /><path d="M6.36 5a2 2 0 0 1 1.962 1.608l.356 1.784a2 2 0 0 0 1.962 1.608h8.36a2 2 0 0 1 2 2" /><path d="M12.36 5a2 2 0 0 1 1.962 1.608l.356 1.784a2 2 0 0 0 1.962 1.608" /></svg><span class="compose-tab-title">${escapeHtml(tabTitle)}</span><button type="button" class="compose-tab-close" title="Close tab">&times;</button>`;
+            tabBtn.addEventListener('click', (e) => {
+              if (e.target.closest('.compose-tab-close')) { closeComposeTab(newTabId); return; }
+              switchToComposeTab(newTabId);
+            });
+            tabBar.appendChild(tabBtn);
+          }
+          let contentPane = document.getElementById(`mail-compose-tab-${newTabId}`);
+          if (!contentPane) contentPane = document.querySelector('.compose-tab-content');
+          if (!contentPane) contentPane = document.getElementById('mail-compose-tab-content');
+          if (contentPane) {
+            contentPane.id = `mail-compose-tab-${newTabId}`;
+            contentPane.classList.remove('hidden');
+            renderComposeTabContent(contentPane, newTabId, { from: ct.from, to: ct.to, cc: ct.cc, bcc: ct.bcc, subject: ct.subject, body: ct.body, dealId: ct.dealId });
+          }
+          switchToComposeTab(newTabId);
+        }
+      }
+    }).catch(() => {});
+  };
+  if (state) {
+    doRestore(state);
+  } else {
+    // Load from server
+    api('/api/v2/minimized-state').then(serverState => {
+      if (serverState && serverState.email) {
+        minimizedEmailState = serverState.email;
+        doRestore(serverState.email);
+        // Clear server state after restore
+        api('/api/v2/minimized-state', { method: 'PUT', body: JSON.stringify({}) }).catch(() => {});
+      }
+    }).catch(() => {});
+  }
 }
 
 // ── Documents modal minimize/restore ─────────────────────────────────────────
@@ -20826,6 +20849,11 @@ function minimizeDocsModal() {
     currentProjectTitle: docsState.currentProjectTitle,
   };
   try { localStorage.setItem(DOCS_MINIMIZED_STORAGE_KEY, JSON.stringify(minimizedDocsState)); } catch {}
+  // Save to server for cross-device persistence
+  api('/api/v2/minimized-state', {
+    method: 'PUT',
+    body: JSON.stringify({ docs: minimizedDocsState }),
+  }).catch(() => {});
   modal.classList.add("hidden");
   const trigger = $("#documents-trigger");
   if (trigger) {

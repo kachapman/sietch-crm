@@ -830,4 +830,14 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
 
+-- ============================================================================
+-- 7.19 Persistent Minimized Modal State (cross-device sync)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS minimized_modal_state (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    state_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
 COMMIT;

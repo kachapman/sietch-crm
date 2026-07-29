@@ -803,6 +803,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_dashboard_notes_get()
             return
 
+        # ── Persistent minimized modal state (cross-device) ──
+        if api_path == "/api/v2/minimized-state":
+            self._handle_minimized_state_get()
+            return
+
         # ── Calendar feed (local handler, unchanged) ──
         if api_path == "/api/calendar/feed":
             self._handle_calendar_feed()
@@ -1098,6 +1103,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # ── User profile (local) ──
         if api_path == "/api/user-profile" and method == "PUT":
             self._handle_user_profile_put()
+            return
+
+        # ── Persistent minimized modal state (cross-device) ──
+        if api_path == "/api/v2/minimized-state" and method == "PUT":
+            self._handle_minimized_state_put()
             return
         if api_path == "/api/dashboard-notes" and method == "PUT":
             self._handle_dashboard_notes_put()
@@ -5073,6 +5083,32 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 404, {"error": "Draft not found"})
                 return
             _json_response(self, 200, dict(row))
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    # ── Persistent minimized modal state ──
+
+    def _handle_minimized_state_get(self) -> None:
+        try:
+            user = _require_auth(self)
+            row = db.query_one("SELECT state_json FROM minimized_modal_state WHERE user_id = %s", (user["id"],))
+            if row:
+                _json_response(self, 200, row["state_json"] if isinstance(row["state_json"], dict) else json.loads(row["state_json"] or "{}"))
+            else:
+                _json_response(self, 200, {})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_minimized_state_put(self) -> None:
+        try:
+            user = _require_auth(self)
+            payload = json.loads(_read_body(self) or b"{}")
+            db.execute(
+                "INSERT INTO minimized_modal_state (user_id, state_json, updated_at) VALUES (%s, %s, NOW()) "
+                "ON CONFLICT (user_id) DO UPDATE SET state_json = EXCLUDED.state_json, updated_at = NOW()",
+                (user["id"], json.dumps(payload)),
+            )
+            _json_response(self, 200, {"ok": True})
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 
