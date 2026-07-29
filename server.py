@@ -5709,10 +5709,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     def _handle_mail_contacts_import(self) -> None:
         try:
             user = _require_auth(self)
-            content = _read_body(self)
+            raw = _read_body(self)
+            import json
+            data = json.loads(raw.decode("utf-8"))
+            csv_text = data.get("csv", "")
+            if not csv_text:
+                _json_response(self, 400, {"error": "No CSV data"})
+                return
             import csv
             import io
-            reader = csv.DictReader(io.StringIO(content.decode("utf-8")))
+            reader = csv.DictReader(io.StringIO(csv_text))
             count = 0
             is_gmail = "E-mail 1 - Value" in (reader.fieldnames or [])
             for row in reader:

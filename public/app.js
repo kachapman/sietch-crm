@@ -16626,22 +16626,35 @@ async function loadCrmContacts(listEl) {
 }
 
 async function loadUserContacts(listEl) {
-  listEl.innerHTML = '<p style="color:var(--muted);font-size:0.7rem;padding:0.2rem 0.4rem;">Loading…</p>';
+  // Preserve the button bar (first child)
+  const btnBar = listEl.querySelector("div:first-child");
   try {
     const data = await api("/api/v2/mail/contacts");
     const contacts = data.contacts || [];
+    // Remove old contact items (keep button bar)
+    listEl.querySelectorAll(".mail-contact-item, .mail-contact-add-form, p").forEach(el => el.remove());
     if (!contacts.length) {
-      listEl.innerHTML = '<p style="color:var(--muted);font-size:0.7rem;padding:0.2rem 0.4rem;">No contacts yet</p>';
+      const empty = document.createElement("p");
+      empty.style.cssText = "color:var(--muted);font-size:0.7rem;padding:0.2rem 0.4rem;";
+      empty.textContent = "No contacts yet";
+      listEl.appendChild(empty);
       return;
     }
-    listEl.innerHTML = contacts.map(c => `
-      <div class="mail-contact-item" data-email="${escapeHtml(c.email || "")}" data-name="${escapeHtml(c.name || c.email || "")}">
-        <div class="mail-contact-name">${escapeHtml(c.name || c.email || "")}</div>
-        <div class="mail-contact-email">${escapeHtml(c.email || "")}</div>
-      </div>`).join("");
+    contacts.forEach(c => {
+      const div = document.createElement("div");
+      div.className = "mail-contact-item";
+      div.dataset.email = c.email || "";
+      div.dataset.name = c.name || c.email || "";
+      div.innerHTML = `<div class="mail-contact-name">${escapeHtml(c.name || c.email || "")}</div><div class="mail-contact-email">${escapeHtml(c.email || "")}</div>`;
+      listEl.appendChild(div);
+    });
     wireContactClicks(listEl);
   } catch (e) {
-    listEl.innerHTML = `<p style="color:var(--danger);font-size:0.7rem;padding:0.2rem 0.4rem;">Failed to load</p>`;
+    listEl.querySelectorAll(".mail-contact-item, p").forEach(el => el.remove());
+    const err = document.createElement("p");
+    err.style.cssText = "color:var(--danger);font-size:0.7rem;padding:0.2rem 0.4rem;";
+    err.textContent = "Failed to load";
+    listEl.appendChild(err);
   }
 }
 
@@ -16697,9 +16710,18 @@ function exportMailContacts() {
 }
 
 function addNewContact() {
-  // Create inline form in the My Contacts list
+  // Always expand My Contacts list first
   const listEl = $("#mail-contact-list");
   if (!listEl) return;
+  const toggle = document.querySelector('.mail-contacts-toggle[data-target="mail-contact-list"]');
+  if (toggle && !listEl.classList.contains("expanded")) {
+    toggle.click(); // expand the list
+  }
+  // Ensure contacts are loaded
+  if (!listEl.dataset.loaded) {
+    listEl.dataset.loaded = "1";
+    loadUserContacts(listEl);
+  }
   // Remove existing form if any
   const existing = listEl.querySelector(".mail-contact-add-form");
   if (existing) { existing.remove(); return; }

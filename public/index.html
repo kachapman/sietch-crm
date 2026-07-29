@@ -747,14 +747,14 @@
                 <button type="button" class="mail-contacts-toggle" data-target="mail-contact-list" style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em; padding:0; margin:0; background:none; border:none; cursor:pointer; white-space:nowrap; display:flex; align-items:center; gap:0.2rem;">
                   <i class="ti ti-chevron-right" style="font-size:0.6rem; transition:transform 0.15s;"></i> My Contacts
                 </button>
-                <span style="margin-left:auto; display:flex; gap:0.2rem;">
+              </div>
+              <div id="mail-contact-list" class="mail-contacts-list" style="max-height:0; overflow:hidden; transition:max-height 0.2s;">
+                <div style="display:flex; gap:0.2rem; padding:0.2rem 0.4rem; border-bottom:1px solid var(--border);">
                   <button type="button" id="mail-contact-add" class="btn btn-ghost btn-small" title="Add contact" style="padding:0.1rem 0.25rem; font-size:0.7rem;"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M8 7a4 4 0 1 0 8 0a4 4 0 0 0 -8 0"/><path d="M16 19h6"/><path d="M19 16v6"/><path d="M6 21v-2a4 4 0 0 1 4 -4h4"/></svg></button>
                   <button type="button" id="mail-contact-import" class="btn btn-ghost btn-small" title="Import contacts" style="padding:0.1rem 0.25rem; font-size:0.7rem;"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 20h-8a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2h12v5"/><path d="M11 16h-5a2 2 0 0 0 -2 2"/><path d="M15 16l3 -3l3 3"/><path d="M18 13v9"/></svg></button>
                   <button type="button" id="mail-contact-export" class="btn btn-ghost btn-small" title="Export contacts" style="padding:0.1rem 0.25rem; font-size:0.7rem;"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 20h-6a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2h12v5"/><path d="M13 16h-7a2 2 0 0 0 -2 2"/><path d="M15 19l3 3l3 -3"/><path d="M18 22v-9"/></svg></button>
-                </span>
-              </div>
-              <div id="mail-contact-list" class="mail-contacts-list" style="max-height:0; overflow:hidden; transition:max-height 0.2s;">
-                <!-- populated by JS on expand -->
+                </div>
+                <!-- contacts populated by JS on expand -->
               </div>
       </div>
       </div>
