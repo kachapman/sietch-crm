@@ -40,6 +40,12 @@ ALTER TABLE mail_messages ADD COLUMN IF NOT EXISTS raw_headers TEXT;
 -- Add attachments_json to mail_messages for quick metadata access
 ALTER TABLE mail_messages ADD COLUMN IF NOT EXISTS attachments_json JSONB;
 
+-- Ensure UNIQUE constraint on mail_contacts (may be missing from older installs)
+DO $$ BEGIN
+    ALTER TABLE mail_contacts ADD CONSTRAINT mail_contacts_user_email_unique UNIQUE (user_id, email);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
 -- Scanner contractors (replaces contractors.json file)
 CREATE TABLE IF NOT EXISTS mail_contractors (
     id SERIAL PRIMARY KEY,
