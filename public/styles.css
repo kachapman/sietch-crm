@@ -3643,6 +3643,12 @@ body {
     width: 250px;
   }
 }
+#mail-tag-dropdown {
+  left: auto;
+  right: 0;
+  width: auto;
+  min-width: 160px;
+}
 .mail-search {
   flex: 1;
   max-width: 300px;

@@ -482,7 +482,7 @@
       </div>
 
       <div class="mail-toolbar">
-        <button type="button" id="mail-compose-btn" class="btn btn-ghost btn-small" title="Compose email">
+        <button type="button" id="mail-compose-btn" class="btn btn-ghost btn-small" title="Compose email" style="border:1px solid var(--accent);">
           <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-mail-plus">
             <path stroke="none" d="M0 0h24v24H0z" fill="none" />
             <path d="M12 19h-7a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v5.5" />
@@ -507,9 +507,9 @@
         <button type="button" id="mail-archive" class="btn btn-ghost btn-small toolbar-secondary" disabled title="Archive"><i class="ti ti-archive"></i></button>
         <div style="position:relative;">
           <button type="button" id="mail-move-folder-btn" class="btn btn-ghost btn-small" disabled title="Move to folder">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M6 6v6a3 3 0 0 0 3 3h10l-4 -4m0 8l4 -4"/></svg><span class="btn-label"> Move to...</span>
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M6 6v6a3 3 0 0 0 3 3h10l-4 -4m0 8l4 -4"/></svg>
           </button>
-          <div id="mail-move-dropdown" class="mail-link-deal-dropdown hidden" style="min-width:140px;">
+          <div id="mail-move-dropdown" class="mail-link-deal-dropdown hidden" style="width:auto;min-width:0;white-space:nowrap;">
             <button type="button" class="move-folder-option" data-folder="INBOX" style="display:block;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;font-size:0.85rem;color:var(--text);">Inbox</button>
             <button type="button" class="move-folder-option" data-folder="Sent" style="display:block;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;font-size:0.85rem;color:var(--text);">Sent</button>
             <button type="button" class="move-folder-option" data-folder="Archive" style="display:block;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;font-size:0.85rem;color:var(--text);">Archive</button>
