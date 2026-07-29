@@ -3717,7 +3717,6 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
-  overflow: hidden;
 }
 .mail-subject-text {
   flex: 1;

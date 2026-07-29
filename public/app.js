@@ -15148,6 +15148,7 @@ let mailState = {
   selected: new Set(),
 };
 let composeAutoSaveTimer = null;
+let composeAttachments = [];
 
 // Dashboard-side read/unread overrides for the mail inbox list.
 // Used because the CRM /mail/messages/markread endpoint currently returns HTML error pages
@@ -15647,7 +15648,7 @@ async function openComposeModal(opts = {}) {
   // File upload handling
   const fileInput = $('#compose-attachments');
   const attachmentList = $('#compose-attachment-list');
-  let composeAttachments = [];
+  composeAttachments = [];
 
   if (fileInput && !fileInput.dataset.bound) {
     fileInput.dataset.bound = '1';
@@ -15929,7 +15930,8 @@ function moveComposeToTab() {
     openMailInboxModal();
   }
 
-  createComposeTab({ from, to, cc, bcc, subject, body, dealId });
+  createComposeTab({ from, to, cc, bcc, subject, body, dealId, attachments: [...composeAttachments] });
+  composeAttachments = [];
 }
 
 function createComposeTab(opts = {}) {
@@ -16054,7 +16056,7 @@ function renderComposeTabContent(container, tabId, opts = {}) {
   });
 
   // Bind file attachments
-  let tabAttachments = [];
+  let tabAttachments = opts.attachments ? [...opts.attachments] : [];
   const fileInput = container.querySelector('.compose-tab-attachments');
   const attList = container.querySelector('.compose-tab-attachment-list');
   if (fileInput) {
@@ -16305,20 +16307,34 @@ async function loadDocPickerList() {
   updateDocPickerSelectBtn();
   try {
     let docs = [], folders = [];
+    const q = docPickerState.searchQuery || '';
     if (docPickerState.scope === 'mydocs') {
-      let url = '/api/v2/documents/personal';
-      if (docPickerState.currentFolderId) url += `?folder_id=${docPickerState.currentFolderId}`;
-      const data = await api(url);
-      docs = data.documents || [];
-      folders = data.folders || [];
+      if (q) {
+        // Search all personal docs (no folder filter when searching)
+        const data = await api('/api/v2/documents/personal');
+        docs = (data.documents || []).filter(d => (d.title || '').toLowerCase().includes(q.toLowerCase()));
+        folders = [];
+      } else {
+        let url = '/api/v2/documents/personal';
+        if (docPickerState.currentFolderId) url += `?folder_id=${docPickerState.currentFolderId}`;
+        const data = await api(url);
+        docs = data.documents || [];
+        folders = data.folders || [];
+      }
     } else if (docPickerState.scope === 'company') {
-      let url = '/api/v2/documents/company';
-      if (docPickerState.currentFolderId) url += `?folder_id=${docPickerState.currentFolderId}`;
-      const data = await api(url);
-      docs = data.documents || [];
-      folders = data.folders || [];
+      if (q) {
+        const data = await api('/api/v2/documents/company');
+        docs = (data.documents || []).filter(d => (d.title || '').toLowerCase().includes(q.toLowerCase()));
+        folders = [];
+      } else {
+        let url = '/api/v2/documents/company';
+        if (docPickerState.currentFolderId) url += `?folder_id=${docPickerState.currentFolderId}`;
+        const data = await api(url);
+        docs = data.documents || [];
+        folders = data.folders || [];
+      }
     } else if (docPickerState.scope === 'projects') {
-      const data = await api('/api/v2/documents/search?q=' + encodeURIComponent(docPickerState.searchQuery || ''));
+      const data = await api('/api/v2/documents/search?q=' + encodeURIComponent(q));
       docs = [];
       (data.results || []).forEach(r => {
         (r.documents || []).forEach(d => {
@@ -16465,9 +16481,21 @@ async function loadDocPickerFolderTree() {
 }
 
 function renderDocPickerFolderTree() {
-  const treeEl = $('#doc-picker-tree');
-  if (!treeEl) return;
-  if (!docPickerState.folderTree.length) {
+  const sidebar = $('#doc-picker-sidebar');
+  if (!sidebar) return;
+  let treeEl = sidebar.querySelector('#doc-picker-tree');
+  // Create tree container with proper class if it doesn't exist
+  if (!treeEl) {
+    treeEl = document.createElement('div');
+    treeEl.id = 'doc-picker-tree';
+    treeEl.className = 'documents-folder-tree';
+    sidebar.appendChild(treeEl);
+  } else if (!treeEl.classList.contains('documents-folder-tree')) {
+    treeEl.classList.add('documents-folder-tree');
+  }
+
+  const isFolderScope = docPickerState.scope === 'mydocs' || docPickerState.scope === 'company';
+  if (!isFolderScope || !docPickerState.folderTree.length) {
     treeEl.innerHTML = '';
     return;
   }
