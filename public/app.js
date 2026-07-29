@@ -3947,9 +3947,11 @@ function bindDocumentsModal() {
   if (!modal || modal.dataset.bound) return;
   modal.dataset.bound = "1";
 
-  modal.querySelectorAll("[data-documents-dismiss]").forEach(el => {
-    el.addEventListener("click", closeDocumentsModal);
-  });
+  // Backdrop click -> minimize instead of close
+  const docsBackdrop = modal.querySelector(".modal-backdrop");
+  if (docsBackdrop) {
+    docsBackdrop.addEventListener("click", minimizeDocsModal);
+  }
   $("#documents-modal-close")?.addEventListener("click", closeDocumentsModal);
   $("#documents-modal-minimize")?.addEventListener("click", minimizeDocsModal);
   document.addEventListener("keydown", e => {
@@ -15899,17 +15901,22 @@ function attachMailModalListeners() {
   if (!modal || modal.dataset.listenersBound) return;
   modal.dataset.listenersBound = "1";
 
-  // close
-  modal.querySelectorAll("[data-mail-inbox-dismiss]").forEach(el => {
-    el.addEventListener("click", () => {
-      modal.classList.add("hidden");
-      // Clear parked state
-      minimizedEmailState = null;
-      try { localStorage.removeItem(EMAIL_MINIMIZED_STORAGE_KEY); } catch {}
-      const trigger = $("#email-trigger");
-      if (trigger) trigger.classList.add("trigger-hidden");
-    });
-  });
+  // Close (X button and footer Close button)
+  function closeMailModal() {
+    modal.classList.add("hidden");
+    minimizedEmailState = null;
+    try { localStorage.removeItem(EMAIL_MINIMIZED_STORAGE_KEY); } catch {}
+    const trigger = $("#email-trigger");
+    if (trigger) trigger.classList.add("trigger-hidden");
+  }
+  $("#mail-inbox-close")?.addEventListener("click", closeMailModal);
+  $("#mail-inbox-close-footer")?.addEventListener("click", closeMailModal);
+
+  // Backdrop click -> minimize instead of close
+  const backdrop = modal.querySelector(".modal-backdrop");
+  if (backdrop) {
+    backdrop.addEventListener("click", minimizeEmailModal);
+  }
 
   // minimize
   $("#mail-inbox-minimize")?.addEventListener("click", minimizeEmailModal);
@@ -20202,9 +20209,11 @@ function bindSearchPopupModal() {
   modal.dataset.bound = "1";
 
   $("#search-popup-close")?.addEventListener("click", closeSearchPopupModal);
-  modal.querySelectorAll("[data-search-popup-dismiss]").forEach((el) => {
-    el.addEventListener("click", closeSearchPopupModal);
-  });
+  // Backdrop click -> minimize instead of close
+  const searchBackdrop = modal.querySelector(".modal-backdrop");
+  if (searchBackdrop) {
+    searchBackdrop.addEventListener("click", minimizeSearchPopup);
+  }
 
   // Escape closes
   document.addEventListener("keydown", (e) => {

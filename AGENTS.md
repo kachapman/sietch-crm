@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** 2026-07-28 session 31: Tag assignment + filter toggle + contacts fix. (1) Tag filter toggle — click active tag to deselect (clear filter). (2) Tag-starred button in toolbar opens dropdown listing all tags; click to add/remove from all selected messages; checkmark shows tags on the first selected message. (3) Tag badges shown on message detail view (below linked_deals). (4) Overflow menu includes Tags option. (5) Contacts list fixed — added `max-height: none !important` to `.mail-contacts-list.expanded` (was invisible due to inline `max-height:0`). Files changed: `public/app.js`, `public/index.html`, `public/styles.css`.
+**Last session summary (for next resume):** 2026-07-28 session 33: Backdrop-minimize + compose border polish. (1) Compose button border changed from `var(--accent)` to `var(--border)` (subtle/muted). (2) Email modal: backdrop click minimizes instead of closes. (3) Search modal: backdrop click minimizes instead of closes. (4) Documents modal: backdrop click minimizes instead of closes. Close buttons (X) still close/clear state. Files changed: `public/index.html`, `public/app.js`.
 
 - Known issue: server process dies when backgrounded from opencode shell (use `setsid` to detach — see ISSUE-012).
 - Known issue: server must be killed and restarted after opencode session exits (use `setsid` to detach — see ISSUE-012).
