@@ -15232,8 +15232,14 @@ async function openMailInboxModal() {
   if (mailMainArea) {
     mailMainArea.style.display = '';
     mailMainArea.style.flexDirection = '';
+    mailMainArea.style.height = '';
     mailMainArea.classList.remove('hidden', 'mail-main-column');
   }
+  // Hide ALL compose panes (fresh open, not restore)
+  document.querySelectorAll('.compose-tab-content, [id^="mail-compose-tab-compose-"]').forEach(el => {
+    el.style.display = 'none';
+    el.classList.add('hidden');
+  });
   const scannerDiv = $('#mail-scanner-admin');
   if (scannerDiv) {
     scannerDiv.classList.add('hidden');
@@ -15355,6 +15361,11 @@ function switchMailTab(btn) {
       mailMainArea.style.height = '';
       mailMainArea.classList.remove('mail-main-column');
     }
+    // Hide ALL compose panes (the root cause of compose content bleeding into other tabs)
+    document.querySelectorAll('.compose-tab-content, [id^="mail-compose-tab-compose-"]').forEach(el => {
+      el.style.display = 'none';
+      el.classList.add('hidden');
+    });
     // Show inbox content
     if (inboxContainer) { inboxContainer.classList.remove('hidden'); inboxContainer.style.display = ''; inboxContainer.style.flex = ''; }
     if (toolbar) { toolbar.classList.remove('hidden'); toolbar.style.display = ''; }
@@ -15392,6 +15403,11 @@ function switchMailTab(btn) {
       mailMainArea.style.flexDirection = '';
       mailMainArea.style.height = '';
     }
+    // Hide ALL compose panes
+    document.querySelectorAll('.compose-tab-content, [id^="mail-compose-tab-compose-"]').forEach(el => {
+      el.style.display = 'none';
+      el.classList.add('hidden');
+    });
     // Hide inbox content
     if (inboxContainer) { inboxContainer.classList.add('hidden'); inboxContainer.style.display = ''; }
     if (toolbar) { toolbar.classList.add('hidden'); toolbar.style.display = ''; }
@@ -15414,6 +15430,11 @@ function switchMailTab(btn) {
     bindScannerAdminButtons();
   } else if (tabName === 'add-account') {
     openAccountSettingsModal();
+    // Hide ALL compose panes
+    document.querySelectorAll('.compose-tab-content, [id^="mail-compose-tab-compose-"]').forEach(el => {
+      el.style.display = 'none';
+      el.classList.add('hidden');
+    });
     // Switch to inbox view first (replicate inbox case show/hide)
     if (inboxContainer) { inboxContainer.classList.remove('hidden'); inboxContainer.style.flex = ''; }
     if (toolbar) toolbar.classList.remove('hidden');
@@ -17721,46 +17742,46 @@ function renderMailList(msgs) {
       });
     });
 
-    // Rich hover popover (disabled on mobile/touch)
-    let hoverTimer = null;
-    let popover = null;
-    item.addEventListener('mouseenter', () => {
-      if (window.innerWidth <= 600 || matchMedia('(pointer:coarse)').matches) return;
-      clearTimeout(hoverTimer);
-      hoverTimer = setTimeout(() => {
-        if (popover) popover.remove();
-        popover = document.createElement('div');
-        popover.className = 'mail-hover-popover';
-        const senderName = from;
-        const fullSubj = subj;
-        const snippetText = (m.body_text || m.snippet || '').replace(/<[^>]+>/g, '').trim().slice(0, 200);
-        const tagHtml = (m.tags && m.tags.length) ? m.tags.map(t => `<span class="mail-hover-tag">${escapeHtml(t)}</span>`).join('') : '';
-        popover.innerHTML = `
-          <div class="mail-hover-from">${escapeHtml(senderName)}</div>
-          <div class="mail-hover-subject">${escapeHtml(fullSubj)}</div>
-          <div class="mail-hover-date">${escapeHtml(dateStr)}</div>
-          ${snippetText ? `<div class="mail-hover-snippet">${escapeHtml(snippetText)}</div>` : ''}
-          ${tagHtml ? `<div class="mail-hover-tags">${tagHtml}</div>` : ''}
-        `;
-        document.body.appendChild(popover);
-        const rect = row.getBoundingClientRect();
-        const popRect = popover.getBoundingClientRect();
-        let left = rect.right + 8;
-        let top = rect.top;
-        if (left + popRect.width > window.innerWidth - 8) {
-          left = rect.left - popRect.width - 8;
+    // Right-click context menu for email actions
+    item.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      // Remove any existing context menu
+      document.querySelectorAll('.mail-context-menu').forEach(m => m.remove());
+      const menu = document.createElement('div');
+      menu.className = 'mail-context-menu';
+      menu.style.cssText = 'position:fixed; z-index:10001; background:var(--surface); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,0.25); padding:0.25rem 0; min-width:160px;';
+      const actions = [
+        { icon: 'ti ti-arrow-back-up', label: 'Reply', action: () => { expBtn.click(); setTimeout(() => { const btn = document.querySelector('.email-preview-action[data-action="reply"]'); if (btn) btn.click(); }, 100); } },
+        { icon: 'ti ti-arrow-forward-up', label: 'Forward', action: () => { expBtn.click(); setTimeout(() => { const btn = document.querySelector('.email-preview-action[data-action="forward"]'); if (btn) btn.click(); }, 100); } },
+        { icon: null, label: '', action: null }, // separator
+        { icon: m.read ? 'ti ti-mail' : 'ti ti-mail-open', label: m.read ? 'Mark unread' : 'Mark read', action: async () => { await markMailMessageRead(id); } },
+        { icon: 'ti ti-star', label: 'Star', action: async () => { try { await api(`/api/v2/mail/messages/${id}/star`, { method: 'PUT' }); loadMailMessagesForModal(); } catch {} } },
+        { icon: 'ti ti-archive', label: 'Archive', action: async () => { try { await api(`/api/v2/mail/messages/${id}/move`, { method: 'POST', body: JSON.stringify({ folder: 'Archive' }) }); loadMailMessagesForModal(); } catch {} } },
+        { icon: 'ti ti-trash', label: 'Delete', action: async () => { if (!confirm('Delete this email?')) return; try { await api(`/api/v2/mail/messages/${id}`, { method: 'DELETE' }); loadMailMessagesForModal(); } catch {} } },
+        { icon: 'ti ti-link', label: 'Link to deal', action: () => { document.querySelector('#mail-link-deal-btn')?.click(); } },
+        { icon: 'ti ti-tag', label: 'Tag', action: () => { document.querySelector('#mail-tag-btn')?.click(); } },
+      ];
+      actions.forEach(a => {
+        if (!a.label) {
+          const sep = document.createElement('div');
+          sep.style.cssText = 'height:1px; background:var(--border); margin:0.25rem 0;';
+          menu.appendChild(sep);
+          return;
         }
-        if (top + popRect.height > window.innerHeight - 8) {
-          top = window.innerHeight - popRect.height - 8;
-        }
-        if (top < 8) top = 8;
-        popover.style.left = left + 'px';
-        popover.style.top = top + 'px';
-      }, 500);
-    });
-    item.addEventListener('mouseleave', () => {
-      clearTimeout(hoverTimer);
-      if (popover) { popover.remove(); popover = null; }
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.style.cssText = 'display:flex; align-items:center; gap:0.5rem; width:100%; padding:0.4rem 0.75rem; border:none; background:none; color:var(--text); cursor:pointer; font-size:0.85rem; text-align:left;';
+        btn.innerHTML = `<i class="${a.icon}" style="font-size:1rem;"></i>${a.label}`;
+        btn.addEventListener('mouseenter', () => btn.style.background = 'var(--hover)');
+        btn.addEventListener('mouseleave', () => btn.style.background = '');
+        btn.addEventListener('click', () => { menu.remove(); a.action(); });
+        menu.appendChild(btn);
+      });
+      menu.style.left = Math.min(e.clientX, window.innerWidth - 180) + 'px';
+      menu.style.top = Math.min(e.clientY, window.innerHeight - (actions.length * 32)) + 'px';
+      document.body.appendChild(menu);
+      const closeMenu = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', closeMenu); } };
+      setTimeout(() => document.addEventListener('click', closeMenu), 0);
     });
 
     // Note: attachments display handled inside renderMailEmbedPanel (expanded view)
