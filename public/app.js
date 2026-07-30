@@ -15295,8 +15295,11 @@ async function openMailInboxModal() {
     for (const acct of accounts) {
       const isActive = mailState.activeAccount === acct.id;
       const label = acct.display_name || acct.email;
+      let authBadge = '';
+      if (acct.authType === 'microsoft') authBadge = '<i class="ti ti-brand-microsoft" style="font-size:0.8rem;margin-left:0.25rem;" title="Microsoft 365 OAuth"></i>';
+      else if (acct.authType === 'google') authBadge = '<i class="ti ti-brand-google" style="font-size:0.8rem;margin-left:0.25rem;" title="Google OAuth"></i>';
       html += `<button type="button" class="mail-inbox-tab ${isActive ? 'active' : ''}" data-mailtab="inbox" data-account-id="${acct.id}">`;
-      html += `<i class="ti ti-user" style="margin-right:0.3rem;"></i>${escapeHtml(label)}`;
+      html += `<i class="ti ti-user" style="margin-right:0.3rem;"></i>${escapeHtml(label)}${authBadge}`;
       html += `<span class="mail-tab-badge" data-account-badge="${acct.id}"></span>`;
       html += `</button>`;
     }
@@ -16676,16 +16679,42 @@ function openAccountSettingsModal(editAccountId) {
   const modal = $('#account-settings-modal');
   if (!modal) return;
   modal.classList.remove('hidden');
-  
+
   const titleEl = $('#account-settings-title');
   const deleteBtn = $('#account-settings-delete');
   const idField = $('#account-settings-id');
-  
+  const manualSection = $('#account-settings-manual-section');
+  const oauthSection = $('#account-settings-oauth-section');
+  const oauthConnectBtn = $('#account-settings-oauth-connect');
+  const oauthStatusEl = $('#account-settings-oauth-status');
+  const oauthLabelEl = $('#account-settings-oauth-provider-label');
+  const authRadios = modal.querySelectorAll('input[name="account-auth-method"]');
+
+  function setAuthMode(mode) {
+    const isOauth = mode === 'microsoft' || mode === 'google';
+    if (manualSection) manualSection.classList.toggle('hidden', isOauth);
+    if (oauthSection) oauthSection.classList.toggle('hidden', !isOauth);
+    if (oauthLabelEl) oauthLabelEl.textContent = mode === 'microsoft' ? 'Microsoft 365' : 'Google';
+    if (oauthStatusEl) oauthStatusEl.textContent = '';
+    // Change connect button icon
+    const icon = oauthConnectBtn?.querySelector('i');
+    if (icon) icon.className = mode === 'microsoft' ? 'ti ti-brand-microsoft' : 'ti ti-brand-google';
+  }
+
+  // Listen for auth method radio changes (bind once)
+  if (!modal.dataset.authRadioBound) {
+    modal.dataset.authRadioBound = '1';
+    authRadios.forEach(radio => {
+      radio.addEventListener('change', () => {
+        if (radio.checked) setAuthMode(radio.value);
+      });
+    });
+  }
+
   if (editAccountId) {
     if (titleEl) titleEl.textContent = 'Edit Mail Account';
     if (deleteBtn) deleteBtn.style.display = '';
     if (idField) idField.value = editAccountId;
-    // Load account data
     api(`/api/v2/mail/accounts`).then(data => {
       const acct = (data.accounts || []).find(a => a.id == editAccountId);
       if (acct) {
@@ -16696,7 +16725,6 @@ function openAccountSettingsModal(editAccountId) {
         $('#account-settings-smtp-host').value = acct.smtp_host || '';
         $('#account-settings-smtp-port').value = acct.smtp_port || 587;
         $('#account-settings-from-name').value = acct.smtp_from_name || '';
-        // Set folder checkboxes
         const monitored = (acct.monitored_folders || 'INBOX').split(',').map(s => s.trim());
         const folderContainer = $('#account-settings-folders');
         if (folderContainer) {
@@ -16704,39 +16732,87 @@ function openAccountSettingsModal(editAccountId) {
             cb.checked = monitored.includes(cb.value);
           });
         }
+        // Set auth mode based on account type
+        const authType = acct.authType || 'password';
+        const radioToCheck = modal.querySelector(`input[name="account-auth-method"][value="${authType}"]`);
+        if (radioToCheck) {
+          radioToCheck.checked = true;
+          setAuthMode(authType);
+        }
+        if (authType !== 'password' && oauthStatusEl) {
+          oauthStatusEl.textContent = acct.oauthStatus === 'expired' ? 'Token expired — reconnect' : 'Connected';
+        }
       }
     }).catch(() => {});
   } else {
     if (titleEl) titleEl.textContent = 'Add Mail Account';
     if (deleteBtn) deleteBtn.style.display = 'none';
     if (idField) idField.value = '';
-    // Clear all fields
     ['account-settings-name','account-settings-email','account-settings-imap-host','account-settings-imap-password','account-settings-smtp-host','account-settings-smtp-password','account-settings-from-name'].forEach(id => {
       const el = $(`#${id}`);
       if (el) el.value = '';
     });
     $('#account-settings-imap-port').value = 993;
     $('#account-settings-smtp-port').value = 587;
-    // Reset folder checkboxes: only INBOX checked by default
     const folderContainer = $('#account-settings-folders');
     if (folderContainer) {
       folderContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => {
         cb.checked = cb.value === 'INBOX';
       });
     }
+    // Reset auth mode to password
+    const pwRadio = modal.querySelector('input[name="account-auth-method"][value="password"]');
+    if (pwRadio) { pwRadio.checked = true; setAuthMode('password'); }
   }
-  
+
   // Bind dismiss
   modal.querySelectorAll('[data-account-settings-dismiss]').forEach(el => {
     el.addEventListener('click', () => modal.classList.add('hidden'), { once: true });
   });
-  
+
+  // Bind OAuth connect button
+  if (oauthConnectBtn && !oauthConnectBtn.dataset.bound) {
+    oauthConnectBtn.dataset.bound = '1';
+    oauthConnectBtn.addEventListener('click', async () => {
+      const selectedRadio = modal.querySelector('input[name="account-auth-method"]:checked');
+      const provider = selectedRadio?.value;
+      if (!provider || provider === 'password') return;
+      const email = $('#account-settings-email')?.value.trim();
+      if (!email && provider === 'google') {
+        // Microsoft can extract email from token, Google too but better to have it
+      }
+      try {
+        const res = await api(`/api/v2/mail/oauth/authorize?provider=${provider}`);
+        if (res.authUrl) {
+          // Store pending state in sessionStorage so we can restore after redirect
+          const pendingId = $('#account-settings-id')?.value;
+          sessionStorage.setItem('mailOAuthPending', JSON.stringify({
+            provider,
+            editAccountId: pendingId || null,
+            displayName: $('#account-settings-name')?.value.trim(),
+          }));
+          window.location.href = res.authUrl;
+        }
+      } catch (e) {
+        showToast('Failed to start OAuth: ' + e.message, true);
+      }
+    });
+  }
+
   // Bind save
   const saveBtn = $('#account-settings-save');
   if (saveBtn && !saveBtn.dataset.bound) {
     saveBtn.dataset.bound = '1';
     saveBtn.addEventListener('click', async () => {
       const id = $('#account-settings-id').value;
+      const selectedRadio = modal.querySelector('input[name="account-auth-method"]:checked');
+      const authMethod = selectedRadio?.value || 'password';
+
+      if (authMethod === 'microsoft' || authMethod === 'google') {
+        showToast('Use the "Connect" button above to authenticate via OAuth');
+        return;
+      }
+
       const folderCbs = $('#account-settings-folders')?.querySelectorAll('input[type="checkbox"]:checked');
       const folders = folderCbs ? Array.from(folderCbs).map(cb => cb.value) : ["INBOX"];
       const payload = {
@@ -16765,7 +16841,7 @@ function openAccountSettingsModal(editAccountId) {
       } catch (e) { showToast('Failed: ' + e.message, true); }
     });
   }
-  
+
   // Bind delete
   const delBtn = $('#account-settings-delete');
   if (delBtn && !delBtn.dataset.bound) {
@@ -23330,7 +23406,7 @@ async function populateEmailScannerTab() {
           return `
           <div style="padding:4px 0; border-bottom:1px solid var(--border);">
             <div style="display:flex; justify-content:space-between; align-items:center;">
-              <span>${escapeHtml(a.email || '')} — ${escapeHtml(a.imap_host || '')}:${a.imap_port || 993}</span>
+              <span>${escapeHtml(a.email || '')} — ${escapeHtml(a.imap_host || '')}:${a.imap_port || 993}${a.authType === 'microsoft' ? ' <i class="ti ti-brand-microsoft" style="font-size:0.8rem;" title="Microsoft 365"></i>' : ''}${a.authType === 'google' ? ' <i class="ti ti-brand-google" style="font-size:0.8rem;" title="Google"></i>' : ''}</span>
               <span style="display:flex; gap:0.3rem; align-items:center;">
                 <span style="font-size:0.75rem; color:${a.sync_enabled ? 'var(--accent)' : 'var(--muted)'};">${a.sync_enabled ? '● Active' : '○ Disabled'}</span>
               <button type="button" class="btn btn-ghost btn-sm scanner-acct-edit" data-id="${a.id}" style="font-size:0.75rem;"><i class="ti ti-pencil"></i></button>
@@ -23573,41 +23649,11 @@ async function populateEmailScannerTab() {
 function bindScannerAdminButtons() {
   const ctrList = $("#scanner-contractors-list");
   const rulesList = $("#scanner-rules-list");
-  // Add account
+  // Add account — use main modal for OAuth support
   const addBtn = $("#scanner-account-add");
-  const form = $("#scanner-account-form");
-  if (addBtn && form && !addBtn.dataset.bound) {
+  if (addBtn && !addBtn.dataset.bound) {
     addBtn.dataset.bound = "1";
-    addBtn.addEventListener("click", () => form.classList.toggle("hidden"));
-    const cancelBtn = $("#scanner-acct-cancel");
-    if (cancelBtn) cancelBtn.addEventListener("click", () => form.classList.add("hidden"));
-    const saveBtn = $("#scanner-acct-save");
-    if (saveBtn) saveBtn.addEventListener("click", async () => {
-      const email = $("#scanner-acct-email")?.value.trim();
-      const host = $("#scanner-acct-host")?.value.trim();
-      const port = parseInt($("#scanner-acct-port")?.value) || 993;
-      const password = $("#scanner-acct-password")?.value;
-      const folderCbs = $("#scanner-acct-folders")?.querySelectorAll('input[type="checkbox"]:checked');
-      const folders = folderCbs ? Array.from(folderCbs).map(cb => cb.value) : ["INBOX"];
-      const smtpHost = $("#scanner-acct-smtp-host")?.value.trim() || null;
-      const smtpPort = parseInt($("#scanner-acct-smtp-port")?.value) || 587;
-      const smtpPassword = $("#scanner-acct-smtp-password")?.value || null;
-      const fromName = $("#scanner-acct-from-name")?.value.trim() || null;
-      if (!email || !host || !password) { showToast("Email, IMAP host, and password required", true); return; }
-      try {
-        const payload = { email, imap_host: host, imap_port: port, password, monitored_folders: folders };
-        if (smtpHost) {
-          payload.smtp_host = smtpHost;
-          payload.smtp_port = smtpPort;
-          payload.smtp_password = smtpPassword;
-          payload.smtp_from_name = fromName;
-        }
-        await api("/api/v2/mail/accounts", { method: "POST", body: JSON.stringify(payload) });
-        showToast("Account saved");
-        form.classList.add("hidden");
-        populateEmailScannerTab();
-      } catch (e) { showToast("Failed: " + e.message, true); }
-    });
+    addBtn.addEventListener("click", () => openAccountSettingsModal());
   }
 
   // Refresh accounts
@@ -28278,6 +28324,31 @@ async function init() {
   } catch (e) {
     console.warn("Failed to load branding:", e);
   }
+
+  // Handle OAuth redirect callback
+  (function handleMailOAuthCallback() {
+    const params = new URLSearchParams(window.location.search);
+    const oauthStatus = params.get('mailOAuth');
+    if (oauthStatus) {
+      const msg = params.get('msg') || '';
+      history.replaceState({}, '', window.location.pathname + window.location.hash);
+      if (oauthStatus === 'success') {
+        showToast(`Mail account connected: ${msg}`);
+        renderMailTabs().catch(() => {});
+        // If we had a pending modal state, re-open for editing
+        try {
+          const pending = JSON.parse(sessionStorage.getItem('mailOAuthPending') || 'null');
+          if (pending) {
+            sessionStorage.removeItem('mailOAuthPending');
+            // Refresh accounts list and open modal for the new/edit account
+            setTimeout(() => openAccountSettingsModal(pending.editAccountId), 500);
+          }
+        } catch {}
+      } else {
+        showToast(`OAuth failed: ${msg}`, true);
+      }
+    }
+  })();
 
   state.groups = [];
   state.calendarTiles = [];

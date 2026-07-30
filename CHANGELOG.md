@@ -2,6 +2,30 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — OAuth 2.0 IMAP Email (2026-07-29)
+
+- **`oauth_providers.py` added:** Microsoft 365 and Google OAuth 2.0 provider classes using stdlib only (`urllib.request`). Each implements `authorize_url()`, `exchange_code()`, `refresh_token()`, `imap_settings()`, `smtp_settings()`.
+- **`server.py` — 3 new OAuth endpoints:** `GET /api/v2/mail/oauth/authorize` (returns provider auth URL), `GET /api/v2/mail/oauth/callback` (exchanges code for tokens, creates/updates account), `POST /api/v2/mail/oauth/refresh` (refreshes expired tokens). In-memory state store for CSRF protection.
+- **`server.py` — mail account handlers updated:** `_handle_mail_accounts()` strips secrets and returns `authType`/`oauthStatus` fields. `_handle_mail_account_create/update` accept OAuth token fields. `_handle_mail_send` auto-refreshes expired tokens and passes them to SMTP client.
+- **`scanner/mail_scanner.py` — OAuth support:** `_get_mailboxes()` queries OAuth columns and returns `auth_type: "xoauth2"`. `_fetch_messages()` and `_list_imap_folders()` use `mailbox.xoauth2()` for OAuth accounts. `_refresh_oauth_token_if_needed()` function auto-refreshes tokens before IMAP connection.
+- **`smtp_client.py` — XOAUTH2 support:** `send_email_from_account()` accepts `oauth_provider` and `oauth_access_token`, authenticates via `server.auth("XOAUTH2", ...)`.
+- **`index.html` — account-settings-modal updated:** Added Auth Method radio buttons (Password / Microsoft 365 / Google) with conditional manual fields vs OAuth connect section with branded provider buttons.
+- **`app.js` — frontend OAuth flow:** Rewrote `openAccountSettingsModal()` to handle OAuth provider toggle, connect button click, and `?mailOAuth=` redirect callback. Added auth type badges (Microsoft/Google icons) in `renderMailTabs()` account tabs and `populateEmailScannerTab()` account list. Scanner "Add Account" button now opens the main account-settings-modal for consistent OAuth support.
+- **`.env` — OAuth variables added** (commented out): `OAUTH_MICROSOFT_CLIENT_ID`, `OAUTH_MICROSOFT_CLIENT_SECRET`, `OAUTH_MICROSOFT_TENANT`, `OAUTH_GOOGLE_CLIENT_ID`, `OAUTH_GOOGLE_CLIENT_SECRET`, `OAUTH_REDIRECT_URI`.
+- **Files:** `oauth_providers.py` (new), `server.py`, `scanner/mail_scanner.py`, `smtp_client.py`, `public/index.html`, `public/app.js`, `.env`, `AGENTS.md`, `CHANGELOG.md`.
+
+## Phase 3 — Localtonet Dev Tunnels (2026-07-29)
+
+- **Localtonet tunnels configured for remote testing.** Two tunnels set up on the dev workstation:
+  - CRM dashboard: `https://g2vpdgb498.localto.net` → `127.0.0.1:8766` (HTTPS/HTTP)
+  - Document Server: `https://m6cbapao4w.localto.net:6777` → `127.0.0.1:6777` → (tcp-forwarder.py) → `127.0.0.1:9443` (TCP raw passthrough)
+- **`tcp-forwarder.py` added:** Bridges `127.0.0.1:6777`→`127.0.0.1:9443` because the localtonet TCP tunnel was configured for port 6777 but the docserver container listens on 9443. Kill with `pkill -f tcp-forwarder.py` or `kill $(lsof -ti :6777)`.
+- **`.env` updated for tunnel URLs.** `DOCS_PUBLIC_URL` now includes port `:6777`. See AGENTS.md "Localtonet tunnel (dev)" section for full table of production vs dev values and revert instructions.
+- **`server.py` `_effective_docs_internal_url()` simplified.** Removed the Docker-only guard so `DOCS_INTERNAL_URL` is respected in both host and Docker modes as long as it's not the `http://docserver` placeholder. The CRM can now talk to the docserver via `https://127.0.0.1:9443` when running on the host.
+- **`server.py` `_proxy_document_server()` SSL bypass added.** Self-signed OnlyOffice Document Server certificates are now bypassed (same pattern as `_download_from_docserver()`). The bypass is activated when the internal URL begins with `https://`.
+- **Both changes are safe for production but documented for easy reversal.** See AGENTS.md for revert commands and per-function notes.
+- **Files:** `.env`, `server.py`, `tcp-forwarder.py`, `AGENTS.md`, `CHANGELOG.md`.
+
 ## Phase 3 — Follow-up Fixes (2026-07-29)
 
 - **Mail tag badges now appear in the email list.** Root cause was a stale server process running pre-fix code; restarted with `setsid` so the backend batch-tag query is active. Tags now return in `/api/v2/mail/messages` and render as colored badge pills.

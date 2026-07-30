@@ -85,6 +85,7 @@ from presence_store import (
     set_status, touch_crm_activity, touch_heartbeat,
 )
 from notification_dispatcher import start_dispatcher, stop_dispatcher
+import oauth_providers
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent
@@ -122,6 +123,16 @@ DOCS_PUBLIC_URL = os.environ.get("DOCS_PUBLIC_URL", "").rstrip("/")
 CRM_PUBLIC_URL = os.environ.get("CRM_PUBLIC_URL", "").rstrip("/") or DOCS_PUBLIC_URL
 CONTAINER_NAME = os.environ.get("CONTAINER_NAME", "sietch-crm")
 DOCSERVER_CONTAINER_NAME = os.environ.get("DOCSERVER_CONTAINER_NAME", "onlyoffice-docserver")
+
+OAUTH_MICROSOFT_CLIENT_ID = os.environ.get("OAUTH_MICROSOFT_CLIENT_ID", "")
+OAUTH_MICROSOFT_CLIENT_SECRET = os.environ.get("OAUTH_MICROSOFT_CLIENT_SECRET", "")
+OAUTH_MICROSOFT_TENANT = os.environ.get("OAUTH_MICROSOFT_TENANT", "common")
+OAUTH_GOOGLE_CLIENT_ID = os.environ.get("OAUTH_GOOGLE_CLIENT_ID", "")
+OAUTH_GOOGLE_CLIENT_SECRET = os.environ.get("OAUTH_GOOGLE_CLIENT_SECRET", "")
+OAUTH_REDIRECT_URI = os.environ.get("OAUTH_REDIRECT_URI", "")
+
+# In-memory OAuth state store: state -> (user_id, provider, expires_at)
+_oauth_states: dict[str, tuple[int, str, float]] = {}
 
 # ── DB init ────────────────────────────────────────────────────────────────────
 import db
@@ -250,24 +261,37 @@ def _is_running_in_docker() -> bool:
 def _effective_docs_internal_url() -> str:
     """Return the URL the CRM should use to reach the Document Server.
 
-    In production the Document Server often lives on a separate droplet, so
-    DOCS_INTERNAL_URL should be set to a URL reachable from the CRM container
-    (frequently the same as DOCS_PUBLIC_URL). In local standalone dev the
-    Docker-network hostname is not resolvable from the host, so we fall back to
-    the public URL.
+    Priority order:
+      1. DOCS_INTERNAL_URL – if set to a real URL (not the old "http://docserver:8080"
+         placeholder), return it directly.  This can be a Docker service hostname
+         ("https://onlyoffice-docserver:443"), a local loopback
+         ("https://127.0.0.1:9443"), or any other address the CRM can reach.
+      2. DOCS_PUBLIC_URL – fallback for legacy setups or when the server runs on
+         the host but no internal URL was configured.
+
+    In development with the dashboard running on the host and the docserver in a
+    Docker container, set DOCS_INTERNAL_URL to https://127.0.0.1:9443 so the CRM
+    talks directly to the container's mapped port without going through the
+    localtonet tunnel (faster, less latency).
+
+    In production Docker Compose, set DOCS_INTERNAL_URL to the service name,
+    e.g. http://docserver:80 or https://onlyoffice-docserver:443. The old
+    placeholder "http://docserver:8080" is ignored.
     """
-    if not _is_running_in_docker():
-        # Standalone dev: Docker hostnames like http://docserver:8080 don't resolve.
-        return DOCS_PUBLIC_URL or DOCS_INTERNAL_URL
-    # In Docker: trust an explicitly configured internal URL unless it's the
-    # placeholder local-dev hostname. Fall back to public URL otherwise.
     if DOCS_INTERNAL_URL and not DOCS_INTERNAL_URL.startswith("http://docserver"):
         return DOCS_INTERNAL_URL
     return DOCS_PUBLIC_URL or DOCS_INTERNAL_URL
 
 
 def _proxy_document_server(method: str, ds_path: str, body: bytes | None = None, headers: dict | None = None, timeout: int = 30) -> tuple:
-    """Forward a request to the internal OnlyOffice Document Server. Returns (status, body, content_type)."""
+    """Forward a request to the internal OnlyOffice Document Server. Returns (status, body, content_type).
+
+    NOTE: This function bypasses SSL certificate verification because the local
+    OnlyOffice Document Server typically uses a self-signed certificate (both in
+    local dev and production). The same approach is used in
+    _download_from_docserver().  If the Document Server ever gets a proper
+    certificate from a trusted CA, this bypass can be removed.
+    """
     ds_url = _effective_docs_internal_url()
     if not ds_url:
         return 503, b'{"error": "Document Server not configured"}', "application/json"
@@ -276,8 +300,13 @@ def _proxy_document_server(method: str, ds_path: str, body: bytes | None = None,
     if headers:
         req_headers.update(headers)
     req = urllib.request.Request(url, data=body, method=method, headers=req_headers, unverifiable=True)
+    ctx = None
+    if ds_url.lower().startswith("https"):
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             return resp.status, resp.read(), resp.headers.get("Content-Type", "application/json")
     except urllib.error.HTTPError as e:
         return e.code, e.read(), e.headers.get("Content-Type", "application/json")
@@ -939,6 +968,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_batch_opportunity_tags()
             return
 
+        # ── Mail OAuth ──
+        if api_path == "/api/v2/mail/oauth/authorize":
+            self._handle_oauth_authorize()
+            return
+        if api_path == "/api/v2/mail/oauth/callback":
+            self._handle_oauth_callback()
+            return
+        m = re.match(r"^/api/v2/mail/oauth/refresh/(\d+)$", api_path)
+        if m:
+            self._handle_oauth_refresh(int(m.group(1)))
+            return
+
         # ── Mail Scanner ──
         if api_path == "/api/v2/mail/inbox":
             self._handle_mail_inbox()
@@ -1436,6 +1477,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if api_path == "/api/v2/notifications/read-all" and method == "PUT":
             self._handle_notifications_mark_all_read()
+            return
+
+        # ── Mail OAuth ──
+        if api_path == "/api/v2/mail/oauth/refresh" and method == "POST":
+            self._handle_oauth_refresh_manual()
             return
 
         # ── Mail Scanner ──
@@ -4855,6 +4901,158 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         clear_conversation("sietch", str(user["id"]), with_id)
         _json_response(self, 200, {"ok": True})
 
+    # ── OAuth Handlers ───────────────────────────────────────────────────────
+
+    def _handle_oauth_authorize(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        provider_name = (qs.get("provider") or [""])[0].strip().lower()
+        prov = oauth_providers.get_provider(provider_name)
+        if not prov:
+            _json_response(self, 400, {"error": f"Unknown provider: {provider_name}"})
+            return
+        if not oauth_providers.MICROSOFT_CLIENT_ID and not oauth_providers.GOOGLE_CLIENT_ID:
+            _json_response(self, 400, {"error": "No OAuth providers configured"})
+            return
+        state = oauth_providers.generate_state()
+        _oauth_states[state] = (user["id"], provider_name, time.time() + 600)
+        auth_url = prov.authorize_url(state)
+        _json_response(self, 200, {"authUrl": auth_url})
+
+    def _handle_oauth_callback(self) -> None:
+        qs = parse_qs(urlparse(self.path).query)
+        code = (qs.get("code") or [""])[0]
+        state_val = (qs.get("state") or [""])[0]
+        error = (qs.get("error") or [""])[0]
+        provider_name = (qs.get("provider") or [""])[0].strip().lower()
+
+        if error:
+            logger.warning("OAuth error from %s: %s", provider_name, error)
+            self._oauth_redirect_with_status("error", error)
+            return
+
+        if not code or not state_val:
+            _json_response(self, 400, {"error": "Missing code or state"})
+            return
+
+        state_data = _oauth_states.pop(state_val, None)
+        if not state_data:
+            _json_response(self, 400, {"error": "Invalid or expired state"})
+            return
+        user_id, stored_provider, _ = state_data
+
+        if provider_name != stored_provider:
+            _json_response(self, 400, {"error": "Provider mismatch"})
+            return
+
+        prov = oauth_providers.get_provider(provider_name)
+        if not prov:
+            _json_response(self, 400, {"error": f"Unknown provider: {provider_name}"})
+            return
+
+        try:
+            token_data = prov.exchange_code(code)
+        except Exception as e:
+            logger.exception("OAuth code exchange failed for %s", provider_name)
+            self._oauth_redirect_with_status("error", f"Token exchange failed: {e}")
+            return
+
+        access_token = token_data.get("access_token", "")
+        refresh_token = token_data.get("refresh_token", "")
+        expires_in = token_data.get("expires_in", 3600)
+        email = token_data.get("email", "")
+
+        if not access_token:
+            self._oauth_redirect_with_status("error", "No access token returned")
+            return
+
+        expires_ts = datetime.now(timezone.utc).timestamp() + expires_in
+        imap = prov.imap_settings()
+        smtp = prov.smtp_settings()
+
+        existing = db.query_one(
+            "SELECT id FROM mail_accounts WHERE email = %s AND owner_user_id = %s",
+            (email, user_id),
+        )
+
+        if existing:
+            db.execute(
+                """UPDATE mail_accounts SET
+                   oauth_provider = %s, oauth_access_token = %s, oauth_refresh_token = %s,
+                   oauth_token_expires = to_timestamp(%s), imap_host = COALESCE(NULLIF(imap_host, ''), %s),
+                   imap_port = COALESCE(NULLIF(imap_port, 0), %s),
+                   smtp_host = COALESCE(NULLIF(smtp_host, ''), %s),
+                   smtp_port = COALESCE(NULLIF(smtp_port, 0), %s),
+                   sync_enabled = TRUE
+                   WHERE id = %s""",
+                (provider_name, access_token, refresh_token, expires_ts,
+                 imap["host"], imap["port"], smtp["host"], smtp["port"],
+                 existing["id"]),
+            )
+        else:
+            db.execute(
+                """INSERT INTO mail_accounts
+                   (email, imap_host, imap_port, smtp_host, smtp_port, owner_user_id,
+                    oauth_provider, oauth_access_token, oauth_refresh_token,
+                    oauth_token_expires, smtp_user, sync_enabled, monitored_folders)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s), %s, TRUE, 'INBOX')""",
+                (email, imap["host"], imap["port"], smtp["host"], smtp["port"],
+                 user_id, provider_name, access_token, refresh_token, expires_ts, email),
+            )
+
+        self._oauth_redirect_with_status("success", email)
+
+    def _oauth_redirect_with_status(self, status: str, message: str) -> None:
+        base = CRM_PUBLIC_URL.rstrip("/") or DOCS_PUBLIC_URL.rstrip("/") or "/"
+        url = f"{base}?mailOAuth={status}&msg={urllib.parse.quote(message)}"
+        self.send_response(302)
+        self.send_header("Location", url)
+        self.end_headers()
+
+    def _handle_oauth_refresh(self, account_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            row = db.query_one(
+                "SELECT oauth_provider, oauth_refresh_token FROM mail_accounts WHERE id = %s AND owner_user_id = %s",
+                (account_id, user["id"]),
+            )
+            if not row or not row.get("oauth_provider") or not row.get("oauth_refresh_token"):
+                _json_response(self, 400, {"error": "Account not found or not OAuth-enabled"})
+                return
+            prov = oauth_providers.get_provider(row["oauth_provider"])
+            if not prov:
+                _json_response(self, 400, {"error": "Unknown provider"})
+                return
+            token_data = prov.refresh_token(row["oauth_refresh_token"])
+            expires_ts = datetime.now(timezone.utc).timestamp() + token_data.get("expires_in", 3600)
+            new_refresh = token_data.get("refresh_token", row["oauth_refresh_token"])
+            db.execute(
+                "UPDATE mail_accounts SET oauth_access_token = %s, oauth_refresh_token = %s, oauth_token_expires = to_timestamp(%s) WHERE id = %s",
+                (token_data["access_token"], new_refresh, expires_ts, account_id),
+            )
+            _json_response(self, 200, {"ok": True, "expiresAt": expires_ts})
+        except Exception as e:
+            logger.exception("Failed to refresh OAuth token for account %d", account_id)
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_oauth_refresh_manual(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            account_id = payload.get("account_id")
+            if not account_id:
+                _json_response(self, 400, {"error": "account_id required"})
+                return
+            self._handle_oauth_refresh(int(account_id))
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
     # ── Mail Scanner Handlers ──────────────────────────────────────
 
     def _link_email_to_deal(self, message_id: int, opp_id: int, linked_by: int | None = None) -> bool:
@@ -5365,7 +5563,29 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_accounts(self) -> None:
         try:
-            rows = db.query_dicts("SELECT * FROM mail_accounts ORDER BY email")
+            rows = db.query_dicts(
+                """SELECT id, email, display_name, imap_host, imap_port,
+                          smtp_host, smtp_port, smtp_from_name, smtp_user,
+                          sync_enabled, monitored_folders, oauth_provider,
+                          oauth_token_expires, oauth_scopes,
+                          last_sync, owner_user_id, created_at
+                   FROM mail_accounts ORDER BY email"""
+            )
+            now_ts = datetime.now(timezone.utc).timestamp()
+            for r in rows:
+                r["password_encrypted"] = ""
+                r["smtp_password_encrypted"] = ""
+                r["oauth_access_token"] = ""
+                r["oauth_refresh_token"] = ""
+                r["authType"] = r.get("oauth_provider") or "password"
+                if r.get("oauth_provider"):
+                    expires = r.get("oauth_token_expires")
+                    if expires and isinstance(expires, datetime):
+                        r["oauthStatus"] = "connected" if expires.timestamp() > now_ts else "expired"
+                    else:
+                        r["oauthStatus"] = "connected"
+                else:
+                    r["oauthStatus"] = None
             _json_response(self, 200, {"accounts": rows})
         except Exception as e:
             logger.exception("Failed to fetch mail accounts")
@@ -5444,12 +5664,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 folders_str = ",".join(folders_raw)
             else:
                 folders_str = str(folders_raw or "INBOX")
+            oauth_provider = payload.get("oauth_provider") or None
             result = db.query_one(
                 """INSERT INTO mail_accounts
                    (email, imap_host, imap_port, password_encrypted, owner_user_id,
                     smtp_host, smtp_port, smtp_user, smtp_password_encrypted,
-                    smtp_use_tls, smtp_from_name, oauth_provider, monitored_folders)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    smtp_use_tls, smtp_from_name, oauth_provider, monitored_folders,
+                    oauth_access_token, oauth_refresh_token, oauth_token_expires)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
                     payload.get("email"),
@@ -5463,8 +5685,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     payload.get("smtp_password"),
                     payload.get("smtp_use_tls", True),
                     payload.get("smtp_from_name"),
-                    payload.get("oauth_provider"),
+                    oauth_provider,
                     folders_str,
+                    payload.get("oauth_access_token"),
+                    payload.get("oauth_refresh_token"),
+                    payload.get("oauth_token_expires"),
                 ),
             )
             _json_response(self, 201, {"id": result["id"]})
@@ -5477,10 +5702,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             payload = json.loads(_read_body(self) or b"{}")
             fields = []
             params: list[Any] = []
-            for key in ("email", "imap_host", "smtp_host", "smtp_user", "smtp_from_name", "oauth_provider"):
+            for key in ("email", "imap_host", "smtp_host", "smtp_user", "smtp_from_name", "oauth_provider",
+                        "oauth_access_token", "oauth_refresh_token"):
                 if key in payload:
                     fields.append(f"{key} = %s")
                     params.append(payload[key])
+            if "oauth_token_expires" in payload:
+                val = payload["oauth_token_expires"]
+                if isinstance(val, (int, float)):
+                    fields.append("oauth_token_expires = to_timestamp(%s)")
+                    params.append(val)
+                else:
+                    fields.append("oauth_token_expires = %s")
+                    params.append(val)
             for key in ("imap_port", "smtp_port"):
                 if key in payload:
                     fields.append(f"{key} = %s")
@@ -5573,6 +5807,27 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 404, {"error": "Account not found"})
                 return
 
+            # Refresh OAuth token if needed
+            oauth_provider = acct.get("oauth_provider")
+            oauth_access_token = acct.get("oauth_access_token")
+            if oauth_provider and oauth_access_token:
+                expires = acct.get("oauth_token_expires")
+                if expires and isinstance(expires, datetime) and expires.timestamp() < datetime.now(timezone.utc).timestamp():
+                    try:
+                        import oauth_providers as op_mod
+                        prov = op_mod.get_provider(oauth_provider)
+                        if prov and acct.get("oauth_refresh_token"):
+                            tok = prov.refresh_token(acct["oauth_refresh_token"])
+                            oauth_access_token = tok.get("access_token", oauth_access_token)
+                            new_expires = time.time() + tok.get("expires_in", 3600)
+                            new_refresh = tok.get("refresh_token", acct["oauth_refresh_token"])
+                            db.execute(
+                                "UPDATE mail_accounts SET oauth_access_token = %s, oauth_refresh_token = %s, oauth_token_expires = to_timestamp(%s) WHERE id = %s",
+                                (oauth_access_token, new_refresh, new_expires, account_id),
+                            )
+                    except Exception:
+                        logger.exception("Failed to refresh OAuth token for send")
+
             from smtp_client import send_email_from_account
             ok, err = send_email_from_account(
                 smtp_host=acct["smtp_host"] or "",
@@ -5589,6 +5844,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 bcc_addr=bcc_addr,
                 use_tls=bool(acct["smtp_use_tls"]),
                 attachments=decoded_attachments if decoded_attachments else None,
+                oauth_provider=oauth_provider,
+                oauth_access_token=oauth_access_token,
             )
 
             attachments_json = json.dumps([{"filename": a.get("filename"), "mime_type": a.get("mime_type"), "size": len(a.get("content", ""))} for a in (payload.get("attachments") or [])]) if payload.get("attachments") else None

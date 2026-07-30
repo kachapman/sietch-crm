@@ -1,7 +1,48 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** 2026-07-29 session 40: Fixed mail tag badges not appearing (server was running stale pre-fix process; restarted with `setsid`), document picker folder tree now repositions under the active scope button to match documents modal layout, mail list tag toolbar/context-menu actions now refresh the list after apply/remove, right-click context menu items/subitems get visible hover highlight in dark mode via new `--hover` CSS variable, tag badges moved to the right of the body snippet, attachment size limit raised to 20MB, compose-modal attachments now render when moved to a compose tab, email preview modal fills mobile viewport, and email body iframe sandbox updated to allow-scripts to stop the about:srcdoc console error. Files changed: `public/app.js`, `public/styles.css`, `AGENTS.md`, `CHANGELOG.md`.
+**Last session summary (for next resume):** 2026-07-29 session 42: Implemented OAuth 2.0 support for IMAP email. Created `oauth_providers.py` with Microsoft 365 and Google provider classes (stdlib-only, `authorize_url`/`exchange_code`/`refresh_token`/`imap_settings`/`smtp_settings`). Added 3 new OAuth endpoints in `server.py` (`/api/v2/mail/oauth/authorize`, `/callback`, `/refresh`) with in-memory state store. Stripped secrets from `_handle_mail_accounts()`, added `authType`/`oauthStatus` fields. Updated `_handle_mail_account_create/update/send` for OAuth tokens. Updated `scanner/mail_scanner.py` to auto-refresh OAuth tokens, use `mailbox.xoauth2()` for IMAP auth. Updated `smtp_client.py` with XOAUTH2 support via `server.auth("XOAUTH2", ...)`. Updated `index.html` account-settings-modal with Auth Method radio buttons (Password / Microsoft 365 / Google). Updated `app.js`: rewrote `openAccountSettingsModal()` for OAuth provider toggle + connect button + redirect flow; added `?mailOAuth=` redirect handler in `init()` for OAuth callback; added auth type badges (Microsoft/Google icons) in `renderMailTabs()` and `populateEmailScannerTab()`; changed scanner "Add Account" button to use main modal. Added OAuth env vars to `.env` (commented out).
+
+## Localtonet tunnel (dev)
+
+To test the CRM remotely, two localtonet tunnels are configured on this workstation:
+
+| Tunnel | Public URL | Forwards to | Type |
+|--------|-----------|-------------|------|
+| Sietch CRM | `https://g2vpdgb498.localto.net` | `127.0.0.1:8766` | HTTPS/HTTP |
+| Sietch Docs | `https://m6cbapao4w.localto.net:6777` | `127.0.0.1:6777` → (tcp-forwarder.py) → `127.0.0.1:9443` | TCP (raw TLS passthrough) |
+
+**TCP forwarder:** The docserver tunnel was set up as a TCP tunnel pointing at port 6777, but the OnlyOffice Document Server container listens on port 9443. A small Python script (`tcp-forwarder.py` in the project root) bridges `127.0.0.1:6777` → `127.0.0.1:9443`. Kill with `pkill -f tcp-forwarder.py` or `kill $(lsof -ti :6777)`. It is started per-session and will not survive a reboot.
+
+**Important for production deployment:** These values MUST be reversed before deploying to the production droplet. The production `.env` should use the actual production URLs:
+
+| Variable | Dev (localtonet) | Production |
+|----------|------------------|------------|
+| `CRM_PUBLIC_URL` | `https://g2vpdgb498.localto.net` | `https://dashboard.publicadjustermidwest.com` |
+| `DOCS_PUBLIC_URL` | `https://m6cbapao4w.localto.net:6777` | `https://docs.publicadjustermidwest.com` |
+| `DOCS_INTERNAL_URL` | `https://127.0.0.1:9443` | `https://onlyoffice-docserver:443` (Docker) or `https://docs.publicadjustermidwest.com` (separate droplet) |
+
+**Two code changes in `server.py` that are safe to keep in production but should be reviewed:**
+
+1. **`_effective_docs_internal_url()` (line 250):** Simplified to always respect `DOCS_INTERNAL_URL` when it's set to a non-placeholder value, regardless of Docker/host mode. In Docker mode the function previously only used `DOCS_INTERNAL_URL` if inside a container; now it works in both modes. The old Docker-only guard was removed. This is safe for production as long as `DOCS_INTERNAL_URL` is set to a valid address.
+
+2. **`_proxy_document_server()` (line 275):** Added SSL certificate verification bypass for HTTPS connections to the internal Document Server. This was needed because the local OnlyOffice Document Server uses a self-signed certificate. The same pattern is already used in `_download_from_docserver()`. **To remove this bypass in production:** delete the `ctx = None` / `if ds_url.startswith("https"):` block (lines ~285-290) and pass `context=ctx` from the `urlopen` calls, or change `CERT_NONE` to `CERT_REQUIRED` if the production Document Server has a proper CA-signed certificate.
+
+**To revert all changes for production:**
+```bash
+# 1. Restore .env to production values
+git checkout -- .env
+
+# 2. In server.py, revert the two functions if desired:
+#    - _effective_docs_internal_url() → old Docker-guard version
+#    - _proxy_document_server() → remove SSL bypass block
+#    (Both are optional; the new code works fine in production too.)
+
+# 3. Rebuild and restart the Docker compose stack
+git pull
+docker compose build
+docker compose up -d
+```
 
 - Known issue: server process dies when backgrounded from opencode shell (use `setsid` to detach — see ISSUE-012).
 - Known issue: server must be killed and restarted after opencode session exits (use `setsid` to detach — see ISSUE-012).

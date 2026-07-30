@@ -60,6 +60,8 @@ def send_email_from_account(
     bcc_addr: str | None = None,
     use_tls: bool = True,
     attachments: list[dict] | None = None,
+    oauth_provider: str | None = None,
+    oauth_access_token: str | None = None,
 ) -> tuple[bool, str | None]:
     """Send email via per-account SMTP settings. Returns (success, error_message)."""
     if not smtp_host or not smtp_user:
@@ -104,7 +106,11 @@ def send_email_from_account(
         with smtplib.SMTP(smtp_host, smtp_port) as server:
             if use_tls:
                 server.starttls()
-            server.login(smtp_user, smtp_password)
+            if oauth_provider and oauth_access_token:
+                auth_str = f"user={smtp_user}\x01auth=Bearer {oauth_access_token}\x01\x01"
+                server.auth("XOAUTH2", lambda x: auth_str)
+            else:
+                server.login(smtp_user, smtp_password)
             server.sendmail(from_addr, all_recipients, msg.as_string())
         return True, None
     except smtplib.SMTPAuthenticationError as e:

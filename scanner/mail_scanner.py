@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from db import db
 from user_profile_store import load_user_profile, save_user_profile
+import oauth_providers
 
 logger = logging.getLogger("sietch.mail_scanner")
 
@@ -252,6 +253,34 @@ def _is_processed(conv_id: str) -> bool:
     return str(conv_id) in _load_processed_ids()
 
 
+def _refresh_oauth_token_if_needed(account_id: int, provider_name: str, current_refresh_token: str, expires_at: datetime | None) -> tuple[str, str] | None:
+    """Refresh OAuth access token if expired. Returns (new_access_token, new_refresh_token) or None."""
+    now_ts = time.time()
+    if expires_at and expires_at.timestamp() > now_ts + 300:
+        return None
+    if not current_refresh_token:
+        logger.warning("No refresh token for account %d (%s), cannot refresh", account_id, provider_name)
+        return None
+    prov = oauth_providers.get_provider(provider_name)
+    if not prov:
+        logger.warning("Unknown provider %s for account %d", provider_name, account_id)
+        return None
+    try:
+        token_data = prov.refresh_token(current_refresh_token)
+        new_access = token_data.get("access_token", "")
+        new_refresh = token_data.get("refresh_token", current_refresh_token)
+        new_expires = time.time() + token_data.get("expires_in", 3600)
+        if new_access:
+            db.execute(
+                "UPDATE mail_accounts SET oauth_access_token = %s, oauth_refresh_token = %s, oauth_token_expires = to_timestamp(%s) WHERE id = %s",
+                (new_access, new_refresh, new_expires, account_id),
+            )
+            return new_access, new_refresh
+    except Exception as e:
+        logger.error("Failed to refresh OAuth token for account %d: %s", account_id, e)
+    return None
+
+
 def _get_mailboxes() -> list[dict[str, Any]]:
     # Try env vars first (for standalone/testing)
     host = os.environ.get("SCANNER_IMAP_HOST", "")
@@ -261,13 +290,16 @@ def _get_mailboxes() -> list[dict[str, Any]]:
     inbox = os.environ.get("SCANNER_INBOX", "INBOX")
     if host and user and password:
         return [{"host": host, "port": port, "user": user, "password": password,
-                 "inbox": inbox, "use_ssl": port == IMAP_PORT_SSL, "account_id": None}]
+                 "inbox": inbox, "use_ssl": port == IMAP_PORT_SSL, "account_id": None,
+                 "auth_type": "password"}]
 
     # Fall back to mail_accounts table
     try:
         rows = db.query_dicts(
-            "SELECT id, email, imap_host, imap_port, password_encrypted, sync_enabled, monitored_folders "
-            "FROM mail_accounts WHERE sync_enabled = TRUE"
+            """SELECT id, email, imap_host, imap_port, password_encrypted,
+                      oauth_provider, oauth_access_token, oauth_refresh_token,
+                      oauth_token_expires, sync_enabled, monitored_folders
+               FROM mail_accounts WHERE sync_enabled = TRUE"""
         )
         results = []
         for row in rows:
@@ -275,16 +307,46 @@ def _get_mailboxes() -> list[dict[str, Any]]:
                 continue
             raw = (row.get("monitored_folders") or "").strip()
             folders = [f.strip() for f in raw.split(",") if f.strip()] if raw else ["INBOX"]
-            results.append({
-                "host": row["imap_host"],
-                "port": int(row.get("imap_port", 993)),
-                "user": row["email"],
-                "password": row.get("password_encrypted", ""),
-                "inbox": folders[0],
-                "folders": folders,
-                "use_ssl": int(row.get("imap_port", 993)) == IMAP_PORT_SSL,
-                "account_id": row.get("id"),
-            })
+            oauth_provider = row.get("oauth_provider")
+            if oauth_provider:
+                token_refreshed = _refresh_oauth_token_if_needed(
+                    row["id"], oauth_provider,
+                    row.get("oauth_refresh_token") or "",
+                    row.get("oauth_token_expires"),
+                )
+                if token_refreshed:
+                    access_token = token_refreshed[0]
+                else:
+                    access_token = row.get("oauth_access_token") or ""
+                if not access_token:
+                    logger.warning("No access token for OAuth account %d (%s), skipping", row["id"], row["email"])
+                    continue
+                results.append({
+                    "host": row["imap_host"],
+                    "port": int(row.get("imap_port", 993)),
+                    "user": row["email"],
+                    "oauth_token": access_token,
+                    "inbox": folders[0],
+                    "folders": folders,
+                    "use_ssl": int(row.get("imap_port", 993)) == IMAP_PORT_SSL,
+                    "account_id": row["id"],
+                    "auth_type": "xoauth2",
+                })
+            else:
+                pwd = row.get("password_encrypted", "")
+                if not pwd:
+                    continue
+                results.append({
+                    "host": row["imap_host"],
+                    "port": int(row.get("imap_port", 993)),
+                    "user": row["email"],
+                    "password": pwd,
+                    "inbox": folders[0],
+                    "folders": folders,
+                    "use_ssl": int(row.get("imap_port", 993)) == IMAP_PORT_SSL,
+                    "account_id": row["id"],
+                    "auth_type": "password",
+                })
         return results
     except Exception as e:
         logger.error("Failed to load mail accounts: %s", e)
@@ -295,7 +357,10 @@ def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None, sinc
     messages: list[dict[str, Any]] = []
     try:
         mailbox = MailBox(mailbox_cfg["host"], port=mailbox_cfg["port"])
-        mailbox.login(mailbox_cfg["user"], mailbox_cfg["password"])
+        if mailbox_cfg.get("auth_type") == "xoauth2":
+            mailbox.xoauth2(mailbox_cfg["user"], mailbox_cfg["oauth_token"])
+        else:
+            mailbox.login(mailbox_cfg["user"], mailbox_cfg["password"])
         
         folder = folder or mailbox_cfg.get("inbox", "INBOX")
         mailbox.folder.set(folder)
@@ -350,7 +415,10 @@ def _list_imap_folders(mailbox_cfg: dict[str, Any]) -> list[dict[str, Any]]:
     folders = []
     try:
         mailbox = MailBox(mailbox_cfg["host"], port=mailbox_cfg["port"])
-        mailbox.login(mailbox_cfg["user"], mailbox_cfg["password"])
+        if mailbox_cfg.get("auth_type") == "xoauth2":
+            mailbox.xoauth2(mailbox_cfg["user"], mailbox_cfg["oauth_token"])
+        else:
+            mailbox.login(mailbox_cfg["user"], mailbox_cfg["password"])
         for folder_info in mailbox.folder.list():
             folders.append({
                 "name": folder_info.name,
