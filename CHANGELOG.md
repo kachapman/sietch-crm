@@ -2,6 +2,14 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — OAuth Scope & CRM Mail Tab Fixes (2026-07-31)
+
+- **`oauth_providers.py` — fixed Microsoft OAuth token audience.** `MicrosoftProvider._SCOPE` mixed Graph scopes (`User.Read`) with Exchange scopes (`IMAP.AccessAsUser.All`, `SMTP.Send`), so the v2.0 token endpoint minted a **Graph-audience** access token (`aud=00000003-...`). Exchange Online rejects that token for IMAP/SMTP, causing `530 5.7.57 Client not authenticated to send mail` on sends and `AUTHENTICATE failed` on IMAP sync. Dropped `User.Read` so the token audience is the Outlook/Exchange resource that XOAUTH2 accepts. Also hardened `exchange_code()` email extraction: prefer the `email` claim, fall back to `preferred_username` with the `live.com#` prefix stripped.
+- **Re-authorization required.** The old consent (account id=5, `vanguardadjusting@outlook.com`) does not cover the corrected resource scopes — a refresh attempt returned `AADSTS65001 consent_required`. User must re-run **Email → Admin → OAuth Connect → Accept** to mint a valid Exchange-audience token. The failed refresh wrote nothing to the DB.
+- **`server.py` — CRM Mail account isolation.** `_handle_mail_accounts()` now returns `is_crm_mail` in the account JSON. The `account_id=crm` sentinel (previously treated as "all accounts") now filters to `is_crm_mail = TRUE` accounts in `_handle_mail_messages()`, `_handle_mail_threads()`, `_handle_mail_drafts_get()`, and `_handle_mail_unread_count()`.
+- **`app.js` — CRM accounts no longer get their own tab.** `renderMailTabs()` skips accounts where `is_crm_mail === true`; they belong to the CRM Mail tab only. The CRM Mail tab now sends `account_id=crm` when loading messages/drafts/threads (showing only company-inbox mail, not personal accounts) and its unread badge queries `unread-count?account_id=crm`.
+- **Files:** `oauth_providers.py`, `server.py`, `public/app.js`, `AGENTS.md`, `CHANGELOG.md`.
+
 ## Phase 3 — OAuth & Email List Fixes (2026-07-31)
 
 - **`server.py` — OAuth import-order fix.** `mail_scanner` (which imports `oauth_providers` and reads its env-derived constants) is now imported AFTER `_load_env_file()` has populated the environment. Previously `server.py` imported `mail_scanner` at the top of the file, so `oauth_providers` baked in empty client credentials and every OAuth request failed with "No OAuth providers configured".

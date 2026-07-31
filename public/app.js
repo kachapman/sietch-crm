@@ -15301,8 +15301,9 @@ async function openMailInboxModal() {
     html += `<span class="mail-tab-badge" data-account-badge="crm"></span>`;
     html += `</button>`;
 
-    // User account tabs
+    // User account tabs (CRM/company accounts fold into the CRM Mail tab)
     for (const acct of accounts) {
+      if (acct.is_crm_mail === true) continue;
       const isActive = mailState.activeAccount === acct.id;
       const label = acct.display_name || acct.email;
       let authBadge = '';
@@ -15328,6 +15329,7 @@ async function openMailInboxModal() {
 
     // Update unread badges
     for (const acct of accounts) {
+      if (acct.is_crm_mail === true) continue;
       try {
         const udata = await api(`/api/v2/mail/unread-count?account_id=${acct.id}`);
         const badge = $(`[data-account-badge="${acct.id}"]`);
@@ -15338,6 +15340,16 @@ async function openMailInboxModal() {
         }
       } catch { /* non-fatal */ }
     }
+    // CRM Mail badge (is_crm_mail accounts only)
+    try {
+      const cudata = await api('/api/v2/mail/unread-count?account_id=crm');
+      const cbadge = $('[data-account-badge="crm"]');
+      if (cbadge) {
+        const count = cudata.count || 0;
+        cbadge.textContent = count > 0 ? count : '';
+        cbadge.style.display = count > 0 ? 'inline' : 'none';
+      }
+    } catch { /* non-fatal */ }
 
     // Default to CRM Mail if none selected
     if (!mailState.activeAccount) {
@@ -17481,7 +17493,7 @@ async function loadMailMessagesForModal() {
   if (mailState.activeFolder === 'Drafts') {
     try {
       const params = [];
-      if (mailState.activeAccount && mailState.activeAccount !== 'crm') params.push(`account_id=${mailState.activeAccount}`);
+      if (mailState.activeAccount) params.push(`account_id=${mailState.activeAccount === 'crm' ? 'crm' : mailState.activeAccount}`);
       const url = '/api/v2/mail/drafts' + (params.length ? '?' + params.join('&') : '');
       const data = await api(url);
       const drafts = data.drafts || [];
@@ -17504,7 +17516,7 @@ async function loadMailMessagesForModal() {
   try {
     let url = "/api/v2/mail/messages";
     const params = [];
-    if (mailState.activeAccount && mailState.activeAccount !== 'crm') params.push(`account_id=${mailState.activeAccount}`);
+    if (mailState.activeAccount) params.push(`account_id=${mailState.activeAccount === 'crm' ? 'crm' : mailState.activeAccount}`);
     if (mailState.activeFolder && mailState.activeFolder !== "INBOX") params.push(`folder=${encodeURIComponent(mailState.activeFolder)}`);
     if (mailState.search) params.push(`search=${encodeURIComponent(mailState.search)}`);
     if (mailState.activeTag) params.push(`tag=${encodeURIComponent(mailState.activeTag)}`);
@@ -17526,7 +17538,7 @@ async function loadMailThreads() {
   try {
     let url = "/api/v2/mail/threads";
     const params = [];
-    if (mailState.activeAccount && mailState.activeAccount !== 'crm') params.push(`account_id=${mailState.activeAccount}`);
+    if (mailState.activeAccount) params.push(`account_id=${mailState.activeAccount === 'crm' ? 'crm' : mailState.activeAccount}`);
     if (params.length) url += '?' + params.join('&');
     const data = await api(url);
     const threads = data.threads || [];

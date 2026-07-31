@@ -78,7 +78,7 @@ class MicrosoftProvider(OAuthProvider):
 
     _AUTHORIZE = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize"
     _TOKEN = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
-    _SCOPE = "offline_access openid email User.Read https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send"
+    _SCOPE = "offline_access openid email https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send"
 
     @classmethod
     def _tenant(cls) -> str:
@@ -117,7 +117,10 @@ class MicrosoftProvider(OAuthProvider):
                     import base64
                     padded = parts[1] + "=" * (4 - len(parts[1]) % 4)
                     payload = json.loads(base64.urlsafe_b64decode(padded))
-                    email = payload.get("preferred_username") or payload.get("email") or ""
+                    # Prefer the verified email claim; MSA id_tokens use preferred_username like "live.com#user@outlook.com"
+                    email = payload.get("email") or payload.get("preferred_username") or ""
+                    if email and "#" in email:
+                        email = email.split("#")[-1]
                 except Exception:
                     pass
         # Fallback: fetch email from Microsoft Graph API

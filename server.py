@@ -5136,7 +5136,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             where = ["m.folder = %s"]
             params: list[Any] = [folder]
             join = ""
-            if account_id:
+            if account_id == 'crm':
+                where.append("m.account_id IN (SELECT id FROM mail_accounts WHERE is_crm_mail = TRUE)")
+            elif account_id:
                 where.append("m.account_id = %s")
                 params.append(int(account_id))
             if search:
@@ -5339,7 +5341,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         try:
             where = "status = 'draft'"
             params: tuple = ()
-            if account_id and account_id != 'crm':
+            if account_id == 'crm':
+                where += " AND account_id IN (SELECT id FROM mail_accounts WHERE is_crm_mail = TRUE)"
+            elif account_id:
                 try:
                     where += " AND account_id = %s"
                     params = (int(account_id),)
@@ -5574,7 +5578,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 """SELECT id, email, display_name, imap_host, imap_port,
                           smtp_host, smtp_port, smtp_from_name, smtp_user,
                           sync_enabled, monitored_folders, oauth_provider,
-                          oauth_token_expires, oauth_scopes,
+                          oauth_token_expires, oauth_scopes, is_crm_mail,
                           last_sync, owner_user_id, created_at
                    FROM mail_accounts ORDER BY email"""
             )
@@ -5639,7 +5643,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         try:
             where = "m.is_read = FALSE"
             params: tuple = ()
-            if account_id:
+            if account_id == 'crm':
+                where += " AND m.account_id IN (SELECT id FROM mail_accounts WHERE is_crm_mail = TRUE)"
+            elif account_id:
                 where += " AND m.account_id = %s"
                 params = (int(account_id),)
             row = db.query_one(f"SELECT COUNT(*) AS cnt FROM mail_messages m WHERE {where}", params)
@@ -6269,7 +6275,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         try:
             where = "m.folder != 'Trash'"
             params: tuple = ()
-            if account_id and account_id != 'crm':
+            if account_id == 'crm':
+                where += " AND m.account_id IN (SELECT id FROM mail_accounts WHERE is_crm_mail = TRUE)"
+            elif account_id:
                 try:
                     where += " AND m.account_id = %s"
                     params = (int(account_id),)
