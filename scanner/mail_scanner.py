@@ -17,7 +17,7 @@ import os
 import re
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -836,9 +836,15 @@ def _poll_mailboxes() -> list[dict[str, Any]]:
                 logger.info("Synced %d IMAP folders", folder_count)
             
             folders = cfg.get("folders", [cfg.get("inbox", "INBOX")])
+            # Bounded backfill window (SCANNER_SYNC_DAYS, default 90). None = full history.
+            try:
+                sync_days = int(os.environ.get("SCANNER_SYNC_DAYS", "90"))
+            except (TypeError, ValueError):
+                sync_days = 90
+            since = datetime.now(timezone.utc) - timedelta(days=sync_days) if sync_days and sync_days > 0 else None
             for folder in folders:
                 logger.info("Fetching folder %s for %s", folder, cfg["user"])
-                msgs = _fetch_messages(cfg, folder)
+                msgs = _fetch_messages(cfg, folder, since=since)
                 for msg in msgs:
                     result = _process_message(msg, cfg)
                     results.append(result)

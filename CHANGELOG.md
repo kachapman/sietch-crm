@@ -2,6 +2,13 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — Consumers-Tenant OAuth + Bounded Sync Window (2026-07-31)
+
+- **`oauth_providers.py` — Microsoft authority switched to `common`.** `MicrosoftProvider._tenant()` previously returned the hardcoded `OAUTH_MICROSOFT_TENANT` (7312e555). For `vanguardadjusting@outlook.com` — a personal live.com account invited as a B2B guest (`#EXT#` UPN) — that minted host-tenant tokens (iss `sts.windows.net/7312e555/`) that Exchange Online rejects for IMAP (`AUTHENTICATE failed`) and SMTP (`535 5.7.3 Authentication unsuccessful`) even with a correctly scoped Exchange-audience token. `common` routes personal accounts through the consumers STS (iss `sts.windows.net/9188040d-...`) which Exchange accepts; work accounts resolve correctly too.
+- **REQUIRED user Azure-portal change:** app registration "Sietch CRM" → Authentication → Supported account types → "Accounts in any organizational directory and personal Microsoft accounts", then re-run **Email → Admin → OAuth Connect → Accept**. Without this the `common` flow rejects the personal account.
+- **`scanner/mail_scanner.py` — bounded backfill.** Added `SCANNER_SYNC_DAYS` (default 90, see `config.example.env`). `_poll_mailboxes()` now computes an IMAP `SINCE` window and passes it to `_fetch_messages()`; previously the scanner fetched the ENTIRE inbox every 5-min poll. 0 or negative = full history.
+- **Files:** `oauth_providers.py`, `scanner/mail_scanner.py`, `config.example.env`, `AGENTS.md`, `CHANGELOG.md`.
+
 ## Phase 3 — OAuth Scope & CRM Mail Tab Fixes (2026-07-31)
 
 - **`oauth_providers.py` — fixed Microsoft OAuth token audience.** `MicrosoftProvider._SCOPE` mixed Graph scopes (`User.Read`) with Exchange scopes (`IMAP.AccessAsUser.All`, `SMTP.Send`), so the v2.0 token endpoint minted a **Graph-audience** access token (`aud=00000003-...`). Exchange Online rejects that token for IMAP/SMTP, causing `530 5.7.57 Client not authenticated to send mail` on sends and `AUTHENTICATE failed` on IMAP sync. Dropped `User.Read` so the token audience is the Outlook/Exchange resource that XOAUTH2 accepts. Also hardened `exchange_code()` email extraction: prefer the `email` claim, fall back to `preferred_username` with the `live.com#` prefix stripped.

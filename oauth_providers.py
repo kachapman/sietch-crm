@@ -82,7 +82,13 @@ class MicrosoftProvider(OAuthProvider):
 
     @classmethod
     def _tenant(cls) -> str:
-        return MICROSOFT_TENANT or "common"
+        # Always use the 'common' authority. A hardcoded tenant mints host-tenant
+        # B2B-guest tokens (#EXT# UPN) for personal Outlook.com/live.com accounts,
+        # which Exchange Online rejects for IMAP/SMTP XOAUTH2 (AUTHENTICATE failed /
+        # 535 5.7.3). 'common' lets the personal account authenticate through the
+        # consumers STS, issuing a token Exchange accepts. Work accounts resolve
+        # correctly through 'common' as well.
+        return "common"
 
     @classmethod
     def authorize_url(cls, state: str) -> str:
