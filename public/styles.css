@@ -4217,6 +4217,16 @@ body {
   color: #222;
   background: transparent;
 }
+/* Compact reply buttons in the expanded mail-list view (mail-detail embed foot) */
+.mail-detail .opp-preview-mail-foot {
+  padding: 0;
+}
+.mail-detail .opp-preview-mail-foot .btn {
+  padding: 0.15rem 0.4rem;
+  min-width: auto;
+  min-height: auto;
+  font-size: 0.8rem;
+}
   /* reuse some preview styles but scope for readability */
   font-size: 0.85rem;
 }
