@@ -6,24 +6,42 @@ You need to register an app with each provider to get `client_id` and `client_se
 
 ## Microsoft 365 / Entra
 
+> **Important for personal (Outlook.com / live.com) accounts:** the app's **Supported account types** MUST include personal Microsoft accounts, and the CRM now always uses the `common` authority (the `OAUTH_MICROSOFT_TENANT` value is ignored for the Microsoft provider — it exists for backward compatibility). A tenant-scoped registration mints host-tenant B2B-guest tokens (`#EXT#` UPN) that Exchange Online rejects for IMAP/SMTP XOAUTH2.
+
+### Registering a new app
+
 1. Go to https://entra.microsoft.com → **App registrations** → **New registration**
 2. Fill in:
    - **Name**: `Sietch CRM` (or anything)
-   - **Supported account types**: "Accounts in any organizational directory (Any Microsoft ID directory)" — this lets users sign in with any Microsoft 365 work/school account as well as personal Outlook.com accounts. For personal accounts only, pick "Personal Microsoft accounts only".
+   - **Supported account types**: "Accounts in any organizational directory and personal Microsoft accounts" (this is the setting that lets personal Outlook.com/live.com accounts authenticate — required for this mailbox)
    - **Redirect URI**: `Web` → `https://g2vpdgb498.localto.net` (dev) or `https://dashboard.publicadjustermidwest.com` (production)
 3. Click **Register**
 4. On the app's **Overview** page, copy:
    - **Application (client) ID** → `OAUTH_MICROSOFT_CLIENT_ID`
-   - **Directory (tenant) ID** → `OAUTH_MICROSOFT_TENANT` (use `common` for multi-tenant)
-
+   - **Directory (tenant) ID** → `OAUTH_MICROSOFT_TENANT` (set to `common`)
 5. Go to **Certificates & secrets** → **Client secrets** → **New client secret**
    - Copy the **Value** (not ID) → `OAUTH_MICROSOFT_CLIENT_SECRET`
-
 6. Go to **API permissions** → **Add a permission** → **Microsoft Graph** → **Delegated permissions**
    - Add: `IMAP.AccessAsUser.All` (read mail via IMAP)
    - Add: `SMTP.Send` (send mail via SMTP)
    - Add: `offline_access` (refresh tokens — this should be auto-granted)
    - Click **Grant admin consent** (if you're the tenant admin). If not, each user accepts on first login.
+
+### Changing the supported account types on an EXISTING app (this is what the CRM mailbox needs)
+
+The app `Sietch CRM` already exists (client id `e285c2a5-...`). You only need to widen its supported account types:
+
+1. Go to https://entra.microsoft.com and sign in with an account that can manage the app (tenant admin or app owner).
+2. Left sidebar: **Identity** → **Applications** → **App registrations**.
+3. Click the **Sietch CRM** app.
+4. In the app's left blade, click **Authentication**.
+5. Under **Supported account types**, select **"Accounts in any organizational directory and personal Microsoft accounts"**.
+6. Click **Save** (at the top).
+7. Ignore the "Microsoft Entra ID and personal Microsoft accounts" panel that appears — no additional settings needed there.
+8. Leave the redirect URIs untouched (they already match the callback).
+9. Re-run **Email → Admin → OAuth Connect** in the CRM, sign in as `vanguardadjusting@outlook.com`, and **Accept** the consent screen. The token will then be issued by the consumers tenant (`sts.windows.net/9188040d-...`) and Exchange Online will accept IMAP + SMTP.
+
+> If "Supported account types" is greyed out, the registration may be a legacy/permission issue — in that case register a new app and update the env vars in `.env`.
 
 7. Set env vars:
    ```
@@ -36,6 +54,8 @@ You need to register an app with each provider to get `client_id` and `client_se
 ---
 
 ## Google / Gmail
+
+> **Unaffected by the Microsoft changes.** Google is a separate provider class with its own OAuth endpoints and scope (`https://mail.google.com/`); the `common` authority and tenant logic apply only to Microsoft. All provider-agnostic fixes (CRM Mail tab, `is_crm_mail`, `account_id=crm` filter, `SCANNER_SYNC_DAYS`) apply to Google accounts too. OAuth-created Google accounts are also treated as CRM mail accounts (`is_crm_mail = TRUE`).
 
 1. Go to https://console.cloud.google.com/apis/credentials
    - Create a project if needed (e.g. "Sietch CRM")
