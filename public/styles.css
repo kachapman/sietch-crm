@@ -3668,6 +3668,7 @@ body {
   overflow: auto;
   border-right: 1px solid var(--border);
   padding: 0.5rem;
+  container-type: inline-size;
 }
 .mail-list {
   width: 100%;
@@ -11703,5 +11704,53 @@ body {
   color: var(--muted);
   display: flex;
   align-items: center;
+}
+
+/* ── Mail list adaptive row height via container queries ─────────────────────
+   .mail-list-container is an inline-size container, so these rules respond to
+   the mail list's ACTUAL rendered width (reading sidebar open/closed, window
+   resize) — no hardcoded viewport breakpoints needed.
+
+   When the list is too narrow to show the snippet inline, the row becomes
+   double-height: line 1 = from + subject (+ date/tags), line 2 = body snippet.
+   Placed at end of file so these rules win over the base .mail-snippet rule.
+────────────────────────────────────────────────────────────────────────── */
+@container (max-width: 720px) {
+  .mail-row.mail-header { display: none; }
+  .mail-row {
+    gap: 0.2rem 0.4rem;
+    padding: 0.35rem 0.4rem;
+    font-size: 0.85rem;
+  }
+  .mail-from {
+    width: 120px;
+    min-width: 60px;
+    flex-shrink: 1;
+    font-size: 0.82rem;
+  }
+  .mail-subject {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.85rem;
+  }
+  .mail-snippet {
+    flex-basis: 100%;
+    min-width: 0;
+    order: 10;
+    margin-left: 0;
+  }
+  .mail-date {
+    width: auto;
+    min-width: auto;
+    margin-left: auto;
+    font-size: 0.7rem;
+  }
+  .mail-star { order: -1; }
+  .mail-expand-btn {
+    min-width: auto;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+  }
 }
 

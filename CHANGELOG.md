@@ -2,6 +2,12 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — OAuth & Email List Fixes (2026-07-31)
+
+- **`server.py` — OAuth import-order fix.** `mail_scanner` (which imports `oauth_providers` and reads its env-derived constants) is now imported AFTER `_load_env_file()` has populated the environment. Previously `server.py` imported `mail_scanner` at the top of the file, so `oauth_providers` baked in empty client credentials and every OAuth request failed with "No OAuth providers configured".
+- **`styles.css` — email list double-height rows via container queries.** `.mail-list-container` is now an `inline-size` container. A `@container (max-width: 720px)` block (appended at end of file, after the base `.mail-snippet` rule which previously overrode the old media-query fix) switches rows to two lines whenever the list's ACTUAL rendered width is too narrow: line 1 = from + subject (+ date/tags), line 2 = body snippet. Responsive to sidebar open/closed and window resize, no fixed viewport breakpoint.
+- **Files:** `server.py`, `public/styles.css`, `AGENTS.md`, `CHANGELOG.md`.
+
 ## Phase 3 — OAuth 2.0 IMAP Email (2026-07-29)
 
 - **`oauth_providers.py` added:** Microsoft 365 and Google OAuth 2.0 provider classes using stdlib only (`urllib.request`). Each implements `authorize_url()`, `exchange_code()`, `refresh_token()`, `imap_settings()`, `smtp_settings()`.

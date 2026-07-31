@@ -32,12 +32,6 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse, urlencode
 
 try:
-    sys.path.insert(0, str(Path(__file__).resolve().parent / "scanner"))
-    import mail_scanner
-except Exception:  # pragma: no cover - scanner module may not be installed
-    mail_scanner = None  # type: ignore[assignment]
-
-try:
     from PIL import Image
 except Exception:  # pragma: no cover - Pillow is optional in dev, present in Docker
     Image = None
@@ -108,6 +102,14 @@ def _load_env_file() -> None:
 
 _load_env_file()
 import oauth_providers
+
+# mail_scanner imports oauth_providers (and reads its env-derived constants),
+# so it MUST be imported AFTER _load_env_file() has populated the environment.
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "scanner"))
+    import mail_scanner
+except Exception:  # pragma: no cover - scanner module may not be installed
+    mail_scanner = None  # type: ignore[assignment]
 
 PORT = int(os.environ.get("PORT", "8766"))
 SESSION_COOKIE = "sietch_session"
