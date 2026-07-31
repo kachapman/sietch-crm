@@ -26,7 +26,7 @@ from imap_tools import MailBox, MailMessage, MailBoxFolderManager
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from db import db
+import db
 from user_profile_store import load_user_profile, save_user_profile
 import oauth_providers
 
@@ -853,7 +853,14 @@ def _scanner_loop() -> None:
     while True:
         try:
             interval = int(os.environ.get("SCANNER_POLL_INTERVAL", "300"))
-            if os.environ.get("SCANNER_ENABLED", "false").lower() not in ("true", "1", "yes"):
+            env_enabled = os.environ.get("SCANNER_ENABLED", "false").lower() in ("true", "1", "yes")
+            db_enabled = False
+            try:
+                rows = db.query_dicts("SELECT id FROM mail_accounts WHERE sync_enabled = TRUE LIMIT 1")
+                db_enabled = len(rows) > 0
+            except Exception:
+                pass
+            if not env_enabled and not db_enabled:
                 logger.info("Scanner disabled, sleeping %ds", interval)
             else:
                 logger.info("Starting poll cycle")
@@ -872,12 +879,32 @@ def start_scanner() -> threading.Thread:
 
 
 def get_scanner_status() -> dict[str, Any]:
+    enabled = False
+    imap_host = ""
+    imap_port = IMAP_PORT_SSL
+    imap_user = ""
+    try:
+        rows = db.query_dicts("SELECT email, imap_host, imap_port FROM mail_accounts WHERE sync_enabled = TRUE LIMIT 1")
+        if rows:
+            r = rows[0]
+            enabled = True
+            imap_host = r.get("imap_host") or ""
+            imap_port = r.get("imap_port") or IMAP_PORT_SSL
+            imap_user = r.get("email") or ""
+    except Exception:
+        pass
+    if not enabled:
+        enabled = os.environ.get("SCANNER_ENABLED", "false").lower() in ("true", "1", "yes")
+    if not imap_host:
+        imap_host = os.environ.get("SCANNER_IMAP_HOST", "")
+    if not imap_user:
+        imap_user = os.environ.get("SCANNER_IMAP_USER", "")
     return {
-        "enabled": os.environ.get("SCANNER_ENABLED", "false").lower() in ("true", "1", "yes"),
+        "enabled": enabled,
         "poll_interval": int(os.environ.get("SCANNER_POLL_INTERVAL", "300")),
-        "imap_host": os.environ.get("SCANNER_IMAP_HOST", ""),
-        "imap_port": int(os.environ.get("SCANNER_IMAP_PORT", str(IMAP_PORT_SSL))),
-        "imap_user": os.environ.get("SCANNER_IMAP_USER", ""),
+        "imap_host": imap_host,
+        "imap_port": imap_port,
+        "imap_user": imap_user,
         "processed_count": len(_load_processed_ids()),
         "log_entries": 0,
         "running": threading.active_count() > 0,

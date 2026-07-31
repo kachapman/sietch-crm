@@ -108,7 +108,7 @@ def send_email_from_account(
                 server.starttls()
             if oauth_provider and oauth_access_token:
                 auth_str = f"user={smtp_user}\x01auth=Bearer {oauth_access_token}\x01\x01"
-                server.auth("XOAUTH2", lambda x: auth_str)
+                server.auth("XOAUTH2", lambda x=None: auth_str)
             else:
                 server.login(smtp_user, smtp_password)
             server.sendmail(from_addr, all_recipients, msg.as_string())

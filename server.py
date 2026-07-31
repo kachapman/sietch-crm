@@ -32,6 +32,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse, urlencode
 
 try:
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "scanner"))
     import mail_scanner
 except Exception:  # pragma: no cover - scanner module may not be installed
     mail_scanner = None  # type: ignore[assignment]
@@ -85,7 +86,6 @@ from presence_store import (
     set_status, touch_crm_activity, touch_heartbeat,
 )
 from notification_dispatcher import start_dispatcher, stop_dispatcher
-import oauth_providers
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent
@@ -107,6 +107,7 @@ def _load_env_file() -> None:
 
 
 _load_env_file()
+import oauth_providers
 
 PORT = int(os.environ.get("PORT", "8766"))
 SESSION_COOKIE = "sietch_session"
@@ -4926,10 +4927,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         code = (qs.get("code") or [""])[0]
         state_val = (qs.get("state") or [""])[0]
         error = (qs.get("error") or [""])[0]
-        provider_name = (qs.get("provider") or [""])[0].strip().lower()
 
         if error:
-            logger.warning("OAuth error from %s: %s", provider_name, error)
+            logger.warning("OAuth error: %s", error)
             self._oauth_redirect_with_status("error", error)
             return
 
@@ -4941,11 +4941,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not state_data:
             _json_response(self, 400, {"error": "Invalid or expired state"})
             return
-        user_id, stored_provider, _ = state_data
-
-        if provider_name != stored_provider:
-            _json_response(self, 400, {"error": "Provider mismatch"})
-            return
+        user_id, provider_name, _ = state_data
 
         prov = oauth_providers.get_provider(provider_name)
         if not prov:
@@ -4963,6 +4959,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         refresh_token = token_data.get("refresh_token", "")
         expires_in = token_data.get("expires_in", 3600)
         email = token_data.get("email", "")
+        logger.info("OAuth callback: provider=%s email=%s has_access=%s has_refresh=%s",
+                     provider_name, email, bool(access_token), bool(refresh_token))
 
         if not access_token:
             self._oauth_redirect_with_status("error", "No access token returned")
@@ -4992,15 +4990,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                  existing["id"]),
             )
         else:
-            db.execute(
-                """INSERT INTO mail_accounts
-                   (email, imap_host, imap_port, smtp_host, smtp_port, owner_user_id,
-                    oauth_provider, oauth_access_token, oauth_refresh_token,
-                    oauth_token_expires, smtp_user, sync_enabled, monitored_folders)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s), %s, TRUE, 'INBOX')""",
-                (email, imap["host"], imap["port"], smtp["host"], smtp["port"],
-                 user_id, provider_name, access_token, refresh_token, expires_ts, email),
-            )
+            try:
+                db.execute(
+                    """INSERT INTO mail_accounts
+                       (email, imap_host, imap_port, smtp_host, smtp_port, owner_user_id,
+                        oauth_provider, oauth_access_token, oauth_refresh_token,
+                        oauth_token_expires, smtp_user, sync_enabled, monitored_folders,
+                        password_encrypted, display_name, is_crm_mail)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s), %s, TRUE, 'INBOX', '', %s, TRUE)""",
+                    (email, imap["host"], imap["port"], smtp["host"], smtp["port"],
+                     user_id, provider_name, access_token, refresh_token, expires_ts, email, email.split("@")[0].replace(".", " ").title()),
+                )
+                logger.info("OAuth INSERT succeeded for email=%s user_id=%s", email, user_id)
+            except Exception as e:
+                logger.exception("OAuth INSERT failed for email=%s", email)
+                self._oauth_redirect_with_status("error", f"DB insert failed: {e}")
+                return
 
         self._oauth_redirect_with_status("success", email)
 
@@ -6546,6 +6551,7 @@ def main() -> None:
         print(f"Open: {u}")
     print(f"Version: {APP_VERSION}")
     dispatcher_stop = start_dispatcher()
+    scanner_stop = mail_scanner.start_scanner() if mail_scanner else None
     try:
         server.serve_forever()
     except KeyboardInterrupt:

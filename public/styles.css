@@ -3675,6 +3675,7 @@ body {
 .mail-row {
   display: flex;
   align-items: flex-start;
+  flex-wrap: wrap;
   gap: 0.5rem;
   padding: 0.4rem 0.5rem;
   border-bottom: 1px solid #eee;
@@ -3838,7 +3839,7 @@ body {
     min-width: 0;
     font-size: 0.85rem;
   }
-  .mail-snippet { display: none; }
+  .mail-snippet { flex-basis: 100%; min-width: 0; order: 10; }
   .mail-date {
     width: auto;
     min-width: auto;
@@ -11443,8 +11444,12 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
+  min-width: 120px;
+  flex-basis: 0;
+  order: 5;
 }
+.mail-date { order: 6; }
+.mail-row-tags { order: 7; }
 
 /* ── Email preview modal ──────────────────────────────────────────────── */
 #email-preview-modal .modal-card {

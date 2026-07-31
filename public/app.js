@@ -15254,7 +15254,17 @@ async function openMailInboxModal() {
     scannerDiv.style.minWidth = '';
   }
   const sidebar = $('.mail-right-sidebar');
-  if (sidebar) sidebar.classList.remove('hidden');
+  if (sidebar) {
+    sidebar.classList.remove('hidden');
+    // Collapse sidebar on mobile by default
+    if (window.innerWidth <= 768) {
+      sidebar.classList.add('mail-sidebar-collapsed');
+      const toggleBtn = $('#mail-sidebar-toggle');
+      if (toggleBtn) toggleBtn.innerHTML = '<i class="ti ti-chevron-left"></i>';
+    } else {
+      sidebar.classList.remove('mail-sidebar-collapsed');
+    }
+  }
   const sidebarToggle = $('#mail-sidebar-toggle');
   if (sidebarToggle) sidebarToggle.classList.remove('hidden');
   const inboxContainer = $('#mail-list-container');
@@ -28334,16 +28344,9 @@ async function init() {
       history.replaceState({}, '', window.location.pathname + window.location.hash);
       if (oauthStatus === 'success') {
         showToast(`Mail account connected: ${msg}`);
+        // Close any open modals
+        document.querySelectorAll('.modal:not(.hidden)').forEach(m => m.classList.add('hidden'));
         renderMailTabs().catch(() => {});
-        // If we had a pending modal state, re-open for editing
-        try {
-          const pending = JSON.parse(sessionStorage.getItem('mailOAuthPending') || 'null');
-          if (pending) {
-            sessionStorage.removeItem('mailOAuthPending');
-            // Refresh accounts list and open modal for the new/edit account
-            setTimeout(() => openAccountSettingsModal(pending.editAccountId), 500);
-          }
-        } catch {}
       } else {
         showToast(`OAuth failed: ${msg}`, true);
       }

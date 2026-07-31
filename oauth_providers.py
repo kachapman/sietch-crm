@@ -78,7 +78,7 @@ class MicrosoftProvider(OAuthProvider):
 
     _AUTHORIZE = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize"
     _TOKEN = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
-    _SCOPE = "offline_access https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send"
+    _SCOPE = "offline_access openid email User.Read https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send"
 
     @classmethod
     def _tenant(cls) -> str:
@@ -107,9 +107,11 @@ class MicrosoftProvider(OAuthProvider):
             "grant_type": "authorization_code",
         }
         result = _post_json(cls._TOKEN.format(tenant=cls._tenant()), data)
-        email = result.get("id_token", "")
-        if email and isinstance(email, str):
-            parts = email.split(".")
+        email = ""
+        # Try id_token first
+        id_token = result.get("id_token", "")
+        if id_token and isinstance(id_token, str):
+            parts = id_token.split(".")
             if len(parts) == 3:
                 try:
                     import base64
@@ -118,8 +120,18 @@ class MicrosoftProvider(OAuthProvider):
                     email = payload.get("preferred_username") or payload.get("email") or ""
                 except Exception:
                     pass
-            else:
-                email = ""
+        # Fallback: fetch email from Microsoft Graph API
+        if not email and result.get("access_token"):
+            try:
+                req = urllib.request.Request(
+                    "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName",
+                    headers={"Authorization": f"Bearer {result['access_token']}"},
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    me = json.loads(resp.read())
+                    email = me.get("mail") or me.get("userPrincipalName") or ""
+            except Exception:
+                pass
         return {
             "access_token": result.get("access_token", ""),
             "refresh_token": result.get("refresh_token", ""),
