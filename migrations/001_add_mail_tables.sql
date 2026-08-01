@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS mail_account_access (
 -- Outgoing mail tracking
 CREATE TABLE IF NOT EXISTS mail_outgoing (
     id SERIAL PRIMARY KEY,
-    account_id INTEGER REFERENCES mail_accounts(id),
+    account_id INTEGER REFERENCES mail_accounts(id) ON DELETE CASCADE,
     from_addr TEXT,
     to_addr TEXT,
     cc_addr TEXT,

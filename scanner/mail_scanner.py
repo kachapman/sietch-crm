@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from imap_tools import MailBox, MailMessage, MailBoxFolderManager
+from imap_tools import A, MailBox, MailMessage, MailBoxFolderManager
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -365,9 +365,7 @@ def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None, sinc
         folder = folder or mailbox_cfg.get("inbox", "INBOX")
         mailbox.folder.set(folder)
         
-        criterion = {}
-        if since:
-            criterion = {"date": since}
+        criterion = A() if since is None else A(date_gte=since.date())
         
         for msg in mailbox.fetch(criteria=criterion, mark_seen=False, bulk=False):
             attachments = []
@@ -381,17 +379,25 @@ def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None, sinc
                     })
             # Build raw headers string from imap_tools headers object
             raw_headers = ""
+            message_id = ""
             if hasattr(msg, "headers") and msg.headers:
+                mid_val = msg.headers.get("message-id")
+                if mid_val:
+                    if isinstance(mid_val, (tuple, list)):
+                        mid_val = ", ".join(str(v) for v in mid_val)
+                    message_id = str(mid_val).strip("<>")
                 header_lines = []
                 for key in ("from", "to", "cc", "subject", "date", "message-id", "in-reply-to", "references", "content-type"):
                     val = msg.headers.get(key)
                     if val:
+                        if isinstance(val, (tuple, list)):
+                            val = ", ".join(str(v) for v in val)
                         header_lines.append(f"{key}: {val}")
                 raw_headers = "\n".join(header_lines)
 
             messages.append({
                 "uid": msg.uid,
-                "message_id": msg.message_id,
+                "message_id": message_id,
                 "from": msg.from_values.email if msg.from_values else "",
                 "from_name": msg.from_values.name if msg.from_values else "",
                 "to": msg.to_values[0].email if msg.to_values else "",

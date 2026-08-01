@@ -2,6 +2,14 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — IMAP Fetch & SMTP Send Fixes (2026-08-01)
+
+- **`scanner/mail_scanner.py` — fixed `_fetch_messages()` IMAP search.** Passing a plain dict (`{"date": since}`) to imap_tools `mailbox.fetch()` stringified to a Python repr, producing `UID SEARCH ... BAD The specified message set is invalid` for every poll (empty inbox sync). Now builds an `imap_tools.A()` query: `A()` for full history, `A(date_gte=since.date())` for the `SINCE` window (also correctly requires `datetime.date`, not `datetime`, and uses `SINCE` semantics instead of `ON`).
+- **`scanner/mail_scanner.py` — fixed `message_id` extraction.** imap_tools 1.14.0 `MailMessage` has no `.message_id` attribute (`'MailMessage' object has no attribute 'message_id'` crashed every message). Now pulled from `msg.headers['message-id']` (tuple values joined, angle brackets stripped). Header values in `raw_headers` also joined when returned as tuples.
+- **`smtp_client.py` — fixed SMTP XOAUTH2 send (530 5.7.57).** After `starttls()`, the server requires a fresh `EHLO` before `AUTH XOAUTH2`; without it, Exchange replied `503 5.5.2 Send hello first`, so auth silently failed and `MAIL FROM` got `530 5.7.57 Client not authenticated to send mail`. Added `server.ehlo()` after `starttls()`. Verified end-to-end: `POST /api/v2/mail/send` returns 200, message lands in `mail_outgoing`, and the IMAP scanner picks the sent message back up on the next poll.
+- **`notification_dispatcher.py` — fixed Telegram dispatcher crash.** `_process_pending_notifications()` used `db.query()` (returns tuples) but indexed rows by name, throwing `TypeError: tuple indices must be integers or slices, not str` every 5s (spammed the log). Now uses `db.query_dicts()`; `_user_telegram_enabled()` accesses `row["enabled"]` instead of `row[0]` (returns dict).
+- **Files:** `scanner/mail_scanner.py`, `smtp_client.py`, `notification_dispatcher.py`, `AGENTS.md`, `CHANGELOG.md`.
+
 ## Phase 3 — Consumers-Tenant OAuth + Bounded Sync Window (2026-07-31)
 
 - **`oauth_providers.py` — Microsoft authority switched to `common`.** `MicrosoftProvider._tenant()` previously returned the hardcoded `OAUTH_MICROSOFT_TENANT` (7312e555). For `vanguardadjusting@outlook.com` — a personal live.com account invited as a B2B guest (`#EXT#` UPN) — that minted host-tenant tokens (iss `sts.windows.net/7312e555/`) that Exchange Online rejects for IMAP (`AUTHENTICATE failed`) and SMTP (`535 5.7.3 Authentication unsuccessful`) even with a correctly scoped Exchange-audience token. `common` routes personal accounts through the consumers STS (iss `sts.windows.net/9188040d-...`) which Exchange accepts; work accounts resolve correctly too.

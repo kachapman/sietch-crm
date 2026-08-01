@@ -106,6 +106,7 @@ def send_email_from_account(
         with smtplib.SMTP(smtp_host, smtp_port) as server:
             if use_tls:
                 server.starttls()
+                server.ehlo()
             if oauth_provider and oauth_access_token:
                 auth_str = f"user={smtp_user}\x01auth=Bearer {oauth_access_token}\x01\x01"
                 server.auth("XOAUTH2", lambda x=None: auth_str)

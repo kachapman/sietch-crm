@@ -131,7 +131,7 @@ def _process_pending_notifications() -> int:
 
     try:
         # Find notifications not yet sent via Telegram
-        rows = db.query(
+        rows = db.query_dicts(
             """SELECT n.id, n.user_id, n.type, n.message, n.payload,
                       n.opportunity_id, n.actor_user_id,
                       u.display_name AS actor_name,
@@ -204,7 +204,7 @@ def _user_telegram_enabled(user_id: int) -> bool:
         )
         if row is None:
             return True  # Default: enabled
-        return bool(row[0])
+        return bool(row["enabled"])
     except Exception:
         return True  # Default: enabled on error
 
