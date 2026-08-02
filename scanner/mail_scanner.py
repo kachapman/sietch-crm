@@ -753,6 +753,10 @@ def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | No
         attachments = msg.get("attachments", [])
         attachments_json = json.dumps(attachments) if attachments else None
 
+        # Check IMAP \Seen flag — respect server-side read status
+        flags = msg.get("flags") or []
+        is_read = "\\Seen" in flags or "Seen" in flags
+
         result = db.query_one(
             """INSERT INTO mail_messages
                (account_id, imap_uid, message_id, from_addr, to_addr, subject,
@@ -771,7 +775,7 @@ def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | No
                 msg.get("body_html") or "",
                 msg.get("date") or None,
                 msg.get("folder") or "INBOX",
-                False,
+                is_read,
                 False,
                 attachments_json,
                 msg.get("raw_headers"),

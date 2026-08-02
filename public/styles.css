@@ -3961,7 +3961,7 @@ body {
     padding: 0.1rem 0;
   }
   .opp-preview-mail-foot .btn {
-    padding: 0.2rem 0.4rem;
+    padding: 0.15rem 0.4rem;
     font-size: 0.8rem;
     min-width: auto;
     min-height: auto;
@@ -4281,10 +4281,10 @@ body {
 .mail-detail {
   width: 100%;
   box-sizing: border-box;
-  padding: 0.5rem 0.75rem;
+  padding: 0.25rem 0.5rem;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  margin: 0.1rem 0 0.4rem;
+  margin: 0.1rem 0 0.3rem;
   font-size: 0.9rem;
 }
 .mail-expand-btn {
@@ -5802,11 +5802,11 @@ body {
 .opp-preview-mail-embed {
   width: 100%;
   box-sizing: border-box;
-  margin-top: 0.45rem;
+  margin-top: 0.25rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface-2);
-  padding: 0.5rem 0.6rem;
+  padding: 0.3rem 0.5rem;
 }
 
 /* Expanded linked email in deal preview / bookmark preview spans full history-item width */
@@ -5865,7 +5865,7 @@ body {
 }
 
 .opp-preview-mail-foot {
-  margin-top: 0.1rem;
+  margin-top: 0.05rem;
   font-size: 0.72rem;
 }
 

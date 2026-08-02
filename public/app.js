@@ -15191,8 +15191,8 @@ function saveMailDashboardReadIds() {
 function getMailMessageIsRead(m) {
   if (!m || typeof m !== 'object') return false;
 
-  // Direct top-level booleans / 0|1 under many casings
-  const direct = m.read ?? m.isRead ?? m.Read ?? m.IsRead ?? m.seen ?? m.Seen ?? m.IsSeen;
+  // Direct top-level booleans / 0|1 under many casings (incl. DB column is_read)
+  const direct = m.read ?? m.is_read ?? m.isRead ?? m.Read ?? m.IsRead ?? m.seen ?? m.Seen ?? m.IsSeen;
   if (typeof direct === 'boolean') return direct;
   if (typeof direct === 'number') return direct !== 0;
 
@@ -18416,7 +18416,7 @@ function renderMailList(msgs) {
     const id = String(m.id || m.ID);
     const from = (m.from_addr || m.from || m.fromEmail || "").toString();
     const subj = (m.subject || m.Subject || "(no subject)").toString();
-    const date = m.date || m.receivedDate || m.Date || "";
+    const date = m.date || m.date_received || m.receivedDate || m.Date || "";
     const dateStr = date ? new Date(date).toLocaleDateString() + " " + new Date(date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : "";
 
     const item = document.createElement("div");
