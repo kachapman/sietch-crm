@@ -135,7 +135,7 @@ OAUTH_GOOGLE_CLIENT_SECRET = os.environ.get("OAUTH_GOOGLE_CLIENT_SECRET", "")
 OAUTH_REDIRECT_URI = os.environ.get("OAUTH_REDIRECT_URI", "")
 
 # In-memory OAuth state store: state -> (user_id, provider, expires_at)
-_oauth_states: dict[str, tuple[int, str, float]] = {}
+_oauth_states: dict[str, tuple[int, str, float, bool]] = {}
 
 # ── DB init ────────────────────────────────────────────────────────────────────
 import db
@@ -148,6 +148,34 @@ try:
     db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS monitored_folders TEXT DEFAULT 'INBOX'")
 except Exception:
     pass  # table may not exist yet
+
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS display_name TEXT")
+except Exception:
+    pass
+
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS auto_bcc_addr TEXT")
+except Exception:
+    pass
+
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS auto_delete_days INTEGER DEFAULT 0")
+except Exception:
+    pass
+
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS tab_icon TEXT DEFAULT 'user'")
+except Exception:
+    pass
+
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS tab_color TEXT DEFAULT 'var(--accent)'")
+except Exception:
+    pass
+
+# History category id for email link events ("Email" in history_categories)
+EMAIL_HISTORY_CATEGORY_ID = 16
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -196,6 +224,58 @@ def _require_admin(handler: SimpleHTTPRequestHandler) -> dict | None:
         _json_response(handler, 403, {"error": "Forbidden"})
         return None
     return user
+
+
+def _mail_visible_accounts_sql(user_id: int) -> str:
+    """SQL predicate fragment: accounts visible to user (company inbox, own, or shared)."""
+    return (
+        "(is_crm_mail = TRUE OR owner_user_id = %s "
+        "OR id IN (SELECT account_id FROM mail_account_access WHERE user_id = %s))"
+    )
+
+
+def _mail_account_accessible(user: dict, account_id: int) -> bool:
+    """True if user can view/message an account: company inbox, owner, admin, or shared."""
+    row = db.query_one(
+        "SELECT is_crm_mail, owner_user_id FROM mail_accounts WHERE id = %s", (account_id,)
+    )
+    if not row:
+        return False
+    if row["is_crm_mail"]:
+        return True
+    if user.get("is_admin"):
+        return True
+    if row["owner_user_id"] == user["id"]:
+        return True
+    granted = db.query_one(
+        "SELECT 1 FROM mail_account_access WHERE account_id = %s AND user_id = %s",
+        (account_id, user["id"]),
+    )
+    return granted is not None
+
+
+def _mail_account_manageable(user: dict, account_id: int) -> bool:
+    """True if user can update/delete/share an account: owner or admin."""
+    if user.get("is_admin"):
+        return True
+    row = db.query_one("SELECT owner_user_id FROM mail_accounts WHERE id = %s", (account_id,))
+    return row is not None and row["owner_user_id"] == user["id"]
+
+
+def _mail_message_accessible(user: dict, message_id: int) -> bool:
+    """True if user can act on a specific message (its account is accessible)."""
+    row = db.query_one("SELECT account_id FROM mail_messages WHERE id = %s", (message_id,))
+    if not row:
+        return False
+    return _mail_account_accessible(user, row["account_id"])
+
+
+def _mail_draft_accessible(user: dict, draft_id: int) -> bool:
+    """True if user can act on a specific outgoing draft (its account is accessible)."""
+    row = db.query_one("SELECT account_id FROM mail_outgoing WHERE id = %s", (draft_id,))
+    if not row:
+        return False
+    return _mail_account_accessible(user, row["account_id"])
 
 
 def _parse_iso_datetime(value: str):
@@ -1011,6 +1091,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/mail/accounts":
             self._handle_mail_accounts()
             return
+        m = re.match(r"^/api/v2/mail/accounts/(\d+)/share$", api_path)
+        if m:
+            self._handle_mail_account_shares(int(m.group(1)))
+            return
         if api_path == "/api/v2/mail/unread-count":
             self._handle_mail_unread_count()
             return
@@ -1551,6 +1635,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         m = re.match(r"^/api/v2/mail/accounts/(\d+)/share$", api_path)
         if m and method == "POST":
             self._handle_mail_account_share(int(m.group(1)))
+            return
+        if m and method == "GET":
+            self._handle_mail_account_shares(int(m.group(1)))
             return
         m = re.match(r"^/api/v2/mail/accounts/(\d+)/share/(\d+)$", api_path)
         if m and method == "DELETE":
@@ -4912,6 +4999,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         qs = parse_qs(urlparse(self.path).query)
         provider_name = (qs.get("provider") or [""])[0].strip().lower()
+        is_crm_mail = (qs.get("is_crm_mail") or ["0"])[0] in ("1", "true", "True")
+        if is_crm_mail and not user.get("is_admin"):
+            is_crm_mail = False
         prov = oauth_providers.get_provider(provider_name)
         if not prov:
             _json_response(self, 400, {"error": f"Unknown provider: {provider_name}"})
@@ -4920,7 +5010,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "No OAuth providers configured"})
             return
         state = oauth_providers.generate_state()
-        _oauth_states[state] = (user["id"], provider_name, time.time() + 600)
+        _oauth_states[state] = (user["id"], provider_name, time.time() + 600, is_crm_mail)
         auth_url = prov.authorize_url(state)
         _json_response(self, 200, {"authUrl": auth_url})
 
@@ -4943,7 +5033,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not state_data:
             _json_response(self, 400, {"error": "Invalid or expired state"})
             return
-        user_id, provider_name, _ = state_data
+        if len(state_data) >= 4:
+            user_id, provider_name, _, is_crm_mail = state_data
+        else:
+            user_id, provider_name, _ = state_data
+            is_crm_mail = False
 
         prov = oauth_providers.get_provider(provider_name)
         if not prov:
@@ -4999,9 +5093,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         oauth_provider, oauth_access_token, oauth_refresh_token,
                         oauth_token_expires, smtp_user, sync_enabled, monitored_folders,
                         password_encrypted, display_name, is_crm_mail)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s), %s, TRUE, 'INBOX', '', %s, TRUE)""",
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s), %s, TRUE, 'INBOX', '', %s, %s)""",
                     (email, imap["host"], imap["port"], smtp["host"], smtp["port"],
-                     user_id, provider_name, access_token, refresh_token, expires_ts, email, email.split("@")[0].replace(".", " ").title()),
+                     user_id, provider_name, access_token, refresh_token, expires_ts, email,
+                     email.split("@")[0].replace(".", " ").title(), bool(is_crm_mail)),
                 )
                 logger.info("OAuth INSERT succeeded for email=%s user_id=%s", email, user_id)
             except Exception as e:
@@ -5132,6 +5227,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         folder = qs.get("folder", ["INBOX"])[0].strip()
         account_id = qs.get("account_id", [None])[0]
         tag = qs.get("tag", [None])[0]
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             where = ["m.folder = %s"]
             params: list[Any] = [folder]
@@ -5141,6 +5239,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             elif account_id:
                 where.append("m.account_id = %s")
                 params.append(int(account_id))
+            where.append(f"m.account_id IN (SELECT id FROM mail_accounts WHERE {_mail_visible_accounts_sql(user['id'])})")
+            params.extend([user["id"], user["id"]])
             if search:
                 where.append("(m.subject ILIKE %s OR m.from_addr ILIKE %s)")
                 params.extend([f"%{search}%", f"%{search}%"])
@@ -5181,6 +5281,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_message(self, message_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             row = db.query_one(
                 "SELECT m.*, a.email AS account_email FROM mail_messages m "
@@ -5189,6 +5292,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             )
             if not row:
                 _json_response(self, 404, {"error": "Message not found"})
+                return
+            if not _mail_account_accessible(user, row["account_id"]):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
                 return
             row_dict = dict(row)
             tags = db.query_dicts(
@@ -5221,6 +5327,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_link(self, message_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_message_accessible(user, message_id):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
+                return
             payload = json.loads(_read_body(self) or b"{}")
             opp_id = payload.get("opportunityId") or payload.get("oppId")
             if not opp_id:
@@ -5236,8 +5348,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not opp:
                 _json_response(self, 404, {"error": f"Opportunity {opp_id} not found"})
                 return
-            user = _require_auth(self)
-            linked_by = user["id"] if user else None
+            linked_by = user["id"]
             ok = self._link_email_to_deal(message_id, opp_id, linked_by)
             if not ok:
                 # Check if already linked
@@ -5250,17 +5361,41 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     return
                 _json_response(self, 500, {"error": "Failed to link email to deal"})
                 return
-            # Create history event so the link appears in the deal timeline
-            msg = db.query_one("SELECT subject, from_addr, body_html, body_text FROM mail_messages WHERE id = %s", (message_id,))
+            # Create history event so the link appears in the deal timeline.
+            # Store a full JSON snapshot so the embedded mail view survives account
+            # deletion / auto-delete retention purging.
+            msg = db.query_one(
+                "SELECT subject, from_addr, to_addr, cc_addr, body_html, body_text, date_received FROM mail_messages WHERE id = %s",
+                (message_id,),
+            )
             if msg:
-                from_addr = msg["from_addr"] or "Unknown"
-                subject = msg["subject"] or "(no subject)"
-                body_preview = re.sub(r"<[^>]+>", "", msg.get("body_html") or "")[:2000] if msg.get("body_html") else (msg.get("body_text") or "")[:2000]
-                note_content = f"Email linked: {subject}\nFrom: {from_addr}\n\n{body_preview[:2000]}"
+                try:
+                    att_rows = db.query_dicts(
+                        "SELECT filename, size_bytes, mime_type FROM mail_attachments WHERE message_id = %s",
+                        (message_id,),
+                    )
+                    att_snapshot = [
+                        {"filename": a["filename"], "size_bytes": a["size_bytes"] or 0, "mime_type": a["mime_type"] or ""}
+                        for a in att_rows
+                    ]
+                except Exception:
+                    att_snapshot = []
+                snapshot = {
+                    "type": "email_snapshot",
+                    "message_id": message_id,
+                    "from": msg["from_addr"] or "",
+                    "to": msg["to_addr"] or "",
+                    "cc": msg["cc_addr"] or "",
+                    "subject": msg["subject"] or "",
+                    "date_sent": str(msg["date_received"]) if msg["date_received"] else "",
+                    "body_html": msg["body_html"] or "",
+                    "body_text": msg["body_text"] or "",
+                    "attachments": att_snapshot,
+                }
                 db.execute(
-                    "INSERT INTO history_events (opportunity_id, user_id, category, content, created_at) "
-                    "VALUES (%s, %s, %s, %s, NOW())",
-                    (opp_id, linked_by, "Email", note_content),
+                    "INSERT INTO history_events (opportunity_id, category_id, content, created_by) "
+                    "VALUES (%s, %s, %s, %s)",
+                    (opp_id, EMAIL_HISTORY_CATEGORY_ID, json.dumps(snapshot), linked_by),
                 )
             _json_response(self, 200, {"ok": True, "linked": True})
         except Exception as e:
@@ -5269,6 +5404,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_message_mark_read(self, message_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_message_accessible(user, message_id):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
+                return
             db.execute("UPDATE mail_messages SET is_read = TRUE WHERE id = %s", (message_id,))
             _json_response(self, 200, {"ok": True})
         except Exception as e:
@@ -5277,6 +5418,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_message_mark_unread(self, message_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_message_accessible(user, message_id):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
+                return
             db.execute("UPDATE mail_messages SET is_read = FALSE WHERE id = %s", (message_id,))
             _json_response(self, 200, {"ok": True})
         except Exception as e:
@@ -5285,6 +5432,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_message_delete(self, message_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_message_accessible(user, message_id):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
+                return
             db.execute("UPDATE mail_messages SET folder = 'Trash' WHERE id = %s", (message_id,))
             _json_response(self, 200, {"ok": True})
         except Exception as e:
@@ -5292,8 +5445,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_trash_count(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
-            row = db.query_one("SELECT COUNT(*) AS cnt FROM mail_messages WHERE folder = 'Trash'")
+            row = db.query_one(
+                f"SELECT COUNT(*) AS cnt FROM mail_messages WHERE folder = 'Trash' "
+                f"AND account_id IN (SELECT id FROM mail_accounts WHERE {_mail_visible_accounts_sql(user['id'])})",
+                (user["id"], user["id"]),
+            )
             _json_response(self, 200, {"count": row["cnt"] if row else 0})
         except Exception as e:
             logger.exception("Failed to get trash count")
@@ -5301,7 +5461,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_draft_get(self, draft_id: int) -> None:
         try:
-            row = db.query_one("SELECT * FROM mail_outgoing WHERE id = %s AND status = 'draft'", (draft_id,))
+            user = _require_auth(self)
+            if not user:
+                return
+            row = db.query_one(
+                f"SELECT * FROM mail_outgoing WHERE id = %s AND status = 'draft' "
+                f"AND account_id IN (SELECT id FROM mail_accounts WHERE {_mail_visible_accounts_sql(user['id'])})",
+                (draft_id, user["id"], user["id"]),
+            )
             if not row:
                 _json_response(self, 404, {"error": "Draft not found"})
                 return
@@ -5338,6 +5505,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     def _handle_mail_drafts_get(self) -> None:
         qs = parse_qs(urlparse(self.path).query)
         account_id = qs.get("account_id", [None])[0]
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             where = "status = 'draft'"
             params: tuple = ()
@@ -5349,6 +5519,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     params = (int(account_id),)
                 except (ValueError, TypeError):
                     pass
+            where += f" AND account_id IN (SELECT id FROM mail_accounts WHERE {_mail_visible_accounts_sql(user['id'])})"
+            params += (user["id"], user["id"])
             rows = db.query_dicts(
                 f"SELECT * FROM mail_outgoing WHERE {where} ORDER BY created_at DESC LIMIT 50",
                 params,
@@ -5359,7 +5531,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_empty_trash(self) -> None:
         try:
-            result = db.execute("DELETE FROM mail_messages WHERE folder = 'Trash'")
+            user = _require_auth(self)
+            if not user:
+                return
+            db.execute(
+                f"DELETE FROM mail_messages WHERE folder = 'Trash' "
+                f"AND account_id IN (SELECT id FROM mail_accounts WHERE {_mail_visible_accounts_sql(user['id'])})",
+                (user["id"], user["id"]),
+            )
             _json_response(self, 200, {"ok": True})
         except Exception as e:
             logger.exception("Failed to empty trash")
@@ -5367,13 +5546,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_message_add_tag(self, message_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_message_accessible(user, message_id):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
+                return
             payload = json.loads(_read_body(self) or b"{}")
             tag_title = payload.get("title") or payload.get("tag")
             if not tag_title:
                 _json_response(self, 400, {"error": "title required"})
                 return
-            user = _require_auth(self)
-            assigned_by = user["id"] if user else None
+            assigned_by = user["id"]
             ok = self._add_tag_to_message(message_id, tag_title, assigned_by)
             _json_response(self, 200, {"ok": ok})
         except Exception as e:
@@ -5488,6 +5672,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_message_remove_tag(self, message_id: int, tag_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_message_accessible(user, message_id):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
+                return
             db.execute("DELETE FROM mail_tag_assignments WHERE message_id = %s AND tag_id = %s", (message_id, tag_id))
             _json_response(self, 200, {"ok": True})
         except Exception as e:
@@ -5574,13 +5764,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_accounts(self) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
             rows = db.query_dicts(
-                """SELECT id, email, display_name, imap_host, imap_port,
+                f"""SELECT id, email, display_name, imap_host, imap_port,
                           smtp_host, smtp_port, smtp_from_name, smtp_user,
                           sync_enabled, monitored_folders, oauth_provider,
                           oauth_token_expires, oauth_scopes, is_crm_mail,
+                          auto_bcc_addr, auto_delete_days, tab_icon, tab_color,
                           last_sync, owner_user_id, created_at
-                   FROM mail_accounts ORDER BY email"""
+                   FROM mail_accounts
+                   WHERE {_mail_visible_accounts_sql(user["id"])}
+                   ORDER BY email""",
+                (user["id"], user["id"]),
             )
             now_ts = datetime.now(timezone.utc).timestamp()
             for r in rows:
@@ -5589,6 +5786,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 r["oauth_access_token"] = ""
                 r["oauth_refresh_token"] = ""
                 r["authType"] = r.get("oauth_provider") or "password"
+                r["isOwner"] = r["owner_user_id"] == user["id"] or bool(user.get("is_admin"))
+                r["canManage"] = _mail_account_manageable(user, r["id"])
                 if r.get("oauth_provider"):
                     expires = r.get("oauth_token_expires")
                     if expires and isinstance(expires, datetime):
@@ -5597,6 +5796,24 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         r["oauthStatus"] = "connected"
                 else:
                     r["oauthStatus"] = None
+            # Attach shared-with users for each visible account
+            acct_ids = [r["id"] for r in rows]
+            shares: dict[int, list[dict]] = {}
+            if acct_ids:
+                share_rows = db.query_dicts(
+                    "SELECT aa.account_id, u.id AS user_id, u.display_name, u.email "
+                    "FROM mail_account_access aa JOIN users u ON u.id = aa.user_id "
+                    "WHERE aa.account_id = ANY(%s) ORDER BY u.display_name",
+                    (acct_ids,),
+                )
+                for sr in share_rows:
+                    shares.setdefault(sr["account_id"], []).append({
+                        "userId": sr["user_id"],
+                        "displayName": sr["display_name"],
+                        "email": sr["email"],
+                    })
+            for r in rows:
+                r["sharedWith"] = shares.get(r["id"], [])
             _json_response(self, 200, {"accounts": rows})
         except Exception as e:
             logger.exception("Failed to fetch mail accounts")
@@ -5640,14 +5857,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     def _handle_mail_unread_count(self) -> None:
         qs = parse_qs(urlparse(self.path).query)
         account_id = qs.get("account_id", [None])[0]
+        user = _require_auth(self)
+        if not user:
+            return
         try:
-            where = "m.is_read = FALSE"
-            params: tuple = ()
+            where = f"m.is_read = FALSE AND m.account_id IN (SELECT id FROM mail_accounts WHERE {_mail_visible_accounts_sql(user['id'])})"
+            params: tuple = (user["id"], user["id"])
             if account_id == 'crm':
                 where += " AND m.account_id IN (SELECT id FROM mail_accounts WHERE is_crm_mail = TRUE)"
             elif account_id:
                 where += " AND m.account_id = %s"
-                params = (int(account_id),)
+                params = params + (int(account_id),)
             row = db.query_one(f"SELECT COUNT(*) AS cnt FROM mail_messages m WHERE {where}", params)
             _json_response(self, 200, {"count": row["cnt"] if row else 0})
         except Exception as e:
@@ -5657,12 +5877,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         qs = parse_qs(urlparse(self.path).query)
         page = int(qs.get("page", ["1"])[0])
         page_size = int(qs.get("page_size", ["50"])[0])
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             rows = db.query_dicts(
-                "SELECT o.*, a.email AS account_email FROM mail_outgoing o "
-                "LEFT JOIN mail_accounts a ON o.account_id = a.id "
-                "ORDER BY o.created_at DESC LIMIT %s OFFSET %s",
-                (page_size, (page - 1) * page_size),
+                f"SELECT o.*, a.email AS account_email FROM mail_outgoing o "
+                f"LEFT JOIN mail_accounts a ON o.account_id = a.id "
+                f"WHERE o.account_id IN (SELECT id FROM mail_accounts WHERE {_mail_visible_accounts_sql(user['id'])}) "
+                f"ORDER BY o.created_at DESC LIMIT %s OFFSET %s",
+                (user["id"], user["id"], page_size, (page - 1) * page_size),
             )
             _json_response(self, 200, {"messages": rows, "page": page, "page_size": page_size})
         except Exception as e:
@@ -5678,16 +5902,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             else:
                 folders_str = str(folders_raw or "INBOX")
             oauth_provider = payload.get("oauth_provider") or None
+            is_crm_mail = bool(payload.get("is_crm_mail")) and bool(user.get("is_admin")) if user else False
             result = db.query_one(
                 """INSERT INTO mail_accounts
-                   (email, imap_host, imap_port, password_encrypted, owner_user_id,
+                   (email, display_name, imap_host, imap_port, password_encrypted, owner_user_id,
                     smtp_host, smtp_port, smtp_user, smtp_password_encrypted,
                     smtp_use_tls, smtp_from_name, oauth_provider, monitored_folders,
-                    oauth_access_token, oauth_refresh_token, oauth_token_expires)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    oauth_access_token, oauth_refresh_token, oauth_token_expires, is_crm_mail,
+                    auto_bcc_addr, auto_delete_days, tab_icon, tab_color)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
                     payload.get("email"),
+                    payload.get("display_name"),
                     payload.get("imap_host"),
                     int(payload.get("imap_port", 993)),
                     payload.get("password", ""),
@@ -5703,6 +5930,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     payload.get("oauth_access_token"),
                     payload.get("oauth_refresh_token"),
                     payload.get("oauth_token_expires"),
+                    is_crm_mail,
+                    payload.get("auto_bcc_addr"),
+                    int(payload.get("auto_delete_days") or 0),
+                    payload.get("tab_icon") or "user",
+                    payload.get("tab_color") or "var(--accent)",
                 ),
             )
             _json_response(self, 201, {"id": result["id"]})
@@ -5712,14 +5944,26 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_account_update(self, account_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_account_manageable(user, account_id):
+                _json_response(self, 403, {"error": "You don't have permission to manage this account"})
+                return
             payload = json.loads(_read_body(self) or b"{}")
             fields = []
             params: list[Any] = []
-            for key in ("email", "imap_host", "smtp_host", "smtp_user", "smtp_from_name", "oauth_provider",
-                        "oauth_access_token", "oauth_refresh_token"):
+            for key in ("email", "display_name", "imap_host", "smtp_host", "smtp_user", "smtp_from_name", "oauth_provider",
+                        "oauth_access_token", "oauth_refresh_token", "auto_bcc_addr", "tab_icon", "tab_color"):
                 if key in payload:
                     fields.append(f"{key} = %s")
                     params.append(payload[key])
+            if "auto_delete_days" in payload:
+                fields.append("auto_delete_days = %s")
+                params.append(int(payload["auto_delete_days"] or 0))
+            if "signature_html" in payload:
+                fields.append("signature_html = %s")
+                params.append(payload["signature_html"])
             if "oauth_token_expires" in payload:
                 val = payload["oauth_token_expires"]
                 if isinstance(val, (int, float)):
@@ -5745,6 +5989,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if "sync_enabled" in payload:
                 fields.append("sync_enabled = %s")
                 params.append(bool(payload["sync_enabled"]))
+            if "is_crm_mail" in payload and user.get("is_admin"):
+                fields.append("is_crm_mail = %s")
+                params.append(bool(payload["is_crm_mail"]))
             if "monitored_folders" in payload:
                 raw = payload["monitored_folders"]
                 if isinstance(raw, list):
@@ -5763,6 +6010,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_account_delete(self, account_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_account_manageable(user, account_id):
+                _json_response(self, 403, {"error": "You don't have permission to manage this account"})
+                return
             db.execute("DELETE FROM mail_accounts WHERE id = %s", (account_id,))
             _json_response(self, 200, {"ok": True})
         except Exception as e:
@@ -5770,10 +6023,34 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_account_share(self, account_id: int) -> None:
         try:
-            payload = json.loads(_read_body(self) or b"{}")
-            share_user_id = int(payload.get("user_id"))
             user = _require_auth(self)
-            granted_by = user["id"] if user else None
+            if not user:
+                return
+            if not _mail_account_manageable(user, account_id):
+                _json_response(self, 403, {"error": "You don't have permission to share this account"})
+                return
+            acct = db.query_one("SELECT is_crm_mail FROM mail_accounts WHERE id = %s", (account_id,))
+            if not acct:
+                _json_response(self, 404, {"error": "Account not found"})
+                return
+            if acct.get("is_crm_mail"):
+                _json_response(self, 400, {"error": "Company inbox is already shared with all users"})
+                return
+            payload = json.loads(_read_body(self) or b"{}")
+            try:
+                share_user_id = int(payload.get("user_id"))
+            except (TypeError, ValueError):
+                _json_response(self, 400, {"error": "user_id is required"})
+                return
+            target = db.query_one("SELECT id, is_admin, is_active FROM users WHERE id = %s", (share_user_id,))
+            if not target or not target.get("is_active"):
+                _json_response(self, 404, {"error": "User not found"})
+                return
+            owner = db.query_one("SELECT owner_user_id FROM mail_accounts WHERE id = %s", (account_id,))
+            if owner and owner["owner_user_id"] == share_user_id:
+                _json_response(self, 400, {"error": "This user already owns the account"})
+                return
+            granted_by = user["id"]
             db.execute(
                 "INSERT INTO mail_account_access (account_id, user_id, granted_by) VALUES (%s, %s, %s) ON CONFLICT (account_id, user_id) DO NOTHING",
                 (account_id, share_user_id, granted_by),
@@ -5784,11 +6061,35 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_account_unshare(self, account_id: int, user_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_account_manageable(user, account_id):
+                _json_response(self, 403, {"error": "You don't have permission to manage this account"})
+                return
             db.execute(
                 "DELETE FROM mail_account_access WHERE account_id = %s AND user_id = %s",
                 (account_id, user_id),
             )
             _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_account_shares(self, account_id: int) -> None:
+        try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_account_accessible(user, account_id):
+                _json_response(self, 403, {"error": "You don't have access to this account"})
+                return
+            rows = db.query_dicts(
+                "SELECT aa.account_id, u.id AS user_id, u.display_name, u.email, aa.granted_at "
+                "FROM mail_account_access aa JOIN users u ON u.id = aa.user_id "
+                "WHERE aa.account_id = %s ORDER BY u.display_name",
+                (account_id,),
+            )
+            _json_response(self, 200, {"shares": rows})
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 
@@ -5819,6 +6120,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not acct:
                 _json_response(self, 404, {"error": "Account not found"})
                 return
+            if not _mail_account_accessible(user, account_id):
+                _json_response(self, 403, {"error": "You don't have access to this account"})
+                return
+
+            # Merge account-level auto-BCC addresses (comma-separated) into the outgoing BCC
+            auto_bcc = (acct.get("auto_bcc_addr") or "").strip()
+            if auto_bcc:
+                merged = []
+                seen: set[str] = set()
+                for raw in (bcc_addr or "").split(",") + auto_bcc.split(","):
+                    addr = raw.strip()
+                    if addr and addr.lower() not in seen:
+                        seen.add(addr.lower())
+                        merged.append(addr)
+                if merged:
+                    bcc_addr = ", ".join(merged)
 
             # Refresh OAuth token if needed
             oauth_provider = acct.get("oauth_provider")
@@ -5904,6 +6221,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_message_star(self, message_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_message_accessible(user, message_id):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
+                return
             row = db.query_one("SELECT starred FROM mail_messages WHERE id = %s", (message_id,))
             _json_response(self, 200, {"starred": row["starred"] if row else False})
         except Exception as e:
@@ -5911,6 +6234,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_message_toggle_star(self, message_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_message_accessible(user, message_id):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
+                return
             db.execute("UPDATE mail_messages SET starred = NOT starred WHERE id = %s", (message_id,))
             row = db.query_one("SELECT starred FROM mail_messages WHERE id = %s", (message_id,))
             _json_response(self, 200, {"starred": row["starred"] if row else False})
@@ -5919,6 +6248,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_message_archive(self, message_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_message_accessible(user, message_id):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
+                return
             db.execute("UPDATE mail_messages SET is_archived = TRUE WHERE id = %s", (message_id,))
             _json_response(self, 200, {"ok": True})
         except Exception as e:
@@ -5926,6 +6261,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_message_move(self, message_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_message_accessible(user, message_id):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
+                return
             payload = json.loads(_read_body(self) or b"{}")
             folder = payload.get("folder", "INBOX")
             db.execute("UPDATE mail_messages SET folder = %s WHERE id = %s", (folder, message_id))
@@ -5935,6 +6276,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_message_reply(self, message_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_message_accessible(user, message_id):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
+                return
             row = db.query_one("SELECT * FROM mail_messages WHERE id = %s", (message_id,))
             if not row:
                 _json_response(self, 404, {"error": "Message not found"})
@@ -5953,6 +6300,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_message_forward(self, message_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_message_accessible(user, message_id):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
+                return
             row = db.query_one("SELECT * FROM mail_messages WHERE id = %s", (message_id,))
             if not row:
                 _json_response(self, 404, {"error": "Message not found"})
@@ -5973,12 +6326,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         try:
             payload = json.loads(_read_body(self) or b"{}")
             user = _require_auth(self)
+            if not user:
+                return
+            account_id = payload.get("account_id")
+            if account_id and not _mail_account_accessible(user, int(account_id)):
+                _json_response(self, 403, {"error": "You don't have access to this account"})
+                return
             result = db.query_one(
                 """INSERT INTO mail_outgoing
                    (account_id, to_addr, cc_addr, bcc_addr, subject, body_html, deal_id, status, created_by)
                    VALUES (%s, %s, %s, %s, %s, %s, %s, 'draft', %s)
                    RETURNING id""",
-                (payload.get("account_id"), payload.get("to"), payload.get("cc"),
+                (account_id, payload.get("to"), payload.get("cc"),
                  payload.get("bcc"), payload.get("subject"), payload.get("body"),
                  payload.get("deal_id"), user["id"] if user else None),
             )
@@ -5988,6 +6347,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_draft_update(self, draft_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_draft_accessible(user, draft_id):
+                _json_response(self, 403, {"error": "You don't have access to this draft"})
+                return
             payload = json.loads(_read_body(self) or b"{}")
             db.execute(
                 "UPDATE mail_outgoing SET to_addr=%s, cc_addr=%s, bcc_addr=%s, subject=%s, body_html=%s WHERE id=%s",
@@ -6000,6 +6365,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_draft_delete(self, draft_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_draft_accessible(user, draft_id):
+                _json_response(self, 403, {"error": "You don't have access to this draft"})
+                return
             db.execute("DELETE FROM mail_outgoing WHERE id = %s AND status = 'draft'", (draft_id,))
             _json_response(self, 200, {"ok": True})
         except Exception as e:
@@ -6169,6 +6540,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_account_signature_get(self, account_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_account_accessible(user, account_id):
+                _json_response(self, 403, {"error": "You don't have access to this account"})
+                return
             row = db.query_one("SELECT signature_html, signature_text FROM mail_accounts WHERE id = %s", (account_id,))
             if not row:
                 _json_response(self, 404, {"error": "Account not found"})
@@ -6179,6 +6556,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_account_signature_put(self, account_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_account_manageable(user, account_id):
+                _json_response(self, 403, {"error": "You don't have permission to manage this account"})
+                return
             payload = json.loads(_read_body(self) or b"{}")
             db.execute(
                 "UPDATE mail_accounts SET signature_html=%s, signature_text=%s WHERE id=%s",
@@ -6190,6 +6573,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_message_attachments(self, message_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_message_accessible(user, message_id):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
+                return
             rows = db.query_dicts(
                 "SELECT * FROM mail_attachments WHERE message_id = %s ORDER BY filename",
                 (message_id,),
@@ -6200,6 +6589,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_attachment_download(self, message_id: int, attachment_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_message_accessible(user, message_id):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
+                return
             att = db.query_one(
                 "SELECT * FROM mail_attachments WHERE id = %s AND message_id = %s",
                 (attachment_id, message_id),
@@ -6261,6 +6656,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_message_headers(self, message_id: int) -> None:
         try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_message_accessible(user, message_id):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
+                return
             row = db.query_one("SELECT raw_headers FROM mail_messages WHERE id = %s", (message_id,))
             if not row:
                 _json_response(self, 404, {"error": "Message not found"})
@@ -6272,6 +6673,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     def _handle_mail_threads(self) -> None:
         qs = parse_qs(urlparse(self.path).query)
         account_id = qs.get("account_id", [None])[0]
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             where = "m.folder != 'Trash'"
             params: tuple = ()
@@ -6283,6 +6687,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     params = (int(account_id),)
                 except (ValueError, TypeError):
                     pass
+            where += f" AND m.account_id IN (SELECT id FROM mail_accounts WHERE {_mail_visible_accounts_sql(user['id'])})"
+            params += (user["id"], user["id"])
             rows = db.query_dicts(
                 f"SELECT m.conversation_id, COUNT(*) AS message_count, "
                 f"MAX(m.date_received) AS latest_date, "

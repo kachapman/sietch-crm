@@ -243,14 +243,20 @@ def _save_processed_ids(ids: set[str]) -> None:
     _write_json(PROCESSED_IDS_FILE, sorted(list(ids)))
 
 
-def _mark_processed(conv_id: str) -> None:
+def _processed_key(account_id, conv_id: str) -> str:
+    # Scope processed-UID tracking per account so a deleted account's UIDs can
+    # never suppress another account's messages.
+    return f"{account_id}:{conv_id}"
+
+
+def _mark_processed(account_id, conv_id: str) -> None:
     ids = _load_processed_ids()
-    ids.add(conv_id)
+    ids.add(_processed_key(account_id, conv_id))
     _save_processed_ids(ids)
 
 
-def _is_processed(conv_id: str) -> bool:
-    return str(conv_id) in _load_processed_ids()
+def _is_processed(account_id, conv_id: str) -> bool:
+    return _processed_key(account_id, conv_id) in _load_processed_ids()
 
 
 def _refresh_oauth_token_if_needed(account_id: int, provider_name: str, current_refresh_token: str, expires_at: datetime | None) -> tuple[str, str] | None:
@@ -375,7 +381,9 @@ def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None, sinc
                         "filename": att.filename or "unnamed",
                         "mime_type": att.content_type or "application/octet/octet-stream",
                         "size_bytes": len(att.payload) if att.payload else 0,
-                        "part_id": att.part or "",
+                        # imap_tools: att.part is the raw MIME part object (not JSON-serializable);
+                        # use content_id which matches the server-side download lookup key.
+                        "part_id": att.content_id or "",
                     })
             # Build raw headers string from imap_tools headers object
             raw_headers = ""
@@ -481,12 +489,36 @@ def _ensure_tag(tag_title: str, created_by: int | None = None) -> int | None:
     return result["id"] if result else None
 
 
+# Claim # custom field is field_key "field_11"; resolve its actual id dynamically so we
+# query the real column (field_id) instead of the non-existent "custom_field_id".
+_CLAIM_FIELD_KEY = "field_11"
+
+
+def _claim_field_id() -> int | None:
+    try:
+        row = db.query_one(
+            "SELECT id FROM custom_field_definitions WHERE field_key = %s",
+            (_CLAIM_FIELD_KEY,),
+        )
+        return row["id"] if row else None
+    except Exception as e:
+        logger.error("Failed to resolve Claim # field id: %s", e)
+        return None
+
+
 def _find_opportunity_by_claim_code(claim_code: str) -> dict[str, Any] | None:
-    rows = db.query(
-        "SELECT id, title FROM opportunities WHERE id IN "
-        "(SELECT opportunity_id FROM opportunity_custom_field_values WHERE custom_field_id = 11 AND field_value = %s)",
-        (claim_code,),
-    )
+    field_id = _claim_field_id()
+    if field_id is None:
+        return None
+    try:
+        rows = db.query(
+            "SELECT id, title FROM opportunities WHERE id IN "
+            "(SELECT opportunity_id FROM opportunity_custom_field_values WHERE field_id = %s AND field_value = %s)",
+            (field_id, claim_code),
+        )
+    except Exception as e:
+        logger.error("Failed to look up opportunity by claim code: %s", e)
+        return None
     if rows:
         return rows[0]
     return None
@@ -541,12 +573,12 @@ def _add_tag_to_message(message_id: int, tag_title: str, assigned_by: int | None
         return False
 
 
-def _post_note_to_deal(opp_id: int, content: str, notify_users: list[str] | None = None) -> bool:
+def _post_note_to_deal(opp_id: int, content: str, notify_users: list[str] | None = None, category_id: int = 16) -> bool:
     try:
         db.execute(
-            "INSERT INTO history_events (opportunity_id, user_id, category, content, created_at) "
-            "VALUES (%s, %s, %s, %s, NOW())",
-            (opp_id, None, "Email", content),
+            "INSERT INTO history_events (opportunity_id, category_id, content, created_by) "
+            "VALUES (%s, %s, %s, %s)",
+            (opp_id, category_id, content, None),
         )
         return True
     except Exception as e:
@@ -703,14 +735,21 @@ def _classify_message(msg: dict[str, Any]) -> dict[str, Any]:
 
 def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | None:
     try:
-        existing = db.query_one(
-            "SELECT id FROM mail_messages WHERE imap_uid = %s AND folder = %s",
-            (str(msg.get("uid") or ""), msg.get("folder") or "INBOX"),
-        )
+        account_id = mailbox_cfg.get("account_id")
+        uid_key = str(msg.get("uid") or "")
+        if account_id is not None:
+            existing = db.query_one(
+                "SELECT id FROM mail_messages WHERE imap_uid = %s AND folder = %s AND account_id = %s",
+                (uid_key, msg.get("folder") or "INBOX", account_id),
+            )
+        else:
+            existing = db.query_one(
+                "SELECT id FROM mail_messages WHERE imap_uid = %s AND folder = %s AND account_id IS NULL",
+                (uid_key, msg.get("folder") or "INBOX"),
+            )
         if existing:
             return existing["id"]
 
-        account_id = mailbox_cfg.get("account_id")
         attachments = msg.get("attachments", [])
         attachments_json = json.dumps(attachments) if attachments else None
 
@@ -740,7 +779,7 @@ def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | No
         )
         msg_id = result["id"] if result else None
         if msg_id:
-            _mark_processed(str(msg.get("uid") or msg_id))
+            _mark_processed(account_id, str(msg.get("uid") or msg_id))
             # Store attachment records and optionally download files
             if attachments and account_id:
                 _store_attachments(msg_id, account_id, attachments, msg)
@@ -780,7 +819,7 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
         _append_log(log_entry)
         return log_entry
 
-    if _is_processed(uid or msg.get("message_id") or ""):
+    if _is_processed(mailbox_cfg.get("account_id"), uid or msg.get("message_id") or ""):
         log_entry["status"] = "already_processed"
         _append_log(log_entry)
         return log_entry
@@ -806,13 +845,26 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
         if linked and toggles.get("post_notes", False):
             deal = _find_opportunity_by_deal_id(classification["linked_deal_id"])
             if deal:
-                body_text = _email_body_for_note(msg)
                 from_addr = msg.get("from") or ""
-                note_content = (
-                    f"Email from {from_addr} (subject: {msg.get('subject', '')})\n\n"
-                    f"{body_text[:2000]}"
-                )
-                _post_note_to_deal(deal["id"], note_content)
+                to_addr = msg.get("to") or ""
+                att_snapshot = [
+                    {"filename": a.get("filename", ""), "size_bytes": a.get("size_bytes", 0) or 0,
+                     "mime_type": a.get("mime_type", "")}
+                    for a in (msg.get("attachments") or [])
+                ]
+                snapshot = {
+                    "type": "email_snapshot",
+                    "message_id": msg_id,
+                    "from": from_addr,
+                    "to": to_addr,
+                    "cc": msg.get("cc") or "",
+                    "subject": msg.get("subject", "") or "",
+                    "date_sent": str(msg.get("date") or ""),
+                    "body_html": msg.get("body_html") or "",
+                    "body_text": msg.get("body_text") or "",
+                    "attachments": att_snapshot,
+                }
+                _post_note_to_deal(deal["id"], json.dumps(snapshot))
                 log_entry["note_posted"] = True
 
     if classification["classification"] == "claim_code_no_deal":
@@ -860,6 +912,36 @@ def _poll_mailboxes() -> list[dict[str, Any]]:
     return results
 
 
+def _enforce_retention() -> None:
+    """Delete synced messages older than each account's auto_delete_days (0 = keep forever).
+
+    Runs for every account with auto_delete_days > 0, regardless of sync_enabled.
+    Messages linked to deals are always kept. Local DB only — never touches IMAP.
+    """
+    try:
+        rows = db.query_dicts(
+            "SELECT id, email, auto_delete_days FROM mail_accounts WHERE auto_delete_days IS NOT NULL AND auto_delete_days > 0"
+        )
+    except Exception as e:
+        logger.error("Retention: failed to fetch accounts: %s", e)
+        return
+    for acct in rows:
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=int(acct["auto_delete_days"]))
+            deleted = db.execute(
+                """DELETE FROM mail_messages
+                   WHERE account_id = %s
+                     AND date_received IS NOT NULL
+                     AND date_received < %s
+                     AND id NOT IN (SELECT message_id FROM mail_deal_links)""",
+                (acct["id"], cutoff),
+            )
+            if deleted:
+                logger.info("Retention: deleted %d old message(s) for %s (older than %d days)", deleted, acct["email"], acct["auto_delete_days"])
+        except Exception as e:
+            logger.error("Retention: failed for %s: %s", acct["email"], e)
+
+
 def _scanner_loop() -> None:
     logger.info("Scanner loop started")
     while True:
@@ -877,6 +959,7 @@ def _scanner_loop() -> None:
             else:
                 logger.info("Starting poll cycle")
                 _poll_mailboxes()
+                _enforce_retention()
                 logger.info("Poll cycle complete")
         except Exception as e:
             logger.error("Scanner loop error: %s", e)
@@ -996,7 +1079,7 @@ def get_feedback_entries(limit: int = 200) -> list[dict[str, Any]]:
 def reprocess_conversations(conversation_ids: list[int]) -> list[dict[str, Any]]:
     results = []
     for cid in conversation_ids:
-        _mark_processed(str(cid))
+        _mark_processed(None, str(cid))
         results.append({"id": cid, "reprocessed": True})
     return results
 

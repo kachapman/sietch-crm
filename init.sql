@@ -460,6 +460,7 @@ CREATE TRIGGER enforce_photo_quota
 CREATE TABLE mail_accounts (
     id SERIAL PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
+    display_name TEXT,
     imap_host TEXT NOT NULL,
     imap_port INTEGER DEFAULT 993,
     password_encrypted TEXT NOT NULL,
@@ -481,7 +482,12 @@ CREATE TABLE mail_accounts (
     oauth_token_expires TIMESTAMP,
     oauth_scopes TEXT,
     signature_html TEXT,
-    signature_text TEXT
+    signature_text TEXT,
+    is_crm_mail BOOLEAN DEFAULT FALSE,
+    auto_bcc_addr TEXT,
+    auto_delete_days INTEGER DEFAULT 0,
+    tab_icon TEXT DEFAULT 'user',
+    tab_color TEXT DEFAULT 'var(--accent)'
 );
 
 CREATE TABLE mail_messages (

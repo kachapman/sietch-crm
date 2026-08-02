@@ -15275,6 +15275,7 @@ async function openMailInboxModal() {
   $("#mail-search-input").value = "";
   await loadMailAccountsForModal();
   await renderMailTabs();
+  updateMailToolbarSettingsBtn();
   await renderMailFolderList();
   await renderMailFolders();
   await renderMailTemplates();
@@ -15282,6 +15283,19 @@ async function openMailInboxModal() {
   await renderMailUnreadBadge();
   await updateTrashCount();
   attachMailModalListeners();
+
+  // Auto-refresh inbox every 30 seconds while modal is open
+  if (_mailInboxAutoRefreshTimer) clearInterval(_mailInboxAutoRefreshTimer);
+  _mailInboxAutoRefreshTimer = setInterval(() => {
+    const m = $("#mail-inbox-modal");
+    if (!m || m.classList.contains("hidden")) {
+      clearInterval(_mailInboxAutoRefreshTimer);
+      _mailInboxAutoRefreshTimer = null;
+      return;
+    }
+    loadMailMessagesForModal();
+    renderMailUnreadBadge();
+  }, 30000);
 }
 
  async function renderMailTabs() {
@@ -15297,7 +15311,8 @@ async function openMailInboxModal() {
     // CRM Mail tab (always present — shared company inbox)
     const crmActive = !mailState.activeAccount || mailState.activeAccount === 'crm';
     html += `<button type="button" class="mail-inbox-tab ${crmActive ? 'active' : ''}" data-mailtab="inbox" data-account-id="crm">`;
-    html += `<i class="ti ti-building" style="margin-right:0.3rem;"></i>CRM Mail`;
+    html += `<span class="mail-tab-avatar" style="--tab-color:var(--muted);"><i class="ti ti-building"></i></span>`;
+    html += `<span class="mail-tab-label">CRM Mail</span>`;
     html += `<span class="mail-tab-badge" data-account-badge="crm"></span>`;
     html += `</button>`;
 
@@ -15306,11 +15321,14 @@ async function openMailInboxModal() {
       if (acct.is_crm_mail === true) continue;
       const isActive = mailState.activeAccount === acct.id;
       const label = acct.display_name || acct.email;
+      const tabColor = acct.tab_color || 'var(--accent)';
+      const tabIcon = acct.tab_icon || 'user';
       let authBadge = '';
       if (acct.authType === 'microsoft') authBadge = '<i class="ti ti-brand-microsoft" style="font-size:0.8rem;margin-left:0.25rem;" title="Microsoft 365 OAuth"></i>';
       else if (acct.authType === 'google') authBadge = '<i class="ti ti-brand-google" style="font-size:0.8rem;margin-left:0.25rem;" title="Google OAuth"></i>';
       html += `<button type="button" class="mail-inbox-tab ${isActive ? 'active' : ''}" data-mailtab="inbox" data-account-id="${acct.id}">`;
-      html += `<i class="ti ti-user" style="margin-right:0.3rem;"></i>${escapeHtml(label)}${authBadge}`;
+      html += `<span class="mail-tab-avatar" style="--tab-color:${tabColor};"><i class="ti ti-${tabIcon}"></i></span>`;
+      html += `<span class="mail-tab-label">${escapeHtml(label)}</span>${authBadge}`;
       html += `<span class="mail-tab-badge" data-account-badge="${acct.id}"></span>`;
       html += `</button>`;
     }
@@ -15318,13 +15336,16 @@ async function openMailInboxModal() {
     // Add account button
     html += `<button type="button" class="mail-inbox-tab" data-mailtab="add-account" title="Add mail account"><i class="ti ti-plus"></i></button>`;
 
-    // Admin tab
-    html += `<button type="button" class="mail-inbox-tab" data-mailtab="scanner-admin"><i class="ti ti-settings" style="margin-right:0.3rem;"></i>Admin</button>`;
+    // Admin tab (admins only)
+    if (state.currentUserIsAdmin) {
+      html += `<button type="button" class="mail-inbox-tab" data-mailtab="scanner-admin"><i class="ti ti-settings" style="margin-right:0.3rem;"></i>Admin</button>`;
+    }
     tabsEl.innerHTML = html;
 
-    // Bind tab clicks
-    tabsEl.querySelectorAll('.mail-inbox-tab').forEach(btn => {
-      btn.addEventListener('click', () => switchMailTab(btn));
+    // Bind tab clicks (delegated)
+    tabsEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('.mail-inbox-tab');
+      if (btn) switchMailTab(btn);
     });
 
     // Update unread badges
@@ -15357,9 +15378,13 @@ async function openMailInboxModal() {
       await loadMailMessagesForModal();
     }
   } catch (e) {
-    tabsEl.innerHTML = `<button type="button" class="mail-inbox-tab active" data-mailtab="inbox" data-account-id="crm"><i class="ti ti-building" style="margin-right:0.3rem;"></i>CRM Mail</button><button type="button" class="mail-inbox-tab" data-mailtab="scanner-admin"><i class="ti ti-settings" style="margin-right:0.3rem;"></i>Admin</button>`;
-    tabsEl.querySelectorAll('.mail-inbox-tab').forEach(btn => {
-      btn.addEventListener('click', () => switchMailTab(btn));
+    const adminTab = state.currentUserIsAdmin
+      ? `<button type="button" class="mail-inbox-tab" data-mailtab="scanner-admin"><i class="ti ti-settings" style="margin-right:0.3rem;"></i>Admin</button>`
+      : '';
+    tabsEl.innerHTML = `<button type="button" class="mail-inbox-tab active" data-mailtab="inbox" data-account-id="crm"><i class="ti ti-building" style="margin-right:0.3rem;"></i>CRM Mail</button>${adminTab}`;
+    tabsEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('.mail-inbox-tab');
+      if (btn) switchMailTab(btn);
     });
     mailState.activeAccount = 'crm';
   }
@@ -15427,6 +15452,7 @@ function switchMailTab(btn) {
     }
     loadMailMessagesForModal();
     renderMailUnreadBadge();
+    updateMailToolbarSettingsBtn();
   } else if (tabName === 'scanner-admin') {
     // Reset mailMainArea layout
     if (mailMainArea) {
@@ -15539,7 +15565,7 @@ async function openComposeModal(opts = {}) {
     try {
       const sig = await api(`/api/v2/mail/accounts/${fromSelect.value}/signature`);
       if (sig.signature_html && bodyDiv) {
-        bodyDiv.innerHTML = `<br><br><div style="border-top:1px solid var(--border); padding-top:0.5rem; color:var(--muted); font-size:0.85rem;">${sig.signature_html}</div>`;
+        bodyDiv.innerHTML = `<br><br><div class="compose-signature-block" style="border-top:1px solid var(--border); padding-top:0.5rem; color:var(--muted); font-size:0.85rem;">${sig.signature_html}</div>`;
       }
     } catch { /* no signature */ }
   }
@@ -16697,10 +16723,45 @@ async function openReplyCompose(messageId, type = 'reply') {
   }
 }
 
-function openAccountSettingsModal(editAccountId) {
+const MAIL_TAB_ICON_OPTIONS = ['user', 'building', 'mail', 'mail-opened', 'inbox', 'send', 'paper-plane', 'at', 'briefcase', 'phone', 'calendar', 'book', 'shield', 'star', 'chart-bar', 'badge', 'lock', 'rocket'];
+const MAIL_TAB_COLOR_OPTIONS = ['var(--accent)', '#e74c3c', '#e67e22', '#f1c40f', '#2ecc71', '#3498db', '#9b59b6', '#e91e63', '#795548', '#607d8b', '#8b95a8'];
+
+function renderAccountTabPickers() {
+  const iconBox = $('#account-settings-tab-icons');
+  const colorBox = $('#account-settings-tab-colors');
+  if (!iconBox || !colorBox) return;
+  let currentIcon = (iconBox.dataset.value || 'user');
+  let currentColor = (colorBox.dataset.value || 'var(--accent)');
+  iconBox.innerHTML = MAIL_TAB_ICON_OPTIONS.map(ic => `
+    <button type="button" class="acct-icon-pick ${ic === currentIcon ? 'selected' : ''}" data-icon="${ic}" title="${ic}">
+      <i class="ti ti-${ic}"></i>
+    </button>`).join('');
+  colorBox.innerHTML = MAIL_TAB_COLOR_OPTIONS.map(c => `
+    <button type="button" class="acct-color-pick ${c === currentColor ? 'selected' : ''}" data-color="${c}" style="background:${c};">
+    </button>`).join('');
+  iconBox.querySelectorAll('.acct-icon-pick').forEach(b => {
+    b.addEventListener('click', () => {
+      iconBox.querySelectorAll('.acct-icon-pick').forEach(x => x.classList.remove('selected'));
+      b.classList.add('selected');
+      iconBox.dataset.value = b.dataset.icon;
+    });
+  });
+  colorBox.querySelectorAll('.acct-color-pick').forEach(b => {
+    b.addEventListener('click', () => {
+      colorBox.querySelectorAll('.acct-color-pick').forEach(x => x.classList.remove('selected'));
+      b.classList.add('selected');
+      colorBox.dataset.value = b.dataset.color;
+    });
+  });
+}
+
+function openAccountSettingsModal(editAccountId, opts) {
   const modal = $('#account-settings-modal');
   if (!modal) return;
   modal.classList.remove('hidden');
+  opts = opts || {};
+  const isCrmMail = !!opts.isCrmMail;
+  modal.dataset.crmMail = isCrmMail ? '1' : '0';
 
   const titleEl = $('#account-settings-title');
   const deleteBtn = $('#account-settings-delete');
@@ -16710,6 +16771,7 @@ function openAccountSettingsModal(editAccountId) {
   const oauthConnectBtn = $('#account-settings-oauth-connect');
   const oauthStatusEl = $('#account-settings-oauth-status');
   const oauthLabelEl = $('#account-settings-oauth-provider-label');
+  const sharingSection = $('#account-settings-sharing-section');
   const authRadios = modal.querySelectorAll('input[name="account-auth-method"]');
 
   function setAuthMode(mode) {
@@ -16747,6 +16809,22 @@ function openAccountSettingsModal(editAccountId) {
         $('#account-settings-smtp-host').value = acct.smtp_host || '';
         $('#account-settings-smtp-port').value = acct.smtp_port || 587;
         $('#account-settings-from-name').value = acct.smtp_from_name || '';
+        $('#account-settings-auto-bcc').value = acct.auto_bcc_addr || '';
+        $('#account-settings-auto-delete-days').value = acct.auto_delete_days || 0;
+        const iconBox = $('#account-settings-tab-icons');
+        const colorBox = $('#account-settings-tab-colors');
+        if (iconBox) iconBox.dataset.value = acct.tab_icon || 'user';
+        if (colorBox) colorBox.dataset.value = acct.tab_color || 'var(--accent)';
+        renderAccountTabPickers();
+        const sigField = $('#account-settings-signature');
+        if (sigField) sigField.value = '';
+        if (acct.signature_html) {
+          sigField.value = acct.signature_html;
+        } else {
+          api(`/api/v2/mail/accounts/${editAccountId}/signature`).then(sdata => {
+            if (sigField) sigField.value = sdata.signature_html || '';
+          }).catch(() => {});
+        }
         const monitored = (acct.monitored_folders || 'INBOX').split(',').map(s => s.trim());
         const folderContainer = $('#account-settings-folders');
         if (folderContainer) {
@@ -16762,7 +16840,27 @@ function openAccountSettingsModal(editAccountId) {
           setAuthMode(authType);
         }
         if (authType !== 'password' && oauthStatusEl) {
-          oauthStatusEl.textContent = acct.oauthStatus === 'expired' ? 'Token expired — reconnect' : 'Connected';
+          oauthStatusEl.textContent = acct.oauthStatus === 'expired' ? 'Token expired — reconnect' : `Connected as ${acct.email}`;
+        }
+        // Sharing section
+        if (sharingSection) {
+          if (acct.is_crm_mail === true) {
+            sharingSection.classList.remove('hidden');
+            const note = $('#account-settings-share-note');
+            if (note) note.textContent = 'Company inbox — already shared with all users.';
+            $('#account-settings-shared-with').innerHTML = '';
+            $('#account-settings-share-add-row').style.display = 'none';
+            const status = $('#account-settings-share-status');
+            if (status) status.textContent = '';
+          } else if (acct.canManage === true || acct.isOwner === true) {
+            sharingSection.classList.remove('hidden');
+            const note = $('#account-settings-share-note');
+            if (note) note.textContent = 'Share this account with other dashboard users.';
+            $('#account-settings-share-add-row').style.display = '';
+            loadAccountShares(editAccountId);
+          } else {
+            sharingSection.classList.add('hidden');
+          }
         }
       }
     }).catch(() => {});
@@ -16770,10 +16868,16 @@ function openAccountSettingsModal(editAccountId) {
     if (titleEl) titleEl.textContent = 'Add Mail Account';
     if (deleteBtn) deleteBtn.style.display = 'none';
     if (idField) idField.value = '';
-    ['account-settings-name','account-settings-email','account-settings-imap-host','account-settings-imap-password','account-settings-smtp-host','account-settings-smtp-password','account-settings-from-name'].forEach(id => {
+    ['account-settings-name','account-settings-email','account-settings-imap-host','account-settings-imap-password','account-settings-smtp-host','account-settings-smtp-password','account-settings-from-name','account-settings-auto-bcc','account-settings-signature'].forEach(id => {
       const el = $(`#${id}`);
       if (el) el.value = '';
     });
+    $('#account-settings-auto-delete-days').value = 0;
+    const iconBox = $('#account-settings-tab-icons');
+    const colorBox = $('#account-settings-tab-colors');
+    if (iconBox) iconBox.dataset.value = 'user';
+    if (colorBox) colorBox.dataset.value = 'var(--accent)';
+    renderAccountTabPickers();
     $('#account-settings-imap-port').value = 993;
     $('#account-settings-smtp-port').value = 587;
     const folderContainer = $('#account-settings-folders');
@@ -16785,6 +16889,8 @@ function openAccountSettingsModal(editAccountId) {
     // Reset auth mode to password
     const pwRadio = modal.querySelector('input[name="account-auth-method"][value="password"]');
     if (pwRadio) { pwRadio.checked = true; setAuthMode('password'); }
+    // Hide sharing section for new accounts
+    if (sharingSection) sharingSection.classList.add('hidden');
   }
 
   // Bind dismiss
@@ -16804,7 +16910,8 @@ function openAccountSettingsModal(editAccountId) {
         // Microsoft can extract email from token, Google too but better to have it
       }
       try {
-        const res = await api(`/api/v2/mail/oauth/authorize?provider=${provider}`);
+        const crmFlag = modal.dataset.crmMail === '1' ? '&is_crm_mail=1' : '';
+        const res = await api(`/api/v2/mail/oauth/authorize?provider=${provider}${crmFlag}`);
         if (res.authUrl) {
           // Store pending state in sessionStorage so we can restore after redirect
           const pendingId = $('#account-settings-id')?.value;
@@ -16830,25 +16937,31 @@ function openAccountSettingsModal(editAccountId) {
       const selectedRadio = modal.querySelector('input[name="account-auth-method"]:checked');
       const authMethod = selectedRadio?.value || 'password';
 
-      if (authMethod === 'microsoft' || authMethod === 'google') {
+      if (!id && (authMethod === 'microsoft' || authMethod === 'google')) {
         showToast('Use the "Connect" button above to authenticate via OAuth');
         return;
       }
 
-      const folderCbs = $('#account-settings-folders')?.querySelectorAll('input[type="checkbox"]:checked');
-      const folders = folderCbs ? Array.from(folderCbs).map(cb => cb.value) : ["INBOX"];
-      const payload = {
-        display_name: $('#account-settings-name').value.trim(),
-        email: $('#account-settings-email').value.trim(),
-        imap_host: $('#account-settings-imap-host').value.trim(),
-        imap_port: parseInt($('#account-settings-imap-port').value) || 993,
-        password: $('#account-settings-imap-password').value,
-        smtp_host: $('#account-settings-smtp-host').value.trim(),
-        smtp_port: parseInt($('#account-settings-smtp-port').value) || 587,
-        smtp_password: $('#account-settings-smtp-password').value,
-        smtp_from_name: $('#account-settings-from-name').value.trim(),
-        monitored_folders: folders,
-      };
+        const folderCbs = $('#account-settings-folders')?.querySelectorAll('input[type="checkbox"]:checked');
+        const folders = folderCbs ? Array.from(folderCbs).map(cb => cb.value) : ["INBOX"];
+        const payload = {
+          display_name: $('#account-settings-name').value.trim(),
+          email: $('#account-settings-email').value.trim(),
+          imap_host: $('#account-settings-imap-host').value.trim(),
+          imap_port: parseInt($('#account-settings-imap-port').value) || 993,
+          password: $('#account-settings-imap-password').value,
+          smtp_host: $('#account-settings-smtp-host').value.trim(),
+          smtp_port: parseInt($('#account-settings-smtp-port').value) || 587,
+          smtp_password: $('#account-settings-smtp-password').value,
+          smtp_from_name: $('#account-settings-from-name').value.trim(),
+          monitored_folders: folders,
+          auto_bcc_addr: $('#account-settings-auto-bcc').value.trim(),
+          auto_delete_days: parseInt($('#account-settings-auto-delete-days').value) || 0,
+          signature_html: $('#account-settings-signature').value,
+          tab_icon: $('#account-settings-tab-icons')?.dataset.value || 'user',
+          tab_color: $('#account-settings-tab-colors')?.dataset.value || 'var(--accent)',
+        };
+        if (modal.dataset.crmMail === '1') payload.is_crm_mail = true;
       if (!payload.email || !payload.imap_host) { showToast('Email and IMAP host required', true); return; }
       try {
         if (id) {
@@ -16880,6 +16993,85 @@ function openAccountSettingsModal(editAccountId) {
       } catch (e) { showToast('Failed: ' + e.message, true); }
     });
   }
+
+  // Bind share add (bind once)
+  const shareAddBtn = $('#account-settings-share-add');
+  if (shareAddBtn && !shareAddBtn.dataset.bound) {
+    shareAddBtn.dataset.bound = '1';
+    shareAddBtn.addEventListener('click', async () => {
+      const id = $('#account-settings-id').value;
+      const sel = $('#account-settings-share-user');
+      const userId = sel?.value;
+      const statusEl = $('#account-settings-share-status');
+      if (!id || !userId) {
+        if (statusEl) statusEl.textContent = 'Select a user first';
+        return;
+      }
+      try {
+        await api(`/api/v2/mail/accounts/${id}/share`, {
+          method: 'POST',
+          body: JSON.stringify({ user_id: parseInt(userId) }),
+        });
+        if (statusEl) { statusEl.textContent = 'Shared'; statusEl.style.color = '#3fb950'; }
+        setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
+        await loadAccountShares(parseInt(id));
+      } catch (e) {
+        if (statusEl) { statusEl.textContent = e.message; statusEl.style.color = '#f85149'; }
+        else showToast('Failed: ' + e.message, true);
+      }
+    });
+  }
+}
+
+function loadAccountShares(accountId) {
+  const sharedList = $('#account-settings-shared-with');
+  const userSel = $('#account-settings-share-user');
+  const statusEl = $('#account-settings-share-status');
+  if (!sharedList) return Promise.resolve();
+  const currentUserId = state.currentUserId;
+  return Promise.all([
+    api(`/api/v2/mail/accounts/${accountId}/share`),
+    api('/api/v2/users'),
+  ]).then(([sharesData, usersData]) => {
+    const shares = sharesData.shares || [];
+    const allUsers = usersData || [];
+    // Render shared-with list
+    if (!shares.length) {
+      sharedList.innerHTML = '<div style="font-size:0.8rem; color:var(--muted);">Not shared with anyone yet.</div>';
+    } else {
+      sharedList.innerHTML = shares.map(s => `
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:0.4rem; font-size:0.82rem; background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:0.25rem 0.4rem;">
+          <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+            <i class="ti ti-user" style="margin-right:0.25rem;"></i>${escapeHtml(s.display_name || s.email)}
+          </span>
+          <button type="button" class="btn btn-ghost btn-sm share-remove" data-share-user-id="${s.user_id}" title="Remove access" style="font-size:0.75rem; color:var(--danger); flex-shrink:0;"><i class="ti ti-x"></i></button>
+        </div>`).join('');
+      sharedList.querySelectorAll('.share-remove').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const userId = btn.dataset.shareUserId;
+          try {
+            await api(`/api/v2/mail/accounts/${accountId}/share/${userId}`, { method: 'DELETE' });
+            if (statusEl) { statusEl.textContent = 'Access removed'; statusEl.style.color = '#3fb950'; }
+            setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
+            await loadAccountShares(accountId);
+          } catch (e) {
+            if (statusEl) { statusEl.textContent = e.message; statusEl.style.color = '#f85149'; }
+            else showToast('Failed: ' + e.message, true);
+          }
+        });
+      });
+    }
+    // Populate user dropdown (exclude current user, owner handled by backend, exclude already shared)
+    const sharedIds = new Set(shares.map(s => s.user_id));
+    if (userSel) {
+      const options = allUsers
+        .filter(u => u.id !== currentUserId && !sharedIds.has(u.id))
+        .map(u => `<option value="${u.id}">${escapeHtml(u.displayName || u.email)}${u.isAdmin ? ' (admin)' : ''}</option>`);
+      userSel.innerHTML = options.length ? `<option value="">Select user…</option>` + options.join('') : `<option value="">No other users available</option>`;
+    }
+  }).catch(e => {
+    sharedList.innerHTML = `<div style="font-size:0.8rem; color:var(--danger);">Failed to load shares: ${escapeHtml(e.message)}</div>`;
+  });
 }
 
 function bindComposeEmailModal() {
@@ -16891,6 +17083,34 @@ function bindComposeEmailModal() {
   const moveToTabBtn = $('#compose-move-to-tab');
   if (moveToTabBtn) {
     moveToTabBtn.addEventListener('click', () => moveComposeToTab());
+  }
+
+  // Reload signature when the From account changes
+  const fromSelect = $('#compose-from-account');
+  if (fromSelect && !fromSelect.dataset.sigBound) {
+    fromSelect.dataset.sigBound = '1';
+    fromSelect.addEventListener('change', async () => {
+      const bodyDiv = $('#compose-body');
+      if (!bodyDiv || !fromSelect.value) return;
+      const oldSig = bodyDiv.querySelector('.compose-signature-block');
+      try {
+        const sig = await api(`/api/v2/mail/accounts/${fromSelect.value}/signature`);
+        if (sig.signature_html) {
+          if (oldSig) {
+            oldSig.outerHTML = `<br><br><div class="compose-signature-block" style="border-top:1px solid var(--border); padding-top:0.5rem; color:var(--muted); font-size:0.85rem;">${sig.signature_html}</div>`;
+          } else {
+            const hasBodyText = bodyDiv.textContent.trim().length > 0;
+            bodyDiv.innerHTML += `<br><br><div class="compose-signature-block" style="border-top:1px solid var(--border); padding-top:0.5rem; color:var(--muted); font-size:0.85rem;">${sig.signature_html}</div>`;
+            if (!hasBodyText) {
+              // Clean up the leading empty lines when body is otherwise empty
+              bodyDiv.innerHTML = bodyDiv.innerHTML.replace(/^<br><br>/, '');
+            }
+          }
+        } else if (oldSig) {
+          oldSig.remove();
+        }
+      } catch { /* no signature */ }
+    });
   }
 
   modal.querySelectorAll('[data-compose-email-dismiss]').forEach(el => {
@@ -16948,6 +17168,14 @@ function bindComposeEmailModal() {
   }, 30000);
 }
 
+function updateMailToolbarSettingsBtn() {
+  const gear = $("#mail-account-settings-btn");
+  if (!gear) return;
+  const acctId = mailState.activeAccount;
+  const acct = (mailState.accounts || []).find(a => String(a.id) === String(acctId));
+  gear.style.display = (acct && acct.canManage === true) ? '' : 'none';
+}
+
 function attachMailModalListeners() {
   const modal = $("#mail-inbox-modal");
   if (!modal || modal.dataset.listenersBound) return;
@@ -16957,6 +17185,7 @@ function attachMailModalListeners() {
   function closeMailModal() {
     modal.classList.add("hidden");
     minimizedEmailState = null;
+    if (_mailInboxAutoRefreshTimer) { clearInterval(_mailInboxAutoRefreshTimer); _mailInboxAutoRefreshTimer = null; }
     try { localStorage.removeItem(EMAIL_MINIMIZED_STORAGE_KEY); } catch {}
     const trigger = $("#email-trigger");
     if (trigger) trigger.classList.add("trigger-hidden");
@@ -17117,6 +17346,17 @@ function attachMailModalListeners() {
   const refBtn = $("#mail-refresh");
   if (refBtn) {
     refBtn.addEventListener("click", () => loadMailMessagesForModal());
+  }
+
+  // account settings gear (toolbar)
+  const acctSettingsBtn = $("#mail-account-settings-btn");
+  if (acctSettingsBtn && !acctSettingsBtn.dataset.bound) {
+    acctSettingsBtn.dataset.bound = "1";
+    acctSettingsBtn.addEventListener("click", () => {
+      const acctId = mailState.activeAccount;
+      const acct = (mailState.accounts || []).find(a => String(a.id) === String(acctId));
+      if (acct) openAccountSettingsModal(Number(acct.id));
+    });
   }
 
   // compose button
@@ -17309,17 +17549,17 @@ function attachMailModalListeners() {
       moveDropdown.classList.toggle("hidden");
     });
     document.addEventListener("click", () => moveDropdown.classList.add("hidden"));
-    moveDropdown.querySelectorAll(".move-folder-option").forEach(opt => {
-      opt.addEventListener("click", async () => {
-        const folder = opt.dataset.folder;
-        moveDropdown.classList.add("hidden");
-        if (!folder || !mailState.selected.size) return;
-        for (const mid of mailState.selected) {
-          try { await api(`/api/v2/mail/messages/${mid}/move`, { method: 'PUT', body: JSON.stringify({ folder }) }); } catch {}
-        }
-        mailState.selected.clear();
-        await loadMailMessagesForModal();
-      });
+    moveDropdown.addEventListener("click", async (e) => {
+      const opt = e.target.closest(".move-folder-option");
+      if (!opt) return;
+      const folder = opt.dataset.folder;
+      moveDropdown.classList.add("hidden");
+      if (!folder || !mailState.selected.size) return;
+      for (const mid of mailState.selected) {
+        try { await api(`/api/v2/mail/messages/${mid}/move`, { method: 'PUT', body: JSON.stringify({ folder }) }); } catch {}
+      }
+      mailState.selected.clear();
+      await loadMailMessagesForModal();
     });
   }
 
@@ -18066,10 +18306,12 @@ async function renderMailFolderList() {
     });
     const addBtn = $('#mail-folder-add-btn');
     if (addBtn) addBtn.addEventListener('click', () => createNewFolder());
-    const moveSelect = $('#mail-move-folder');
-    if (moveSelect) {
-      moveSelect.innerHTML = '<option value="">Move to...</option>' +
-        folders.map(f => `<option value="${escapeHtml(f.name)}">${escapeHtml(f.name)}</option>`).join('');
+    const moveDropdown = $('#mail-move-dropdown');
+    if (moveDropdown) {
+      moveDropdown.innerHTML = folders.map(f => `
+        <button type="button" class="move-folder-option" data-folder="${escapeHtml(f.name)}" style="display:block;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;font-size:0.85rem;color:var(--text);">
+          <i class="ti ti-${f.icon || 'folder'}" style="margin-right:0.3rem;"></i>${escapeHtml(f.name)}
+        </button>`).join('');
     }
     renderMailUnreadBadge();
     updateTrashCount();
@@ -19162,6 +19404,9 @@ function normalizeCrmMailPayload(obj) {
     introduction: String(
       obj.introduction ?? obj.Introduction ?? obj.preview ?? obj.Preview ?? obj.textBody ?? ""
     ).trim(),
+    body_html: String(obj.body_html ?? obj.htmlBody ?? obj.HtmlBody ?? obj.BodyHtml ?? ""),
+    body_text: String(obj.body_text ?? obj.textBody ?? obj.TextBody ?? obj.plainText ?? ""),
+    attachments: Array.isArray(obj.attachments) ? obj.attachments : null,
     messageUrl: messageUrl || portalMailMessageUrl(messageId),
   };
 }
@@ -20299,10 +20544,38 @@ function renderHistoryEventItem(ev) {
         mailPanel.dataset.loaded = String(messageId);
       } catch (err) {
         const rawMsg = err && err.message ? String(err.message) : "";
-        let nice = `Could not load email (${escapeHtml(rawMsg)}).`;
         if (/wasn['']t found|not found|404/i.test(rawMsg)) {
-          nice = "Linked email no longer available (deleted or access changed in CRM). Open the deal in CRM to view details.";
+          // Message deleted (account removed / auto-delete retention). Fall back to the
+          // full-body snapshot stored on the history event so the email stays viewable.
+          if (mailPayload && (mailPayload.body_html || mailPayload.body_text)) {
+            const snapshotMail = {
+              subject: mailPayload.subject,
+              from: mailPayload.from,
+              to: mailPayload.to,
+              cc: mailPayload.cc,
+              dateSent: mailPayload.date,
+              htmlBody: mailPayload.body_html || "",
+              textBody: mailPayload.body_text || "",
+              attachments: mailPayload.attachments || [],
+            };
+            renderMailEmbedPanel(mailPanel, snapshotMail, messageId, { crmPayload: mailPayload });
+            mailPanel.dataset.loaded = String(messageId);
+            return;
+          }
+          const nice = "Linked email no longer available (deleted or access changed in CRM).";
+          mailPanel.innerHTML = `<p class="opp-preview-mail-error">${nice}</p>`;
+          const retry = document.createElement("a");
+          retry.href =
+            mailPayload?.messageUrl || portalMailMessageUrl(messageId);
+          retry.target = "_blank";
+          retry.rel = "noopener noreferrer";
+          retry.className = "opp-preview-mail-fallback";
+          retry.textContent = "Open in Mail";
+          mailPanel.appendChild(retry);
+          return;
         }
+        const rawMsgOut = String(rawMsg || "");
+        let nice = `Could not load email (${escapeHtml(rawMsgOut)}).`;
         mailPanel.innerHTML = `<p class="opp-preview-mail-error">${nice}</p>`;
         const retry = document.createElement("a");
         retry.href =
@@ -21342,11 +21615,13 @@ function restoreMinimizedSearchTabs() {
 
 // ── Email modal minimize/restore ──────────────────────────────────────────────
 let minimizedEmailState = null;
+let _mailInboxAutoRefreshTimer = null;
 const EMAIL_MINIMIZED_STORAGE_KEY = "oo_email_minimized_v1";
 
 function minimizeEmailModal() {
   const modal = $("#mail-inbox-modal");
   if (!modal) return;
+  if (_mailInboxAutoRefreshTimer) { clearInterval(_mailInboxAutoRefreshTimer); _mailInboxAutoRefreshTimer = null; }
   const scrollEl = $("#mail-list-container");
   const selectedEl = document.querySelector(".mail-list-row.selected, .mail-row.selected");
       minimizedEmailState = {
@@ -23675,7 +23950,7 @@ function bindScannerAdminButtons() {
   const addBtn = $("#scanner-account-add");
   if (addBtn && !addBtn.dataset.bound) {
     addBtn.dataset.bound = "1";
-    addBtn.addEventListener("click", () => openAccountSettingsModal());
+    addBtn.addEventListener("click", () => openAccountSettingsModal(null, { isCrmMail: true }));
   }
 
   // Refresh accounts
