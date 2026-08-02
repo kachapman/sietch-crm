@@ -3428,8 +3428,7 @@ body {
 
 /* CRM Mail Inbox modal styles */
 .mail-inbox-card {
-  width: 96vw;
-  max-width: 1400px;
+  width: min(100vw - 1rem, 1400px);
   height: 85vh;
   max-height: 900px;
   display: flex;
@@ -3437,6 +3436,23 @@ body {
   padding: 0;
   overflow: hidden;
 }
+/* Mail pagination */
+.mail-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 0.5rem;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  position: sticky;
+  bottom: 0;
+  background: var(--surface);
+  z-index: 1;
+}
+.mail-page-info { white-space: nowrap; }
 .mail-inbox-header {
   display: flex;
   align-items: center;

@@ -15271,7 +15271,7 @@ async function openMailInboxModal() {
   if (inboxContainer) { inboxContainer.classList.remove('hidden'); inboxContainer.style.flex = ''; }
   loadMailDashboardReadIds();
   resetLinkDealDropdown();
-  mailState = { accounts: [], messages: [], pageSize: 50, search: '', selected: new Set(), activeAccount: null, activeFolder: 'INBOX', activeTag: null, threaded: false };
+  mailState = { accounts: [], messages: [], pageSize: 50, page: 1, pages: 1, search: '', selected: new Set(), activeAccount: null, activeFolder: 'INBOX', activeTag: null, threaded: false };
   $("#mail-search-input").value = "";
   await loadMailAccountsForModal();
   await renderMailTabs();
@@ -15444,6 +15444,7 @@ function switchMailTab(btn) {
     }
     mailState.activeAccount = btn.dataset.accountId || 'crm';
     mailState.activeFolder = 'INBOX';
+    mailState.page = 1;
     const folderList = $('#mail-folder-list');
     if (folderList) {
       folderList.querySelectorAll('.mail-folder-btn').forEach(b => b.classList.remove('active'));
@@ -17262,6 +17263,7 @@ function attachMailModalListeners() {
       mailState.selected.clear();
       renderMailList(mailState.messages);
       updateMailSelectedInfo();
+      renderMailUnreadBadge();
       showToast(`Marked ${ok} of ${ids.length} conversation(s) as read`);
     });
   }
@@ -17288,6 +17290,7 @@ function attachMailModalListeners() {
       mailState.selected.clear();
       renderMailList(mailState.messages);
       updateMailSelectedInfo();
+      renderMailUnreadBadge();
       showToast(`Marked ${ok} of ${ids.length} conversation(s) as unread`);
     });
   }
@@ -17338,6 +17341,7 @@ function attachMailModalListeners() {
       }
       mailState.messages.forEach(m => { m.read = true; });
       renderMailList(mailState.messages);
+      renderMailUnreadBadge();
       showToast(`Marked ${ok} of ${ids.length} as read`);
     });
   }
@@ -17630,6 +17634,7 @@ function attachMailModalListeners() {
       folderList.querySelectorAll(".mail-folder-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
       mailState.activeFolder = btn.dataset.folder || "INBOX";
+      mailState.page = 1;
       loadMailMessagesForModal();
     });
     // Folder context menu
@@ -17763,12 +17768,16 @@ async function loadMailMessagesForModal() {
     if (mailState.activeFolder && mailState.activeFolder !== "INBOX") params.push(`folder=${encodeURIComponent(mailState.activeFolder)}`);
     if (mailState.search) params.push(`search=${encodeURIComponent(mailState.search)}`);
     if (mailState.activeTag) params.push(`tag=${encodeURIComponent(mailState.activeTag)}`);
+    params.push(`page=${mailState.page || 1}`);
+    params.push(`page_size=${mailState.pageSize || 50}`);
     if (params.length) url += '?' + params.join('&');
     const data = await api(url);
     mailState.messages = data.messages || [];
     mailState.page = data.page || 1;
-    mailState.pages = Math.ceil((data.total || mailState.messages.length) / mailState.pageSize);
+    mailState.total = data.total || mailState.messages.length;
+    mailState.pages = Math.ceil(mailState.total / (mailState.pageSize || 50));
     renderMailList(mailState.messages);
+    renderMailPagination();
   } catch (e) {
     list.innerHTML = `<div class="mail-empty">Failed to load emails: ${escapeHtml(e.message)}</div>`;
   }
@@ -18364,6 +18373,25 @@ async function renderMailUnreadBadge() {
     badge.textContent = count > 0 ? count : '';
     badge.style.display = count > 0 ? 'inline' : 'none';
   } catch { badge.style.display = 'none'; }
+}
+
+function renderMailPagination() {
+  const existing = $("#mail-pagination");
+  if (existing) existing.remove();
+  if (!mailState.pages || mailState.pages <= 1) return;
+  const list = $("#mail-list");
+  if (!list) return;
+  const bar = document.createElement("div");
+  bar.id = "mail-pagination";
+  bar.className = "mail-pagination";
+  bar.innerHTML = `
+    <button type="button" class="btn btn-ghost btn-small" id="mail-prev-page" ${mailState.page <= 1 ? 'disabled' : ''}><i class="ti ti-chevron-left"></i> Newer</button>
+    <span class="mail-page-info">Page ${mailState.page} of ${mailState.pages} (${mailState.total || 0} emails)</span>
+    <button type="button" class="btn btn-ghost btn-small" id="mail-next-page" ${mailState.page >= mailState.pages ? 'disabled' : ''}>Older <i class="ti ti-chevron-right"></i></button>
+  `;
+  list.parentElement.appendChild(bar);
+  $("#mail-prev-page")?.addEventListener("click", () => { if (mailState.page > 1) { mailState.page--; loadMailMessagesForModal(); } });
+  $("#mail-next-page")?.addEventListener("click", () => { if (mailState.page < mailState.pages) { mailState.page++; loadMailMessagesForModal(); } });
 }
 
 async function updateTrashCount() {
