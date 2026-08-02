@@ -16817,6 +16817,9 @@ function openAccountSettingsModal(editAccountId, opts) {
         if (iconBox) iconBox.dataset.value = acct.tab_icon || 'user';
         if (colorBox) colorBox.dataset.value = acct.tab_color || 'var(--accent)';
         renderAccountTabPickers();
+        // Hide tab appearance for CRM mail (shared company inbox — no personalization)
+        const tabAppearance = $('#account-settings-tab-appearance');
+        if (tabAppearance) tabAppearance.style.display = acct.is_crm_mail ? 'none' : '';
         const sigField = $('#account-settings-signature');
         if (sigField) sigField.value = '';
         if (acct.signature_html) {
@@ -16879,6 +16882,9 @@ function openAccountSettingsModal(editAccountId, opts) {
     if (iconBox) iconBox.dataset.value = 'user';
     if (colorBox) colorBox.dataset.value = 'var(--accent)';
     renderAccountTabPickers();
+    // Hide tab appearance for CRM mail (shared company inbox)
+    const tabAppearance = $('#account-settings-tab-appearance');
+    if (tabAppearance) tabAppearance.style.display = isCrmMail ? 'none' : '';
     $('#account-settings-imap-port').value = 993;
     $('#account-settings-smtp-port').value = 587;
     const folderContainer = $('#account-settings-folders');
@@ -23731,10 +23737,11 @@ async function populateEmailScannerTab() {
         acctList.innerHTML = accounts.map(a => {
           const monitoredFolders = (a.monitored_folders || 'INBOX').split(',').map(s => s.trim()).filter(Boolean);
           const folderStr = monitoredFolders.length ? monitoredFolders.join(', ') : 'INBOX';
+          const typeLabel = a.is_crm_mail ? ' <span style="font-size:0.7rem;color:var(--accent);">[CRM Mail]</span>' : '';
           return `
           <div style="padding:4px 0; border-bottom:1px solid var(--border);">
             <div style="display:flex; justify-content:space-between; align-items:center;">
-              <span>${escapeHtml(a.email || '')} — ${escapeHtml(a.imap_host || '')}:${a.imap_port || 993}${a.authType === 'microsoft' ? ' <i class="ti ti-brand-microsoft" style="font-size:0.8rem;" title="Microsoft 365"></i>' : ''}${a.authType === 'google' ? ' <i class="ti ti-brand-google" style="font-size:0.8rem;" title="Google"></i>' : ''}</span>
+              <span>${escapeHtml(a.email || '')}${typeLabel} — ${escapeHtml(a.imap_host || '')}:${a.imap_port || 993}${a.authType === 'microsoft' ? ' <i class="ti ti-brand-microsoft" style="font-size:0.8rem;" title="Microsoft 365"></i>' : ''}${a.authType === 'google' ? ' <i class="ti ti-brand-google" style="font-size:0.8rem;" title="Google"></i>' : ''}</span>
               <span style="display:flex; gap:0.3rem; align-items:center;">
                 <span style="font-size:0.75rem; color:${a.sync_enabled ? 'var(--accent)' : 'var(--muted)'};">${a.sync_enabled ? '● Active' : '○ Disabled'}</span>
               <button type="button" class="btn btn-ghost btn-sm scanner-acct-edit" data-id="${a.id}" style="font-size:0.75rem;"><i class="ti ti-pencil"></i></button>

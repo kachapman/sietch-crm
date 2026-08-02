@@ -3426,9 +3426,10 @@ body {
 .presence-dm-load-more:hover { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.9); }
 .presence-dm-load-more:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* CRM Mail Inbox modal styles */
-.mail-inbox-card {
-  width: min(100vw - 1rem, 1400px);
+/* CRM Mail Inbox modal styles — override .modal-card width */
+#mail-inbox-modal .mail-inbox-card {
+  width: calc(100vw - 1rem);
+  max-width: 1400px;
   height: 85vh;
   max-height: 900px;
   display: flex;
