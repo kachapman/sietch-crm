@@ -3910,20 +3910,13 @@ body {
     grid-template-columns: 1fr;
   }
 }
-/* Desktop: overflow button visible for account settings; hide duplicates already in toolbar */
-.mail-toolbar .toolbar-overflow-btn { display: flex; }
+/* Desktop: overflow + folder button hidden */
+.mail-toolbar .toolbar-overflow-btn { display: none; }
 .mail-toolbar .mail-search-icon { display: none; }
-/* On desktop hide overflow items that duplicate visible toolbar buttons */
-@media (min-width: 601px) {
-  .toolbar-overflow-dropdown #ovf-star,
-  .toolbar-overflow-dropdown #ovf-archive,
-  .toolbar-overflow-dropdown #ovf-delete,
-  .toolbar-overflow-dropdown #ovf-thread,
-  .toolbar-overflow-dropdown #ovf-tags,
-  .toolbar-overflow-dropdown #ovf-mark-all-read { display: none; }
-}
 
 @media (max-width: 600px) {
+  /* Settings gear hidden on mobile — accessible via overflow menu instead */
+  #mail-account-settings-btn { display: none; }
   /* --- Fix 4: Compact inline layout for mail rows --- */
   .mail-row.mail-header { display: none; }
   .mail-row {
