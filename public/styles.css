@@ -3427,8 +3427,11 @@ body {
 .presence-dm-load-more:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* CRM Mail Inbox modal styles — override .modal-card width */
+#mail-inbox-modal {
+  padding: 0.5rem;
+}
 #mail-inbox-modal .mail-inbox-card {
-  width: calc(100vw - 1rem);
+  width: 100%;
   max-width: 1400px;
   height: 85vh;
   max-height: 900px;
