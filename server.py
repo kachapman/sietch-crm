@@ -11,6 +11,7 @@ import collections
 import base64
 import gzip
 import sys
+import threading
 import traceback
 import hashlib
 import hmac
@@ -276,6 +277,94 @@ def _mail_draft_accessible(user: dict, draft_id: int) -> bool:
     if not row:
         return False
     return _mail_account_accessible(user, row["account_id"])
+
+
+# ── IMAP sync helpers ──────────────────────────────────────────────────────────
+# Best-effort: if IMAP fails, the DB is still updated; we log and continue.
+
+def _imap_connect(account_id: int):
+    """Connect to IMAP for the given account. Returns MailBox or None."""
+    from imap_tools import MailBox
+    acct = db.query_one(
+        "SELECT email, imap_host, imap_port, password_encrypted, oauth_provider, oauth_access_token "
+        "FROM mail_accounts WHERE id = %s",
+        (account_id,),
+    )
+    if not acct or not acct.get("imap_host"):
+        return None
+    port = int(acct.get("imap_port") or 993)
+    mb = MailBox(acct["imap_host"], port=port)
+    if acct.get("oauth_provider"):
+        token = acct.get("oauth_access_token") or ""
+        if not token:
+            return None
+        mb.xoauth2(acct["email"], token)
+    else:
+        pwd = acct.get("password_encrypted") or ""
+        if not pwd:
+            return None
+        mb.login(acct["email"], pwd)
+    return mb
+
+
+def _imap_set_seen(account_id: int, folder: str, uid: str, seen: bool) -> bool:
+    """Set or unset \\Seen flag on IMAP (mark read/unread)."""
+    try:
+        mb = _imap_connect(account_id)
+        if not mb:
+            return False
+        mb.folder.set(folder)
+        mb.flag([uid], "\\Seen", seen)
+        mb.logout()
+        return True
+    except Exception as e:
+        logger.warning("IMAP set_seen failed (account %d, folder %s, uid %s): %s", account_id, folder, uid, e)
+        return False
+
+
+def _imap_set_flagged(account_id: int, folder: str, uid: str, flagged: bool) -> bool:
+    """Set or unset \\Flagged flag on IMAP (star)."""
+    try:
+        mb = _imap_connect(account_id)
+        if not mb:
+            return False
+        mb.folder.set(folder)
+        mb.flag([uid], "\\Flagged", flagged)
+        mb.logout()
+        return True
+    except Exception as e:
+        logger.warning("IMAP set_flagged failed (account %d, uid %s): %s", account_id, uid, e)
+        return False
+
+
+def _imap_move(account_id: int, folder: str, uid: str, dest_folder: str) -> bool:
+    """Move a message between IMAP folders."""
+    try:
+        mb = _imap_connect(account_id)
+        if not mb:
+            return False
+        mb.folder.set(folder)
+        mb.move([uid], dest_folder)
+        mb.logout()
+        return True
+    except Exception as e:
+        logger.warning("IMAP move failed (account %d, uid %s → %s): %s", account_id, uid, dest_folder, e)
+        return False
+
+
+def _imap_delete(account_id: int, folder: str, uid: str) -> bool:
+    """Permanently delete a message from IMAP."""
+    try:
+        mb = _imap_connect(account_id)
+        if not mb:
+            return False
+        mb.folder.set(folder)
+        mb.delete([uid])
+        mb.logout()
+        return True
+    except Exception as e:
+        logger.warning("IMAP delete failed (account %d, uid %s): %s", account_id, uid, e)
+        return False
 
 
 def _parse_iso_datetime(value: str):
@@ -5411,6 +5500,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 403, {"error": "You don't have access to this message"})
                 return
             db.execute("UPDATE mail_messages SET is_read = TRUE WHERE id = %s", (message_id,))
+            # Sync to IMAP — set \Seen flag so Outlook/webmail reflect the change
+            msg = db.query_one("SELECT account_id, folder, imap_uid FROM mail_messages WHERE id = %s", (message_id,))
+            if msg and msg.get("imap_uid"):
+                threading.Thread(target=_imap_set_seen, args=(msg["account_id"], msg["folder"], str(msg["imap_uid"]), True), daemon=True).start()
             _json_response(self, 200, {"ok": True})
         except Exception as e:
             logger.exception("Failed to mark message %d read", message_id)
@@ -5425,6 +5518,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 403, {"error": "You don't have access to this message"})
                 return
             db.execute("UPDATE mail_messages SET is_read = FALSE WHERE id = %s", (message_id,))
+            # Sync to IMAP — remove \Seen flag
+            msg = db.query_one("SELECT account_id, folder, imap_uid FROM mail_messages WHERE id = %s", (message_id,))
+            if msg and msg.get("imap_uid"):
+                threading.Thread(target=_imap_set_seen, args=(msg["account_id"], msg["folder"], str(msg["imap_uid"]), False), daemon=True).start()
             _json_response(self, 200, {"ok": True})
         except Exception as e:
             logger.exception("Failed to mark message %d unread", message_id)
@@ -5439,6 +5536,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 403, {"error": "You don't have access to this message"})
                 return
             db.execute("UPDATE mail_messages SET folder = 'Trash' WHERE id = %s", (message_id,))
+            # Sync to IMAP — move to Trash folder
+            msg = db.query_one("SELECT account_id, folder, imap_uid FROM mail_messages WHERE id = %s", (message_id,))
+            if msg and msg.get("imap_uid"):
+                threading.Thread(target=_imap_move, args=(msg["account_id"], msg["folder"], str(msg["imap_uid"]), "Trash"), daemon=True).start()
             _json_response(self, 200, {"ok": True})
         except Exception as e:
             logger.exception("Failed to trash message %d", message_id)
@@ -6241,9 +6342,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 403, {"error": "You don't have access to this message"})
                 return
             db.execute("UPDATE mail_messages SET starred = NOT starred WHERE id = %s", (message_id,))
-            row = db.query_one("SELECT starred FROM mail_messages WHERE id = %s", (message_id,))
+            row = db.query_one("SELECT starred, account_id, folder, imap_uid FROM mail_messages WHERE id = %s", (message_id,))
+            # Sync to IMAP — set/unset \Flagged
+            if row and row.get("imap_uid"):
+                threading.Thread(target=_imap_set_flagged, args=(row["account_id"], row["folder"], str(row["imap_uid"]), bool(row["starred"])), daemon=True).start()
             _json_response(self, 200, {"starred": row["starred"] if row else False})
         except Exception as e:
+            logger.exception("Failed to toggle star for message %d", message_id)
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_message_archive(self, message_id: int) -> None:
@@ -6269,9 +6374,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             payload = json.loads(_read_body(self) or b"{}")
             folder = payload.get("folder", "INBOX")
+            # Get old folder for IMAP move
+            old = db.query_one("SELECT account_id, folder, imap_uid FROM mail_messages WHERE id = %s", (message_id,))
             db.execute("UPDATE mail_messages SET folder = %s WHERE id = %s", (folder, message_id))
+            # Sync to IMAP — move to destination folder
+            if old and old.get("imap_uid") and old.get("folder") != folder:
+                threading.Thread(target=_imap_move, args=(old["account_id"], old["folder"], str(old["imap_uid"]), folder), daemon=True).start()
             _json_response(self, 200, {"ok": True})
         except Exception as e:
+            logger.exception("Failed to move message %d", message_id)
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_message_reply(self, message_id: int) -> None:
