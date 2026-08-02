@@ -6238,10 +6238,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 if merged:
                     bcc_addr = ", ".join(merged)
 
-            # Refresh OAuth token if needed
+            # Determine SMTP auth method: app password takes precedence over OAuth
+            # (personal Outlook.com accounts don't support OAuth SMTP)
             oauth_provider = acct.get("oauth_provider")
             oauth_access_token = acct.get("oauth_access_token")
-            if oauth_provider and oauth_access_token:
+            smtp_password = acct.get("smtp_password_encrypted") or ""
+            use_oauth_smtp = bool(oauth_provider and oauth_access_token and not smtp_password)
+            if use_oauth_smtp:
                 expires = acct.get("oauth_token_expires")
                 if expires and isinstance(expires, datetime) and expires.timestamp() < datetime.now(timezone.utc).timestamp():
                     try:
@@ -6264,7 +6267,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 smtp_host=acct["smtp_host"] or "",
                 smtp_port=int(acct["smtp_port"] or 587),
                 smtp_user=acct["smtp_user"] or acct["email"],
-                smtp_password=acct["smtp_password_encrypted"] or "",
+                smtp_password=smtp_password,
                 from_name=acct["smtp_from_name"],
                 from_addr=acct["email"],
                 to_addr=to_addr,
@@ -6275,8 +6278,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 bcc_addr=bcc_addr,
                 use_tls=bool(acct["smtp_use_tls"]),
                 attachments=decoded_attachments if decoded_attachments else None,
-                oauth_provider=oauth_provider,
-                oauth_access_token=oauth_access_token,
+                oauth_provider=oauth_provider if use_oauth_smtp else None,
+                oauth_access_token=oauth_access_token if use_oauth_smtp else None,
             )
 
             attachments_json = json.dumps([{"filename": a.get("filename"), "mime_type": a.get("mime_type"), "size": len(a.get("content", ""))} for a in (payload.get("attachments") or [])]) if payload.get("attachments") else None
