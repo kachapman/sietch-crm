@@ -17169,11 +17169,11 @@ function bindComposeEmailModal() {
 }
 
 function updateMailToolbarSettingsBtn() {
-  const gear = $("#mail-account-settings-btn");
-  if (!gear) return;
+  const ovf = $("#ovf-account-settings");
+  if (!ovf) return;
   const acctId = mailState.activeAccount;
   const acct = (mailState.accounts || []).find(a => String(a.id) === String(acctId));
-  gear.style.display = (acct && acct.canManage === true) ? '' : 'none';
+  ovf.style.display = (acct && acct.canManage === true) ? '' : 'none';
 }
 
 function attachMailModalListeners() {
@@ -17348,14 +17348,17 @@ function attachMailModalListeners() {
     refBtn.addEventListener("click", () => loadMailMessagesForModal());
   }
 
-  // account settings gear (toolbar)
-  const acctSettingsBtn = $("#mail-account-settings-btn");
-  if (acctSettingsBtn && !acctSettingsBtn.dataset.bound) {
-    acctSettingsBtn.dataset.bound = "1";
-    acctSettingsBtn.addEventListener("click", () => {
+  // account settings gear (overflow menu)
+  const ovfAcctSettings = $("#ovf-account-settings");
+  if (ovfAcctSettings && !ovfAcctSettings.dataset.bound) {
+    ovfAcctSettings.dataset.bound = "1";
+    ovfAcctSettings.addEventListener("click", () => {
       const acctId = mailState.activeAccount;
       const acct = (mailState.accounts || []).find(a => String(a.id) === String(acctId));
       if (acct) openAccountSettingsModal(Number(acct.id));
+      // Close overflow menu
+      const menu = $("#mail-toolbar-overflow-menu");
+      if (menu) menu.classList.add("hidden");
     });
   }
 

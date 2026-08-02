@@ -3840,7 +3840,7 @@ body {
   flex-shrink: 0;
   white-space: nowrap;
   text-align: right;
-  color: #666;
+  color: var(--muted);
   font-size: 0.8rem;
 }
 .mail-sidebar-toggle {
@@ -3910,9 +3910,18 @@ body {
     grid-template-columns: 1fr;
   }
 }
-/* Desktop: overflow + folder button hidden */
-.mail-toolbar .toolbar-overflow-btn { display: none; }
+/* Desktop: overflow button visible for account settings; hide duplicates already in toolbar */
+.mail-toolbar .toolbar-overflow-btn { display: flex; }
 .mail-toolbar .mail-search-icon { display: none; }
+/* On desktop hide overflow items that duplicate visible toolbar buttons */
+@media (min-width: 601px) {
+  .toolbar-overflow-dropdown #ovf-star,
+  .toolbar-overflow-dropdown #ovf-archive,
+  .toolbar-overflow-dropdown #ovf-delete,
+  .toolbar-overflow-dropdown #ovf-thread,
+  .toolbar-overflow-dropdown #ovf-tags,
+  .toolbar-overflow-dropdown #ovf-mark-all-read { display: none; }
+}
 
 @media (max-width: 600px) {
   /* --- Fix 4: Compact inline layout for mail rows --- */
@@ -3940,7 +3949,7 @@ body {
     width: auto;
     min-width: auto;
     margin-left: auto;
-    font-size: 0.7rem;
+    font-size: 0.75rem;
   }
   .mail-star { order: -1; }
   .mail-row .mail-row-tags { order: 3; }
@@ -3959,10 +3968,10 @@ body {
     padding: 0.1rem 0;
   }
   .opp-preview-mail-foot .btn {
-    padding: 0.35rem 0.5rem;
-    font-size: 0.85rem;
-    min-width: 36px;
-    min-height: 36px;
+    padding: 0.2rem 0.4rem;
+    font-size: 0.8rem;
+    min-width: auto;
+    min-height: auto;
   }
   .opp-preview-mail-foot .btn .btn-label { display: none; }
   .opp-preview-mail-foot .btn i { font-size: 1.1rem; }
