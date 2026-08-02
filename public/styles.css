@@ -3485,9 +3485,6 @@ body {
     max-width: none;
     order: -1;
   }
-  #mail-mark-read, #mail-mark-unread, #mail-delete {
-    display: none;
-  }
 }
 .mail-inbox-tabs {
   display: flex;
