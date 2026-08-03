@@ -464,6 +464,18 @@ def _normalize_folder_name(name: str) -> str:
     return name
 
 
+_EXCHANGE_DIAGNOSTIC_PREFIXES = ("sync issues", "conversation history", "outbox")
+
+
+def _is_exchange_diagnostic_folder(name: str) -> bool:
+    """Return True for Exchange/Outlook diagnostic folders that should be hidden."""
+    lower = name.lower().strip()
+    for prefix in _EXCHANGE_DIAGNOSTIC_PREFIXES:
+        if lower == prefix or lower.startswith(prefix + "/"):
+            return True
+    return False
+
+
 def _sync_imap_folders(mailbox_cfg: dict[str, Any]) -> int:
     imap_folders = _list_imap_folders(mailbox_cfg)
     account_id = mailbox_cfg.get("account_id")
@@ -472,6 +484,8 @@ def _sync_imap_folders(mailbox_cfg: dict[str, Any]) -> int:
     count = 0
     for f in imap_folders:
         raw_name = f["name"]
+        if _is_exchange_diagnostic_folder(raw_name):
+            continue
         name = _normalize_folder_name(raw_name)
         flags = f.get("flags", [])
         icon = "folder"
