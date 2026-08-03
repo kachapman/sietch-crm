@@ -18291,7 +18291,8 @@ async function renderMailFolderList() {
   const folderList = $("#mail-folder-list");
   if (!folderList) return;
   try {
-    const data = await api("/api/v2/mail/folders");
+    const acctId = mailState.activeAccount === 'crm' ? 'crm' : (mailState.activeAccount || '');
+    const data = await api(`/api/v2/mail/folders?account_id=${encodeURIComponent(acctId)}`);
     const folders = data.folders || [];
     folderList.innerHTML = folders.map(f => {
       const icon = f.icon || 'folder';

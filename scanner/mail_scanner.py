@@ -368,7 +368,7 @@ def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None, sinc
         else:
             mailbox.login(mailbox_cfg["user"], mailbox_cfg["password"])
         
-        folder = folder or mailbox_cfg.get("inbox", "INBOX")
+        folder = _normalize_folder_name(folder or mailbox_cfg.get("inbox", "INBOX"))
         mailbox.folder.set(folder)
         
         criterion = A() if since is None else A(date_gte=since.date())
@@ -444,6 +444,26 @@ def _list_imap_folders(mailbox_cfg: dict[str, Any]) -> list[dict[str, Any]]:
     return folders
 
 
+_SYSTEM_FOLDER_NORMALIZE = {
+    "inbox": "INBOX",
+    "sent": "Sent",
+    "drafts": "Drafts",
+    "trash": "Trash",
+    "spam": "Spam",
+    "junk": "Junk",
+    "archive": "Archive",
+    "deleted": "Deleted",
+}
+
+
+def _normalize_folder_name(name: str) -> str:
+    """Normalize IMAP folder names so case variants don't create duplicates."""
+    lower = name.lower()
+    if lower in _SYSTEM_FOLDER_NORMALIZE:
+        return _SYSTEM_FOLDER_NORMALIZE[lower]
+    return name
+
+
 def _sync_imap_folders(mailbox_cfg: dict[str, Any]) -> int:
     imap_folders = _list_imap_folders(mailbox_cfg)
     account_id = mailbox_cfg.get("account_id")
@@ -451,7 +471,8 @@ def _sync_imap_folders(mailbox_cfg: dict[str, Any]) -> int:
         return 0
     count = 0
     for f in imap_folders:
-        name = f["name"]
+        raw_name = f["name"]
+        name = _normalize_folder_name(raw_name)
         flags = f.get("flags", [])
         icon = "folder"
         if "\\Sent" in str(flags): icon = "send"
@@ -460,16 +481,17 @@ def _sync_imap_folders(mailbox_cfg: dict[str, Any]) -> int:
         elif "\\Junk" in str(flags): icon = "alert-triangle"
         elif "\\Archive" in str(flags): icon = "archive"
         existing = db.query_one(
-            "SELECT id FROM mail_folders WHERE imap_account_id = %s AND imap_path = %s",
-            (account_id, name),
+            "SELECT id FROM mail_folders WHERE imap_account_id = %s AND (imap_path = %s OR name = %s)",
+            (account_id, raw_name, name),
         )
         if existing:
-            db.execute("UPDATE mail_folders SET last_sync = NOW(), icon = %s WHERE id = %s", (icon, existing["id"]))
+            db.execute("UPDATE mail_folders SET last_sync = NOW(), icon = %s, name = %s, imap_path = %s WHERE id = %s",
+                       (icon, name, raw_name, existing["id"]))
         else:
             db.execute(
                 "INSERT INTO mail_folders (name, icon, folder_type, imap_account_id, imap_path) "
                 "VALUES (%s, %s, 'imap', %s, %s)",
-                (name, icon, account_id, name),
+                (name, icon, account_id, raw_name),
             )
         count += 1
     return count
@@ -737,15 +759,16 @@ def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | No
     try:
         account_id = mailbox_cfg.get("account_id")
         uid_key = str(msg.get("uid") or "")
+        folder = _normalize_folder_name(msg.get("folder") or "INBOX")
         if account_id is not None:
             existing = db.query_one(
                 "SELECT id FROM mail_messages WHERE imap_uid = %s AND folder = %s AND account_id = %s",
-                (uid_key, msg.get("folder") or "INBOX", account_id),
+                (uid_key, folder, account_id),
             )
         else:
             existing = db.query_one(
                 "SELECT id FROM mail_messages WHERE imap_uid = %s AND folder = %s AND account_id IS NULL",
-                (uid_key, msg.get("folder") or "INBOX"),
+                (uid_key, folder),
             )
         if existing:
             return existing["id"]
@@ -774,7 +797,7 @@ def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | No
                 msg.get("body_text") or "",
                 msg.get("body_html") or "",
                 msg.get("date") or None,
-                msg.get("folder") or "INBOX",
+                folder,
                 is_read,
                 False,
                 attachments_json,

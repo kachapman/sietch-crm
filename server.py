@@ -6419,6 +6419,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             payload = json.loads(_read_body(self) or b"{}")
             folder = payload.get("folder", "INBOX")
+            if folder.lower() in ("inbox",): folder = "INBOX"
             # Get old folder for IMAP move
             old = db.query_one("SELECT account_id, folder, imap_uid FROM mail_messages WHERE id = %s", (message_id,))
             db.execute("UPDATE mail_messages SET folder = %s WHERE id = %s", (folder, message_id))
@@ -6863,14 +6864,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         try:
             qs = parse_qs(urlparse(self.path).query)
             account_id = qs.get("account_id", [None])[0]
-            if account_id:
+            if account_id == "crm":
                 rows = db.query_dicts(
-                    "SELECT * FROM mail_folders WHERE imap_account_id = %s OR imap_account_id IS NULL ORDER BY sort_order, name",
+                    "SELECT * FROM mail_folders "
+                    "WHERE imap_account_id IN (SELECT id FROM mail_accounts WHERE is_crm_mail = TRUE) "
+                    "ORDER BY sort_order, name",
+                )
+            elif account_id:
+                rows = db.query_dicts(
+                    "SELECT * FROM mail_folders WHERE imap_account_id = %s ORDER BY sort_order, name",
                     (int(account_id),),
                 )
             else:
                 rows = db.query_dicts(
-                    "SELECT DISTINCT ON (name) * FROM mail_folders ORDER BY name, sort_order, id"
+                    "SELECT * FROM mail_folders ORDER BY sort_order, name"
                 )
             _json_response(self, 200, {"folders": rows})
         except Exception as e:
