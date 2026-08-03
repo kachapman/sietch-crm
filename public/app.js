@@ -15781,7 +15781,7 @@ async function openComposeModal(opts = {}) {
             b.addEventListener('click', () => {
               const selected = $('#compose-deal-selected');
               if (selected) {
-                selected.innerHTML = `<span style="background:var(--bg-elevated);padding:2px 6px;border-radius:3px;font-size:0.85rem;">${escapeHtml(b.dataset.dealTitle)} <button type="button" class="compose-deal-clear" style="border:none;background:none;cursor:pointer;color:var(--muted);">&times;</button></span>`;
+                selected.innerHTML = `<div style="display:inline-flex;align-items:center;gap:0.35rem;background:var(--accent);color:#fff;padding:0.35rem 0.55rem;border-radius:4px;font-size:0.85rem;font-weight:500;"><i class="ti ti-briefcase" style="font-size:0.8rem;"></i><span>Linked to ${escapeHtml(b.dataset.dealTitle)}</span><button type="button" class="compose-deal-clear" style="border:none;background:none;cursor:pointer;color:#fff;opacity:0.85;font-size:0.9rem;line-height:1;">&times;</button></div>`;
                 selected.dataset.dealId = b.dataset.dealId;
                 selected.querySelector('.compose-deal-clear')?.addEventListener('click', () => {
                   selected.innerHTML = '';
@@ -15789,7 +15789,7 @@ async function openComposeModal(opts = {}) {
                 });
               }
               results.style.display = 'none';
-              dealSearch.value = b.dataset.dealTitle;
+              dealSearch.value = '';
             });
           });
         } catch { results.style.display = 'none'; }
@@ -15814,8 +15814,11 @@ async function openComposeModal(opts = {}) {
       const bcc = $('#compose-bcc')?.value.trim() || null;
       const subject = $('#compose-subject')?.value.trim();
       const body = $('#compose-body')?.innerHTML || '';
-      const dealId = parseInt($('#compose-deal-selected')?.dataset?.dealId) || null;
+      const dealSel = $('#compose-deal-selected');
+      const dealId = parseInt(dealSel?.dataset?.dealId) || null;
+      const dealSearchText = $('#compose-deal-search')?.value?.trim() || '';
       if (!accountId || !to || !subject) { showToast('From, To, and Subject are required', true); return; }
+      if (!dealId && dealSearchText && !confirm(`You typed "${dealSearchText}" in the deal search but didn't select a deal. Send without linking to a deal?`)) { return; }
       sendBtn.disabled = true;
       sendBtn.innerHTML = '<i class="ti ti-loader" style="margin-right:0.3rem;"></i>Sending...';
       try {

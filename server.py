@@ -308,8 +308,15 @@ def _imap_connect(account_id: int):
     return mb
 
 
+def _is_synthetic_uid(uid: str | None) -> bool:
+    """Return True for locally-generated UIDs that do not exist on the IMAP server."""
+    return bool(uid) and str(uid).startswith("sent:outgoing:")
+
+
 def _imap_set_seen(account_id: int, folder: str, uid: str, seen: bool) -> bool:
     """Set or unset \\Seen flag on IMAP (mark read/unread)."""
+    if _is_synthetic_uid(uid):
+        return True
     try:
         mb = _imap_connect(account_id)
         if not mb:
@@ -325,6 +332,8 @@ def _imap_set_seen(account_id: int, folder: str, uid: str, seen: bool) -> bool:
 
 def _imap_set_flagged(account_id: int, folder: str, uid: str, flagged: bool) -> bool:
     """Set or unset \\Flagged flag on IMAP (star)."""
+    if _is_synthetic_uid(uid):
+        return True
     try:
         mb = _imap_connect(account_id)
         if not mb:
@@ -340,6 +349,8 @@ def _imap_set_flagged(account_id: int, folder: str, uid: str, flagged: bool) -> 
 
 def _imap_move(account_id: int, folder: str, uid: str, dest_folder: str) -> bool:
     """Move a message between IMAP folders."""
+    if _is_synthetic_uid(uid):
+        return True
     try:
         mb = _imap_connect(account_id)
         if not mb:
@@ -355,6 +366,8 @@ def _imap_move(account_id: int, folder: str, uid: str, dest_folder: str) -> bool
 
 def _imap_delete(account_id: int, folder: str, uid: str) -> bool:
     """Permanently delete a message from IMAP."""
+    if _is_synthetic_uid(uid):
+        return True
     try:
         mb = _imap_connect(account_id)
         if not mb:

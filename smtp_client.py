@@ -116,6 +116,13 @@ def send_email_from_account(
         return True, None
     except smtplib.SMTPAuthenticationError as e:
         logger.error("SMTP auth failed for %s: %s", from_addr, e)
+        err_str = str(e)
+        if "SmtpClientAuthentication is disabled" in err_str or "5.7.139" in err_str:
+            return False, (
+                "Microsoft has disabled SMTP sending for this Outlook account. "
+                "Contact Microsoft Support and ask them to enable 'Authenticated SMTP' for this mailbox. "
+                "Until then, use a different email provider or the Outlook web app."
+            )
         return False, f"Authentication failed: {e}"
     except smtplib.SMTPConnectError as e:
         logger.error("SMTP connect failed for %s:%d: %s", smtp_host, smtp_port, e)
