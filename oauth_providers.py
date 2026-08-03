@@ -65,11 +65,11 @@ class OAuthProvider:
         raise NotImplementedError
 
     @classmethod
-    def imap_settings(cls) -> dict[str, Any]:
+    def imap_settings(cls, email: str | None = None) -> dict[str, Any]:
         raise NotImplementedError
 
     @classmethod
-    def smtp_settings(cls) -> dict[str, Any]:
+    def smtp_settings(cls, email: str | None = None) -> dict[str, Any]:
         raise NotImplementedError
 
 
@@ -165,11 +165,19 @@ class MicrosoftProvider(OAuthProvider):
         }
 
     @classmethod
-    def imap_settings(cls) -> dict[str, Any]:
+    def imap_settings(cls, email: str | None = None) -> dict[str, Any]:
         return {"host": "outlook.office365.com", "port": 993}
 
     @classmethod
-    def smtp_settings(cls) -> dict[str, Any]:
+    def smtp_settings(cls, email: str | None = None) -> dict[str, Any]:
+        # Personal Outlook/Hotmail/Live/MSN accounts require the consumer SMTP
+        # endpoint. Office 365 / Exchange work accounts use smtp.office365.com.
+        personal_domains = {"outlook.com", "hotmail.com", "live.com", "msn.com"}
+        domain = ""
+        if email and "@" in email:
+            domain = email.split("@")[-1].lower()
+        if domain in personal_domains:
+            return {"host": "smtp-mail.outlook.com", "port": 587}
         return {"host": "smtp.office365.com", "port": 587}
 
 
@@ -239,11 +247,11 @@ class GoogleProvider(OAuthProvider):
         }
 
     @classmethod
-    def imap_settings(cls) -> dict[str, Any]:
+    def imap_settings(cls, email: str | None = None) -> dict[str, Any]:
         return {"host": "imap.gmail.com", "port": 993}
 
     @classmethod
-    def smtp_settings(cls) -> dict[str, Any]:
+    def smtp_settings(cls, email: str | None = None) -> dict[str, Any]:
         return {"host": "smtp.gmail.com", "port": 587}
 
 

@@ -26,6 +26,7 @@ import urllib.error
 import zipfile
 import urllib.request
 from datetime import datetime, timezone
+from email.utils import make_msgid
 from http import cookies
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -5152,8 +5153,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         expires_ts = datetime.now(timezone.utc).timestamp() + expires_in
-        imap = prov.imap_settings()
-        smtp = prov.smtp_settings()
+        imap = prov.imap_settings(email)
+        smtp = prov.smtp_settings(email)
 
         existing = db.query_one(
             "SELECT id FROM mail_accounts WHERE email = %s AND owner_user_id = %s",
@@ -6284,7 +6285,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
             attachments_json = json.dumps([{"filename": a.get("filename"), "mime_type": a.get("mime_type"), "size": len(a.get("content", ""))} for a in (payload.get("attachments") or [])]) if payload.get("attachments") else None
 
-            result = db.query_one(
+            outgoing = db.query_one(
                 """INSERT INTO mail_outgoing
                    (account_id, from_addr, to_addr, cc_addr, bcc_addr, subject,
                     body_text, body_html, deal_id, attachments_json, status, sent_at, created_by)
@@ -6299,15 +6300,43 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 ),
             )
 
-            if ok and deal_id:
+            message_id = None
+            if ok and outgoing:
+                # Store a sent-message copy so it appears in Sent and can be linked to deals.
+                # mail_deal_links.message_id is a FK to mail_messages.id, not mail_outgoing.id.
+                message_id_header = make_msgid(domain="sietch.local")
+                msg_row = db.query_one(
+                    """INSERT INTO mail_messages
+                       (account_id, imap_uid, message_id, from_addr, to_addr, cc_addr,
+                        subject, body_text, body_html, date_received, folder, is_read,
+                        is_flagged, attachments_json)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'Sent', TRUE, FALSE, %s)
+                       RETURNING id""",
+                    (
+                        account_id,
+                        f"sent:outgoing:{outgoing['id']}",
+                        message_id_header,
+                        acct["email"],
+                        to_addr,
+                        cc_addr,
+                        subject,
+                        body_text,
+                        body_html,
+                        datetime.now(timezone.utc),
+                        attachments_json,
+                    ),
+                )
+                message_id = msg_row["id"] if msg_row else None
+
+            if ok and deal_id and message_id:
                 db.execute(
                     "INSERT INTO mail_deal_links (message_id, opportunity_id, linked_by_user_id) "
                     "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
-                    (result["id"], deal_id, user["id"] if user else None),
+                    (message_id, deal_id, user["id"] if user else None),
                 )
 
             if ok:
-                _json_response(self, 200, {"ok": True, "id": result["id"]})
+                _json_response(self, 200, {"ok": True, "id": outgoing["id"] if outgoing else None})
             else:
                 _json_response(self, 500, {"ok": False, "error": err or "Send failed"})
         except Exception as e:

@@ -23730,9 +23730,9 @@ async function populateEmailScannerTab() {
   if (acctList) {
     try {
       const data = await api("/api/v2/mail/accounts");
-      const accounts = data.accounts || [];
+      const accounts = (data.accounts || []).filter(a => a.is_crm_mail);
       if (!accounts.length) {
-        acctList.innerHTML = '<p style="color:var(--muted);font-size:0.85rem;">No IMAP accounts configured.</p>';
+        acctList.innerHTML = '<p style="color:var(--muted);font-size:0.85rem;">No CRM mail accounts configured.</p>';
       } else {
         acctList.innerHTML = accounts.map(a => {
           const monitoredFolders = (a.monitored_folders || 'INBOX').split(',').map(s => s.trim()).filter(Boolean);

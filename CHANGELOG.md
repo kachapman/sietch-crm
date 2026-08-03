@@ -2,6 +2,13 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — SMTP Domain Awareness & Sent-Mail Deal Links (2026-08-03)
+
+- **Microsoft OAuth SMTP host is now domain-aware.** `MicrosoftProvider.smtp_settings()` accepts the connected email and returns `smtp-mail.outlook.com:587` for personal Microsoft domains (`outlook.com`, `hotmail.com`, `live.com`, `msn.com`) instead of always using `smtp.office365.com`, which personal accounts reject with `SmtpClientAuthentication is disabled`. Office 365 / Exchange work accounts continue to get `smtp.office365.com:587`. The OAuth callback in `server.py` now passes the email to the provider's settings methods.
+- **Sent emails are now recorded in `mail_messages` and linked to deals correctly.** `_handle_mail_send` previously inserted into `mail_outgoing` and then used the `mail_outgoing.id` as `message_id` in `mail_deal_links`, violating the foreign key (`mail_deal_links.message_id` references `mail_messages.id`). Now a sent-message copy is inserted into `mail_messages` (folder `Sent`, `is_read = TRUE`, synthetic `imap_uid`, generated `Message-ID`) and the deal link uses the real `mail_messages.id`. Sent messages therefore appear in the Sent folder and in the linked deal's history.
+- **Admin "CRM Mail Accounts" list now only shows CRM mail accounts.** `populateEmailScannerTab()` filters the account list to `is_crm_mail === true` so the section title matches the contents; personal accounts remain manageable through the inbox settings.
+- **Files:** `oauth_providers.py`, `server.py`, `public/app.js`, `AGENTS.md`, `CHANGELOG.md`.
+
 ## Phase 3 — Mail Account Settings Rework (2026-08-02)
 
 - **Mail-list row layout fixed.** In narrow view (list container ≤720px / viewport ≤600px), the body snippet no longer wraps to a second line — it's hidden. The subject now takes its own full-width second line. The expand-preview button is always the last item on the top line in both desktop and narrow views (via explicit `order` values). Date + time received is always visible (white-space:nowrap, auto width).
