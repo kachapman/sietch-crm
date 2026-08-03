@@ -12,6 +12,8 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Microsoft SMTP auth error message improved.** When a personal Outlook account rejects SMTP with `SmtpClientAuthentication is disabled` / `5.7.139`, the UI now shows a clear explanation that Microsoft has disabled SMTP on the mailbox and suggests contacting Microsoft Support or using a different provider.
 - **Mail sidebar folders and unread badge are now scoped to the active tab.** `renderMailFolderList()` passes the active account ID to `GET /api/v2/mail/folders?account_id=...`, and `renderMailUnreadBadge()` passes it to `GET /api/v2/mail/unread-count?account_id=...`. `switchMailTab()` now refreshes the folder list on every tab switch. Each tab shows only its own folders and unread count.
 - **IMAP folder names normalized on sync.** `_sync_imap_folders()` now normalizes system folder names (`inbox` → `INBOX`, `sent` → `Sent`, etc.) so different IMAP servers that return different casing no longer create duplicate entries. Existing duplicate rows merged and stale global system folders removed.
+- **Toolbar settings gear now works.** The `#mail-account-settings-btn` gear icon in the mail toolbar now opens the account settings modal for the active tab. Previously it had no click handler.
+- **Exchange diagnostic folders filtered out.** `_sync_imap_folders()` now skips `Sync Issues`, `Sync Issues/Conflicts`, `Sync Issues/Local Failures`, `Sync Issues/Server Failures`, and `Conversation History` — Exchange/Outlook diagnostic folders that aren't real mail folders.
 - **Files:** `oauth_providers.py`, `server.py`, `smtp_client.py`, `scanner/mail_scanner.py`, `public/app.js`, `AGENTS.md`, `CHANGELOG.md`.
 
 ## Phase 3 — Mail Account Settings Rework (2026-08-02)
