@@ -15390,7 +15390,7 @@ async function openMailInboxModal() {
   }
 }
 
-function switchMailTab(btn) {
+async function switchMailTab(btn) {
   const tabs = btn.parentElement.querySelectorAll('.mail-inbox-tab');
   tabs.forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
@@ -15445,6 +15445,7 @@ function switchMailTab(btn) {
     mailState.activeAccount = btn.dataset.accountId || 'crm';
     mailState.activeFolder = 'INBOX';
     mailState.page = 1;
+    await renderMailFolderList();
     const folderList = $('#mail-folder-list');
     if (folderList) {
       folderList.querySelectorAll('.mail-folder-btn').forEach(b => b.classList.remove('active'));
@@ -18378,7 +18379,8 @@ async function renderMailUnreadBadge() {
   const badge = $("#mail-inbox-unread");
   if (!badge) return;
   try {
-    const data = await api("/api/v2/mail/unread-count");
+    const acctId = mailState.activeAccount === 'crm' ? 'crm' : (mailState.activeAccount || '');
+    const data = await api(`/api/v2/mail/unread-count?account_id=${encodeURIComponent(acctId)}`);
     const count = data.count || 0;
     badge.textContent = count > 0 ? count : '';
     badge.style.display = count > 0 ? 'inline' : 'none';
