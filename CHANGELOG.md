@@ -16,6 +16,7 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Exchange diagnostic folders filtered out.** `_sync_imap_folders()` now skips `Sync Issues`, `Sync Issues/Conflicts`, `Sync Issues/Local Failures`, `Sync Issues/Server Failures`, and `Conversation History` — Exchange/Outlook diagnostic folders that aren't real mail folders.
 - **Account settings: server/credential visibility.** When editing an OAuth account, IMAP/SMTP server and port are shown as read-only with an "Edit servers" button to make them editable. Password fields now show a green "Saved" indicator when a password is already stored.
 - **Mobile account settings modal fix.** The modal now fills the viewport on mobile (`100dvh`) with the footer pinned at the bottom (`flex-shrink:0`), preventing the Save button from being pushed off-screen.
+- **Mobile email modal fix.** The email inbox modal now fills the viewport on mobile (`100dvh`) with header, toolbar, and footer pinned. The sidebar toggle is hidden on mobile. The "Close" footer button is no longer pushed off-screen.
 - **Files:** `oauth_providers.py`, `server.py`, `smtp_client.py`, `scanner/mail_scanner.py`, `public/app.js`, `public/index.html`, `public/styles.css`, `AGENTS.md`, `CHANGELOG.md`.
 
 ## Phase 3 — Mail Account Settings Rework (2026-08-02)

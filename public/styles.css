@@ -3433,7 +3433,7 @@ body {
 #mail-inbox-modal .mail-inbox-card {
   width: 100%;
   max-width: 1400px;
-  height: 85vh;
+  height: min(85vh, 85dvh);
   max-height: 900px;
   display: flex;
   flex-direction: column;
@@ -11112,7 +11112,7 @@ body {
   flex-shrink: 0;
 }
 
-/* Mobile: account settings modal fills viewport */
+/* Mobile: modals fill viewport */
 @media (max-width: 600px) {
   #account-settings-modal .modal-card {
     max-height: 100dvh;
@@ -11127,6 +11127,35 @@ body {
   #account-settings-modal .modal-card > div:nth-of-type(2) {
     flex: 1;
     min-height: 0;
+  }
+  #mail-inbox-modal {
+    padding: 0;
+  }
+  #mail-inbox-modal .mail-inbox-card {
+    height: 100dvh;
+    max-height: 100dvh;
+    width: 100%;
+    max-width: 100%;
+    border-radius: 0;
+  }
+  .mail-inbox-header {
+    flex-shrink: 0;
+  }
+  .mail-toolbar {
+    flex-shrink: 0;
+  }
+  .mail-main-area {
+    min-height: 0;
+    flex: 1;
+  }
+  .mail-list-container {
+    min-height: 0;
+  }
+  .mail-footer-actions {
+    flex-shrink: 0;
+  }
+  .mail-sidebar-toggle {
+    display: none;
   }
 }
 
