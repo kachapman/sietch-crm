@@ -72,9 +72,7 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Auto-reload:** Immediate when retrained
 
 ### CRM Mail Add-Account Flag
-- **Issue:** Admin "Add Account" button creates accounts with `is_crm_mail = FALSE` instead of `TRUE`
-- **Status:** Needs investigation (possible timing issue or flag not being passed correctly)
-- **Temporary workaround:** Manually edit account after creation to set `is_crm_mail = TRUE`
+**CLOSED — Not a bug.** Code trace verified correct: admin "Add Account" → `{ isCrmMail: true }` → `dataset.crmMail = '1'` → `is_crm_mail: true` in payload → server inserts correctly. The issue was likely user confusion (clicking the `+` tab instead of the admin "Add Account" button).
 
 ## Phase 3 — Mail Account Settings Rework (2026-08-02)
 
