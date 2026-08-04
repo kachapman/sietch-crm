@@ -11941,3 +11941,61 @@ body {
   }
 }
 
+/* ── Mail auto-link status icons ─────────────────────────────────────── */
+.mail-link-icon {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.3rem;
+  font-size: 0.75rem;
+  cursor: help;
+  flex-shrink: 0;
+}
+.mail-link-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.mail-link-icon.linked {
+  color: #22c55e;
+}
+.mail-link-icon.linked:hover {
+  color: #16a34a;
+}
+.mail-link-icon.unlinked {
+  color: #f59e0b;
+}
+.mail-link-icon.unlinked:hover {
+  color: #d97706;
+}
+@media (prefers-color-scheme: dark) {
+  .mail-link-icon.linked { color: #4ade80; }
+  .mail-link-icon.linked:hover { color: #22c55e; }
+  .mail-link-icon.unlinked { color: #fbbf24; }
+  .mail-link-icon.unlinked:hover { color: #f59e0b; }
+}
+
+/* Scanner log dry-run status */
+.log-dry-run {
+  border-left: 2px solid var(--accent);
+}
+.log-dry-run .log-status {
+  color: var(--accent);
+}
+/* Scanner log checkboxes */
+.log-entry {
+  display: flex;
+  align-items: center;
+  padding: 0.2rem 0.4rem;
+}
+.log-cb {
+  margin-right: 0.3rem;
+  flex-shrink: 0;
+}
+/* Correction modal project results */
+.correction-pick:hover {
+  background: var(--bg-elevated);
+}
+.correction-pick.selected {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+

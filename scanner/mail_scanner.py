@@ -54,11 +54,12 @@ DEFAULT_CONTRACTORS = {
         },
     ],
     "scanner_behavior": {
-        "auto_link_project_id": True,
-        "create_deals": False,
-        "create_tasks": False,
-        "post_notes": False,
-        "notify_users": False,
+        "auto_link_project_id": {"enabled": True, "dry_run": False, "accounts": "all"},
+        "auto_link_by_content": {"enabled": False, "dry_run": True, "accounts": "all"},
+        "create_deals": {"enabled": False, "dry_run": True, "accounts": []},
+        "create_tasks": {"enabled": False, "dry_run": True, "accounts": []},
+        "post_notes": {"enabled": False, "dry_run": True, "accounts": []},
+        "notify_users": {"enabled": False, "dry_run": True, "accounts": []},
     },
     "action_toggles": {
         "create_deals": False,
@@ -80,6 +81,179 @@ DEAL_ID_RE = re.compile(r"\[#DEAL-(\d+)\]", re.IGNORECASE)
 ML_ENABLED = False
 ml_model = None
 ml_vectorizer = None
+
+# In-memory deal field index, refreshed each poll cycle
+_deal_index: dict[str, Any] = {}
+_deal_index_built_at: float = 0
+
+# Address normalization
+_ADDRESS_ABBREVS = {
+    "street": "st", "avenue": "ave", "boulevard": "blvd", "drive": "dr",
+    "lane": "ln", "court": "ct", "place": "pl", "road": "rd",
+    "circle": "cir", "terrace": "ter", "highway": "hwy", "parkway": "pkwy",
+}
+
+
+def _normalize_behavior_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Convert old boolean behavior format to new object format."""
+    behavior = config.get("scanner_behavior", {})
+    normalized = {}
+    for key, value in behavior.items():
+        if isinstance(value, bool):
+            normalized[key] = {"enabled": value, "dry_run": False, "accounts": "all"}
+        elif isinstance(value, dict):
+            normalized[key] = value
+        else:
+            normalized[key] = {"enabled": bool(value), "dry_run": False, "accounts": "all"}
+    config["scanner_behavior"] = normalized
+    return config
+
+
+def _is_behavior_enabled(behavior_cfg: dict[str, Any], account_id: int | None = None) -> bool:
+    """Check if a behavior task is enabled for a given account."""
+    if not behavior_cfg.get("enabled", False):
+        return False
+    accounts = behavior_cfg.get("accounts", "all")
+    if accounts == "all":
+        return True
+    if isinstance(accounts, list) and account_id is not None:
+        return account_id in accounts
+    return False
+
+
+def _is_dry_run(behavior_cfg: dict[str, Any], account_id: int | None = None) -> bool:
+    """Check if a behavior task is in dry-run mode for a given account."""
+    if not behavior_cfg.get("dry_run", False):
+        return False
+    accounts = behavior_cfg.get("accounts", "all")
+    if accounts == "all":
+        return True
+    if isinstance(accounts, list) and account_id is not None:
+        return account_id in accounts
+    return False
+
+
+def _normalize_address(addr: str) -> str:
+    """Normalize address for matching: lowercase, remove periods, abbreviate."""
+    addr = addr.lower().strip()
+    addr = addr.replace(".", "")
+    addr = re.sub(r"\s+", " ", addr)
+    for full, abbr in _ADDRESS_ABBREVS.items():
+        addr = addr.replace(full, abbr)
+    return addr
+
+
+def _build_deal_index() -> dict[str, Any]:
+    """Build in-memory index of deal fields for content matching."""
+    global _deal_index, _deal_index_built_at
+
+    index: dict[str, Any] = {
+        "crm_ids": {},      # crm_id_string -> deal_id
+        "claims": {},       # claim_code -> deal_id
+        "policies": {},     # policy_number -> deal_id
+        "addresses": {},    # normalized_address -> deal_id
+        "contact_ids": {},  # contact_id -> deal_id
+    }
+
+    try:
+        # Get all opportunities (open, closed, lost)
+        opps = db.query_dicts("SELECT id, title FROM opportunities")
+        if not opps:
+            return index
+
+        # Get custom field definitions for claim and policy
+        claim_field_id = None
+        policy_field_id = None
+        address_field_id = None
+        fields = db.query_dicts("SELECT id, field_key FROM custom_field_definitions")
+        for f in fields:
+            if f["field_key"] == "field_11":
+                claim_field_id = f["id"]
+            elif f["field_key"] == "field_26":
+                policy_field_id = f["id"]
+            elif "address" in (f["field_key"] or "").lower():
+                address_field_id = f["id"]
+
+        # Index opportunity IDs
+        for opp in opps:
+            index["crm_ids"][str(opp["id"])] = opp["id"]
+
+        # Index claim codes
+        if claim_field_id:
+            claim_rows = db.query_dicts(
+                "SELECT field_value, opportunity_id FROM opportunity_custom_field_values WHERE field_id = %s",
+                (claim_field_id,),
+            )
+            for row in (claim_rows or []):
+                if row.get("field_value"):
+                    index["claims"][row["field_value"].strip().lower()] = row["opportunity_id"]
+
+        # Index policy numbers
+        if policy_field_id:
+            policy_rows = db.query_dicts(
+                "SELECT field_value, opportunity_id FROM opportunity_custom_field_values WHERE field_id = %s",
+                (policy_field_id,),
+            )
+            for row in (policy_rows or []):
+                if row.get("field_value"):
+                    index["policies"][row["field_value"].strip().lower()] = row["opportunity_id"]
+
+        # Index addresses
+        if address_field_id:
+            addr_rows = db.query_dicts(
+                "SELECT field_value, opportunity_id FROM opportunity_custom_field_values WHERE field_id = %s",
+                (address_field_id,),
+            )
+            for row in (addr_rows or []):
+                if row.get("field_value"):
+                    normalized = _normalize_address(row["field_value"])
+                    index["addresses"][normalized] = row["opportunity_id"]
+
+        # Index contact IDs
+        try:
+            contacts = db.query_dicts("SELECT id FROM contacts")
+            for c in (contacts or []):
+                index["contact_ids"][str(c["id"])] = c["id"]
+        except Exception:
+            pass
+
+        _deal_index = index
+        _deal_index_built_at = time.time()
+        logger.info("Built deal index: %d crm_ids, %d claims, %d policies, %d addresses, %d contact_ids",
+                     len(index["crm_ids"]), len(index["claims"]), len(index["policies"]),
+                     len(index["addresses"]), len(index["contact_ids"]))
+    except Exception as e:
+        logger.error("Failed to build deal index: %s", e)
+
+    return index
+
+
+def _match_by_content(subject: str, body: str, deal_index: dict[str, Any]) -> list[dict[str, Any]]:
+    """Match email content against deal field index."""
+    matches = []
+
+    # Combine subject + first 5000 chars of body
+    text = f"{subject}\n{body[:5000]}".lower()
+
+    # Search each field type
+    for field_type, field_dict in deal_index.items():
+        for value, deal_id in field_dict.items():
+            if len(value) < 3:
+                continue  # Skip very short values
+            if value in text:
+                matches.append({
+                    "deal_id": deal_id,
+                    "field_type": field_type,
+                    "matched_value": value,
+                    "confidence": "strong",
+                })
+
+    # Deduplicate by deal_id, keep first match
+    seen = {}
+    for m in matches:
+        if m["deal_id"] not in seen:
+            seen[m["deal_id"]] = m
+    return list(seen.values())
 
 
 def _read_json(path: Path, default: Any = None) -> Any:
@@ -846,13 +1020,15 @@ def _store_attachments(message_id: int, account_id: int, attachments: list[dict]
 
 def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[str, Any]:
     uid = msg.get("uid") or ""
-    log_entry = {
+    account_id = mailbox_cfg.get("account_id")
+    log_entry: dict[str, Any] = {
         "timestamp": _now_et(),
         "uid": uid,
         "subject": msg.get("subject", ""),
         "from": msg.get("from", ""),
         "folder": msg.get("folder", "INBOX"),
         "mailbox": mailbox_cfg.get("inbox", ""),
+        "account_id": account_id,
     }
 
     if not uid and not msg.get("message_id"):
@@ -860,7 +1036,7 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
         _append_log(log_entry)
         return log_entry
 
-    if _is_processed(mailbox_cfg.get("account_id"), uid or msg.get("message_id") or ""):
+    if _is_processed(account_id, uid or msg.get("message_id") or ""):
         log_entry["status"] = "already_processed"
         _append_log(log_entry)
         return log_entry
@@ -880,40 +1056,111 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
     config = get_contractors()
     toggles = config.get("scanner_behavior", {})
 
-    if classification["action"] == "link_deal" and classification["linked_deal_id"]:
-        linked = _link_email_to_deal(msg_id, classification["linked_deal_id"])
-        log_entry["deal_linked"] = linked
-        if linked and toggles.get("post_notes", False):
+    # --- Auto-link by project ID (primary classifier) ---
+    if (classification["action"] == "link_deal" and classification["linked_deal_id"]
+            and _is_behavior_enabled(toggles.get("auto_link_project_id", {}), account_id)):
+        dry = _is_dry_run(toggles.get("auto_link_project_id", {}), account_id)
+        if dry:
+            log_entry["status"] = "dry_run"
+            log_entry["dry_run_action"] = "link_deal"
+            log_entry["dry_run_target"] = classification["linked_deal_id"]
             deal = _find_opportunity_by_deal_id(classification["linked_deal_id"])
-            if deal:
-                from_addr = msg.get("from") or ""
-                to_addr = msg.get("to") or ""
-                att_snapshot = [
-                    {"filename": a.get("filename", ""), "size_bytes": a.get("size_bytes", 0) or 0,
-                     "mime_type": a.get("mime_type", "")}
-                    for a in (msg.get("attachments") or [])
-                ]
-                snapshot = {
-                    "type": "email_snapshot",
-                    "message_id": msg_id,
-                    "from": from_addr,
-                    "to": to_addr,
-                    "cc": msg.get("cc") or "",
-                    "subject": msg.get("subject", "") or "",
-                    "date_sent": str(msg.get("date") or ""),
-                    "body_html": msg.get("body_html") or "",
-                    "body_text": msg.get("body_text") or "",
-                    "attachments": att_snapshot,
-                }
+            log_entry["dry_run_deal_title"] = deal["title"] if deal else ""
+        else:
+            linked = _link_email_to_deal(msg_id, classification["linked_deal_id"])
+            log_entry["deal_linked"] = linked
+
+    # --- Auto-link by content (secondary classifier) ---
+    if (classification["linked_deal_id"] is None
+            and _is_behavior_enabled(toggles.get("auto_link_by_content", {}), account_id)):
+        dry = _is_dry_run(toggles.get("auto_link_by_content", {}), account_id)
+        subject = msg.get("subject") or ""
+        body_text = msg.get("body_text") or ""
+        body_html = msg.get("body_html") or ""
+        body = body_text or _sanitize_body(body_html)
+
+        content_matches = _match_by_content(subject, body, _deal_index)
+        if content_matches:
+            best = content_matches[0]
+            if dry:
+                log_entry["status"] = "dry_run"
+                log_entry["dry_run_action"] = "link_deal_by_content"
+                log_entry["dry_run_target"] = best["deal_id"]
+                log_entry["dry_run_field_type"] = best["field_type"]
+                deal = _find_opportunity_by_deal_id(best["deal_id"])
+                log_entry["dry_run_deal_title"] = deal["title"] if deal else ""
+            else:
+                linked = _link_email_to_deal(msg_id, best["deal_id"])
+                log_entry["deal_linked"] = linked
+                classification["linked_deal_id"] = best["deal_id"]
+        elif not classification["linked_deal_id"]:
+            log_entry["unlinked_reason"] = "No unique identifier found"
+
+    # --- Post notes to deal ---
+    if (classification["linked_deal_id"] and log_entry.get("deal_linked")
+            and _is_behavior_enabled(toggles.get("post_notes", {}), account_id)):
+        dry = _is_dry_run(toggles.get("post_notes", {}), account_id)
+        deal = _find_opportunity_by_deal_id(classification["linked_deal_id"])
+        if deal:
+            from_addr = msg.get("from") or ""
+            to_addr = msg.get("to") or ""
+            att_snapshot = [
+                {"filename": a.get("filename", ""), "size_bytes": a.get("size_bytes", 0) or 0,
+                 "mime_type": a.get("mime_type", "")}
+                for a in (msg.get("attachments") or [])
+            ]
+            snapshot = {
+                "type": "email_snapshot",
+                "message_id": msg_id,
+                "from": from_addr,
+                "to": to_addr,
+                "cc": msg.get("cc") or "",
+                "subject": msg.get("subject", "") or "",
+                "date_sent": str(msg.get("date") or ""),
+                "body_html": msg.get("body_html") or "",
+                "body_text": msg.get("body_text") or "",
+                "attachments": att_snapshot,
+            }
+            if dry:
+                log_entry["dry_run_action"] = "post_note"
+                log_entry["dry_run_deal_title"] = deal["title"]
+            else:
                 _post_note_to_deal(deal["id"], json.dumps(snapshot))
                 log_entry["note_posted"] = True
 
-    if classification["classification"] == "claim_code_no_deal":
+    # --- Create tasks (placeholder) ---
+    if _is_behavior_enabled(toggles.get("create_tasks", {}), account_id):
+        dry = _is_dry_run(toggles.get("create_tasks", {}), account_id)
+        if dry and classification["linked_deal_id"]:
+            log_entry["dry_run_action"] = "create_task"
+            _tmp_deal = _find_opportunity_by_deal_id(classification["linked_deal_id"])
+            log_entry["dry_run_deal_title"] = _tmp_deal["title"] if _tmp_deal else ""
+
+    # --- Create deals (placeholder) ---
+    if _is_behavior_enabled(toggles.get("create_deals", {}), account_id):
+        dry = _is_dry_run(toggles.get("create_deals", {}), account_id)
+        if dry and classification["linked_deal_id"]:
+            log_entry["dry_run_action"] = "create_deal"
+
+    # --- Notify users (placeholder) ---
+    if _is_behavior_enabled(toggles.get("notify_users", {}), account_id):
+        dry = _is_dry_run(toggles.get("notify_users", {}), account_id)
+        if dry and classification["linked_deal_id"]:
+            log_entry["dry_run_action"] = "notify_user"
+
+    # Set final status
+    if log_entry.get("status") == "dry_run":
+        pass  # Already set
+    elif classification["classification"] == "claim_code_no_deal":
         log_entry["status"] = "linked_no_deal"
     elif classification["action"] == "link_deal":
         log_entry["status"] = "processed"
     else:
         log_entry["status"] = "processed"
+
+    # Store linked_deal_id for API response
+    if classification["linked_deal_id"]:
+        log_entry["linked_deal_id"] = classification["linked_deal_id"]
 
     _append_log(log_entry)
     return log_entry
@@ -925,6 +1172,11 @@ def _poll_mailboxes() -> list[dict[str, Any]]:
     if not mailboxes:
         logger.info("No IMAP mailboxes configured")
         return results
+
+    # Refresh deal index for content matching
+    config = get_contractors()
+    if config.get("scanner_behavior", {}).get("auto_link_by_content", {}).get("enabled", False):
+        _build_deal_index()
 
     for cfg in mailboxes:
         logger.info("Polling mailbox %s@%s", cfg["user"], cfg["host"])
@@ -1063,6 +1315,7 @@ def get_contractors() -> dict[str, Any]:
     """Get contractors from DB, falling back to file-based config."""
     # Read toggles from file (saved by admin UI)
     file_config = _read_json(CONTRACTORS_FILE, default=DEFAULT_CONTRACTORS)
+    file_config = _normalize_behavior_config(file_config)
     toggles = file_config.get("scanner_behavior", DEFAULT_CONTRACTORS["scanner_behavior"])
     try:
         rows = db.query_dicts("SELECT * FROM mail_contractors WHERE enabled = TRUE ORDER BY priority DESC, name")

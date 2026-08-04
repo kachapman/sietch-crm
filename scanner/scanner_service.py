@@ -89,10 +89,7 @@ class ScannerHandler(BaseHTTPRequestHandler):
             sb = cfg.get("scanner_behavior") or {}
             at = cfg.get("action_toggles") or {}
             _json_response(self, 200, {
-                "create_deals": bool(sb.get("create_deals", False)),
-                "create_tasks": bool(sb.get("create_tasks", False)),
-                "post_notes": bool(sb.get("post_notes", False)),
-                "notify_users": bool(sb.get("notify_users", False)),
+                "scanner_behavior": sb,
                 "action_toggles": at,
             })
             return
@@ -123,10 +120,14 @@ class ScannerHandler(BaseHTTPRequestHandler):
                 return
             cfg = mail_scanner.get_contractors()
             sb = cfg.get("scanner_behavior", {})
-            sb["create_deals"] = bool(payload.get("create_deals", sb.get("create_deals", False)))
-            sb["create_tasks"] = bool(payload.get("create_tasks", sb.get("create_tasks", False)))
-            sb["post_notes"] = bool(payload.get("post_notes", sb.get("post_notes", False)))
-            sb["notify_users"] = bool(payload.get("notify_users", sb.get("notify_users", False)))
+            # Update behavior toggles from payload (supports both old boolean and new object format)
+            for key in ("auto_link_project_id", "auto_link_by_content", "create_deals", "create_tasks", "post_notes", "notify_users"):
+                if key in payload:
+                    val = payload[key]
+                    if isinstance(val, bool):
+                        sb[key] = {"enabled": val, "dry_run": sb.get(key, {}).get("dry_run", False), "accounts": sb.get(key, {}).get("accounts", "all")}
+                    elif isinstance(val, dict):
+                        sb[key] = val
             cfg["scanner_behavior"] = sb
             cfg["action_toggles"] = payload.get("action_toggles", cfg.get("action_toggles", {}))
             mail_scanner.update_contractors(cfg)

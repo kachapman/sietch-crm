@@ -17,7 +17,11 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Account settings: server/credential visibility.** When editing an OAuth account, IMAP/SMTP server and port are shown as read-only with an "Edit servers" button to make them editable. Password fields now show a green "Saved" indicator when a password is already stored.
 - **Mobile account settings modal fix.** The modal now fills the viewport on mobile (`100dvh`) with the footer pinned at the bottom (`flex-shrink:0`), preventing the Save button from being pushed off-screen.
 - **Mobile email modal fix.** The email inbox modal now fills the viewport on mobile (`100dvh`) with header, toolbar, and footer pinned. The sidebar toggle is hidden on mobile. The "Close" footer button is no longer pushed off-screen.
-- **Files:** `oauth_providers.py`, `server.py`, `smtp_client.py`, `scanner/mail_scanner.py`, `public/app.js`, `public/index.html`, `public/styles.css`, `AGENTS.md`, `CHANGELOG.md`.
+- **Per-task dry run toggle.** Each behavior task (auto-link, create deals, create tasks, post notes, notify users) now has its own dry-run toggle and account scope selector. When dry-run is enabled, the scanner logs `[DRY RUN] Would have: <action>` without executing.
+- **Secondary auto-link by content.** New `auto_link_by_content` behavior scans subject and body for claim numbers, policy numbers, normalized addresses, and contact IDs. Builds an in-memory index of ~1100 deals at each poll cycle. Separate from the primary `auto_link_project_id` behavior.
+- **Visual indicators on emails.** Green link icon on linked emails (tooltip: "Linked: Project Name (#ID)"). Amber robot icon on unlinked emails (tooltip: "Unable to link: [reason]"). Icons appear after subject, before expand button.
+- **Interactive scanner log with correction modal.** Log entries have checkboxes for multi-select. "Mark as wrong" button opens a correction modal to select the correct project. Corrections are saved to `classifier_training_data` table.
+- **Files:** `oauth_providers.py`, `server.py`, `smtp_client.py`, `scanner/mail_scanner.py`, `scanner/scanner_service.py`, `public/app.js`, `public/index.html`, `public/styles.css`, `AGENTS.md`, `CHANGELOG.md`.
 
 ## Phase 3 — Mail Account Settings Rework (2026-08-02)
 

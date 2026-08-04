@@ -18605,6 +18605,21 @@ function renderMailList(msgs) {
       row.appendChild(tagsWrap);
     }
 
+    // Auto-link status icon (after subject, before expand button)
+    if (m.linked_deals && m.linked_deals.length > 0) {
+      const linkIcon = document.createElement("span");
+      linkIcon.className = "mail-link-icon linked";
+      linkIcon.title = "Linked: " + m.linked_deals.map(d => `${d.title} (#${d.deal_id})`).join(", ");
+      linkIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 15l6 -6"/><path d="M11 6l.463 -.536a5 5 0 0 1 7.071 7.072l-.534 .464"/><path d="M13 18l-.463 .536a5 5 0 0 1 -7.071 -7.072l.534 -.464"/></svg>';
+      row.appendChild(linkIcon);
+    } else if (m.unlinked_reason) {
+      const robotIcon = document.createElement("span");
+      robotIcon.className = "mail-link-icon unlinked";
+      robotIcon.title = "Unable to link: " + m.unlinked_reason;
+      robotIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 16a4 4 0 0 1 -2.5 -7.5"/><path d="M10 16a4 4 0 0 1 -2.5 -7.5"/><path d="M13 16a4 4 0 0 1 -2.5 -7.5"/><path d="M16 16a4 4 0 0 1 -2.5 -7.5"/><path d="M4 8h16"/><path d="M8 12h8"/></svg>';
+      row.appendChild(robotIcon);
+    }
+
     const dateDiv = document.createElement("div");
     dateDiv.className = "mail-date";
     dateDiv.textContent = dateStr;
@@ -23854,11 +23869,28 @@ async function populateEmailScannerTab() {
       const sb = cfg.scanner_behavior || cfg;
       if (sb) {
         const set = (id, val) => { const el = $(id); if (el) el.checked = !!val; };
-        set("#scanner-toggle-auto-link", sb.auto_link_project_id !== false);
-        set("#scanner-toggle-create-deals", sb.create_deals);
-        set("#scanner-toggle-create-tasks", sb.create_tasks);
-        set("#scanner-toggle-post-notes", sb.post_notes);
-        set("#scanner-toggle-notify-users", sb.notify_users);
+        const getEnabled = (v) => typeof v === "object" ? v.enabled : !!v;
+        const getDryRun = (v) => typeof v === "object" ? v.dry_run : false;
+        const getAccounts = (v) => typeof v === "object" ? (v.accounts ?? "all") : "all";
+        set("#scanner-toggle-auto-link", getEnabled(sb.auto_link_project_id));
+        set("#scanner-toggle-auto-link-content", getEnabled(sb.auto_link_by_content));
+        set("#scanner-toggle-create-deals", getEnabled(sb.create_deals));
+        set("#scanner-toggle-create-tasks", getEnabled(sb.create_tasks));
+        set("#scanner-toggle-post-notes", getEnabled(sb.post_notes));
+        set("#scanner-toggle-notify-users", getEnabled(sb.notify_users));
+        set("#scanner-dry-auto-link-content", getDryRun(sb.auto_link_by_content));
+        set("#scanner-dry-create-deals", getDryRun(sb.create_deals));
+        set("#scanner-dry-create-tasks", getDryRun(sb.create_tasks));
+        set("#scanner-dry-post-notes", getDryRun(sb.post_notes));
+        set("#scanner-dry-notify-users", getDryRun(sb.notify_users));
+        // Set scope selectors
+        const setScope = (id, v) => { const el = $(id); if (el && typeof v === "object") el.value = v.accounts ?? "all"; };
+        setScope("#scanner-scope-auto-link", sb.auto_link_project_id);
+        setScope("#scanner-scope-auto-link-content", sb.auto_link_by_content);
+        setScope("#scanner-scope-create-deals", sb.create_deals);
+        setScope("#scanner-scope-create-tasks", sb.create_tasks);
+        setScope("#scanner-scope-post-notes", sb.post_notes);
+        setScope("#scanner-scope-notify-users", sb.notify_users);
       }
     } catch { /* toggles default unchecked */ }
   }
@@ -23902,17 +23934,57 @@ async function populateEmailScannerTab() {
       if (!entries.length && !pendingFeedback.length) {
         html = '<div style="color:#484f58;">$ tail -f scanner.log<br>No entries yet.</div>';
       } else if (entries.length) {
-        html += entries.slice().reverse().map(e => {
+        // Track selected log entries for correction
+        window._scannerLogSelected = window._scannerLogSelected || new Set();
+        html += entries.slice().reverse().map((e, i) => {
           const ts = e.timestamp ? new Date(e.timestamp).toLocaleTimeString('en-US', {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'}) : '--:--:--';
           const status = (e.status || 'unknown').toUpperCase();
-          const cls = e.status === 'processed' ? 'log-processed' : e.status === 'error' ? 'log-error' : e.status === 'skipped' || e.status === 'already_processed' ? 'log-skipped' : e.classification && e.classification.startsWith('rule_') ? 'log-rule' : '';
+          const cls = e.status === 'processed' ? 'log-processed' : e.status === 'error' ? 'log-error' : e.status === 'skipped' || e.status === 'already_processed' ? 'log-skipped' : e.status === 'dry_run' ? 'log-dry-run' : e.classification && e.classification.startsWith('rule_') ? 'log-rule' : '';
           const subj = (e.subject || '').slice(0, 50);
           const from = e.from ? ` <${e.from}>` : '';
-          return `<div class="log-entry ${cls}"><span class="log-ts">[${ts}]</span> <span class="log-status">${escapeHtml(status)}</span> <span class="log-msg">${escapeHtml(subj)}${escapeHtml(from)}</span></div>`;
+          const dealLinked = e.deal_linked ? ' <span style="color:#3fb950;">✓</span>' : '';
+          const dryRun = e.status === 'dry_run' ? ` <span style="color:var(--accent);font-size:0.7rem;">[DRY RUN]</span>` : '';
+          const reason = e.unlinked_reason ? ` <span style="color:var(--warning);font-size:0.7rem;" title="${escapeHtml(e.unlinked_reason)}">⚠</span>` : '';
+          const uid = e.uid || '';
+          const isSelected = window._scannerLogSelected.has(uid);
+          return `<div class="log-entry ${cls}" data-uid="${escapeHtml(uid)}" data-idx="${i}">
+            <input type="checkbox" class="log-cb" data-uid="${escapeHtml(uid)}" ${isSelected ? 'checked' : ''} style="margin-right:0.3rem;" />
+            <span class="log-ts">[${ts}]</span> <span class="log-status">${escapeHtml(status)}${dryRun}</span> <span class="log-msg">${escapeHtml(subj)}${escapeHtml(from)}${dealLinked}${reason}</span>
+          </div>`;
         }).join('');
       }
 
       logList.innerHTML = html;
+
+      // Multi-select logic
+      const markWrongBtn = $("#scanner-log-mark-wrong");
+      const selectedCount = $("#scanner-log-selected-count");
+      const updateSelectedUI = () => {
+        const count = window._scannerLogSelected.size;
+        if (markWrongBtn) markWrongBtn.style.display = count > 0 ? '' : 'none';
+        if (selectedCount) selectedCount.textContent = count > 0 ? `${count} selected` : '';
+      };
+      logList.querySelectorAll('.log-cb').forEach(cb => {
+        cb.addEventListener('change', () => {
+          if (cb.checked) window._scannerLogSelected.add(cb.dataset.uid);
+          else window._scannerLogSelected.delete(cb.dataset.uid);
+          updateSelectedUI();
+        });
+      });
+      // Select all
+      const selectAllBtn = $("#scanner-log-select-all");
+      if (selectAllBtn) {
+        selectAllBtn.onclick = () => {
+          const cbs = logList.querySelectorAll('.log-cb');
+          const allChecked = Array.from(cbs).every(cb => cb.checked);
+          cbs.forEach(cb => {
+            cb.checked = !allChecked;
+            if (cb.checked) window._scannerLogSelected.add(cb.dataset.uid);
+            else window._scannerLogSelected.delete(cb.dataset.uid);
+          });
+          updateSelectedUI();
+        };
+      }
 
       logList.querySelectorAll('.fb-approve').forEach(btn => {
         btn.addEventListener('click', async (e) => {
@@ -23963,6 +24035,84 @@ async function populateEmailScannerTab() {
     } catch (e) {
       logList.innerHTML = `<div style="color:#f85149;">$ ERROR: ${escapeHtml(e.message)}</div>`;
     }
+  }
+
+  // Scanner log correction modal
+  const markWrongBtn = $("#scanner-log-mark-wrong");
+  if (markWrongBtn && !markWrongBtn.dataset.bound) {
+    markWrongBtn.dataset.bound = "1";
+    markWrongBtn.addEventListener("click", () => {
+      const selected = window._scannerLogSelected || new Set();
+      if (!selected.size) return;
+      const modal = $("#scanner-correction-modal");
+      if (!modal) return;
+      modal.classList.remove("hidden");
+      $("#correction-email-count").textContent = selected.size;
+      $("#correction-selected").innerHTML = "";
+      $("#correction-project-results").style.display = "none";
+      $("#correction-project-results").innerHTML = "";
+      $("#correction-project-search").value = "";
+      const saveBtn = $("#correction-save-btn");
+      if (saveBtn) saveBtn.disabled = true;
+      let selectedProjectId = null;
+
+      // Search for projects
+      const searchInput = $("#correction-project-search");
+      let searchTimer = null;
+      searchInput.oninput = () => {
+        clearTimeout(searchTimer);
+        const q = searchInput.value.trim();
+        if (q.length < 2) { $("#correction-project-results").style.display = "none"; return; }
+        searchTimer = setTimeout(async () => {
+          try {
+            const data = await api(`/api/v2/projects?search=${encodeURIComponent(q)}`);
+            const projects = data.projects || data || [];
+            const results = $("#correction-project-results");
+            if (!projects.length) {
+              results.innerHTML = '<div style="padding:0.5rem;color:var(--muted);font-size:0.8rem;">No matches</div>';
+            } else {
+              results.innerHTML = projects.slice(0, 10).map(p =>
+                `<button type="button" class="correction-pick" data-id="${p.id}" data-title="${escapeHtml(p.title || p.Name || '')}" style="display:block;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;font-size:0.85rem;">${escapeHtml(p.title || p.Name || 'Untitled')}</button>`
+              ).join('');
+              results.querySelectorAll('.correction-pick').forEach(btn => {
+                btn.addEventListener('click', () => {
+                  selectedProjectId = parseInt(btn.dataset.id);
+                  $("#correction-selected").innerHTML = `<span style="background:var(--bg-elevated);padding:2px 6px;border-radius:3px;">${btn.dataset.title} (#${selectedProjectId})</span>`;
+                  results.style.display = "none";
+                  if (saveBtn) saveBtn.disabled = false;
+                });
+              });
+            }
+            results.style.display = "block";
+          } catch (e) { showToast("Search failed: " + e.message, true); }
+        }, 300);
+      };
+
+      // Save correction
+      if (saveBtn) {
+        saveBtn.onclick = async () => {
+          if (!selectedProjectId) return;
+          try {
+            await api("/api/v2/mail/log/correct", {
+              method: "POST",
+              body: JSON.stringify({
+                uids: Array.from(selected),
+                correct_project_id: selectedProjectId,
+              }),
+            });
+            showToast("Correction saved — added to training data");
+            modal.classList.add("hidden");
+            window._scannerLogSelected.clear();
+            populateEmailScannerTab();
+          } catch (e) { showToast("Failed: " + e.message, true); }
+        };
+      }
+
+      // Dismiss
+      modal.querySelectorAll('[data-correction-dismiss]').forEach(el => {
+        el.addEventListener('click', () => modal.classList.add('hidden'), { once: true });
+      });
+    });
   }
 
   // Templates
@@ -24074,20 +24224,71 @@ function bindScannerAdminButtons() {
   }
 
   // Save toggles
+  // Populate scope selectors with mail accounts
+  const scopeSelects = document.querySelectorAll('[id^="scanner-scope-"]');
+  if (scopeSelects.length && !document.getElementById("scanner-scope-populated")) {
+    api("/api/v2/mail/accounts").then(data => {
+      const accounts = data.accounts || [];
+      scopeSelects.forEach(sel => {
+        accounts.forEach(a => {
+          const opt = document.createElement("option");
+          opt.value = a.id;
+          opt.textContent = a.display_name || a.email;
+          sel.appendChild(opt);
+        });
+      });
+    }).catch(() => {});
+    // Mark as populated to avoid re-populating
+    const marker = document.createElement("span");
+    marker.id = "scanner-scope-populated";
+    marker.style.display = "none";
+    document.body.appendChild(marker);
+  }
+
   const togglesSave = $("#scanner-toggles-save");
   if (togglesSave && !togglesSave.dataset.bound) {
     togglesSave.dataset.bound = "1";
     togglesSave.addEventListener("click", async () => {
       const statusEl = $("#scanner-toggles-status");
+      const getScope = (id) => {
+        const sel = $(id);
+        if (!sel) return "all";
+        return sel.value === "all" ? "all" : parseInt(sel.value);
+      };
       try {
         await api("/api/v2/mail/config", {
           method: "PUT",
           body: JSON.stringify({
-            auto_link_project_id: $("#scanner-toggle-auto-link")?.checked !== false,
-            create_deals: $("#scanner-toggle-create-deals")?.checked || false,
-            create_tasks: $("#scanner-toggle-create-tasks")?.checked || false,
-            post_notes: $("#scanner-toggle-post-notes")?.checked || false,
-            notify_users: $("#scanner-toggle-notify-users")?.checked || false,
+            auto_link_project_id: {
+              enabled: $("#scanner-toggle-auto-link")?.checked !== false,
+              dry_run: false,
+              accounts: getScope("#scanner-scope-auto-link"),
+            },
+            auto_link_by_content: {
+              enabled: $("#scanner-toggle-auto-link-content")?.checked || false,
+              dry_run: $("#scanner-dry-auto-link-content")?.checked || false,
+              accounts: getScope("#scanner-scope-auto-link-content"),
+            },
+            create_deals: {
+              enabled: $("#scanner-toggle-create-deals")?.checked || false,
+              dry_run: $("#scanner-dry-create-deals")?.checked || false,
+              accounts: getScope("#scanner-scope-create-deals"),
+            },
+            create_tasks: {
+              enabled: $("#scanner-toggle-create-tasks")?.checked || false,
+              dry_run: $("#scanner-dry-create-tasks")?.checked || false,
+              accounts: getScope("#scanner-scope-create-tasks"),
+            },
+            post_notes: {
+              enabled: $("#scanner-toggle-post-notes")?.checked || false,
+              dry_run: $("#scanner-dry-post-notes")?.checked || false,
+              accounts: getScope("#scanner-scope-post-notes"),
+            },
+            notify_users: {
+              enabled: $("#scanner-toggle-notify-users")?.checked || false,
+              dry_run: $("#scanner-dry-notify-users")?.checked || false,
+              accounts: getScope("#scanner-scope-notify-users"),
+            },
           })
         });
         if (statusEl) { statusEl.textContent = "✓ Saved"; statusEl.className = "event-log-health-status ok"; }

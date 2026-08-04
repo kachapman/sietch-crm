@@ -1723,6 +1723,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/mail/config" and method == "PUT":
             self._handle_mail_config_put()
             return
+        if api_path == "/api/v2/mail/log/correct" and method == "POST":
+            self._handle_mail_log_correct()
+            return
         # Account CRUD
         if api_path == "/api/v2/mail/accounts" and method == "POST":
             self._handle_mail_account_create()
@@ -5358,7 +5361,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 + join + " WHERE " + q + " ORDER BY m.date_received DESC LIMIT %s OFFSET %s",
                 tuple(params) + (page_size, (page - 1) * page_size),
             )
-            # Fetch tags for each message in a single batch query
+            # Fetch tags and linked deals for each message in single batch queries
             if rows:
                 msg_ids = [r["id"] for r in rows]
                 tag_rows = db.query_dicts(
@@ -5372,8 +5375,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     if mid not in tags_by_msg:
                         tags_by_msg[mid] = []
                     tags_by_msg[mid].append({"title": tr["title"], "color": tr["color"]})
+                # Fetch linked deals
+                deal_link_rows = db.query_dicts(
+                    "SELECT dl.message_id, dl.opportunity_id, o.title FROM mail_deal_links dl "
+                    "JOIN opportunities o ON dl.opportunity_id = o.id WHERE dl.message_id = ANY(%s)",
+                    (msg_ids,),
+                )
+                deals_by_msg = {}
+                for dl in deal_link_rows:
+                    mid = dl["message_id"]
+                    if mid not in deals_by_msg:
+                        deals_by_msg[mid] = []
+                    deals_by_msg[mid].append({"deal_id": dl["opportunity_id"], "title": dl["title"]})
                 for r in rows:
                     r["tags"] = tags_by_msg.get(r["id"], [])
+                    r["linked_deals"] = deals_by_msg.get(r["id"], [])
             total = db.query_one(
                 "SELECT COUNT(*) AS cnt FROM mail_messages m " + join + " WHERE " + q,
                 tuple(params),
@@ -5941,6 +5957,41 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         qs = parse_qs(urlparse(self.path).query)
         limit = int(qs.get("limit", ["200"])[0])
         _json_response(self, 200, {"entries": mail_scanner.get_scanner_log(limit) if mail_scanner else []})
+
+    def _handle_mail_log_correct(self) -> None:
+        try:
+            user = _require_auth(self)
+            if not user:
+                return
+            payload = json.loads(_read_body(self) or b"{}")
+            uids = payload.get("uids", [])
+            correct_project_id = payload.get("correct_project_id")
+            if not uids or not correct_project_id:
+                _json_response(self, 400, {"error": "uids and correct_project_id required"})
+                return
+            # Verify the project exists
+            opp = db.query_one("SELECT id FROM opportunities WHERE id = %s", (correct_project_id,))
+            if not opp:
+                _json_response(self, 404, {"error": f"Project {correct_project_id} not found"})
+                return
+            # Find messages by IMAP UID and save corrections to training data
+            count = 0
+            for uid in uids:
+                msg = db.query_one("SELECT id, subject, from_addr FROM mail_messages WHERE imap_uid = %s", (uid,))
+                if msg:
+                    try:
+                        db.execute(
+                            "INSERT INTO classifier_training_data "
+                            "(message_id, correct_classification, correct_project_id, correct_action_type, reviewer_id, reviewed_at) "
+                            "VALUES (%s, %s, %s, %s, %s, NOW())",
+                            (msg["id"], "link_deal", correct_project_id, "link", user["id"]),
+                        )
+                        count += 1
+                    except Exception:
+                        pass
+            _json_response(self, 200, {"ok": True, "corrected": count})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_reprocess(self) -> None:
         try:
