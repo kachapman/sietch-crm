@@ -2,6 +2,19 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — Trigger System & Scanner Status Improvements (2026-08-04)
+
+- **Per-account scanner status.** Scanner status now shows each active account with status (active/auth_failed), IMAP host, last sync time, and which behaviors are active (checkmarks with mouseover detail). "Reconnect" button opens account settings for auth_failed accounts.
+- **Trigger system for custom behaviors.** Each custom behavior can now have trigger conditions that determine when it executes. Triggers support:
+  - Multiple triggers per behavior (OR logic between triggers)
+  - Multiple conditions per trigger (AND/OR logic)
+  - Negation (NOT) on any condition
+  - 20+ condition types: subject/body text/regex, sender email/domain/name, deal stage/value/tag/field, attachment status, reply/forward detection
+  - "Test Trigger" button showing matching email count
+- **Regex pattern caching.** Compiled regex patterns are cached for performance.
+- **Amber icon for skipped triggers.** When a behavior has deal-based triggers but email isn't linked, amber robot icon appears with tooltip explaining the skip reason.
+- **Files:** `scanner/mail_scanner.py`, `server.py`, `public/app.js`, `public/index.html`, `public/styles.css`.
+
 ## Phase 3 — SMTP Domain Awareness & Sent-Mail Deal Links (2026-08-03)
 
 - **Microsoft OAuth SMTP host is now domain-aware.** `MicrosoftProvider.smtp_settings()` accepts the connected email and returns `smtp-mail.outlook.com:587` for personal Microsoft domains (`outlook.com`, `hotmail.com`, `live.com`, `msn.com`) instead of always using `smtp.office365.com`, which personal accounts reject with `SmtpClientAuthentication is disabled`. Office 365 / Exchange work accounts continue to get `smtp.office365.com:587`. The OAuth callback in `server.py` now passes the email to the provider's settings methods.

@@ -1138,6 +1138,18 @@
         </div>
         <!-- Dynamic config fields -->
         <div id="custom-behavior-config" style="border-top:1px solid var(--border); padding-top:0.5rem;"></div>
+        <!-- Trigger conditions -->
+        <div id="custom-behavior-triggers" style="border-top:1px solid var(--border); margin-top:0.5rem; padding-top:0.5rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.3rem;">
+            <label style="font-size:0.85rem; font-weight:500;">Trigger Conditions</label>
+            <div style="display:flex; gap:0.3rem;">
+              <button type="button" id="cb-test-trigger" class="btn btn-ghost btn-sm" style="font-size:0.7rem;"><i class="ti ti-search"></i> Test</button>
+              <button type="button" id="cb-add-trigger" class="btn btn-ghost btn-sm" style="font-size:0.7rem;"><i class="ti ti-plus"></i> Add Trigger</button>
+            </div>
+          </div>
+          <div id="cb-triggers-container"></div>
+          <div id="cb-trigger-test-results" style="display:none; margin-top:0.3rem; padding:0.3rem; background:var(--bg-elevated); border-radius:4px; font-size:0.75rem;"></div>
+        </div>
       </div>
       <div style="display:flex; gap:0.5rem; justify-content:flex-end; padding:0.5rem 0.75rem; border-top:1px solid var(--border); flex-shrink:0;">
         <button type="button" class="btn btn-ghost btn-small" data-custom-behavior-dismiss>Cancel</button>

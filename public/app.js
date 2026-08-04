@@ -23805,11 +23805,51 @@ async function populateEmailScannerTab() {
     try {
       const s = await api("/api/v2/mail/status");
       const enabled = s.enabled;
-      statusBox.innerHTML = `
-        <span class="${enabled ? 'status-ok' : 'status-fail'}">${enabled ? '● Scanner enabled' : '● Scanner disabled'}</span>
-        &nbsp;· IMAP: ${escapeHtml(s.imap_host || 'not configured')} (${s.imap_port || 993})
-        &nbsp;· Processed: ${s.processed_count || 0}
-        &nbsp;· Poll: ${s.poll_interval || 300}s`;
+      let html = `<span class="${enabled ? 'status-ok' : 'status-fail'}">${enabled ? '● Scanner enabled' : '● Scanner disabled'}</span>`;
+      html += ` · Poll: ${s.poll_interval || 300}s · Processed: ${s.processed_count || 0}`;
+
+      // Per-account status
+      if (s.accounts && s.accounts.length) {
+        html += '<div style="margin-top:0.5rem;">';
+        s.accounts.forEach(a => {
+          const statusClass = a.status === 'active' ? 'status-ok' : 'status-fail';
+          const statusIcon = a.status === 'active' ? '●' : a.status === 'auth_failed' ? '●' : '●';
+          const statusText = a.status === 'active' ? '' : a.status === 'auth_failed' ? ' Token expired' : ' No password';
+          const behaviorBadges = a.active_behaviors.map(b => {
+            const short = b.replace('auto_link_project_id', 'auto-link')
+                          .replace('post_notes', 'post-notes')
+                          .replace('auto_link_by_content', 'auto-link-content')
+                          .replace('create_deals', 'create-deal')
+                          .replace('create_tasks', 'create-task')
+                          .replace('notify_users', 'notify')
+                          .replace('add_email_tags', 'email-tags')
+                          .replace('add_project_tags', 'project-tags')
+                          .replace('change_project_stage', 'change-stage')
+                          .replace('reply_to_email', 'reply');
+            return `<span class="behavior-badge" title="${escapeHtml(b)}" style="background:var(--bg-elevated);padding:0.1rem 0.3rem;border-radius:3px;font-size:0.7rem;">✓ ${escapeHtml(short)}</span>`;
+          }).join(' ');
+          const lastSync = a.last_sync ? ` · Last: ${new Date(a.last_sync).toLocaleString()}` : '';
+          const reconnectBtn = a.status === 'auth_failed'
+            ? `<button class="btn btn-ghost btn-sm scanner-reconnect-btn" data-account-id="${a.id}" style="font-size:0.7rem;margin-left:0.3rem;">Reconnect</button>`
+            : '';
+          html += `<div style="padding:0.3rem 0; border-bottom:1px solid var(--border); font-size:0.8rem;">
+            <span class="${statusClass}">${statusIcon}</span> ${escapeHtml(a.email)} — ${escapeHtml(a.imap_host)}:${a.imap_port}${statusText}
+            ${behaviorBadges ? `<span style="margin-left:0.3rem;">${behaviorBadges}</span>` : ''}
+            <span style="color:var(--muted); font-size:0.75rem;">${lastSync}</span>
+            ${reconnectBtn}
+          </div>`;
+        });
+        html += '</div>';
+      }
+      statusBox.innerHTML = html;
+
+      // Bind reconnect buttons
+      statusBox.querySelectorAll('.scanner-reconnect-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const accountId = parseInt(btn.dataset.accountId);
+          openAccountSettingsModal(accountId);
+        });
+      });
     } catch (e) {
       statusBox.innerHTML = `<span class="status-fail">● Failed to load: ${escapeHtml(e.message)}</span>`;
     }
@@ -24424,7 +24464,13 @@ function bindScannerAdminButtons() {
     // Render config
     updateCustomBehaviorConfig(typeSel.value, isEdit ? window._customBehaviors[editIdx].config : {});
     typeSel.onchange = () => updateCustomBehaviorConfig(typeSel.value, {});
-    // Load users for assignee/notify
+    // Populate triggers
+    window._cbTriggers = isEdit ? JSON.parse(JSON.stringify(window._customBehaviors[editIdx].triggers || [])) : [];
+    renderTriggersUI();
+    // Clear test results
+    const testResults = $("#cb-trigger-test-results");
+    if (testResults) testResults.style.display = 'none';
+    // Load users/stages/tags for assignee/notify
     loadUsersForCustomBehavior();
   }
 
@@ -24545,7 +24591,7 @@ function bindScannerAdminButtons() {
         config.action = $("#cb-config-reply-action")?.value || "create_draft";
         config.reply_template = $("#cb-config-reply-template")?.value || "";
       }
-      const behavior = { type, enabled: true, dry_run: dryRun, accounts: scope, config, order: window._customBehaviors.length + 1 };
+      const behavior = { type, enabled: true, dry_run: dryRun, accounts: scope, config, triggers: window._cbTriggers || [], order: window._customBehaviors.length + 1 };
       if (editId !== "") {
         window._customBehaviors[parseInt(editId)] = behavior;
       } else {
@@ -24560,6 +24606,218 @@ function bindScannerAdminButtons() {
   document.querySelectorAll('[data-custom-behavior-dismiss]').forEach(el => {
     el.addEventListener('click', () => { $("#custom-behavior-modal")?.classList.add("hidden"); }, { once: true });
   });
+
+  // ── Trigger UI ──────────────────────────────────────────────────────
+  const CONDITION_TYPES = [
+    { category: "Text", type: "subject_contains", label: "Subject contains", valueType: "text" },
+    { category: "Text", type: "subject_regex", label: "Subject matches regex", valueType: "text" },
+    { category: "Text", type: "body_contains", label: "Body contains", valueType: "text" },
+    { category: "Text", type: "body_regex", label: "Body matches regex", valueType: "text" },
+    { category: "Text", type: "sender_email", label: "Sender email is", valueType: "text" },
+    { category: "Text", type: "sender_domain", label: "Sender domain contains", valueType: "text" },
+    { category: "Text", type: "sender_name", label: "Sender name contains", valueType: "text" },
+    { category: "Deal", type: "linked_to_deal", label: "Linked to any deal", valueType: "none" },
+    { category: "Deal", type: "deal_stage_id", label: "Deal stage is", valueType: "stage" },
+    { category: "Deal", type: "deal_stage_is_not", label: "Deal stage is not", valueType: "stage" },
+    { category: "Deal", type: "deal_value_above", label: "Deal value above $", valueType: "number" },
+    { category: "Deal", type: "deal_value_below", label: "Deal value below $", valueType: "number" },
+    { category: "Deal", type: "deal_has_tag", label: "Deal has tag", valueType: "tag" },
+    { category: "Deal", type: "deal_field_contains", label: "Deal field contains", valueType: "text", placeholder: "field_key:value" },
+    { category: "Email", type: "has_attachment", label: "Has attachment", valueType: "none" },
+    { category: "Email", type: "attachment_count_above", label: "Attachment count >", valueType: "number" },
+    { category: "Email", type: "is_reply", label: "Is a reply", valueType: "none" },
+    { category: "Email", type: "is_forward", label: "Is a forward", valueType: "none" },
+    { category: "Email", type: "has_cc", label: "Has CC recipients", valueType: "none" },
+    { category: "Email", type: "has_bcc", label: "Has BCC recipients", valueType: "none" },
+  ];
+
+  // Temporary triggers array for the modal
+  window._cbTriggers = [];
+
+  function renderConditionTypeOptions() {
+    let html = '';
+    let lastCat = '';
+    CONDITION_TYPES.forEach(ct => {
+      if (ct.category !== lastCat) {
+        if (lastCat) html += '</optgroup>';
+        html += `<optgroup label="${ct.category}">`;
+        lastCat = ct.category;
+      }
+      html += `<option value="${ct.type}" data-value-type="${ct.valueType}" data-placeholder="${ct.placeholder || ''}">${ct.label}</option>`;
+    });
+    html += '</optgroup>';
+    return html;
+  }
+
+  function renderTriggerGroup(trigger, triggerIdx) {
+    const logic = trigger.logic || 'and';
+    const conditions = trigger.conditions || [];
+    let html = `<div class="trigger-group" data-trigger-idx="${triggerIdx}">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.3rem;">
+        <span style="font-size:0.75rem; color:var(--muted);">Trigger ${triggerIdx + 1}</span>
+        <div style="display:flex; gap:0.3rem; align-items:center;">
+          <label style="font-size:0.7rem; color:var(--muted);">Logic:</label>
+          <select class="cb-trigger-logic" style="font-size:0.7rem; padding:0.1rem 0.2rem; border:1px solid var(--border); border-radius:3px;">
+            <option value="and" ${logic === 'and' ? 'selected' : ''}>AND</option>
+            <option value="or" ${logic === 'or' ? 'selected' : ''}>OR</option>
+          </select>
+          <button type="button" class="btn btn-ghost btn-sm cb-remove-trigger" data-idx="${triggerIdx}" style="font-size:0.65rem; color:var(--danger); padding:0.1rem 0.2rem;"><i class="ti ti-x"></i></button>
+        </div>
+      </div>`;
+    conditions.forEach((cond, condIdx) => {
+      html += renderCondition(cond, triggerIdx, condIdx);
+    });
+    html += `<button type="button" class="btn btn-ghost btn-sm cb-add-condition" data-trigger-idx="${triggerIdx}" style="font-size:0.7rem; margin-top:0.2rem;"><i class="ti ti-plus"></i> Add Condition</button>`;
+    html += '</div>';
+    return html;
+  }
+
+  function renderCondition(cond, triggerIdx, condIdx) {
+    const ct = CONDITION_TYPES.find(c => c.type === cond.type) || CONDITION_TYPES[0];
+    const needsValue = ct.valueType !== 'none';
+    return `<div class="trigger-condition" data-trigger-idx="${triggerIdx}" data-cond-idx="${condIdx}">
+      <select class="cb-cond-type" style="font-size:0.7rem;">${renderConditionTypeOptions()}</select>
+      ${needsValue ? `<input type="${ct.valueType === 'number' ? 'number' : 'text'}" class="cb-cond-value" value="${escapeHtml(cond.value || '')}" placeholder="${ct.placeholder || ''}" style="font-size:0.7rem;">` : ''}
+      <label style="font-size:0.7rem; color:var(--muted); display:flex; align-items:center; gap:0.15rem;">
+        <input type="checkbox" class="cb-cond-negate" ${cond.negate ? 'checked' : ''}> NOT
+      </label>
+      <button type="button" class="btn btn-ghost btn-sm cb-remove-condition" style="font-size:0.65rem; color:var(--danger); padding:0.1rem 0.2rem;"><i class="ti ti-x"></i></button>
+    </div>`;
+  }
+
+  function renderTriggersUI() {
+    const container = $("#cb-triggers-container");
+    if (!container) return;
+    if (!window._cbTriggers.length) {
+      container.innerHTML = '<div style="font-size:0.75rem; color:var(--muted);">No triggers = always execute when email is linked to a deal.</div>';
+      return;
+    }
+    container.innerHTML = window._cbTriggers.map((t, i) => renderTriggerGroup(t, i)).join('');
+
+    // Set selected values for condition type selects
+    container.querySelectorAll('.trigger-condition').forEach(condEl => {
+      const triggerIdx = parseInt(condEl.dataset.triggerIdx);
+      const condIdx = parseInt(condEl.dataset.condIdx);
+      const cond = window._cbTriggers[triggerIdx]?.conditions[condIdx];
+      if (cond) {
+        const typeSelect = condEl.querySelector('.cb-cond-type');
+        if (typeSelect) typeSelect.value = cond.type;
+      }
+    });
+
+    // Bind condition type change
+    container.querySelectorAll('.cb-cond-type').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const condEl = sel.closest('.trigger-condition');
+        const triggerIdx = parseInt(condEl.dataset.triggerIdx);
+        const condIdx = parseInt(condEl.dataset.condIdx);
+        if (window._cbTriggers[triggerIdx]?.conditions[condIdx]) {
+          window._cbTriggers[triggerIdx].conditions[condIdx].type = sel.value;
+          renderTriggersUI();
+        }
+      });
+    });
+
+    // Bind condition value changes
+    container.querySelectorAll('.cb-cond-value').forEach(input => {
+      input.addEventListener('input', () => {
+        const condEl = input.closest('.trigger-condition');
+        const triggerIdx = parseInt(condEl.dataset.triggerIdx);
+        const condIdx = parseInt(condEl.dataset.condIdx);
+        if (window._cbTriggers[triggerIdx]?.conditions[condIdx]) {
+          window._cbTriggers[triggerIdx].conditions[condIdx].value = input.value;
+        }
+      });
+    });
+
+    // Bind condition negate changes
+    container.querySelectorAll('.cb-cond-negate').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const condEl = cb.closest('.trigger-condition');
+        const triggerIdx = parseInt(condEl.dataset.triggerIdx);
+        const condIdx = parseInt(condEl.dataset.condIdx);
+        if (window._cbTriggers[triggerIdx]?.conditions[condIdx]) {
+          window._cbTriggers[triggerIdx].conditions[condIdx].negate = cb.checked;
+        }
+      });
+    });
+
+    // Bind trigger logic changes
+    container.querySelectorAll('.cb-trigger-logic').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const triggerGroup = sel.closest('.trigger-group');
+        const triggerIdx = parseInt(triggerGroup.dataset.triggerIdx);
+        if (window._cbTriggers[triggerIdx]) {
+          window._cbTriggers[triggerIdx].logic = sel.value;
+        }
+      });
+    });
+
+    // Bind remove condition
+    container.querySelectorAll('.cb-remove-condition').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const condEl = btn.closest('.trigger-condition');
+        const triggerIdx = parseInt(condEl.dataset.triggerIdx);
+        const condIdx = parseInt(condEl.dataset.condIdx);
+        if (window._cbTriggers[triggerIdx]) {
+          window._cbTriggers[triggerIdx].conditions.splice(condIdx, 1);
+          if (!window._cbTriggers[triggerIdx].conditions.length) {
+            window._cbTriggers.splice(triggerIdx, 1);
+          }
+          renderTriggersUI();
+        }
+      });
+    });
+
+    // Bind remove trigger
+    container.querySelectorAll('.cb-remove-trigger').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const triggerIdx = parseInt(btn.dataset.idx);
+        window._cbTriggers.splice(triggerIdx, 1);
+        renderTriggersUI();
+      });
+    });
+
+    // Bind add condition
+    container.querySelectorAll('.cb-add-condition').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const triggerIdx = parseInt(btn.dataset.triggerIdx);
+        if (window._cbTriggers[triggerIdx]) {
+          window._cbTriggers[triggerIdx].conditions.push({ type: 'subject_contains', value: '', negate: false });
+          renderTriggersUI();
+        }
+      });
+    });
+  }
+
+  // Add trigger button
+  const cbAddTrigger = $("#cb-add-trigger");
+  if (cbAddTrigger) {
+    cbAddTrigger.addEventListener('click', () => {
+      window._cbTriggers.push({ logic: 'and', conditions: [{ type: 'subject_contains', value: '', negate: false }] });
+      renderTriggersUI();
+    });
+  }
+
+  // Test trigger button
+  const cbTestTrigger = $("#cb-test-trigger");
+  if (cbTestTrigger) {
+    cbTestTrigger.addEventListener('click', async () => {
+      const resultsEl = $("#cb-trigger-test-results");
+      if (!resultsEl) return;
+      resultsEl.style.display = 'block';
+      resultsEl.innerHTML = 'Testing...';
+      try {
+        const data = await api("/api/v2/mail/trigger-test", {
+          method: 'POST',
+          body: JSON.stringify({ triggers: window._cbTriggers }),
+        });
+        resultsEl.innerHTML = `<strong>${data.matches?.length || 0}</strong> of ${data.total || 0} recent emails match these triggers.`;
+      } catch (e) {
+        resultsEl.innerHTML = `<span style="color:var(--danger);">Test failed: ${escapeHtml(e.message)}</span>`;
+      }
+    });
+  }
 
   // Add custom behavior button
   const cbAddBtn = $("#scanner-custom-behavior-add");

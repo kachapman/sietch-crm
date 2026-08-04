@@ -12070,4 +12070,50 @@ body {
   background: var(--accent-subtle);
   color: var(--accent);
 }
+/* Behavior badges */
+.behavior-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  background: var(--bg-elevated);
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.behavior-badge:hover {
+  color: var(--text);
+}
+/* Trigger section */
+.trigger-group {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem;
+  margin-bottom: 0.4rem;
+  background: var(--bg-elevated);
+}
+.trigger-condition {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.3rem;
+  flex-wrap: wrap;
+}
+.trigger-condition select,
+.trigger-condition input[type="text"],
+.trigger-condition input[type="number"] {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.trigger-condition select {
+  max-width: 160px;
+}
+.trigger-condition input[type="text"],
+.trigger-condition input[type="number"] {
+  flex: 1;
+  min-width: 80px;
+}
 

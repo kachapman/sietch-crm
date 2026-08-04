@@ -363,11 +363,13 @@ def _execute_custom_behaviors(
     msg_id: int | None,
     deal_id: int | None,
     account_id: int | None,
+    classification: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Execute all enabled custom behaviors for a message."""
     results = []
     config = get_contractors()
     custom_behaviors = config.get("custom_behaviors", [])
+    classification = classification or {}
 
     # Sort by order
     sorted_behaviors = sorted(custom_behaviors, key=lambda b: b.get("order", 999))
@@ -377,12 +379,179 @@ def _execute_custom_behaviors(
             continue
         if not _is_behavior_enabled(behavior, account_id):
             continue
+
+        # Check triggers
+        triggers = behavior.get("triggers", [])
+        if triggers:
+            # Check if triggers have deal conditions but no deal linked
+            has_deal_cond = any(_has_deal_conditions(t) for t in triggers)
+            if has_deal_cond and not deal_id:
+                # Skip but log
+                results.append({
+                    "behavior_type": behavior.get("type", ""),
+                    "dry_run": behavior.get("dry_run", False),
+                    "skipped": True,
+                    "skip_reason": "No deal linked (deal-based trigger required)",
+                })
+                continue
+
+            if not _evaluate_triggers(triggers, msg, classification):
+                continue
+
         result = _execute_custom_behavior(behavior, msg, msg_id, deal_id, account_id)
         result["behavior_type"] = behavior.get("type", "")
         result["dry_run"] = behavior.get("dry_run", False)
         results.append(result)
 
     return results
+
+
+# ── Trigger Evaluation Engine ────────────────────────────────────────────────
+
+_regex_cache: dict[str, re.Pattern] = {}
+
+
+def _get_regex(pattern: str) -> re.Pattern:
+    """Cache compiled regex patterns for performance."""
+    if pattern not in _regex_cache:
+        _regex_cache[pattern] = re.compile(pattern, re.IGNORECASE)
+    return _regex_cache[pattern]
+
+
+def _evaluate_triggers(triggers: list, msg: dict, classification: dict) -> bool:
+    """Evaluate all triggers (OR between triggers)."""
+    if not triggers:
+        return True  # No triggers = always execute
+    return any(_evaluate_trigger_group(t, msg, classification) for t in triggers)
+
+
+def _evaluate_trigger_group(trigger: dict, msg: dict, classification: dict) -> bool:
+    """Evaluate a trigger group (AND/OR within group)."""
+    logic = trigger.get("logic", "and")
+    conditions = trigger.get("conditions", [])
+    if not conditions:
+        return True
+    results = [_evaluate_condition(c, msg, classification) for c in conditions]
+    return all(results) if logic == "and" else any(results)
+
+
+def _has_deal_conditions(trigger: dict) -> bool:
+    """Check if a trigger has any deal-based conditions."""
+    deal_types = {"linked_to_deal", "deal_stage_id", "deal_stage_is_not",
+                  "deal_value_above", "deal_value_below", "deal_has_tag", "deal_field_contains"}
+    for cond in trigger.get("conditions", []):
+        if cond.get("type") in deal_types:
+            return True
+    return False
+
+
+def _evaluate_condition(condition: dict, msg: dict, classification: dict) -> bool:
+    """Evaluate a single trigger condition."""
+    ctype = condition.get("type", "")
+    value = condition.get("value")
+    negate = condition.get("negate", False)
+    result = False
+
+    subject = (msg.get("subject", "") or "").lower()
+    body = ((msg.get("body_text") or "")[:5000]).lower()
+    sender = (msg.get("from", "") or "").lower()
+    sender_name = (msg.get("from_name", "") or "").lower()
+
+    # ── Text-based conditions ──
+    if ctype == "subject_contains":
+        result = value.lower() in subject if value else False
+    elif ctype == "subject_regex":
+        try:
+            result = bool(_get_regex(value).search(subject)) if value else False
+        except re.error:
+            result = False
+    elif ctype == "body_contains":
+        result = value.lower() in body if value else False
+    elif ctype == "body_regex":
+        try:
+            result = bool(_get_regex(value).search(body)) if value else False
+        except re.error:
+            result = False
+    elif ctype == "sender_email":
+        result = value.lower() == sender if value else False
+    elif ctype == "sender_domain":
+        domain = sender.split("@")[-1] if "@" in sender else ""
+        result = value.lower() in domain if value else False
+    elif ctype == "sender_name":
+        result = value.lower() in sender_name if value else False
+
+    # ── Deal-based conditions ──
+    elif ctype == "linked_to_deal":
+        result = bool(classification.get("linked_deal_id"))
+    elif ctype in ("deal_stage_id", "deal_stage_is_not"):
+        deal_id = classification.get("linked_deal_id")
+        if deal_id:
+            deal = _find_opportunity_by_deal_id(deal_id)
+            result = deal and deal.get("stage_id") == value
+            if ctype == "deal_stage_is_not":
+                result = not result
+        else:
+            return not negate  # Skip = condition not met
+    elif ctype == "deal_value_above":
+        deal_id = classification.get("linked_deal_id")
+        if deal_id:
+            deal = _find_opportunity_by_deal_id(deal_id)
+            result = deal and (deal.get("bid_value") or 0) > float(value or 0)
+        else:
+            return not negate
+    elif ctype == "deal_value_below":
+        deal_id = classification.get("linked_deal_id")
+        if deal_id:
+            deal = _find_opportunity_by_deal_id(deal_id)
+            result = deal and (deal.get("bid_value") or 0) < float(value or 0)
+        else:
+            return not negate
+    elif ctype == "deal_has_tag":
+        deal_id = classification.get("linked_deal_id")
+        if deal_id and value:
+            try:
+                tag_match = db.query_one(
+                    "SELECT id FROM opportunity_tags WHERE opportunity_id = %s AND tag_id = %s",
+                    (deal_id, int(value))
+                )
+                result = bool(tag_match)
+            except Exception:
+                result = False
+        else:
+            return not negate
+    elif ctype == "deal_field_contains":
+        deal_id = classification.get("linked_deal_id")
+        if deal_id and value and ":" in value:
+            field_key, search_val = value.split(":", 1)
+            try:
+                field_match = db.query_one(
+                    """SELECT id FROM opportunity_custom_field_values
+                       WHERE opportunity_id = %s AND field_id = (
+                           SELECT id FROM custom_field_definitions WHERE field_key = %s
+                       ) AND field_value ILIKE %s""",
+                    (deal_id, field_key, f"%{search_val}%")
+                )
+                result = bool(field_match)
+            except Exception:
+                result = False
+        else:
+            return not negate
+
+    # ── Email-based conditions ──
+    elif ctype == "has_attachment":
+        result = bool(msg.get("attachments"))
+    elif ctype == "attachment_count_above":
+        result = len(msg.get("attachments") or []) > int(value or 0)
+    elif ctype == "is_reply":
+        result = bool(re.match(r"^re:", subject, re.IGNORECASE))
+    elif ctype == "is_forward":
+        result = bool(re.match(r"^fwd?:", subject, re.IGNORECASE))
+    elif ctype == "has_cc":
+        result = bool(msg.get("cc"))
+    elif ctype == "has_bcc":
+        result = bool(msg.get("bcc"))
+
+    return not result if negate else result
 
 
 def _build_deal_index() -> dict[str, Any]:
@@ -1373,7 +1542,7 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
     # --- Execute custom behaviors ---
     linked_deal_id = classification["linked_deal_id"]
     if linked_deal_id:
-        custom_results = _execute_custom_behaviors(msg, msg_id, linked_deal_id, account_id)
+        custom_results = _execute_custom_behaviors(msg, msg_id, linked_deal_id, account_id, classification)
         for cr in custom_results:
             bt = cr.get("behavior_type", "")
             if cr.get("dry_run"):
@@ -1504,34 +1673,78 @@ def start_scanner() -> threading.Thread:
 
 
 def get_scanner_status() -> dict[str, Any]:
-    enabled = False
-    imap_host = ""
-    imap_port = IMAP_PORT_SSL
-    imap_user = ""
+    """Get scanner status with per-account details and active behaviors."""
     try:
-        rows = db.query_dicts("SELECT email, imap_host, imap_port FROM mail_accounts WHERE sync_enabled = TRUE LIMIT 1")
-        if rows:
-            r = rows[0]
-            enabled = True
-            imap_host = r.get("imap_host") or ""
-            imap_port = r.get("imap_port") or IMAP_PORT_SSL
-            imap_user = r.get("email") or ""
+        rows = db.query_dicts(
+            """SELECT id, email, imap_host, imap_port, oauth_provider,
+                      last_sync, sync_enabled FROM mail_accounts
+               WHERE sync_enabled = TRUE"""
+        )
     except Exception:
-        pass
+        rows = []
+
+    # Get behavior config
+    config = get_contractors()
+    behavior_map = config.get("scanner_behavior", {})
+    custom_behaviors = config.get("custom_behaviors", [])
+
+    account_list = []
+    for acct in rows:
+        # Determine account status
+        if acct.get("oauth_provider"):
+            # Check if OAuth token is valid
+            token_valid = False
+            try:
+                token_row = db.query_one(
+                    "SELECT oauth_token_expires FROM mail_accounts WHERE id = %s",
+                    (acct["id"],),
+                )
+                if token_row and token_row.get("oauth_token_expires"):
+                    expires = token_row["oauth_token_expires"]
+                    if isinstance(expires, datetime):
+                        token_valid = expires > datetime.now(timezone.utc)
+                # Also check if we have a refresh token (can refresh)
+                if not token_valid:
+                    refresh_row = db.query_one(
+                        "SELECT oauth_refresh_token FROM mail_accounts WHERE id = %s",
+                        (acct["id"],),
+                    )
+                    if refresh_row and refresh_row.get("oauth_refresh_token"):
+                        token_valid = True  # Can refresh
+            except Exception:
+                pass
+            status = "active" if token_valid else "auth_failed"
+        else:
+            status = "active" if acct.get("password_encrypted") else "no_password"
+
+        # Determine active behaviors for this account
+        active_behaviors = []
+        for beh_name, beh_cfg in behavior_map.items():
+            if _is_behavior_enabled(beh_cfg, acct["id"]):
+                active_behaviors.append(beh_name)
+        for cb in custom_behaviors:
+            if cb.get("enabled") and _is_behavior_enabled(cb, acct["id"]):
+                active_behaviors.append(cb.get("type", "custom"))
+
+        account_list.append({
+            "id": acct["id"],
+            "email": acct["email"],
+            "imap_host": acct["imap_host"],
+            "imap_port": acct["imap_port"],
+            "status": status,
+            "active_behaviors": active_behaviors,
+            "last_sync": str(acct.get("last_sync", "")),
+        })
+
+    enabled = len(account_list) > 0
     if not enabled:
         enabled = os.environ.get("SCANNER_ENABLED", "false").lower() in ("true", "1", "yes")
-    if not imap_host:
-        imap_host = os.environ.get("SCANNER_IMAP_HOST", "")
-    if not imap_user:
-        imap_user = os.environ.get("SCANNER_IMAP_USER", "")
+
     return {
         "enabled": enabled,
+        "accounts": account_list,
         "poll_interval": int(os.environ.get("SCANNER_POLL_INTERVAL", "300")),
-        "imap_host": imap_host,
-        "imap_port": imap_port,
-        "imap_user": imap_user,
         "processed_count": len(_load_processed_ids()),
-        "log_entries": 0,
         "running": threading.active_count() > 0,
     }
 

@@ -1726,6 +1726,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/mail/log/correct" and method == "POST":
             self._handle_mail_log_correct()
             return
+        if api_path == "/api/v2/mail/trigger-test" and method == "POST":
+            self._handle_mail_trigger_test()
+            return
         # Account CRUD
         if api_path == "/api/v2/mail/accounts" and method == "POST":
             self._handle_mail_account_create()
@@ -5990,6 +5993,42 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     except Exception:
                         pass
             _json_response(self, 200, {"ok": True, "corrected": count})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_trigger_test(self) -> None:
+        try:
+            user = _require_auth(self)
+            if not user:
+                return
+            payload = json.loads(_read_body(self) or b"{}")
+            triggers = payload.get("triggers", [])
+            account_id = payload.get("account_id")
+
+            # Get recent messages for testing
+            if account_id:
+                messages = db.query_dicts(
+                    "SELECT * FROM mail_messages WHERE account_id = %s ORDER BY date_received DESC LIMIT 100",
+                    (int(account_id),),
+                )
+            else:
+                messages = db.query_dicts(
+                    "SELECT * FROM mail_messages ORDER BY date_received DESC LIMIT 100"
+                )
+
+            matches = []
+            for msg in (messages or []):
+                # Build a minimal classification dict for trigger evaluation
+                classification = {"linked_deal_id": None}
+                if mail_scanner and mail_scanner._evaluate_triggers(triggers, msg, classification):
+                    matches.append({
+                        "id": msg["id"],
+                        "subject": msg.get("subject", ""),
+                        "from": msg.get("from_addr", ""),
+                        "date": str(msg.get("date_received", "")),
+                    })
+
+            _json_response(self, 200, {"matches": matches, "total": len(messages or [])})
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 
