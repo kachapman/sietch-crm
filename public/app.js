@@ -16779,15 +16779,50 @@ function openAccountSettingsModal(editAccountId, opts) {
   const sharingSection = $('#account-settings-sharing-section');
   const authRadios = modal.querySelectorAll('input[name="account-auth-method"]');
 
+  const serversReadonly = $('#account-settings-servers-readonly');
+  const editServersBtn = $('#account-settings-edit-servers');
+
   function setAuthMode(mode) {
     const isOauth = mode === 'microsoft' || mode === 'google';
-    if (manualSection) manualSection.classList.toggle('hidden', isOauth);
+    // For OAuth: show read-only servers, hide editable fields (unless user clicked "Edit servers")
+    if (serversReadonly) {
+      serversReadonly.classList.toggle('hidden', !isOauth || editServersBtn?.dataset.editing === '1');
+    }
+    if (manualSection) manualSection.classList.toggle('hidden', isOauth && editServersBtn?.dataset.editing !== '1');
     if (oauthSection) oauthSection.classList.toggle('hidden', !isOauth);
     if (oauthLabelEl) oauthLabelEl.textContent = mode === 'microsoft' ? 'Microsoft 365' : 'Google';
     if (oauthStatusEl) oauthStatusEl.textContent = '';
     // Change connect button icon
     const icon = oauthConnectBtn?.querySelector('i');
     if (icon) icon.className = mode === 'microsoft' ? 'ti ti-brand-microsoft' : 'ti ti-brand-google';
+  }
+
+  // "Edit servers" button: toggle from read-only to editable
+  if (editServersBtn && !editServersBtn.dataset.bound) {
+    editServersBtn.dataset.bound = '1';
+    editServersBtn.addEventListener('click', () => {
+      editServersBtn.dataset.editing = '1';
+      if (serversReadonly) serversReadonly.classList.add('hidden');
+      if (manualSection) manualSection.classList.remove('hidden');
+    });
+  }
+
+  // Password input: clear "Saved" indicator when user types a new password
+  const imapPwInput = $('#account-settings-imap-password');
+  const smtpPwInput = $('#account-settings-smtp-password');
+  if (imapPwInput && !imapPwInput.dataset.bound) {
+    imapPwInput.dataset.bound = '1';
+    imapPwInput.addEventListener('input', () => {
+      const s = $('#account-settings-imap-pw-status');
+      if (s && imapPwInput.value) s.textContent = '';
+    });
+  }
+  if (smtpPwInput && !smtpPwInput.dataset.bound) {
+    smtpPwInput.dataset.bound = '1';
+    smtpPwInput.addEventListener('input', () => {
+      const s = $('#account-settings-smtp-pw-status');
+      if (s && smtpPwInput.value) s.textContent = '';
+    });
   }
 
   // Listen for auth method radio changes (bind once)
@@ -16840,6 +16875,18 @@ function openAccountSettingsModal(editAccountId, opts) {
             cb.checked = monitored.includes(cb.value);
           });
         }
+        // Populate read-only server view
+        if ($('#ro-imap-host')) $('#ro-imap-host').textContent = acct.imap_host || '—';
+        if ($('#ro-imap-port')) $('#ro-imap-port').textContent = acct.imap_port || '—';
+        if ($('#ro-smtp-host')) $('#ro-smtp-host').textContent = acct.smtp_host || '—';
+        if ($('#ro-smtp-port')) $('#ro-smtp-port').textContent = acct.smtp_port || '—';
+        // Reset "Edit servers" toggle
+        if (editServersBtn) delete editServersBtn.dataset.editing;
+        // Populate password status indicators
+        const imapPwStatus = $('#account-settings-imap-pw-status');
+        const smtpPwStatus = $('#account-settings-smtp-pw-status');
+        if (imapPwStatus) imapPwStatus.textContent = acct.password_encrypted ? 'Saved' : '';
+        if (smtpPwStatus) smtpPwStatus.textContent = acct.smtp_password_encrypted ? 'Saved' : '';
         // Set auth mode based on account type
         const authType = acct.authType || 'password';
         const radioToCheck = modal.querySelector(`input[name="account-auth-method"][value="${authType}"]`);
@@ -16900,6 +16947,17 @@ function openAccountSettingsModal(editAccountId, opts) {
     // Reset auth mode to password
     const pwRadio = modal.querySelector('input[name="account-auth-method"][value="password"]');
     if (pwRadio) { pwRadio.checked = true; setAuthMode('password'); }
+    // Clear read-only server view and password status for new accounts
+    if ($('#ro-imap-host')) $('#ro-imap-host').textContent = '—';
+    if ($('#ro-imap-port')) $('#ro-imap-port').textContent = '—';
+    if ($('#ro-smtp-host')) $('#ro-smtp-host').textContent = '—';
+    if ($('#ro-smtp-port')) $('#ro-smtp-port').textContent = '—';
+    if (serversReadonly) serversReadonly.classList.add('hidden');
+    if (editServersBtn) delete editServersBtn.dataset.editing;
+    const imapPwSt = $('#account-settings-imap-pw-status');
+    const smtpPwSt = $('#account-settings-smtp-pw-status');
+    if (imapPwSt) imapPwSt.textContent = '';
+    if (smtpPwSt) smtpPwSt.textContent = '';
     // Hide sharing section for new accounts
     if (sharingSection) sharingSection.classList.add('hidden');
   }

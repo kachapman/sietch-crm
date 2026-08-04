@@ -947,7 +947,7 @@
   <!-- Account Settings modal -->
   <div id="account-settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="account-settings-title">
     <div class="modal-backdrop" data-account-settings-dismiss></div>
-    <div class="modal-card" style="max-width:560px; width:95vw; max-height:85vh; display:flex; flex-direction:column; padding:0;">
+    <div class="modal-card" style="max-width:560px; width:95vw; max-height:min(85vh, 85dvh); display:flex; flex-direction:column; padding:0;">
       <div style="display:flex; justify-content:space-between; align-items:center; padding:0.5rem 0.75rem; border-bottom:1px solid var(--border);">
         <h2 id="account-settings-title" class="modal-title" style="margin:0; font-size:1rem;">Add Mail Account</h2>
         <button type="button" class="btn btn-icon-only modal-header-control" title="Close" data-account-settings-dismiss><i class="ti ti-x"></i></button>
@@ -976,6 +976,15 @@
           </div>
         </div>
 
+        <div id="account-settings-servers-readonly" class="hidden" style="margin-bottom:0.5rem; padding:0.5rem; background:var(--bg-elevated); border-radius:4px;">
+          <div style="font-size:0.8rem; color:var(--muted); margin-bottom:0.3rem;">Server Settings (read-only)</div>
+          <div style="display:flex; gap:1rem; flex-wrap:wrap; font-size:0.85rem;">
+            <div><span style="color:var(--muted);">IMAP:</span> <span id="ro-imap-host">—</span>:<span id="ro-imap-port">—</span></div>
+            <div><span style="color:var(--muted);">SMTP:</span> <span id="ro-smtp-host">—</span>:<span id="ro-smtp-port">—</span></div>
+          </div>
+          <button type="button" id="account-settings-edit-servers" class="btn btn-ghost btn-small" style="margin-top:0.3rem; font-size:0.75rem;"><i class="ti ti-pencil"></i> Edit servers</button>
+        </div>
+
         <div id="account-settings-manual-section">
           <h4 style="margin:0.5rem 0 0.3rem; font-size:0.85rem; color:var(--text);">IMAP (Incoming)</h4>
           <div style="display:flex; gap:0.5rem; margin-bottom:0.4rem;">
@@ -983,7 +992,10 @@
             <div style="flex:1;"><label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:0.15rem;">Port</label><input type="number" id="account-settings-imap-port" value="993" style="width:100%; padding:0.3rem 0.4rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem;"></div>
           </div>
           <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:0.15rem;">Password</label>
-          <input type="password" id="account-settings-imap-password" style="width:100%; padding:0.3rem 0.4rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem; margin-bottom:0.4rem;">
+          <div style="display:flex; align-items:center; gap:0.4rem; margin-bottom:0.4rem;">
+            <input type="password" id="account-settings-imap-password" style="flex:1; padding:0.3rem 0.4rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem;">
+            <span id="account-settings-imap-pw-status" class="pw-status"></span>
+          </div>
           <div style="margin-bottom:0.4rem;">
             <div style="font-size:0.8rem; color:var(--muted); margin-bottom:0.15rem;">Folders to scan</div>
             <div id="account-settings-folders" style="display:flex; flex-wrap:wrap; gap:0.3rem;">
@@ -1001,7 +1013,10 @@
             <div style="flex:1;"><label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:0.15rem;">Port</label><input type="number" id="account-settings-smtp-port" value="587" style="width:100%; padding:0.3rem 0.4rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem;"></div>
           </div>
           <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:0.15rem;">SMTP Password</label>
-          <input type="password" id="account-settings-smtp-password" style="width:100%; padding:0.3rem 0.4rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem; margin-bottom:0.4rem;">
+          <div style="display:flex; align-items:center; gap:0.4rem; margin-bottom:0.4rem;">
+            <input type="password" id="account-settings-smtp-password" style="flex:1; padding:0.3rem 0.4rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem;">
+            <span id="account-settings-smtp-pw-status" class="pw-status"></span>
+          </div>
         </div>
 
         <div id="account-settings-tab-appearance" style="border-top:1px solid var(--border); margin-top:0.75rem; padding-top:0.75rem;">
@@ -1049,7 +1064,7 @@
           <p id="account-settings-share-status" style="font-size:0.75rem; color:var(--muted); margin-top:0.35rem;"></p>
         </div>
       </div>
-      <div style="display:flex; justify-content:space-between; padding:0.5rem 0.75rem; border-top:1px solid var(--border);">
+      <div style="display:flex; justify-content:space-between; padding:0.5rem 0.75rem; border-top:1px solid var(--border); flex-shrink:0;">
         <button type="button" id="account-settings-delete" class="btn btn-danger btn-small" style="display:none;"><i class="ti ti-trash"></i> Delete</button>
         <div style="display:flex; gap:0.5rem; margin-left:auto;">
           <button type="button" class="btn btn-ghost btn-small" data-account-settings-dismiss>Cancel</button>
