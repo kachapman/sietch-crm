@@ -5,20 +5,22 @@
 
 ### Remaining TODO (Future Sessions)
 
-**Scanner Custom Behavior Execution:**
-- Create Task → insert into tasks table with assignee
-- Notify Users → send in-app/email/telegram notifications
-- Create Deal → insert into opportunities, optionally create follow-up task
-- Add Email Tags → insert into mail_tag_assignments
-- Add Project Tags → insert into opportunity_tags
-- Change Project Stage → update opportunities.stage_id with optional condition
-- Reply to Email → create draft or send reply via SMTP
+**Scanner Custom Behavior Execution:** ✅ COMPLETED
+- Create Task → inserts into tasks table with assignee
+- Notify Users → inserts into notifications table
+- Create Deal → inserts into opportunities, optionally creates follow-up task and notifies user
+- Add Email Tags → inserts into mail_tag_assignments
+- Add Project Tags → inserts into opportunity_tags (creates tags if needed)
+- Change Project Stage → updates opportunities.stage_id with optional condition
+- Reply to Email → creates draft or sends reply via SMTP
 
-**Template Variable Engine:**
-- String interpolation for `{subject}`, `{from}`, `{project}`, `{claim_number}`, `{date}`, `{body_preview}`
+**Template Variable Engine:** ✅ COMPLETED
+- String interpolation for `{subject}`, `{from}`, `{from_name}`, `{project}`, `{project_id}`, `{claim_number}`, `{date}`, `{body_preview}`
 
-**Config Data Loading:**
-- Populate users/stages/tags dropdowns in custom behavior modal
+**Config Data Loading:** ✅ COMPLETED
+- Users fetched from /api/v2/users
+- Stages fetched from /api/v2/stages
+- Email tags fetched from mail_tags with checkboxes
 
 **Model Training (Deferred):**
 - Waiting for OnlyOffice user field migration for more labeled data

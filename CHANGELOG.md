@@ -30,26 +30,26 @@ All notable changes to the Sietch CRM dashboard are documented here.
 ## Remaining TODO (Future Sessions)
 
 ### Scanner Custom Behavior Execution
-The custom behavior system is **configured** but the scanner does not yet **execute** the actions. The following need to be implemented in `scanner/mail_scanner.py`:
-- **Create Task:** Insert into `tasks` table with assignee from config
-- **Notify Users:** Send in-app/email/telegram notifications
-- **Create Deal:** Insert into `opportunities` table, optionally create follow-up task
-- **Add Email Tags:** Insert into `mail_tag_assignments` table
-- **Add Project Tags:** Insert into `opportunity_tags` table
-- **Change Project Stage:** Update `opportunities.stage_id` with optional condition check
-- **Reply to Email:** Create draft or send reply via SMTP
+**COMPLETED.** Custom behaviors now execute in `scanner/mail_scanner.py`:
+- **Create Task:** Inserts into `tasks` table with assignee from config
+- **Notify Users:** Inserts into `notifications` table for each user
+- **Create Deal:** Inserts into `opportunities` table, optionally creates follow-up task and notifies user
+- **Add Email Tags:** Inserts into `mail_tag_assignments` table
+- **Add Project Tags:** Inserts into `opportunity_tags` table (creates tags if needed)
+- **Change Project Stage:** Updates `opportunities.stage_id` with optional condition check
+- **Reply to Email:** Creates draft in `mail_messages` or sends reply via SMTP
 
 ### Template Variable Engine
-Implement string interpolation for templates like `{subject}`, `{from}`, `{project}`, etc. Available variables:
+**COMPLETED.** String interpolation for templates via `_render_template()` and `_build_template_context()`. Available variables:
 - `{subject}`, `{from}`, `{from_name}`, `{project}`, `{project_id}`
 - `{claim_number}`, `{date}`, `{body_preview}`
 
 ### Load Config Data for Custom Behavior Fields
-The custom behavior modal needs to populate dropdowns:
+**COMPLETED.** Custom behavior modal now populates dropdowns:
 - **Users:** Fetch from `/api/v2/users` for assignee/notify fields
-- **Stages:** Fetch from pipeline_stages for change-stage fields
-- **Email Tags:** Fetch from `mail_tags` table
-- **Project Tags:** Fetch from opportunity tags
+- **Stages:** Fetch from `/api/v2/stages` for change-stage fields
+- **Email Tags:** Fetch from `mail_tags` table with checkboxes
+- **Project Tags:** Text input (comma-separated)
 
 ### Model Training (Deferred)
 - **Status:** Waiting for OnlyOffice user field migration to bring more labeled data

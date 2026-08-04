@@ -146,6 +146,245 @@ def _normalize_address(addr: str) -> str:
     return addr
 
 
+def _render_template(template: str, context: dict[str, Any]) -> str:
+    """Replace {variable} placeholders in template with context values."""
+    def replacer(match):
+        key = match.group(1)
+        return str(context.get(key, match.group(0)))
+    return re.sub(r"\{(\w+)\}", replacer, template)
+
+
+def _build_template_context(msg: dict[str, Any], deal: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build template variable context from message and deal."""
+    body_text = msg.get("body_text") or ""
+    return {
+        "subject": msg.get("subject", ""),
+        "from": msg.get("from", ""),
+        "from_name": msg.get("from_name", ""),
+        "project": deal.get("title", "") if deal else "",
+        "project_id": str(deal["id"]) if deal else "",
+        "claim_number": "",
+        "date": str(msg.get("date", "")),
+        "body_preview": body_text[:200],
+    }
+
+
+def _execute_custom_behavior(
+    behavior: dict[str, Any],
+    msg: dict[str, Any],
+    msg_id: int | None,
+    deal_id: int | None,
+    account_id: int | None,
+) -> dict[str, Any]:
+    """Execute a single custom behavior. Returns log entry updates."""
+    result: dict[str, Any] = {}
+    behavior_type = behavior.get("type", "")
+    config = behavior.get("config", {})
+    dry = behavior.get("dry_run", False)
+
+    deal = None
+    if deal_id:
+        deal = _find_opportunity_by_deal_id(deal_id)
+
+    ctx = _build_template_context(msg, deal)
+
+    try:
+        if behavior_type == "create_task":
+            assignee_id = config.get("assignee_user_id")
+            title = _render_template(config.get("task_title_template", "Email: {subject}"), ctx)
+            description = _render_template(config.get("task_description_template", ""), ctx)
+            if dry:
+                result["dry_run_action"] = "create_task"
+                result["dry_run_detail"] = f"Task '{title}' for user {assignee_id}"
+            else:
+                # Insert into tasks table
+                db.execute(
+                    """INSERT INTO tasks (title, description, assignee_id, opportunity_id, status, created_at)
+                       VALUES (%s, %s, %s, %s, 'open', NOW())""",
+                    (title, description, assignee_id, deal_id),
+                )
+                result["task_created"] = True
+
+        elif behavior_type == "notify_users":
+            user_ids = config.get("notify_user_ids", [])
+            method = config.get("notification_method", "in_app")
+            title = _render_template("Email: {subject}", ctx)
+            if dry:
+                result["dry_run_action"] = "notify_users"
+                result["dry_run_detail"] = f"Notify {len(user_ids)} users via {method}"
+            else:
+                # Insert notifications for each user
+                for uid in user_ids:
+                    db.execute(
+                        """INSERT INTO notifications (user_id, title, message, type, link, created_at)
+                           VALUES (%s, %s, %s, 'email_linked', %s, NOW())""",
+                        (uid, title, f"New email linked to {ctx['project']}", f"/project/{deal_id}" if deal_id else None),
+                    )
+                result["users_notified"] = len(user_ids)
+
+        elif behavior_type == "create_deal":
+            title = _render_template(config.get("deal_title_template", "{from} - {subject}"), ctx)
+            stage_id = config.get("stage_id")
+            if dry:
+                result["dry_run_action"] = "create_deal"
+                result["dry_run_detail"] = f"Deal '{title}'"
+            else:
+                # Insert into opportunities
+                stage_val = stage_id if stage_id else None
+                new_deal = db.query_one(
+                    """INSERT INTO opportunities (title, stage_id, created_at)
+                       VALUES (%s, %s, NOW()) RETURNING id""",
+                    (title, stage_val),
+                )
+                if new_deal:
+                    result["deal_created"] = True
+                    result["new_deal_id"] = new_deal["id"]
+                    # Auto-create task if configured
+                    if config.get("auto_create_task"):
+                        task_assignee = config.get("task_assignee_id")
+                        task_title = f"Follow up: {title}"
+                        db.execute(
+                            """INSERT INTO tasks (title, assignee_id, opportunity_id, status, created_at)
+                               VALUES (%s, %s, %s, 'open', NOW())""",
+                            (task_title, task_assignee, new_deal["id"]),
+                        )
+                    # Notify user if configured
+                    notify_uid = config.get("notify_user_id")
+                    if notify_uid:
+                        db.execute(
+                            """INSERT INTO notifications (user_id, title, message, type, link, created_at)
+                               VALUES (%s, %s, %s, 'deal_created', %s, NOW())""",
+                            (notify_uid, f"New deal created: {title}", f"Auto-created from email '{ctx['subject']}'", f"/project/{new_deal['id']}"),
+                        )
+
+        elif behavior_type == "add_email_tags":
+            tag_ids = config.get("tag_ids", [])
+            if dry:
+                result["dry_run_action"] = "add_email_tags"
+                result["dry_run_detail"] = f"Add {len(tag_ids)} tags to email"
+            elif msg_id:
+                for tag_id in tag_ids:
+                    db.execute(
+                        "INSERT INTO mail_tag_assignments (message_id, tag_id, assigned_at) VALUES (%s, %s, NOW()) ON CONFLICT DO NOTHING",
+                        (msg_id, tag_id),
+                    )
+                result["tags_added"] = len(tag_ids)
+
+        elif behavior_type == "add_project_tags":
+            tag_titles = config.get("tag_titles", [])
+            if dry:
+                result["dry_run_action"] = "add_project_tags"
+                result["dry_run_detail"] = f"Add {len(tag_titles)} tags to project"
+            elif deal_id:
+                for title in tag_titles:
+                    # Ensure tag exists
+                    tag = db.query_one("SELECT id FROM tags WHERE title = %s", (title,))
+                    if not tag:
+                        tag = db.query_one("INSERT INTO tags (title) VALUES (%s) RETURNING id", (title,))
+                    if tag:
+                        db.execute(
+                            "INSERT INTO opportunity_tags (opportunity_id, tag_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                            (deal_id, tag["id"]),
+                        )
+                result["project_tags_added"] = len(tag_titles)
+
+        elif behavior_type == "change_project_stage":
+            target_stage_id = config.get("stage_id")
+            condition = config.get("condition", "always")
+            condition_stage_id = config.get("condition_stage_id")
+            if not target_stage_id or not deal_id:
+                result["skipped"] = True
+                return result
+            if dry:
+                result["dry_run_action"] = "change_project_stage"
+                result["dry_run_detail"] = f"Move project to stage {target_stage_id}"
+            else:
+                # Check condition
+                if condition == "only_if" and condition_stage_id:
+                    current = db.query_one("SELECT stage_id FROM opportunities WHERE id = %s", (deal_id,))
+                    if current and current["stage_id"] != condition_stage_id:
+                        result["skipped"] = True
+                        return result
+                db.execute("UPDATE opportunities SET stage_id = %s WHERE id = %s", (target_stage_id, deal_id))
+                result["stage_changed"] = True
+
+        elif behavior_type == "reply_to_email":
+            action = config.get("action", "create_draft")
+            reply_template = config.get("reply_template", "")
+            reply_body = _render_template(reply_template, ctx)
+            if dry:
+                result["dry_run_action"] = "reply_to_email"
+                result["dry_run_detail"] = f"{'Send' if action == 'send_reply' else 'Draft'} reply to {ctx['from']}"
+            else:
+                if action == "create_draft":
+                    # Store as draft in mail_messages
+                    db.execute(
+                        """INSERT INTO mail_messages (account_id, imap_uid, message_id, from_addr, to_addr,
+                           subject, body_html, date_received, folder, is_read)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), 'Drafts', TRUE)""",
+                        (account_id, f"draft:auto:{msg_id or 'new'}", f"<auto-reply-{msg_id}>",
+                         ctx["from"], ctx["from"], f"Re: {ctx['subject']}", reply_body),
+                    )
+                    result["draft_created"] = True
+                elif action == "send_reply":
+                    # Send via SMTP (using account settings)
+                    try:
+                        acct = db.query_one("SELECT * FROM mail_accounts WHERE id = %s", (account_id,))
+                        if acct:
+                            from smtp_client import send_email_from_account
+                            ok, err = send_email_from_account(
+                                smtp_host=acct["smtp_host"] or "",
+                                smtp_port=int(acct["smtp_port"] or 587),
+                                smtp_user=acct["smtp_user"] or acct["email"],
+                                smtp_password=acct.get("smtp_password_encrypted") or "",
+                                from_name=acct.get("smtp_from_name"),
+                                from_addr=acct["email"],
+                                to_addr=ctx["from"],
+                                subject=f"Re: {ctx['subject']}",
+                                html_body=reply_body,
+                                text_body=reply_body,
+                                use_tls=bool(acct["smtp_use_tls"]),
+                            )
+                            result["reply_sent"] = ok
+                            if not ok:
+                                result["reply_error"] = err
+                    except Exception as e:
+                        result["reply_error"] = str(e)
+
+    except Exception as e:
+        logger.error("Custom behavior %s failed: %s", behavior_type, e)
+        result["error"] = str(e)
+
+    return result
+
+
+def _execute_custom_behaviors(
+    msg: dict[str, Any],
+    msg_id: int | None,
+    deal_id: int | None,
+    account_id: int | None,
+) -> list[dict[str, Any]]:
+    """Execute all enabled custom behaviors for a message."""
+    results = []
+    config = get_contractors()
+    custom_behaviors = config.get("custom_behaviors", [])
+
+    # Sort by order
+    sorted_behaviors = sorted(custom_behaviors, key=lambda b: b.get("order", 999))
+
+    for behavior in sorted_behaviors:
+        if not behavior.get("enabled", False):
+            continue
+        if not _is_behavior_enabled(behavior, account_id):
+            continue
+        result = _execute_custom_behavior(behavior, msg, msg_id, deal_id, account_id)
+        result["behavior_type"] = behavior.get("type", "")
+        result["dry_run"] = behavior.get("dry_run", False)
+        results.append(result)
+
+    return results
+
+
 def _build_deal_index() -> dict[str, Any]:
     """Build in-memory index of deal fields for content matching."""
     global _deal_index, _deal_index_built_at
@@ -1131,25 +1370,20 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
                 _post_note_to_deal(deal["id"], json.dumps(snapshot))
                 log_entry["note_posted"] = True
 
-    # --- Create tasks (placeholder) ---
-    if _is_behavior_enabled(toggles.get("create_tasks", {}), account_id):
-        dry = _is_dry_run(toggles.get("create_tasks", {}), account_id)
-        if dry and classification["linked_deal_id"]:
-            log_entry["dry_run_action"] = "create_task"
-            _tmp_deal = _find_opportunity_by_deal_id(classification["linked_deal_id"])
-            log_entry["dry_run_deal_title"] = _tmp_deal["title"] if _tmp_deal else ""
-
-    # --- Create deals (placeholder) ---
-    if _is_behavior_enabled(toggles.get("create_deals", {}), account_id):
-        dry = _is_dry_run(toggles.get("create_deals", {}), account_id)
-        if dry and classification["linked_deal_id"]:
-            log_entry["dry_run_action"] = "create_deal"
-
-    # --- Notify users (placeholder) ---
-    if _is_behavior_enabled(toggles.get("notify_users", {}), account_id):
-        dry = _is_dry_run(toggles.get("notify_users", {}), account_id)
-        if dry and classification["linked_deal_id"]:
-            log_entry["dry_run_action"] = "notify_user"
+    # --- Execute custom behaviors ---
+    linked_deal_id = classification["linked_deal_id"]
+    if linked_deal_id:
+        custom_results = _execute_custom_behaviors(msg, msg_id, linked_deal_id, account_id)
+        for cr in custom_results:
+            bt = cr.get("behavior_type", "")
+            if cr.get("dry_run"):
+                log_entry["status"] = "dry_run"
+                log_entry["dry_run_action"] = f"custom:{bt}"
+                log_entry["dry_run_detail"] = cr.get("dry_run_detail", "")
+            elif cr.get("error"):
+                log_entry["custom_error"] = f"{bt}: {cr['error']}"
+            else:
+                log_entry[f"custom_{bt}"] = True
 
     # Set final status
     if log_entry.get("status") == "dry_run":

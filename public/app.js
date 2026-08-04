@@ -24467,6 +24467,7 @@ function bindScannerAdminButtons() {
 
   async function loadUsersForCustomBehavior() {
     try {
+      // Load users
       const users = await api("/api/v2/users");
       const assignee = $("#cb-config-assignee");
       const notify = $("#cb-config-notify");
@@ -24477,6 +24478,35 @@ function bindScannerAdminButtons() {
         usersDiv._rendered = true;
         usersDiv._selectedUsers = usersDiv._selectedUsers || new Set();
         usersDiv.innerHTML = users.map(u => `<label style="display:flex; gap:0.3rem; align-items:center; padding:0.15rem 0; font-size:0.8rem;"><input type="checkbox" value="${u.id}" class="cb-user-cb" ${usersDiv._selectedUsers.has(u.id) ? 'checked' : ''}> ${escapeHtml(u.display_name || u.email)}</label>`).join('');
+      }
+
+      // Load stages
+      const stageSelects = document.querySelectorAll("#cb-config-stage, #cb-config-target-stage, #cb-config-condition-stage");
+      if (stageSelects.length) {
+        try {
+          const stages = await api("/api/v2/stages");
+          stageSelects.forEach(sel => {
+            const firstOpt = sel.querySelector('option');
+            const currentVal = sel.value;
+            sel.innerHTML = (firstOpt ? '' : '<option value="">Select stage…</option>') +
+              stages.map(s => `<option value="${s.id}">${escapeHtml(s.name || s.Name || 'Stage ' + s.id)}</option>`).join('');
+            if (currentVal) sel.value = currentVal;
+          });
+        } catch {}
+      }
+
+      // Load email tags
+      const emailTagsDiv = $("#cb-config-email-tags");
+      if (emailTagsDiv && !emailTagsDiv._rendered) {
+        emailTagsDiv._rendered = true;
+        try {
+          const tagData = await api("/api/v2/mail/tags");
+          const tags = tagData.tags || [];
+          emailTagsDiv._selectedTags = emailTagsDiv._selectedTags || new Set();
+          emailTagsDiv.innerHTML = tags.length
+            ? tags.map(t => `<label style="display:flex; gap:0.3rem; align-items:center; padding:0.15rem 0; font-size:0.8rem;"><input type="checkbox" value="${t.id}" class="cb-tag-cb" ${emailTagsDiv._selectedTags.has(t.id) ? 'checked' : ''}> <span style="color:${escapeHtml(t.color || '#6c757d')};">●</span> ${escapeHtml(t.title)}</label>`).join('')
+            : '<div style="color:var(--muted); font-size:0.8rem;">No tags created yet.</div>';
+        } catch {}
       }
     } catch {}
   }
@@ -24503,6 +24533,8 @@ function bindScannerAdminButtons() {
         config.stage_id = parseInt($("#cb-config-stage")?.value) || null;
         config.notify_user_id = parseInt($("#cb-config-notify")?.value) || null;
         config.auto_create_task = $("#cb-config-auto-task")?.checked || false;
+      } else if (type === "add_email_tags") {
+        config.tag_ids = Array.from($("#cb-config-email-tags")?.querySelectorAll('.cb-tag-cb:checked') || []).map(cb => parseInt(cb.value));
       } else if (type === "add_project_tags") {
         config.tag_titles = ($("#cb-config-project-tags")?.value || "").split(",").map(t => t.trim()).filter(Boolean);
       } else if (type === "change_project_stage") {
