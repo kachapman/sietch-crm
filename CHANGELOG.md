@@ -25,6 +25,44 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **UI restructured.** Behavior toggles now show inline dry_run + scope for each task. Removed duplicate table. Experimental behaviors grouped under accent header.
 - **Files:** `oauth_providers.py`, `server.py`, `smtp_client.py`, `scanner/mail_scanner.py`, `scanner/scanner_service.py`, `public/app.js`, `public/index.html`, `public/styles.css`, `AGENTS.md`, `CHANGELOG.md`.
 
+---
+
+## Remaining TODO (Future Sessions)
+
+### Scanner Custom Behavior Execution
+The custom behavior system is **configured** but the scanner does not yet **execute** the actions. The following need to be implemented in `scanner/mail_scanner.py`:
+- **Create Task:** Insert into `tasks` table with assignee from config
+- **Notify Users:** Send in-app/email/telegram notifications
+- **Create Deal:** Insert into `opportunities` table, optionally create follow-up task
+- **Add Email Tags:** Insert into `mail_tag_assignments` table
+- **Add Project Tags:** Insert into `opportunity_tags` table
+- **Change Project Stage:** Update `opportunities.stage_id` with optional condition check
+- **Reply to Email:** Create draft or send reply via SMTP
+
+### Template Variable Engine
+Implement string interpolation for templates like `{subject}`, `{from}`, `{project}`, etc. Available variables:
+- `{subject}`, `{from}`, `{from_name}`, `{project}`, `{project_id}`
+- `{claim_number}`, `{date}`, `{body_preview}`
+
+### Load Config Data for Custom Behavior Fields
+The custom behavior modal needs to populate dropdowns:
+- **Users:** Fetch from `/api/v2/users` for assignee/notify fields
+- **Stages:** Fetch from pipeline_stages for change-stage fields
+- **Email Tags:** Fetch from `mail_tags` table
+- **Project Tags:** Fetch from opportunity tags
+
+### Model Training (Deferred)
+- **Status:** Waiting for OnlyOffice user field migration to bring more labeled data
+- **Current state:** ML is disabled (`ML_ENABLED = False`), no trained model exists
+- **When ready:** Query `mail_messages` + `mail_deal_links` for labeled examples, train LogisticRegression + KNeighborsClassifier on sentence-transformer embeddings
+- **Auto-retrain:** After every 10 corrections
+- **Auto-reload:** Immediate when retrained
+
+### CRM Mail Add-Account Flag
+- **Issue:** Admin "Add Account" button creates accounts with `is_crm_mail = FALSE` instead of `TRUE`
+- **Status:** Needs investigation (possible timing issue or flag not being passed correctly)
+- **Temporary workaround:** Manually edit account after creation to set `is_crm_mail = TRUE`
+
 ## Phase 3 — Mail Account Settings Rework (2026-08-02)
 
 - **Mail-list row layout fixed.** In narrow view (list container ≤720px / viewport ≤600px), the body snippet no longer wraps to a second line — it's hidden. The subject now takes its own full-width second line. The expand-preview button is always the last item on the top line in both desktop and narrow views (via explicit `order` values). Date + time received is always visible (white-space:nowrap, auto width).
