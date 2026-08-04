@@ -23866,32 +23866,28 @@ async function populateEmailScannerTab() {
   if (togglesBox) {
     try {
       const cfg = await api("/api/v2/mail/config");
-      const sb = cfg.scanner_behavior || cfg;
-      if (sb) {
-        const set = (id, val) => { const el = $(id); if (el) el.checked = !!val; };
-        const getEnabled = (v) => typeof v === "object" ? v.enabled : !!v;
-        const getDryRun = (v) => typeof v === "object" ? v.dry_run : false;
-        const getAccounts = (v) => typeof v === "object" ? (v.accounts ?? "all") : "all";
-        set("#scanner-toggle-auto-link", getEnabled(sb.auto_link_project_id));
-        set("#scanner-toggle-auto-link-content", getEnabled(sb.auto_link_by_content));
-        set("#scanner-toggle-create-deals", getEnabled(sb.create_deals));
-        set("#scanner-toggle-create-tasks", getEnabled(sb.create_tasks));
-        set("#scanner-toggle-post-notes", getEnabled(sb.post_notes));
-        set("#scanner-toggle-notify-users", getEnabled(sb.notify_users));
-        set("#scanner-dry-auto-link-content", getDryRun(sb.auto_link_by_content));
-        set("#scanner-dry-create-deals", getDryRun(sb.create_deals));
-        set("#scanner-dry-create-tasks", getDryRun(sb.create_tasks));
-        set("#scanner-dry-post-notes", getDryRun(sb.post_notes));
-        set("#scanner-dry-notify-users", getDryRun(sb.notify_users));
-        // Set scope selectors
-        const setScope = (id, v) => { const el = $(id); if (el && typeof v === "object") el.value = v.accounts ?? "all"; };
-        setScope("#scanner-scope-auto-link", sb.auto_link_project_id);
-        setScope("#scanner-scope-auto-link-content", sb.auto_link_by_content);
-        setScope("#scanner-scope-create-deals", sb.create_deals);
-        setScope("#scanner-scope-create-tasks", sb.create_tasks);
-        setScope("#scanner-scope-post-notes", sb.post_notes);
-        setScope("#scanner-scope-notify-users", sb.notify_users);
-      }
+      const sb = cfg.scanner_behavior || {};
+      const set = (id, val) => { const el = $(id); if (el) el.checked = !!val; };
+      const getEnabled = (v) => typeof v === "object" ? v.enabled : !!v;
+      const getDryRun = (v) => typeof v === "object" ? v.dry_run : false;
+      const getScope = (v) => typeof v === "object" ? (v.accounts ?? "crm") : "crm";
+      // Built-in behaviors
+      set("#scanner-toggle-auto-link", getEnabled(sb.auto_link_project_id));
+      set("#scanner-dry-auto-link", getDryRun(sb.auto_link_project_id));
+      const scopeEl = $("#scanner-scope-auto-link");
+      if (scopeEl) scopeEl.value = getScope(sb.auto_link_project_id);
+      set("#scanner-toggle-post-notes", getEnabled(sb.post_notes));
+      set("#scanner-dry-post-notes", getDryRun(sb.post_notes));
+      const scopePost = $("#scanner-scope-post-notes");
+      if (scopePost) scopePost.value = getScope(sb.post_notes);
+      // Experimental built-in
+      set("#scanner-toggle-auto-link-content", getEnabled(sb.auto_link_by_content));
+      set("#scanner-dry-auto-link-content", getDryRun(sb.auto_link_by_content));
+      const scopeContent = $("#scanner-scope-auto-link-content");
+      if (scopeContent) scopeContent.value = getScope(sb.auto_link_by_content);
+      // Custom behaviors
+      window._customBehaviors = cfg.custom_behaviors || [];
+      renderCustomBehaviorsList();
     } catch { /* toggles default unchecked */ }
   }
 
@@ -24245,6 +24241,9 @@ function bindScannerAdminButtons() {
     document.body.appendChild(marker);
   }
 
+  // State for custom behaviors (loaded from config)
+  if (!window._customBehaviors) window._customBehaviors = [];
+
   const togglesSave = $("#scanner-toggles-save");
   if (togglesSave && !togglesSave.dataset.bound) {
     togglesSave.dataset.bound = "1";
@@ -24252,43 +24251,32 @@ function bindScannerAdminButtons() {
       const statusEl = $("#scanner-toggles-status");
       const getScope = (id) => {
         const sel = $(id);
-        if (!sel) return "all";
+        if (!sel) return "crm";
+        if (sel.value === "custom") return "custom";
         return sel.value === "all" ? "all" : parseInt(sel.value);
       };
       try {
         await api("/api/v2/mail/config", {
           method: "PUT",
           body: JSON.stringify({
-            auto_link_project_id: {
-              enabled: $("#scanner-toggle-auto-link")?.checked !== false,
-              dry_run: false,
-              accounts: getScope("#scanner-scope-auto-link"),
+            scanner_behavior: {
+              auto_link_project_id: {
+                enabled: $("#scanner-toggle-auto-link")?.checked !== false,
+                dry_run: $("#scanner-dry-auto-link")?.checked || false,
+                accounts: getScope("#scanner-scope-auto-link"),
+              },
+              post_notes: {
+                enabled: $("#scanner-toggle-post-notes")?.checked || false,
+                dry_run: $("#scanner-dry-post-notes")?.checked || false,
+                accounts: getScope("#scanner-scope-post-notes"),
+              },
+              auto_link_by_content: {
+                enabled: $("#scanner-toggle-auto-link-content")?.checked || false,
+                dry_run: $("#scanner-dry-auto-link-content")?.checked || false,
+                accounts: getScope("#scanner-scope-auto-link-content"),
+              },
             },
-            auto_link_by_content: {
-              enabled: $("#scanner-toggle-auto-link-content")?.checked || false,
-              dry_run: $("#scanner-dry-auto-link-content")?.checked || false,
-              accounts: getScope("#scanner-scope-auto-link-content"),
-            },
-            create_deals: {
-              enabled: $("#scanner-toggle-create-deals")?.checked || false,
-              dry_run: $("#scanner-dry-create-deals")?.checked || false,
-              accounts: getScope("#scanner-scope-create-deals"),
-            },
-            create_tasks: {
-              enabled: $("#scanner-toggle-create-tasks")?.checked || false,
-              dry_run: $("#scanner-dry-create-tasks")?.checked || false,
-              accounts: getScope("#scanner-scope-create-tasks"),
-            },
-            post_notes: {
-              enabled: $("#scanner-toggle-post-notes")?.checked || false,
-              dry_run: $("#scanner-dry-post-notes")?.checked || false,
-              accounts: getScope("#scanner-scope-post-notes"),
-            },
-            notify_users: {
-              enabled: $("#scanner-toggle-notify-users")?.checked || false,
-              dry_run: $("#scanner-dry-notify-users")?.checked || false,
-              accounts: getScope("#scanner-scope-notify-users"),
-            },
+            custom_behaviors: window._customBehaviors,
           })
         });
         if (statusEl) { statusEl.textContent = "✓ Saved"; statusEl.className = "event-log-health-status ok"; }
@@ -24297,6 +24285,255 @@ function bindScannerAdminButtons() {
         if (statusEl) { statusEl.textContent = e.message; statusEl.className = "event-log-health-status fail"; }
       }
     });
+  }
+
+  // Render custom behaviors list
+  function renderCustomBehaviorsList() {
+    const list = $("#scanner-custom-behaviors-list");
+    if (!list) return;
+    if (!window._customBehaviors.length) {
+      list.innerHTML = '<div style="color:var(--muted); font-size:0.8rem;">No custom behaviors configured.</div>';
+      return;
+    }
+    list.innerHTML = window._customBehaviors.map((cb, i) => {
+      const typeLabels = {create_task:"Create Task",notify_users:"Notify Users",create_deal:"Create Deal",add_email_tags:"Add Email Tags",add_project_tags:"Add Project Tags",change_project_stage:"Change Stage",reply_to_email:"Reply/Draft"};
+      const label = typeLabels[cb.type] || cb.type;
+      const enabled = cb.enabled ? '●' : '○';
+      const dryRun = cb.dry_run ? '<span style="color:var(--accent);font-size:0.7rem;">[DRY]</span>' : '';
+      return `<div class="custom-behavior-item" draggable="true" data-idx="${i}">
+        <span class="drag-handle">⠿</span>
+        <span style="flex:1;">${enabled} ${escapeHtml(label)} ${dryRun}</span>
+        <span class="behavior-actions">
+          <button type="button" class="btn btn-ghost btn-sm custom-behavior-edit" data-idx="${i}" style="font-size:0.7rem;"><i class="ti ti-pencil"></i></button>
+          <button type="button" class="btn btn-ghost btn-sm custom-behavior-delete" data-idx="${i}" style="font-size:0.7rem; color:var(--danger);"><i class="ti ti-trash"></i></button>
+        </span>
+      </div>`;
+    }).join('');
+    // Bind edit/delete
+    list.querySelectorAll('.custom-behavior-edit').forEach(btn => {
+      btn.addEventListener('click', () => openCustomBehaviorModal(parseInt(btn.dataset.idx)));
+    });
+    list.querySelectorAll('.custom-behavior-delete').forEach(btn => {
+      btn.addEventListener('click', () => {
+        window._customBehaviors.splice(parseInt(btn.dataset.idx), 1);
+        renderCustomBehaviorsList();
+      });
+    });
+    // Drag reorder
+    let dragIdx = null;
+    list.querySelectorAll('.custom-behavior-item').forEach(item => {
+      item.addEventListener('dragstart', (e) => { dragIdx = parseInt(item.dataset.idx); item.classList.add('dragging'); });
+      item.addEventListener('dragend', () => { dragIdx = null; item.classList.remove('dragging'); });
+      item.addEventListener('dragover', (e) => { e.preventDefault(); });
+      item.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const dropIdx = parseInt(item.dataset.idx);
+        if (dragIdx !== null && dragIdx !== dropIdx) {
+          const [moved] = window._customBehaviors.splice(dragIdx, 1);
+          window._customBehaviors.splice(dropIdx, 0, moved);
+          // Update order
+          window._customBehaviors.forEach((cb, i) => cb.order = i + 1);
+          renderCustomBehaviorsList();
+        }
+      });
+    });
+  }
+
+  // Custom behavior modal config fields
+  const CUSTOM_BEH_CONFIGS = {
+    create_task: `
+      <label style="font-size:0.8rem; display:block; margin-bottom:0.3rem;">Assignee</label>
+      <select id="cb-config-assignee" style="width:100%; padding:0.3rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem; margin-bottom:0.4rem;"><option value="">Select user…</option></select>
+      <label style="font-size:0.8rem; display:block; margin-bottom:0.3rem;">Task Title Template</label>
+      <input type="text" id="cb-config-title" style="width:100%; padding:0.3rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem; margin-bottom:0.4rem;" placeholder="Review: {subject}">
+      <label style="font-size:0.8rem; display:block; margin-bottom:0.3rem;">Description Template</label>
+      <textarea id="cb-config-desc" rows="2" style="width:100%; padding:0.3rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem;" placeholder="Email from {from} linked to {project}"></textarea>
+    `,
+    notify_users: `
+      <label style="font-size:0.8rem; display:block; margin-bottom:0.3rem;">Users to notify</label>
+      <div id="cb-config-users" style="max-height:120px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; padding:0.3rem;"></div>
+      <label style="font-size:0.8rem; display:block; margin:0.4rem 0 0.3rem;">Notification Method</label>
+      <select id="cb-config-method" style="width:100%; padding:0.3rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem;">
+        <option value="in_app">In-app</option>
+        <option value="email">Email</option>
+        <option value="telegram">Telegram</option>
+      </select>
+    `,
+    create_deal: `
+      <label style="font-size:0.8rem; display:block; margin-bottom:0.3rem;">Deal Title Template</label>
+      <input type="text" id="cb-config-deal-title" style="width:100%; padding:0.3rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem; margin-bottom:0.4rem;" placeholder="{from} - {subject}">
+      <label style="font-size:0.8rem; display:block; margin-bottom:0.3rem;">Initial Stage</label>
+      <select id="cb-config-stage" style="width:100%; padding:0.3rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem; margin-bottom:0.4rem;"><option value="">Select stage…</option></select>
+      <label style="font-size:0.8rem; display:block; margin-bottom:0.3rem;">Notify User</label>
+      <select id="cb-config-notify" style="width:100%; padding:0.3rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem; margin-bottom:0.4rem;"><option value="">None</option></select>
+      <label style="display:flex; gap:0.5rem; align-items:center; font-size:0.8rem;"><input type="checkbox" id="cb-config-auto-task"> Auto-create follow-up task</label>
+    `,
+    add_email_tags: `
+      <label style="font-size:0.8rem; display:block; margin-bottom:0.3rem;">Email Tags</label>
+      <div id="cb-config-email-tags" style="max-height:120px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; padding:0.3rem;"></div>
+    `,
+    add_project_tags: `
+      <label style="font-size:0.8rem; display:block; margin-bottom:0.3rem;">Project Tags (comma-separated)</label>
+      <input type="text" id="cb-config-project-tags" style="width:100%; padding:0.3rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem;" placeholder="tag1, tag2, tag3">
+    `,
+    change_project_stage: `
+      <label style="font-size:0.8rem; display:block; margin-bottom:0.3rem;">Move to Stage</label>
+      <select id="cb-config-target-stage" style="width:100%; padding:0.3rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem; margin-bottom:0.4rem;"><option value="">Select stage…</option></select>
+      <label style="font-size:0.8rem; display:block; margin-bottom:0.3rem;">Condition</label>
+      <select id="cb-config-condition" style="width:100%; padding:0.3rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem;">
+        <option value="always">Always</option>
+        <option value="only_if">Only if current stage is…</option>
+      </select>
+      <select id="cb-config-condition-stage" style="width:100%; padding:0.3rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem; margin-top:0.3rem; display:none;"><option value="">Select stage…</option></select>
+    `,
+    reply_to_email: `
+      <label style="font-size:0.8rem; display:block; margin-bottom:0.3rem;">Action</label>
+      <select id="cb-config-reply-action" style="width:100%; padding:0.3rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem; margin-bottom:0.4rem;">
+        <option value="create_draft">Create Draft</option>
+        <option value="send_reply">Send Reply</option>
+      </select>
+      <label style="font-size:0.8rem; display:block; margin-bottom:0.3rem;">Reply Template</label>
+      <textarea id="cb-config-reply-template" rows="3" style="width:100%; padding:0.3rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem;" placeholder="Thank you for your email. We will review and respond shortly."></textarea>
+    `,
+  };
+
+  function openCustomBehaviorModal(editIdx) {
+    const modal = $("#custom-behavior-modal");
+    if (!modal) return;
+    modal.classList.remove("hidden");
+    const isEdit = editIdx !== undefined && editIdx !== null;
+    $("#custom-behavior-title").textContent = isEdit ? "Edit Custom Behavior" : "Add Custom Behavior";
+    $("#custom-behavior-edit-id").value = isEdit ? editIdx : "";
+    // Populate type
+    const typeSel = $("#custom-behavior-type");
+    if (isEdit) {
+      typeSel.value = window._customBehaviors[editIdx].type;
+      typeSel.disabled = true;
+    } else {
+      typeSel.disabled = false;
+      typeSel.value = "create_task";
+    }
+    // Populate scope
+    const scopeSel = $("#custom-behavior-scope");
+    if (isEdit) scopeSel.value = window._customBehaviors[editIdx].accounts === "all" ? "all" : "crm";
+    else scopeSel.value = "crm";
+    // Dry run
+    const dryRun = $("#custom-behavior-dry-run");
+    if (isEdit) dryRun.checked = window._customBehaviors[editIdx].dry_run;
+    else dryRun.checked = true;
+    // Render config
+    updateCustomBehaviorConfig(typeSel.value, isEdit ? window._customBehaviors[editIdx].config : {});
+    typeSel.onchange = () => updateCustomBehaviorConfig(typeSel.value, {});
+    // Load users for assignee/notify
+    loadUsersForCustomBehavior();
+  }
+
+  function updateCustomBehaviorConfig(type, config) {
+    const container = $("#custom-behavior-config");
+    if (!container) return;
+    container.innerHTML = CUSTOM_BEH_CONFIGS[type] || "";
+    // Populate saved values
+    if (type === "create_task") {
+      if (config.assignee_user_id) { const s = $("#cb-config-assignee"); if (s) s.value = config.assignee_user_id; }
+      if (config.task_title_template) { const i = $("#cb-config-title"); if (i) i.value = config.task_title_template; }
+      if (config.task_description_template) { const t = $("#cb-config-desc"); if (t) t.value = config.task_description_template; }
+    } else if (type === "notify_users") {
+      if (config.notify_user_ids) {
+        const container = $("#cb-config-users");
+        if (container) {
+          container._selectedUsers = new Set(config.notify_user_ids);
+        }
+      }
+    } else if (type === "create_deal") {
+      if (config.deal_title_template) { const i = $("#cb-config-deal-title"); if (i) i.value = config.deal_title_template; }
+      if (config.notify_user_id) { const s = $("#cb-config-notify"); if (s) s.value = config.notify_user_id; }
+      if (config.auto_create_task) { const c = $("#cb-config-auto-task"); if (c) c.checked = true; }
+    } else if (type === "add_project_tags") {
+      if (config.tag_titles) { const i = $("#cb-config-project-tags"); if (i) i.value = config.tag_titles.join(", "); }
+    } else if (type === "change_project_stage") {
+      if (config.stage_id) { const s = $("#cb-config-target-stage"); if (s) s.value = config.stage_id; }
+      if (config.condition) { const s = $("#cb-config-condition"); if (s) s.value = config.condition; }
+      if (config.condition === "only_if") {
+        const cs = $("#cb-config-condition-stage");
+        if (cs) { cs.style.display = ""; if (config.condition_stage_id) cs.value = config.condition_stage_id; }
+      }
+      const condSel = $("#cb-config-condition");
+      if (condSel) condSel.onchange = () => { const cs = $("#cb-config-condition-stage"); if (cs) cs.style.display = condSel.value === "only_if" ? "" : "none"; };
+    } else if (type === "reply_to_email") {
+      if (config.action) { const s = $("#cb-config-reply-action"); if (s) s.value = config.action; }
+      if (config.reply_template) { const t = $("#cb-config-reply-template"); if (t) t.value = config.reply_template; }
+    }
+  }
+
+  async function loadUsersForCustomBehavior() {
+    try {
+      const users = await api("/api/v2/users");
+      const assignee = $("#cb-config-assignee");
+      const notify = $("#cb-config-notify");
+      const usersDiv = $("#cb-config-users");
+      if (assignee) { assignee.innerHTML = '<option value="">Select user…</option>' + users.map(u => `<option value="${u.id}">${escapeHtml(u.display_name || u.email)}</option>`).join(''); }
+      if (notify) { notify.innerHTML = '<option value="">None</option>' + users.map(u => `<option value="${u.id}">${escapeHtml(u.display_name || u.email)}</option>`).join(''); }
+      if (usersDiv && !usersDiv._rendered) {
+        usersDiv._rendered = true;
+        usersDiv._selectedUsers = usersDiv._selectedUsers || new Set();
+        usersDiv.innerHTML = users.map(u => `<label style="display:flex; gap:0.3rem; align-items:center; padding:0.15rem 0; font-size:0.8rem;"><input type="checkbox" value="${u.id}" class="cb-user-cb" ${usersDiv._selectedUsers.has(u.id) ? 'checked' : ''}> ${escapeHtml(u.display_name || u.email)}</label>`).join('');
+      }
+    } catch {}
+  }
+
+  // Save custom behavior
+  const cbSaveBtn = $("#custom-behavior-save-btn");
+  if (cbSaveBtn && !cbSaveBtn.dataset.bound) {
+    cbSaveBtn.dataset.bound = "1";
+    cbSaveBtn.addEventListener("click", () => {
+      const type = $("#custom-behavior-type")?.value;
+      const scope = $("#custom-behavior-scope")?.value;
+      const dryRun = $("#custom-behavior-dry-run")?.checked;
+      const editId = $("#custom-behavior-edit-id")?.value;
+      const config = {};
+      if (type === "create_task") {
+        config.assignee_user_id = parseInt($("#cb-config-assignee")?.value) || null;
+        config.task_title_template = $("#cb-config-title")?.value || "";
+        config.task_description_template = $("#cb-config-desc")?.value || "";
+      } else if (type === "notify_users") {
+        config.notify_user_ids = Array.from($("#cb-config-users")?.querySelectorAll('.cb-user-cb:checked') || []).map(cb => parseInt(cb.value));
+        config.notification_method = $("#cb-config-method")?.value || "in_app";
+      } else if (type === "create_deal") {
+        config.deal_title_template = $("#cb-config-deal-title")?.value || "";
+        config.stage_id = parseInt($("#cb-config-stage")?.value) || null;
+        config.notify_user_id = parseInt($("#cb-config-notify")?.value) || null;
+        config.auto_create_task = $("#cb-config-auto-task")?.checked || false;
+      } else if (type === "add_project_tags") {
+        config.tag_titles = ($("#cb-config-project-tags")?.value || "").split(",").map(t => t.trim()).filter(Boolean);
+      } else if (type === "change_project_stage") {
+        config.stage_id = parseInt($("#cb-config-target-stage")?.value) || null;
+        config.condition = $("#cb-config-condition")?.value || "always";
+        config.condition_stage_id = parseInt($("#cb-config-condition-stage")?.value) || null;
+      } else if (type === "reply_to_email") {
+        config.action = $("#cb-config-reply-action")?.value || "create_draft";
+        config.reply_template = $("#cb-config-reply-template")?.value || "";
+      }
+      const behavior = { type, enabled: true, dry_run: dryRun, accounts: scope, config, order: window._customBehaviors.length + 1 };
+      if (editId !== "") {
+        window._customBehaviors[parseInt(editId)] = behavior;
+      } else {
+        window._customBehaviors.push(behavior);
+      }
+      renderCustomBehaviorsList();
+      $("#custom-behavior-modal")?.classList.add("hidden");
+    });
+  }
+
+  // Dismiss custom behavior modal
+  document.querySelectorAll('[data-custom-behavior-dismiss]').forEach(el => {
+    el.addEventListener('click', () => { $("#custom-behavior-modal")?.classList.add("hidden"); }, { once: true });
+  });
+
+  // Add custom behavior button
+  const cbAddBtn = $("#scanner-custom-behavior-add");
+  if (cbAddBtn && !cbAddBtn.dataset.bound) {
+    cbAddBtn.dataset.bound = "1";
+    cbAddBtn.addEventListener("click", () => openCustomBehaviorModal());
   }
 
   // Log refresh

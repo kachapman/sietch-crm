@@ -11157,6 +11157,13 @@ body {
   .mail-sidebar-toggle {
     display: none;
   }
+  #custom-behavior-modal .modal-card {
+    max-height: 100dvh;
+    height: 100dvh;
+    width: 100%;
+    max-width: 100%;
+    border-radius: 0;
+  }
 }
 
 /* ── Phase 2G: Profile Modal ──────────────────────────────────────────── */
@@ -11938,6 +11945,71 @@ body {
     width: 22px;
     height: 22px;
     padding: 0;
+  }
+}
+
+/* ── Behavior toggles layout ────────────────────────────────────────── */
+.behavior-row {
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.behavior-row:last-child {
+  border-bottom: none;
+}
+.behavior-config {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: 1.5rem;
+  margin-top: 0.2rem;
+  font-size: 0.75rem;
+}
+.behavior-config-label {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.behavior-scope {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  max-width: 150px;
+}
+/* Custom behaviors list */
+.custom-behavior-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin-bottom: 0.3rem;
+  background: var(--bg-elevated);
+  cursor: grab;
+}
+.custom-behavior-item:active {
+  cursor: grabbing;
+}
+.custom-behavior-item.dragging {
+  opacity: 0.5;
+  border-style: dashed;
+}
+.custom-behavior-item .drag-handle {
+  color: var(--muted);
+  margin-right: 0.3rem;
+  font-size: 0.8rem;
+}
+.custom-behavior-item .behavior-actions {
+  display: flex;
+  gap: 0.2rem;
+}
+@media (max-width: 600px) {
+  .behavior-config {
+    flex-wrap: wrap;
+    margin-left: 1rem;
+  }
+  .behavior-scope {
+    max-width: 100%;
   }
 }
 

@@ -87,10 +87,10 @@ class ScannerHandler(BaseHTTPRequestHandler):
                 return
             cfg = mail_scanner.get_contractors() or {}
             sb = cfg.get("scanner_behavior") or {}
-            at = cfg.get("action_toggles") or {}
+            custom = cfg.get("custom_behaviors") or []
             _json_response(self, 200, {
                 "scanner_behavior": sb,
-                "action_toggles": at,
+                "custom_behaviors": custom,
             })
             return
 
@@ -119,17 +119,18 @@ class ScannerHandler(BaseHTTPRequestHandler):
                 _json_response(self, 400, {"error": "Invalid JSON"})
                 return
             cfg = mail_scanner.get_contractors()
-            sb = cfg.get("scanner_behavior", {})
-            # Update behavior toggles from payload (supports both old boolean and new object format)
-            for key in ("auto_link_project_id", "auto_link_by_content", "create_deals", "create_tasks", "post_notes", "notify_users"):
-                if key in payload:
-                    val = payload[key]
-                    if isinstance(val, bool):
-                        sb[key] = {"enabled": val, "dry_run": sb.get(key, {}).get("dry_run", False), "accounts": sb.get(key, {}).get("accounts", "all")}
-                    elif isinstance(val, dict):
-                        sb[key] = val
-            cfg["scanner_behavior"] = sb
-            cfg["action_toggles"] = payload.get("action_toggles", cfg.get("action_toggles", {}))
+            # Update scanner_behavior from payload
+            if "scanner_behavior" in payload:
+                sb = payload["scanner_behavior"]
+                # Merge with existing config
+                existing_sb = cfg.get("scanner_behavior", {})
+                for key in ("auto_link_project_id", "auto_link_by_content", "post_notes"):
+                    if key in sb:
+                        existing_sb[key] = sb[key]
+                cfg["scanner_behavior"] = existing_sb
+            # Update custom_behaviors from payload
+            if "custom_behaviors" in payload:
+                cfg["custom_behaviors"] = payload["custom_behaviors"]
             mail_scanner.update_contractors(cfg)
             _json_response(self, 200, {"ok": True, "config": cfg})
             return

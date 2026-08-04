@@ -602,40 +602,47 @@
               <div class="infra-section">
                 <h4>Behavior Toggles</h4>
                 <div id="scanner-toggles" style="font-size:0.85rem;">
-                  <div style="margin-bottom:0.6rem; padding-bottom:0.6rem; border-bottom:1px solid var(--border);">
+                  <!-- Built-in: Auto-link by project ID -->
+                  <div class="behavior-row">
                     <label style="display:flex; gap:0.5rem; align-items:center; font-weight:600;"><input type="checkbox" id="scanner-toggle-auto-link" checked> Auto-link emails by [#PROJECTID] in subject (primary classifier)</label>
-                    <div style="display:flex; gap:0.5rem; align-items:center; margin-left:1.5rem; margin-top:0.2rem;">
-                      <label style="font-size:0.75rem; color:var(--muted);">Scope:</label>
-                      <select id="scanner-scope-auto-link" style="font-size:0.75rem; padding:0.15rem 0.3rem; border:1px solid var(--border); border-radius:3px;"><option value="all">All accounts</option></select>
+                    <div class="behavior-config">
+                      <label class="behavior-config-label">Scope:</label>
+                      <select id="scanner-scope-auto-link" class="behavior-scope"><option value="crm">CRM Only</option><option value="all">All accounts</option><option value="custom">Custom…</option></select>
+                      <label class="behavior-config-label" style="margin-left:0.5rem;">Dry run:</label>
+                      <input type="checkbox" id="scanner-dry-auto-link">
                     </div>
                   </div>
-                  <div style="margin-bottom:0.4rem; padding-bottom:0.4rem; border-bottom:1px solid var(--border);">
-                    <div style="display:flex; gap:0.5rem; align-items:center; font-weight:500; color:var(--accent);"><i class="ti ti-flask" style="font-size:0.8rem;"></i> Experimental</div>
-                    <div style="margin-left:1.2rem;">
-                      <label style="display:flex; gap:0.5rem; align-items:center; margin:0.3rem 0;"><input type="checkbox" id="scanner-toggle-auto-link-content"> Auto-link by content (claim #, policy #, address, contact ID in subject/body)</label>
-                      <label style="display:flex; gap:0.5rem; align-items:center; margin:0.3rem 0;"><input type="checkbox" id="scanner-toggle-create-deals"> Create deals (auto-create new opportunity on strong match)</label>
-                      <label style="display:flex; gap:0.5rem; align-items:center; margin:0.3rem 0;"><input type="checkbox" id="scanner-toggle-create-tasks"> Create tasks (auto-create review/follow-up tasks)</label>
-                      <label style="display:flex; gap:0.5rem; align-items:center; margin:0.3rem 0;"><input type="checkbox" id="scanner-toggle-post-notes"> Post notes (attach email body to matched deal history)</label>
-                      <label style="display:flex; gap:0.5rem; align-items:center; margin:0.3rem 0;"><input type="checkbox" id="scanner-toggle-notify-users"> Notify users (Telegram notification on action)</label>
+                  <!-- Built-in: Post notes -->
+                  <div class="behavior-row">
+                    <label style="display:flex; gap:0.5rem; align-items:center; font-weight:600;"><input type="checkbox" id="scanner-toggle-post-notes"> Post email body as note to linked deal</label>
+                    <div class="behavior-config">
+                      <label class="behavior-config-label">Scope:</label>
+                      <select id="scanner-scope-post-notes" class="behavior-scope"><option value="crm">CRM Only</option><option value="all">All accounts</option><option value="custom">Custom…</option></select>
+                      <label class="behavior-config-label" style="margin-left:0.5rem;">Dry run:</label>
+                      <input type="checkbox" id="scanner-dry-post-notes">
                     </div>
                   </div>
-                  <div style="font-size:0.75rem; color:var(--muted); margin-bottom:0.5rem;">
-                    <strong>Dry run:</strong> When enabled for a task, the scanner logs what it <em>would</em> do without actually doing it.
+                  <!-- Experimental built-in -->
+                  <div style="margin:0.6rem 0 0.3rem; padding-top:0.4rem; border-top:1px solid var(--border);">
+                    <div style="display:flex; gap:0.5rem; align-items:center; font-weight:500; color:var(--accent); margin-bottom:0.3rem;"><i class="ti ti-flask" style="font-size:0.8rem;"></i> Experimental</div>
                   </div>
-                  <table style="width:100%; font-size:0.75rem; border-collapse:collapse;">
-                    <thead><tr style="border-bottom:1px solid var(--border); color:var(--muted);">
-                      <th style="text-align:left; padding:0.2rem 0;">Task</th>
-                      <th style="text-align:center; padding:0.2rem 0;">Dry run</th>
-                      <th style="text-align:left; padding:0.2rem 0;">Apply to</th>
-                    </tr></thead>
-                    <tbody>
-                      <tr><td>Auto-link by content</td><td style="text-align:center;"><input type="checkbox" id="scanner-dry-auto-link-content" checked></td><td><select id="scanner-scope-auto-link-content" style="font-size:0.7rem; padding:0.1rem 0.2rem; width:100%;"><option value="all">All accounts</option></select></td></tr>
-                      <tr><td>Create deals</td><td style="text-align:center;"><input type="checkbox" id="scanner-dry-create-deals" checked></td><td><select id="scanner-scope-create-deals" style="font-size:0.7rem; padding:0.1rem 0.2rem; width:100%;"><option value="all">All accounts</option></select></td></tr>
-                      <tr><td>Create tasks</td><td style="text-align:center;"><input type="checkbox" id="scanner-dry-create-tasks" checked></td><td><select id="scanner-scope-create-tasks" style="font-size:0.7rem; padding:0.1rem 0.2rem; width:100%;"><option value="all">All accounts</option></select></td></tr>
-                      <tr><td>Post notes</td><td style="text-align:center;"><input type="checkbox" id="scanner-dry-post-notes" checked></td><td><select id="scanner-scope-post-notes" style="font-size:0.7rem; padding:0.1rem 0.2rem; width:100%;"><option value="all">All accounts</option></select></td></tr>
-                      <tr><td>Notify users</td><td style="text-align:center;"><input type="checkbox" id="scanner-dry-notify-users" checked></td><td><select id="scanner-scope-notify-users" style="font-size:0.7rem; padding:0.1rem 0.2rem; width:100%;"><option value="all">All accounts</option></select></td></tr>
-                    </tbody>
-                  </table>
+                  <div class="behavior-row">
+                    <label style="display:flex; gap:0.5rem; align-items:center;"><input type="checkbox" id="scanner-toggle-auto-link-content"> Auto-link by content (claim #, policy #, address, contact ID)</label>
+                    <div class="behavior-config">
+                      <label class="behavior-config-label">Scope:</label>
+                      <select id="scanner-scope-auto-link-content" class="behavior-scope"><option value="crm">CRM Only</option><option value="all">All accounts</option><option value="custom">Custom…</option></select>
+                      <label class="behavior-config-label" style="margin-left:0.5rem;">Dry run:</label>
+                      <input type="checkbox" id="scanner-dry-auto-link-content" checked>
+                    </div>
+                  </div>
+                </div>
+                <!-- Custom Behaviors -->
+                <div style="margin-top:0.6rem; padding-top:0.5rem; border-top:1px solid var(--border);">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+                    <div style="font-size:0.85rem; font-weight:500;">Custom Behaviors</div>
+                    <button type="button" id="scanner-custom-behavior-add" class="btn btn-secondary btn-sm"><i class="ti ti-plus"></i> Add Behavior</button>
+                  </div>
+                  <div id="scanner-custom-behaviors-list" style="font-size:0.8rem;">No custom behaviors configured.</div>
                 </div>
                 <button type="button" id="scanner-toggles-save" class="btn btn-primary btn-sm" style="margin-top:0.5rem;"><i class="ti ti-device-floppy"></i> Save</button>
                 <span id="scanner-toggles-status" style="margin-left:0.5rem; font-size:0.8rem;"></span>
@@ -658,42 +665,7 @@
                   </div>
                 </div>
               </div>
-              <div class="infra-section">
-                <h4 style="display:flex; align-items:center; gap:0.5rem;">Routing Rules <button type="button" class="btn btn-ghost btn-small scanner-help-btn" data-help="routing" style="font-size:0.7rem; padding:0.1rem 0.4rem; border-radius:50%; border:1px solid var(--border);" title="How routing rules work">?</button></h4>
-                <div id="scanner-contractors-list" style="max-height:200px; overflow-y:auto; font-size:0.85rem;">Loading…</div>
-                <div style="margin-top:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
-                  <button type="button" id="scanner-contractor-add" class="btn btn-secondary btn-sm"><i class="ti ti-plus"></i> New Routing Rule</button>
-                  <button type="button" id="scanner-contractors-refresh" class="btn btn-ghost btn-sm"><i class="ti ti-refresh"></i></button>
-                </div>
-                <div id="scanner-contractor-form" class="hidden" style="margin-top:0.5rem; padding:0.5rem; background:var(--bg-elevated); border-radius:4px;">
-                  <label title="A descriptive name for this routing rule">Name<br><input id="scanner-ctr-name" type="text" style="width:100%;" placeholder="e.g. Claims inbox"></label>
-                  <label style="margin-top:0.4rem;" title="Which IMAP account to apply this rule to (leave empty for all)">IMAP Account<br>
-                    <select id="scanner-ctr-account" style="width:100%;">
-                      <option value="">All accounts</option>
-                    </select>
-                  </label>
-                  <label style="margin-top:0.4rem;" title="IMAP folder to monitor (e.g. INBOX, Sent, Claims)">Folder<br><input id="scanner-ctr-folder" type="text" value="INBOX" style="width:100px;"></label>
-                  <label style="margin-top:0.4rem;" title="What to do when an email matches: link_only = link to deal, create_deal = auto-create opportunity, create_task = create follow-up task, post_note = post email body to deal history">Action<br>
-                    <select id="scanner-ctr-action" style="width:100%;">
-                      <option value="link_only">Link only</option>
-                      <option value="create_deal">Create deal</option>
-                      <option value="create_task">Create task</option>
-                      <option value="post_note">Post note</option>
-                    </select>
-                  </label>
-                  <label style="margin-top:0.4rem;" title="Assign matched emails to this user (for tasks and notifications)">Assignee<br>
-                    <select id="scanner-ctr-user" style="width:100%;">
-                      <option value="">None</option>
-                    </select>
-                  </label>
-                  <label style="margin-top:0.4rem;" title="Higher priority rules are evaluated first (0 = default)"><b>Priority</b><br><input id="scanner-ctr-priority" type="number" value="0" style="width:80px;"></label>
-                  <input type="hidden" id="scanner-ctr-edit-id" value="">
-                  <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
-                    <button type="button" id="scanner-ctr-save" class="btn btn-primary btn-sm"><i class="ti ti-device-floppy"></i> Save</button>
-                    <button type="button" id="scanner-ctr-cancel" class="btn btn-ghost btn-sm"><i class="ti ti-x"></i></button>
-                  </div>
-                </div>
-              </div>
+
             </div>
             <!-- RIGHT COLUMN: Classifier -->
             <div class="scanner-admin-col">
@@ -1126,6 +1098,50 @@
       <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
         <button type="button" class="btn btn-ghost btn-small" data-correction-dismiss>Cancel</button>
         <button type="button" id="correction-save-btn" class="btn btn-primary btn-small" disabled><i class="ti ti-check"></i> Save correction</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Custom behavior modal -->
+  <div id="custom-behavior-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-custom-behavior-dismiss></div>
+    <div class="modal-card" style="max-width:500px; width:95vw; max-height:min(85vh, 85dvh); display:flex; flex-direction:column; padding:0;">
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:0.5rem 0.75rem; border-bottom:1px solid var(--border);">
+        <h3 id="custom-behavior-title" style="margin:0; font-size:1rem;">Add Custom Behavior</h3>
+        <button type="button" class="btn btn-icon-only" data-custom-behavior-dismiss><i class="ti ti-x"></i></button>
+      </div>
+      <div style="padding:0.75rem; overflow-y:auto; flex:1;">
+        <input type="hidden" id="custom-behavior-edit-id" value="">
+        <label style="font-size:0.85rem; display:block; margin-bottom:0.3rem;">Behavior Type</label>
+        <select id="custom-behavior-type" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem; margin-bottom:0.5rem;">
+          <option value="create_task">Create Task</option>
+          <option value="notify_users">Notify Users</option>
+          <option value="create_deal">Create Deal</option>
+          <option value="add_email_tags">Add Email Tags</option>
+          <option value="add_project_tags">Add Project Tags</option>
+          <option value="change_project_stage">Change Project Stage</option>
+          <option value="reply_to_email">Reply to Email</option>
+        </select>
+        <div style="display:flex; gap:0.5rem; margin-bottom:0.5rem;">
+          <div style="flex:1;">
+            <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:0.15rem;">Scope</label>
+            <select id="custom-behavior-scope" style="width:100%; padding:0.3rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem;">
+              <option value="crm">CRM Only</option>
+              <option value="all">All accounts</option>
+              <option value="custom">Custom…</option>
+            </select>
+          </div>
+          <div style="display:flex; align-items:flex-end; gap:0.3rem;">
+            <label style="font-size:0.8rem; color:var(--muted);">Dry run</label>
+            <input type="checkbox" id="custom-behavior-dry-run" style="margin-bottom:0.2rem;">
+          </div>
+        </div>
+        <!-- Dynamic config fields -->
+        <div id="custom-behavior-config" style="border-top:1px solid var(--border); padding-top:0.5rem;"></div>
+      </div>
+      <div style="display:flex; gap:0.5rem; justify-content:flex-end; padding:0.5rem 0.75rem; border-top:1px solid var(--border); flex-shrink:0;">
+        <button type="button" class="btn btn-ghost btn-small" data-custom-behavior-dismiss>Cancel</button>
+        <button type="button" id="custom-behavior-save-btn" class="btn btn-primary btn-small"><i class="ti ti-device-floppy"></i> Save</button>
       </div>
     </div>
   </div>

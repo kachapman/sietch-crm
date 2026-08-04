@@ -106,6 +106,9 @@ def _normalize_behavior_config(config: dict[str, Any]) -> dict[str, Any]:
         else:
             normalized[key] = {"enabled": bool(value), "dry_run": False, "accounts": "all"}
     config["scanner_behavior"] = normalized
+    # Ensure custom_behaviors is a list
+    if "custom_behaviors" not in config:
+        config["custom_behaviors"] = []
     return config
 
 
