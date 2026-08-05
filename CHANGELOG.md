@@ -2,6 +2,16 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — Imported OnlyOffice Emails Now History Events (2026-08-05)
+
+- **"Pull Email Bodies" import now stores emails as project history notes.** Previously the admin OnlyOffice sync endpoint incorrectly inserted imported emails into `mail_messages` with `account_id = NULL`, which made them invisible and dependent on a non-existent mail account. The endpoint now imports each email into `history_events` as a self-contained `email_snapshot` so it appears on the project timeline for any user who can open the project.
+- **No OnlyOffice dependency on imported email notes.** The imported snapshot contains `subject`, `from`, `to`, `cc`, `bcc`, `date`, `body_html`, `body_text`, and `attachments` directly in the row. The "Open in Mail" link is no longer rendered for imported snapshots, and the snapshot is rendered from the Sietch database without calling the broken OnlyOffice `filehandler.ashx` endpoint.
+- **psycopg2 `%` wildcard bug fixed.** `db.py` previously passed `params or ()` to `cursor.execute()` for every query. When a query had no parameters but contained a literal `%` wildcard (e.g., `LIKE 'onlyoffice:%'`), psycopg2 formatted the string against an empty tuple and raised `IndexError: tuple index out of range`. `db.py` now only passes parameters when they are provided, avoiding the crash and preventing future wildcard issues.
+- **Existing raw OnlyOffice history events are upserted.** The import builds an index of existing imported email history events keyed by `(opportunity_id, OnlyOffice message_id)`. Matching events are updated to the clean Sietch snapshot format; new events are inserted.
+- **Leftover orphan `mail_messages` rows are cleaned.** The sync endpoint deletes any `mail_messages` rows with `account_id IS NULL` and `imap_uid LIKE 'onlyoffice:%'` that were created by the old import model.
+- **Frontend supports imported email snapshots.** `normalizeCrmMailPayload()` recognizes `source: "onlyoffice_import"` and snapshots without a live `message_id`. The project history toggle renders the embedded body directly from the snapshot without trying to fetch from `mail_messages` or linking back to OnlyOffice.
+- **Files:** `db.py`, `server.py`, `public/app.js`, `AGENTS.md`, `CHANGELOG.md`.
+
 ## Phase 3 — Trigger System & Scanner Status Improvements (2026-08-04)
 
 - **Per-account scanner status.** Scanner status now shows each active account with status (active/auth_failed), IMAP host, last sync time, and which behaviors are active (checkmarks with mouseover detail). "Reconnect" button opens account settings for auth_failed accounts.

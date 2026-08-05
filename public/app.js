@@ -19512,13 +19512,28 @@ function mailObjectFromEvent(ev) {
 
 function normalizeCrmMailPayload(obj) {
   if (!obj || typeof obj !== "object") return null;
+
+  // Imported OnlyOffice emails are stored as self-contained snapshots without a
+  // live Sietch mail_messages.id. They are identified by source and should
+  // still render as email notes even though they cannot be opened in a mailbox.
+  const isImported = obj.source === "onlyoffice_import" || obj.type === "email_snapshot" && obj.crm_message_id;
+
   const midRaw = obj.message_id ?? obj.messageId ?? obj.MessageId ?? obj.mailMessageId ?? obj.id ?? obj.ID;
-  const messageId = Number(typeof midRaw === "string" ? midRaw.trim() : midRaw);
-  if (!Number.isFinite(messageId) || messageId <= 0) return null;
+  let messageId = null;
+  if (midRaw != null && midRaw !== "") {
+    const parsed = Number(typeof midRaw === "string" ? midRaw.trim() : midRaw);
+    if (Number.isFinite(parsed) && parsed > 0) messageId = parsed;
+  }
+  if (!isImported && !messageId) return null;
 
   const fromRaw = String(obj.from ?? obj.From ?? "").trim();
   const from = fromRaw.replace(/^["']+|["']+$/g, "").trim();
-  const messageUrl = portalAbsoluteUrl(obj.message_url ?? obj.messageUrl ?? obj.MessageUrl ?? "");
+
+  // For imported snapshots we intentionally do not link back to OnlyOffice.
+  let messageUrl = portalAbsoluteUrl(obj.message_url ?? obj.messageUrl ?? obj.MessageUrl ?? "");
+  if (!messageUrl && !isImported && messageId) {
+    messageUrl = portalMailMessageUrl(messageId);
+  }
 
   return {
     messageId,
@@ -19536,7 +19551,8 @@ function normalizeCrmMailPayload(obj) {
     body_html: String(obj.body_html ?? obj.htmlBody ?? obj.HtmlBody ?? obj.BodyHtml ?? ""),
     body_text: String(obj.body_text ?? obj.textBody ?? obj.TextBody ?? obj.plainText ?? ""),
     attachments: Array.isArray(obj.attachments) ? obj.attachments : null,
-    messageUrl: messageUrl || portalMailMessageUrl(messageId),
+    messageUrl,
+    source: String(obj.source ?? "").trim(),
   };
 }
 
@@ -19855,13 +19871,18 @@ function renderCrmMailPayloadDetail(parent, payload) {
 
   const foot = document.createElement("div");
   foot.className = "opp-preview-mail-foot";
-  const open = document.createElement("a");
-  open.href = payload.messageUrl;
-  open.target = "_blank";
-  open.rel = "noopener noreferrer";
-  open.textContent = "Open in Mail";
-  foot.appendChild(open);
-  parent.appendChild(foot);
+  // Imported snapshots are self-contained in Sietch; do not link back to OnlyOffice.
+  if (payload.messageUrl && payload.source !== "onlyoffice_import") {
+    const open = document.createElement("a");
+    open.href = payload.messageUrl;
+    open.target = "_blank";
+    open.rel = "noopener noreferrer";
+    open.textContent = "Open in Mail";
+    foot.appendChild(open);
+  }
+  if (foot.childNodes.length) {
+    parent.appendChild(foot);
+  }
 }
 
 function pickMailBodyForDisplay(norm, { allowIntroFallback = false, crmPayload = null } = {}) {
@@ -20382,7 +20403,7 @@ function renderInlineReply(panel, type, messageId, norm) {
   });
 }
 
-function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openUrl = "" } = {}) {
+function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openUrl = "", hideOpenInMail = false } = {}) {
   panel.innerHTML = "";
   const norm = normalizeMailMessage(mail);
   if (!norm) {
@@ -20462,41 +20483,47 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
   foot.className = "opp-preview-mail-foot";
   foot.style.cssText = "display:flex; align-items:center; gap:0.25rem; flex-wrap:wrap; padding:0.15rem 0;";
 
-  const actionBtns = document.createElement("div");
-  actionBtns.style.cssText = "display:flex; gap:0.3rem; margin-left:auto;";
+  // Imported snapshots are not live mail_messages, so reply/forward makes no sense.
+  if (messageId && !hideOpenInMail) {
+    const actionBtns = document.createElement("div");
+    actionBtns.style.cssText = "display:flex; gap:0.3rem; margin-left:auto;";
 
-  const replyBtn = document.createElement("button");
-  replyBtn.type = "button";
-  replyBtn.className = "btn btn-ghost btn-small";
-  replyBtn.title = "Reply";
-  replyBtn.innerHTML = '<i class="ti ti-arrow-back-up"></i><span class="btn-label"> Reply</span>';
-  replyBtn.addEventListener("click", () => {
-    renderInlineReply(panel, "reply", messageId, norm);
-  });
-  actionBtns.appendChild(replyBtn);
+    const replyBtn = document.createElement("button");
+    replyBtn.type = "button";
+    replyBtn.className = "btn btn-ghost btn-small";
+    replyBtn.title = "Reply";
+    replyBtn.innerHTML = '<i class="ti ti-arrow-back-up"></i><span class="btn-label"> Reply</span>';
+    replyBtn.addEventListener("click", () => {
+      renderInlineReply(panel, "reply", messageId, norm);
+    });
+    actionBtns.appendChild(replyBtn);
 
-  const replyAllBtn = document.createElement("button");
-  replyAllBtn.type = "button";
-  replyAllBtn.className = "btn btn-ghost btn-small";
-  replyAllBtn.title = "Reply all";
-  replyAllBtn.innerHTML = '<i class="ti ti-arrow-back-up"></i><span class="btn-label"> All</span>';
-  replyAllBtn.addEventListener("click", () => {
-    renderInlineReply(panel, "reply-all", messageId, norm);
-  });
-  actionBtns.appendChild(replyAllBtn);
+    const replyAllBtn = document.createElement("button");
+    replyAllBtn.type = "button";
+    replyAllBtn.className = "btn btn-ghost btn-small";
+    replyAllBtn.title = "Reply all";
+    replyAllBtn.innerHTML = '<i class="ti ti-arrow-back-up"></i><span class="btn-label"> All</span>';
+    replyAllBtn.addEventListener("click", () => {
+      renderInlineReply(panel, "reply-all", messageId, norm);
+    });
+    actionBtns.appendChild(replyAllBtn);
 
-  const fwdBtn = document.createElement("button");
-  fwdBtn.type = "button";
-  fwdBtn.className = "btn btn-ghost btn-small";
-  fwdBtn.title = "Forward";
-  fwdBtn.innerHTML = '<i class="ti ti-arrow-forward-up"></i><span class="btn-label"> Forward</span>';
-  fwdBtn.addEventListener("click", () => {
-    renderInlineReply(panel, "forward", messageId, norm);
-  });
-  actionBtns.appendChild(fwdBtn);
+    const fwdBtn = document.createElement("button");
+    fwdBtn.type = "button";
+    fwdBtn.className = "btn btn-ghost btn-small";
+    fwdBtn.title = "Forward";
+    fwdBtn.innerHTML = '<i class="ti ti-arrow-forward-up"></i><span class="btn-label"> Forward</span>';
+    fwdBtn.addEventListener("click", () => {
+      renderInlineReply(panel, "forward", messageId, norm);
+    });
+    actionBtns.appendChild(fwdBtn);
 
-  foot.appendChild(actionBtns);
-  panel.appendChild(foot);
+    foot.appendChild(actionBtns);
+  }
+
+  if (foot.childNodes.length) {
+    panel.appendChild(foot);
+  }
 }
 
 async function refreshOpenMailPanels() {
@@ -20551,7 +20578,9 @@ function renderHistoryEventItem(ev) {
   const mailPayload = parseHistoryMailPayload(ev);
   const mailIds = extractMailMessageIds(ev);
   const messageId = mailIds[0] || mailPayload?.messageId || null;
-  const isDeletableNote = isDeletableHistoryCategory(ev) && !messageId && !mailPayload && !isHistoryMailEvent(ev, mailPayload);
+  const isImportedEmail = mailPayload?.source === "onlyoffice_import";
+  const hasImportedBody = isImportedEmail && (mailPayload.body_html || mailPayload.body_text || mailPayload.introduction);
+  const isDeletableNote = isDeletableHistoryCategory(ev) && !messageId && !mailPayload && !isHistoryMailEvent(ev, mailPayload) && !isImportedEmail;
 
   const metaRow = document.createElement("div");
   metaRow.className = "opp-preview-history-meta-row";
@@ -20637,7 +20666,7 @@ function renderHistoryEventItem(ev) {
 
   let mailToggle = null;
   let mailPanel = null;
-  if (messageId) {
+  if (messageId || (isImportedEmail && hasImportedBody)) {
     mailToggle = document.createElement("button");
     mailToggle.type = "button";
     mailToggle.className = "opp-preview-mail-toggle";
@@ -20657,6 +20686,24 @@ function renderHistoryEventItem(ev) {
       mailPanel.removeAttribute("hidden");
       mailPanel.classList.remove("hidden");
       mailToggle.textContent = "Hide linked email";
+
+      if (isImportedEmail) {
+        // Imported snapshots are self-contained; render directly without fetching mail_messages.
+        const snapshotMail = {
+          subject: mailPayload.subject,
+          from: mailPayload.from,
+          to: mailPayload.to,
+          cc: mailPayload.cc,
+          bcc: mailPayload.bcc,
+          dateSent: mailPayload.date,
+          htmlBody: mailPayload.body_html || "",
+          textBody: mailPayload.body_text || mailPayload.introduction || "",
+          attachments: mailPayload.attachments || [],
+        };
+        renderMailEmbedPanel(mailPanel, snapshotMail, null, { crmPayload: mailPayload, hideOpenInMail: true });
+        mailPanel.dataset.loaded = "imported";
+        return;
+      }
 
       if (!messageId) {
         mailPanel.innerHTML =

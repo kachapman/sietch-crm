@@ -4040,7 +4040,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _sync_running = False
 
     def _handle_sync_pull_email_bodies(self) -> None:
-        """Import email bodies from OnlyOffice history event snapshots."""
+        """Import OnlyOffice deal-linked emails as Sietch history events.
+
+        Imported emails are stored as self-contained history notes, not as
+        mail_messages rows. They are visible to any user who can open the
+        project, and they do not depend on the OnlyOffice filehandler endpoint.
+        """
         global _sync_log, _sync_running
         if _sync_running:
             _json_response(self, 409, {"error": "Sync already running"})
@@ -4063,19 +4068,56 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _sync_running = False
                 return
 
-            # Get existing deals
+            # Remove any leftover orphan rows from the old wrong import model.
+            # Imported emails now live in history_events, not mail_messages.
+            try:
+                deleted = db.execute(
+                    "DELETE FROM mail_messages WHERE account_id IS NULL AND imap_uid LIKE 'onlyoffice:%'"
+                )
+                if deleted:
+                    _append_sync_log("info", f"Cleaned up {deleted} orphan mail_messages rows from old import model")
+            except Exception as e:
+                _append_sync_log("warn", f"Cleanup of orphan mail_messages rows failed: {e}")
+
+            # Map existing Sietch deals by title
             _append_sync_log("info", "Loading existing deals...")
             existing_deals = db.query_dicts("SELECT id, title FROM opportunities")
             deal_by_title = {d["title"].lower().strip(): d["id"] for d in existing_deals}
             _append_sync_log("info", f"Found {len(deal_by_title)} existing deals")
 
-            # Get existing email UIDs to avoid duplicates
-            existing_uids = set()
-            for row in db.query_dicts("SELECT imap_uid FROM mail_messages WHERE imap_uid LIKE 'onlyoffice:%'"):
-                existing_uids.add(row["imap_uid"])
+            # Build index of existing imported email history events for dedup/upsert.
+            # We key by (opportunity_id, OnlyOffice message_id). Existing events may be
+            # raw OnlyOffice JSON from a previous pull-deals sync, or a prior run of this
+            # import already normalized into an email_snapshot.
+            _append_sync_log("info", "Indexing existing imported email history events...")
+            existing_import_index = {}
+            for row in db.query_dicts(
+                "SELECT id, opportunity_id, content FROM history_events "
+                "WHERE category_id IN (11, 16) AND content LIKE '%message_id%' AND content LIKE '%message_url%'"
+            ):
+                try:
+                    content = json.loads(row["content"] or "{}") if row["content"] else {}
+                    if not isinstance(content, dict):
+                        continue
+                    crm_id = (
+                        content.get("crm_message_id")
+                        or content.get("message_id")
+                        or content.get("messageId")
+                        or content.get("MessageId")
+                        or content.get("id")
+                        or content.get("ID")
+                        or ""
+                    )
+                    opp_id = row["opportunity_id"]
+                    if crm_id and opp_id:
+                        existing_import_index[(opp_id, str(crm_id))] = row["id"]
+                except Exception:
+                    continue
+            _append_sync_log("info", f"Found {len(existing_import_index)} existing imported email history events")
 
             start_time = time.time()
             emails_imported = 0
+            emails_updated = 0
             deals_processed = 0
 
             # Fetch all deals from OnlyOffice
@@ -4121,48 +4163,81 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             if not isinstance(content, dict):
                                 continue
 
+                            # Only process items that look like OnlyOffice email snapshots
+                            crm_message_id = (
+                                content.get("message_id")
+                                or content.get("messageId")
+                                or content.get("MessageId")
+                                or content.get("id")
+                                or content.get("ID")
+                                or ""
+                            )
+                            if not crm_message_id:
+                                continue
+
                             # Extract email fields (handle both raw mail object and snapshot formats)
-                            mid_raw = content.get("message_id") or content.get("messageId") or content.get("MessageId") or ""
                             from_addr = str(content.get("from") or content.get("From") or "").strip()
                             from_addr = from_addr.strip('"').strip("'").strip()
                             to_addr = str(content.get("to") or content.get("To") or "").strip()
+                            cc_addr = str(content.get("cc") or content.get("Cc") or "").strip()
+                            bcc_addr = str(content.get("bcc") or content.get("Bcc") or "").strip()
                             subject = str(content.get("subject") or content.get("Subject") or "").strip()
                             body_html = str(content.get("body_html") or content.get("htmlBody") or content.get("HtmlBody") or content.get("BodyHtml") or "")
                             body_text = str(content.get("body_text") or content.get("textBody") or content.get("TextBody") or content.get("plainText") or "")
                             introduction = str(content.get("introduction") or content.get("Introduction") or content.get("preview") or content.get("Preview") or "")
                             date_sent = str(content.get("date_created") or content.get("dateCreated") or content.get("date_sent") or content.get("dateSent") or "")
 
-                            # Use introduction as fallback for body_text
-                            if not body_text and introduction:
-                                body_text = introduction
-
                             if not subject and not body_text and not body_html and not introduction:
                                 continue
 
-                            uid = f"onlyoffice:{crm_id}:{mid_raw or subject[:50]}"
-                            if uid in existing_uids:
-                                continue
+                            # Normalize attachments
+                            attachments = []
+                            att_list = content.get("attachments") or content.get("Attachments") or []
+                            if isinstance(att_list, list):
+                                for a in att_list:
+                                    if not isinstance(a, dict):
+                                        continue
+                                    attachments.append({
+                                        "filename": str(a.get("fileName") or a.get("filename") or a.get("title") or a.get("name") or "").strip(),
+                                        "size_bytes": int(a.get("size") or a.get("fileSize") or a.get("sizeBytes") or 0) or 0,
+                                        "mime_type": str(a.get("mimeType") or a.get("mime_type") or a.get("contentType") or "").strip(),
+                                    })
 
+                            # Build a clean Sietch email_snapshot without any OnlyOffice URL dependency
+                            snapshot = {
+                                "type": "email_snapshot",
+                                "source": "onlyoffice_import",
+                                "crm_message_id": str(crm_message_id),
+                                "message_id": None,
+                                "from": from_addr,
+                                "to": to_addr,
+                                "cc": cc_addr,
+                                "bcc": bcc_addr,
+                                "subject": subject,
+                                "date_sent": date_sent,
+                                "body_html": body_html,
+                                "body_text": body_text or introduction,
+                                "introduction": introduction,
+                                "attachments": attachments,
+                            }
+
+                            existing_event_id = existing_import_index.get((v3_opp_id, str(crm_message_id)))
                             try:
-                                db.execute(
-                                    """INSERT INTO mail_messages
-                                       (account_id, imap_uid, message_id, from_addr, to_addr,
-                                        subject, body_text, body_html, date_received, folder, is_read)
-                                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'INBOX', TRUE)
-                                       ON CONFLICT (account_id, imap_uid, folder) DO NOTHING""",
-                                    (None, uid, str(mid_raw), from_addr, to_addr,
-                                     subject, body_text or introduction, body_html, date_sent or None),
-                                )
-                                msg_row = db.query_one("SELECT id FROM mail_messages WHERE imap_uid = %s", (uid,))
-                                if msg_row:
-                                    emails_imported += 1
+                                if existing_event_id:
                                     db.execute(
-                                        "INSERT INTO mail_deal_links (message_id, opportunity_id, linked_at) VALUES (%s, %s, NOW()) ON CONFLICT DO NOTHING",
-                                        (msg_row["id"], v3_opp_id),
+                                        "UPDATE history_events SET category_id = %s, content = %s, backdated_created_at = %s WHERE id = %s",
+                                        (EMAIL_HISTORY_CATEGORY_ID, json.dumps(snapshot), date_sent or None, existing_event_id),
                                     )
-                                    existing_uids.add(uid)
+                                    emails_updated += 1
+                                else:
+                                    db.execute(
+                                        "INSERT INTO history_events (opportunity_id, category_id, content, created_by, backdated_created_at) "
+                                        "VALUES (%s, %s, %s, %s, %s)",
+                                        (v3_opp_id, EMAIL_HISTORY_CATEGORY_ID, json.dumps(snapshot), None, date_sent or None),
+                                    )
+                                    emails_imported += 1
                             except Exception as e:
-                                _append_sync_log("warn", f"Failed to import email: {e}")
+                                _append_sync_log("warn", f"Failed to import email for deal {crm_id}: {e}")
 
                     except Exception as e:
                         _append_sync_log("warn", f"History fetch failed for deal {crm_id}: {e}")
@@ -4177,8 +4252,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     break
                 start += page_size
 
-            _append_sync_log("info", f"Email body import complete: {deals_processed} deals processed, {emails_imported} emails imported")
-            _json_response(self, 200, {"ok": True, "deals_processed": deals_processed, "emails_imported": emails_imported, "log": list(_sync_log)})
+            _append_sync_log("info", f"Email body import complete: {deals_processed} deals processed, {emails_imported} imported, {emails_updated} updated")
+            _json_response(self, 200, {"ok": True, "deals_processed": deals_processed, "emails_imported": emails_imported, "emails_updated": emails_updated, "log": list(_sync_log)})
         except Exception as e:
             _append_sync_log("error", f"Email body import failed: {e}")
             _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})

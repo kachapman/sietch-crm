@@ -52,6 +52,14 @@ def db_cursor():
         put_conn(conn)
 
 
+def _exec(cur, sql: str, params: tuple | None) -> None:
+    """Execute a cursor statement, handling None/empty params so literal % wildcards are safe."""
+    if params:
+        cur.execute(sql, params)
+    else:
+        cur.execute(sql)
+
+
 def query(sql: str, params: tuple | None = None, fetch: str = "all") -> Any:
     """Execute a query and return results.
 
@@ -60,7 +68,7 @@ def query(sql: str, params: tuple | None = None, fetch: str = "all") -> Any:
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute(sql, params or ())
+        _exec(cur, sql, params)
         if fetch == "all":
             result = cur.fetchall()
             conn.commit()
@@ -87,7 +95,7 @@ def execute(sql: str, params: tuple | None = None) -> int:
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute(sql, params or ())
+        _exec(cur, sql, params)
         rowcount = cur.rowcount
         conn.commit()
         return rowcount
@@ -104,7 +112,7 @@ def insert_returning(sql: str, params: tuple | None = None) -> Any:
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute(sql, params or ())
+        _exec(cur, sql, params)
         result = cur.fetchone()
         conn.commit()
         return result[0] if result else None
@@ -121,7 +129,7 @@ def query_one(sql: str, params: tuple | None = None) -> dict | None:
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute(sql, params or ())
+        _exec(cur, sql, params)
         row = cur.fetchone()
         conn.commit()
         if not row:
@@ -148,7 +156,7 @@ def query_dicts(sql: str, params: tuple | None = None) -> list[dict]:
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute(sql, params or ())
+        _exec(cur, sql, params)
         rows = cur.fetchall()
         columns = [desc[0] for desc in cur.description] if cur.description else []
         conn.commit()
