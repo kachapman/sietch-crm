@@ -3664,9 +3664,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _sync_running = False
                 return
             _append_sync_log("info", "Fetching tasks...")
-            open_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/projects/task/")) or []
-            closed_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/projects/task/?closed=true")) or []
-            all_tasks = (open_tasks if isinstance(open_tasks, list) else []) + (closed_tasks if isinstance(closed_tasks, list) else [])
+            try:
+                open_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/projects/task/")) or []
+                closed_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/projects/task/?closed=true")) or []
+                all_tasks = (open_tasks if isinstance(open_tasks, list) else []) + (closed_tasks if isinstance(closed_tasks, list) else [])
+            except Exception as e:
+                _append_sync_log("warn", f"Tasks API not available: {e}")
+                all_tasks = []
             count = 0
             for task in all_tasks:
                 if not isinstance(task, dict):
@@ -3736,6 +3740,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             existing_deals = db.query_dicts("SELECT id, title FROM opportunities")
             deal_by_title = {d["title"].lower().strip(): d["id"] for d in existing_deals}
             _append_sync_log("info", f"Found {len(deal_by_title)} existing deals")
+            start_time = time.time()
 
             # Clear existing tags and custom field values
             _append_sync_log("info", "Clearing existing opportunity tags and custom field values...")
@@ -3771,6 +3776,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         continue  # Deal doesn't exist locally
 
                     deals_updated += 1
+                    elapsed = time.time() - start_time
+                    rate = deals_updated / elapsed if elapsed > 0 else 0
+                    remaining = (len(deal_by_title) - deals_updated) / rate if rate > 0 else 0
+                    _append_sync_log("info", f"[{deals_updated}/{len(deal_by_title)}] {title[:40]}... ({int(remaining)}s remaining)")
 
                     # Sync tags
                     try:

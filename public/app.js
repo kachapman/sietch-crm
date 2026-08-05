@@ -23624,6 +23624,30 @@ function openAdminConsoleModal() {
         password: $("#sync-password")?.value?.trim() || "",
       };
     }
+    function saveSyncCredentials() {
+      const payload = getSyncPayload();
+      if (payload.portal_url || payload.email) {
+        localStorage.setItem("oo_sync_credentials", JSON.stringify({
+          portal_url: payload.portal_url,
+          email: payload.email,
+          password: payload.password,
+        }));
+      }
+    }
+    function loadSyncCredentials() {
+      try {
+        const saved = JSON.parse(localStorage.getItem("oo_sync_credentials") || "{}");
+        if (saved.portal_url) $("#sync-portal-url").value = saved.portal_url;
+        if (saved.email) $("#sync-email").value = saved.email;
+        if (saved.password) $("#sync-password").value = saved.password;
+      } catch {}
+    }
+    // Load saved credentials on tab open
+    loadSyncCredentials();
+    // Save credentials when any sync button is clicked
+    ["sync-test-btn", "sync-deal-tags-btn", "sync-deals-btn", "sync-tags-btn", "sync-tasks-btn", "sync-full-btn"].forEach(id => {
+      $(`#${id}`)?.addEventListener("click", saveSyncCredentials);
+    });
     function renderSyncLog(log) {
       const logEl = $("#sync-log");
       if (!logEl || !log?.length) return;
