@@ -23656,21 +23656,53 @@ function openAdminConsoleModal() {
     });
 
     $("#sync-deal-tags-btn")?.addEventListener("click", async () => {
-      showSyncProgress("Syncing tags and custom fields for existing deals...");
+      showSyncProgress("Syncing tags and custom fields for existing deals... (this may take several minutes)");
+      // Start polling for progress
+      let pollCount = 0;
+      const pollInterval = setInterval(async () => {
+        try {
+          const status = await api("/api/v2/admin/sync/status");
+          renderSyncLog(status.log);
+          pollCount++;
+          if (!status.running && pollCount > 2) {
+            clearInterval(pollInterval);
+          }
+        } catch (e) { /* ignore */ }
+      }, 5000);
       try {
         const data = await api("/api/v2/admin/sync/pull-deal-tags", { method: "POST", body: JSON.stringify(getSyncPayload()) });
-        showSyncResult({ message: `Deals updated: ${data.deals_updated || 0} | Tags: ${data.tags_linked || 0} | Custom fields: ${data.custom_fields || 0}` });
+        clearInterval(pollInterval);
         renderSyncLog(data.log);
-      } catch (e) { showSyncError(e.message); }
+        showSyncResult({ message: `Deals updated: ${data.deals_updated || 0} | Tags: ${data.tags_linked || 0} | Custom fields: ${data.custom_fields || 0}` });
+      } catch (e) {
+        clearInterval(pollInterval);
+        showSyncError(e.message);
+        // Try to get final log
+        try { const s = await api("/api/v2/admin/sync/status"); renderSyncLog(s.log); } catch {}
+      }
     });
 
     $("#sync-deals-btn")?.addEventListener("click", async () => {
-      showSyncProgress("Pulling deals (this may take a while)...");
+      showSyncProgress("Pulling new deals (this may take several minutes)...");
+      let pollCount = 0;
+      const pollInterval = setInterval(async () => {
+        try {
+          const status = await api("/api/v2/admin/sync/status");
+          renderSyncLog(status.log);
+          pollCount++;
+          if (!status.running && pollCount > 2) clearInterval(pollInterval);
+        } catch (e) {}
+      }, 5000);
       try {
         const data = await api("/api/v2/admin/sync/pull-deals", { method: "POST", body: JSON.stringify(getSyncPayload()) });
-        showSyncResult({ message: `Deals: ${data.created || 0} created, ${data.skipped || 0} skipped | Tags: ${data.tags || 0} | History: ${data.history || 0}` });
+        clearInterval(pollInterval);
         renderSyncLog(data.log);
-      } catch (e) { showSyncError(e.message); }
+        showSyncResult({ message: `Deals: ${data.created || 0} created, ${data.skipped || 0} skipped | Tags: ${data.tags || 0} | History: ${data.history || 0}` });
+      } catch (e) {
+        clearInterval(pollInterval);
+        showSyncError(e.message);
+        try { const s = await api("/api/v2/admin/sync/status"); renderSyncLog(s.log); } catch {}
+      }
     });
 
     $("#sync-tags-btn")?.addEventListener("click", async () => {
@@ -23684,21 +23716,49 @@ function openAdminConsoleModal() {
 
     $("#sync-tasks-btn")?.addEventListener("click", async () => {
       showSyncProgress("Pulling tasks...");
+      let pollCount = 0;
+      const pollInterval = setInterval(async () => {
+        try {
+          const status = await api("/api/v2/admin/sync/status");
+          renderSyncLog(status.log);
+          pollCount++;
+          if (!status.running && pollCount > 2) clearInterval(pollInterval);
+        } catch (e) {}
+      }, 5000);
       try {
         const data = await api("/api/v2/admin/sync/pull-tasks", { method: "POST", body: JSON.stringify(getSyncPayload()) });
-        showSyncResult({ message: `Tasks synced: ${data.created || 0} new (of ${data.total || 0})` });
+        clearInterval(pollInterval);
         renderSyncLog(data.log);
-      } catch (e) { showSyncError(e.message); }
+        showSyncResult({ message: `Tasks synced: ${data.created || 0} new (of ${data.total || 0})` });
+      } catch (e) {
+        clearInterval(pollInterval);
+        showSyncError(e.message);
+        try { const s = await api("/api/v2/admin/sync/status"); renderSyncLog(s.log); } catch {}
+      }
     });
 
     $("#sync-full-btn")?.addEventListener("click", async () => {
-      showSyncProgress("Running full reconcile...");
+      showSyncProgress("Running full reconcile (this may take several minutes)...");
+      let pollCount = 0;
+      const pollInterval = setInterval(async () => {
+        try {
+          const status = await api("/api/v2/admin/sync/status");
+          renderSyncLog(status.log);
+          pollCount++;
+          if (!status.running && pollCount > 2) clearInterval(pollInterval);
+        } catch (e) {}
+      }, 5000);
       try {
         const data = await api("/api/v2/admin/sync/full-reconcile", { method: "POST", body: JSON.stringify(getSyncPayload()) });
+        clearInterval(pollInterval);
+        renderSyncLog(data.log);
         const r = data.results || {};
         showSyncResult({ message: `Done! Tags: ${r.tags_created || 0}, Tasks: ${r.tasks_created || 0}, Custom fields: ${r.custom_fields_created || 0}` });
-        renderSyncLog(data.log);
-      } catch (e) { showSyncError(e.message); }
+      } catch (e) {
+        clearInterval(pollInterval);
+        showSyncError(e.message);
+        try { const s = await api("/api/v2/admin/sync/status"); renderSyncLog(s.log); } catch {}
+      }
     });
   }
 

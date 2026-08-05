@@ -1568,6 +1568,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             self._handle_sync_pull_tasks()
             return
+        if api_path == "/api/v2/admin/sync/status":
+            user = _require_admin(self)
+            if not user:
+                return
+            _json_response(self, 200, {"running": _sync_running, "log": list(_sync_log)})
+            return
         if api_path == "/api/v2/admin/sync/pull-deal-tags" and method == "POST":
             user = _require_admin(self)
             if not user:
@@ -3790,10 +3796,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     except Exception:
                         pass
 
-                    # Sync custom fields
+                    # Sync custom fields (from full deal details, not separate endpoint)
                     try:
-                        cf_data = _unwrap(_crm_api_get(portal, token, f"/api/2.0/crm/opportunity/{crm_id}/customfield"))
-                        cf_list = cf_data if isinstance(cf_data, list) else []
+                        deal_data = _unwrap(_crm_api_get(portal, token, f"/api/2.0/crm/opportunity/{crm_id}"))
+                        cf_list = deal_data.get("customFields", []) if isinstance(deal_data, dict) else []
                         for cf in cf_list:
                             if not isinstance(cf, dict):
                                 continue
