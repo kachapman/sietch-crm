@@ -23769,6 +23769,31 @@ function openAdminConsoleModal() {
       }
     });
 
+    $("#sync-email-bodies-btn")?.addEventListener("click", async () => {
+      showSyncProgress("Importing email bodies from OnlyOffice (this may take several minutes)...");
+      let lastLogLen = 0;
+      const pollInterval = setInterval(async () => {
+        try {
+          const status = await api("/api/v2/admin/sync/status");
+          if (status.log && status.log.length > lastLogLen) {
+            renderSyncLog(status.log);
+            lastLogLen = status.log.length;
+          }
+          if (!status.running && lastLogLen > 0) clearInterval(pollInterval);
+        } catch (e) {}
+      }, 3000);
+      try {
+        const data = await api("/api/v2/admin/sync/pull-email-bodies", { method: "POST", body: JSON.stringify(getSyncPayload()) });
+        clearInterval(pollInterval);
+        if (data.log) renderSyncLog(data.log);
+        showSyncResult({ message: `Email bodies: ${data.emails_imported || 0} imported from ${data.deals_processed || 0} deals` });
+      } catch (e) {
+        clearInterval(pollInterval);
+        showSyncError(e.message);
+        try { const s = await api("/api/v2/admin/sync/status"); if (s.log) renderSyncLog(s.log); } catch {}
+      }
+    });
+
     $("#sync-full-btn")?.addEventListener("click", async () => {
       showSyncProgress("Running full reconcile (this may take several minutes)...");
       let lastLogLen = 0;

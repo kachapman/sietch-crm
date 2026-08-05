@@ -19,9 +19,13 @@ This document tracks the progress of migrating data from OnlyOffice CRM to Sietc
 - **Endpoints:**
   - `POST /api/v2/admin/sync/test` — Test OnlyOffice connection
   - `POST /api/v2/admin/sync/pull-tags` — Pull tags from OnlyOffice
-  - `POST /api/v2/admin/sync/pull-tasks` — Pull tasks from OnlyOffice
+  - `POST /api/v2/admin/sync/pull-deal-tags` — Sync tags + custom fields for existing deals
+  - `POST /api/v2/admin/sync/pull-deals` — Pull new deals with history
+  - `POST /api/v2/admin/sync/pull-email-bodies` — Import email bodies from history event snapshots
   - `POST /api/v2/admin/sync/full-reconcile` — Full read-only reconcile
-- **UI:** Admin "Import Sync" tab with progress log
+  - `GET /api/v2/admin/sync/status` — Get sync progress (for polling)
+- **UI:** Admin "Import Sync" tab with progress log and polling
+- **Note:** Tasks sync via OnlyOffice API returns 404 (bot account lacks access). Tasks were already migrated in the full migration.
 
 ### 3. Email Import (`import_email.py`)
 - **Status:** EXISTS but uses wrong table names
@@ -114,14 +118,23 @@ python migrate_dashboard_data.py
 
 ## Timeline
 
-| Phase | Status | Estimated Time |
-|-------|--------|----------------|
-| Full migration script | ✅ EXISTS | — |
-| Admin sync backend | ✅ IMPLEMENTED | — |
-| Email import rewrite | ⏳ PENDING | 2-3 hours |
-| Full migration wrapper | ⏳ PENDING | 2-3 hours |
-| Tonight's migration | ⏳ PENDING | 8-12 hours |
-| Verification | ⏳ PENDING | 1 hour |
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Full migration script | ✅ EXISTS | 902 lines, handles all core entities |
+| Admin sync backend | ✅ IMPLEMENTED | 7 endpoints + UI with progress polling |
+| Email body import | ✅ IMPLEMENTED | Imports from OnlyOffice history event snapshots |
+| Tags + custom fields sync | ✅ IMPLEMENTED | Syncs for existing deals |
+| Tasks sync | ⚠️ SKIP | Tasks already migrated; OnlyOffice API returns 404 |
+| Model training | ⏳ DEFERRED | Waiting for user field migration for more labeled data |
+
+## Remaining TODO
+
+### Model Training (Deferred)
+- **Status:** Waiting for OnlyOffice user field migration to bring more labeled data
+- **Current state:** ML is disabled (`ML_ENABLED = False`), no trained model exists
+- **When ready:** Query `mail_messages` + `mail_deal_links` for labeled examples, train LogisticRegression + KNeighborsClassifier on sentence-transformer embeddings
+- **Auto-retrain:** After every 10 corrections
+- **Auto-reload:** Immediate when retrained
 
 ---
 

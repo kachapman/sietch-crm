@@ -1592,6 +1592,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             self._handle_sync_full_reconcile()
             return
+        if api_path == "/api/v2/admin/sync/pull-email-bodies" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_sync_pull_email_bodies()
+            return
 
         # ── Bot customers (admin) ──
         if api_path.startswith("/api/bot-customers"):
@@ -4029,6 +4035,145 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"ok": True, "created": created, "skipped": skipped, "tags": tag_count, "custom_fields": cf_count, "history": history_count, "total": len(all_opps), "log": list(_sync_log)})
         except Exception as e:
             _append_sync_log("error", f"Deals sync failed: {e}")
+            _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
+        finally:
+            _sync_running = False
+
+    def _handle_sync_pull_email_bodies(self) -> None:
+        """Import email bodies from OnlyOffice history event snapshots."""
+        global _sync_log, _sync_running
+        if _sync_running:
+            _json_response(self, 409, {"error": "Sync already running"})
+            return
+        _sync_running = True
+        _sync_log.clear()
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            portal = payload.get("portal_url", "").strip()
+            email = payload.get("email", "").strip()
+            password = payload.get("password", "").strip()
+            if not portal or not email or not password:
+                _json_response(self, 400, {"error": "portal_url, email, and password required"})
+                _sync_running = False
+                return
+            _append_sync_log("info", "Authenticating to OnlyOffice CRM...")
+            token = _crm_authenticate(portal, email, password)
+            if not token:
+                _json_response(self, 400, {"error": "Authentication failed"})
+                _sync_running = False
+                return
+
+            # Get existing deals
+            _append_sync_log("info", "Loading existing deals...")
+            existing_deals = db.query_dicts("SELECT id, title FROM opportunities")
+            deal_by_title = {d["title"].lower().strip(): d["id"] for d in existing_deals}
+            _append_sync_log("info", f"Found {len(deal_by_title)} existing deals")
+
+            # Get existing email UIDs to avoid duplicates
+            existing_uids = set()
+            for row in db.query_dicts("SELECT imap_uid FROM mail_messages WHERE imap_uid LIKE 'onlyoffice:%'"):
+                existing_uids.add(row["imap_uid"])
+
+            start_time = time.time()
+            emails_imported = 0
+            deals_processed = 0
+
+            # Fetch all deals from OnlyOffice
+            _append_sync_log("info", "Fetching deals from OnlyOffice to import email bodies...")
+            start = 0
+            page_size = 500
+
+            while True:
+                sep = "&" if "?" in "/api/2.0/crm/opportunity/filter" else "?"
+                path = f"/api/2.0/crm/opportunity/filter{sep}count={page_size}&startIndex={start}"
+                data = _unwrap(_crm_api_get(portal, token, path))
+                if not isinstance(data, list) or not data:
+                    break
+
+                for o in data:
+                    if not isinstance(o, dict):
+                        continue
+                    crm_id = str(o.get("id") or o.get("ID") or "")
+                    title = str(o.get("title") or o.get("Title") or "").strip()
+                    v3_opp_id = deal_by_title.get(title.lower().strip())
+
+                    if not v3_opp_id:
+                        continue
+
+                    deals_processed += 1
+
+                    # Fetch history events for this deal
+                    try:
+                        hist_path = f"/api/2.0/crm/history/filter?entityType=opportunity&entityId={crm_id}&count=500"
+                        hist_data = _unwrap(_crm_api_get(portal, token, hist_path))
+                        hist_list = hist_data if isinstance(hist_data, list) else []
+
+                        for h in hist_list:
+                            if not isinstance(h, dict):
+                                continue
+                            content_str = h.get("content") or h.get("Content") or ""
+                            if not content_str:
+                                continue
+                            try:
+                                content = json.loads(content_str) if isinstance(content_str, str) else content_str
+                            except (json.JSONDecodeError, TypeError):
+                                continue
+                            if not isinstance(content, dict) or content.get("type") != "email_snapshot":
+                                continue
+
+                            from_addr = content.get("from", "")
+                            to_addr = content.get("to", "")
+                            subject = content.get("subject", "")
+                            body_html = content.get("body_html", "")
+                            body_text = content.get("body_text", "")
+                            date_sent = content.get("date_sent", "")
+                            msg_id_header = content.get("message_id", "")
+
+                            if not subject and not body_text and not body_html:
+                                continue
+
+                            uid = f"onlyoffice:{crm_id}:{msg_id_header or subject[:50]}"
+                            if uid in existing_uids:
+                                continue
+
+                            try:
+                                db.execute(
+                                    """INSERT INTO mail_messages
+                                       (account_id, imap_uid, message_id, from_addr, to_addr,
+                                        subject, body_text, body_html, date_received, folder, is_read)
+                                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'INBOX', TRUE)
+                                       ON CONFLICT (account_id, imap_uid, folder) DO NOTHING""",
+                                    (None, uid, msg_id_header, from_addr, to_addr,
+                                     subject, body_text, body_html, date_sent or None),
+                                )
+                                msg_row = db.query_one("SELECT id FROM mail_messages WHERE imap_uid = %s", (uid,))
+                                if msg_row:
+                                    emails_imported += 1
+                                    db.execute(
+                                        "INSERT INTO mail_deal_links (message_id, opportunity_id, linked_at) VALUES (%s, %s, NOW()) ON CONFLICT DO NOTHING",
+                                        (msg_row["id"], v3_opp_id),
+                                    )
+                                    existing_uids.add(uid)
+                            except Exception as e:
+                                _append_sync_log("warn", f"Failed to import email: {e}")
+
+                    except Exception as e:
+                        _append_sync_log("warn", f"History fetch failed for deal {crm_id}: {e}")
+
+                    if deals_processed % 50 == 0:
+                        elapsed = time.time() - start_time
+                        rate = deals_processed / elapsed if elapsed > 0 else 0
+                        remaining = (len(deal_by_title) - deals_processed) / rate if rate > 0 else 0
+                        _append_sync_log("info", f"[{deals_processed}/{len(deal_by_title)}] {title[:40]}... ({int(remaining)}s remaining)")
+
+                if len(data) < page_size:
+                    break
+                start += page_size
+
+            _append_sync_log("info", f"Email body import complete: {deals_processed} deals processed, {emails_imported} emails imported")
+            _json_response(self, 200, {"ok": True, "deals_processed": deals_processed, "emails_imported": emails_imported, "log": list(_sync_log)})
+        except Exception as e:
+            _append_sync_log("error", f"Email body import failed: {e}")
             _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
         finally:
             _sync_running = False
