@@ -108,6 +108,52 @@ def _crm_authenticate(portal: str, email: str, password: str) -> str | None:
         _append_sync_log("error", f"Authentication failed: {e}")
         return None
 
+def _fetch_onlyoffice_mail_body(portal: str, token: str, message_id) -> tuple[str, str]:
+    """Fetch full email body from OnlyOffice filehandler.ashx.
+
+    Returns (body_html, body_text).  Either or both may be empty on failure.
+    """
+    mid = str(message_id).strip()
+    if not mid or not mid.isdigit():
+        return "", ""
+    url = f"{portal.rstrip('/')}/Products/CRM/HttpHandlers/filehandler.ashx?action=mailmessage&message_id={mid}"
+    req = urllib.request.Request(url, headers={
+        "Authorization": token,
+        "Accept": "application/json, text/html, */*",
+    })
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
+            ctype = resp.headers.get("Content-Type", "")
+            raw = resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        return "", ""
+    # Handle JSON response (mail message object with htmlBody / textBody)
+    if "application/json" in ctype or raw.lstrip().startswith(("{", "[")):
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return "", ""
+        if isinstance(data, dict):
+            # Unwrap OnlyOffice envelope if present
+            data = data.get("response", data)
+        if isinstance(data, dict):
+            html = (data.get("htmlBody") or data.get("HtmlBody")
+                    or data.get("bodyHtml") or data.get("BodyHtml")
+                    or data.get("body") or "")
+            text = (data.get("textBody") or data.get("TextBody")
+                    or data.get("plainText") or data.get("PlainText")
+                    or "")
+            if html or text:
+                return str(html), str(text)
+    # Handle raw HTML response
+    if raw.strip() and not raw.strip().startswith("marker file"):
+        return raw, ""
+    return "", ""
+
+
 def _unwrap(data: Any) -> Any:
     """Unwrap OnlyOffice API response envelope."""
     if isinstance(data, dict):
@@ -4118,10 +4164,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             start_time = time.time()
             emails_imported = 0
             emails_updated = 0
+            emails_with_body = 0
+            emails_body_fetch_failed = 0
             deals_processed = 0
+            emails_this_batch = 0
 
             # Fetch all deals from OnlyOffice
-            _append_sync_log("info", "Fetching deals from OnlyOffice to import email bodies...")
+            _append_sync_log("info", "Fetching deals from OnlyOffice to import email bodies (with full body fetch)...")
             start = 0
             page_size = 500
 
@@ -4144,12 +4193,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
                     deals_processed += 1
 
+                    if deals_processed % 10 == 0:
+                        elapsed = time.time() - start_time
+                        _append_sync_log("info", f"[{deals_processed}/{len(deal_by_title)}] Processing deals... ({int(elapsed)}s elapsed)")
+
                     # Fetch history events for this deal
+                    email_count_before = emails_imported + emails_updated
                     try:
                         hist_path = f"/api/2.0/crm/history/filter?entityType=opportunity&entityId={crm_id}&count=500"
                         hist_data = _unwrap(_crm_api_get(portal, token, hist_path))
                         hist_list = hist_data if isinstance(hist_data, list) else []
 
+                        email_events_in_deal = 0
                         for h in hist_list:
                             if not isinstance(h, dict):
                                 continue
@@ -4175,6 +4230,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             if not crm_message_id:
                                 continue
 
+                            email_events_in_deal += 1
+
                             # Extract email fields (handle both raw mail object and snapshot formats)
                             from_addr = str(content.get("from") or content.get("From") or "").strip()
                             from_addr = from_addr.strip('"').strip("'").strip()
@@ -4189,6 +4246,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
                             if not subject and not body_text and not body_html and not introduction:
                                 continue
+
+                            # Fetch full body from filehandler.ashx if we don't already have one
+                            if not body_html and not body_text:
+                                try:
+                                    fh_html, fh_text = _fetch_onlyoffice_mail_body(portal, token, crm_message_id)
+                                    if fh_html or fh_text:
+                                        body_html = body_html or fh_html
+                                        body_text = body_text or fh_text
+                                        emails_with_body += 1
+                                    else:
+                                        emails_body_fetch_failed += 1
+                                except Exception as e:
+                                    emails_body_fetch_failed += 1
 
                             # Normalize attachments
                             attachments = []
@@ -4239,21 +4309,26 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             except Exception as e:
                                 _append_sync_log("warn", f"Failed to import email for deal {crm_id}: {e}")
 
+                        emails_this_batch = (emails_imported + emails_updated) - email_count_before
+                        if email_events_in_deal > 0 and deals_processed % 5 == 0:
+                            _append_sync_log("info", f"  Deal #{crm_id} '{title[:35]}': {email_events_in_deal} email events, {emails_this_batch} saved (total: {emails_imported + emails_updated})")
+
                     except Exception as e:
                         _append_sync_log("warn", f"History fetch failed for deal {crm_id}: {e}")
 
-                    if deals_processed % 50 == 0:
+                    if deals_processed % 25 == 0:
                         elapsed = time.time() - start_time
-                        rate = deals_processed / elapsed if elapsed > 0 else 0
-                        remaining = (len(deal_by_title) - deals_processed) / rate if rate > 0 else 0
-                        _append_sync_log("info", f"[{deals_processed}/{len(deal_by_title)}] {title[:40]}... ({int(remaining)}s remaining)")
+                        total_done = emails_imported + emails_updated
+                        rate = total_done / elapsed if elapsed > 0 else 0
+                        _append_sync_log("info", f"Progress: {deals_processed} deals, {total_done} emails imported/updated ({emails_with_body} with full body, {emails_body_fetch_failed} fetch failed, {int(elapsed)}s elapsed)")
 
                 if len(data) < page_size:
                     break
                 start += page_size
 
-            _append_sync_log("info", f"Email body import complete: {deals_processed} deals processed, {emails_imported} imported, {emails_updated} updated")
-            _json_response(self, 200, {"ok": True, "deals_processed": deals_processed, "emails_imported": emails_imported, "emails_updated": emails_updated, "log": list(_sync_log)})
+            elapsed = time.time() - start_time
+            _append_sync_log("info", f"Email body import complete: {deals_processed} deals processed, {emails_imported} imported, {emails_updated} updated, {emails_with_body} with full body fetched, {emails_body_fetch_failed} body fetches failed ({int(elapsed)}s total)")
+            _json_response(self, 200, {"ok": True, "deals_processed": deals_processed, "emails_imported": emails_imported, "emails_updated": emails_updated, "emails_with_body": emails_with_body, "emails_body_fetch_failed": emails_body_fetch_failed, "elapsed_seconds": int(elapsed), "log": list(_sync_log)})
         except Exception as e:
             _append_sync_log("error", f"Email body import failed: {e}")
             _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
