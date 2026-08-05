@@ -4118,21 +4118,28 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                 content = json.loads(content_str) if isinstance(content_str, str) else content_str
                             except (json.JSONDecodeError, TypeError):
                                 continue
-                            if not isinstance(content, dict) or content.get("type") != "email_snapshot":
+                            if not isinstance(content, dict):
                                 continue
 
-                            from_addr = content.get("from", "")
-                            to_addr = content.get("to", "")
-                            subject = content.get("subject", "")
-                            body_html = content.get("body_html", "")
-                            body_text = content.get("body_text", "")
-                            date_sent = content.get("date_sent", "")
-                            msg_id_header = content.get("message_id", "")
+                            # Extract email fields (handle both raw mail object and snapshot formats)
+                            mid_raw = content.get("message_id") or content.get("messageId") or content.get("MessageId") or ""
+                            from_addr = str(content.get("from") or content.get("From") or "").strip()
+                            from_addr = from_addr.strip('"').strip("'").strip()
+                            to_addr = str(content.get("to") or content.get("To") or "").strip()
+                            subject = str(content.get("subject") or content.get("Subject") or "").strip()
+                            body_html = str(content.get("body_html") or content.get("htmlBody") or content.get("HtmlBody") or content.get("BodyHtml") or "")
+                            body_text = str(content.get("body_text") or content.get("textBody") or content.get("TextBody") or content.get("plainText") or "")
+                            introduction = str(content.get("introduction") or content.get("Introduction") or content.get("preview") or content.get("Preview") or "")
+                            date_sent = str(content.get("date_created") or content.get("dateCreated") or content.get("date_sent") or content.get("dateSent") or "")
 
-                            if not subject and not body_text and not body_html:
+                            # Use introduction as fallback for body_text
+                            if not body_text and introduction:
+                                body_text = introduction
+
+                            if not subject and not body_text and not body_html and not introduction:
                                 continue
 
-                            uid = f"onlyoffice:{crm_id}:{msg_id_header or subject[:50]}"
+                            uid = f"onlyoffice:{crm_id}:{mid_raw or subject[:50]}"
                             if uid in existing_uids:
                                 continue
 
@@ -4143,8 +4150,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                         subject, body_text, body_html, date_received, folder, is_read)
                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'INBOX', TRUE)
                                        ON CONFLICT (account_id, imap_uid, folder) DO NOTHING""",
-                                    (None, uid, msg_id_header, from_addr, to_addr,
-                                     subject, body_text, body_html, date_sent or None),
+                                    (None, uid, str(mid_raw), from_addr, to_addr,
+                                     subject, body_text or introduction, body_html, date_sent or None),
                                 )
                                 msg_row = db.query_one("SELECT id FROM mail_messages WHERE imap_uid = %s", (uid,))
                                 if msg_row:
