@@ -23655,6 +23655,15 @@ function openAdminConsoleModal() {
       } catch (e) { showSyncError(e.message); }
     });
 
+    $("#sync-deals-btn")?.addEventListener("click", async () => {
+      showSyncProgress("Pulling deals (this may take a while)...");
+      try {
+        const data = await api("/api/v2/admin/sync/pull-deals", { method: "POST", body: JSON.stringify(getSyncPayload()) });
+        showSyncResult({ message: `Deals: ${data.created || 0} created, ${data.skipped || 0} skipped | Tags: ${data.tags || 0} | History: ${data.history || 0}` });
+        renderSyncLog(data.log);
+      } catch (e) { showSyncError(e.message); }
+    });
+
     $("#sync-tags-btn")?.addEventListener("click", async () => {
       showSyncProgress("Pulling tags...");
       try {

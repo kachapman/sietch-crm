@@ -1568,6 +1568,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             self._handle_sync_pull_tasks()
             return
+        if api_path == "/api/v2/admin/sync/pull-deals" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_sync_pull_deals()
+            return
         if api_path == "/api/v2/admin/sync/full-reconcile" and method == "POST":
             user = _require_admin(self)
             if not user:
@@ -3562,12 +3568,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not token:
                 _json_response(self, 400, {"error": "Authentication failed", "log": list(_sync_log)})
                 return
-            # Try to fetch something to verify access
+            # Try to fetch something to verify access — use stages (works for all accounts)
             try:
-                users_data = _unwrap(_crm_api_get(portal, token, "/api/2.0/people/"))
-                user_count = len(users_data) if isinstance(users_data, list) else 0
-                _append_sync_log("info", f"Connection successful. Found {user_count} users.")
-                _json_response(self, 200, {"ok": True, "user_count": user_count, "log": list(_sync_log)})
+                stages_data = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/opportunity/stage"))
+                stage_count = len(stages_data) if isinstance(stages_data, list) else 0
+                _append_sync_log("info", f"Connection successful. Found {stage_count} pipeline stages.")
+                _json_response(self, 200, {"ok": True, "stage_count": stage_count, "log": list(_sync_log)})
             except Exception as e:
                 _append_sync_log("error", f"API test failed: {e}")
                 _json_response(self, 400, {"error": f"API test failed: {e}", "log": list(_sync_log)})
@@ -3677,6 +3683,192 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"ok": True, "created": count, "total": len(all_tasks), "log": list(_sync_log)})
         except Exception as e:
             _append_sync_log("error", f"Tasks sync failed: {e}")
+            _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
+        finally:
+            _sync_running = False
+
+    def _handle_sync_pull_deals(self) -> None:
+        """Pull deals (opportunities) from OnlyOffice CRM with tags, custom fields, and history."""
+        global _sync_log, _sync_running
+        if _sync_running:
+            _json_response(self, 409, {"error": "Sync already running"})
+            return
+        _sync_running = True
+        _sync_log.clear()
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            portal = payload.get("portal_url", "").strip()
+            email = payload.get("email", "").strip()
+            password = payload.get("password", "").strip()
+            if not portal or not email or not password:
+                _json_response(self, 400, {"error": "portal_url, email, and password required"})
+                _sync_running = False
+                return
+            _append_sync_log("info", "Authenticating to OnlyOffice CRM...")
+            token = _crm_authenticate(portal, email, password)
+            if not token:
+                _json_response(self, 400, {"error": "Authentication failed"})
+                _sync_running = False
+                return
+
+            # Get existing ID maps
+            tag_map = {}
+            for row in db.query_dicts("SELECT id, title FROM tag_definitions"):
+                tag_map[row["title"].lower()] = row["id"]
+            cf_map = {}
+            for row in db.query_dicts("SELECT id, field_key FROM custom_field_definitions"):
+                cf_map[row["field_key"]] = row["id"]
+            stage_map = {}
+            for row in db.query_dicts("SELECT id, title FROM stages"):
+                stage_map[row["title"].lower()] = row["id"]
+
+            _append_sync_log("info", "Fetching deals from OnlyOffice...")
+            # Fetch all opportunities (paginated)
+            start = 0
+            page_size = 500
+            all_opps = []
+            while True:
+                sep = "&" if "?" in "/api/2.0/crm/opportunity/filter" else "?"
+                path = f"/api/2.0/crm/opportunity/filter{sep}count={page_size}&startIndex={start}"
+                data = _unwrap(_crm_api_get(portal, token, path))
+                if not isinstance(data, list) or not data:
+                    break
+                all_opps.extend(data)
+                if len(data) < page_size:
+                    break
+                start += page_size
+                _append_sync_log("info", f"Fetched {len(all_opps)} deals so far...")
+
+            _append_sync_log("info", f"Total deals to sync: {len(all_opps)}")
+            created = 0
+            updated = 0
+            skipped = 0
+            history_count = 0
+            tag_count = 0
+            cf_count = 0
+
+            for idx, o in enumerate(all_opps):
+                if not isinstance(o, dict):
+                    continue
+                crm_id = str(o.get("id") or o.get("ID") or "")
+                title = str(o.get("title") or o.get("Title") or "Untitled").strip()
+
+                # Stage mapping
+                stage_data = o.get("stage") or o.get("Stage") or {}
+                crm_stage_id = str(stage_data.get("id") or stage_data.get("ID") or "")
+                v3_stage_id = stage_map.get(crm_stage_id.lower() if crm_stage_id else "")
+
+                # Bid value
+                bid_value = None
+                for bv_key in ("bidValue", "BidValue", "value", "Value"):
+                    raw = o.get(bv_key)
+                    if raw is not None:
+                        try:
+                            bid_value = float(raw)
+                        except (TypeError, ValueError):
+                            pass
+                        break
+
+                # Description
+                description = str(o.get("description") or o.get("Description") or "").strip() or None
+
+                # Check if deal already exists (by title)
+                existing = db.query_one("SELECT id FROM opportunities WHERE title = %s", (title,))
+                if existing:
+                    skipped += 1
+                    continue
+
+                # Insert opportunity
+                db.execute(
+                    """INSERT INTO opportunities (title, description, stage_id, bid_value, created_at)
+                       VALUES (%s, %s, %s, %s, NOW())""",
+                    (title, description, v3_stage_id, bid_value),
+                )
+                v3_opp_id = db.query_one("SELECT id FROM opportunities WHERE title = %s", (title,))["id"]
+                created += 1
+
+                if created % 50 == 0:
+                    _append_sync_log("info", f"Progress: {created} deals created, {skipped} skipped...")
+
+                # Fetch and sync tags for this deal
+                try:
+                    tags_data = _unwrap(_crm_api_get(portal, token, f"/api/2.0/crm/opportunity/tag/{crm_id}"))
+                    tag_list = tags_data if isinstance(tags_data, list) else []
+                    for t in tag_list:
+                        tag_title = ""
+                        if isinstance(t, dict):
+                            tag_title = str(t.get("title") or t.get("name") or t.get("Title") or "").strip()
+                        elif isinstance(t, str):
+                            tag_title = t.strip()
+                        if tag_title:
+                            tag_id = tag_map.get(tag_title.lower())
+                            if not tag_id:
+                                db.execute("INSERT INTO tag_definitions (title, color) VALUES (%s, %s)", (tag_title, "#6c757d"))
+                                tag_id = db.query_one("SELECT id FROM tag_definitions WHERE title = %s", (tag_title,))["id"]
+                                tag_map[tag_title.lower()] = tag_id
+                                tag_count += 1
+                            db.execute(
+                                "INSERT INTO opportunity_tags (opportunity_id, tag_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                                (v3_opp_id, tag_id),
+                            )
+                except Exception:
+                    pass
+
+                # Fetch and sync custom fields for this deal
+                try:
+                    cf_data = _unwrap(_crm_api_get(portal, token, f"/api/2.0/crm/opportunity/{crm_id}/customfield"))
+                    cf_list = cf_data if isinstance(cf_data, list) else []
+                    for cf in cf_list:
+                        if not isinstance(cf, dict):
+                            continue
+                        cf_crm_id = str(cf.get("id") or cf.get("ID") or "")
+                        cf_value = cf.get("value") or cf.get("Value") or cf.get("fieldValue") or ""
+                        if isinstance(cf_value, dict):
+                            cf_value = cf_value.get("title") or cf_value.get("text") or cf_value.get("value") or ""
+                        cf_value = str(cf_value).strip()
+                        v3_field_id = cf_map.get(cf_crm_id)
+                        if v3_field_id and cf_value:
+                            db.execute(
+                                """INSERT INTO opportunity_custom_field_values (opportunity_id, field_id, field_value)
+                                   VALUES (%s, %s, %s) ON CONFLICT (opportunity_id, field_id) DO UPDATE SET field_value = EXCLUDED.field_value""",
+                                (v3_opp_id, v3_field_id, cf_value),
+                            )
+                            cf_count += 1
+                except Exception:
+                    pass
+
+                # Fetch and sync history for this deal
+                try:
+                    hist_data = _unwrap(_crm_api_get(portal, token, f"/api/2.0/crm/history/filter?entityType=opportunity&entityId={crm_id}&count=500"))
+                    hist_list = hist_data if isinstance(hist_data, list) else []
+                    for h in hist_list:
+                        if not isinstance(h, dict):
+                            continue
+                        cat_data = h.get("category") or h.get("Category") or {}
+                        cat_title = str(cat_data.get("title") or cat_data.get("Title") or "Note").strip() if isinstance(cat_data, dict) else "Note"
+                        cat_row = db.query_one("SELECT id FROM history_categories WHERE title = %s", (cat_title,))
+                        if not cat_row:
+                            db.execute("INSERT INTO history_categories (title, is_system) VALUES (%s, TRUE) RETURNING id", (cat_title,))
+                            cat_id = db.query_one("SELECT id FROM history_categories WHERE title = %s", (cat_title,))["id"]
+                        else:
+                            cat_id = cat_row["id"]
+                        event_content = str(h.get("content") or h.get("Content") or "").strip() or None
+                        event_created = h.get("created") or h.get("Created") or h.get("date") or None
+                        create_by = h.get("createBy") or h.get("CreateBy") or h.get("createdBy") or {}
+                        crm_author_id = str(create_by.get("id") or create_by.get("ID") or "") if isinstance(create_by, dict) else ""
+                        db.execute(
+                            """INSERT INTO history_events (opportunity_id, category_id, content, created_by, created_at)
+                               VALUES (%s, %s, %s, %s, COALESCE(%s, NOW()))""",
+                            (v3_opp_id, cat_id, event_content, None, event_created),
+                        )
+                        history_count += 1
+                except Exception:
+                    pass
+
+            _append_sync_log("info", f"Deals sync complete: {created} created, {skipped} skipped, {tag_count} tags, {cf_count} custom fields, {history_count} history events")
+            _json_response(self, 200, {"ok": True, "created": created, "skipped": skipped, "tags": tag_count, "custom_fields": cf_count, "history": history_count, "total": len(all_opps), "log": list(_sync_log)})
+        except Exception as e:
+            _append_sync_log("error", f"Deals sync failed: {e}")
             _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
         finally:
             _sync_running = False
