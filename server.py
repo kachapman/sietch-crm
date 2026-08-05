@@ -53,6 +53,70 @@ def log_infra_event(level: str, msg: str) -> None:
 
 log_infra_event("info", "Server started")
 
+# ── OnlyOffice Sync State ──────────────────────────────────────────────────────
+_sync_log: collections.deque = collections.deque(maxlen=500)
+_sync_running = False
+
+def _append_sync_log(level: str, msg: str) -> None:
+    """Append a message to the sync log."""
+    _sync_log.append({"ts": datetime.now(timezone.utc).isoformat(), "level": level, "msg": msg})
+    logger.info("SYNC %s: %s", level, msg)
+
+def _crm_api_get(portal: str, token: str, path: str, retries: int = 3) -> Any:
+    """GET from OnlyOffice CRM API with retry."""
+    url = f"{portal.rstrip('/')}{path}"
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"Accept": "application/json", "Authorization": token},
+                method="GET",
+            )
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                time.sleep(0.1)
+                return data
+        except urllib.error.HTTPError as exc:
+            if exc.code in (429, 503) and attempt < retries:
+                delay = 1.0 * (2 ** attempt)
+                _append_sync_log("warn", f"HTTP {exc.code} on {path}, retry {attempt+1}")
+                time.sleep(delay)
+                continue
+            raise
+    return None
+
+def _crm_authenticate(portal: str, email: str, password: str) -> str | None:
+    """Authenticate to OnlyOffice CRM and return token."""
+    auth_body = json.dumps({"userName": email, "password": password}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{portal.rstrip('/')}/api/2.0/authentication.json",
+        data=auth_body,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=20) as resp:
+            auth_data = json.loads(resp.read().decode("utf-8"))
+            return auth_data.get("response", {}).get("token")
+    except Exception as e:
+        _append_sync_log("error", f"Authentication failed: {e}")
+        return None
+
+def _unwrap(data: Any) -> Any:
+    """Unwrap OnlyOffice API response envelope."""
+    if isinstance(data, dict):
+        if "response" in data:
+            return data["response"]
+        if "result" in data:
+            return data["result"]
+    return data
+
 from ics_calendar import _MAX_ICS_BYTES, is_allowed_calendar_url, parse_ics_calendar
 
 # ── Version ────────────────────────────────────────────────────────────────────
@@ -1483,6 +1547,32 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 logger.exception("Document Server restart failed")
                 log_infra_event("error", f"Document Server restart exception: {exc}")
                 _json_response(self, 500, {"error": str(exc)})
+            return
+
+        # ── OnlyOffice Sync (admin-only) ──
+        if api_path == "/api/v2/admin/sync/test" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_sync_test()
+            return
+        if api_path == "/api/v2/admin/sync/pull-tags" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_sync_pull_tags()
+            return
+        if api_path == "/api/v2/admin/sync/pull-tasks" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_sync_pull_tasks()
+            return
+        if api_path == "/api/v2/admin/sync/full-reconcile" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_sync_full_reconcile()
             return
 
         # ── Bot customers (admin) ──
@@ -3453,25 +3543,250 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             info["status"] = f"error: {exc}"
         _json_response(self, 200, info)
 
-    def _handle_document_download(self, doc_id: int) -> None:
-        # Authenticate either via session or a valid document-server JWT token
-        qs = parse_qs(urlparse(self.path).query)
-        token = (qs.get("token") or [""])[0]
-        user = _require_auth(self) if not token else None
-        if not user and not token:
+    # ── OnlyOffice Sync Handlers ────────────────────────────────────────────────
+
+    def _handle_sync_test(self) -> None:
+        """Test OnlyOffice CRM connection."""
+        global _sync_log
+        _sync_log.clear()
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            portal = payload.get("portal_url", "").strip()
+            email = payload.get("email", "").strip()
+            password = payload.get("password", "").strip()
+            if not portal or not email or not password:
+                _json_response(self, 400, {"error": "portal_url, email, and password required"})
+                return
+            _append_sync_log("info", f"Testing connection to {portal}...")
+            token = _crm_authenticate(portal, email, password)
+            if not token:
+                _json_response(self, 400, {"error": "Authentication failed", "log": list(_sync_log)})
+                return
+            # Try to fetch something to verify access
+            try:
+                users_data = _unwrap(_crm_api_get(portal, token, "/api/2.0/people/"))
+                user_count = len(users_data) if isinstance(users_data, list) else 0
+                _append_sync_log("info", f"Connection successful. Found {user_count} users.")
+                _json_response(self, 200, {"ok": True, "user_count": user_count, "log": list(_sync_log)})
+            except Exception as e:
+                _append_sync_log("error", f"API test failed: {e}")
+                _json_response(self, 400, {"error": f"API test failed: {e}", "log": list(_sync_log)})
+        except Exception as e:
+            _append_sync_log("error", f"Test failed: {e}")
+            _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
+
+    def _handle_sync_pull_tags(self) -> None:
+        """Pull tags from OnlyOffice CRM."""
+        global _sync_log, _sync_running
+        if _sync_running:
+            _json_response(self, 409, {"error": "Sync already running"})
             return
-        if not user:
-            if not DOCS_JWT_SECRET:
-                self.send_error(401)
+        _sync_running = True
+        _sync_log.clear()
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            portal = payload.get("portal_url", "").strip()
+            email = payload.get("email", "").strip()
+            password = payload.get("password", "").strip()
+            if not portal or not email or not password:
+                _json_response(self, 400, {"error": "portal_url, email, and password required"})
+                _sync_running = False
                 return
-            payload = _verify_jwt(token, DOCS_JWT_SECRET)
-            if not payload or payload.get("id") != doc_id:
-                self.send_error(401)
+            _append_sync_log("info", "Authenticating to OnlyOffice CRM...")
+            token = _crm_authenticate(portal, email, password)
+            if not token:
+                _json_response(self, 400, {"error": "Authentication failed"})
+                _sync_running = False
                 return
-        row = db.query(
-            "SELECT opportunity_id, title, file_path, file_size, mime_type FROM project_documents WHERE id = %s AND is_deleted = FALSE",
-            (doc_id,), fetch="one",
-        )
+            _append_sync_log("info", "Fetching tags...")
+            tags_data = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/opportunity/tag"))
+            tags = tags_data if isinstance(tags_data, list) else []
+            count = 0
+            for tag in tags:
+                if not isinstance(tag, dict):
+                    continue
+                title = str(tag.get("title") or tag.get("name") or tag.get("Title") or tag.get("Name") or "").strip()
+                color = str(tag.get("color") or tag.get("Color") or "#6c757d").strip()
+                if not title:
+                    continue
+                existing = db.query_one("SELECT id FROM tag_definitions WHERE title = %s", (title,))
+                if not existing:
+                    db.execute("INSERT INTO tag_definitions (title, color) VALUES (%s, %s)", (title, color))
+                    count += 1
+                    _append_sync_log("info", f"Created tag: {title}")
+            _append_sync_log("info", f"Tags sync complete: {count} new tags created")
+            _json_response(self, 200, {"ok": True, "created": count, "total": len(tags), "log": list(_sync_log)})
+        except Exception as e:
+            _append_sync_log("error", f"Tags sync failed: {e}")
+            _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
+        finally:
+            _sync_running = False
+
+    def _handle_sync_pull_tasks(self) -> None:
+        """Pull tasks from OnlyOffice CRM."""
+        global _sync_log, _sync_running
+        if _sync_running:
+            _json_response(self, 409, {"error": "Sync already running"})
+            return
+        _sync_running = True
+        _sync_log.clear()
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            portal = payload.get("portal_url", "").strip()
+            email = payload.get("email", "").strip()
+            password = payload.get("password", "").strip()
+            if not portal or not email or not password:
+                _json_response(self, 400, {"error": "portal_url, email, and password required"})
+                _sync_running = False
+                return
+            _append_sync_log("info", "Authenticating to OnlyOffice CRM...")
+            token = _crm_authenticate(portal, email, password)
+            if not token:
+                _json_response(self, 400, {"error": "Authentication failed"})
+                _sync_running = False
+                return
+            _append_sync_log("info", "Fetching tasks...")
+            open_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/projects/task/")) or []
+            closed_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/projects/task/?closed=true")) or []
+            all_tasks = (open_tasks if isinstance(open_tasks, list) else []) + (closed_tasks if isinstance(closed_tasks, list) else [])
+            count = 0
+            for task in all_tasks:
+                if not isinstance(task, dict):
+                    continue
+                title = str(task.get("title") or task.get("Title") or "").strip()
+                if not title:
+                    continue
+                # Check if task already exists (by title)
+                existing = db.query_one("SELECT id FROM tasks WHERE title = %s", (title,))
+                if existing:
+                    continue
+                desc = str(task.get("description") or task.get("Description") or "").strip() or None
+                due = task.get("dueDate") or task.get("DueDate")
+                if due:
+                    due = str(due)[:10]
+                is_closed = task.get("isClosed") or task.get("IsClosed") or False
+                status = "completed" if is_closed else "open"
+                db.execute(
+                    "INSERT INTO tasks (title, description, due_date, status, created_at) VALUES (%s, %s, %s, %s, NOW())",
+                    (title, desc, due, status),
+                )
+                count += 1
+                if count % 50 == 0:
+                    _append_sync_log("info", f"Progress: {count} tasks synced...")
+            _append_sync_log("info", f"Tasks sync complete: {count} new tasks created")
+            _json_response(self, 200, {"ok": True, "created": count, "total": len(all_tasks), "log": list(_sync_log)})
+        except Exception as e:
+            _append_sync_log("error", f"Tasks sync failed: {e}")
+            _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
+        finally:
+            _sync_running = False
+
+    def _handle_sync_full_reconcile(self) -> None:
+        """Full read-only reconcile from OnlyOffice CRM."""
+        global _sync_log, _sync_running
+        if _sync_running:
+            _json_response(self, 409, {"error": "Sync already running"})
+            return
+        _sync_running = True
+        _sync_log.clear()
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            portal = payload.get("portal_url", "").strip()
+            email = payload.get("email", "").strip()
+            password = payload.get("password", "").strip()
+            if not portal or not email or not password:
+                _json_response(self, 400, {"error": "portal_url, email, and password required"})
+                _sync_running = False
+                return
+            _append_sync_log("info", "Starting full reconcile...")
+            token = _crm_authenticate(portal, email, password)
+            if not token:
+                _json_response(self, 400, {"error": "Authentication failed"})
+                _sync_running = False
+                return
+            results = {}
+            # Tags
+            _append_sync_log("info", "Syncing tags...")
+            tags_data = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/opportunity/tag"))
+            tags = tags_data if isinstance(tags_data, list) else []
+            tag_count = 0
+            for tag in tags:
+                if not isinstance(tag, dict):
+                    continue
+                title = str(tag.get("title") or tag.get("name") or tag.get("Title") or tag.get("Name") or "").strip()
+                color = str(tag.get("color") or tag.get("Color") or "#6c757d").strip()
+                if not title:
+                    continue
+                existing = db.query_one("SELECT id FROM tag_definitions WHERE title = %s", (title,))
+                if not existing:
+                    db.execute("INSERT INTO tag_definitions (title, color) VALUES (%s, %s)", (title, color))
+                    tag_count += 1
+            results["tags_created"] = tag_count
+            _append_sync_log("info", f"Tags: {tag_count} new")
+            # Tasks
+            _append_sync_log("info", "Syncing tasks...")
+            open_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/projects/task/")) or []
+            closed_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/projects/task/?closed=true")) or []
+            all_tasks = (open_tasks if isinstance(open_tasks, list) else []) + (closed_tasks if isinstance(closed_tasks, list) else [])
+            task_count = 0
+            for task in all_tasks:
+                if not isinstance(task, dict):
+                    continue
+                title = str(task.get("title") or task.get("Title") or "").strip()
+                if not title:
+                    continue
+                existing = db.query_one("SELECT id FROM tasks WHERE title = %s", (title,))
+                if existing:
+                    continue
+                desc = str(task.get("description") or task.get("Description") or "").strip() or None
+                due = task.get("dueDate") or task.get("DueDate")
+                if due:
+                    due = str(due)[:10]
+                is_closed = task.get("isClosed") or task.get("IsClosed") or False
+                status = "completed" if is_closed else "open"
+                db.execute(
+                    "INSERT INTO tasks (title, description, due_date, status, created_at) VALUES (%s, %s, %s, %s, NOW())",
+                    (title, desc, due, status),
+                )
+                task_count += 1
+            results["tasks_created"] = task_count
+            _append_sync_log("info", f"Tasks: {task_count} new")
+            # Opportunities (read-only count)
+            _append_sync_log("info", "Counting opportunities...")
+            opps_data = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/opportunity/filter?count=5"))
+            opp_count = len(opps_data) if isinstance(opps_data, list) else 0
+            results["opportunities_sample"] = opp_count
+            _append_sync_log("info", f"Opportunities sample: {opp_count} returned")
+            # Custom field definitions
+            _append_sync_log("info", "Syncing custom field definitions...")
+            cf_data = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/opportunity/customfield/definitions"))
+            cfs = cf_data if isinstance(cf_data, list) else []
+            cf_count = 0
+            for cf in cfs:
+                if not isinstance(cf, dict):
+                    continue
+                label = str(cf.get("label") or cf.get("title") or cf.get("name") or cf.get("Title") or "").strip()
+                field_key = str(cf.get("key") or cf.get("fieldKey") or cf.get("Key") or "").strip()
+                if not label or not field_key:
+                    continue
+                existing = db.query_one("SELECT id FROM custom_field_definitions WHERE field_key = %s", (field_key,))
+                if not existing:
+                    db.execute(
+                        "INSERT INTO custom_field_definitions (field_key, label, field_type) VALUES (%s, %s, %s)",
+                        (field_key, label, "text"),
+                    )
+                    cf_count += 1
+            results["custom_fields_created"] = cf_count
+            _append_sync_log("info", f"Custom fields: {cf_count} new")
+            _append_sync_log("info", "Full reconcile complete")
+            _json_response(self, 200, {"ok": True, "results": results, "log": list(_sync_log)})
+        except Exception as e:
+            _append_sync_log("error", f"Full reconcile failed: {e}")
+            _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
+        finally:
+            _sync_running = False
+
+    def _handle_document_download(self, doc_id: int) -> None:
         if not row:
             self.send_error(404)
             return

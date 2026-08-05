@@ -23616,12 +23616,72 @@ function openAdminConsoleModal() {
     bindAdminContacts();
     bindAdminStages();
     bindAdminTags();
-    // stub sync buttons (real impl later in sync phase; read-only enrich)
-    const statusEl = $("#sync-status");
-    $("#sync-test-btn")?.addEventListener("click", () => { if (statusEl) statusEl.textContent = "Connection test stub: OK (implement real auth in sync worker)."; });
-    $("#sync-tags-btn")?.addEventListener("click", () => { if (statusEl) statusEl.textContent = "Pull tags stub. Will enrich using read-only OO pull (external_id matching)."; });
-    $("#sync-tasks-btn")?.addEventListener("click", () => { if (statusEl) statusEl.textContent = "Pull tasks stub."; });
-    $("#sync-full-btn")?.addEventListener("click", () => { if (statusEl) statusEl.textContent = "Full reconcile stub. Uses read-only for now."; });
+    // Sync buttons — real implementation
+    function getSyncPayload() {
+      return {
+        portal_url: $("#sync-portal-url")?.value?.trim() || "",
+        email: $("#sync-email")?.value?.trim() || "",
+        password: $("#sync-password")?.value?.trim() || "",
+      };
+    }
+    function renderSyncLog(log) {
+      const logEl = $("#sync-log");
+      if (!logEl || !log?.length) return;
+      logEl.innerHTML = log.map(e => {
+        const cls = e.level === "error" ? "color:var(--danger)" : e.level === "warn" ? "color:var(--warning)" : "";
+        return `<div style="font-size:0.75rem; ${cls}">[${escapeHtml(e.ts?.slice(11, 19) || "")}] ${escapeHtml(e.msg)}</div>`;
+      }).join("");
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    function showSyncProgress(msg) {
+      const el = $("#sync-status");
+      if (el) el.innerHTML = `<span style="color:var(--accent);">${escapeHtml(msg)}</span>`;
+    }
+    function showSyncResult(data) {
+      const el = $("#sync-status");
+      if (el) el.innerHTML = `<span style="color:#3fb950;">${escapeHtml(data.message || "Done")}</span>`;
+    }
+    function showSyncError(msg) {
+      const el = $("#sync-status");
+      if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(msg)}</span>`;
+    }
+
+    $("#sync-test-btn")?.addEventListener("click", async () => {
+      showSyncProgress("Testing connection...");
+      try {
+        const data = await api("/api/v2/admin/sync/test", { method: "POST", body: JSON.stringify(getSyncPayload()) });
+        showSyncResult({ message: `Connected! ${data.user_count || 0} users found.` });
+        renderSyncLog(data.log);
+      } catch (e) { showSyncError(e.message); }
+    });
+
+    $("#sync-tags-btn")?.addEventListener("click", async () => {
+      showSyncProgress("Pulling tags...");
+      try {
+        const data = await api("/api/v2/admin/sync/pull-tags", { method: "POST", body: JSON.stringify(getSyncPayload()) });
+        showSyncResult({ message: `Tags synced: ${data.created || 0} new (of ${data.total || 0})` });
+        renderSyncLog(data.log);
+      } catch (e) { showSyncError(e.message); }
+    });
+
+    $("#sync-tasks-btn")?.addEventListener("click", async () => {
+      showSyncProgress("Pulling tasks...");
+      try {
+        const data = await api("/api/v2/admin/sync/pull-tasks", { method: "POST", body: JSON.stringify(getSyncPayload()) });
+        showSyncResult({ message: `Tasks synced: ${data.created || 0} new (of ${data.total || 0})` });
+        renderSyncLog(data.log);
+      } catch (e) { showSyncError(e.message); }
+    });
+
+    $("#sync-full-btn")?.addEventListener("click", async () => {
+      showSyncProgress("Running full reconcile...");
+      try {
+        const data = await api("/api/v2/admin/sync/full-reconcile", { method: "POST", body: JSON.stringify(getSyncPayload()) });
+        const r = data.results || {};
+        showSyncResult({ message: `Done! Tags: ${r.tags_created || 0}, Tasks: ${r.tasks_created || 0}, Custom fields: ${r.custom_fields_created || 0}` });
+        renderSyncLog(data.log);
+      } catch (e) { showSyncError(e.message); }
+    });
   }
 
   // Mobile: collapse tab sidebar by default to save space
