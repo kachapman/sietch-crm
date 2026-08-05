@@ -23694,7 +23694,7 @@ function openAdminConsoleModal() {
     // Load saved credentials on tab open
     loadSyncCredentials();
     // Save credentials when any sync button is clicked
-    ["sync-test-btn", "sync-deal-tags-btn", "sync-deals-btn", "sync-tags-btn", "sync-tasks-btn", "sync-full-btn"].forEach(id => {
+    ["sync-test-btn", "sync-deal-tags-btn", "sync-deals-btn", "sync-tags-btn", "sync-tasks-btn", "sync-email-bodies-btn", "sync-full-btn"].forEach(id => {
       $(`#${id}`)?.addEventListener("click", saveSyncCredentials);
     });
     function renderSyncLog(log) {
@@ -23742,7 +23742,7 @@ function openAdminConsoleModal() {
           if (!status.running && lastLogLen > 0) {
             clearInterval(pollInterval);
           }
-        } catch (e) { /* ignore polling errors */ }
+        } catch (e) { console.error("Sync poll error:", e); }
       }, 3000);
       try {
         const data = await api("/api/v2/admin/sync/pull-deal-tags", { method: "POST", body: JSON.stringify(getSyncPayload()) });
@@ -23750,9 +23750,12 @@ function openAdminConsoleModal() {
         if (data.log) renderSyncLog(data.log);
         showSyncResult({ message: `Deals updated: ${data.deals_updated || 0} | Tags: ${data.tags_linked || 0} | Custom fields: ${data.custom_fields || 0}` });
       } catch (e) {
+        if (e.status === 409) {
+          showSyncProgress("Sync already running — showing live log...");
+          return;
+        }
         clearInterval(pollInterval);
         showSyncError(e.message);
-        // Try to get final log on error
         try { const s = await api("/api/v2/admin/sync/status"); if (s.log) renderSyncLog(s.log); } catch {}
       }
     });
@@ -23768,7 +23771,7 @@ function openAdminConsoleModal() {
             lastLogLen = status.log.length;
           }
           if (!status.running && lastLogLen > 0) clearInterval(pollInterval);
-        } catch (e) {}
+        } catch (e) { console.error("Sync poll error:", e); }
       }, 3000);
       try {
         const data = await api("/api/v2/admin/sync/pull-deals", { method: "POST", body: JSON.stringify(getSyncPayload()) });
@@ -23776,6 +23779,10 @@ function openAdminConsoleModal() {
         if (data.log) renderSyncLog(data.log);
         showSyncResult({ message: `Deals: ${data.created || 0} created, ${data.skipped || 0} skipped | Tags: ${data.tags || 0} | History: ${data.history || 0}` });
       } catch (e) {
+        if (e.status === 409) {
+          showSyncProgress("Sync already running — showing live log...");
+          return;
+        }
         clearInterval(pollInterval);
         showSyncError(e.message);
         try { const s = await api("/api/v2/admin/sync/status"); if (s.log) renderSyncLog(s.log); } catch {}
@@ -23802,7 +23809,7 @@ function openAdminConsoleModal() {
             lastLogLen = status.log.length;
           }
           if (!status.running && lastLogLen > 0) clearInterval(pollInterval);
-        } catch (e) {}
+        } catch (e) { console.error("Sync poll error:", e); }
       }, 3000);
       try {
         const data = await api("/api/v2/admin/sync/pull-tasks", { method: "POST", body: JSON.stringify(getSyncPayload()) });
@@ -23810,6 +23817,10 @@ function openAdminConsoleModal() {
         if (data.log) renderSyncLog(data.log);
         showSyncResult({ message: `Tasks synced: ${data.created || 0} new (of ${data.total || 0})` });
       } catch (e) {
+        if (e.status === 409) {
+          showSyncProgress("Sync already running — showing live log...");
+          return;
+        }
         clearInterval(pollInterval);
         showSyncError(e.message);
         try { const s = await api("/api/v2/admin/sync/status"); if (s.log) renderSyncLog(s.log); } catch {}
@@ -23827,7 +23838,7 @@ function openAdminConsoleModal() {
             lastLogLen = status.log.length;
           }
           if (!status.running && lastLogLen > 0) clearInterval(pollInterval);
-        } catch (e) {}
+        } catch (e) { console.error("Sync poll error:", e); }
       }, 3000);
       try {
         const data = await api("/api/v2/admin/sync/pull-email-bodies", { method: "POST", body: JSON.stringify(getSyncPayload()) });
@@ -23835,6 +23846,10 @@ function openAdminConsoleModal() {
         if (data.log) renderSyncLog(data.log);
         showSyncResult({ message: `Email bodies: ${data.emails_imported || 0} imported from ${data.deals_processed || 0} deals` });
       } catch (e) {
+        if (e.status === 409) {
+          showSyncProgress("Sync already running — showing live log...");
+          return;
+        }
         clearInterval(pollInterval);
         showSyncError(e.message);
         try { const s = await api("/api/v2/admin/sync/status"); if (s.log) renderSyncLog(s.log); } catch {}
@@ -23852,7 +23867,7 @@ function openAdminConsoleModal() {
             lastLogLen = status.log.length;
           }
           if (!status.running && lastLogLen > 0) clearInterval(pollInterval);
-        } catch (e) {}
+        } catch (e) { console.error("Sync poll error:", e); }
       }, 3000);
       try {
         const data = await api("/api/v2/admin/sync/full-reconcile", { method: "POST", body: JSON.stringify(getSyncPayload()) });
@@ -23861,6 +23876,10 @@ function openAdminConsoleModal() {
         const r = data.results || {};
         showSyncResult({ message: `Done! Tags: ${r.tags_created || 0}, Tasks: ${r.tasks_created || 0}, Custom fields: ${r.custom_fields_created || 0}` });
       } catch (e) {
+        if (e.status === 409) {
+          showSyncProgress("Sync already running — showing live log...");
+          return;
+        }
         clearInterval(pollInterval);
         showSyncError(e.message);
         try { const s = await api("/api/v2/admin/sync/status"); if (s.log) renderSyncLog(s.log); } catch {}

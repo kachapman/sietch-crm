@@ -10,8 +10,10 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Existing raw OnlyOffice history events are upserted.** The import builds an index of existing imported email history events keyed by `(opportunity_id, OnlyOffice message_id)`. Matching events are updated to the clean Sietch snapshot format; new events are inserted.
 - **Leftover orphan `mail_messages` rows are cleaned.** The sync endpoint deletes any `mail_messages` rows with `account_id IS NULL` and `imap_uid LIKE 'onlyoffice:%'` that were created by the old import model.
 - **Frontend supports imported email snapshots.** `normalizeCrmMailPayload()` recognizes `source: "onlyoffice_import"` and snapshots without a live `message_id`. The project history toggle renders the embedded body directly from the snapshot without trying to fetch from `mail_messages` or linking back to OnlyOffice.
-- **Improved import logging.** Progress is logged every 10 deals, every 25 emails, and per-deal email event counts. Body fetch success/failure counts are tracked and reported. Final summary includes total elapsed time and body fetch stats.
-- **Files:** `db.py`, `server.py`, `public/app.js`, `AGENTS.md`, `CHANGELOG.md`.
+- **Sync log polling fixed.** The `/api/v2/admin/sync/status` endpoint is now accessible via GET (was POST-only, causing 404 on every poll). All 5 sync button polling intervals now receive log updates in real-time. Polling errors are logged to console instead of silently swallowed. Clicking any sync button while another is running shows "Sync already running — showing live log..." and continues polling.
+- **"Pull Tasks" button restored.** The button was accidentally removed when the email bodies button was added.
+- **"Pull New Deals" now also pulls missing history for existing deals.** Previously it only created new deals. Now for existing deals (matched by title), it fetches history from OnlyOffice and inserts only the missing events (deduped by category + content prefix + date).
+- **Files:** `db.py`, `server.py`, `public/app.js`, `public/index.html`, `AGENTS.md`, `CHANGELOG.md`.
 
 ## Phase 3 — Trigger System & Scanner Status Improvements (2026-08-04)
 
