@@ -3733,7 +3733,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 tag_map[row["title"].lower()] = row["id"]
             cf_map = {}
             for row in db.query_dicts("SELECT id, field_key FROM custom_field_definitions"):
-                cf_map[row["field_key"]] = row["id"]
+                # field_key is "field_26", OnlyOffice ID is "26"
+                numeric_id = row["field_key"].replace("field_", "")
+                cf_map[numeric_id] = row["id"]
 
             # Get existing deals with their OnlyOffice titles
             _append_sync_log("info", "Loading existing deals...")
@@ -3874,7 +3876,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 tag_map[row["title"].lower()] = row["id"]
             cf_map = {}
             for row in db.query_dicts("SELECT id, field_key FROM custom_field_definitions"):
-                cf_map[row["field_key"]] = row["id"]
+                numeric_id = row["field_key"].replace("field_", "")
+                cf_map[numeric_id] = row["id"]
             stage_map = {}
             for row in db.query_dicts("SELECT id, title FROM stages"):
                 stage_map[row["title"].lower()] = row["id"]

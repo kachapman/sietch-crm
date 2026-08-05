@@ -19058,6 +19058,7 @@ async function searchOpportunitiesByTitle(query, { limit = 30 } = {}) {
   const local = [];
   const seen = new Set();
   const qLower = q.toLowerCase();
+  const isNumeric = /^\d+$/.test(q);
 
   for (const g of state.groups) {
     for (const o of g.opportunities || []) {
@@ -19066,7 +19067,8 @@ async function searchOpportunitiesByTitle(query, { limit = 30 } = {}) {
       const title = (o.title || o.Title || `Opportunity #${id}`).trim();
       const key = String(id);
       if (seen.has(key)) continue;
-      if (!q || title.toLowerCase().includes(qLower)) {
+      // Match by title OR by ID (if query is numeric)
+      if (!q || title.toLowerCase().includes(qLower) || (isNumeric && String(id) === q)) {
         seen.add(key);
         local.push({ id: Number(id), title });
       }
