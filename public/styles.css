@@ -9875,7 +9875,7 @@ body {
 .admin-modal-card {
   width: 980px;
   max-width: 95vw;
-  height: 560px;
+  height: min(840px, 85vh);
   display: flex;
   flex-direction: column;
 }
@@ -9985,6 +9985,7 @@ body {
   .admin-modal-card {
     width: 95vw;
     max-width: 95vw;
+    height: 100dvh;
   }
   .admin-tabs {
     width: 130px;
@@ -9996,6 +9997,9 @@ body {
   .admin-main {
     max-height: 60vh;
     overflow: auto;
+  }
+  #sync-log {
+    max-height: 200px;
   }
 }
 

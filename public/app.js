@@ -23683,51 +23683,55 @@ function openAdminConsoleModal() {
 
     $("#sync-deal-tags-btn")?.addEventListener("click", async () => {
       showSyncProgress("Syncing tags and custom fields for existing deals... (this may take several minutes)");
-      // Start polling for progress
-      let pollCount = 0;
+      // Start polling for progress immediately
+      let lastLogLen = 0;
       const pollInterval = setInterval(async () => {
         try {
           const status = await api("/api/v2/admin/sync/status");
-          renderSyncLog(status.log);
-          pollCount++;
-          if (!status.running && pollCount > 2) {
+          if (status.log && status.log.length > lastLogLen) {
+            renderSyncLog(status.log);
+            lastLogLen = status.log.length;
+          }
+          if (!status.running && lastLogLen > 0) {
             clearInterval(pollInterval);
           }
-        } catch (e) { /* ignore */ }
-      }, 5000);
+        } catch (e) { /* ignore polling errors */ }
+      }, 3000);
       try {
         const data = await api("/api/v2/admin/sync/pull-deal-tags", { method: "POST", body: JSON.stringify(getSyncPayload()) });
         clearInterval(pollInterval);
-        renderSyncLog(data.log);
+        if (data.log) renderSyncLog(data.log);
         showSyncResult({ message: `Deals updated: ${data.deals_updated || 0} | Tags: ${data.tags_linked || 0} | Custom fields: ${data.custom_fields || 0}` });
       } catch (e) {
         clearInterval(pollInterval);
         showSyncError(e.message);
-        // Try to get final log
-        try { const s = await api("/api/v2/admin/sync/status"); renderSyncLog(s.log); } catch {}
+        // Try to get final log on error
+        try { const s = await api("/api/v2/admin/sync/status"); if (s.log) renderSyncLog(s.log); } catch {}
       }
     });
 
     $("#sync-deals-btn")?.addEventListener("click", async () => {
       showSyncProgress("Pulling new deals (this may take several minutes)...");
-      let pollCount = 0;
+      let lastLogLen = 0;
       const pollInterval = setInterval(async () => {
         try {
           const status = await api("/api/v2/admin/sync/status");
-          renderSyncLog(status.log);
-          pollCount++;
-          if (!status.running && pollCount > 2) clearInterval(pollInterval);
+          if (status.log && status.log.length > lastLogLen) {
+            renderSyncLog(status.log);
+            lastLogLen = status.log.length;
+          }
+          if (!status.running && lastLogLen > 0) clearInterval(pollInterval);
         } catch (e) {}
-      }, 5000);
+      }, 3000);
       try {
         const data = await api("/api/v2/admin/sync/pull-deals", { method: "POST", body: JSON.stringify(getSyncPayload()) });
         clearInterval(pollInterval);
-        renderSyncLog(data.log);
+        if (data.log) renderSyncLog(data.log);
         showSyncResult({ message: `Deals: ${data.created || 0} created, ${data.skipped || 0} skipped | Tags: ${data.tags || 0} | History: ${data.history || 0}` });
       } catch (e) {
         clearInterval(pollInterval);
         showSyncError(e.message);
-        try { const s = await api("/api/v2/admin/sync/status"); renderSyncLog(s.log); } catch {}
+        try { const s = await api("/api/v2/admin/sync/status"); if (s.log) renderSyncLog(s.log); } catch {}
       }
     });
 
@@ -23742,48 +23746,52 @@ function openAdminConsoleModal() {
 
     $("#sync-tasks-btn")?.addEventListener("click", async () => {
       showSyncProgress("Pulling tasks...");
-      let pollCount = 0;
+      let lastLogLen = 0;
       const pollInterval = setInterval(async () => {
         try {
           const status = await api("/api/v2/admin/sync/status");
-          renderSyncLog(status.log);
-          pollCount++;
-          if (!status.running && pollCount > 2) clearInterval(pollInterval);
+          if (status.log && status.log.length > lastLogLen) {
+            renderSyncLog(status.log);
+            lastLogLen = status.log.length;
+          }
+          if (!status.running && lastLogLen > 0) clearInterval(pollInterval);
         } catch (e) {}
-      }, 5000);
+      }, 3000);
       try {
         const data = await api("/api/v2/admin/sync/pull-tasks", { method: "POST", body: JSON.stringify(getSyncPayload()) });
         clearInterval(pollInterval);
-        renderSyncLog(data.log);
+        if (data.log) renderSyncLog(data.log);
         showSyncResult({ message: `Tasks synced: ${data.created || 0} new (of ${data.total || 0})` });
       } catch (e) {
         clearInterval(pollInterval);
         showSyncError(e.message);
-        try { const s = await api("/api/v2/admin/sync/status"); renderSyncLog(s.log); } catch {}
+        try { const s = await api("/api/v2/admin/sync/status"); if (s.log) renderSyncLog(s.log); } catch {}
       }
     });
 
     $("#sync-full-btn")?.addEventListener("click", async () => {
       showSyncProgress("Running full reconcile (this may take several minutes)...");
-      let pollCount = 0;
+      let lastLogLen = 0;
       const pollInterval = setInterval(async () => {
         try {
           const status = await api("/api/v2/admin/sync/status");
-          renderSyncLog(status.log);
-          pollCount++;
-          if (!status.running && pollCount > 2) clearInterval(pollInterval);
+          if (status.log && status.log.length > lastLogLen) {
+            renderSyncLog(status.log);
+            lastLogLen = status.log.length;
+          }
+          if (!status.running && lastLogLen > 0) clearInterval(pollInterval);
         } catch (e) {}
-      }, 5000);
+      }, 3000);
       try {
         const data = await api("/api/v2/admin/sync/full-reconcile", { method: "POST", body: JSON.stringify(getSyncPayload()) });
         clearInterval(pollInterval);
-        renderSyncLog(data.log);
+        if (data.log) renderSyncLog(data.log);
         const r = data.results || {};
         showSyncResult({ message: `Done! Tags: ${r.tags_created || 0}, Tasks: ${r.tasks_created || 0}, Custom fields: ${r.custom_fields_created || 0}` });
       } catch (e) {
         clearInterval(pollInterval);
         showSyncError(e.message);
-        try { const s = await api("/api/v2/admin/sync/status"); renderSyncLog(s.log); } catch {}
+        try { const s = await api("/api/v2/admin/sync/status"); if (s.log) renderSyncLog(s.log); } catch {}
       }
     });
   }
