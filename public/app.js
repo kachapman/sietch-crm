@@ -23655,6 +23655,15 @@ function openAdminConsoleModal() {
       } catch (e) { showSyncError(e.message); }
     });
 
+    $("#sync-deal-tags-btn")?.addEventListener("click", async () => {
+      showSyncProgress("Syncing tags and custom fields for existing deals...");
+      try {
+        const data = await api("/api/v2/admin/sync/pull-deal-tags", { method: "POST", body: JSON.stringify(getSyncPayload()) });
+        showSyncResult({ message: `Deals updated: ${data.deals_updated || 0} | Tags: ${data.tags_linked || 0} | Custom fields: ${data.custom_fields || 0}` });
+        renderSyncLog(data.log);
+      } catch (e) { showSyncError(e.message); }
+    });
+
     $("#sync-deals-btn")?.addEventListener("click", async () => {
       showSyncProgress("Pulling deals (this may take a while)...");
       try {

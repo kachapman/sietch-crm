@@ -1568,6 +1568,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             self._handle_sync_pull_tasks()
             return
+        if api_path == "/api/v2/admin/sync/pull-deal-tags" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_sync_pull_deal_tags()
+            return
         if api_path == "/api/v2/admin/sync/pull-deals" and method == "POST":
             user = _require_admin(self)
             if not user:
@@ -3683,6 +3689,142 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"ok": True, "created": count, "total": len(all_tasks), "log": list(_sync_log)})
         except Exception as e:
             _append_sync_log("error", f"Tasks sync failed: {e}")
+            _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
+        finally:
+            _sync_running = False
+
+    def _handle_sync_pull_deal_tags(self) -> None:
+        """Sync tags and custom fields for existing deals from OnlyOffice."""
+        global _sync_log, _sync_running
+        if _sync_running:
+            _json_response(self, 409, {"error": "Sync already running"})
+            return
+        _sync_running = True
+        _sync_log.clear()
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            portal = payload.get("portal_url", "").strip()
+            email = payload.get("email", "").strip()
+            password = payload.get("password", "").strip()
+            if not portal or not email or not password:
+                _json_response(self, 400, {"error": "portal_url, email, and password required"})
+                _sync_running = False
+                return
+            _append_sync_log("info", "Authenticating to OnlyOffice CRM...")
+            token = _crm_authenticate(portal, email, password)
+            if not token:
+                _json_response(self, 400, {"error": "Authentication failed"})
+                _sync_running = False
+                return
+
+            # Get existing tag and CF maps
+            tag_map = {}
+            for row in db.query_dicts("SELECT id, title FROM tag_definitions"):
+                tag_map[row["title"].lower()] = row["id"]
+            cf_map = {}
+            for row in db.query_dicts("SELECT id, field_key FROM custom_field_definitions"):
+                cf_map[row["field_key"]] = row["id"]
+
+            # Get existing deals with their OnlyOffice titles
+            _append_sync_log("info", "Loading existing deals...")
+            existing_deals = db.query_dicts("SELECT id, title FROM opportunities")
+            deal_by_title = {d["title"].lower().strip(): d["id"] for d in existing_deals}
+            _append_sync_log("info", f"Found {len(deal_by_title)} existing deals")
+
+            # Clear existing tags and custom field values
+            _append_sync_log("info", "Clearing existing opportunity tags and custom field values...")
+            db.execute("DELETE FROM opportunity_tags")
+            db.execute("DELETE FROM opportunity_custom_field_values")
+            _append_sync_log("info", "Cleared existing tags and custom field values")
+
+            # Fetch all deals from OnlyOffice and sync tags/CFs for matching ones
+            _append_sync_log("info", "Fetching deals from OnlyOffice to sync tags...")
+            start = 0
+            page_size = 500
+            total_fetched = 0
+            deals_updated = 0
+            tags_synced = 0
+            cfs_synced = 0
+
+            while True:
+                sep = "&" if "?" in "/api/2.0/crm/opportunity/filter" else "?"
+                path = f"/api/2.0/crm/opportunity/filter{sep}count={page_size}&startIndex={start}"
+                data = _unwrap(_crm_api_get(portal, token, path))
+                if not isinstance(data, list) or not data:
+                    break
+                total_fetched += len(data)
+
+                for o in data:
+                    if not isinstance(o, dict):
+                        continue
+                    crm_id = str(o.get("id") or o.get("ID") or "")
+                    title = str(o.get("title") or o.get("Title") or "").strip()
+                    v3_opp_id = deal_by_title.get(title.lower().strip())
+
+                    if not v3_opp_id:
+                        continue  # Deal doesn't exist locally
+
+                    deals_updated += 1
+
+                    # Sync tags
+                    try:
+                        tags_data = _unwrap(_crm_api_get(portal, token, f"/api/2.0/crm/opportunity/tag/{crm_id}"))
+                        tag_list = tags_data if isinstance(tags_data, list) else []
+                        for t in tag_list:
+                            tag_title = ""
+                            if isinstance(t, dict):
+                                tag_title = str(t.get("title") or t.get("name") or t.get("Title") or "").strip()
+                            elif isinstance(t, str):
+                                tag_title = t.strip()
+                            if tag_title:
+                                tag_id = tag_map.get(tag_title.lower())
+                                if not tag_id:
+                                    db.execute("INSERT INTO tag_definitions (title, color) VALUES (%s, %s)", (tag_title, "#6c757d"))
+                                    tag_id = db.query_one("SELECT id FROM tag_definitions WHERE title = %s", (tag_title,))["id"]
+                                    tag_map[tag_title.lower()] = tag_id
+                                db.execute(
+                                    "INSERT INTO opportunity_tags (opportunity_id, tag_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                                    (v3_opp_id, tag_id),
+                                )
+                                tags_synced += 1
+                    except Exception:
+                        pass
+
+                    # Sync custom fields
+                    try:
+                        cf_data = _unwrap(_crm_api_get(portal, token, f"/api/2.0/crm/opportunity/{crm_id}/customfield"))
+                        cf_list = cf_data if isinstance(cf_data, list) else []
+                        for cf in cf_list:
+                            if not isinstance(cf, dict):
+                                continue
+                            cf_crm_id = str(cf.get("id") or cf.get("ID") or "")
+                            cf_value = cf.get("value") or cf.get("Value") or cf.get("fieldValue") or ""
+                            if isinstance(cf_value, dict):
+                                cf_value = cf_value.get("title") or cf_value.get("text") or cf_value.get("value") or ""
+                            cf_value = str(cf_value).strip()
+                            v3_field_id = cf_map.get(cf_crm_id)
+                            if v3_field_id and cf_value:
+                                db.execute(
+                                    """INSERT INTO opportunity_custom_field_values (opportunity_id, field_id, field_value)
+                                       VALUES (%s, %s, %s) ON CONFLICT (opportunity_id, field_id) DO UPDATE SET field_value = EXCLUDED.field_value""",
+                                    (v3_opp_id, v3_field_id, cf_value),
+                                )
+                                cfs_synced += 1
+                    except Exception:
+                        pass
+
+                    if deals_updated % 50 == 0:
+                        _append_sync_log("info", f"Progress: {deals_updated} deals synced, {tags_synced} tags, {cfs_synced} custom fields...")
+
+                if len(data) < page_size:
+                    break
+                start += page_size
+                _append_sync_log("info", f"Fetched {total_fetched} deals total...")
+
+            _append_sync_log("info", f"Deal tags sync complete: {deals_updated} deals updated, {tags_synced} tags linked, {cfs_synced} custom field values")
+            _json_response(self, 200, {"ok": True, "deals_updated": deals_updated, "tags_linked": tags_synced, "custom_fields": cfs_synced, "total_fetched": total_fetched, "log": list(_sync_log)})
+        except Exception as e:
+            _append_sync_log("error", f"Deal tags sync failed: {e}")
             _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
         finally:
             _sync_running = False
