@@ -1357,7 +1357,7 @@ body {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   grid-auto-rows: auto;
-  grid-auto-flow: dense;
+  grid-auto-flow: row;
   gap: 1.25rem;
   align-items: start;
   position: relative; /* anchor for .tile-resize-ghost */
@@ -9932,45 +9932,46 @@ body {
 
 #admin-console-modal .admin-body {
   display: flex;
-  gap: 0;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  position: relative;
 }
 
 #admin-console-modal .admin-tabs {
-  width: 170px;
-  flex: 0 0 170px;
   display: flex;
-  flex-direction: column;
+  flex-wrap: nowrap;
   gap: 0.25rem;
-  overflow-y: auto;
-  padding-right: 18px;
+  padding: 0.5rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+#admin-console-modal .admin-tabs::-webkit-scrollbar {
+  height: 4px;
 }
 
 #admin-console-modal .admin-main {
   flex: 1;
-  min-width: 0;
-  height: 100%;
+  min-height: 0;
   overflow-y: auto;
-  padding-left: 18px;
-  padding-right: 0.25rem;
+  padding: 0.75rem;
 }
 
 #admin-console-modal .admin-tab-btn {
-  width: 100%;
-  justify-content: flex-start;
-  padding: 0.4rem 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0.35rem 0.6rem;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--surface);
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   white-space: nowrap;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  text-align: left;
+  flex-shrink: 0;
 }
 
 #admin-console-modal .admin-tab-btn:hover {
@@ -9978,79 +9979,40 @@ body {
 }
 
 #admin-console-modal .admin-tab-btn.active {
-  border: 2px solid var(--accent);
+  border-color: var(--accent);
   background: rgba(59, 130, 246, 0.1);
 }
 
-/* Admin tabs toggle — positioned at the tabs/main boundary, replacing the border */
-#admin-console-modal .admin-tabs-toggle {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 170px;
-  width: 18px;
-  min-width: 18px;
-  padding: 0;
-  margin: 0;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  user-select: none;
-  transition: background 0.15s, color 0.15s, left 0.15s;
-  z-index: 1;
+/* Icon-only mode when tabs don't fit */
+@media (max-width: 768px) {
+  #admin-console-modal .admin-tab-label {
+    display: none;
+  }
+  #admin-console-modal .admin-tab-btn {
+    padding: 0.4rem;
+  }
 }
 
-#admin-console-modal .admin-tabs-toggle:hover {
-  background: var(--surface-2);
-  color: var(--text);
-}
-
-#admin-console-modal .admin-tabs-toggle svg {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  transition: transform 0.15s;
-}
-
-#admin-console-modal .admin-tabs.admin-tabs-collapsed {
-  width: 0 !important;
-  flex: 0 0 0 !important;
-  padding: 0 !important;
-  overflow: hidden;
-}
-
-#admin-console-modal .admin-tabs.admin-tabs-collapsed + .admin-tabs-toggle {
-  left: 0;
-}
-
-#admin-console-modal .admin-tabs.admin-tabs-collapsed + .admin-tabs-toggle svg {
-  transform: rotate(180deg);
-}
-
+/* Mobile: fill screen */
 @media (max-width: 640px) {
+  #admin-console-modal {
+    padding: 0;
+  }
   .admin-modal-card {
-    width: 95vw;
-    max-width: 95vw;
+    width: 100%;
+    max-width: 100%;
     height: 100dvh;
-  }
-  .admin-tabs {
-    width: 130px;
-    flex: 0 0 130px;
-  }
-  #admin-console-modal .admin-tabs-toggle {
-    left: 130px;
-  }
-  .admin-main {
-    max-height: 60vh;
-    overflow: auto;
+    max-height: 100dvh;
+    border-radius: 0;
   }
   #sync-log {
     max-height: 200px;
   }
+}
+
+/* ── Header Settings Dropdown ────────────────────────────────────────────────── */
+.header-settings-wrap {
+  position: relative;
 }
 
 /* ── Documents Modal ──────────────────────────────────────── */
@@ -11069,28 +11031,26 @@ body {
 }
 
 #admin-console-modal .admin-tabs {
-  background: linear-gradient(180deg, #1a1a1a 0%, #0a0a0a 100%);
-  border-right: 1px solid #333;
+  background: #1a1a1a;
+  border-bottom: 1px solid #333;
 }
 
 #admin-console-modal .admin-tab-btn {
   color: #e0e0e0;
-  border-left: 3px solid transparent;
-  border: none;
-  border-left: 3px solid transparent;
+  border: 1px solid transparent;
   background: transparent;
   font-family: 'DM Mono', ui-monospace, 'Consolas', monospace;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 #admin-console-modal .admin-tab-btn:hover {
-  background: #1a1a1a;
+  background: #252525;
   color: #00ff88;
 }
 
 #admin-console-modal .admin-tab-btn.active {
   background: #1a1a1a;
-  border-left-color: #00ff88;
+  border-color: #00ff88;
   color: #00ff88;
   text-shadow: 0 0 8px rgba(0, 255, 136, 0.4);
 }

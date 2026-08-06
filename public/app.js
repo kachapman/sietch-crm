@@ -803,6 +803,7 @@ function ensureTileLayout() {
   if (!state.tileLayout.order.includes("tile-presence")) {
     state.tileLayout.order.push("tile-presence");
   }
+  saveLayoutToStorage();
 }
 
 function tileWidth(tileId) {
@@ -5041,6 +5042,7 @@ async function saveUserProfileToServer({ quiet = false } = {}) {
       }
     }
   } catch (err) {
+    console.warn("Failed to save profile to server:", err.message);
     if (!quiet) showToast(err.message, true);
     throw err;
   }
@@ -23632,12 +23634,10 @@ function updateBrandingBtn() {
   }
 }
 
-function updateAdminConsoleBtn() {
-  const btn = $("#admin-console-btn");
-  if (!btn) return;
-  btn.classList.toggle("hidden", !state.currentUserIsAdmin);
-  if (state.currentUserIsAdmin) {
-    btn.onclick = openAdminConsoleModal;
+function updateSettingsDropdown() {
+  const adminBtn = $("#dropdown-admin-btn");
+  if (adminBtn) {
+    adminBtn.style.display = state.currentUserIsAdmin ? "" : "none";
   }
 }
 
@@ -23655,16 +23655,6 @@ function openAdminConsoleModal() {
     modal.querySelectorAll(".admin-tab-btn").forEach(btn => {
       btn.addEventListener("click", () => switchAdminTab(btn.dataset.tab));
     });
-    // Sidebar toggle (works on all screen sizes)
-    const adminTabs = modal.querySelector(".admin-tabs");
-    const adminTabsToggle = modal.querySelector("#admin-tabs-toggle");
-    if (adminTabs && adminTabsToggle) {
-      adminTabsToggle.addEventListener("click", () => {
-        const collapsed = adminTabs.classList.toggle("admin-tabs-collapsed");
-        adminTabsToggle.setAttribute("aria-label", collapsed ? "Show tabs" : "Hide tabs");
-        adminTabsToggle.setAttribute("title", collapsed ? "Show tabs" : "Hide tabs");
-      });
-    }
     bindAdminContacts();
     bindAdminStages();
     bindAdminTags();
@@ -24067,15 +24057,6 @@ function openAdminConsoleModal() {
     });
 
     loadBackupHistory();
-  }
-
-  // Mobile: collapse tab sidebar by default to save space
-  const adminTabs = modal.querySelector(".admin-tabs");
-  const adminTabsToggle = modal.querySelector("#admin-tabs-toggle");
-  if (adminTabs && adminTabsToggle && window.innerWidth <= 640) {
-    adminTabs.classList.add("admin-tabs-collapsed");
-    adminTabsToggle.setAttribute("aria-label", "Show tabs");
-    adminTabsToggle.setAttribute("title", "Show tabs");
   }
 
   // Bind branding save (content moved to admin tab, no separate modal)
@@ -29342,7 +29323,7 @@ async function refreshAll({ force = false } = {}) {
       }
     }
     // bot and branding buttons removed (consolidated into admin console)
-    updateAdminConsoleBtn();
+    updateSettingsDropdown();
     syncFeedFilterPlaceholder();
     // Re-render bookmark sidebar + button states now that profile (including bookmarkedDeals) is loaded
     renderBookmarkTabs();
@@ -29913,8 +29894,38 @@ async function _profileSave() {
 }
 
 function _setupProfileEvents() {
-  const profileBtn = $("#profile-btn");
-  if (profileBtn) profileBtn.addEventListener("click", openProfileModal);
+  // Settings dropdown (replaces old profile/admin/signout buttons)
+  const settingsBtn = $("#settings-btn");
+  const settingsDropdown = $("#settings-dropdown");
+  if (settingsBtn && settingsDropdown) {
+    settingsBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      settingsDropdown.classList.toggle("hidden");
+      settingsBtn.setAttribute("aria-expanded", !settingsDropdown.classList.contains("hidden"));
+    });
+    document.addEventListener("click", (e) => {
+      if (!settingsDropdown.contains(e.target) && e.target !== settingsBtn) {
+        settingsDropdown.classList.add("hidden");
+        settingsBtn.setAttribute("aria-expanded", "false");
+      }
+    });
+    $("#dropdown-profile-btn")?.addEventListener("click", () => {
+      settingsDropdown.classList.add("hidden");
+      openProfileModal();
+    });
+    $("#dropdown-admin-btn")?.addEventListener("click", () => {
+      settingsDropdown.classList.add("hidden");
+      openAdminConsoleModal();
+    });
+    $("#dropdown-signout-btn")?.addEventListener("click", async () => {
+      settingsDropdown.classList.add("hidden");
+      try {
+        await fetch("/api/v2/auth/logout", { method: "POST", credentials: "same-origin" });
+      } catch (_) {}
+      try { clearPresenceUsersCache(); } catch {}
+      showLogin();
+    });
+  }
 
   // Dismiss buttons
   for (const el of document.querySelectorAll("[data-profile-dismiss]")) {
@@ -30050,18 +30061,15 @@ async function init() {
     });
   }
 
-  // Attach critical header button handlers EARLY (right after login form) so they work even if later init code throws an error (prevents "does nothing" buttons and broken sign-out).
-  const logoutBtnEarly = $("#logout-btn");
-  if (logoutBtnEarly && !logoutBtnEarly.dataset.earlyBound) {
-    logoutBtnEarly.dataset.earlyBound = "1";
-    logoutBtnEarly.addEventListener("click", async () => {
-      try {
-        await fetch("/api/v2/auth/logout", { method: "POST", credentials: "same-origin" });
-      } catch (_) {
-        // still switch UI
-      }
-      try { clearPresenceUsersCache(); } catch {}
-      showLogin();
+  // Attach critical header button handlers EARLY — settings dropdown
+  const settingsBtnEarly = $("#settings-btn");
+  if (settingsBtnEarly && !settingsBtnEarly.dataset.earlyBound) {
+    settingsBtnEarly.dataset.earlyBound = "1";
+    settingsBtnEarly.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const dd = $("#settings-dropdown");
+      if (dd) dd.classList.toggle("hidden");
+      settingsBtnEarly.setAttribute("aria-expanded", dd ? !dd.classList.contains("hidden") : "false");
     });
   }
 

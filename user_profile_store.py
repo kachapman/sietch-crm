@@ -30,13 +30,15 @@ def _empty_profile() -> dict[str, Any]:
         "version": PROFILE_VERSION,
         "updatedAt": "",
         "groups": [],
-        "tileLayout": {"order": [], "widths": {}, "heights": {}, "collapsed": {}},
+        "tileLayout": {"order": [], "widths": {}, "heights": {}, "collapsed": {}, "pinned": {}},
         "calendarTiles": [],
         "notesTiles": [],
-            "groupTemplates": [],
+        "groupTemplates": [],
         "hiddenFeedKeys": [],
         "feedKeywordFilter": "",
         "bookmarkedDeals": [],
+        "localKanbanTiles": [],
+        "minimizedSearchTabs": [],
     }
 
 
@@ -217,6 +219,7 @@ def load_user_profile(portal: str, user_id: str) -> dict[str, Any]:
             "widths": dict(layout.get("widths") or {}),
             "heights": dict(layout.get("heights") or {}),
             "collapsed": dict(layout.get("collapsed") or {}),
+            "pinned": dict(layout.get("pinned") or {}),
         }
     profile["calendarTiles"] = _clean_calendar_tiles(data.get("calendarTiles"))
     profile["notesTiles"] = _clean_notes_tiles(data.get("notesTiles"))
@@ -225,6 +228,8 @@ def load_user_profile(portal: str, user_id: str) -> dict[str, Any]:
     profile["hiddenFeedKeys"] = _clean_hidden_feed_keys(data.get("hiddenFeedKeys"))
     profile["feedKeywordFilter"] = str(data.get("feedKeywordFilter") or "")[:500]
     profile["bookmarkedDeals"] = data.get("bookmarkedDeals") if isinstance(data.get("bookmarkedDeals"), list) else []
+    profile["localKanbanTiles"] = data.get("localKanbanTiles") if isinstance(data.get("localKanbanTiles"), list) else []
+    profile["minimizedSearchTabs"] = data.get("minimizedSearchTabs") if isinstance(data.get("minimizedSearchTabs"), list) else []
     profile["updatedAt"] = str(data.get("updatedAt") or "")
     return _migrate_legacy_notes(portal, user_id, profile)
 
@@ -250,6 +255,8 @@ def save_user_profile(portal: str, user_id: str, payload: dict[str, Any]) -> dic
         "hiddenFeedKeys": _clean_hidden_feed_keys(payload.get("hiddenFeedKeys")),
         "feedKeywordFilter": str(payload.get("feedKeywordFilter") or "")[:500],
         "bookmarkedDeals": payload.get("bookmarkedDeals") if isinstance(payload.get("bookmarkedDeals"), list) else [],
+        "localKanbanTiles": payload.get("localKanbanTiles") if isinstance(payload.get("localKanbanTiles"), list) else [],
+        "minimizedSearchTabs": payload.get("minimizedSearchTabs") if isinstance(payload.get("minimizedSearchTabs"), list) else [],
     }
     path.write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
     return cleaned
