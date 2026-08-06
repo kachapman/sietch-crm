@@ -199,8 +199,8 @@ def _execute_custom_behavior(
             else:
                 # Insert into tasks table
                 db.execute(
-                    """INSERT INTO tasks (title, description, assignee_id, opportunity_id, status, created_at)
-                       VALUES (%s, %s, %s, %s, 'open', NOW())""",
+                    """INSERT INTO tasks (title, description, responsible_user_id, opportunity_id, is_closed, created_at)
+                       VALUES (%s, %s, %s, %s, FALSE, NOW())""",
                     (title, description, assignee_id, deal_id),
                 )
                 result["task_created"] = True
@@ -244,8 +244,8 @@ def _execute_custom_behavior(
                         task_assignee = config.get("task_assignee_id")
                         task_title = f"Follow up: {title}"
                         db.execute(
-                            """INSERT INTO tasks (title, assignee_id, opportunity_id, status, created_at)
-                               VALUES (%s, %s, %s, 'open', NOW())""",
+                            """INSERT INTO tasks (title, responsible_user_id, opportunity_id, is_closed, created_at)
+                               VALUES (%s, %s, %s, FALSE, NOW())""",
                             (task_title, task_assignee, new_deal["id"]),
                         )
                     # Notify user if configured

@@ -3816,11 +3816,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 due = task.get("dueDate") or task.get("DueDate")
                 if due:
                     due = str(due)[:10]
-                is_closed = task.get("isClosed") or task.get("IsClosed") or False
-                status = "completed" if is_closed else "open"
+                is_closed = bool(task.get("isClosed") or task.get("IsClosed") or False)
                 db.execute(
-                    "INSERT INTO tasks (title, description, due_date, status, created_at) VALUES (%s, %s, %s, %s, NOW())",
-                    (title, desc, due, status),
+                    "INSERT INTO tasks (title, description, due_date, is_closed, created_at) VALUES (%s, %s, %s, %s, NOW())",
+                    (title, desc, due, is_closed),
                 )
                 count += 1
                 if count % 50 == 0:
@@ -4516,11 +4515,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 due = task.get("dueDate") or task.get("DueDate")
                 if due:
                     due = str(due)[:10]
-                is_closed = task.get("isClosed") or task.get("IsClosed") or False
-                status = "completed" if is_closed else "open"
+                is_closed = bool(task.get("isClosed") or task.get("IsClosed") or False)
                 db.execute(
-                    "INSERT INTO tasks (title, description, due_date, status, created_at) VALUES (%s, %s, %s, %s, NOW())",
-                    (title, desc, due, status),
+                    "INSERT INTO tasks (title, description, due_date, is_closed, created_at) VALUES (%s, %s, %s, %s, NOW())",
+                    (title, desc, due, is_closed),
                 )
                 task_count += 1
             results["tasks_created"] = task_count
