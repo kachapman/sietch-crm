@@ -3795,8 +3795,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             _append_sync_log("info", "Fetching tasks...")
             try:
-                open_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/projects/task/")) or []
-                closed_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/projects/task/?closed=true")) or []
+                open_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/task/filter?count=500&isClosed=false")) or []
+                closed_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/task/filter?count=500&isClosed=true")) or []
                 all_tasks = (open_tasks if isinstance(open_tasks, list) else []) + (closed_tasks if isinstance(closed_tasks, list) else [])
             except Exception as e:
                 _append_sync_log("warn", f"Tasks API not available: {e}")
@@ -4499,8 +4499,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _append_sync_log("info", f"Tags: {tag_count} new")
             # Tasks
             _append_sync_log("info", "Syncing tasks...")
-            open_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/projects/task/")) or []
-            closed_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/projects/task/?closed=true")) or []
+            open_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/task/filter?count=500&isClosed=false")) or []
+            closed_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/task/filter?count=500&isClosed=true")) or []
             all_tasks = (open_tasks if isinstance(open_tasks, list) else []) + (closed_tasks if isinstance(closed_tasks, list) else [])
             task_count = 0
             for task in all_tasks:

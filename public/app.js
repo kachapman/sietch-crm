@@ -24063,51 +24063,6 @@ function openAdminConsoleModal() {
       }
     });
 
-    // Load backup status + history on tab open
-    async function loadBackupHistory() {
-      try {
-        const status = await api("/api/v2/admin/backup/config");
-        const cb = $("#backup-enabled");
-        if (cb) cb.checked = status.enabled || false;
-        const iv = $("#backup-interval");
-        if (iv) iv.value = Math.round((status.interval || 86400) / 3600);
-        const ret = $("#backup-retention");
-        if (ret) ret.value = status.retention_days || 30;
-        const rt = $("#backup-remote-type");
-        if (rt) rt.value = status.remote_type || "none";
-        const rh = $("#backup-remote-host");
-        if (rh) rh.value = status.remote_host || "";
-        const rp = $("#backup-remote-port");
-        if (rp) rp.value = status.remote_port || 22;
-        const ru = $("#backup-remote-user");
-        if (ru) ru.value = status.remote_user || "";
-        const rpath = $("#backup-remote-path");
-        if (rpath) rpath.value = status.remote_path || "";
-        const rk = $("#backup-remote-key");
-        if (rk) rk.value = status.remote_key || "";
-
-        const hist = await api("/api/v2/admin/backup/history");
-        const infoEl = $("#backup-history-info");
-        const listEl = $("#backup-history-list");
-        const last = status.last_backup || {};
-        if (infoEl) {
-          const lastTs = last.ts ? new Date(last.ts).toLocaleString() : "never";
-          const lastStatus = last.status === "success" ? "✅" : last.status === "failed" ? "❌" : "—";
-          infoEl.innerHTML = `Last backup: ${lastTs} ${lastStatus} ${last.size ? `(${((last.size||0)/1024/1024).toFixed(1)} MB)` : ""}`;
-        }
-        if (listEl && hist.history?.length) {
-          listEl.innerHTML = hist.history.map(h => {
-            const ts = h.ts ? new Date(h.ts).toLocaleString() : "?";
-            const icon = h.status === "success" ? "✅" : "❌";
-            const size = h.db_size ? ` ${(h.db_size/1024/1024).toFixed(1)} MB` : "";
-            const remote = h.remote_status ? ` ${h.remote_status}` : "";
-            return `<div style="padding:0.15rem 0; border-bottom:1px solid var(--border);">${ts} ${icon}${size}${remote}</div>`;
-          }).join("");
-        } else if (listEl) {
-          listEl.innerHTML = '<div style="color:var(--muted);">No backups yet.</div>';
-        }
-      } catch (e) { /* ignore */ }
-    }
     loadBackupHistory();
   }
 
@@ -24126,6 +24081,55 @@ function openAdminConsoleModal() {
     // reset or just close admin for now
     $("#admin-console-modal")?.classList.add("hidden");
   });
+}
+
+async function loadBackupHistory() {
+  try {
+    const status = await api("/api/v2/admin/backup/config");
+    const cb = $("#backup-enabled");
+    if (cb) cb.checked = status.enabled || false;
+    const iv = $("#backup-interval");
+    if (iv) iv.value = Math.round((status.interval || 86400) / 3600);
+    const ret = $("#backup-retention");
+    if (ret) ret.value = status.retention_days || 30;
+    const rt = $("#backup-remote-type");
+    if (rt) rt.value = status.remote_type || "none";
+    const rh = $("#backup-remote-host");
+    if (rh) rh.value = status.remote_host || "";
+    const rp = $("#backup-remote-port");
+    if (rp) rp.value = status.remote_port || 22;
+    const ru = $("#backup-remote-user");
+    if (ru) ru.value = status.remote_user || "";
+    const rpath = $("#backup-remote-path");
+    if (rpath) rpath.value = status.remote_path || "";
+    const rk = $("#backup-remote-key");
+    if (rk) rk.value = status.remote_key || "";
+
+    const hist = await api("/api/v2/admin/backup/history");
+    const infoEl = $("#backup-history-info");
+    const listEl = $("#backup-history-list");
+    const last = status.last_backup || {};
+    if (infoEl) {
+      const lastTs = last.ts ? new Date(last.ts).toLocaleString() : "never";
+      const lastStatus = last.status === "success" ? "✅" : last.status === "failed" ? "❌" : "—";
+      infoEl.innerHTML = `Last backup: ${lastTs} ${lastStatus} ${last.size ? `(${((last.size||0)/1024/1024).toFixed(1)} MB)` : ""}`;
+    }
+    if (listEl && hist.history?.length) {
+      listEl.innerHTML = hist.history.map(h => {
+        const ts = h.ts ? new Date(h.ts).toLocaleString() : "?";
+        const icon = h.status === "success" ? "✅" : "❌";
+        const size = h.db_size ? ` ${(h.db_size/1024/1024).toFixed(1)} MB` : "";
+        const remote = h.remote_status ? ` ${h.remote_status}` : "";
+        return `<div style="padding:0.15rem 0; border-bottom:1px solid var(--border);">${ts} ${icon}${size}${remote}</div>`;
+      }).join("");
+    } else if (listEl) {
+      listEl.innerHTML = '<div style="color:var(--muted);">No backups yet.</div>';
+    }
+  } catch (e) {
+    console.error("Backup history load error:", e);
+    const infoEl = $("#backup-history-info");
+    if (infoEl) infoEl.textContent = "Failed to load backup history";
+  }
 }
 
 function switchAdminTab(tab) {
@@ -24172,6 +24176,9 @@ function switchAdminTab(tab) {
   }
   if (tab === "infra") {
     populateAdminInfra();
+  }
+  if (tab === "sync") {
+    loadBackupHistory();
   }
 }
 
