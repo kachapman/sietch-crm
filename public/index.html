@@ -1824,13 +1824,9 @@
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             <span class="admin-tab-label">Users</span>
           </button>
-          <button class="admin-tab-btn btn btn-ghost" data-tab="stages" title="Stages/Tags">
+          <button class="admin-tab-btn btn btn-ghost" data-tab="customize" title="Customize Projects">
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-            <span class="admin-tab-label">Stages/Tags</span>
-          </button>
-          <button class="admin-tab-btn btn btn-ghost" data-tab="custom-fields" title="Custom Fields">
-            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-            <span class="admin-tab-label">Custom Fields</span>
+            <span class="admin-tab-label">Customize Projects</span>
           </button>
           <button class="admin-tab-btn btn btn-ghost" data-tab="contacts" title="Contacts">
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M20 6v12a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2h10a2 2 0 0 1 2 2"/><path d="M10 16h6"/><path d="M11 11a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M4 8h3"/><path d="M4 12h3"/><path d="M4 16h3"/></svg>
@@ -1986,33 +1982,48 @@
           <div id="admin-tab-users" class="admin-tab-content hidden">
             <p>Loading users...</p>
           </div>
-           <div id="admin-tab-stages" class="admin-tab-content hidden">
-             <p class="modal-message">Stages (pipeline columns for kanban + filters). Tags are per-opportunity or group filter sets.</p>
-             <div style="margin-bottom:0.5rem;">
-               <input type="text" id="admin-stages-search" placeholder="Search stages..." style="width:100%; padding:0.4rem; font-size:0.85rem;" />
-             </div>
-             <div id="admin-stages-list" style="max-height:240px; overflow:auto; border:1px solid var(--border); padding:0.25rem; font-size:0.85rem;"></div>
-             <div style="margin-top:0.5rem;">
-               <button type="button" id="admin-add-stage" class="btn btn-secondary btn-small">+ Add Stage</button>
-             </div>
-             <div id="admin-stage-form" style="display:none; margin-top:0.5rem; padding:0.5rem; border:1px solid var(--border);">
-               <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.25rem; font-size:0.8rem;">
-                 <input id="admin-stage-title" placeholder="Stage title" />
-                 <input id="admin-stage-color" type="color" value="#6d4aff" title="Color" />
-                 <input id="admin-stage-prob" placeholder="Probability %" style="grid-column:span 2;" />
-               </div>
-               <div style="margin-top:0.25rem;">
-                 <button type="button" id="admin-stage-save" class="btn btn-primary btn-small">Save</button>
-                 <button type="button" id="admin-stage-cancel" class="btn btn-ghost btn-small">Cancel</button>
-               </div>
-             </div>
-              <p style="font-size:0.7rem;color:var(--muted);margin-top:0.25rem;">Basic list + add for Phase 2C; full edit/reorder later.</p>
+            <div id="admin-tab-customize" class="admin-tab-content hidden">
+              <p class="modal-message">Manage pipeline stages, custom fields, and tags for projects.</p>
+
+              <h4 style="margin:0.75rem 0 0.3rem; font-size:0.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em;">Stages</h4>
+              <div style="margin-bottom:0.5rem;">
+                <input type="text" id="admin-stages-search" placeholder="Search stages..." style="width:100%; padding:0.4rem; font-size:0.85rem;" />
+              </div>
+              <div id="admin-stages-list" style="max-height:200px; overflow:auto; border:1px solid var(--border); padding:0.25rem; font-size:0.85rem;"></div>
+              <div style="margin-top:0.4rem;">
+                <button type="button" id="admin-add-stage" class="btn btn-secondary btn-small">+ Add Stage</button>
+              </div>
+              <div id="admin-stage-form" style="display:none; margin-top:0.4rem; padding:0.5rem; border:1px solid var(--border);">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.25rem; font-size:0.8rem;">
+                  <input id="admin-stage-title" placeholder="Stage title" />
+                  <input id="admin-stage-color" type="color" value="#6d4aff" title="Color" />
+                  <input id="admin-stage-prob" placeholder="Probability %" style="grid-column:span 2;" />
+                </div>
+                <div style="margin-top:0.25rem;">
+                  <button type="button" id="admin-stage-save" class="btn btn-primary btn-small">Save</button>
+                  <button type="button" id="admin-stage-cancel" class="btn btn-ghost btn-small">Cancel</button>
+                </div>
+              </div>
+
+              <h4 style="margin:1rem 0 0.3rem; font-size:0.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em;">Custom Fields</h4>
+              <div id="admin-custom-fields-list" style="max-height:200px; overflow:auto; border:1px solid var(--border); padding:0.25rem; font-size:0.85rem;"></div>
+
+              <h4 style="margin:1rem 0 0.3rem; font-size:0.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em;">Tags</h4>
+              <div id="admin-tags-list" style="max-height:200px; overflow:auto; border:1px solid var(--border); padding:0.25rem; font-size:0.85rem;"></div>
+              <div style="margin-top:0.4rem;">
+                <button type="button" id="admin-add-tag" class="btn btn-secondary btn-small">+ Add Tag</button>
+              </div>
+              <div id="admin-tag-form" style="display:none; margin-top:0.4rem; padding:0.5rem; border:1px solid var(--border);">
+                <div style="display:flex; gap:0.25rem; font-size:0.8rem;">
+                  <input id="admin-tag-title" placeholder="Tag name" style="flex:1;" />
+                  <input id="admin-tag-color" type="color" value="#6d4aff" title="Color" />
+                </div>
+                <div style="margin-top:0.25rem;">
+                  <button type="button" id="admin-tag-save" class="btn btn-primary btn-small">Save</button>
+                  <button type="button" id="admin-tag-cancel" class="btn btn-ghost btn-small">Cancel</button>
+                </div>
+              </div>
             </div>
-          <div id="admin-tab-custom-fields" class="admin-tab-content hidden">
-            <p class="modal-message">Custom field definitions used on deals.</p>
-            <div id="admin-custom-fields-list" style="max-height:260px; overflow:auto; border:1px solid var(--border); padding:0.25rem; font-size:0.85rem;"></div>
-            <p style="font-size:0.7rem;color:var(--muted);margin-top:0.25rem;">Phase 2C read-only; full CRUD later.</p>
-          </div>
             <div id="admin-tab-contacts" class="admin-tab-content hidden">
              <p class="modal-message">Contacts (imported from OO for use in deals, bot modal, previews, etc.).</p>
              <div style="margin-bottom:0.5rem;">
@@ -2037,24 +2048,6 @@
              </div>
               <p style="font-size:0.7rem;color:var(--muted);margin-top:0.25rem;">Full CRUD later; current for import preservation.</p>
             </div>
-          <div id="admin-tab-tags" class="admin-tab-content hidden">
-            <p class="modal-message">Tags available across all deals.</p>
-            <div id="admin-tags-list" style="max-height:240px; overflow:auto; border:1px solid var(--border); padding:0.25rem; font-size:0.85rem;"></div>
-            <div style="margin-top:0.5rem;">
-              <button type="button" id="admin-add-tag" class="btn btn-secondary btn-small">+ Add Tag</button>
-            </div>
-            <div id="admin-tag-form" style="display:none; margin-top:0.5rem; padding:0.5rem; border:1px solid var(--border);">
-              <div style="display:flex; gap:0.25rem; font-size:0.8rem;">
-                <input id="admin-tag-title" placeholder="Tag name" style="flex:1;" />
-                <input id="admin-tag-color" type="color" value="#6d4aff" title="Color" />
-              </div>
-              <div style="margin-top:0.25rem;">
-                <button type="button" id="admin-tag-save" class="btn btn-primary btn-small">Save</button>
-                <button type="button" id="admin-tag-cancel" class="btn btn-ghost btn-small">Cancel</button>
-              </div>
-            </div>
-            <p style="font-size:0.7rem;color:var(--muted);margin-top:0.25rem;">Phase 2C basic add; rename/merge later.</p>
-          </div>
            <div id="admin-tab-branding" class="admin-tab-content hidden">
             <p class="modal-message">Customize how your company appears in the dashboard and login screen.</p>
             <form id="branding-form" class="modal-form">

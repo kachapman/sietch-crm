@@ -24128,14 +24128,10 @@ function switchAdminTab(tab) {
     const s = $("#admin-contacts-search")?.value.trim() || "";
     populateAdminContactsList(s);
   }
-  if (tab === "stages") {
+  if (tab === "customize") {
     const s = $("#admin-stages-search")?.value.trim() || "";
     populateAdminStagesList(s);
-  }
-  if (tab === "custom-fields") {
     populateAdminCustomFieldsList();
-  }
-  if (tab === "tags") {
     populateAdminTagsList();
   }
   if (tab === "logs") {
