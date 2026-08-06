@@ -1813,8 +1813,8 @@
             Overview
           </button>
           <button class="admin-tab-btn btn btn-ghost" data-tab="sync">
-            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M21 21v-5h-5"/></svg>
-            Import Sync
+            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Import / Export
           </button>
           <button class="admin-tab-btn btn btn-ghost" data-tab="users">
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
@@ -1892,11 +1892,14 @@
             <p><strong>Current admins:</strong> bot, kenc (and others with is_admin in DB). Console is auto-available on login for isAdmin users — no extra credentials needed.</p>
           </div>
           <div id="admin-tab-sync" class="admin-tab-content hidden">
-            <p><strong>Import Sync (transitional, read-only)</strong></p>
-            <p>Enter OnlyOffice details to pull missing data (tags, tasks) and attach to existing imported opportunities. Does not overwrite local Sietch data or push back.</p>
-            <label>OnlyOffice Portal URL<br><input id="sync-portal-url" type="text" placeholder="https://office.example.com" style="width:100%;"></label>
-             <label style="margin-top:0.5rem;">Admin Email<br><input id="sync-email" type="text" placeholder="admin@example.com" style="width:100%;"></label>
-            <label style="margin-top:0.5rem;">Password<br><input id="sync-password" type="password" style="width:100%;"></label>
+            <p class="modal-message">Import data from OnlyOffice, export Sietch data for backup or migration, and configure scheduled backups with remote destinations.</p>
+
+            <!-- ── OnlyOffice Import ── -->
+            <h4 style="margin:1rem 0 0.3rem; border-bottom:1px solid var(--border); padding-bottom:0.3rem;">OnlyOffice Import</h4>
+            <p style="font-size:0.8rem; color:var(--muted); margin:0 0 0.5rem;">Pull data from an OnlyOffice CRM instance. Requires admin credentials. Imports are one-way; nothing is pushed back.</p>
+            <label title="Base URL of the OnlyOffice CRM server">OnlyOffice Portal URL<br><input id="sync-portal-url" type="text" placeholder="https://office.example.com" style="width:100%;"></label>
+            <label style="margin-top:0.5rem;" title="Admin email for the OnlyOffice CRM account">Admin Email<br><input id="sync-email" type="text" placeholder="admin@example.com" style="width:100%;"></label>
+            <label style="margin-top:0.5rem;" title="Admin password for the OnlyOffice CRM account">Password<br><input id="sync-password" type="password" style="width:100%;"></label>
             <div style="margin-top:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
               <button id="sync-test-btn" class="btn btn-secondary">Test Connection</button>
               <button id="sync-deal-tags-btn" class="btn btn-primary">Sync Deal Tags + Fields</button>
@@ -1908,7 +1911,101 @@
             </div>
             <div id="sync-status" style="margin-top:0.5rem; font-size:0.85rem; color:var(--muted);"></div>
             <div id="sync-log" style="margin-top:0.5rem; max-height:400px; overflow-y:auto; background:var(--bg-elevated); border-radius:4px; padding:0.5rem; font-family:monospace; font-size:0.7rem;"></div>
-            <p style="font-size:0.75rem; color:var(--muted); margin-top:0.5rem;">Future: interval scheduling, 2-way, watermarks. Uses session admin (no extra login).</p>
+
+            <!-- ── Export Sietch Data ── -->
+            <h4 style="margin:1.5rem 0 0.3rem; border-bottom:1px solid var(--border); padding-bottom:0.3rem;">Export Sietch Data</h4>
+            <p style="font-size:0.8rem; color:var(--muted); margin:0 0 0.5rem;">Download your CRM data for backup, migration, or portability. No credentials are included in exports.</p>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+              <button id="export-json-btn" class="btn btn-primary">Export JSON (Universal)</button>
+              <button id="export-sql-btn" class="btn btn-primary">Export SQL (Backup)</button>
+            </div>
+            <p style="font-size:0.7rem; color:var(--muted); margin:0.3rem 0 0;"><b>JSON</b>: ZIP with all tables as JSON + linked files. Human-readable, compatible with other CRMs.</p>
+            <p style="font-size:0.7rem; color:var(--muted); margin:0.1rem 0 0;"><b>SQL</b>: PostgreSQL dump for fast restore. Requires pg_dump (postgresql-client).</p>
+            <div id="export-status" style="margin-top:0.5rem; font-size:0.85rem; color:var(--muted);"></div>
+
+            <!-- ── Import / Restore ── -->
+            <h4 style="margin:1.5rem 0 0.3rem; border-bottom:1px solid var(--border); padding-bottom:0.3rem;">Import / Restore</h4>
+            <p style="font-size:0.8rem; color:var(--muted); margin:0 0 0.5rem;">Restore from a previously exported file. JSON imports skip existing records. SQL restore executes the dump directly.</p>
+            <label style="font-size:0.85rem;">Restore from JSON Export (ZIP)<br>
+              <input id="import-json-file" type="file" accept=".zip" style="margin-top:0.25rem;">
+            </label>
+            <button id="import-json-btn" class="btn btn-secondary" style="margin-top:0.3rem;" disabled>Import JSON</button>
+            <div id="import-json-status" style="margin-top:0.3rem; font-size:0.8rem; color:var(--muted);"></div>
+            <label style="margin-top:1rem; font-size:0.85rem;">Restore from SQL Backup<br>
+              <input id="import-sql-file" type="file" accept=".sql,.sql.gz" style="margin-top:0.25rem;">
+            </label>
+            <p style="font-size:0.7rem; color:var(--danger, #f85149); margin:0.2rem 0 0;">Warning: This runs raw SQL against the database. Use only trusted backup files.</p>
+            <button id="import-sql-btn" class="btn btn-secondary" style="margin-top:0.3rem;" disabled>Restore SQL</button>
+            <div id="import-sql-status" style="margin-top:0.3rem; font-size:0.8rem; color:var(--muted);"></div>
+
+            <!-- ── Scheduled Backups ── -->
+            <h4 style="margin:1.5rem 0 0.3rem; border-bottom:1px solid var(--border); padding-bottom:0.3rem;">Scheduled Backups</h4>
+            <p style="font-size:0.8rem; color:var(--muted); margin:0 0 0.5rem;">Automatic database backups on a recurring schedule. Backups are stored locally and optionally sent to a remote server.</p>
+            <div style="display:flex; gap:1rem; flex-wrap:wrap; align-items:end;">
+              <label style="font-size:0.85rem;">
+                <input type="checkbox" id="backup-enabled"> Enabled
+              </label>
+              <label style="font-size:0.85rem;">
+                Interval (hours)<br><input id="backup-interval" type="number" min="1" max="720" value="24" style="width:5rem; padding:0.3rem;">
+              </label>
+              <label style="font-size:0.85rem;">
+                Retention (days)<br><input id="backup-retention" type="number" min="1" max="365" value="30" style="width:5rem; padding:0.3rem;">
+              </label>
+              <button id="backup-config-save" class="btn btn-secondary btn-small">Save</button>
+            </div>
+
+            <!-- Remote Destination -->
+            <p style="font-size:0.8rem; color:var(--muted); margin:1rem 0 0.3rem;"><b>Remote Destination</b> — Send each backup to another server after creation. Requires SSH key-based auth.</p>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:end;">
+              <label style="font-size:0.85rem;">
+                Protocol<br>
+                <select id="backup-remote-type" style="padding:0.3rem;">
+                  <option value="none">None</option>
+                  <option value="scp">SCP</option>
+                  <option value="sftp">SFTP</option>
+                  <option value="rsync">rsync</option>
+                  <option value="smtp">Email</option>
+                </select>
+              </label>
+              <label style="font-size:0.85rem;">
+                Host<br><input id="backup-remote-host" type="text" placeholder="backup.example.com" style="width:12rem; padding:0.3rem;">
+              </label>
+              <label style="font-size:0.85rem;">
+                Port<br><input id="backup-remote-port" type="number" value="22" style="width:4rem; padding:0.3rem;">
+              </label>
+              <label style="font-size:0.85rem;">
+                User<br><input id="backup-remote-user" type="text" placeholder="backup" style="width:8rem; padding:0.3rem;">
+              </label>
+              <label style="font-size:0.85rem;">
+                Path / Email<br><input id="backup-remote-path" type="text" placeholder="/backups/sietch" style="width:12rem; padding:0.3rem;">
+              </label>
+            </div>
+            <label style="margin-top:0.3rem; font-size:0.85rem;">
+              SSH Key Path<br><input id="backup-remote-key" type="text" placeholder="/app/data/.ssh/id_rsa" style="width:100%; padding:0.3rem;">
+            </label>
+            <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
+              <button id="backup-remote-save" class="btn btn-secondary btn-small">Save</button>
+              <button id="backup-remote-test" class="btn btn-ghost btn-small">Test Connection</button>
+            </div>
+            <div id="backup-remote-status" style="margin-top:0.3rem; font-size:0.8rem; color:var(--muted);"></div>
+
+            <!-- Backup Notifications -->
+            <p style="font-size:0.8rem; color:var(--muted); margin:1rem 0 0.3rem;"><b>Backup Notifications</b> — Get notified when backups succeed or fail. Uses your account email and linked Telegram chat.</p>
+            <div style="display:flex; gap:1.5rem; flex-wrap:wrap;">
+              <label style="font-size:0.85rem;"><input type="checkbox" id="backup-notify-email-success" checked> Email on success</label>
+              <label style="font-size:0.85rem;"><input type="checkbox" id="backup-notify-email-failure" checked> Email on failure</label>
+              <label style="font-size:0.85rem;"><input type="checkbox" id="backup-notify-telegram-success" checked> Telegram on success</label>
+              <label style="font-size:0.85rem;"><input type="checkbox" id="backup-notify-telegram-failure" checked> Telegram on failure</label>
+            </div>
+            <button id="backup-notify-save" class="btn btn-secondary btn-small" style="margin-top:0.3rem;">Save Preferences</button>
+            <div id="backup-notify-status" style="margin-top:0.3rem; font-size:0.8rem; color:var(--muted);"></div>
+
+            <!-- Backup History -->
+            <p style="font-size:0.8rem; color:var(--muted); margin:1rem 0 0.3rem;"><b>Backup History</b></p>
+            <div id="backup-history-info" style="font-size:0.8rem; color:var(--muted); margin-bottom:0.5rem;">Loading...</div>
+            <button id="backup-run-now" class="btn btn-primary btn-small">Run Backup Now</button>
+            <div id="backup-run-status" style="margin-top:0.3rem; font-size:0.8rem; color:var(--muted);"></div>
+            <div id="backup-history-list" style="margin-top:0.5rem; max-height:200px; overflow-y:auto; background:var(--bg-elevated); border-radius:4px; padding:0.5rem; font-family:monospace; font-size:0.7rem;"></div>
           </div>
           <div id="admin-tab-users" class="admin-tab-content hidden">
             <p>Loading users...</p>

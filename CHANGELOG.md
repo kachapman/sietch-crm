@@ -2,6 +2,22 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — Import/Export Tab + Scheduled Backups (2026-08-05)
+
+- **Admin tab renamed from "Import Sync" to "Import / Export".** The tab now covers importing from OnlyOffice, exporting Sietch data, restoring from backups, and configuring scheduled backups.
+- **Universal Export (JSON).** Downloads a ZIP file containing all database tables as JSON files plus linked photos and documents. No credentials included. Human-readable and compatible with other CRMs. Uses manifest.json for metadata and file registry.
+- **Database Backup (SQL).** Downloads a PostgreSQL SQL dump via `pg_dump` for fast restore. Requires `postgresql-client` package.
+- **JSON Import.** Upload a previously exported ZIP to restore data. Skips duplicate records. Restores linked files to the data directory.
+- **SQL Restore.** Upload a `.sql` backup file to execute against the database. Uses `psql`.
+- **Scheduled Backups.** Configurable automatic backups via the admin UI. Interval, retention, and remote destination stored in `system_settings`. Background thread follows the `notification_dispatcher.py` pattern.
+- **Remote Backup Sending.** Send backups to another server via SCP, SFTP, rsync (SSH key-based auth) or email. Test connection button validates SSH access.
+- **Backup Notifications.** Admins can configure email and/or Telegram notifications for backup success/failure. Uses existing `smtp_client.send_email()` and Telegram bot API directly.
+- **Backup History.** Recent backup outcomes stored in `system_settings` and displayed in the admin UI.
+- **Helper text on all sections.** Each Import/Export sub-section has a `<p style="font-size:0.8rem; color:var(--muted)">` description explaining what it does.
+- **Dockerfile updated.** Added `postgresql-client`, `rsync`, `openssh-client` packages. Added `backup_service.py` to COPY.
+- **New env vars.** `BACKUP_ENABLED`, `BACKUP_INTERVAL`, `BACKUP_RETENTION_DAYS`, `BACKUP_DIR`, `BACKUP_REMOTE_TYPE/HOST/PORT/USER/PATH/KEY_FILE`.
+- **Files:** `backup_service.py` (NEW), `server.py`, `public/index.html`, `public/app.js`, `Dockerfile`, `config.example.env`, `CHANGELOG.md`, `AGENTS.md`.
+
 ## Phase 3 — Imported OnlyOffice Emails Now History Events (2026-08-05)
 
 - **"Pull Email Bodies" import now stores emails as project history notes.** Previously the admin OnlyOffice sync endpoint incorrectly inserted imported emails into `mail_messages` with `account_id = NULL`, which made them invisible and dependent on a non-existent mail account. The endpoint now imports each email into `history_events` as a self-contained `email_snapshot` so it appears on the project timeline for any user who can open the project.

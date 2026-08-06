@@ -23885,6 +23885,230 @@ function openAdminConsoleModal() {
         try { const s = await api("/api/v2/admin/sync/status"); if (s.log) renderSyncLog(s.log); } catch {}
       }
     });
+
+    // ── Export / Import / Backup handlers ──────────────────────────────────
+
+    // Export JSON
+    $("#export-json-btn")?.addEventListener("click", async () => {
+      const el = $("#export-status");
+      if (el) el.innerHTML = '<span style="color:var(--accent);">Generating JSON export…</span>';
+      try {
+        const res = await fetch("/api/v2/admin/export/universal", { method: "POST", credentials: "same-origin" });
+        if (!res.ok) throw new Error(`Export failed: ${res.statusText}`);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `sietch-export-${new Date().toISOString().slice(0,10)}.zip`;
+        a.click();
+        URL.revokeObjectURL(url);
+        if (el) el.innerHTML = '<span style="color:#3fb950;">Export downloaded.</span>';
+      } catch (e) {
+        if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(e.message)}</span>`;
+      }
+    });
+
+    // Export SQL
+    $("#export-sql-btn")?.addEventListener("click", async () => {
+      const el = $("#export-status");
+      if (el) el.innerHTML = '<span style="color:var(--accent);">Generating SQL backup…</span>';
+      try {
+        const res = await fetch("/api/v2/admin/export/backup", { method: "POST", credentials: "same-origin" });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || res.statusText);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `sietch-backup-${new Date().toISOString().slice(0,10)}.sql`;
+        a.click();
+        URL.revokeObjectURL(url);
+        if (el) el.innerHTML = '<span style="color:#3fb950;">SQL backup downloaded.</span>';
+      } catch (e) {
+        if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(e.message)}</span>`;
+      }
+    });
+
+    // Import JSON
+    $("#import-json-file")?.addEventListener("change", (e) => {
+      const btn = $("#import-json-btn");
+      if (btn) btn.disabled = !e.target.files.length;
+    });
+    $("#import-json-btn")?.addEventListener("click", async () => {
+      const fileInput = $("#import-json-file");
+      const el = $("#import-json-status");
+      if (!fileInput?.files.length) return;
+      if (el) el.innerHTML = '<span style="color:var(--accent);">Importing…</span>';
+      const form = new FormData();
+      form.append("file", fileInput.files[0]);
+      try {
+        const res = await fetch("/api/v2/admin/import/json", { method: "POST", body: form, credentials: "same-origin" });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || "Import failed");
+        if (el) el.innerHTML = `<span style="color:#3fb950;">Done: ${data.rows_imported || 0} rows imported, ${data.rows_skipped || 0} skipped, ${data.files_copied || 0} files copied.</span>`;
+      } catch (e) {
+        if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(e.message)}</span>`;
+      }
+    });
+
+    // Import SQL
+    $("#import-sql-file")?.addEventListener("change", (e) => {
+      const btn = $("#import-sql-btn");
+      if (btn) btn.disabled = !e.target.files.length;
+    });
+    $("#import-sql-btn")?.addEventListener("click", async () => {
+      const fileInput = $("#import-sql-file");
+      const el = $("#import-sql-status");
+      if (!fileInput?.files.length) return;
+      if (!confirm("This will execute raw SQL against the database. Continue?")) return;
+      if (el) el.innerHTML = '<span style="color:var(--accent);">Restoring…</span>';
+      const form = new FormData();
+      form.append("file", fileInput.files[0]);
+      try {
+        const res = await fetch("/api/v2/admin/import/sql", { method: "POST", body: form, credentials: "same-origin" });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || "Restore failed");
+        if (el) el.innerHTML = '<span style="color:#3fb950;">SQL restore complete.</span>';
+      } catch (e) {
+        if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(e.message)}</span>`;
+      }
+    });
+
+    // Backup config save
+    $("#backup-config-save")?.addEventListener("click", async () => {
+      const el = $("#backup-run-status");
+      try {
+        await api("/api/v2/admin/backup/config", { method: "POST", body: JSON.stringify({
+          enabled: $("#backup-enabled")?.checked || false,
+          interval: parseInt($("#backup-interval")?.value || "86400"),
+          retention_days: parseInt($("#backup-retention")?.value || "30"),
+        })});
+        if (el) el.innerHTML = '<span style="color:#3fb950;">Backup config saved.</span>';
+      } catch (e) {
+        if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(e.message)}</span>`;
+      }
+    });
+
+    // Backup remote save
+    $("#backup-remote-save")?.addEventListener("click", async () => {
+      const el = $("#backup-remote-status");
+      try {
+        const config = await api("/api/v2/admin/backup/config");
+        await api("/api/v2/admin/backup/config", { method: "POST", body: JSON.stringify({
+          ...config,
+          remote_type: $("#backup-remote-type")?.value || "none",
+          remote_host: $("#backup-remote-host")?.value || "",
+          remote_port: parseInt($("#backup-remote-port")?.value || "22"),
+          remote_user: $("#backup-remote-user")?.value || "",
+          remote_path: $("#backup-remote-path")?.value || "",
+          remote_key: $("#backup-remote-key")?.value || "",
+        })});
+        if (el) el.innerHTML = '<span style="color:#3fb950;">Remote config saved.</span>';
+      } catch (e) {
+        if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(e.message)}</span>`;
+      }
+    });
+
+    // Backup remote test
+    $("#backup-remote-test")?.addEventListener("click", async () => {
+      const el = $("#backup-remote-status");
+      if (el) el.innerHTML = '<span style="color:var(--accent);">Testing…</span>';
+      try {
+        const res = await api("/api/v2/admin/backup/remote-test", { method: "POST", body: JSON.stringify({
+          remote_type: $("#backup-remote-type")?.value || "none",
+          remote_host: $("#backup-remote-host")?.value || "",
+          remote_port: parseInt($("#backup-remote-port")?.value || "22"),
+          remote_user: $("#backup-remote-user")?.value || "",
+          remote_key: $("#backup-remote-key")?.value || "",
+        })});
+        if (el) el.innerHTML = `<span style="color:#3fb950;">${escapeHtml(res.message || "Connection successful")}</span>`;
+      } catch (e) {
+        if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(e.message)}</span>`;
+      }
+    });
+
+    // Backup notification prefs save
+    $("#backup-notify-save")?.addEventListener("click", async () => {
+      const el = $("#backup-notify-status");
+      try {
+        await api("/api/v2/admin/backup/notify-prefs", { method: "POST", body: JSON.stringify({
+          email_success: $("#backup-notify-email-success")?.checked ?? true,
+          email_failure: $("#backup-notify-email-failure")?.checked ?? true,
+          telegram_success: $("#backup-notify-telegram-success")?.checked ?? true,
+          telegram_failure: $("#backup-notify-telegram-failure")?.checked ?? true,
+        })});
+        if (el) el.innerHTML = '<span style="color:#3fb950;">Preferences saved.</span>';
+      } catch (e) {
+        if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(e.message)}</span>`;
+      }
+    });
+
+    // Backup run now
+    $("#backup-run-now")?.addEventListener("click", async () => {
+      const el = $("#backup-run-status");
+      if (el) el.innerHTML = '<span style="color:var(--accent);">Running backup…</span>';
+      try {
+        const res = await api("/api/v2/admin/backup/run", { method: "POST" });
+        if (res.ok) {
+          if (el) el.innerHTML = `<span style="color:#3fb950;">Backup completed (${((res.size||0)/1024/1024).toFixed(1)} MB, ${res.duration||0}s).</span>`;
+        } else {
+          if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(res.error || "Backup failed")}</span>`;
+        }
+        // Refresh history
+        loadBackupHistory();
+      } catch (e) {
+        if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(e.message)}</span>`;
+      }
+    });
+
+    // Load backup status + history on tab open
+    async function loadBackupHistory() {
+      try {
+        const status = await api("/api/v2/admin/backup/config");
+        const cb = $("#backup-enabled");
+        if (cb) cb.checked = status.enabled || false;
+        const iv = $("#backup-interval");
+        if (iv) iv.value = Math.round((status.interval || 86400) / 3600);
+        const ret = $("#backup-retention");
+        if (ret) ret.value = status.retention_days || 30;
+        const rt = $("#backup-remote-type");
+        if (rt) rt.value = status.remote_type || "none";
+        const rh = $("#backup-remote-host");
+        if (rh) rh.value = status.remote_host || "";
+        const rp = $("#backup-remote-port");
+        if (rp) rp.value = status.remote_port || 22;
+        const ru = $("#backup-remote-user");
+        if (ru) ru.value = status.remote_user || "";
+        const rpath = $("#backup-remote-path");
+        if (rpath) rpath.value = status.remote_path || "";
+        const rk = $("#backup-remote-key");
+        if (rk) rk.value = status.remote_key || "";
+
+        const hist = await api("/api/v2/admin/backup/history");
+        const infoEl = $("#backup-history-info");
+        const listEl = $("#backup-history-list");
+        const last = status.last_backup || {};
+        if (infoEl) {
+          const lastTs = last.ts ? new Date(last.ts).toLocaleString() : "never";
+          const lastStatus = last.status === "success" ? "✅" : last.status === "failed" ? "❌" : "—";
+          infoEl.innerHTML = `Last backup: ${lastTs} ${lastStatus} ${last.size ? `(${((last.size||0)/1024/1024).toFixed(1)} MB)` : ""}`;
+        }
+        if (listEl && hist.history?.length) {
+          listEl.innerHTML = hist.history.map(h => {
+            const ts = h.ts ? new Date(h.ts).toLocaleString() : "?";
+            const icon = h.status === "success" ? "✅" : "❌";
+            const size = h.db_size ? ` ${(h.db_size/1024/1024).toFixed(1)} MB` : "";
+            const remote = h.remote_status ? ` ${h.remote_status}` : "";
+            return `<div style="padding:0.15rem 0; border-bottom:1px solid var(--border);">${ts} ${icon}${size}${remote}</div>`;
+          }).join("");
+        } else if (listEl) {
+          listEl.innerHTML = '<div style="color:var(--muted);">No backups yet.</div>';
+        }
+      } catch (e) { /* ignore */ }
+    }
+    loadBackupHistory();
   }
 
   // Mobile: collapse tab sidebar by default to save space

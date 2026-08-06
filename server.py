@@ -10,6 +10,8 @@ from __future__ import annotations
 import collections
 import base64
 import gzip
+import shutil
+import subprocess
 import sys
 import threading
 import traceback
@@ -1101,6 +1103,26 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"running": _sync_running, "log": list(_sync_log)})
             return
 
+        # ── Backup status/config/history (GET) ──
+        if api_path == "/api/v2/admin/backup/status":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_backup_status()
+            return
+        if api_path == "/api/v2/admin/backup/config":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_backup_config_get()
+            return
+        if api_path == "/api/v2/admin/backup/history":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_backup_history()
+            return
+
         # ── Presence / Team (local store, unchanged) ──
         if api_path.startswith("/api/presence"):
             if api_path == "/api/presence/users":
@@ -1649,6 +1671,56 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not user:
                 return
             self._handle_sync_pull_email_bodies()
+            return
+
+        # ── Export / Import / Backup (POST) ──
+        if api_path == "/api/v2/admin/export/universal" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_export_universal()
+            return
+        if api_path == "/api/v2/admin/export/backup" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_export_backup()
+            return
+        if api_path == "/api/v2/admin/import/json" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_import_json()
+            return
+        if api_path == "/api/v2/admin/import/sql" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_import_sql()
+            return
+        if api_path == "/api/v2/admin/backup/run" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_backup_run()
+            return
+        if api_path == "/api/v2/admin/backup/config" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_backup_config_post()
+            return
+        if api_path == "/api/v2/admin/backup/notify-prefs" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_backup_notify_prefs_post()
+            return
+        if api_path == "/api/v2/admin/backup/remote-test" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_backup_remote_test()
             return
 
         # ── Bot customers (admin) ──
@@ -4487,6 +4559,399 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
         finally:
             _sync_running = False
+
+    # ── Export / Import / Backup handlers ────────────────────────────────────
+
+    # Tables to export (ordered by FK dependencies)
+    _EXPORT_TABLES = [
+        ("users", "SELECT * FROM users ORDER BY id"),
+        ("stages", "SELECT * FROM stages ORDER BY id"),
+        ("tag_definitions", "SELECT * FROM tag_definitions ORDER BY id"),
+        ("custom_field_definitions", "SELECT * FROM custom_field_definitions ORDER BY id"),
+        ("custom_field_options", "SELECT * FROM custom_field_options ORDER BY id"),
+        ("history_categories", "SELECT * FROM history_categories ORDER BY id"),
+        ("branding", "SELECT * FROM branding ORDER BY id"),
+        ("system_settings", "SELECT * FROM system_settings ORDER BY key"),
+        ("contacts", "SELECT * FROM contacts ORDER BY id"),
+        ("opportunities", "SELECT * FROM opportunities ORDER BY id"),
+        ("opportunity_tags", "SELECT * FROM opportunity_tags"),
+        ("opportunity_custom_field_values", "SELECT * FROM opportunity_custom_field_values ORDER BY id"),
+        ("tasks", "SELECT * FROM tasks ORDER BY id"),
+        ("history_events", "SELECT * FROM history_events ORDER BY id"),
+        ("history_replies", "SELECT * FROM history_replies ORDER BY id"),
+        ("history_attachments", "SELECT * FROM history_attachments ORDER BY id"),
+        ("history_notify_users", "SELECT * FROM history_notify_users"),
+        ("mail_accounts", "SELECT * FROM mail_accounts ORDER BY id"),
+        ("mail_messages", "SELECT * FROM mail_messages ORDER BY id"),
+        ("mail_deal_links", "SELECT * FROM mail_deal_links ORDER BY id"),
+        ("mail_tag_assignments", "SELECT * FROM mail_tag_assignments ORDER BY id"),
+        ("mail_outgoing", "SELECT * FROM mail_outgoing ORDER BY id"),
+        ("mail_folders", "SELECT * FROM mail_folders ORDER BY id"),
+        ("mail_attachments", "SELECT * FROM mail_attachments ORDER BY id"),
+        ("mail_tags", "SELECT * FROM mail_tags ORDER BY id"),
+        ("mail_templates", "SELECT * FROM mail_templates ORDER BY id"),
+        ("mail_contacts", "SELECT * FROM mail_contacts ORDER BY id"),
+        ("notifications", "SELECT * FROM notifications ORDER BY id"),
+        ("notification_preferences", "SELECT * FROM notification_preferences"),
+        ("document_folders", "SELECT * FROM document_folders ORDER BY id"),
+        ("project_documents", "SELECT * FROM project_documents ORDER BY id"),
+        ("project_photos", "SELECT * FROM project_photos ORDER BY id"),
+        ("project_photo_folders", "SELECT * FROM project_photo_folders ORDER BY id"),
+        ("user_profiles", "SELECT * FROM user_profiles"),
+        ("sessions", "SELECT * FROM sessions ORDER BY created_at DESC LIMIT 0"),
+        ("mail_account_access", "SELECT * FROM mail_account_access"),
+        ("mail_flag_queue", "SELECT * FROM mail_flag_queue"),
+        ("opportunity_changes", "SELECT * FROM opportunity_changes ORDER BY id"),
+        ("sync_watermarks", "SELECT * FROM sync_watermarks"),
+        ("sync_errors", "SELECT * FROM sync_errors ORDER BY id"),
+        ("email_classifications", "SELECT * FROM email_classifications ORDER BY id"),
+        ("classifier_training_data", "SELECT * FROM classifier_training_data ORDER BY id"),
+    ]
+
+    # Sensitive columns to exclude from universal export
+    _SENSITIVE_COLUMNS = {
+        "password_hash", "password_salt", "password_encrypted",
+        "smtp_password_encrypted", "oauth_access_token", "oauth_refresh_token",
+        "token",
+    }
+
+    def _handle_export_universal(self) -> None:
+        """Export all database tables as a ZIP of JSON files + linked files."""
+        try:
+            buf = io.BytesIO()
+            manifest: dict[str, Any] = {
+                "version": "1.0",
+                "exported_at": datetime.now(timezone.utc).isoformat(),
+                "tables": {},
+                "files": {"documents": [], "photos": []},
+            }
+
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                # Export each table
+                for table_name, sql in self._EXPORT_TABLES:
+                    try:
+                        rows = db.query_dicts(sql)
+                        # Strip sensitive columns
+                        clean_rows = []
+                        for row in rows:
+                            clean = {k: v for k, v in row.items() if k not in self._SENSITIVE_COLUMNS}
+                            # Convert datetime objects to strings for JSON serialization
+                            for k, v in clean.items():
+                                if isinstance(v, datetime):
+                                    clean[k] = v.isoformat()
+                            clean_rows.append(clean)
+                        manifest["tables"][table_name] = {"row_count": len(clean_rows)}
+                        zf.writestr(f"{table_name}.json", json.dumps(clean_rows, default=str, ensure_ascii=False))
+                    except Exception as e:
+                        manifest["tables"][table_name] = {"row_count": 0, "error": str(e)}
+
+                # Export linked files (documents + photos)
+                data_dir = Path("data")
+                for subdir, file_list_key in [("documents/project_documents", "documents"), ("photos", "photos")]:
+                    src_dir = data_dir / subdir
+                    if not src_dir.exists():
+                        continue
+                    for fpath in src_dir.rglob("*"):
+                        if fpath.is_file():
+                            arc_name = f"files/{subdir}/{fpath.relative_to(src_dir)}"
+                            zf.write(fpath, arc_name)
+                            # Find which project this belongs to
+                            rel = str(fpath.relative_to(src_dir))
+                            manifest["files"][file_list_key].append({
+                                "zip_path": arc_name,
+                                "filename": fpath.name,
+                                "size": fpath.stat().st_size,
+                            })
+
+                zf.writestr("manifest.json", json.dumps(manifest, indent=2, default=str, ensure_ascii=False))
+
+            zip_data = buf.getvalue()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(len(zip_data)))
+            self.send_header("Content-Disposition", f'attachment; filename="sietch-export-{datetime.now().strftime("%Y-%m-%d")}.zip"')
+            self.end_headers()
+            self.wfile.write(zip_data)
+        except Exception as e:
+            logger.exception("Export failed")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_export_backup(self) -> None:
+        """Export database as SQL dump via pg_dump."""
+        try:
+            env = {**os.environ, "PGPASSWORD": os.getenv("DB_PASSWORD", "")}
+            proc = subprocess.run(
+                [
+                    "pg_dump",
+                    "-h", os.getenv("DB_HOST", "db"),
+                    "-p", os.getenv("DB_PORT", "5432"),
+                    "-U", os.getenv("DB_USER", "sietch"),
+                    "-d", os.getenv("DB_NAME", "sietch_crm"),
+                    "--no-owner", "--no-privileges", "-Fp",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=600,
+                env=env,
+            )
+            if proc.returncode != 0:
+                _json_response(self, 500, {"error": f"pg_dump failed: {proc.stderr[:500]}"})
+                return
+
+            sql_bytes = proc.stdout.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/sql")
+            self.send_header("Content-Length", str(len(sql_bytes)))
+            self.send_header("Content-Disposition", f'attachment; filename="sietch-backup-{datetime.now().strftime("%Y-%m-%d")}.sql"')
+            self.end_headers()
+            self.wfile.write(sql_bytes)
+        except FileNotFoundError:
+            _json_response(self, 500, {"error": "pg_dump not found. Install postgresql-client."})
+        except Exception as e:
+            logger.exception("SQL export failed")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_import_json(self) -> None:
+        """Import from a JSON export ZIP."""
+        try:
+            content_type = self.headers.get("Content-Type", "")
+            if "multipart/form-data" not in content_type:
+                _json_response(self, 400, {"error": "Expected multipart/form-data"})
+                return
+
+            # Parse multipart form data
+            boundary = content_type.split("boundary=")[1].strip()
+            raw = _read_body(self)
+            parts = self._parse_multipart(raw, boundary)
+
+            file_data = None
+            for name, value in parts.items():
+                if name == "file" and isinstance(value, bytes):
+                    file_data = value
+                    break
+
+            if not file_data:
+                _json_response(self, 400, {"error": "No file uploaded"})
+                return
+
+            # Extract and process ZIP
+            buf = io.BytesIO(file_data)
+            results: dict[str, Any] = {"tables_imported": 0, "rows_imported": 0, "rows_skipped": 0, "files_copied": 0, "errors": []}
+
+            with zipfile.ZipFile(buf, "r") as zf:
+                # Read manifest
+                if "manifest.json" not in zf.namelist():
+                    _json_response(self, 400, {"error": "Invalid export: no manifest.json"})
+                    return
+                manifest = json.loads(zf.read("manifest.json"))
+
+                # Import tables in order
+                for table_name, _ in self._EXPORT_TABLES:
+                    json_name = f"{table_name}.json"
+                    if json_name not in zf.namelist():
+                        continue
+                    try:
+                        rows = json.loads(zf.read(json_name))
+                        if not rows:
+                            continue
+                        columns = list(rows[0].keys())
+                        placeholders = ", ".join(["%s"] * len(columns))
+                        col_names = ", ".join(columns)
+                        inserted = 0
+                        skipped = 0
+                        for row in rows:
+                            values = tuple(row.get(c) for c in columns)
+                            try:
+                                db.execute(
+                                    f"INSERT INTO {table_name} ({col_names}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",
+                                    values,
+                                )
+                                inserted += 1
+                            except Exception:
+                                skipped += 1
+                        results["tables_imported"] += 1
+                        results["rows_imported"] += inserted
+                        results["rows_skipped"] += skipped
+                    except Exception as e:
+                        results["errors"].append(f"{table_name}: {e}")
+
+                # Copy files
+                data_dir = Path("data")
+                for info in zf.infolist():
+                    if info.filename.startswith("files/"):
+                        target = data_dir / info.filename[6:]  # strip "files/"
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        with zf.open(info) as src, open(target, "wb") as dst:
+                            shutil.copyfileobj(src, dst)
+                        results["files_copied"] += 1
+
+            _json_response(self, 200, {"ok": True, **results})
+        except Exception as e:
+            logger.exception("JSON import failed")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_import_sql(self) -> None:
+        """Import from a SQL backup file."""
+        try:
+            content_type = self.headers.get("Content-Type", "")
+            if "multipart/form-data" not in content_type:
+                _json_response(self, 400, {"error": "Expected multipart/form-data"})
+                return
+
+            boundary = content_type.split("boundary=")[1].strip()
+            raw = _read_body(self)
+            parts = self._parse_multipart(raw, boundary)
+
+            file_data = None
+            for name, value in parts.items():
+                if name == "file" and isinstance(value, bytes):
+                    file_data = value
+                    break
+
+            if not file_data:
+                _json_response(self, 400, {"error": "No file uploaded"})
+                return
+
+            # Execute SQL via psql
+            env = {**os.environ, "PGPASSWORD": os.getenv("DB_PASSWORD", "")}
+            proc = subprocess.run(
+                [
+                    "psql",
+                    "-h", os.getenv("DB_HOST", "db"),
+                    "-p", os.getenv("DB_PORT", "5432"),
+                    "-U", os.getenv("DB_USER", "sietch"),
+                    "-d", os.getenv("DB_NAME", "sietch_crm"),
+                    "-v", "ON_ERROR_STOP=0",
+                ],
+                input=file_data.decode("utf-8", errors="replace"),
+                capture_output=True,
+                text=True,
+                timeout=600,
+                env=env,
+            )
+
+            if proc.returncode != 0 and proc.returncode != 1:
+                _json_response(self, 500, {"error": f"psql failed (exit {proc.returncode}): {proc.stderr[:500]}"})
+                return
+
+            _json_response(self, 200, {"ok": True, "output": proc.stdout[-2000:] if proc.stdout else "", "errors": proc.stderr[-1000:] if proc.stderr else ""})
+        except FileNotFoundError:
+            _json_response(self, 500, {"error": "psql not found. Install postgresql-client."})
+        except Exception as e:
+            logger.exception("SQL import failed")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_backup_status(self) -> None:
+        """GET backup status."""
+        _json_response(self, 200, get_backup_status())
+
+    def _handle_backup_history(self) -> None:
+        """GET backup history."""
+        _json_response(self, 200, {"history": get_backup_history()})
+
+    def _handle_backup_config_get(self) -> None:
+        """GET backup config."""
+        _json_response(self, 200, get_backup_status())
+
+    def _handle_backup_config_post(self) -> None:
+        """POST save backup config."""
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            import backup_service
+            config = {
+                "enabled": bool(payload.get("enabled")),
+                "interval": int(payload.get("interval", 86400)),
+                "retention_days": int(payload.get("retention_days", 30)),
+                "remote_type": str(payload.get("remote_type", "none")),
+                "remote_host": str(payload.get("remote_host", "")),
+                "remote_port": int(payload.get("remote_port", 22)),
+                "remote_user": str(payload.get("remote_user", "")),
+                "remote_path": str(payload.get("remote_path", "")),
+                "remote_key": str(payload.get("remote_key", "")),
+            }
+            backup_service._save_config_to_db(config)
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_backup_run(self) -> None:
+        """POST trigger immediate backup."""
+        try:
+            import backup_service
+            result = backup_service.run_backup()
+            _json_response(self, 200, result)
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_backup_notify_prefs_post(self) -> None:
+        """POST save backup notification preferences."""
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            import backup_service
+            prefs = {
+                "backup_email_success": bool(payload.get("email_success", True)),
+                "backup_email_failure": bool(payload.get("email_failure", True)),
+                "backup_telegram_success": bool(payload.get("telegram_success", True)),
+                "backup_telegram_failure": bool(payload.get("telegram_failure", True)),
+            }
+            backup_service._save_notify_prefs(prefs)
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_backup_remote_test(self) -> None:
+        """POST test remote connection."""
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            remote_type = payload.get("remote_type", "none")
+            host = payload.get("remote_host", "")
+            port = str(payload.get("remote_port", 22))
+            user = payload.get("remote_user", "")
+            key = payload.get("remote_key", "")
+
+            if not host or not user:
+                _json_response(self, 400, {"error": "Host and user are required"})
+                return
+
+            ssh_opts = ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10"]
+            if key:
+                ssh_opts.extend(["-i", key])
+
+            cmd = ["ssh", "-p", port] + ssh_opts + [f"{user}@{host}", "echo ok"]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            if proc.returncode == 0:
+                _json_response(self, 200, {"ok": True, "message": "Connection successful"})
+            else:
+                _json_response(self, 400, {"error": f"SSH failed: {proc.stderr[:300]}"})
+        except FileNotFoundError:
+            _json_response(self, 500, {"error": "ssh not found. Install openssh-client."})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    @staticmethod
+    def _parse_multipart(raw: bytes, boundary: str) -> dict:
+        """Minimal multipart/form-data parser."""
+        result = {}
+        sep = f"--{boundary}".encode()
+        parts = raw.split(sep)
+        for part in parts:
+            if not part or part == b"--\r\n" or part == b"--":
+                continue
+            if b"\r\n\r\n" not in part:
+                continue
+            header_data, body = part.split(b"\r\n\r\n", 1)
+            if body.endswith(b"\r\n"):
+                body = body[:-2]
+            headers = header_data.decode("utf-8", errors="replace")
+            name_match = re.search(r'name="([^"]+)"', headers)
+            filename_match = re.search(r'filename="([^"]+)"', headers)
+            if name_match:
+                name = name_match.group(1)
+                if filename_match:
+                    result[name] = body
+                else:
+                    result[name] = body.decode("utf-8", errors="replace")
+        return result
 
     def _handle_document_download(self, doc_id: int) -> None:
         if not row:
@@ -8238,11 +8703,20 @@ def main() -> None:
     print(f"Version: {APP_VERSION}")
     dispatcher_stop = start_dispatcher()
     scanner_stop = mail_scanner.start_scanner() if mail_scanner else None
+    backup_stop = None
+    try:
+        from backup_service import start_backup_scheduler
+        backup_stop = start_backup_scheduler()
+    except Exception as e:
+        print(f"Backup scheduler not started: {e}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down...")
         stop_dispatcher(dispatcher_stop)
+        if backup_stop:
+            from backup_service import stop_backup_scheduler
+            stop_backup_scheduler(backup_stop)
         server.shutdown()
 
 
