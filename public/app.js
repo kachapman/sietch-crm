@@ -30061,18 +30061,6 @@ async function init() {
     });
   }
 
-  // Attach critical header button handlers EARLY — settings dropdown
-  const settingsBtnEarly = $("#settings-btn");
-  if (settingsBtnEarly && !settingsBtnEarly.dataset.earlyBound) {
-    settingsBtnEarly.dataset.earlyBound = "1";
-    settingsBtnEarly.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const dd = $("#settings-dropdown");
-      if (dd) dd.classList.toggle("hidden");
-      settingsBtnEarly.setAttribute("aria-expanded", dd ? !dd.classList.contains("hidden") : "false");
-    });
-  }
-
   const mailBtnEarly = $("#mail-inbox-btn");
   if (mailBtnEarly && !mailBtnEarly.dataset.earlyBound) {
     mailBtnEarly.dataset.earlyBound = "1";
