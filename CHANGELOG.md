@@ -2,6 +2,19 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — Tasks Tab + Email Date Fix + Task Linking (2026-08-05)
+
+- **Tasks tab in project preview modal.** New "Tasks" tab (after Photos) shows tasks linked to the project with open/closed/all filter, checkbox toggle, priority colored dots, truncated description, due date, and assigned user. "New Task" button opens the existing task modal with the project pre-filled.
+- **Task sync now links tasks to projects.** `_handle_sync_pull_tasks` extracts `entity.entityId` from OnlyOffice tasks and maps them to Sietch opportunity IDs via title match. Fetches all tasks (open + closed) without `isClosed` filter.
+- **Task endpoint fix.** Changed from `/api/2.0/projects/task/` (wrong module, 404) to `/api/2.0/crm/task/filter` (correct CRM endpoint). Fixed in both `_handle_sync_pull_tasks` and `_handle_sync_full_reconcile`.
+- **Imported email dates fixed.** `created_at` now set to `date_sent` (not `NOW()`), so imported emails appear at their correct chronological position in the timeline. `historyEventDate()` now prefers `backdatedCreated` as fallback.
+- **Task filter dark mode fixed.** Changed from `btn-ghost` (transparent background) to `btn-secondary` for proper dark-mode styling.
+- **Task modal renamed.** "Opportunity" → "Project" in task creation form labels. "Linked Deal" → "Linked Project" in task preview.
+- **Tasks table column fix.** Changed `status` column to `is_closed` (boolean) which is the actual column in the tasks table. Fixed in `_handle_sync_pull_tasks`, `_handle_sync_full_reconcile`, and `mail_scanner.py`.
+- **GET /api/v2/admin/backup/status** route added so frontend polling works (was POST-only, returning 404 on every poll).
+- **Backup history loading fixed.** `loadBackupHistory()` moved outside bind-once block; added `case "sync"` to `switchAdminTab` so data refreshes on tab open; replaced silent `catch(e){}` with `console.error` + visible error.
+- **Files:** `server.py`, `public/app.js`, `public/styles.css`, `public/index.html`, `CHANGELOG.md`, `AGENTS.md`.
+
 ## Phase 3 — Import/Export Tab + Scheduled Backups (2026-08-05)
 
 - **Admin tab renamed from "Import Sync" to "Import / Export".** The tab now covers importing from OnlyOffice, exporting Sietch data, restoring from backups, and configuring scheduled backups.
