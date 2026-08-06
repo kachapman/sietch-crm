@@ -10017,17 +10017,10 @@ body {
 
 @media (max-width: 640px) {
   .header-settings-wrap .template-dropdown {
-    position: fixed;
-    top: auto;
-    bottom: 0;
-    left: 0;
     right: 0;
-    width: 100%;
-    min-width: 0;
-    max-width: 100%;
-    border-radius: 12px 12px 0 0;
-    max-height: 50dvh;
-    z-index: 2001;
+    left: auto;
+    min-width: 160px;
+    max-width: 200px;
   }
 }
 
