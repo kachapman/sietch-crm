@@ -2,6 +2,15 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — Admin UI Rework + Tile Persistence (2026-08-06)
+
+- **Admin modal horizontal tabs.** Sidebar removed; tabs now flow horizontally with `overflow-x: auto` scroll. Tab labels hide on narrow screens (<=768px) showing only icons.
+- **Settings dropdown.** Profile, Admin Console, and Sign out buttons combined into a single cog-icon dropdown in the header. Uses the existing `template-dropdown` pattern. On mobile, the dropdown pins to the cog button.
+- **Customize Projects tab.** Stages, Custom Fields, and Tags tabs merged into a single "Customize Projects" tab with stacked sections.
+- **Mobile admin modal fills screen.** At <=640px: wrapper `padding: 0`, card `width: 100%`, `100dvh` height, `border-radius: 0`. No gaps on any screen size.
+- **Tile layout persistence fixes.** `localKanbanTiles` and `minimizedSearchTabs` now saved server-side (were silently dropped). `pinned` field now loaded from server. `grid-auto-flow: dense` changed to `row` to prevent visual rearrangement. `ensureTileLayout()` now calls `saveLayoutToStorage()` after modifying order. Server save failures logged to console.
+- **Files:** `index.html`, `styles.css`, `app.js`, `user_profile_store.py`, `CHANGELOG.md`, `AGENTS.md`.
+
 ## Phase 3 — Tasks Tab + Email Date Fix + Task Linking (2026-08-05)
 
 - **Tasks tab in project preview modal.** New "Tasks" tab (after Photos) shows tasks linked to the project with open/closed/all filter, checkbox toggle, priority colored dots, truncated description, due date, and assigned user. "New Task" button opens the existing task modal with the project pre-filled.
