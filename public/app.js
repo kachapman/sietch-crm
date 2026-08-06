@@ -19139,6 +19139,7 @@ function createCrmOpenLink(oppId, { className = "crm-open-external", title = "Op
 
 function historyEventDate(ev) {
   return (
+    ev.backdatedCreated ??
     ev.createdOn?.value ??
     ev.createdOn ??
     ev.CreatedOn?.value ??
@@ -28059,7 +28060,7 @@ function renderOpportunityPreviewTasksTab(container, oppId, opp, openTasks, clos
   });
 
   const filterSelect = document.createElement("select");
-  filterSelect.className = "btn btn-ghost btn-small";
+  filterSelect.className = "btn btn-secondary btn-small";
   filterSelect.innerHTML = `<option value="open">Open</option><option value="closed">Completed</option><option value="all">All</option>`;
   filterSelect.style.cssText = "font-size:0.8rem; padding:0.2rem 0.4rem;";
 

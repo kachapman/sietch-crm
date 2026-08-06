@@ -3775,7 +3775,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _sync_running = False
 
     def _handle_sync_pull_tasks(self) -> None:
-        """Pull tasks from OnlyOffice CRM."""
+        """Pull tasks from OnlyOffice CRM with opportunity linkage."""
         global _sync_log, _sync_running
         if _sync_running:
             _json_response(self, 409, {"error": "Sync already running"})
@@ -3797,22 +3797,50 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 400, {"error": "Authentication failed"})
                 _sync_running = False
                 return
+
+            # Build OnlyOffice ID → Sietch ID mapping from existing deals
+            _append_sync_log("info", "Mapping opportunities...")
+            existing_deals = db.query_dicts("SELECT id, title FROM opportunities")
+            deal_by_title = {d["title"].lower().strip(): d["id"] for d in existing_deals}
+
+            # Fetch OnlyOffice opportunities to build crm_id → v3_id map
+            opp_id_map = {}
+            try:
+                start = 0
+                while True:
+                    path = f"/api/2.0/crm/opportunity/filter?count=500&startIndex={start}"
+                    data = _unwrap(_crm_api_get(portal, token, path))
+                    if not isinstance(data, list) or not data:
+                        break
+                    for o in data:
+                        crm_id = str(o.get("id") or o.get("ID") or "")
+                        title = str(o.get("title") or o.get("Title") or "").strip()
+                        v3_id = deal_by_title.get(title.lower().strip())
+                        if crm_id and v3_id:
+                            opp_id_map[crm_id] = v3_id
+                    if len(data) < 500:
+                        break
+                    start += 500
+            except Exception as e:
+                _append_sync_log("warn", f"Could not load opportunity map: {e}")
+
             _append_sync_log("info", "Fetching tasks...")
             try:
-                open_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/task/filter?count=500&isClosed=false")) or []
-                closed_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/task/filter?count=500&isClosed=true")) or []
-                all_tasks = (open_tasks if isinstance(open_tasks, list) else []) + (closed_tasks if isinstance(closed_tasks, list) else [])
+                all_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/task/filter?count=500")) or []
+                if not isinstance(all_tasks, list):
+                    all_tasks = []
             except Exception as e:
                 _append_sync_log("warn", f"Tasks API not available: {e}")
                 all_tasks = []
+
             count = 0
+            linked_count = 0
             for task in all_tasks:
                 if not isinstance(task, dict):
                     continue
                 title = str(task.get("title") or task.get("Title") or "").strip()
                 if not title:
                     continue
-                # Check if task already exists (by title)
                 existing = db.query_one("SELECT id FROM tasks WHERE title = %s", (title,))
                 if existing:
                     continue
@@ -3821,34 +3849,25 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 if due:
                     due = str(due)[:10]
                 is_closed = bool(task.get("isClosed") or task.get("IsClosed") or False)
+
+                # Extract opportunity linkage from entity field
+                entity = task.get("entity") or {}
+                opportunity_id = None
+                if entity.get("entityType") == "opportunity" and entity.get("entityId"):
+                    crm_opp_id = str(entity["entityId"])
+                    opportunity_id = opp_id_map.get(crm_opp_id)
+
                 db.execute(
-                    "INSERT INTO tasks (title, description, due_date, is_closed, created_at) VALUES (%s, %s, %s, %s, NOW())",
-                    (title, desc, due, is_closed),
+                    "INSERT INTO tasks (title, description, due_date, is_closed, opportunity_id, created_at) VALUES (%s, %s, %s, %s, %s, NOW())",
+                    (title, desc, due, is_closed, opportunity_id),
                 )
+                if opportunity_id:
+                    linked_count += 1
                 count += 1
                 if count % 50 == 0:
-                    _append_sync_log("info", f"Progress: {count} tasks synced...")
-            _append_sync_log("info", f"Tasks sync complete: {count} new tasks created")
+                    _append_sync_log("info", f"Progress: {count} tasks synced, {linked_count} linked...")
 
-            # One-time: link unlinked tasks to opportunities by title match
-            _append_sync_log("info", "Linking tasks to projects...")
-            unlinked = db.query_dicts("SELECT id, title FROM tasks WHERE opportunity_id IS NULL")
-            linked_count = 0
-            for task in unlinked:
-                task_title = (task.get("title") or "").strip()
-                if not task_title:
-                    continue
-                # Try to find a matching opportunity by title
-                opp = db.query_one(
-                    "SELECT id FROM opportunities WHERE title ILIKE %s LIMIT 1",
-                    (f"%{task_title[:40]}%",),
-                )
-                if opp:
-                    db.execute("UPDATE tasks SET opportunity_id = %s WHERE id = %s", (opp["id"], task["id"]))
-                    linked_count += 1
-            if linked_count:
-                _append_sync_log("info", f"Linked {linked_count} tasks to projects")
-
+            _append_sync_log("info", f"Tasks sync complete: {count} new tasks created, {linked_count} linked to projects")
             _json_response(self, 200, {"ok": True, "created": count, "linked": linked_count, "total": len(all_tasks), "log": list(_sync_log)})
         except Exception as e:
             _append_sync_log("error", f"Tasks sync failed: {e}")
@@ -4438,15 +4457,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             try:
                                 if existing_event_id:
                                     db.execute(
-                                        "UPDATE history_events SET category_id = %s, content = %s, backdated_created_at = %s WHERE id = %s",
-                                        (EMAIL_HISTORY_CATEGORY_ID, json.dumps(snapshot), date_sent or None, existing_event_id),
+                                        "UPDATE history_events SET category_id = %s, content = %s, created_at = COALESCE(%s, created_at), backdated_created_at = %s WHERE id = %s",
+                                        (EMAIL_HISTORY_CATEGORY_ID, json.dumps(snapshot), date_sent or None, date_sent or None, existing_event_id),
                                     )
                                     emails_updated += 1
                                 else:
                                     db.execute(
-                                        "INSERT INTO history_events (opportunity_id, category_id, content, created_by, backdated_created_at) "
-                                        "VALUES (%s, %s, %s, %s, %s)",
-                                        (v3_opp_id, EMAIL_HISTORY_CATEGORY_ID, json.dumps(snapshot), None, date_sent or None),
+                                        "INSERT INTO history_events (opportunity_id, category_id, content, created_by, created_at, backdated_created_at) "
+                                        "VALUES (%s, %s, %s, %s, COALESCE(%s, NOW()), %s)",
+                                        (v3_opp_id, EMAIL_HISTORY_CATEGORY_ID, json.dumps(snapshot), None, date_sent or None, date_sent or None),
                                     )
                                     emails_imported += 1
                             except Exception as e:
