@@ -18965,7 +18965,7 @@ function clearNewTaskOpportunitySelection() {
 }
 
 function setNewTaskOpportunitySelection(id, title) {
-  state.newTaskOpportunity = { id: Number(id), title: title || `Opportunity #${id}` };
+  state.newTaskOpportunity = { id: Number(id), title: title || `Project #${id}` };
   const search = $("#new-task-opportunity-search");
   const selected = $("#new-task-opportunity-selected");
   const results = $("#new-task-opportunity-results");
@@ -21069,15 +21069,17 @@ async function fetchOpportunityPreviewData(oppId, quick = false) {
   ]);
 
   const opp = await fetchOpportunityForUpdate(id);
-  const [customFieldValues, history, tags, documents, photos] = await Promise.all([
+  const [customFieldValues, history, tags, documents, photos, openTasks, closedTasks] = await Promise.all([
     fetchOpportunityCustomFieldValues(id),
     fetchAllOpportunityHistory(id, quick ? 2 : undefined),
     loadDealEditTags(opp),
     fetchOpportunityDocuments(id),
     fetchOpportunityPhotos(id),
+    api(`/api/v2/tasks?opportunity_id=${id}&closed=false`).catch(() => []),
+    api(`/api/v2/tasks?opportunity_id=${id}&closed=true`).catch(() => []),
   ]);
 
-  return { opp, customFieldValues, history, tags, documents, photos, oppId: id };
+  return { opp, customFieldValues, history, tags, documents, photos, openTasks, closedTasks, oppId: id };
 }
 
 async function fetchOpportunityDocuments(oppId) {
@@ -26473,7 +26475,7 @@ function renderOpportunityPreviewContent(container, data) {
   if (!container) return;
   container.innerHTML = "";
 
-  const { opp, customFieldValues, history, tags, documents, photos } = data;
+  const { opp, customFieldValues, history, tags, documents, photos, openTasks, closedTasks } = data;
   const standardRows = buildOpportunityPreviewStandardFields(opp);
   const allUserRows = buildOpportunityPreviewUserFields(opp, customFieldValues);
   const userRows = allUserRows.filter((r) => !r._isCheckbox);
@@ -26521,9 +26523,15 @@ function renderOpportunityPreviewContent(container, data) {
   tabPhotos.className = "opp-preview-tab";
   tabPhotos.textContent = "Photos";
   tabPhotos.dataset.tab = "photos";
+  const tabTasks = document.createElement("button");
+  tabTasks.type = "button";
+  tabTasks.className = "opp-preview-tab";
+  tabTasks.textContent = "Tasks";
+  tabTasks.dataset.tab = "tasks";
   tabs.appendChild(tabDetails);
   tabs.appendChild(tabDocs);
   tabs.appendChild(tabPhotos);
+  tabs.appendChild(tabTasks);
   container.appendChild(tabs);
 
   // Details content
@@ -27600,16 +27608,26 @@ function renderOpportunityPreviewContent(container, data) {
   renderOpportunityPreviewPhotosTab(photosContent, oppId, photos || []);
   container.appendChild(photosContent);
 
+  // Tasks tab
+  const tasksContent = document.createElement("div");
+  tasksContent.className = "opp-preview-tab-content";
+  tasksContent.dataset.tabContent = "tasks";
+  tasksContent.style.display = "none";
+  renderOpportunityPreviewTasksTab(tasksContent, oppId, opp, openTasks || [], closedTasks || []);
+  container.appendChild(tasksContent);
+
   // Tab switching
   const activateTab = (tabName) => {
     tabs.querySelectorAll('.opp-preview-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tabName));
     detailsContent.style.display = tabName === 'details' ? '' : 'none';
     docsContent.style.display = tabName === 'documents' ? '' : 'none';
     photosContent.style.display = tabName === 'photos' ? '' : 'none';
+    tasksContent.style.display = tabName === 'tasks' ? '' : 'none';
   };
   tabDetails.addEventListener('click', () => activateTab('details'));
   tabDocs.addEventListener('click', () => activateTab('documents'));
   tabPhotos.addEventListener('click', () => activateTab('photos'));
+  tabTasks.addEventListener('click', () => activateTab('tasks'));
 }
 
 function formatBytes(bytes) {
@@ -28013,6 +28031,141 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
     render();
     updateToolbar();
   }
+}
+
+function renderOpportunityPreviewTasksTab(container, oppId, opp, openTasks, closedTasks) {
+  if (!container) return;
+  container.innerHTML = "";
+
+  const oppTitle = opp.title || opp.Title || "";
+
+  // Toolbar
+  const toolbar = document.createElement("div");
+  toolbar.className = "opp-preview-tasks-toolbar";
+  toolbar.style.cssText = "display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap;";
+
+  const newTaskBtn = document.createElement("button");
+  newTaskBtn.type = "button";
+  newTaskBtn.className = "btn btn-primary btn-small";
+  newTaskBtn.textContent = "+ New Task";
+  newTaskBtn.addEventListener("click", () => {
+    openNewTaskModal();
+    // Pre-fill the opportunity field
+    state.newTaskOpportunity = { id: Number(oppId), title: oppTitle };
+    const oppSearch = document.getElementById("new-task-opportunity-search");
+    const oppSelected = document.getElementById("new-task-opportunity-selected");
+    if (oppSearch) oppSearch.value = oppTitle;
+    if (oppSelected) oppSelected.innerHTML = `<span class="chip">${escapeHtml(oppTitle)} <span class="contact-clear" role="button" tabindex="0">×</span></span>`;
+  });
+
+  const filterSelect = document.createElement("select");
+  filterSelect.className = "btn btn-ghost btn-small";
+  filterSelect.innerHTML = `<option value="open">Open</option><option value="closed">Completed</option><option value="all">All</option>`;
+  filterSelect.style.cssText = "font-size:0.8rem; padding:0.2rem 0.4rem;";
+
+  toolbar.appendChild(newTaskBtn);
+  toolbar.appendChild(filterSelect);
+  container.appendChild(toolbar);
+
+  const listEl = document.createElement("div");
+  listEl.className = "opp-preview-tasks-list";
+  listEl.style.cssText = "max-height:400px; overflow-y:auto;";
+  container.appendChild(listEl);
+
+  const priorityColors = { 0: null, 1: "#4a9eff", 2: "#d4942b", 3: "#f85149" };
+
+  function renderList() {
+    const filter = filterSelect.value;
+    let tasks;
+    if (filter === "open") tasks = openTasks;
+    else if (filter === "closed") tasks = closedTasks;
+    else tasks = [...openTasks, ...closedTasks];
+
+    listEl.innerHTML = "";
+    if (!tasks.length) {
+      const empty = document.createElement("p");
+      empty.style.cssText = "color:var(--muted); font-size:0.85rem; padding:1rem 0;";
+      empty.textContent = filter === "open" ? "No open tasks. Click '+ New Task' to add one." : "No tasks found.";
+      listEl.appendChild(empty);
+      return;
+    }
+
+    tasks.forEach(task => {
+      const row = document.createElement("div");
+      row.className = `opp-preview-task-row${task.isClosed ? " done" : ""}`;
+      row.dataset.taskId = task.id;
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.className = "opp-preview-task-check";
+      checkbox.checked = task.isClosed;
+      checkbox.addEventListener("change", async () => {
+        try {
+          await api(`/api/v2/tasks/${task.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ isClosed: checkbox.checked }),
+          });
+          // Update local state
+          if (checkbox.checked) {
+            task.isClosed = true;
+            openTasks = openTasks.filter(t => t.id !== task.id);
+            closedTasks.push(task);
+          } else {
+            task.isClosed = false;
+            closedTasks = closedTasks.filter(t => t.id !== task.id);
+            openTasks.push(task);
+          }
+          renderList();
+        } catch (e) {
+          showToast("Failed to update task: " + e.message, true);
+          checkbox.checked = !checkbox.checked;
+        }
+      });
+
+      const info = document.createElement("div");
+      info.className = "opp-preview-task-info";
+
+      const titleRow = document.createElement("div");
+      titleRow.style.cssText = "display:flex; align-items:center; gap:0.4rem;";
+
+      if (task.priority > 0) {
+        const dot = document.createElement("span");
+        dot.className = "opp-preview-task-priority";
+        dot.style.cssText = `width:8px; height:8px; border-radius:50%; background:${priorityColors[task.priority] || "#666"}; flex-shrink:0;`;
+        dot.title = `Priority: ${task.priority}`;
+        titleRow.appendChild(dot);
+      }
+
+      const title = document.createElement("span");
+      title.className = "opp-preview-task-title";
+      title.textContent = task.title;
+      titleRow.appendChild(title);
+      info.appendChild(titleRow);
+
+      if (task.description) {
+        const desc = document.createElement("span");
+        desc.className = "opp-preview-task-desc";
+        desc.textContent = task.description.length > 80 ? task.description.slice(0, 80) + "…" : task.description;
+        info.appendChild(desc);
+      }
+
+      const meta = document.createElement("span");
+      meta.className = "opp-preview-task-meta";
+      const parts = [];
+      if (task.dueDate) parts.push("Due: " + new Date(task.dueDate).toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }));
+      if (task.responsible?.displayName) parts.push(task.responsible.displayName);
+      meta.textContent = parts.join(" · ");
+      info.appendChild(meta);
+
+      row.appendChild(checkbox);
+      row.appendChild(info);
+      listEl.appendChild(row);
+    });
+  }
+
+  filterSelect.addEventListener("change", renderList);
+  renderList();
 }
 
 function openPhotoLightbox(photos, startPhotoId) {
@@ -28538,8 +28691,8 @@ function openTaskPreviewModal(task) {
   `;
   if (task.entity?.entityType === "opportunity" && task.entity.entityTitle) {
     html += `
-      <p><strong>Linked Deal:</strong> ${task.entity.entityTitle}
-        <button type="button" class="btn btn-ghost btn-icon-only" title="Preview deal" data-preview-deal>
+      <p><strong>Linked Project:</strong> ${task.entity.entityTitle}
+        <button type="button" class="btn btn-ghost btn-icon-only" title="Preview project" data-preview-deal>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
         </button>
       </p>

@@ -2820,6 +2820,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if "responsible_user_id" in qs:
             where.append("t.responsible_user_id = %s")
             params.append(int(qs["responsible_user_id"][0]))
+        if "opportunity_id" in qs:
+            where.append("t.opportunity_id = %s")
+            params.append(int(qs["opportunity_id"][0]))
         rows = db.query(
             f"""SELECT t.id, t.title, t.description, t.opportunity_id, t.responsible_user_id,
                        t.due_date, t.priority, t.is_closed, t.closed_at, t.created_at,
@@ -2837,7 +2840,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
              "priority": r[6], "isClosed": r[7], "closedAt": r[8].isoformat() if r[8] else None,
              "created": r[9].isoformat() if r[9] else None,
              "responsible": {"id": r[4], "displayName": r[10]} if r[10] else None,
-             "opportunity": {"title": r[11]} if r[11] else None}
+             "opportunity": {"title": r[11]} if r[11] else None,
+             "entity": {"entityType": "opportunity", "entityId": r[3], "entityTitle": r[11]} if r[11] else None}
             for r in rows
         ])
 
@@ -3825,7 +3829,27 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 if count % 50 == 0:
                     _append_sync_log("info", f"Progress: {count} tasks synced...")
             _append_sync_log("info", f"Tasks sync complete: {count} new tasks created")
-            _json_response(self, 200, {"ok": True, "created": count, "total": len(all_tasks), "log": list(_sync_log)})
+
+            # One-time: link unlinked tasks to opportunities by title match
+            _append_sync_log("info", "Linking tasks to projects...")
+            unlinked = db.query_dicts("SELECT id, title FROM tasks WHERE opportunity_id IS NULL")
+            linked_count = 0
+            for task in unlinked:
+                task_title = (task.get("title") or "").strip()
+                if not task_title:
+                    continue
+                # Try to find a matching opportunity by title
+                opp = db.query_one(
+                    "SELECT id FROM opportunities WHERE title ILIKE %s LIMIT 1",
+                    (f"%{task_title[:40]}%",),
+                )
+                if opp:
+                    db.execute("UPDATE tasks SET opportunity_id = %s WHERE id = %s", (opp["id"], task["id"]))
+                    linked_count += 1
+            if linked_count:
+                _append_sync_log("info", f"Linked {linked_count} tasks to projects")
+
+            _json_response(self, 200, {"ok": True, "created": count, "linked": linked_count, "total": len(all_tasks), "log": list(_sync_log)})
         except Exception as e:
             _append_sync_log("error", f"Tasks sync failed: {e}")
             _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})

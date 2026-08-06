@@ -5273,6 +5273,56 @@ body {
   flex: 1;
 }
 
+.opp-preview-task-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.opp-preview-task-row:last-child {
+  border-bottom: none;
+}
+.opp-preview-task-row.done {
+  opacity: 0.55;
+}
+.opp-preview-task-row.done .opp-preview-task-title {
+  text-decoration: line-through;
+}
+.opp-preview-task-check {
+  margin-top: 0.25rem;
+  flex-shrink: 0;
+}
+.opp-preview-task-info {
+  flex: 1;
+  min-width: 0;
+}
+.opp-preview-task-title {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+}
+.opp-preview-task-desc {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.opp-preview-task-meta {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.opp-preview-tasks-toolbar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .opp-preview-tab.active {
   color: var(--text);
   border-bottom-color: var(--accent);
