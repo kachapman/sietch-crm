@@ -63,6 +63,8 @@
     (async function() {
       const params = new URLSearchParams(window.location.search);
       const docId = params.get("id");
+      const mailMsg = params.get("mail_msg");
+      const mailAtt = params.get("mail_att");
       const loadingEl = document.getElementById("loading");
       const errorEl = document.getElementById("error");
       const errorMsgEl = document.getElementById("error-message");
@@ -73,13 +75,21 @@
         errorMsgEl.textContent = msg;
       }
 
-      if (!docId || !/^\d+$/.test(docId)) {
-        showError("Invalid document ID.");
+      // Determine which endpoint to call
+      let configUrl;
+      let isMailAttachment = false;
+      if (mailMsg && mailAtt && /^\d+$/.test(mailMsg) && /^\d+$/.test(mailAtt)) {
+        configUrl = `/api/v2/mail/messages/${mailMsg}/attachments/${mailAtt}/editor-config`;
+        isMailAttachment = true;
+      } else if (docId && /^\d+$/.test(docId)) {
+        configUrl = `/api/v2/documents/${docId}/editor-config`;
+      } else {
+        showError("Invalid document or attachment ID.");
         return;
       }
 
       try {
-        const res = await fetch(`/api/v2/documents/${docId}/editor-config`, { credentials: "same-origin" });
+        const res = await fetch(configUrl, { credentials: "same-origin" });
         const text = await res.text();
         let config;
         try {
@@ -91,6 +101,12 @@
 
         if (!res.ok) {
           showError(config.error || config.message || `Server error (HTTP ${res.status}).`);
+          return;
+        }
+
+        // If server says unsupported type, fall back to download
+        if (config.error === "unsupported" && config.downloadUrl) {
+          window.location.href = config.downloadUrl;
           return;
         }
 
@@ -108,64 +124,65 @@
           }
           loadingEl.style.display = "none";
 
-          config.events = config.events || {};
+          // Mail attachments are view-only — no rename/save-as events needed
+          if (!isMailAttachment) {
+            config.events = config.events || {};
 
-          // onMetaChange: receive title renames broadcast from OnlyOffice (from any user)
-          config.events.onMetaChange = function(e) {
-            if (e && e.data && e.data.title) {
+            // onMetaChange: receive title renames broadcast from OnlyOffice (from any user)
+            config.events.onMetaChange = function(e) {
+              if (e && e.data && e.data.title) {
+                fetch(`/api/v2/documents/${docId}`, {
+                  method: "PATCH",
+                  credentials: "same-origin",
+                  headers: {"Content-Type": "application/json"},
+                  body: JSON.stringify({ title: e.data.title }),
+                }).catch(() => {});
+              }
+            };
+
+            // onRequestRename: user clicked "Rename..." in editor title bar
+            config.events.onRequestRename = function(e) {
+              const newTitle = e && e.data;
+              if (!newTitle) return;
               fetch(`/api/v2/documents/${docId}`, {
                 method: "PATCH",
                 credentials: "same-origin",
                 headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({ title: e.data.title }),
+                body: JSON.stringify({ title: newTitle }),
               }).catch(() => {});
-            }
-          };
+              fetch(`/api/v2/documents/${docId}/command`, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({ c: "meta", meta: { title: newTitle } }),
+              }).catch(() => {});
+            };
 
-          // onRequestRename: user clicked "Rename..." in editor title bar
-          config.events.onRequestRename = function(e) {
-            const newTitle = e && e.data;
-            if (!newTitle) return;
-            // 1) Update CRM database
-            fetch(`/api/v2/documents/${docId}`, {
-              method: "PATCH",
-              credentials: "same-origin",
-              headers: {"Content-Type": "application/json"},
-              body: JSON.stringify({ title: newTitle }),
-            }).catch(() => {});
-            // 2) Broadcast rename to all editors via OnlyOffice Command Service
-            fetch(`/api/v2/documents/${docId}/command`, {
-              method: "POST",
-              credentials: "same-origin",
-              headers: {"Content-Type": "application/json"},
-              body: JSON.stringify({ c: "meta", meta: { title: newTitle } }),
-            }).catch(() => {});
-          };
-
-          // onRequestSaveAs: user clicked "Save Copy as..." in File menu
-          config.events.onRequestSaveAs = function(e) {
-            if (!e || !e.data) return;
-            const fileUrl = e.data.url;
-            const title = e.data.title || "Document";
-            if (!fileUrl) return;
-            fetch("/api/v2/documents/save-as", {
-              method: "POST",
-              credentials: "same-origin",
-              headers: {"Content-Type": "application/json"},
-              body: JSON.stringify({ url: fileUrl, title: title, source_doc_id: Number(docId) }),
-            }).then(r => r.json()).then(data => {
-              if (data && data.error) {
-                alert("Save As failed: " + data.error);
-              } else {
-                try { localStorage.setItem("crm-docs-refresh", Date.now().toString()); } catch {}
-                if (data && data.editUrl) {
-                  window.open(data.editUrl, "_blank");
+            // onRequestSaveAs: user clicked "Save Copy as..." in File menu
+            config.events.onRequestSaveAs = function(e) {
+              if (!e || !e.data) return;
+              const fileUrl = e.data.url;
+              const title = e.data.title || "Document";
+              if (!fileUrl) return;
+              fetch("/api/v2/documents/save-as", {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({ url: fileUrl, title: title, source_doc_id: Number(docId) }),
+              }).then(r => r.json()).then(data => {
+                if (data && data.error) {
+                  alert("Save As failed: " + data.error);
+                } else {
+                  try { localStorage.setItem("crm-docs-refresh", Date.now().toString()); } catch {}
+                  if (data && data.editUrl) {
+                    window.open(data.editUrl, "_blank");
+                  }
                 }
-              }
-            }).catch(err => {
-              alert("Save As failed: " + err.message);
-            });
-          };
+              }).catch(err => {
+                alert("Save As failed: " + err.message);
+              });
+            };
+          }
 
           new DocsAPI.DocEditor("editor", config);
         };

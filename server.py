@@ -288,6 +288,30 @@ try:
 except Exception:
     pass
 
+# Classifier training data schema
+try:
+    db.execute("ALTER TABLE classifier_training_data ADD COLUMN IF NOT EXISTS message_id INTEGER REFERENCES mail_messages(id)")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE classifier_training_data ADD COLUMN IF NOT EXISTS reviewer_id INTEGER REFERENCES users(id)")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE classifier_training_data ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMP")
+except Exception:
+    pass
+
+# Rename auto_delete_days → retention_days (merged sync + retention setting)
+try:
+    db.execute("ALTER TABLE mail_accounts RENAME COLUMN auto_delete_days TO retention_days")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS retention_days INTEGER DEFAULT 90")
+except Exception:
+    pass
+
 # History category id for email link events ("Email" in history_categories)
 EMAIL_HISTORY_CATEGORY_ID = 16
 
@@ -397,7 +421,7 @@ def _mail_draft_accessible(user: dict, draft_id: int) -> bool:
 
 def _imap_connect(account_id: int):
     """Connect to IMAP for the given account. Returns MailBox or None."""
-    from imap_tools import MailBox
+    from imap_tools import MailBox, A
     acct = db.query_one(
         "SELECT email, imap_host, imap_port, password_encrypted, oauth_provider, oauth_access_token "
         "FROM mail_accounts WHERE id = %s",
@@ -1393,6 +1417,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if m:
             self._handle_mail_attachment_download(int(m.group(1)), int(m.group(2)))
             return
+        # Attachment editor config (OnlyOffice)
+        m = re.match(r"^/api/v2/mail/messages/(\d+)/attachments/(\d+)/editor-config$", api_path)
+        if m:
+            self._handle_mail_attachment_editor_config(int(m.group(1)), int(m.group(2)))
+            return
+        # Mail attachment serve (JWT-authenticated, for Document Server)
+        if api_path == "/api/v2/mail/attachments/serve":
+            self._handle_mail_attachment_serve()
+            return
         # Headers
         m = re.match(r"^/api/v2/mail/messages/(\d+)/headers$", api_path)
         if m:
@@ -1970,6 +2003,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # Account CRUD
         if api_path == "/api/v2/mail/accounts" and method == "POST":
             self._handle_mail_account_create()
+            return
+        if api_path == "/api/v2/mail/accounts/test" and method == "POST":
+            self._handle_mail_account_test()
             return
         m = re.match(r"^/api/v2/mail/accounts/(\d+)$", api_path)
         if m and method == "PUT":
@@ -6913,9 +6949,24 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     if mid not in deals_by_msg:
                         deals_by_msg[mid] = []
                     deals_by_msg[mid].append({"deal_id": dl["opportunity_id"], "title": dl["title"]})
+                # Fetch attachment counts
+                att_count_rows = db.query_dicts(
+                    "SELECT message_id, COUNT(*) AS cnt FROM mail_attachments WHERE message_id = ANY(%s) GROUP BY message_id",
+                    (msg_ids,),
+                )
+                att_counts = {r["message_id"]: r["cnt"] for r in att_count_rows}
                 for r in rows:
                     r["tags"] = tags_by_msg.get(r["id"], [])
                     r["linked_deals"] = deals_by_msg.get(r["id"], [])
+                    # Attachment count: prefer mail_attachments table, fallback to attachments_json
+                    r["attachment_count"] = att_counts.get(r["id"], 0)
+                    if not r["attachment_count"] and r.get("attachments_json"):
+                        try:
+                            aj = r["attachments_json"]
+                            if isinstance(aj, list):
+                                r["attachment_count"] = len(aj)
+                        except Exception:
+                            pass
             total = db.query_one(
                 "SELECT COUNT(*) AS cnt FROM mail_messages m " + join + " WHERE " + q,
                 tuple(params),
@@ -7429,7 +7480,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                           smtp_host, smtp_port, smtp_from_name, smtp_user,
                           sync_enabled, monitored_folders, oauth_provider,
                           oauth_token_expires, oauth_scopes, is_crm_mail,
-                          auto_bcc_addr, auto_delete_days, tab_icon, tab_color,
+                          auto_bcc_addr, retention_days, tab_icon, tab_color,
                           last_sync, owner_user_id, created_at
                    FROM mail_accounts
                    WHERE {_mail_visible_accounts_sql(user["id"])}
@@ -7481,8 +7532,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_log(self) -> None:
         qs = parse_qs(urlparse(self.path).query)
-        limit = int(qs.get("limit", ["200"])[0])
-        _json_response(self, 200, {"entries": mail_scanner.get_scanner_log(limit) if mail_scanner else []})
+        limit = int(qs.get("limit", ["500"])[0])
+        account_id = qs.get("account_id", [None])[0]
+        entries = mail_scanner.get_scanner_log(limit * 5) if mail_scanner else []
+        if account_id:
+            entries = [e for e in entries if str(e.get("account_id")) == str(account_id)]
+        _json_response(self, 200, {"entries": entries[-limit:]})
 
     def _handle_mail_log_correct(self) -> None:
         try:
@@ -7516,6 +7571,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     except Exception:
                         pass
             _json_response(self, 200, {"ok": True, "corrected": count})
+            # Auto-retrain after 10+ corrections accumulate
+            if count > 0 and mail_scanner:
+                try:
+                    corr_count = db.query_one("SELECT COUNT(*) AS cnt FROM classifier_training_data")
+                    if corr_count and corr_count["cnt"] >= 10:
+                        import threading
+                        threading.Thread(target=mail_scanner.retrain_classifier_head, kwargs={"mock_samples": 0}, daemon=True).start()
+                except Exception:
+                    pass
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 
@@ -7637,7 +7701,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     smtp_host, smtp_port, smtp_user, smtp_password_encrypted,
                     smtp_use_tls, smtp_from_name, oauth_provider, monitored_folders,
                     oauth_access_token, oauth_refresh_token, oauth_token_expires, is_crm_mail,
-                    auto_bcc_addr, auto_delete_days, tab_icon, tab_color)
+                    auto_bcc_addr, retention_days, tab_icon, tab_color)
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
@@ -7660,7 +7724,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     payload.get("oauth_token_expires"),
                     is_crm_mail,
                     payload.get("auto_bcc_addr"),
-                    int(payload.get("auto_delete_days") or 0),
+                    int(payload.get("retention_days") or 90),
                     payload.get("tab_icon") or "user",
                     payload.get("tab_color") or "var(--accent)",
                 ),
@@ -7669,6 +7733,35 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             logger.exception("Failed to create mail account")
             _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_account_test(self) -> None:
+        """Test IMAP connection with provided credentials."""
+        try:
+            user = _require_auth(self)
+            if not user:
+                return
+            payload = json.loads(_read_body(self) or b"{}")
+            host = (payload.get("host") or "").strip()
+            port = int(payload.get("port") or 993)
+            email_addr = (payload.get("email") or "").strip()
+            password = payload.get("password") or ""
+            if not host or not email_addr:
+                _json_response(self, 400, {"ok": False, "error": "Host and email are required"})
+                return
+            if not password:
+                _json_response(self, 400, {"ok": False, "error": "Password is required"})
+                return
+            try:
+                from imap_tools import MailBox
+                mb = MailBox(host, port=port)
+                mb.login(email_addr, password)
+                mb.logout()
+                _json_response(self, 200, {"ok": True, "message": "Connected successfully"})
+            except Exception as imap_e:
+                _json_response(self, 200, {"ok": False, "error": f"IMAP login failed: {imap_e}"})
+        except Exception as e:
+            logger.exception("Failed to test mail account")
+            _json_response(self, 500, {"ok": False, "error": str(e)})
 
     def _handle_mail_account_update(self, account_id: int) -> None:
         try:
@@ -7686,9 +7779,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 if key in payload:
                     fields.append(f"{key} = %s")
                     params.append(payload[key])
-            if "auto_delete_days" in payload:
-                fields.append("auto_delete_days = %s")
-                params.append(int(payload["auto_delete_days"] or 0))
+            if "retention_days" in payload:
+                fields.append("retention_days = %s")
+                params.append(int(payload["retention_days"] or 90))
             if "signature_html" in payload:
                 fields.append("signature_html = %s")
                 params.append(payload["signature_html"])
@@ -8387,41 +8480,175 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             # Lazy-fetch attachment content from IMAP
             try:
-                from imap_tools import MailBox
-                mailbox = MailBox(acct["imap_host"], port=acct["imap_port"])
-                mailbox.login(acct["email"], acct["password_encrypted"])
+                from imap_tools import A as _ImapA
+                mailbox = _imap_connect(msg["account_id"])
+                if not mailbox:
+                    _json_response(self, 502, {"error": "Could not connect to IMAP"})
+                    return
+                try:
+                    mailbox.folder.set(msg["folder"] or "INBOX")
+                    uid = str(msg["imap_uid"])
+                    msgs = list(mailbox.fetch(criteria=_ImapA(uid=uid), mark_seen=False, bulk=False))
+                    if not msgs:
+                        _json_response(self, 404, {"error": "Message not found on IMAP server"})
+                        return
+                    imap_msg = msgs[0]
+                    content = None
+                    part_id = str(att["imap_part_id"]) if att["imap_part_id"] else ""
+                    for att_obj in (imap_msg.attachments or []):
+                        if part_id and str(att_obj.part or "") == part_id:
+                            content = att_obj.payload
+                            break
+                        if att_obj.filename == att["filename"]:
+                            content = att_obj.payload
+                    if content is None:
+                        _json_response(self, 404, {"error": "Attachment content not found on IMAP server"})
+                        return
+                    # Stream binary content
+                    self.send_response(200)
+                    self.send_header("Content-Type", att["mime_type"] or "application/octet-stream")
+                    self.send_header("Content-Disposition", f'attachment; filename="{att["filename"]}"')
+                    self.send_header("Content-Length", str(len(content)))
+                    self.end_headers()
+                    self.wfile.write(content)
+                finally:
+                    try:
+                        mailbox.logout()
+                    except Exception:
+                        pass
+            except Exception as imap_e:
+                logger.exception("IMAP fetch failed for attachment %d", attachment_id)
+                _json_response(self, 502, {"error": f"IMAP fetch failed: {imap_e}"})
+        except Exception as e:
+            logger.exception("Failed to download attachment %d", attachment_id)
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_attachment_editor_config(self, message_id: int, attachment_id: int) -> None:
+        """Return OnlyOffice editor config for a mail attachment (view-only)."""
+        try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_message_accessible(user, message_id):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
+                return
+            att = db.query_one(
+                "SELECT * FROM mail_attachments WHERE id = %s AND message_id = %s",
+                (attachment_id, message_id),
+            )
+            if not att:
+                _json_response(self, 404, {"error": "Attachment not found"})
+                return
+            filename = att.get("filename") or "file"
+            file_ext = Path(filename).suffix.lstrip(".").lower()
+            doc_type = _document_type_from_ext(file_ext)
+            supported = {"word", "cell", "slide", "pdf"}
+            if doc_type not in supported:
+                _json_response(self, 200, {"error": "unsupported", "downloadUrl": f"/api/v2/mail/messages/{message_id}/attachments/{attachment_id}/download"})
+                return
+            if not DOCS_PUBLIC_URL:
+                _json_response(self, 503, {"error": "Document Server public URL not configured"})
+                return
+            if not DOCS_JWT_SECRET:
+                _json_response(self, 503, {"error": "Document Server JWT secret not configured"})
+                return
+            ts = int(time.time())
+            doc_key = f"sietch-mail-att-{attachment_id}-{ts}"
+            token_payload = {"type": "mail_att", "message_id": message_id, "attachment_id": attachment_id, "ts": ts}
+            download_token = _sign_jwt(token_payload, DOCS_JWT_SECRET)
+            serve_url = f"{CRM_PUBLIC_URL}/api/v2/mail/attachments/serve?token={download_token}"
+            editor_mode = "view"  # mail attachments are always view-only
+            config = {
+                "document": {
+                    "fileType": file_ext,
+                    "key": doc_key,
+                    "title": filename,
+                    "url": serve_url,
+                    "permissions": {"download": True, "edit": False},
+                },
+                "documentType": doc_type,
+                "editorConfig": {
+                    "mode": editor_mode,
+                    "user": {"id": str(user["id"]), "name": user.get("display_name") or user.get("email") or "User"},
+                },
+            }
+            config["token"] = _sign_jwt(config, DOCS_JWT_SECRET)
+            config["docsApiUrl"] = f"{DOCS_PUBLIC_URL}/web-apps/apps/api/documents/api.js"
+            _json_response(self, 200, config)
+        except Exception as e:
+            logger.exception("Failed to build mail attachment editor config")
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_attachment_serve(self) -> None:
+        """Serve a mail attachment to the OnlyOffice Document Server via JWT auth."""
+        try:
+            token = ""
+            if "?" in (self.path or ""):
+                qs = self.path.split("?", 1)[1]
+                for part in qs.split("&"):
+                    if part.startswith("token="):
+                        token = part[6:]
+                        break
+            if not token:
+                _json_response(self, 401, {"error": "Missing token"})
+                return
+            payload = _verify_jwt(token, DOCS_JWT_SECRET)
+            if not payload or payload.get("type") != "mail_att":
+                _json_response(self, 403, {"error": "Invalid or expired token"})
+                return
+            message_id = payload["message_id"]
+            attachment_id = payload["attachment_id"]
+            att = db.query_one(
+                "SELECT * FROM mail_attachments WHERE id = %s AND message_id = %s",
+                (attachment_id, message_id),
+            )
+            if not att:
+                _json_response(self, 404, {"error": "Attachment not found"})
+                return
+            msg = db.query_one(
+                "SELECT m.imap_uid, m.folder, m.account_id FROM mail_messages m WHERE m.id = %s",
+                (message_id,),
+            )
+            if not msg:
+                _json_response(self, 404, {"error": "Message not found"})
+                return
+            mailbox = _imap_connect(msg["account_id"])
+            if not mailbox:
+                _json_response(self, 502, {"error": "Could not connect to IMAP"})
+                return
+            try:
+                from imap_tools import A as _ImapA2
                 mailbox.folder.set(msg["folder"] or "INBOX")
                 uid = str(msg["imap_uid"])
-                msgs = list(mailbox.fetch(uid=uid, mark_seen=False, bulk=False))
+                msgs = list(mailbox.fetch(criteria=_ImapA2(uid=uid), mark_seen=False, bulk=False))
                 if not msgs:
                     _json_response(self, 404, {"error": "Message not found on IMAP server"})
-                    mailbox.logout()
                     return
                 imap_msg = msgs[0]
                 content = None
-                part_id = str(att["imap_part_id"]) if att["imap_part_id"] else ""
+                part_id = str(att.get("imap_part_id") or "")
                 for att_obj in (imap_msg.attachments or []):
                     if part_id and str(att_obj.part or "") == part_id:
                         content = att_obj.payload
                         break
                     if att_obj.filename == att["filename"]:
                         content = att_obj.payload
-                mailbox.logout()
                 if content is None:
                     _json_response(self, 404, {"error": "Attachment content not found on IMAP server"})
                     return
-                # Stream binary content
                 self.send_response(200)
-                self.send_header("Content-Type", att["mime_type"] or "application/octet-stream")
-                self.send_header("Content-Disposition", f'attachment; filename="{att["filename"]}"')
+                self.send_header("Content-Type", att.get("mime_type") or "application/octet-stream")
+                self.send_header("Content-Disposition", f'inline; filename="{att["filename"]}"')
                 self.send_header("Content-Length", str(len(content)))
                 self.end_headers()
                 self.wfile.write(content)
-            except Exception as imap_e:
-                logger.exception("IMAP fetch failed for attachment %d", attachment_id)
-                _json_response(self, 502, {"error": f"IMAP fetch failed: {imap_e}"})
+            finally:
+                try:
+                    mailbox.logout()
+                except Exception:
+                    pass
         except Exception as e:
-            logger.exception("Failed to download attachment %d", attachment_id)
+            logger.exception("Failed to serve mail attachment")
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_message_headers(self, message_id: int) -> None:

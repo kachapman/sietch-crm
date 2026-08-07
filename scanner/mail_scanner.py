@@ -760,18 +760,19 @@ def _init_ml() -> bool:
     global ml_model, ml_vectorizer, ML_ENABLED
     if ML_ENABLED and ml_model is None:
         try:
-            import numpy as np
-            from sklearn.linear_model import LogisticRegression
-            from sklearn.neighbors import KNeighborsClassifier
+            import pickle
             from sentence_transformers import SentenceTransformer
 
-            ml_vectorizer = SentenceTransformer("all-MiniLM-L6-v2")
-            ml_model = {
-                "logistic": LogisticRegression(max_iter=1000),
-                "knn": KNeighborsClassifier(n_neighbors=5),
-            }
-            ML_ENABLED = True
-            logger.info("ML head initialized")
+            model_path = DATA_DIR / "ml_models" / "sietch-classifier-head.pkl"
+            if model_path.exists():
+                with open(model_path, "rb") as f:
+                    ml_model = pickle.load(f)
+                ml_vectorizer = SentenceTransformer("all-MiniLM-L6-v2")
+                ML_ENABLED = True
+                logger.info("ML head loaded from %s (labels: %s)", model_path, ml_model.get("labels"))
+            else:
+                logger.info("No trained model at %s — ML disabled", model_path)
+                ML_ENABLED = False
         except Exception as e:
             logger.warning("ML init failed: %s", e)
             ML_ENABLED = False
@@ -811,12 +812,14 @@ def _apply_ml_override(
     match_strength: str,
     ml_result: dict[str, Any] | None,
 ) -> str:
-    if ml_result is None:
+    if ml_result is None or match_strength != "weak":
         return classification
-    if match_strength != "weak":
-        return classification
-    if ml_result.get("used_ml"):
+    logistic = ml_result.get("logistic")
+    knn = ml_result.get("knn")
+    # Both models agree: this email is likely linked to a deal
+    if logistic == knn and logistic == "linked":
         log_entry["ml_applied"] = True
+        return "ml_suggested_link"
     return classification
 
 
@@ -889,7 +892,8 @@ def _get_mailboxes() -> list[dict[str, Any]]:
         rows = db.query_dicts(
             """SELECT id, email, imap_host, imap_port, password_encrypted,
                       oauth_provider, oauth_access_token, oauth_refresh_token,
-                      oauth_token_expires, sync_enabled, monitored_folders
+                      oauth_token_expires, sync_enabled, monitored_folders,
+                      retention_days
                FROM mail_accounts WHERE sync_enabled = TRUE"""
         )
         results = []
@@ -922,6 +926,7 @@ def _get_mailboxes() -> list[dict[str, Any]]:
                     "use_ssl": int(row.get("imap_port", 993)) == IMAP_PORT_SSL,
                     "account_id": row["id"],
                     "auth_type": "xoauth2",
+                    "retention_days": int(row.get("retention_days") or 0),
                 })
             else:
                 pwd = row.get("password_encrypted", "")
@@ -937,6 +942,7 @@ def _get_mailboxes() -> list[dict[str, Any]]:
                     "use_ssl": int(row.get("imap_port", 993)) == IMAP_PORT_SSL,
                     "account_id": row["id"],
                     "auth_type": "password",
+                    "retention_days": int(row.get("retention_days") or 0),
                 })
         return results
     except Exception as e:
@@ -1334,11 +1340,17 @@ def _classify_message(msg: dict[str, Any]) -> dict[str, Any]:
             action = "link_only"
 
     ml_result = None
+    ml_applied = False
     if classification == "uncertain":
         _init_ml()
         ml_result = _ml_classify(subject, body)
         if ml_result and ml_result.get("used_ml"):
-            classification = ml_result.get("logistic", "uncertain")
+            # Apply ML override if models agree
+            logistic = ml_result.get("logistic")
+            knn = ml_result.get("knn")
+            if logistic == knn and logistic == "linked":
+                classification = "ml_suggested_link"
+                ml_applied = True
 
     return {
         "classification": classification,
@@ -1346,6 +1358,7 @@ def _classify_message(msg: dict[str, Any]) -> dict[str, Any]:
         "action": action,
         "linked_deal_id": linked_deal_id,
         "ml_result": ml_result,
+        "ml_applied": ml_applied,
         "subject": subject,
         "from_email": from_email,
         "from_name": from_name,
@@ -1462,6 +1475,8 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
     log_entry["classification"] = classification["classification"]
     log_entry["match_strength"] = classification["match_strength"]
     log_entry["action"] = classification["action"]
+    if classification.get("ml_applied"):
+        log_entry["ml_applied"] = True
 
     # Read behavior toggles from config
     config = get_contractors()
@@ -1593,12 +1608,16 @@ def _poll_mailboxes() -> list[dict[str, Any]]:
                 logger.info("Synced %d IMAP folders", folder_count)
             
             folders = cfg.get("folders", [cfg.get("inbox", "INBOX")])
-            # Bounded backfill window (SCANNER_SYNC_DAYS, default 90). None = full history.
-            try:
-                sync_days = int(os.environ.get("SCANNER_SYNC_DAYS", "90"))
-            except (TypeError, ValueError):
-                sync_days = 90
-            since = datetime.now(timezone.utc) - timedelta(days=sync_days) if sync_days and sync_days > 0 else None
+            # Per-account sync window (retention_days), fallback to global SCANNER_SYNC_DAYS
+            acct_retention = cfg.get("retention_days", 0)
+            if acct_retention and acct_retention > 0:
+                since = datetime.now(timezone.utc) - timedelta(days=acct_retention)
+            else:
+                try:
+                    sync_days = int(os.environ.get("SCANNER_SYNC_DAYS", "90"))
+                except (TypeError, ValueError):
+                    sync_days = 90
+                since = datetime.now(timezone.utc) - timedelta(days=sync_days) if sync_days and sync_days > 0 else None
             for folder in folders:
                 logger.info("Fetching folder %s for %s", folder, cfg["user"])
                 msgs = _fetch_messages(cfg, folder, since=since)
@@ -1612,21 +1631,27 @@ def _poll_mailboxes() -> list[dict[str, Any]]:
 
 
 def _enforce_retention() -> None:
-    """Delete synced messages older than each account's auto_delete_days (0 = keep forever).
+    """Delete synced messages older than each account's retention_days (0 = keep forever).
 
-    Runs for every account with auto_delete_days > 0, regardless of sync_enabled.
+    Runs for every account with retention_days > 0, regardless of sync_enabled.
     Messages linked to deals are always kept. Local DB only — never touches IMAP.
+    Also cleans up processed-IDs file for deleted messages.
     """
     try:
         rows = db.query_dicts(
-            "SELECT id, email, auto_delete_days FROM mail_accounts WHERE auto_delete_days IS NOT NULL AND auto_delete_days > 0"
+            "SELECT id, email, retention_days FROM mail_accounts WHERE retention_days IS NOT NULL AND retention_days > 0"
         )
     except Exception as e:
         logger.error("Retention: failed to fetch accounts: %s", e)
         return
     for acct in rows:
         try:
-            cutoff = datetime.now(timezone.utc) - timedelta(days=int(acct["auto_delete_days"]))
+            cutoff = datetime.now(timezone.utc) - timedelta(days=int(acct["retention_days"]))
+            # Get UIDs about to be deleted (for processed-IDs cleanup)
+            uids_to_clean = db.query_dicts(
+                "SELECT account_id, imap_uid FROM mail_messages WHERE account_id = %s AND date_received < %s AND id NOT IN (SELECT message_id FROM mail_deal_links)",
+                (acct["id"], cutoff),
+            )
             deleted = db.execute(
                 """DELETE FROM mail_messages
                    WHERE account_id = %s
@@ -1636,7 +1661,13 @@ def _enforce_retention() -> None:
                 (acct["id"], cutoff),
             )
             if deleted:
-                logger.info("Retention: deleted %d old message(s) for %s (older than %d days)", deleted, acct["email"], acct["auto_delete_days"])
+                logger.info("Retention: deleted %d old message(s) for %s (older than %d days)", deleted, acct["email"], acct["retention_days"])
+                # Clean up processed IDs for deleted messages
+                if uids_to_clean:
+                    ids = _load_processed_ids()
+                    for r in uids_to_clean:
+                        ids.discard(_processed_key(r["account_id"], r["imap_uid"]))
+                    _save_processed_ids(ids)
         except Exception as e:
             logger.error("Retention: failed for %s: %s", acct["email"], e)
 
@@ -1677,7 +1708,7 @@ def get_scanner_status() -> dict[str, Any]:
     try:
         rows = db.query_dicts(
             """SELECT id, email, imap_host, imap_port, oauth_provider,
-                      last_sync, sync_enabled FROM mail_accounts
+                      password_encrypted, last_sync, sync_enabled FROM mail_accounts
                WHERE sync_enabled = TRUE"""
         )
     except Exception:
@@ -1733,7 +1764,7 @@ def get_scanner_status() -> dict[str, Any]:
             "imap_port": acct["imap_port"],
             "status": status,
             "active_behaviors": active_behaviors,
-            "last_sync": str(acct.get("last_sync", "")),
+            "last_sync": str(acct.get("last_sync") or ""),
         })
 
     enabled = len(account_list) > 0
@@ -1831,7 +1862,13 @@ def reprocess_conversations(conversation_ids: list[int]) -> list[dict[str, Any]]
 def retrain_classifier_head(mock_samples: int = 0, use_feedback: bool = True) -> dict[str, Any]:
     try:
         from .train_ml_head import train as _train_ml
-        result = _train_ml(mock_samples=mock_samples, use_feedback=use_feedback)
+        result = _train_ml(use_db=True, mock_samples=mock_samples)
+        # Reload the model after training
+        if result.get("ok"):
+            global ml_model, ml_vectorizer
+            ml_model = None
+            ml_vectorizer = None
+            _init_ml()
         return result
     except ImportError as e:
         logger.warning("ML dependencies not available: %s", e)

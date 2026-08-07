@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** 2026-08-06 session 53: **Admin UI rework: horizontal tabs, settings dropdown, tile persistence, Customize Projects tab.** (A) Admin modal restructured from sidebar to horizontal tab bar with icon-only mode at <=768px. (B) Profile/Admin/SignOut buttons replaced with settings dropdown (cog icon) using template-dropdown pattern. (C) Mobile: dropdown pins to cog button, modal fills screen (padding:0, width:100%, 100dvh). (D) Stages/Custom Fields/Tags combined into single 'Customize Projects' tab. (E) Tile persistence fixes: localKanbanTiles + minimizedSearchTabs saved server-side, pinned field loaded, grid-auto-flow:dense removed, ensureTileLayout saves after modification. (F) **Verified:** `python3 -m py_compile user_profile_store.py` passes; `node --check public/app.js` passes; server restarted clean (PID 2447248), `/api/config` returns 200.
+**Last session summary (for next resume):** 2026-08-06 session 57: **ML classifier pipeline — full rebuild from zero to working.** (A) Schema migration: added `message_id`, `reviewer_id`, `reviewed_at` columns to `classifier_training_data` — fixes silent INSERT failures. (B) Rewrote `train_ml_head.py` to query DB for real training data — 108 positive (linked) + 318 negative (unlinked) examples from `mail_deal_links`/`mail_messages`. Logistic accuracy 1.00, kNN 0.93. (C) Fixed `_init_ml()` to load saved `.pkl` model from disk instead of creating fresh untrained models. (D) Fixed `_apply_ml_override()` — was a no-op, now overrides "weak" classifications to "ml_suggested_link" when both logistic and kNN agree. (E) Wired ML override into `_classify_message` with `ml_applied` flag in log entries. (F) Set `ML_ENABLED = True` — lazy-loaded when first uncertain email is encountered. (G) Auto-retrain: after 10+ corrections accumulate, triggers background retraining. (H) Installed ML deps: `sentence-transformers`, `torch` (CPU-only), `scikit-learn`. (I) Fixed "Invalid Date" in scanner status — `str(None)` was producing `"None"` string; now returns empty. (J) Fixed deal-link dropdown mobile positioning — removed `left:0` override that made it extend rightward. **Verified:** `python3 -m py_compile server.py scanner/mail_scanner.py scanner/train_ml_head.py` + `node --check public/app.js` both pass. Model trained and saved to `scanner/data/mail_scanner/ml_models/sietch-classifier-head.pkl`.
 
 ### Remaining TODO (Future Sessions)
 
@@ -228,6 +228,11 @@ docker exec onlyoffice-docserver /bin/sh -c 'curl -s -o /dev/null -w "%{http_cod
 ```
 
 ## How to Run / Test / Deploy
+- **⚠️ CRITICAL: Starting server from opencode shell.** The server process dies when backgrounded normally from the opencode shell. You **MUST** use `setsid bash -c '...'` to create a fully detached process group:
+  ```bash
+  setsid bash -c 'cd /home/chapman-server/Projects/new-crm && exec ./.venv/bin/python3 server.py >> /tmp/crm-server.log 2>&1' &
+  ```
+  Do NOT use plain `python3 server.py &` — it will appear to start but die silently when the opencode session exits or times out. The localtonet tunnel will then show "ConnectionRefused".
 - **Dev (normal):** `cd ~/new-crm && cp -n config.example.env .env && ./start.sh` (or `DB_HOST=127.0.0.1 ./.venv/bin/python3 server.py` if needed). Server prints LAN URLs on start (binds 0.0.0.0). Login with your credentials (session-cookie auth). **Requires a real PostgreSQL database.**
 - **Chaos testing only:** `python test-server.py` — this is **not** a development server. Only for simulating failures via `/api/test/chaos`. All functional development requires the real server with a real DB (or LAN server).
 - **Test changes:** Browser + DevTools (Network tab for API calls, Application → Local Storage for profile). Always test both happy path and failure scenarios.

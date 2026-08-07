@@ -1,0 +1,6 @@
+[Unit]
+Description=Kill hung/stale localtonet processes (IAM service restores tunnels)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/localtonet-watchdog.sh

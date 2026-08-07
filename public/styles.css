@@ -3748,9 +3748,11 @@ body {
 }
 @media (max-width: 600px) {
   .mail-link-deal-dropdown {
-    right: auto;
-    left: 0;
+    right: 0;
+    top: 100%;
+    bottom: auto;
     width: 250px;
+    margin-top: 4px;
   }
 }
 #mail-tag-dropdown {
@@ -3916,11 +3918,14 @@ body {
   grid-template-columns: 1fr 1fr;
   gap: 1rem;
   align-items: start;
+  max-width: 100%;
+  overflow: hidden;
 }
 .scanner-admin-col {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  min-width: 0;
 }
 @media (max-width: 900px) {
   .scanner-admin-grid {
@@ -4121,12 +4126,6 @@ body {
   content: '$ tail -f scanner.log';
   color: #484f58;
 }
-.scanner-log .log-entry {
-  padding: 1px 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .scanner-log .log-entry .log-ts {
   color: #484f58;
 }
@@ -4152,6 +4151,21 @@ body {
   background: rgba(210, 153, 34, 0.05);
   white-space: normal;
   word-break: break-all;
+}
+/* Log entry — simple terminal wrapping, no grid */
+.scanner-log .log-entry {
+  padding: 1px 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+.scanner-log .log-meta {
+  white-space: nowrap;
+}
+@media (max-width: 600px) {
+  .scanner-log {
+    font-size: 0.7rem;
+  }
 }
 .mail-viewer-warning-content {
   position: relative;
@@ -11095,14 +11109,6 @@ body {
     width: 100%;
     border-radius: 0;
   }
-  #compose-email-modal .modal-card {
-    max-width: 100% !important;
-    width: 100% !important;
-    border-radius: 0;
-  }
-  #compose-email-modal {
-    padding: 0;
-  }
   #compose-send-btn {
     padding: 0.35rem 0.8rem;
   }
@@ -11124,6 +11130,37 @@ body {
     min-width: 1.9rem;
     min-height: 1.9rem;
     padding: 0.3rem;
+  }
+}
+
+/* Compose modal: fill viewport on mobile, sticky footer */
+@media (max-width: 600px) {
+  #compose-email-modal {
+    padding: 0;
+  }
+  #compose-email-modal .modal-card {
+    max-width: 100% !important;
+    width: 100% !important;
+    max-height: 100dvh !important;
+    height: 100dvh;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  #compose-email-modal .modal-card > div:last-child {
+    flex-shrink: 0;
+    position: sticky;
+    bottom: 0;
+    background: var(--surface);
+    z-index: 1;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+  #compose-email-modal .note-editor {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
   }
 }
 
@@ -12060,6 +12097,12 @@ body {
 }
 .mail-link-icon.unlinked:hover {
   color: #d97706;
+}
+.mail-link-icon.has-attachments {
+  color: #8b95a8;
+}
+.mail-link-icon.has-attachments:hover {
+  color: #a0aec0;
 }
 @media (prefers-color-scheme: dark) {
   .mail-link-icon.linked { color: #4ade80; }

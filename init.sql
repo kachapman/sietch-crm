@@ -485,7 +485,7 @@ CREATE TABLE mail_accounts (
     signature_text TEXT,
     is_crm_mail BOOLEAN DEFAULT FALSE,
     auto_bcc_addr TEXT,
-    auto_delete_days INTEGER DEFAULT 0,
+    retention_days INTEGER DEFAULT 90,
     tab_icon TEXT DEFAULT 'user',
     tab_color TEXT DEFAULT 'var(--accent)'
 );
