@@ -2073,17 +2073,20 @@ function renderTasksTile() {
     `;
     $("#dashboard-tiles")?.appendChild(tile);
     bindTileChrome(tile, tileId);
-    // Move the list tabs up into the title bar, right after the task count.
+    // Drop the "Tasks" title + counter from the title bar (tabs carry the counts),
+    // then move the list tabs up into the title bar at the front.
     const tasksToolbar = tile.querySelector(":scope > .tile-toolbar");
-    const tasksTabsEl = tile.querySelector(".tasks-tabs");
-    if (tasksToolbar && tasksTabsEl) {
-      const tasksCount = tasksToolbar.querySelector(".tile-toolbar-count");
-      if (tasksCount && tasksCount.nextSibling) {
-        tasksToolbar.insertBefore(tasksTabsEl, tasksCount.nextSibling);
-      } else if (tasksCount) {
-        tasksCount.after(tasksTabsEl);
-      } else {
-        tasksToolbar.appendChild(tasksTabsEl);
+    if (tasksToolbar) {
+      tasksToolbar.querySelector(".tile-toolbar-title")?.remove();
+      tasksToolbar.querySelector(".tile-toolbar-count")?.remove();
+      const tasksTabsEl = tile.querySelector(".tasks-tabs");
+      if (tasksTabsEl) {
+        const tasksHint = tasksToolbar.querySelector(".tile-drag-hint");
+        if (tasksHint && tasksHint.nextSibling) {
+          tasksToolbar.insertBefore(tasksTabsEl, tasksHint.nextSibling);
+        } else {
+          tasksToolbar.appendChild(tasksTabsEl);
+        }
       }
     }
   }
