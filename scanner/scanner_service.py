@@ -151,16 +151,28 @@ class ScannerHandler(BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 _json_response(self, 400, {"error": "Invalid JSON"})
                 return
-            ids = payload.get("conversation_ids") or payload.get("ids") or []
-            if not ids:
-                _json_response(self, 400, {"error": "conversation_ids required"})
-                return
-            try:
-                int_ids = [int(x) for x in ids]
-            except (ValueError, TypeError):
-                _json_response(self, 400, {"error": "ids must be integers"})
-                return
-            results = mail_scanner.reprocess_conversations(int_ids)
+            entries = payload.get("entries") or []
+            if entries:
+                results = mail_scanner.reprocess_conversations(entries)
+            else:
+                ids = payload.get("conversation_ids") or payload.get("ids") or []
+                if not ids:
+                    _json_response(self, 400, {"error": "entries or ids required"})
+                    return
+                # Support account_id:uid pairs as strings
+                parsed_entries = []
+                for s in ids:
+                    s = str(s).strip()
+                    if ":" in s:
+                        parts = s.split(":", 1)
+                        try:
+                            parsed_entries.append({"account_id": int(parts[0]), "uid": parts[1]})
+                        except (ValueError, TypeError):
+                            pass
+                if not parsed_entries:
+                    _json_response(self, 400, {"error": "ids must be account_id:uid pairs"})
+                    return
+                results = mail_scanner.reprocess_conversations(parsed_entries)
             _json_response(self, 200, {"results": results})
             return
 

@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=3.4.0" />
+  <link rel="stylesheet" href="styles.css?v=3.4.5" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
 </head>
 <body>
@@ -720,8 +720,13 @@
               </div>
               <div class="infra-section">
                 <h4>Scanner Log</h4>
-                <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.4rem;">
+                <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.4rem; flex-wrap:wrap;">
+                  <select id="scanner-log-account-filter" class="form-select form-select-sm" style="font-size:0.75rem; width:auto; min-width:160px;">
+                    <option value="crm">CRM accounts</option>
+                    <option value="">All accounts</option>
+                  </select>
                   <button type="button" id="scanner-log-select-all" class="btn btn-ghost btn-sm" style="font-size:0.75rem;"><i class="ti ti-checkbox"></i> Select all</button>
+                  <button type="button" id="scanner-log-reprocess" class="btn btn-ghost btn-sm" style="font-size:0.75rem; color:var(--accent); display:none;"><i class="ti ti-reload"></i> Reprocess selected</button>
                   <button type="button" id="scanner-log-mark-wrong" class="btn btn-ghost btn-sm" style="font-size:0.75rem; color:var(--warning); display:none;"><i class="ti ti-alert-triangle"></i> Mark as wrong</button>
                   <span id="scanner-log-selected-count" style="font-size:0.7rem; color:var(--muted);"></span>
                 </div>
@@ -730,8 +735,8 @@
               </div>
               <div class="infra-section">
                 <h4>Reprocess</h4>
-                <p style="font-size:0.8rem; color:var(--muted); margin:0 0 0.4rem;">Reprocess messages by ID (comma-separated) through the classifier pipeline.</p>
-                <input type="text" id="scanner-reprocess-ids" placeholder="e.g. 1234,5678" style="width:200px;">
+                <p style="font-size:0.8rem; color:var(--muted); margin:0 0 0.4rem;">Reprocess selected log entries above, or enter account_id:uid pairs (comma-separated) to clear processed IDs.</p>
+                <input type="text" id="scanner-reprocess-ids" placeholder="e.g. 26:4114,26:4113" style="width:200px;">
                 <button type="button" id="scanner-reprocess-btn" class="btn btn-secondary btn-sm" style="margin-left:0.5rem;"><i class="ti ti-reload"></i> Reprocess</button>
                 <span id="scanner-reprocess-status" style="margin-left:0.5rem; font-size:0.8rem;"></span>
               </div>
@@ -2321,6 +2326,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
-  <script src="app.js?v=3.4.0" type="module"></script>
+  <script src="app.js?v=3.4.5" type="module"></script>
 </body>
 </html>

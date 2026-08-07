@@ -74,6 +74,22 @@ DEFAULT_CONTRACTORS = {
 IMAP_PORT_SSL = 993
 IMAP_PORT_STARTTLS = 143
 
+_CRM_ACCOUNT_IDS: set[int] | None = None
+
+
+def _get_crm_account_ids() -> set[int]:
+    """Return IDs of mail_accounts flagged as CRM mail. Cached per process."""
+    global _CRM_ACCOUNT_IDS
+    if _CRM_ACCOUNT_IDS is not None:
+        return _CRM_ACCOUNT_IDS
+    try:
+        rows = db.query_dicts("SELECT id FROM mail_accounts WHERE is_crm_mail = TRUE")
+        _CRM_ACCOUNT_IDS = {r["id"] for r in rows}
+    except Exception:
+        _CRM_ACCOUNT_IDS = set()
+    return _CRM_ACCOUNT_IDS
+
+
 DEAL_LINK_RE = re.compile(r"\[#(\d+)\]", re.IGNORECASE)
 CLAIM_CODE_RE = re.compile(r"^[A-Za-z0-9\-]{5,20}$")
 DEAL_ID_RE = re.compile(r"\[#DEAL-(\d+)\]", re.IGNORECASE)
@@ -106,6 +122,10 @@ def _normalize_behavior_config(config: dict[str, Any]) -> dict[str, Any]:
         else:
             normalized[key] = {"enabled": bool(value), "dry_run": False, "accounts": "all"}
     config["scanner_behavior"] = normalized
+    # Normalize null/missing accounts to "crm" (matches UI default of CRM Only)
+    for cfg in config.get("scanner_behavior", {}).values():
+        if isinstance(cfg, dict) and cfg.get("accounts") is None:
+            cfg["accounts"] = "crm"
     # Ensure custom_behaviors is a list
     if "custom_behaviors" not in config:
         config["custom_behaviors"] = []
@@ -113,12 +133,22 @@ def _normalize_behavior_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _is_behavior_enabled(behavior_cfg: dict[str, Any], account_id: int | None = None) -> bool:
-    """Check if a behavior task is enabled for a given account."""
+    """Check if a behavior task is enabled for a given account.
+
+    accounts: "all" = every account, "crm" = CRM-only accounts, list = explicit IDs.
+    A null/missing value is treated as "crm" to match the UI default of "CRM Only".
+    """
     if not behavior_cfg.get("enabled", False):
         return False
-    accounts = behavior_cfg.get("accounts", "all")
+    accounts = behavior_cfg.get("accounts", "crm")
+    if accounts is None:
+        accounts = "crm"
     if accounts == "all":
         return True
+    if accounts == "crm":
+        if account_id is None:
+            return False
+        return account_id in _get_crm_account_ids()
     if isinstance(accounts, list) and account_id is not None:
         return account_id in accounts
     return False
@@ -128,9 +158,15 @@ def _is_dry_run(behavior_cfg: dict[str, Any], account_id: int | None = None) -> 
     """Check if a behavior task is in dry-run mode for a given account."""
     if not behavior_cfg.get("dry_run", False):
         return False
-    accounts = behavior_cfg.get("accounts", "all")
+    accounts = behavior_cfg.get("accounts", "crm")
+    if accounts is None:
+        accounts = "crm"
     if accounts == "all":
         return True
+    if accounts == "crm":
+        if account_id is None:
+            return False
+        return account_id in _get_crm_account_ids()
     if isinstance(accounts, list) and account_id is not None:
         return account_id in accounts
     return False
@@ -1138,7 +1174,7 @@ def _find_opportunity_by_claim_code(claim_code: str) -> dict[str, Any] | None:
     if field_id is None:
         return None
     try:
-        rows = db.query(
+        rows = db.query_dicts(
             "SELECT id, title FROM opportunities WHERE id IN "
             "(SELECT opportunity_id FROM opportunity_custom_field_values WHERE field_id = %s AND field_value = %s)",
             (field_id, claim_code),
@@ -1152,7 +1188,7 @@ def _find_opportunity_by_claim_code(claim_code: str) -> dict[str, Any] | None:
 
 
 def _find_opportunity_by_deal_id(deal_id: int) -> dict[str, Any] | None:
-    rows = db.query(
+    rows = db.query_dicts(
         "SELECT id, title FROM opportunities WHERE id = %s",
         (deal_id,),
     )
@@ -1780,14 +1816,21 @@ def get_scanner_status() -> dict[str, Any]:
     }
 
 
-def get_scanner_log(limit: int = 200) -> list[dict[str, Any]]:
+def get_scanner_log(limit: int = 200, account_id: str | None = None) -> list[dict[str, Any]]:
     if not LOG_FILE.exists():
         return []
     try:
         with open(LOG_FILE, "r", encoding="utf-8") as f:
             lines = f.readlines()
-        entries = [json.loads(l) for l in lines[-limit:] if l.strip()]
-        return entries
+        entries = [json.loads(l) for l in lines if l.strip()]
+        if account_id:
+            # Support "crm" sentinel for all CRM-only accounts or a numeric ID.
+            if str(account_id).lower() == "crm":
+                crm_ids = _get_crm_account_ids()
+                entries = [e for e in entries if e.get("account_id") in crm_ids]
+            else:
+                entries = [e for e in entries if str(e.get("account_id")) == str(account_id)]
+        return entries[-limit:] if limit else entries
     except Exception:
         return []
 
@@ -1851,11 +1894,70 @@ def get_feedback_entries(limit: int = 200) -> list[dict[str, Any]]:
         return []
 
 
-def reprocess_conversations(conversation_ids: list[int]) -> list[dict[str, Any]]:
+def _reprocess_message_by_uid(account_id: int, uid: str) -> dict[str, Any] | None:
+    """Clear the processed ID for a message and immediately reprocess it from the DB.
+
+    Reconstructs the message from mail_messages and runs the classifier pipeline so
+    dry-run actions and classifications are logged immediately, not just on the next
+    IMAP poll.
+    """
+    key = _processed_key(account_id, uid)
+    ids = _load_processed_ids()
+    if key in ids:
+        ids.discard(key)
+        _save_processed_ids(ids)
+
+    try:
+        row = db.query_one(
+            "SELECT id, imap_uid, message_id, from_addr, to_addr, cc_addr, subject, "
+            "body_text, body_html, date_received, folder, account_id "
+            "FROM mail_messages WHERE account_id = %s AND imap_uid = %s",
+            (account_id, uid),
+        )
+    except Exception:
+        row = None
+
+    if not row:
+        return {"account_id": account_id, "uid": uid, "reprocessed": True, "immediate": False}
+
+    msg = {
+        "uid": row["imap_uid"],
+        "message_id": row["message_id"] or "",
+        "from": row["from_addr"] or "",
+        "to": row["to_addr"] or "",
+        "cc": row["cc_addr"] or "",
+        "subject": row["subject"] or "",
+        "body_text": row["body_text"] or "",
+        "body_html": row["body_html"] or "",
+        "date": row["date_received"],
+        "folder": row["folder"] or "INBOX",
+        "attachments": [],
+        "raw_headers": "",
+    }
+    mailbox_cfg = {"account_id": account_id, "inbox": row["folder"] or "INBOX"}
+    log_entry = _process_message(msg, mailbox_cfg)
+    return {"account_id": account_id, "uid": uid, "reprocessed": True, "immediate": True, "log_status": log_entry.get("status")}
+
+
+def reprocess_conversations(items: list[int] | list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Reprocess selected messages immediately if they are in the DB.
+
+    Accepts either legacy integer IDs (for backward compatibility) or dicts with
+    account_id + uid, which is the correct format because processed keys are scoped
+    per-account.
+    """
     results = []
-    for cid in conversation_ids:
-        _mark_processed(None, str(cid))
-        results.append({"id": cid, "reprocessed": True})
+    for item in items:
+        if isinstance(item, dict):
+            account_id = item.get("account_id")
+            uid = str(item.get("uid", ""))
+        else:
+            # Legacy integer path: cannot scope to account, so it won't clear real keys.
+            account_id = None
+            uid = str(item)
+        if account_id is not None and uid:
+            result = _reprocess_message_by_uid(account_id, uid)
+            results.append(result)
     return results
 
 

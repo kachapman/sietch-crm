@@ -2,6 +2,20 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 3 — Scanner Log Fixes + CRM Dry-Run + Email Timezone (2026-08-07)
+
+- **Scanner log wrapping fixed.** Removed `.log-meta { white-space: nowrap }` and the `.log-meta` wrapper entirely. Status labels now have a right margin and explicit non-breaking spaces separate timestamp/status/message, so entries wrap like the OnlyOffice sync log instead of pushing the subject to a new line.
+- **Scanner log account filter.** Added an account dropdown above the log (All / CRM / individual accounts). UI now fetches `/api/v2/mail/log?limit=500` with `account_id` so CRM entries are visible even when the recent log tail is dominated by the requests account.
+- **Server-side log filtering fixed.** `get_scanner_log()` now reads the whole log file and filters by `account_id` (including `crm` sentinel) before returning the last N entries, instead of filtering only the last N tail lines.
+- **Dry-run scope fix.** UI "CRM Only" selection was saving `accounts: null` (from `parseInt("crm")` → `NaN`). Backend now understands `accounts: "crm"`, checks against `mail_accounts.is_crm_mail`, and treats `null` as `"crm"` to match the UI default. Scanner behaviors configured as dry-run will now log dry-run actions for CRM emails.
+- **Email list timezone fix.** `_json_response()` now serializes `datetime` objects as UTC ISO-8601 with offset. Naive PostgreSQL `TIMESTAMP` values are assumed UTC, so the frontend's `America/New_York` conversion produces the correct wall time instead of showing times 4 hours ahead.
+- **Reprocess selected log entries.** Added a "Reprocess selected" button to the Scanner Log toolbar. Selecting one or more log entries and clicking the button now immediately re-runs the classifier pipeline on the stored message, logs a fresh `dry_run`/`processed` entry, and removes the processed ID. The manual Reprocess input field now also accepts `account_id:uid` pairs (e.g. `26:4114`).
+- **Scanner log deduplication.** UI now keeps only the most recent entry per UID so the log reflects the current classification status instead of showing a trail of repeated scans.
+- **Scanner log default filter.** Scanner Log dropdown now defaults to **CRM accounts** instead of All accounts, since CRM emails are the primary use case and the All view is dominated by high-volume accounts.
+- **Scanner log wrapping fix (final).** Removed the `.log-header` / `.log-msg` block split and all extra wrapping rules. Each entry is now a single line of plain inline text: a floated checkbox, timestamp, status, and message text. The message wraps naturally back to the timestamp edge, filling the empty space under the status. Removed the stale generic `.log-entry { display: flex; align-items: center; padding: 0.2rem 0.4rem; }` rule that was forcing the invisible two-column/cell layout. Bumped CSS and JS cache-busters to `?v=3.4.5`.
+- **Classifier bug fix.** `_find_opportunity_by_deal_id` and `_find_opportunity_by_claim_code` were returning raw tuples instead of dicts, causing `TypeError: tuple indices must be integers` when a deal was found. Switched to `db.query_dicts`.
+- **Files:** `public/app.js`, `public/styles.css`, `public/index.html`, `scanner/mail_scanner.py`, `scanner/scanner_service.py`, `server.py`, `CHANGELOG.md`, `AGENTS.md`.
+
 ## Phase 3 — Admin UI Rework + Tile Persistence (2026-08-06)
 
 - **Admin modal horizontal tabs.** Sidebar removed; tabs now flow horizontally with `overflow-x: auto` scroll. Tab labels hide on narrow screens (<=768px) showing only icons.

@@ -4141,9 +4141,6 @@ body {
 .scanner-log .log-entry.log-rule .log-status {
   color: #a371f7;
 }
-.scanner-log .log-entry .log-msg {
-  color: #c9d1d9;
-}
 .scanner-log .log-entry.log-feedback-pending {
   border-left: 3px solid #d29922;
   padding-left: 0.3rem;
@@ -4152,15 +4149,19 @@ body {
   white-space: normal;
   word-break: break-all;
 }
-/* Log entry — simple terminal wrapping, no grid */
+/* Log entry — plain terminal wrapping, one inline line */
 .scanner-log .log-entry {
+  display: block;
+  overflow: hidden;
   padding: 1px 0;
   white-space: pre-wrap;
   word-wrap: break-word;
   overflow-wrap: break-word;
 }
-.scanner-log .log-meta {
+.scanner-log .log-entry .log-meta {
+  float: left;
   white-space: nowrap;
+  margin-right: 0.4rem;
 }
 @media (max-width: 600px) {
   .scanner-log {
@@ -12118,15 +12119,9 @@ body {
 .log-dry-run .log-status {
   color: var(--accent);
 }
-/* Scanner log checkboxes */
-.log-entry {
-  display: flex;
-  align-items: center;
-  padding: 0.2rem 0.4rem;
-}
+/* Scanner log checkbox */
 .log-cb {
   margin-right: 0.3rem;
-  flex-shrink: 0;
 }
 /* Correction modal project results */
 .correction-pick:hover {

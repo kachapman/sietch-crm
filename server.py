@@ -318,8 +318,21 @@ EMAIL_HISTORY_CATEGORY_ID = 16
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
+def _json_default(obj: Any) -> str:
+    """Serialize objects for JSON. Datetimes are emitted as UTC ISO-8601 with offset.
+
+    PostgreSQL TIMESTAMP columns store naive UTC values; treat them as UTC so the
+    frontend's timeZone conversion (e.g. America/New_York) produces the correct wall time.
+    """
+    if isinstance(obj, datetime):
+        if obj.tzinfo is None:
+            return obj.replace(tzinfo=timezone.utc).isoformat()
+        return obj.astimezone(timezone.utc).isoformat()
+    return str(obj)
+
+
 def _json_response(handler: SimpleHTTPRequestHandler, status: int, payload: dict | list) -> None:
-    body = json.dumps(payload, default=str).encode("utf-8")
+    body = json.dumps(payload, default=_json_default).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
@@ -7534,10 +7547,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         qs = parse_qs(urlparse(self.path).query)
         limit = int(qs.get("limit", ["500"])[0])
         account_id = qs.get("account_id", [None])[0]
-        entries = mail_scanner.get_scanner_log(limit * 5) if mail_scanner else []
-        if account_id:
-            entries = [e for e in entries if str(e.get("account_id")) == str(account_id)]
-        _json_response(self, 200, {"entries": entries[-limit:]})
+        entries = mail_scanner.get_scanner_log(limit=limit, account_id=account_id) if mail_scanner else []
+        _json_response(self, 200, {"entries": entries})
 
     def _handle_mail_log_correct(self) -> None:
         try:
@@ -7622,8 +7633,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     def _handle_mail_reprocess(self) -> None:
         try:
             payload = json.loads(_read_body(self) or b"{}")
-            ids = payload.get("conversation_ids") or payload.get("ids") or []
-            results = mail_scanner.reprocess_conversations([int(x) for x in ids])
+            entries = payload.get("entries") or []
+            if entries:
+                results = mail_scanner.reprocess_conversations(entries)
+            else:
+                # Legacy fallback for integer IDs (unscoped, may not clear real keys)
+                ids = payload.get("conversation_ids") or payload.get("ids") or []
+                results = mail_scanner.reprocess_conversations([int(x) for x in ids])
             _json_response(self, 200, {"results": results})
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})

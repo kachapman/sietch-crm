@@ -24563,11 +24563,13 @@ async function populateEmailScannerTab() {
   }
 
   // Accounts
+  let allMailAccounts = [];
   const acctList = $("#scanner-accounts-list");
   if (acctList) {
     try {
       const data = await api("/api/v2/mail/accounts");
-      const accounts = (data.accounts || []).filter(a => a.is_crm_mail);
+      allMailAccounts = data.accounts || [];
+      const accounts = allMailAccounts.filter(a => a.is_crm_mail);
       if (!accounts.length) {
         acctList.innerHTML = '<p style="color:var(--muted);font-size:0.85rem;">No CRM mail accounts configured.</p>';
       } else {
@@ -24640,13 +24642,41 @@ async function populateEmailScannerTab() {
 
   // Log + feedback review
   const logList = $("#scanner-log-list");
+  const logAccountFilter = $("#scanner-log-account-filter");
+  if (logAccountFilter) {
+    // Populate filter dropdown with accounts, preserving current selection.
+    const currentVal = logAccountFilter.value;
+    const baseOptions = '<option value="">All accounts</option><option value="crm">CRM accounts</option>';
+    const acctOptions = allMailAccounts.map(a =>
+      `<option value="${escapeHtml(a.id)}">${escapeHtml(a.email || a.display_name || a.id)}</option>`
+    ).join('');
+    logAccountFilter.innerHTML = baseOptions + acctOptions;
+    if (currentVal) logAccountFilter.value = currentVal;
+  }
   if (logList) {
     try {
+      const logLimit = 500;
+      const logFilter = logAccountFilter?.value || '';
+      const logUrl = logFilter
+        ? `/api/v2/mail/log?limit=${logLimit}&account_id=${encodeURIComponent(logFilter)}`
+        : `/api/v2/mail/log?limit=${logLimit}`;
       const [logData, feedbackData] = await Promise.all([
-        api("/api/v2/mail/log?limit=50"),
+        api(logUrl),
         api("/api/v2/mail/feedback").catch(() => ({ entries: [] }))
       ]);
       const entries = logData.entries || [];
+      // Deduplicate by UID: keep the most recent entry for each message so the log
+      // reflects the current classification status rather than a trail of scans.
+      const dedupedEntries = [];
+      const seenUids = new Set();
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const e = entries[i];
+        const key = `${e.account_id || 'none'}:${e.uid || e.message_id || i}`;
+        if (!seenUids.has(key)) {
+          seenUids.add(key);
+          dedupedEntries.unshift(e);
+        }
+      }
       const allFeedback = feedbackData.entries || [];
       const pendingFeedback = allFeedback.filter(f => f.status !== 'reviewed');
 
@@ -24661,9 +24691,7 @@ async function populateEmailScannerTab() {
           const classification = f.classification || 'unknown';
           const confidence = f.match_strength ? ` (${f.match_strength})` : '';
           html += `<div class="log-entry log-feedback-pending">
-            <span class="log-ts">[${escapeHtml(ts)}]</span>
-            <span class="log-status" style="color:var(--warning);">PENDING</span>
-            <span class="log-msg">${escapeHtml(subj)}${escapeHtml(from)}</span>
+            <span class="log-ts">[${escapeHtml(ts)}]</span> <span class="log-status" style="color:var(--warning);">PENDING</span> ${escapeHtml(subj)}${escapeHtml(from)}
             <div style="font-size:0.7rem; color:var(--muted); margin-top:0.15rem;">
               Classification: ${escapeHtml(classification)}${escapeHtml(confidence)}
               <button type="button" class="btn btn-ghost btn-sm fb-approve" data-fb-idx="${i}" style="font-size:0.7rem; color:#3fb950; padding:0.1rem 0.3rem; min-width:auto;">✓ Approve</button>
@@ -24674,12 +24702,12 @@ async function populateEmailScannerTab() {
         html += '<div style="height:0.25rem;"></div>';
       }
 
-      if (!entries.length && !pendingFeedback.length) {
+      if (!dedupedEntries.length && !pendingFeedback.length) {
         html = '<div style="color:#484f58;">$ tail -f scanner.log<br>No entries yet.</div>';
-      } else if (entries.length) {
+      } else if (dedupedEntries.length) {
         // Track selected log entries for correction
         window._scannerLogSelected = window._scannerLogSelected || new Set();
-        html += entries.slice().reverse().map((e, i) => {
+        html += dedupedEntries.slice().reverse().map((e, i) => {
           const ts = e.timestamp ? new Date(e.timestamp).toLocaleTimeString('en-US', {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit', timeZone:'America/New_York'}) : '--:--:--';
           const status = (e.status || 'unknown').toUpperCase();
           const cls = e.status === 'processed' ? 'log-processed' : e.status === 'error' ? 'log-error' : e.status === 'skipped' || e.status === 'already_processed' ? 'log-skipped' : e.status === 'dry_run' ? 'log-dry-run' : e.classification && e.classification.startsWith('rule_') ? 'log-rule' : '';
@@ -24692,10 +24720,8 @@ async function populateEmailScannerTab() {
             : '';
           const uid = e.uid || '';
           const isSelected = window._scannerLogSelected.has(uid);
-          return `<div class="log-entry ${cls}" data-uid="${escapeHtml(uid)}" data-idx="${i}">
-            <span class="log-meta"><input type="checkbox" class="log-cb" data-uid="${escapeHtml(uid)}" ${isSelected ? 'checked' : ''} style="margin-right:0.3rem;" />
-            <span class="log-ts">[${ts}]</span> <span class="log-status">${escapeHtml(status)}</span></span>
-            <span class="log-msg">${escapeHtml(subj)}${escapeHtml(from)}${dealLinked}${reason}${dryDetail}</span>
+          return `<div class="log-entry ${cls}" data-uid="${escapeHtml(uid)}" data-account-id="${escapeHtml(e.account_id || '')}" data-idx="${i}">
+            <span class="log-meta"><input type="checkbox" class="log-cb" data-uid="${escapeHtml(uid)}" ${isSelected ? 'checked' : ''} /> <span class="log-ts">[${ts}]</span> <span class="log-status">${escapeHtml(status)}</span></span> ${escapeHtml(subj)}${escapeHtml(from)}${dealLinked}${reason}${dryDetail}
           </div>`;
         }).join('');
       }
@@ -24704,10 +24730,12 @@ async function populateEmailScannerTab() {
 
       // Multi-select logic
       const markWrongBtn = $("#scanner-log-mark-wrong");
+      const reprocessBtn = $("#scanner-log-reprocess");
       const selectedCount = $("#scanner-log-selected-count");
       const updateSelectedUI = () => {
         const count = window._scannerLogSelected.size;
         if (markWrongBtn) markWrongBtn.style.display = count > 0 ? '' : 'none';
+        if (reprocessBtn) reprocessBtn.style.display = count > 0 ? '' : 'none';
         if (selectedCount) selectedCount.textContent = count > 0 ? `${count} selected` : '';
       };
       logList.querySelectorAll('.log-cb').forEach(cb => {
@@ -24730,6 +24758,33 @@ async function populateEmailScannerTab() {
           });
           updateSelectedUI();
         };
+      }
+
+      // Reprocess selected log entries
+      if (reprocessBtn && !reprocessBtn.dataset.bound) {
+        reprocessBtn.dataset.bound = "1";
+        reprocessBtn.addEventListener('click', async () => {
+          const cbs = Array.from(logList.querySelectorAll('.log-cb:checked'));
+          if (!cbs.length) { showToast("No entries selected", true); return; }
+          const entries = cbs.map(cb => {
+            const entry = cb.closest('.log-entry');
+            return {
+              account_id: entry?.dataset.accountId || null,
+              uid: cb.dataset.uid || ''
+            };
+          }).filter(e => e.account_id && e.uid);
+          if (!entries.length) { showToast("Selected entries are missing account/uid", true); return; }
+          try {
+            const res = await api("/api/v2/mail/reprocess", {
+              method: "POST",
+              body: JSON.stringify({ entries })
+            });
+            window._scannerLogSelected.clear();
+            updateSelectedUI();
+            populateEmailScannerTab();
+            showToast(`Reprocessed ${res.results?.length || 0} selected entries`);
+          } catch (e) { showToast('Reprocess failed: ' + e.message, true); }
+        });
       }
 
       logList.querySelectorAll('.fb-approve').forEach(btn => {
@@ -25003,7 +25058,9 @@ function bindScannerAdminButtons() {
         const sel = $(id);
         if (!sel) return "crm";
         if (sel.value === "custom") return "custom";
-        return sel.value === "all" ? "all" : parseInt(sel.value);
+        if (sel.value === "all" || sel.value === "crm") return sel.value;
+        const n = parseInt(sel.value);
+        return isNaN(n) ? "crm" : n;
       };
       try {
         await api("/api/v2/mail/config", {
@@ -25536,11 +25593,16 @@ function bindScannerAdminButtons() {
     cbAddBtn.addEventListener("click", () => openCustomBehaviorModal());
   }
 
-  // Log refresh
+  // Log refresh + account filter
   const logRefresh = $("#scanner-log-refresh");
   if (logRefresh && !logRefresh.dataset.bound) {
     logRefresh.dataset.bound = "1";
     logRefresh.addEventListener("click", () => populateEmailScannerTab());
+  }
+  const logAccountFilter = $("#scanner-log-account-filter");
+  if (logAccountFilter && !logAccountFilter.dataset.bound) {
+    logAccountFilter.dataset.bound = "1";
+    logAccountFilter.addEventListener("change", () => populateEmailScannerTab());
   }
 
   // Reprocess
@@ -25550,12 +25612,17 @@ function bindScannerAdminButtons() {
     reprocessBtn.addEventListener("click", async () => {
       const idsStr = $("#scanner-reprocess-ids")?.value.trim();
       const statusEl = $("#scanner-reprocess-status");
-      if (!idsStr) { showToast("Enter message IDs to reprocess", true); return; }
-      const ids = idsStr.split(",").map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-      if (!ids.length) { showToast("No valid IDs", true); return; }
+      if (!idsStr) { showToast("Enter account_id:uid pairs to reprocess", true); return; }
+      const entries = idsStr.split(",").map(s => s.trim()).filter(Boolean).map(s => {
+        const parts = s.split(":");
+        const account_id = parts.length === 2 ? parseInt(parts[0]) : NaN;
+        const uid = parts.length === 2 ? parts[1] : s;
+        return { account_id, uid };
+      }).filter(e => !isNaN(e.account_id) && e.uid);
+      if (!entries.length) { showToast("No valid account_id:uid pairs", true); return; }
       try {
-        await api("/api/v2/mail/reprocess", { method: "POST", body: JSON.stringify({ conversation_ids: ids }) });
-        if (statusEl) { statusEl.textContent = `✓ Reprocessed ${ids.length} message(s)`; statusEl.className = "event-log-health-status ok"; }
+        const res = await api("/api/v2/mail/reprocess", { method: "POST", body: JSON.stringify({ entries }) });
+        if (statusEl) { statusEl.textContent = `✓ Reprocessed ${res.results?.length || 0} message(s)`; statusEl.className = "event-log-health-status ok"; }
       } catch (e) {
         if (statusEl) { statusEl.textContent = e.message; statusEl.className = "event-log-health-status fail"; }
       }
