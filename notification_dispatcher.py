@@ -71,12 +71,26 @@ def _format_task_assigned(notification: dict, project_title: str, actor_name: st
     )
 
 
+def _format_task_reminder(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
+    payload = notification.get("payload") or {}
+    task_title = _escape_html(payload.get("taskTitle") or notification.get("message") or "Task reminder")
+    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+    return (
+        f"\u23f0 <b>Task reminder</b>\n\n"
+        f"{task_title}\n\n"
+        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
+        + f"\u21a9\ufe0f Reply to add a note"
+    )
+
+
 def _format_notification(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str | None:
     ntype = notification.get("type")
     if ntype == "note_tagged":
         return _format_note_tagged(notification, project_title, actor_name, project_id)
     elif ntype == "task_assigned":
         return _format_task_assigned(notification, project_title, actor_name, project_id)
+    elif ntype == "task_reminder":
+        return _format_task_reminder(notification, project_title, actor_name, project_id)
     return None
 
 

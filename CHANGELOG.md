@@ -2,6 +2,22 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 4 — Tasks Tile Revamp: Private Owner-Scoped Todos + Checklist/Reminders (2026-08-07)
+
+- **Private owner-scoped tasks.** Tasks are now owned per user via `owner_user_id`. The tasks tile no longer shows a team-wide user filter; each user sees only their own tasks. Team-shared `responsible_user_id` display removed from the tile.
+- **Project Tasks vs My Todos tabs.** The tile now has tabs — **Project Tasks** (linked to an opportunity via `opportunity_id`) and **My Todos** (no linked project). Quick-add bar at the top of the tile creates a todo without opening the modal.
+- **Checklist subtasks.** Tasks carry `items JSONB` (`[{id,text,done,indent}]`). The preview modal now shows a live checklist with add/toggle/remove.
+- **Reminders + repeat.** New `remind_at` / `reminder_fired_at` / `repeat` (`none|daily|weekly:W|monthly:D|yearly:M-D`) columns. `task_reminders.py` runs a 30s sweep that fires a `task_reminder` notification and reschedules repeats. The notification dispatcher formats them.
+- **Archive.** `archived` + `pinned` + `sort_order` columns. Tasks can be archived (undoable toast), pinned to the top, and reordered by dragging the grip handle (SortableJS → `POST /api/v2/tasks/reorder`).
+- **Dense task rows.** Rewritten row layout: grip, complete checkbox, title, due-date chip (overdue red / today amber), label chips, project chip, hover actions (pin/archive). Completing a task bursts confetti and shows an undo toast.
+- **Edit modal.** `openTaskPreviewModal` is now a full edit modal: title, description, due date, reminder datetime-local, repeat select, labels, project search/link, live checklist, and Save / Complete / Archive / Delete actions.
+- **Backend.** New endpoints `POST /api/v2/tasks/reorder` and `DELETE /api/v2/tasks/{id}`. `GET /api/v2/tasks` is owner-scoped (optional `archived` param). `POST` sets `owner_user_id` from the auth user. `PUT` validates owner (404 otherwise), full field whitelist, `closed_by` fix, JSON-serialized `items`.
+- **Schema migration.** `migrations/006_add_task_owner_columns.sql` + server.py startup ALTERs add the new columns and backfill `owner_user_id = COALESCE(responsible_user_id, created_by)` then the first admin. Verified live: 240 tasks, all backfilled.
+- **OnlyOffice import compat.** Module-level helpers `_fetch_oo_user_owner_map` (OO CRM user filter by email) and `_oo_task_owner` keep imported tasks owned correctly; both sync paths (`pull_tasks`, `full_reconcile`) and the mail scanner task INSERTs now set `owner_user_id`. Dedupe is now `(title, owner_user_id)`.
+- **Cleaned up.** Removed `crmTaskUrl`, the preview "Open in CRM" link, the tasks user filter (JS + CSS), and `new-task-category`. Removed dead CSS (`.tasks-user-block`, `.tasks-column`, `.tasks-user-filter-select`, `.tasks-filter-label`).
+- **Verified:** `python3 -m py_compile` (server.py, notification_dispatcher.py, task_reminders.py, mail_scanner.py) + `node --check public/app.js` pass; server restarted with `setsid` (log shows `task-reminders Task reminder sweep started (interval=30s)`); live API test of create/update/delete/reorder with owner-scoping passes.
+- **Files:** `server.py`, `init.sql`, `migrations/006_add_task_owner_columns.sql` (new), `task_reminders.py` (new), `notification_dispatcher.py`, `scanner/mail_scanner.py`, `public/app.js`, `public/index.html`, `public/styles.css`, `CHANGELOG.md`, `AGENTS.md`.
+
 ## Phase 3 — Scanner Log Fixes + CRM Dry-Run + Email Timezone (2026-08-07)
 
 - **Scanner log wrapping fixed.** Removed `.log-meta { white-space: nowrap }` and the `.log-meta` wrapper entirely. Status labels now have a right margin and explicit non-breaking spaces separate timestamp/status/message, so entries wrap like the OnlyOffice sync log instead of pushing the subject to a new line.

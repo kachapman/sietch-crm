@@ -266,18 +266,31 @@ CREATE TABLE tasks (
     description TEXT,
     opportunity_id INTEGER REFERENCES opportunities(id) ON DELETE SET NULL,
     responsible_user_id INTEGER REFERENCES users(id),
+    owner_user_id INTEGER REFERENCES users(id),
     due_date TIMESTAMP,
+    remind_at TIMESTAMP,
+    reminder_fired_at TIMESTAMP,
     priority INTEGER DEFAULT 0,
+    items JSONB DEFAULT '[]'::jsonb,
+    labels TEXT DEFAULT '',
+    repeat TEXT DEFAULT 'none',
+    color TEXT DEFAULT '',
+    pinned BOOLEAN DEFAULT FALSE,
+    archived BOOLEAN DEFAULT FALSE,
+    sort_order INTEGER DEFAULT 0,
     is_closed BOOLEAN DEFAULT FALSE,
     closed_at TIMESTAMP,
     closed_by INTEGER REFERENCES users(id),
     created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
     created_by INTEGER REFERENCES users(id)
 );
 
 CREATE INDEX idx_tasks_responsible ON tasks(responsible_user_id);
 CREATE INDEX idx_tasks_opportunity ON tasks(opportunity_id);
 CREATE INDEX idx_tasks_closed ON tasks(is_closed);
+CREATE INDEX idx_tasks_owner ON tasks(owner_user_id);
+CREATE INDEX idx_tasks_reminders ON tasks(owner_user_id, remind_at) WHERE remind_at IS NOT NULL;
 
 -- ============================================================================
 -- 7.10 Notifications (Internal Feed)

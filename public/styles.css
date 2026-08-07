@@ -1836,8 +1836,7 @@ body {
   flex-direction: column;
 }
 
-.dashboard-tile.feed-panel .feed-list,
-.dashboard-tile.tasks-panel .tasks-by-user {
+.dashboard-tile.feed-panel .feed-list {
   list-style: none;
   margin: 0 1rem 1rem;
   padding: 0;
@@ -1850,47 +1849,23 @@ body {
   box-sizing: border-box;
 }
 
+.dashboard-tile.tasks-panel .tasks-by-user {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem 0 0.5rem;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
 .dashboard-tile.feed-panel .feed-list {
   /* flex:1 + overflow-y:auto fills tile and scrolls when needed */
-}
-
-.dashboard-tile.tasks-panel .tasks-by-user:not(.tasks-by-user-columns) {
-  /* flex:1 + overflow-y:auto fills tile and scrolls when needed */
-}
-
-.dashboard-tile.tasks-panel.tasks-tile-full .tasks-by-user.tasks-by-user-columns {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0 1.25rem;
-  align-items: start;
-  max-height: none;
-  overflow: visible;
-}
-
-.tasks-column {
-  min-width: 0;
-}
-
-.tasks-column .task-row:first-of-type {
-  border-top: none;
-  border-bottom: 1px solid var(--border);
 }
 
 .dashboard-tile .tasks-by-user .board-loading {
   padding: 0.65rem 0.85rem;
   margin: 0;
-}
-
-.dashboard-tile .tasks-user-block {
-  padding: 0.65rem 0.85rem;
-  margin: 0;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-}
-
-.dashboard-tile .tasks-user-block + .tasks-user-block {
-  border-top: 1px solid var(--border);
 }
 
 .dashboard-tile.board-group-tile .board-group-header {
@@ -1979,32 +1954,79 @@ body {
   gap: 0;
 }
 
-.tasks-user-block {
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  padding: 0.65rem 0.85rem;
+/* Tabs + quick-add live above the list inside the tasks tile */
+.tasks-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
 }
 
-/* (h3 name header removed from tasks-by-user render; dropdown indicates selected user.
-   Rule left commented to avoid accidental re-introduction of duplicate label) */
-/* .tasks-user-block h3 { margin: 0 0 0.5rem; font-size: 0.9rem; color: var(--accent); } */
+.tasks-tab {
+  flex: 1;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.45rem 0.5rem;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
 
+.tasks-tab:hover {
+  color: var(--text);
+}
+
+.tasks-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.tasks-quick-add {
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.tasks-quick-add input {
+  width: 100%;
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  box-sizing: border-box;
+}
+
+.tasks-quick-add input::placeholder {
+  color: var(--muted);
+}
+
+.tasks-list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Dense task rows: divider lines instead of bordered cards. */
 .task-row {
   display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
-  padding: 0.65rem 0.85rem;
-  margin-bottom: 0.35rem;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
   font-size: 0.85rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+
+.task-row:hover {
+  background: var(--surface-2);
 }
 
 .task-row:last-of-type {
-  margin-bottom: 0;
+  border-bottom: none;
 }
 
 .task-row.done {
@@ -2012,9 +2034,226 @@ body {
 }
 
 .task-row--overdue {
-  background: rgba(240, 180, 41, 0.08);
+  background: rgba(240, 180, 41, 0.06);
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+
+.task-row--ghost {
+  opacity: 0.4;
+  background: var(--surface-2);
+}
+
+.task-drag-handle {
+  color: var(--muted);
+  cursor: grab;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0.1rem;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.task-drag-handle:active {
+  cursor: grabbing;
+}
+
+.task-complete-cb {
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.task-pin-btn {
+  display: none;
+  padding: 0.1rem;
+  flex-shrink: 0;
+}
+
+.task-row:hover .task-pin-btn {
+  display: inline-flex;
+}
+
+.task-title {
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 500;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-title:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.task-row-chips {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.task-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.task-chip--overdue {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: rgba(240, 113, 120, 0.1);
+}
+
+.task-chip--today {
+  color: var(--warn);
   border-color: var(--warn);
-  border-left: 3px solid var(--warn);
+  background: rgba(240, 180, 41, 0.1);
+}
+
+.task-chip-label {
+  color: var(--accent);
+  border-color: rgba(79, 140, 255, 0.4);
+  background: rgba(79, 140, 255, 0.08);
+}
+
+.task-chip-project {
+  cursor: pointer;
+  color: var(--accent);
+  border-color: rgba(79, 140, 255, 0.4);
+}
+
+.task-chip-project:hover {
+  text-decoration: underline;
+}
+
+.task-archive-btn {
+  display: none;
+  padding: 0.1rem;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.task-row:hover .task-archive-btn {
+  display: inline-flex;
+}
+
+.task-archive-btn:hover {
+  color: var(--danger);
+}
+
+/* Task preview/edit modal */
+.task-edit-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+}
+
+@media (max-width: 520px) {
+  .task-edit-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.task-edit-project-chip {
+  cursor: pointer;
+}
+
+.task-edit-project-none {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.task-item-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+}
+
+.task-item-text {
+  flex: 1;
+  font-size: 0.85rem;
+  min-width: 0;
+}
+
+.task-item-text.done {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.task-item-del {
+  color: var(--muted);
+  padding: 0.1rem 0.3rem;
+}
+
+.task-item-del:hover {
+  color: var(--danger);
+}
+
+.task-item-add-row {
+  margin-top: 0.25rem;
+}
+
+.task-item-add-row input {
+  width: 100%;
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  box-sizing: border-box;
+}
+
+.task-edit-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.btn-toast-action {
+  margin-left: 0.75rem;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.75rem;
+  color: var(--accent);
+  border-color: rgba(79, 140, 255, 0.5);
+  flex-shrink: 0;
+}
+
+.confetti-dot {
+  position: fixed;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--confetti-color);
+  pointer-events: none;
+  z-index: 10000;
+  animation: confetti-burst 0.8s ease-out forwards;
+}
+
+@keyframes confetti-burst {
+  0% {
+    transform: translate(0, 0) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(var(--confetti-dx), var(--confetti-dy)) rotate(360deg);
+    opacity: 0;
+  }
 }
 
 /* High Priority tag highlight on opportunity cards */
@@ -2024,61 +2263,11 @@ body {
   border-left: 4px solid var(--warn);
 }
 
-.task-row label {
-  flex: 1;
-  cursor: pointer;
-}
-
-.tasks-filter-label {
-  font-size: 0.8rem;
-  color: var(--muted);
-  display: flex;
-  margin-left: auto;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.tasks-filter-label select {
-  font: inherit;
-  padding: 0.35rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface-2);
-  color: var(--text);
-}
-
-/* Tasks tile user filter lives in the toolbar; keep it compact so it doesn't
-   thicken the title bar. */
-.tasks-user-filter-select {
-  font: inherit;
-  font-size: 0.72rem;
-  padding: 0.15rem 0.35rem;
-  height: auto;
-  line-height: 1.2;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface-2);
-  color: var(--text);
-  max-width: 9rem;
-  min-width: 4rem;
-}
-
-@media (max-width: 600px) {
-  .presence-status-select-tile,
-  .tasks-user-filter-select {
-    max-width: 7rem;
-    padding: 0.1rem 0.25rem;
-    font-size: 0.7rem;
-  }
-}
-
-.task-row label a:first-of-type,
 .tasks-list-row label a:first-of-type {
   color: #d4942b;
   text-decoration: none;
   font-weight: 500;
 }
-.task-row label a:hover,
 .tasks-list-row label a:hover {
   text-decoration: underline;
 }

@@ -165,6 +165,49 @@ def _unwrap(data: Any) -> Any:
             return data["result"]
     return data
 
+
+def _fetch_oo_user_owner_map(portal: str, token: str) -> dict:
+    """Map OnlyOffice user IDs → Sietch user IDs via email, for task ownership."""
+    oo_users = []
+    try:
+        data = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/user/filter?count=500"))
+        if isinstance(data, list):
+            oo_users = data
+    except Exception:
+        oo_users = []
+    if not oo_users:
+        try:
+            data = _unwrap(_crm_api_get(portal, token, "/api/2.0/people/filter"))
+            if isinstance(data, list):
+                oo_users = data
+        except Exception:
+            oo_users = []
+    sietch_by_email = {}
+    for u in db.query_dicts("SELECT id, email FROM users"):
+        em = (u.get("email") or "").strip().lower()
+        if em:
+            sietch_by_email[em] = u["id"]
+    owner_map = {}
+    for u in oo_users:
+        if not isinstance(u, dict):
+            continue
+        uid = str(u.get("id") or u.get("Id") or u.get("ID") or "")
+        em = str(u.get("email") or u.get("Email") or "").strip().lower()
+        if uid and em and em in sietch_by_email:
+            owner_map[uid] = sietch_by_email[em]
+    return owner_map
+
+
+def _oo_task_owner(task: dict, owner_map: dict, fallback_id: int) -> int:
+    """Resolve owner id for an OnlyOffice task (responsible → author → fallback)."""
+    for key in ("responsibleId", "responsible_id", "ResponsibleId", "authorId", "author_id", "AuthorId"):
+        val = task.get(key)
+        if val is not None:
+            owner_id = owner_map.get(str(val))
+            if owner_id:
+                return owner_id
+    return fallback_id
+
 from ics_calendar import _MAX_ICS_BYTES, is_allowed_calendar_url, parse_ics_calendar
 
 # ── Version ────────────────────────────────────────────────────────────────────
@@ -285,6 +328,51 @@ except Exception:
 
 try:
     db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS tab_color TEXT DEFAULT 'var(--accent)'")
+except Exception:
+    pass
+
+# ── Sietch Tasks revamp: private tasks (owner-scoped) + checklist/todo fields ──
+for _col in [
+    "owner_user_id INTEGER REFERENCES users(id)",
+    "items JSONB DEFAULT '[]'::jsonb",
+    "labels TEXT DEFAULT ''",
+    "repeat TEXT DEFAULT 'none'",
+    "color TEXT DEFAULT ''",
+    "pinned BOOLEAN DEFAULT FALSE",
+    "archived BOOLEAN DEFAULT FALSE",
+    "sort_order INTEGER DEFAULT 0",
+    "updated_at TIMESTAMP DEFAULT NOW()",
+    "remind_at TIMESTAMP",
+    "reminder_fired_at TIMESTAMP",
+]:
+    try:
+        db.execute(f"ALTER TABLE tasks ADD COLUMN IF NOT EXISTS {_col}")
+    except Exception:
+        pass
+
+# Backfill owner: owner = responsible user, else creator, else first admin.
+try:
+    db.execute(
+        "UPDATE tasks SET owner_user_id = COALESCE(responsible_user_id, created_by) "
+        "WHERE owner_user_id IS NULL AND (responsible_user_id IS NOT NULL OR created_by IS NOT NULL)"
+    )
+except Exception:
+    pass
+try:
+    db.execute(
+        "UPDATE tasks SET owner_user_id = (SELECT id FROM users WHERE is_admin = TRUE ORDER BY id LIMIT 1) "
+        "WHERE owner_user_id IS NULL"
+    )
+except Exception:
+    pass
+try:
+    db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner_user_id)")
+except Exception:
+    pass
+try:
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_reminders ON tasks(owner_user_id, remind_at) WHERE remind_at IS NOT NULL"
+    )
 except Exception:
     pass
 
@@ -1909,9 +1997,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/tasks" and method == "POST":
             self._handle_task_create()
             return
+        if api_path == "/api/v2/tasks/reorder" and method == "POST":
+            self._handle_tasks_reorder()
+            return
         m = re.match(r"^/api/v2/tasks/(\d+)$", api_path)
         if m and method == "PUT":
             self._handle_task_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_task_delete(int(m.group(1)))
             return
         if api_path == "/api/v2/users" and method == "POST":
             self._handle_user_create()
@@ -2864,8 +2958,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not user:
             return
         closed = qs.get("closed", ["false"])[0].lower() == "true"
-        where = ["t.is_closed = %s"]
-        params: list = [closed]
+        archived = qs.get("archived", ["false"])[0].lower() == "true"
+        where = ["t.owner_user_id = %s", "t.is_closed = %s", "t.archived = %s"]
+        params: list = [user["id"], closed, archived]
         if "responsible_user_id" in qs:
             where.append("t.responsible_user_id = %s")
             params.append(int(qs["responsible_user_id"][0]))
@@ -2875,12 +2970,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         rows = db.query(
             f"""SELECT t.id, t.title, t.description, t.opportunity_id, t.responsible_user_id,
                        t.due_date, t.priority, t.is_closed, t.closed_at, t.created_at,
-                       u.display_name, o.title
+                       u.display_name, o.title, t.items, t.labels, t.repeat, t.color, t.pinned,
+                       t.archived, t.sort_order, t.updated_at, t.owner_user_id, t.remind_at
                 FROM tasks t
                 LEFT JOIN users u ON t.responsible_user_id = u.id
                 LEFT JOIN opportunities o ON t.opportunity_id = o.id
                 WHERE {' AND '.join(where)}
-                ORDER BY t.due_date ASC NULLS LAST""",
+                ORDER BY t.sort_order ASC, t.due_date ASC NULLS LAST, t.created_at DESC""",
             (*params,),
         )
         _json_response(self, 200, [
@@ -2890,7 +2986,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
              "created": r[9].isoformat() if r[9] else None,
              "responsible": {"id": r[4], "displayName": r[10]} if r[10] else None,
              "opportunity": {"title": r[11]} if r[11] else None,
-             "entity": {"entityType": "opportunity", "entityId": r[3], "entityTitle": r[11]} if r[11] else None}
+             "entity": {"entityType": "opportunity", "entityId": r[3], "entityTitle": r[11]} if r[11] else None,
+             "items": r[12] or [], "labels": r[13] or "", "repeat": r[14] or "none",
+             "color": r[15] or "", "pinned": bool(r[16]), "archived": bool(r[17]),
+             "sortOrder": r[18] or 0, "updatedAt": r[19].isoformat() if r[19] else None,
+             "ownerUserId": r[20], "remindAt": r[21].isoformat() if r[21] else None}
             for r in rows
         ])
 
@@ -2908,11 +3008,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "Title is required"})
             return
         tid = db.insert_returning(
-            """INSERT INTO tasks (title, description, opportunity_id, responsible_user_id, due_date, priority, created_by)
-               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            """INSERT INTO tasks (title, description, opportunity_id, responsible_user_id, due_date, priority, created_by,
+                                 owner_user_id, items, labels, repeat, color, sort_order, remind_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
             (title, payload.get("description"), payload.get("opportunityId"),
              payload.get("responsibleUserId", user["id"]),
-             payload.get("dueDate"), payload.get("priority", 0), user["id"]),
+             payload.get("dueDate"), payload.get("priority", 0), user["id"],
+             user["id"], json.dumps(payload.get("items") or []), payload.get("labels") or "",
+             payload.get("repeat") or "none", payload.get("color") or "",
+             payload.get("sortOrder", 0), payload.get("remindAt")),
         )
         _json_response(self, 201, {"id": tid, "ok": True})
 
@@ -2925,18 +3029,83 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except json.JSONDecodeError:
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
+        owned = db.query_one(
+            "SELECT id FROM tasks WHERE id = %s AND owner_user_id = %s",
+            (task_id, user["id"]),
+        )
+        if not owned:
+            _json_response(self, 404, {"error": "Task not found"})
+            return
         if "isClosed" in payload:
             if payload["isClosed"]:
                 db.execute(
-                    "UPDATE tasks SET is_closed = TRUE, closed_at = NOW(), closed_by = %s WHERE id = %s",
+                    "UPDATE tasks SET is_closed = TRUE, closed_at = NOW(), closed_by = %s, updated_at = NOW() WHERE id = %s",
                     (user["id"], task_id),
                 )
             else:
-                db.execute("UPDATE tasks SET is_closed = FALSE, closed_at = NULL WHERE id = %s", (task_id,))
-        for field, col in [("title", "title"), ("description", "description"), ("dueDate", "due_date"), ("priority", "priority")]:
-            if field in payload:
-                db.execute(f"UPDATE tasks SET {col} = %s WHERE id = %s", (payload[field], task_id))
+                db.execute(
+                    "UPDATE tasks SET is_closed = FALSE, closed_at = NULL, closed_by = NULL, updated_at = NOW() WHERE id = %s",
+                    (task_id,),
+                )
+        fields = [
+            ("title", "title"), ("description", "description"), ("dueDate", "due_date"),
+            ("priority", "priority"), ("responsibleUserId", "responsible_user_id"),
+            ("opportunityId", "opportunity_id"), ("labels", "labels"), ("repeat", "repeat"),
+            ("color", "color"), ("pinned", "pinned"), ("archived", "archived"),
+            ("sortOrder", "sort_order"), ("remindAt", "remind_at"), ("items", "items"),
+        ]
+        for field, col in fields:
+            if field not in payload:
+                continue
+            val = payload[field]
+            if field == "items":
+                val = json.dumps(val or [])
+            if field in ("pinned", "archived"):
+                val = bool(val)
+            if field == "remindAt" and not val:
+                val = None
+            db.execute(
+                f"UPDATE tasks SET {col} = %s, updated_at = NOW() WHERE id = %s",
+                (val, task_id),
+            )
         _json_response(self, 200, {"ok": True})
+
+    def _handle_task_delete(self, task_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        owned = db.query_one(
+            "SELECT id FROM tasks WHERE id = %s AND owner_user_id = %s",
+            (task_id, user["id"]),
+        )
+        if not owned:
+            _json_response(self, 404, {"error": "Task not found"})
+            return
+        db.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_tasks_reorder(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        ids = payload.get("ids") or []
+        count = 0
+        for i, tid in enumerate(ids):
+            try:
+                n = db.execute(
+                    "UPDATE tasks SET sort_order = %s, updated_at = NOW() WHERE id = %s AND owner_user_id = %s",
+                    (i, int(tid), user["id"]),
+                )
+            except (TypeError, ValueError):
+                continue
+            if n:
+                count += 1
+        _json_response(self, 200, {"ok": True, "count": count})
 
     # ── Users ───────────────────────────────────────────────────────────────
 
@@ -3884,13 +4053,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
             count = 0
             linked_count = 0
+            _admin = _require_admin(self)
+            fallback_owner = _admin["id"] if _admin else 1
+            owner_map = _fetch_oo_user_owner_map(portal, token)
             for task in all_tasks:
                 if not isinstance(task, dict):
                     continue
                 title = str(task.get("title") or task.get("Title") or "").strip()
                 if not title:
                     continue
-                existing = db.query_one("SELECT id FROM tasks WHERE title = %s", (title,))
+                owner_id = _oo_task_owner(task, owner_map, fallback_owner)
+                existing = db.query_one(
+                    "SELECT id FROM tasks WHERE title = %s AND owner_user_id = %s", (title, owner_id)
+                )
                 if existing:
                     continue
                 desc = str(task.get("description") or task.get("Description") or "").strip() or None
@@ -3907,8 +4082,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     opportunity_id = opp_id_map.get(crm_opp_id)
 
                 db.execute(
-                    "INSERT INTO tasks (title, description, due_date, is_closed, opportunity_id, created_at) VALUES (%s, %s, %s, %s, %s, NOW())",
-                    (title, desc, due, is_closed, opportunity_id),
+                    "INSERT INTO tasks (title, description, due_date, is_closed, opportunity_id, owner_user_id, responsible_user_id, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())",
+                    (title, desc, due, is_closed, opportunity_id, owner_id, owner_id),
                 )
                 if opportunity_id:
                     linked_count += 1
@@ -4594,13 +4769,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             closed_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/task/filter?count=500&isClosed=true")) or []
             all_tasks = (open_tasks if isinstance(open_tasks, list) else []) + (closed_tasks if isinstance(closed_tasks, list) else [])
             task_count = 0
+            _admin = _require_admin(self)
+            fallback_owner = _admin["id"] if _admin else 1
+            owner_map = _fetch_oo_user_owner_map(portal, token)
             for task in all_tasks:
                 if not isinstance(task, dict):
                     continue
                 title = str(task.get("title") or task.get("Title") or "").strip()
                 if not title:
                     continue
-                existing = db.query_one("SELECT id FROM tasks WHERE title = %s", (title,))
+                owner_id = _oo_task_owner(task, owner_map, fallback_owner)
+                existing = db.query_one(
+                    "SELECT id FROM tasks WHERE title = %s AND owner_user_id = %s", (title, owner_id)
+                )
                 if existing:
                     continue
                 desc = str(task.get("description") or task.get("Description") or "").strip() or None
@@ -4609,8 +4790,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     due = str(due)[:10]
                 is_closed = bool(task.get("isClosed") or task.get("IsClosed") or False)
                 db.execute(
-                    "INSERT INTO tasks (title, description, due_date, is_closed, created_at) VALUES (%s, %s, %s, %s, NOW())",
-                    (title, desc, due, is_closed),
+                    "INSERT INTO tasks (title, description, due_date, is_closed, owner_user_id, responsible_user_id, created_at) VALUES (%s, %s, %s, %s, %s, %s, NOW())",
+                    (title, desc, due, is_closed, owner_id, owner_id),
                 )
                 task_count += 1
             results["tasks_created"] = task_count
@@ -8988,11 +9169,17 @@ def main() -> None:
     dispatcher_stop = start_dispatcher()
     scanner_stop = mail_scanner.start_scanner() if mail_scanner else None
     backup_stop = None
+    reminders_stop = None
     try:
         from backup_service import start_backup_scheduler
         backup_stop = start_backup_scheduler()
     except Exception as e:
         print(f"Backup scheduler not started: {e}")
+    try:
+        from task_reminders import start_reminder_sweep
+        reminders_stop = start_reminder_sweep()
+    except Exception as e:
+        print(f"Task reminder sweep not started: {e}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -9001,6 +9188,9 @@ def main() -> None:
         if backup_stop:
             from backup_service import stop_backup_scheduler
             stop_backup_scheduler(backup_stop)
+        if reminders_stop:
+            from task_reminders import stop_reminder_sweep
+            stop_reminder_sweep(reminders_stop)
         server.shutdown()
 
 
