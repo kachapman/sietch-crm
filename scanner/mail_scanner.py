@@ -1489,6 +1489,7 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
         "folder": msg.get("folder", "INBOX"),
         "mailbox": mailbox_cfg.get("inbox", ""),
         "account_id": account_id,
+        "date": msg.get("date", ""),
     }
 
     if not uid and not msg.get("message_id"):

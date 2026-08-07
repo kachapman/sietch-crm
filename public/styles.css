@@ -4149,19 +4149,23 @@ body {
   white-space: normal;
   word-break: break-all;
 }
-/* Log entry — plain terminal wrapping, one inline line */
+/* Log entry — two-column grid: checkbox left, message right */
 .scanner-log .log-entry {
-  display: block;
-  overflow: hidden;
+  display: grid;
+  grid-template-columns: 1rem 1fr;
+  column-gap: 0.4rem;
+  align-items: start;
   padding: 1px 0;
+}
+.scanner-log .log-entry .log-cb {
+  margin: 0;
+  align-self: start;
+}
+.scanner-log .log-entry .log-msg-body {
   white-space: pre-wrap;
   word-wrap: break-word;
   overflow-wrap: break-word;
-}
-.scanner-log .log-entry .log-meta {
-  float: left;
-  white-space: nowrap;
-  margin-right: 0.4rem;
+  min-width: 0;
 }
 @media (max-width: 600px) {
   .scanner-log {
@@ -12119,9 +12123,9 @@ body {
 .log-dry-run .log-status {
   color: var(--accent);
 }
-/* Scanner log checkbox */
+/* Scanner log checkbox — spacing handled by grid column-gap */
 .log-cb {
-  margin-right: 0.3rem;
+  margin: 0;
 }
 /* Correction modal project results */
 .correction-pick:hover {

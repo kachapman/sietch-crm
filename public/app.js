@@ -24691,12 +24691,12 @@ async function populateEmailScannerTab() {
           const classification = f.classification || 'unknown';
           const confidence = f.match_strength ? ` (${f.match_strength})` : '';
           html += `<div class="log-entry log-feedback-pending">
-            <span class="log-ts">[${escapeHtml(ts)}]</span> <span class="log-status" style="color:var(--warning);">PENDING</span> ${escapeHtml(subj)}${escapeHtml(from)}
+            <span class="log-msg-body" style="grid-column: 1 / -1;"><span class="log-ts">[${escapeHtml(ts)}]</span> <span class="log-status" style="color:var(--warning);">PENDING</span> ${escapeHtml(subj)}${escapeHtml(from)}
             <div style="font-size:0.7rem; color:var(--muted); margin-top:0.15rem;">
               Classification: ${escapeHtml(classification)}${escapeHtml(confidence)}
               <button type="button" class="btn btn-ghost btn-sm fb-approve" data-fb-idx="${i}" style="font-size:0.7rem; color:#3fb950; padding:0.1rem 0.3rem; min-width:auto;">✓ Approve</button>
               <button type="button" class="btn btn-ghost btn-sm fb-reject" data-fb-idx="${i}" style="font-size:0.7rem; color:#f85149; padding:0.1rem 0.3rem; min-width:auto;">✗ Reject</button>
-            </div>
+            </div></span>
           </div>`;
         });
         html += '<div style="height:0.25rem;"></div>';
@@ -24705,9 +24705,21 @@ async function populateEmailScannerTab() {
       if (!dedupedEntries.length && !pendingFeedback.length) {
         html = '<div style="color:#484f58;">$ tail -f scanner.log<br>No entries yet.</div>';
       } else if (dedupedEntries.length) {
+        // Sort by selected order: processing time (default) or email date
+        const sortMode = $("#scanner-log-sort")?.value || "processed";
+        const sortedEntries = dedupedEntries.slice().sort((a, b) => {
+          if (sortMode === "date") {
+            // Sort by email date (newest first). Entries without a date fall back to timestamp.
+            const da = a.date || a.timestamp || "";
+            const db = b.date || b.timestamp || "";
+            return db.localeCompare(da);
+          }
+          // Sort by processing timestamp (newest first)
+          return (b.timestamp || "").localeCompare(a.timestamp || "");
+        });
         // Track selected log entries for correction
         window._scannerLogSelected = window._scannerLogSelected || new Set();
-        html += dedupedEntries.slice().reverse().map((e, i) => {
+        html += sortedEntries.map((e, i) => {
           const ts = e.timestamp ? new Date(e.timestamp).toLocaleTimeString('en-US', {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit', timeZone:'America/New_York'}) : '--:--:--';
           const status = (e.status || 'unknown').toUpperCase();
           const cls = e.status === 'processed' ? 'log-processed' : e.status === 'error' ? 'log-error' : e.status === 'skipped' || e.status === 'already_processed' ? 'log-skipped' : e.status === 'dry_run' ? 'log-dry-run' : e.classification && e.classification.startsWith('rule_') ? 'log-rule' : '';
@@ -24721,7 +24733,8 @@ async function populateEmailScannerTab() {
           const uid = e.uid || '';
           const isSelected = window._scannerLogSelected.has(uid);
           return `<div class="log-entry ${cls}" data-uid="${escapeHtml(uid)}" data-account-id="${escapeHtml(e.account_id || '')}" data-idx="${i}">
-            <span class="log-meta"><input type="checkbox" class="log-cb" data-uid="${escapeHtml(uid)}" ${isSelected ? 'checked' : ''} /> <span class="log-ts">[${ts}]</span> <span class="log-status">${escapeHtml(status)}</span></span> ${escapeHtml(subj)}${escapeHtml(from)}${dealLinked}${reason}${dryDetail}
+            <input type="checkbox" class="log-cb" data-uid="${escapeHtml(uid)}" ${isSelected ? 'checked' : ''} />
+            <span class="log-msg-body"><span class="log-ts">[${ts}]</span> <span class="log-status">${escapeHtml(status)}</span> ${escapeHtml(subj)}${escapeHtml(from)}${dealLinked}${reason}${dryDetail}</span>
           </div>`;
         }).join('');
       }
@@ -25603,6 +25616,11 @@ function bindScannerAdminButtons() {
   if (logAccountFilter && !logAccountFilter.dataset.bound) {
     logAccountFilter.dataset.bound = "1";
     logAccountFilter.addEventListener("change", () => populateEmailScannerTab());
+  }
+  const logSortSel = $("#scanner-log-sort");
+  if (logSortSel && !logSortSel.dataset.bound) {
+    logSortSel.dataset.bound = "1";
+    logSortSel.addEventListener("change", () => populateEmailScannerTab());
   }
 
   // Reprocess
