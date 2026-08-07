@@ -2063,8 +2063,8 @@ function renderTasksTile() {
     tile.dataset.tileLabel = "Tasks";
     tile.innerHTML = `
       <div class="tasks-tabs" role="tablist" aria-label="Task lists">
-        <button type="button" class="tasks-tab" data-tasks-tab="todos" role="tab">My Todos</button>
-        <button type="button" class="tasks-tab" data-tasks-tab="project" role="tab">Project Tasks</button>
+        <button type="button" class="tasks-tab" data-tasks-tab="todos" role="tab">My Todos <span class="tasks-tab-count">0</span></button>
+        <button type="button" class="tasks-tab" data-tasks-tab="project" role="tab">Project Tasks <span class="tasks-tab-count">0</span></button>
       </div>
       <div class="tasks-quick-add">
         <input type="text" id="tasks-quick-add-input" placeholder="Add a task, press Enter" autocomplete="off" />
@@ -29348,6 +29348,7 @@ function createTaskRow(task) {
   const cb = document.createElement("input");
   cb.type = "checkbox";
   cb.className = "task-complete-cb";
+  cb.checked = !!task.isClosed;
   cb.title = "Mark complete";
   cb.addEventListener("change", () => {
     if (!cb.checked) return;
@@ -29424,9 +29425,17 @@ function renderTasksContent() {
   const todos = [];
   const projects = [];
   for (const t of state.tasks) {
+    if (t.isClosed) continue;
     const oppId = t.opportunityId != null ? t.opportunityId : null;
     (oppId == null ? todos : projects).push(t);
   }
+
+  const setTabCount = (tab, n) => {
+    const badge = tile?.querySelector(`.tasks-tab[data-tasks-tab="${tab}"] .tasks-tab-count`);
+    if (badge) badge.textContent = String(n);
+  };
+  setTabCount("todos", todos.length);
+  setTabCount("project", projects.length);
 
   const sortTasks = (arr) => {
     return [...arr].sort((a, b) => {
@@ -29518,6 +29527,7 @@ function confettiBurst(anchorEl) {
 function completeTaskWithUndo(task) {
   const prev = [...state.tasks];
   task.isClosed = true;
+  state.tasks = state.tasks.filter((t) => t.id !== task.id);
   renderTasksContent();
   confettiBurst();
   showToastWithAction("Task completed", "Undo", async () => {

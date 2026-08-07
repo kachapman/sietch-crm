@@ -4,6 +4,7 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Phase 4 — Tasks Tile Revamp: Private Owner-Scoped Todos + Checklist/Reminders (2026-08-07)
 
+- **Follow-up fixes:** completing a task from the row checkbox now actually removes it from the tile list (confetti + undo toast still fire) — `renderTasksContent()` was re-rendering the completed task because it only partitioned by project link and never filtered `isClosed`. Tab buttons now show live count badges (open tasks per tab: My Todos / Project Tasks). Cache-busters bumped to `?v=3.4.7`.
 - **Private owner-scoped tasks.** Tasks are now owned per user via `owner_user_id`. The tasks tile no longer shows a team-wide user filter; each user sees only their own tasks. Team-shared `responsible_user_id` display removed from the tile.
 - **Project Tasks vs My Todos tabs.** The tile now has tabs — **Project Tasks** (linked to an opportunity via `opportunity_id`) and **My Todos** (no linked project). Quick-add bar at the top of the tile creates a todo without opening the modal.
 - **Checklist subtasks.** Tasks carry `items JSONB` (`[{id,text,done,indent}]`). The preview modal now shows a live checklist with add/toggle/remove.

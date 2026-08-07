@@ -1984,6 +1984,26 @@ body {
   border-bottom-color: var(--accent);
 }
 
+.tasks-tab-count {
+  display: inline-block;
+  min-width: 1.1rem;
+  margin-left: 0.25rem;
+  padding: 0.05rem 0.35rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.1;
+  text-align: center;
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface-3, rgba(128, 128, 128, 0.15));
+  vertical-align: middle;
+}
+
+.tasks-tab.active .tasks-tab-count {
+  color: var(--accent);
+  background: rgba(79, 140, 255, 0.15);
+}
+
 .tasks-quick-add {
   padding: 0.4rem 0.6rem;
   border-bottom: 1px solid var(--border);
