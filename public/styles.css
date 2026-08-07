@@ -1766,11 +1766,24 @@ body {
   height: auto;
 }
 
-/* Double-height panels: fill the 2-row grid area */
+/* Double-height panels: fill the 2-row grid area. !important so these beat the
+   generic `min-height: 0 !important` on multi-row tiles below (specificity wins
+   when both are important), otherwise a short tasks list collapses the tile and
+   leaves blank space inside its spanned grid rows. */
 .dashboard-tile.tile-double.feed-panel,
 .dashboard-tile.tile-double.tasks-panel,
 .dashboard-tile.tile-double.presence-panel {
-  min-height: calc(var(--tile-row-height) * 2 + 1.25rem);
+  min-height: calc(var(--tile-row-height) * 2 + 1.25rem) !important;
+}
+.dashboard-tile.tile-triple.feed-panel,
+.dashboard-tile.tile-triple.tasks-panel,
+.dashboard-tile.tile-triple.presence-panel {
+  min-height: calc(var(--tile-row-height) * 3 + 2.5rem) !important;
+}
+.dashboard-tile.tile-quad.feed-panel,
+.dashboard-tile.tile-quad.tasks-panel,
+.dashboard-tile.tile-quad.presence-panel {
+  min-height: calc(var(--tile-row-height) * 4 + 3.75rem) !important;
 }
 
 /* Multi-row tiles: override panel/board-group min-height so tiles stretch to fill grid area */
@@ -2042,6 +2055,69 @@ body {
   flex-direction: column;
 }
 
+/* Two-column (Todo + Project Tasks) layout toggle. Appears when the tasks tile
+   is half-width or wider (not quarter). */
+.tasks-columns-btn {
+  display: none;
+}
+.dashboard-tile.tasks-panel:not(.tile-quarter) .tasks-columns-btn {
+  display: inline-flex;
+}
+.tasks-columns-btn.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: rgba(79, 140, 255, 0.35);
+}
+
+/* Two-column view: hidden by default; shown when the tile is half-width or
+   wider with the toggle on. The single (tab) view hides at the same time. */
+.tasks-columns {
+  display: none;
+}
+.dashboard-tile.tasks-panel:not(.tile-quarter).tasks-columns-on .tasks-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  padding: 0.6rem;
+  align-items: start;
+  min-height: 0;
+}
+.dashboard-tile.tasks-panel:not(.tile-quarter).tasks-columns-on .tasks-single-view {
+  display: none;
+}
+
+.tasks-column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.tasks-column-head {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.tasks-column .tasks-list {
+  min-height: 0;
+}
+.tasks-column .board-loading {
+  padding: 0.65rem 0.85rem;
+  margin: 0;
+}
+.tasks-column .task-row {
+  padding-right: 0.45rem;
+  padding-left: 0.45rem;
+}
+
 /* Dense task rows: divider lines instead of bordered cards. */
 .task-row {
   display: flex;
@@ -2073,6 +2149,63 @@ body {
 .task-row--ghost {
   opacity: 0.4;
   background: var(--surface-2);
+}
+
+/* Task row hover tooltip — floats above the row, pointer-events enabled so it
+   can be hovered without disappearing. 200ms show-delay prevents flicker when
+   moving between rows; instant hide avoids stale tooltips. */
+.task-tooltip {
+  position: fixed;
+  z-index: 200;
+  pointer-events: auto;
+  max-width: 340px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.14);
+  padding: 0.6rem 0.75rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text);
+}
+.task-tooltip-desc {
+  margin-bottom: 0.35rem;
+  white-space: normal;
+  word-break: break-word;
+}
+.task-tooltip-due,
+.task-tooltip-repeat {
+  color: var(--muted);
+  font-size: 0.74rem;
+  margin-bottom: 0.1rem;
+}
+.task-tooltip-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.3rem 0;
+}
+.task-tooltip-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.task-tooltip-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+.task-tooltip-more {
+  font-style: italic;
+}
+.task-tooltip-project {
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  margin-top: 0.35rem;
+  padding-top: 0.3rem;
+  border-top: 1px solid var(--border);
 }
 
 .task-drag-handle {

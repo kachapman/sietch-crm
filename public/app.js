@@ -421,7 +421,6 @@ const state = {
   customFieldById: new Map(),
   taskCategories: [],
   tasksTab: "todos",
-  newTaskOpportunity: { id: null, title: "" },
   dealEdit: null,
   quickNote: null,
   historyCategories: [],
@@ -639,13 +638,14 @@ function loadLayoutFromStorage() {
           heights: parsed.heights && typeof parsed.heights === "object" ? parsed.heights : {},
           collapsed: parsed.collapsed && typeof parsed.collapsed === "object" ? parsed.collapsed : {},
           pinned: parsed.pinned && typeof parsed.pinned === "object" ? parsed.pinned : {},
+          tasksColumns: parsed.tasksColumns === true,
         };
       }
     }
   } catch {
     /* ignore */
   }
-  return { order: [], widths: {}, heights: {}, collapsed: {}, pinned: {} };
+  return { order: [], widths: {}, heights: {}, collapsed: {}, pinned: {}, tasksColumns: false };
 }
 
 function hiddenFeedCutoffTime() {
@@ -868,6 +868,29 @@ function setTileBodyCollapsed(tileId, collapsed) {
   const tileEl = document.querySelector(`[data-tile-id="${tileId}"]`);
   if (tileEl) {
     applyTileBodyCollapsed(tileEl, tileId);
+  }
+}
+
+/* Tasks tile: two-column layout (Todo + Project Tasks side by side). Only
+   available (and only rendered) while the tile is half-width — see CSS
+   `.tasks-panel.tile-half.tasks-columns-on`. */
+function tasksColumnsMode() {
+  return state.tileLayout.tasksColumns === true;
+}
+
+function setTasksColumnsMode(on) {
+  state.tileLayout.tasksColumns = !!on;
+  saveLayoutToStorage();
+}
+
+function applyTasksColumnsState(tileEl) {
+  if (!tileEl || tileEl.dataset.tileId !== "tile-tasks") return;
+  const on = tasksColumnsMode();
+  tileEl.classList.toggle("tasks-columns-on", on);
+  const btn = tileEl.querySelector(".tasks-columns-btn");
+  if (btn) {
+    btn.classList.toggle("active", on);
+    btn.title = on ? "Show one list at a time" : "Show Todo and Project Tasks side by side";
   }
 }
 
@@ -2067,7 +2090,7 @@ function renderTasksTile() {
         <button type="button" class="tasks-tab" data-tasks-tab="project" role="tab">Project Tasks <span class="tasks-tab-count">0</span></button>
       </div>
       <div class="tasks-quick-add">
-        <input type="text" id="tasks-quick-add-input" placeholder="Add a task, press Enter" autocomplete="off" />
+        <input type="text" id="tasks-quick-add-input" placeholder="Add a todo, press Enter" autocomplete="off" />
       </div>
       <div id="tasks-by-user" class="tasks-by-user"></div>
     `;
@@ -2093,6 +2116,7 @@ function renderTasksTile() {
   applyTileLayoutClasses(tile, tileId);
   ensureTileAutoRefreshButton(tile, tileId);
   ensureTasksNewTaskButton(tile);
+  ensureTasksColumnsButton(tile);
   if (tile && !tile.dataset.tasksTabBound) {
     tile.dataset.tasksTabBound = "1";
     tile.querySelectorAll(".tasks-tab").forEach((btn) => {
@@ -2286,11 +2310,6 @@ function showRefreshingStatus() {}
 function hideRefreshingStatus() {}
 function clearConnectingTimer() {}
 function setConnectionState() {}
-function startConnectingGrace() {}
-function enqueueCrmMutation() {}
-async function processMutationQueue() {}
-function updateMutationSyncStatus() {}
-function updateNoteQueueList() {}
 
 function showSubmittingNote(button, message = 'Submitting — do not press the button again') {
   if (!button || !button.parentNode) return null;
@@ -7967,6 +7986,13 @@ function renderCard(opp, group, showStagePill) {
 
 function renderGroupBoard(group, container, onComplete) {
   disconnectGroupCardObserver(group.id);
+  // Save column scroll positions before clearing so they can be restored after
+  // re-render (prevents scroll jump on data refresh / filter change).
+  const scrollMap = new Map();
+  container.querySelectorAll(".column").forEach((col) => {
+    const body = col.querySelector(".column-body");
+    if (body && col.dataset.stageId) scrollMap.set(col.dataset.stageId, body.scrollTop);
+  });
   container.innerHTML = "";
   const columns = groupOpportunities(group);
   const showStagePill = group.groupBy !== "stage";
@@ -8086,7 +8112,12 @@ function renderGroupBoard(group, container, onComplete) {
     if (colIdx < pending.length) {
       setTimeout(renderChunk, 0);
     } else {
-      // observeOpportunityCardsInGroup(group); // disabled to prevent re-render flash on hover/visible; restore original simple hover border light-up from production
+      // Restore column scroll positions saved before clear.
+      for (const col of container.querySelectorAll(".column")) {
+        const body = col.querySelector(".column-body");
+        const saved = scrollMap.get(col.dataset.stageId);
+        if (body && saved != null) body.scrollTop = saved;
+      }
       if (onComplete) onComplete();
     }
   }
@@ -8328,21 +8359,94 @@ function bindContactField(group, wrap) {
 }
 
 function renderBoardGroups() {
-  // Sanitize layout (remove stale collapsed widths, etc.) so that
-  // applies below see clean state and correct classes get added.
   ensureTileLayout();
-
   renderTasksTile();
   renderPresenceTile();
   const dash = $("#dashboard-tiles");
   if (!dash) return;
 
-  // Only remove actual group tiles here. Local kanban tiles (which share the board-group styling) are managed by their own render and would be duplicated or lost otherwise.
-  dash.querySelectorAll(".board-group-tile:not(.local-kanban-tile)").forEach((el) => el.remove());
+  const expectedIds = new Set(state.groups.map((g) => `group-${g.id}`));
+
+  // Remove orphaned group tiles (deleted groups) but keep local-kanban tiles.
+  dash.querySelectorAll(".board-group-tile:not(.local-kanban-tile)").forEach((el) => {
+    if (!expectedIds.has(el.dataset.tileId)) el.remove();
+  });
 
   for (const group of state.groups) {
     const tileId = `group-${group.id}`;
-    const section = document.createElement("section");
+    let section = dash.querySelector(`[data-tile-id="${tileId}"]`);
+
+    if (section) {
+      // ── UPDATE PATH: sync filter controls + re-render board only ──────
+      section.dataset.tileLabel = group.name || "Opportunity group";
+
+      section.querySelectorAll("[data-status]").forEach((btn) => {
+        btn.classList.toggle("chip-active", btn.dataset.status === group.dealStatus);
+      });
+
+      const groupBy = $(".group-by", section);
+      if (groupBy) groupBy.value = group.groupBy;
+
+      // Rebuild stage filter options (stages may have changed).
+      const stageFilter = $(".stage-filter", section);
+      if (stageFilter) {
+        const prev = stageFilter.value;
+        stageFilter.innerHTML = '<option value="">All stages</option>';
+        for (const s of state.stages) {
+          const opt = document.createElement("option");
+          opt.value = s.id;
+          opt.textContent = s.title;
+          stageFilter.appendChild(opt);
+        }
+        stageFilter.value = group.stageId || prev || "";
+      }
+
+      syncStageGroupFiltersUI(section, group);
+      renderStageColumnsMultiselect(group, $(".stage-columns-multiselect", section));
+
+      const showEmptyStages = $(".show-empty-stages", section);
+      if (showEmptyStages) showEmptyStages.checked = group.showEmptyStages !== false;
+
+      const showOnlyRed = $(".show-only-red", section);
+      if (showOnlyRed) showOnlyRed.checked = !!group.showOnlyRedOpportunities;
+
+      // Only sync search input if user is NOT actively typing in it.
+      const searchInput = $(".group-search", section);
+      if (searchInput && document.activeElement !== searchInput) {
+        searchInput.value = group.search || "";
+      }
+
+      const sortBy = $(".group-sort-by", section);
+      if (sortBy) sortBy.value = group.sortBy || "stage";
+
+      const sortOrder = $(".group-sort-order", section);
+      if (sortOrder) sortOrder.value = group.sortOrder || "ascending";
+
+      renderTagMultiselect(group, $(".tag-multiselect", section));
+      bindContactField(group, $(".contact-field", section));
+
+      updateGroupFilterSummary(group);
+
+      if (tileBodyCollapsed(tileId)) {
+        const board = $(".board", section);
+        if (group.opportunities?.length && board) {
+          renderGroupBoard(group, board);
+          const cnt = $(".board-group-count", section);
+          if (cnt) cnt.textContent = `${group.opportunities.length} deals (cached)`;
+        }
+      } else {
+        renderGroupBoard(group, $(".board", section));
+        const cnt = $(".board-group-count", section);
+        if (cnt) cnt.textContent = `${group.opportunities.length} deals`;
+      }
+      applyTileLayoutClasses(section, tileId);
+      applyTileBodyCollapsed(section, tileId);
+      group._el = section;
+      continue;
+    }
+
+    // ── CREATE PATH: full DOM + listener binding (first render) ──────────
+    section = document.createElement("section");
     section.className = "dashboard-tile board-group board-group-tile";
     section.dataset.tileId = tileId;
     section.dataset.tileLabel = group.name || "Opportunity group";
@@ -9973,7 +10077,7 @@ function ensureTasksNewTaskButton(tileEl) {
   btn.textContent = "New task";
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    openNewTaskModal().catch((err) => showToast(err.message, true));
+    openTaskPreviewModal(null, { isNew: true });
   });
   if (archiveBtn && archiveBtn.nextSibling) {
     toolbar.insertBefore(btn, archiveBtn.nextSibling);
@@ -9986,6 +10090,34 @@ function ensureTasksNewTaskButton(tileEl) {
   } else {
     toolbar.appendChild(btn);
   }
+}
+
+function ensureTasksColumnsButton(tileEl) {
+  if (!tileEl || tileEl.dataset.tileId !== "tile-tasks") return;
+  if (tileEl.querySelector(".tasks-columns-btn")) return;
+  const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
+  if (!toolbar) return;
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn btn-ghost btn-icon-only tasks-columns-btn";
+  btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2l0 -12"/><path d="M12 4l0 16"/></svg>`;
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setTasksColumnsMode(!tasksColumnsMode());
+    applyTasksColumnsState(tileEl);
+    renderTasksContent();
+  });
+
+  const newTaskBtn = toolbar.querySelector(".btn-new-task");
+  if (newTaskBtn && newTaskBtn.nextSibling) {
+    toolbar.insertBefore(btn, newTaskBtn.nextSibling);
+  } else if (newTaskBtn) {
+    newTaskBtn.after(btn);
+  } else {
+    toolbar.appendChild(btn);
+  }
+  applyTasksColumnsState(tileEl);
 }
 
 function setDealEditError(message) {
@@ -19081,55 +19213,6 @@ function bindCreateOpportunityModal() {
   bindCreateOppContactPicker();
 }
 
-function setTaskModalError(message) {
-  const el = $("#task-modal-error");
-  if (!el) return;
-  if (message) {
-    el.textContent = message;
-    el.classList.remove("hidden");
-  } else {
-    el.textContent = "";
-    el.classList.add("hidden");
-  }
-}
-
-function closeNewTaskModal() {
-  const modal = $("#task-modal");
-  if (modal) modal.classList.add("hidden");
-  setTaskModalError("");
-  // Re-eval header marquee now that a popup is closed (may need to show if queued >8s)
-  setTimeout(updateMutationSyncStatus, 30);
-}
-
-function clearNewTaskOpportunitySelection() {
-  state.newTaskOpportunity = { id: null, title: "" };
-  const search = $("#new-task-opportunity-search");
-  const selected = $("#new-task-opportunity-selected");
-  const results = $("#new-task-opportunity-results");
-  if (search) search.value = "";
-  if (selected) selected.innerHTML = "";
-  if (results) {
-    results.innerHTML = "";
-    results.classList.add("hidden");
-  }
-}
-
-function setNewTaskOpportunitySelection(id, title) {
-  state.newTaskOpportunity = { id: Number(id), title: title || `Project #${id}` };
-  const search = $("#new-task-opportunity-search");
-  const selected = $("#new-task-opportunity-selected");
-  const results = $("#new-task-opportunity-results");
-  if (search) search.value = "";
-  if (results) {
-    results.innerHTML = "";
-    results.classList.add("hidden");
-  }
-  if (selected) {
-    selected.innerHTML = `${escapeHtml(state.newTaskOpportunity.title)} <span class="contact-clear" role="button" tabindex="0">clear</span>`;
-    $(".contact-clear", selected)?.addEventListener("click", () => clearNewTaskOpportunitySelection());
-  }
-}
-
 async function loadTaskCategories({ force = false } = {}) {
   // Prefer in-memory cache
   if (state.taskCategories.length && !force) return;
@@ -19160,26 +19243,6 @@ async function loadTaskCategories({ force = false } = {}) {
   } catch {
     if (!state.taskCategories.length) state.taskCategories = [];
   }
-}
-
-function populateNewTaskResponsibleSelect() {
-  const sel = $("#new-task-responsible");
-  if (!sel) return;
-  sel.innerHTML = "";
-  const users = new Map();
-  for (const u of state.portalUsers) {
-    if (u.id != null) users.set(String(u.id), String(u.displayName || u.id));
-  }
-  if (state.currentUserId != null) {
-    users.set(String(state.currentUserId), String(state.currentUserName || state.currentUserId));
-  }
-  for (const [id, name] of [...users.entries()].sort((a, b) => String(a[1] || "").localeCompare(String(b[1] || "")))) {
-    const opt = document.createElement("option");
-    opt.value = id;
-    opt.textContent = name;
-    sel.appendChild(opt);
-  }
-  if (state.currentUserId != null) sel.value = String(state.currentUserId);
 }
 
 async function searchOpportunitiesByTitle(query, { limit = 30 } = {}) {
@@ -19223,10 +19286,6 @@ async function searchOpportunitiesByTitle(query, { limit = 30 } = {}) {
   }
 
   return local.sort((a, b) => String(a.title || "").localeCompare(String(b.title || ""))).slice(0, limit);
-}
-
-async function searchOpportunitiesForTaskPicker(query) {
-  return searchOpportunitiesByTitle(query);
 }
 
 const ICON_EXTERNAL_LINK = `<svg class="crm-open-external-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>`;
@@ -28364,13 +28423,10 @@ function renderOpportunityPreviewTasksTab(container, oppId, opp, openTasks, clos
   newTaskBtn.className = "btn btn-primary btn-small";
   newTaskBtn.textContent = "+ New Task";
   newTaskBtn.addEventListener("click", () => {
-    openNewTaskModal();
-    // Pre-fill the opportunity field
-    state.newTaskOpportunity = { id: Number(oppId), title: oppTitle };
-    const oppSearch = document.getElementById("new-task-opportunity-search");
-    const oppSelected = document.getElementById("new-task-opportunity-selected");
-    if (oppSearch) oppSearch.value = oppTitle;
-    if (oppSelected) oppSelected.innerHTML = `<span class="chip">${escapeHtml(oppTitle)} <span class="contact-clear" role="button" tabindex="0">×</span></span>`;
+    openTaskPreviewModal(
+      { title: `Task for ${oppTitle}`, opportunityId: Number(oppId), opportunity: { title: oppTitle } },
+      { isNew: true }
+    );
   });
 
   const filterSelect = document.createElement("select");
@@ -28560,227 +28616,6 @@ function openPhotoLightbox(photos, startPhotoId) {
   update();
 }
 
-function bindNewTaskOpportunityPicker() {
-  const input = $("#new-task-opportunity-search");
-  const results = $("#new-task-opportunity-results");
-  if (!input || !results || input.dataset.bound) return;
-  input.dataset.bound = "1";
-  let debounce;
-  input.addEventListener("input", () => {
-    clearTimeout(debounce);
-    debounce = setTimeout(async () => {
-      const q = input.value.trim();
-      results.innerHTML = "";
-      if (q.length < 1) {
-        results.classList.add("hidden");
-        return;
-      }
-      try {
-        const opps = await searchOpportunitiesForTaskPicker(q);
-        results.classList.remove("hidden");
-        if (!opps.length) {
-          results.innerHTML = '<button type="button" disabled>No matches</button>';
-          return;
-        }
-        for (const o of opps) {
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.textContent = o.title;
-          btn.addEventListener("click", () => setNewTaskOpportunitySelection(o.id, o.title));
-          results.appendChild(btn);
-        }
-      } catch (err) {
-        showToast(err.message, true);
-      }
-    }, 300);
-  });
-  document.addEventListener("click", (e) => {
-    const wrap = input.closest(".opportunity-picker-field");
-    if (wrap && !wrap.contains(e.target)) results.classList.add("hidden");
-  });
-}
-
-/** CRM create-task uses `deadline` (ISO), not read-model `deadLine`. */
-function toApiTaskDeadline(dateInputValue) {
-  if (!dateInputValue) return null;
-  const d = new Date(`${dateInputValue}T17:00:00`);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
-}
-
-function resolveTaskCategoryId(formCategoryId) {
-  const picked = formCategoryId != null && String(formCategoryId).trim() !== "" ? Number(formCategoryId) : NaN;
-  if (Number.isFinite(picked) && picked > 0) return picked;
-  const first = state.taskCategories[0];
-  const fallback = Number(first?.id ?? first?.ID);
-  if (Number.isFinite(fallback) && fallback > 0) return fallback;
-  return null;
-}
-
-function buildCreateTaskBody(form) {
-  const title = form.title?.trim();
-  if (!title) throw new Error("Task title is required");
-
-  const body = {
-    title,
-    description: form.description?.trim() || "",
-  };
-
-  if (form.responsibleId?.trim()) body.responsibleUserId = String(form.responsibleId.trim());
-
-  const deadline = toApiTaskDeadline(form.deadLine);
-  if (deadline) body.dueDate = deadline;
-
-  const oppId = state.newTaskOpportunity.id;
-  if (oppId != null && Number.isFinite(oppId)) {
-    body.opportunityId = oppId;
-  }
-
-  return body;
-}
-
-function unwrapCreatedEntity(data) {
-  const r = data?.response ?? data?.result ?? data;
-  if (r && typeof r === "object") return r;
-  return data;
-}
-
-async function createCrmTask(body) {
-  const res = await withCrmQueueOnTransient(
-    () => api("/api/v2/tasks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      showCrashBanner: false,
-    }),
-    {
-      method: "POST",
-      path: "/api/v2/tasks",
-      body: JSON.stringify(body),
-      description: `Create task "${body?.title || body?.Title || 'untitled'}"`,
-      opType: "task",
-      targetId: body?.opportunityId ? String(body.opportunityId) : undefined,
-    }
-  );
-  if (res && res.queued) {
-    // Return a shape the caller can detect (it currently only uses the success path for ID)
-    return { queued: true };
-  }
-  return res;
-}
-
-async function notifyCrmTaskResponsible(taskId) {
-  // No v2 equivalent — no-op
-}
-
-async function submitNewTaskForm(e) {
-  e.preventDefault();
-  setTaskModalError("");
-  const form = e.target;
-  const submitBtn = $("#task-modal-submit");
-  if (submitBtn) submitBtn.disabled = true;
-
-  // Small tooltip-like note below the button on press.
-  const submittingNote = showSubmittingNote(submitBtn);
-
-  // Show progress immediately on button press (bottom right, with bar).
-  // This ensures the indicator appears right when the user commits the action.
-  setConnectionState('connected');
-  showCRMSyncStatus('Connecting...');
-
-  const connectStart = Date.now();
-
-  // Cap popup visible time at 2.5s max. Safe to close sooner because data is saved locally first (optimistic + queue).
-  // The status bar + toasts carry the result.
-  const closeTimer = setTimeout(() => {
-    closeNewTaskModal();
-  }, 2500);
-
-  try {
-    const body = buildCreateTaskBody({
-      title: $("#new-task-title")?.value,
-      description: $("#new-task-description")?.value,
-      deadLine: $("#new-task-deadline")?.value,
-      responsibleId: $("#new-task-responsible")?.value,
-      isNotify: $("#new-task-notify")?.checked,
-    });
-    const data = await createCrmTask(body);
-    if (data && data.queued) {
-      // Transient failure — already enqueued + toasted by the wrapper.
-      // Close the modal (user action "succeeded" from their perspective) and let the
-      // processor + loadTasks reconcile when it succeeds.
-      clearTimeout(closeTimer);
-      closeNewTaskModal();
-      // The enqueueCrmMutation already showed the "queued" toast.
-      await loadTasks().catch(() => {});
-      return;
-    }
-    const created = unwrapCreatedEntity(data);
-    const taskId = created?.id ?? created?.ID ?? data?.id ?? data?.ID;
-    if ($("#new-task-notify")?.checked && taskId != null) {
-      await notifyCrmTaskResponsible(taskId);
-    }
-    clearTimeout(closeTimer);
-    closeNewTaskModal();
-    hideCRMSyncStatus();  // clear any "Connecting..." immediately on successful response
-    // Once the CRM server has successfully received the push, go straight to success.
-    // No lingering "Connected & Syncing..." after the event.
-    onCRMSuccess();
-    showCRMSyncStatus('Task sent successfully');
-    setTimeout(() => {
-      hideCRMSyncStatus();
-    }, 1500);
-    await loadTasks();
-  } catch (err) {
-    clearTimeout(closeTimer);
-    setTaskModalError(err.message || "Could not create task");
-    hideCRMSyncStatus();
-  } finally {
-    clearTimeout(closeTimer);
-    if (submitBtn) submitBtn.disabled = false;
-    if (submittingNote && submittingNote.parentNode) submittingNote.parentNode.removeChild(submittingNote);
-  }
-}
-
-async function openNewTaskModal() {
-  const modal = $("#task-modal");
-  const form = $("#task-modal-form");
-  if (!modal || !form) return;
-
-  setTaskModalError("");
-  form.reset();
-  clearNewTaskOpportunitySelection();
-  populateNewTaskResponsibleSelect();
-
-  const notify = $("#new-task-notify");
-  if (notify) notify.checked = true;
-
-  modal.classList.remove("hidden");
-  $("#new-task-title")?.focus();
-}
-
-function bindNewTaskModal() {
-  const modal = $("#task-modal");
-  const form = $("#task-modal-form");
-  if (!modal || !form || form.dataset.bound) return;
-  form.dataset.bound = "1";
-
-  form.addEventListener("submit", (e) => {
-    submitNewTaskForm(e).catch((err) => setTaskModalError(err.message));
-  });
-
-  $("#task-modal-cancel")?.addEventListener("click", closeNewTaskModal);
-  modal.querySelectorAll("[data-task-modal-dismiss]").forEach((el) => {
-    el.addEventListener("click", closeNewTaskModal);
-  });
-
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !modal.classList.contains("hidden")) closeNewTaskModal();
-  });
-
-  bindNewTaskOpportunityPicker();
-}
-
 async function loadTasks({ force = false } = {}) {
   if (tileBodyCollapsed("tile-tasks")) {
     showTileCollapsedHint("tile-tasks", "Minimized — expand to load tasks");
@@ -28961,7 +28796,7 @@ async function openTasksListModal() {
     });
     $("#tasks-list-new")?.addEventListener("click", () => {
       modal.classList.add("hidden");
-      openNewTaskModal().catch((e) => showToast(e.message, true));
+      openTaskPreviewModal(null, { isNew: true });
     });
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && !modal.classList.contains("hidden")) {
@@ -28973,13 +28808,35 @@ async function openTasksListModal() {
   modal.classList.remove("hidden");
 }
 
-function openTaskPreviewModal(task) {
+function openTaskPreviewModal(task, { isNew = false } = {}) {
   const modal = $("#task-preview-modal");
   const titleEl = $("#task-preview-modal-title");
   const body = $("#task-preview-body");
   if (!modal || !titleEl || !body) return;
 
-  titleEl.textContent = task.title || "Task";
+  if (isNew) {
+    task = Object.assign(
+      {
+        id: null,
+        title: "",
+        description: "",
+        dueDate: null,
+        remindAt: null,
+        repeat: "none",
+        labels: "",
+        color: "",
+        pinned: false,
+        archived: false,
+        isClosed: false,
+        items: [],
+        opportunityId: null,
+        opportunity: null,
+      },
+      task || {}
+    );
+  }
+
+  titleEl.textContent = isNew ? "New Task" : task.title || "Task";
 
   const toLocalDate = (iso) => {
     if (!iso) return "";
@@ -29085,9 +28942,10 @@ function openTaskPreviewModal(task) {
       </div>
       <p id="task-edit-error" class="modal-error hidden" role="alert"></p>
       <div class="task-edit-actions">
-        <button type="button" id="task-edit-save" class="btn btn-primary">Save &amp; Close</button>
-        <button type="button" id="task-edit-complete" class="btn btn-icon-only btn-success" title="Mark complete" aria-label="Mark complete"><i class="ti ti-square-rounded-check"></i></button>
-        <button type="button" id="task-edit-delete" class="btn btn-icon-only btn-danger" title="Delete task" aria-label="Delete task"><i class="ti ti-trash"></i></button>
+        <button type="button" id="task-edit-save" class="btn btn-primary">${isNew ? "Create" : "Save &amp; Close"}</button>
+        ${isNew ? `<button type="button" id="task-edit-cancel" class="btn btn-secondary">Cancel</button>` : ""}
+        ${isNew ? "" : `<button type="button" id="task-edit-complete" class="btn btn-icon-only btn-success" title="Mark complete" aria-label="Mark complete"><i class="ti ti-square-rounded-check"></i></button>`}
+        ${isNew ? "" : `<button type="button" id="task-edit-delete" class="btn btn-icon-only btn-danger" title="Delete task" aria-label="Delete task"><i class="ti ti-trash"></i></button>`}
       </div>
     </form>
   `;
@@ -29114,17 +28972,38 @@ function openTaskPreviewModal(task) {
   const persist = async (updates, { rerender = true } = {}) => {
     Object.assign(task, updates);
     try {
-      await api(`/api/v2/tasks/${task.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updates),
-      });
+      if (task.id == null) {
+        const body = Object.assign(gatherFields(), updates);
+        if (!body.title) {
+          setError("Title is required");
+          return false;
+        }
+        const res = await api("/api/v2/tasks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const id = res?.id ?? res?.ID;
+        if (id != null) {
+          task.id = id;
+          if (!state.tasks.some((t) => t.id === id)) {
+            task.sortOrder = state.tasks.length;
+            state.tasks.push(task);
+          }
+        }
+      } else {
+        await api(`/api/v2/tasks/${task.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updates),
+        });
+      }
     } catch (err) {
       setError(err.message || "Save failed");
       return false;
     }
     if (rerender) {
-      openTaskPreviewModal(task);
+      openTaskPreviewModal(task, { isNew: false });
       renderTasksContent();
     }
     return true;
@@ -29279,20 +29158,35 @@ function openTaskPreviewModal(task) {
     await persist({ items });
   });
 
-  $("#task-edit-save")?.addEventListener("click", (e) => {
-    e.preventDefault();
+  const saveAndClose = async () => {
     const fields = gatherFields();
     if (!fields.title) {
       setError("Title is required");
       return;
     }
-    persist(fields, { rerender: false }).then((ok) => {
-      if (ok) {
-        modal.classList.add("hidden");
-        renderTasksContent();
-        showToast("Task updated");
-      }
-    });
+    const ok = await persist(fields, { rerender: false });
+    if (ok) {
+      modal.classList.add("hidden");
+      renderTasksContent();
+      showToast(isNew ? "Task created" : "Task updated");
+    }
+  };
+
+  $("#task-edit-save")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    saveAndClose();
+  });
+
+  $("#task-edit-close")?.addEventListener("click", () => {
+    saveAndClose();
+  });
+
+  $("#task-edit-cancel")?.addEventListener("click", () => {
+    modal.classList.add("hidden");
+  });
+
+  $("#task-edit-form")?.addEventListener("submit", (e) => {
+    e.preventDefault();
   });
 
   $("#task-edit-complete")?.addEventListener("click", (e) => {
@@ -29336,6 +29230,91 @@ function taskSortMs(task) {
     task.createOn?.value ?? task.createOn ?? task.created?.value ?? task.created ?? task.dateAndTime;
   const c = new Date(created || 0).getTime();
   return Number.isNaN(c) ? 0 : c;
+}
+
+/* ── Task row hover tooltip ─────────────────────────────────────────────────── */
+
+let _taskTooltipEl = null;
+let _taskTooltipTimer = null;
+
+function taskTooltipHtml(task) {
+  const parts = [];
+  if (task.description) {
+    parts.push(`<div class="task-tooltip-desc">${escapeHtml(task.description)}</div>`);
+  }
+  const due = task.dueDate || task.deadLine?.value || task.deadLine;
+  if (due) {
+    const d = new Date(due);
+    if (!Number.isNaN(d.getTime())) {
+      const dateStr = d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+      const timeStr = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+      parts.push(`<div class="task-tooltip-due">Due ${escapeHtml(dateStr)} at ${escapeHtml(timeStr)}</div>`);
+    }
+  }
+  if (task.repeat && task.repeat !== "none") {
+    const label = task.repeat.startsWith("daily") ? "Daily"
+      : task.repeat.startsWith("weekly") ? "Weekly"
+      : task.repeat.startsWith("monthly") ? "Monthly"
+      : task.repeat.startsWith("yearly") ? "Yearly"
+      : task.repeat;
+    parts.push(`<div class="task-tooltip-repeat">Repeats ${escapeHtml(label)}</div>`);
+  }
+  const items = Array.isArray(task.items) ? task.items : [];
+  if (items.length) {
+    const MAX = 8;
+    const shown = items.slice(0, MAX);
+    let html = `<div class="task-tooltip-items">`;
+    for (const it of shown) {
+      html += `<div class="task-tooltip-item">${it.done ? "✓" : "○"} ${escapeHtml(it.text)}</div>`;
+    }
+    if (items.length > MAX) {
+      html += `<div class="task-tooltip-item task-tooltip-more">+${items.length - MAX} more</div>`;
+    }
+    html += `</div>`;
+    parts.push(html);
+  }
+  if (task.opportunity?.title) {
+    parts.push(`<div class="task-tooltip-project">${escapeHtml(task.opportunity.title)}</div>`);
+  }
+  return parts.join("");
+}
+
+function showTaskTooltip(e, task) {
+  hideTaskTooltip();
+  clearTimeout(_taskTooltipTimer);
+  const row = e.currentTarget;
+  if (!row) return;
+  _taskTooltipTimer = setTimeout(() => {
+    const html = taskTooltipHtml(task);
+    if (!html) return;
+    const rect = row.getBoundingClientRect();
+    const el = document.createElement("div");
+    el.className = "task-tooltip";
+    el.innerHTML = html;
+    el.addEventListener("mouseenter", () => { clearTimeout(_taskTooltipTimer); });
+    el.addEventListener("mouseleave", hideTaskTooltip);
+    document.body.appendChild(el);
+    const tipH = el.offsetHeight;
+    const tipW = el.offsetWidth;
+    const gap = 6;
+    let top = rect.top - tipH - gap;
+    let left = rect.left + rect.width / 2 - tipW / 2;
+    if (top < 4) top = rect.bottom + gap;
+    if (left < 4) left = 4;
+    if (left + tipW > window.innerWidth - 4) left = window.innerWidth - tipW - 4;
+    el.style.top = `${top}px`;
+    el.style.left = `${left}px`;
+    _taskTooltipEl = el;
+  }, 200);
+}
+
+function hideTaskTooltip() {
+  clearTimeout(_taskTooltipTimer);
+  _taskTooltipTimer = null;
+  if (_taskTooltipEl) {
+    _taskTooltipEl.remove();
+    _taskTooltipEl = null;
+  }
 }
 
 function isTaskOverdue(task) {
@@ -29408,6 +29387,9 @@ function createTaskRow(task) {
     row.appendChild(ent);
   }
 
+  row.addEventListener("mouseenter", (e) => showTaskTooltip(e, task));
+  row.addEventListener("mouseleave", hideTaskTooltip);
+
   return row;
 }
 
@@ -29421,8 +29403,10 @@ function renderTasksContent() {
   tile?.querySelectorAll(".tasks-tab").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.tasksTab === activeTab);
   });
+  applyTasksColumnsState(tile);
+  const columnsOn = tasksColumnsMode();
   const quickAdd = $("#tasks-quick-add-input", tile);
-  if (quickAdd) quickAdd.style.display = activeTab === "project" ? "none" : "";
+  if (quickAdd) quickAdd.style.display = !columnsOn && activeTab === "project" ? "none" : "";
 
   const todos = [];
   const projects = [];
@@ -29449,22 +29433,8 @@ function renderTasksContent() {
     });
   };
 
-  const list = activeTab === "project" ? sortTasks(projects) : sortTasks(todos);
-  updatePanelTileCount("tile-tasks", list.length);
-
-  if (!list.length) {
-    root.innerHTML = `<p class="board-loading">${
-      activeTab === "project" ? "No project tasks." : "No open todos."
-    }</p>`;
-    return;
-  }
-
-  const listEl = document.createElement("div");
-  listEl.className = "tasks-list";
-  for (const task of list) listEl.appendChild(createTaskRow(task));
-  root.appendChild(listEl);
-
-  if (window.Sortable && !listEl.dataset.sortableBound) {
+  const bindSortable = (listEl) => {
+    if (!window.Sortable || listEl.dataset.sortableBound) return;
     listEl.dataset.sortableBound = "1";
     window.Sortable.create(listEl, {
       handle: ".task-drag-handle",
@@ -29485,7 +29455,60 @@ function renderTasksContent() {
         }).catch(() => showToast("Reorder failed to save", true));
       },
     });
+  };
+
+  const listEl = (tasks) => {
+    const el = document.createElement("div");
+    el.className = "tasks-list";
+    for (const task of tasks) el.appendChild(createTaskRow(task));
+    bindSortable(el);
+    return el;
+  };
+
+  const emptyMsg = (kind) =>
+    kind === "project" ? "No project tasks." : "No open todos.";
+
+  const columnEl = (label, tasks, kind) => {
+    const col = document.createElement("div");
+    col.className = "tasks-column";
+    const head = document.createElement("div");
+    head.className = "tasks-column-head";
+    head.textContent = label;
+    col.appendChild(head);
+    if (!tasks.length) {
+      const p = document.createElement("p");
+      p.className = "board-loading";
+      p.textContent = emptyMsg(kind);
+      col.appendChild(p);
+    } else {
+      col.appendChild(listEl(tasks));
+    }
+    return col;
+  };
+
+  const activeTasks = sortTasks(activeTab === "project" ? projects : todos);
+  updatePanelTileCount("tile-tasks", activeTasks.length);
+
+  // Single view (active tab only).
+  const singleView = document.createElement("div");
+  singleView.className = "tasks-single-view";
+  if (!activeTasks.length) {
+    const p = document.createElement("p");
+    p.className = "board-loading";
+    p.textContent = emptyMsg(activeTab);
+    singleView.appendChild(p);
+  } else {
+    singleView.appendChild(listEl(activeTasks));
   }
+  root.appendChild(singleView);
+
+  // Two-column view (Todo + Project Tasks side by side). Always rendered; CSS
+  // shows it only while the tile is half-width and tasks-columns-on.
+  const cols = document.createElement("div");
+  cols.className = "tasks-columns";
+  cols.appendChild(columnEl("Todo", sortTasks(todos), "todos"));
+  cols.appendChild(columnEl("Project Tasks", sortTasks(projects), "project"));
+  root.appendChild(cols);
 }
 
 async function createTask(payload) {
@@ -30842,7 +30865,6 @@ async function init() {
   state.hiddenFeedEntries = new Map();
   state.groupTemplates = [];
   userProfileReady = false;
-  bindNewTaskModal();
   bindDealEditModal();
   bindQuickNoteModal();
   bindCreateOpportunityModal();

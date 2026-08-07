@@ -5114,15 +5114,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_backup_status(self) -> None:
         """GET backup status."""
-        _json_response(self, 200, get_backup_status())
+        import backup_service
+        _json_response(self, 200, backup_service.get_backup_status())
 
     def _handle_backup_history(self) -> None:
         """GET backup history."""
-        _json_response(self, 200, {"history": get_backup_history()})
+        import backup_service
+        _json_response(self, 200, {"history": backup_service.get_backup_history()})
 
     def _handle_backup_config_get(self) -> None:
         """GET backup config."""
-        _json_response(self, 200, get_backup_status())
+        import backup_service
+        _json_response(self, 200, backup_service.get_backup_status())
 
     def _handle_backup_config_post(self) -> None:
         """POST save backup config."""

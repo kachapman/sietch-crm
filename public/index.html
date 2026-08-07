@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=3.4.11" />
+  <link rel="stylesheet" href="styles.css?v=3.4.18" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
 </head>
 <body>
@@ -1443,7 +1443,7 @@
       <div class="modal-header">
         <h2 id="task-preview-modal-title" class="modal-title">Task Details</h2>
         <div class="modal-actions">
-          <button type="button" class="btn btn-icon-only modal-header-control" title="Close" data-task-preview-dismiss aria-label="Close"><i class="ti ti-x"></i></button>
+          <button type="button" id="task-edit-close" class="btn btn-icon-only modal-header-control" title="Save &amp; Close" aria-label="Save &amp; Close"><i class="ti ti-x"></i></button>
         </div>
       </div>
       <div id="task-preview-body" class="modal-body"></div>
@@ -1595,46 +1595,6 @@
         <button type="button" id="quick-note-cancel" class="btn btn-secondary">Cancel</button>
         <button type="submit" id="quick-note-submit" class="btn btn-primary" form="quick-note-form">Save note</button>
       </div>
-    </div>
-  </div>
-
-  <div id="task-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="task-modal-title">
-    <div class="modal-backdrop" data-task-modal-dismiss></div>
-    <div class="modal-card modal-card-form">
-      <h2 id="task-modal-title" class="modal-title">New task</h2>
-      <form id="task-modal-form" class="modal-form">
-        <div class="field">
-          <label for="new-task-title">Title</label>
-          <input type="text" id="new-task-title" name="title" required autocomplete="off" placeholder="Task title" />
-        </div>
-        <div class="field">
-          <label for="new-task-description">Description</label>
-          <textarea id="new-task-description" name="description" rows="3" placeholder="Optional details"></textarea>
-        </div>
-        <div class="field">
-          <label for="new-task-deadline">Due date</label>
-          <input type="date" id="new-task-deadline" name="deadLine" />
-        </div>
-        <div class="field">
-          <label for="new-task-responsible">Assigned to</label>
-          <select id="new-task-responsible" name="responsibleId" required></select>
-        </div>
-        <div class="field opportunity-picker-field">
-          <label for="new-task-opportunity-search">Project</label>
-          <input type="search" id="new-task-opportunity-search" placeholder="Search project title…" autocomplete="off" />
-          <div id="new-task-opportunity-results" class="contact-results hidden"></div>
-          <div id="new-task-opportunity-selected" class="contact-selected"></div>
-        </div>
-        <label class="checkbox-filter modal-checkbox">
-          <input type="checkbox" id="new-task-notify" name="notify" checked />
-          <span>Notify assigned user</span>
-        </label>
-        <p id="task-modal-error" class="modal-error hidden" role="alert"></p>
-        <div class="modal-actions">
-          <button type="button" id="task-modal-cancel" class="btn btn-secondary">Cancel</button>
-          <button type="submit" id="task-modal-submit" class="btn btn-primary">Create task</button>
-        </div>
-      </form>
     </div>
   </div>
 
@@ -2323,6 +2283,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
-  <script src="app.js?v=3.4.11" type="module"></script>
+  <script src="app.js?v=3.4.18" type="module"></script>
 </body>
 </html>
