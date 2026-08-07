@@ -2607,6 +2607,16 @@ body {
   border-color: var(--danger);
 }
 
+.btn-success {
+  background: transparent;
+  color: var(--success);
+  border: 1px solid var(--border);
+}
+
+.btn-success:hover {
+  border-color: var(--success);
+}
+
 .group-filters {
   display: flex;
   flex-wrap: wrap;

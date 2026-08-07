@@ -29086,8 +29086,8 @@ function openTaskPreviewModal(task) {
       <p id="task-edit-error" class="modal-error hidden" role="alert"></p>
       <div class="task-edit-actions">
         <button type="button" id="task-edit-save" class="btn btn-primary">Save &amp; Close</button>
-        <button type="button" id="task-edit-complete" class="btn btn-secondary">Complete</button>
-        <button type="button" id="task-edit-delete" class="btn btn-danger">Delete</button>
+        <button type="button" id="task-edit-complete" class="btn btn-icon-only btn-success" title="Mark complete" aria-label="Mark complete"><i class="ti ti-square-rounded-check"></i></button>
+        <button type="button" id="task-edit-delete" class="btn btn-icon-only btn-danger" title="Delete task" aria-label="Delete task"><i class="ti ti-trash"></i></button>
       </div>
     </form>
   `;
