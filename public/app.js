@@ -29085,9 +29085,8 @@ function openTaskPreviewModal(task) {
       </div>
       <p id="task-edit-error" class="modal-error hidden" role="alert"></p>
       <div class="task-edit-actions">
-        <button type="button" id="task-edit-save" class="btn btn-primary">Save</button>
+        <button type="button" id="task-edit-save" class="btn btn-primary">Save &amp; Close</button>
         <button type="button" id="task-edit-complete" class="btn btn-secondary">Complete</button>
-        <button type="button" id="task-edit-archive" class="btn btn-secondary">Archive</button>
         <button type="button" id="task-edit-delete" class="btn btn-danger">Delete</button>
       </div>
     </form>
@@ -29287,8 +29286,12 @@ function openTaskPreviewModal(task) {
       setError("Title is required");
       return;
     }
-    persist(fields).then((ok) => {
-      if (ok) showToast("Task updated");
+    persist(fields, { rerender: false }).then((ok) => {
+      if (ok) {
+        modal.classList.add("hidden");
+        renderTasksContent();
+        showToast("Task updated");
+      }
     });
   });
 
@@ -29296,12 +29299,6 @@ function openTaskPreviewModal(task) {
     e.preventDefault();
     modal.classList.add("hidden");
     completeTaskWithUndo(task);
-  });
-
-  $("#task-edit-archive")?.addEventListener("click", (e) => {
-    e.preventDefault();
-    modal.classList.add("hidden");
-    archiveTaskWithUndo(task);
   });
 
   $("#task-edit-delete")?.addEventListener("click", (e) => {
@@ -29410,17 +29407,6 @@ function createTaskRow(task) {
     });
     row.appendChild(ent);
   }
-
-  const archiveBtn = document.createElement("button");
-  archiveBtn.type = "button";
-  archiveBtn.className = "btn btn-ghost btn-icon-only task-archive-btn";
-  archiveBtn.title = "Archive";
-  archiveBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>`;
-  archiveBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    archiveTaskWithUndo(task);
-  });
-  row.appendChild(archiveBtn);
 
   return row;
 }
@@ -29564,31 +29550,6 @@ function completeTaskWithUndo(task) {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ isClosed: true }),
-  }).catch((err) => showToast(err.message, true));
-}
-
-function archiveTaskWithUndo(task) {
-  const prev = [...state.tasks];
-  task.archived = true;
-  renderTasksContent();
-  showToastWithAction(`Archived “${task.title || "task"}”`, "Undo", async () => {
-    task.archived = false;
-    state.tasks = prev;
-    renderTasksContent();
-    try {
-      await api(`/api/v2/tasks/${task.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ archived: false }),
-      });
-    } catch (err) {
-      showToast(err.message, true);
-    }
-  });
-  api(`/api/v2/tasks/${task.id}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ archived: true }),
   }).catch((err) => showToast(err.message, true));
 }
 

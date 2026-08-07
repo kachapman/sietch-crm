@@ -2170,21 +2170,6 @@ body {
   text-decoration: underline;
 }
 
-.task-archive-btn {
-  display: none;
-  padding: 0.1rem;
-  color: var(--muted);
-  flex-shrink: 0;
-}
-
-.task-row:hover .task-archive-btn {
-  display: inline-flex;
-}
-
-.task-archive-btn:hover {
-  color: var(--danger);
-}
-
 /* Task preview/edit modal */
 .task-edit-grid {
   display: grid;
