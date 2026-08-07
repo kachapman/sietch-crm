@@ -1729,6 +1729,10 @@ body {
   font-size: 0.65rem;
   padding: 0.15rem 0.3rem;
 }
+.dashboard-tile.tile-quarter .tasks-tab {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.3rem;
+}
 
 .tile-btn {
   font: inherit;
@@ -1955,43 +1959,51 @@ body {
 }
 
 /* Tabs + quick-add live above the list inside the tasks tile */
+/* Tabs now live in the tile title bar as a compact segmented control. */
 .tasks-tabs {
   display: flex;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
+  align-items: center;
+  gap: 0.15rem;
+  margin-left: 0.15rem;
+  flex-shrink: 0;
 }
 
 .tasks-tab {
-  flex: 1;
   font: inherit;
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 600;
   color: var(--muted);
   background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  padding: 0.45rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0.15rem 0.4rem;
   cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
 }
 
 .tasks-tab:hover {
   color: var(--text);
+  background: rgba(0, 0, 0, 0.04);
 }
 
 .tasks-tab.active {
   color: var(--accent);
-  border-bottom-color: var(--accent);
+  background: var(--accent-soft);
+  border-color: rgba(79, 140, 255, 0.35);
 }
 
 .tasks-tab-count {
   display: inline-block;
-  min-width: 1.1rem;
-  margin-left: 0.25rem;
-  padding: 0.05rem 0.35rem;
-  font-size: 0.68rem;
+  min-width: 1.05rem;
+  margin-left: 0.15rem;
+  padding: 0.02rem 0.3rem;
+  font-size: 0.66rem;
   font-weight: 700;
-  line-height: 1.1;
+  line-height: 1.15;
   text-align: center;
   border-radius: 999px;
   color: var(--muted);

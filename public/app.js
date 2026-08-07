@@ -2063,7 +2063,7 @@ function renderTasksTile() {
     tile.dataset.tileLabel = "Tasks";
     tile.innerHTML = `
       <div class="tasks-tabs" role="tablist" aria-label="Task lists">
-        <button type="button" class="tasks-tab" data-tasks-tab="todos" role="tab">My Todos <span class="tasks-tab-count">0</span></button>
+        <button type="button" class="tasks-tab" data-tasks-tab="todos" role="tab">Todo <span class="tasks-tab-count">0</span></button>
         <button type="button" class="tasks-tab" data-tasks-tab="project" role="tab">Project Tasks <span class="tasks-tab-count">0</span></button>
       </div>
       <div class="tasks-quick-add">
@@ -2073,6 +2073,19 @@ function renderTasksTile() {
     `;
     $("#dashboard-tiles")?.appendChild(tile);
     bindTileChrome(tile, tileId);
+    // Move the list tabs up into the title bar, right after the task count.
+    const tasksToolbar = tile.querySelector(":scope > .tile-toolbar");
+    const tasksTabsEl = tile.querySelector(".tasks-tabs");
+    if (tasksToolbar && tasksTabsEl) {
+      const tasksCount = tasksToolbar.querySelector(".tile-toolbar-count");
+      if (tasksCount && tasksCount.nextSibling) {
+        tasksToolbar.insertBefore(tasksTabsEl, tasksCount.nextSibling);
+      } else if (tasksCount) {
+        tasksCount.after(tasksTabsEl);
+      } else {
+        tasksToolbar.appendChild(tasksTabsEl);
+      }
+    }
   }
   applyTileLayoutClasses(tile, tileId);
   ensureTileAutoRefreshButton(tile, tileId);
