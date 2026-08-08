@@ -6493,6 +6493,7 @@ function renderPersonalNotesTile(dash) {
   applyTileLayoutClasses(section, tileId);
   applyTileBodyCollapsed(section, tileId);
   attachTileCollapseButton(section, tileId);
+  addResizeHandles(section, tileId);
 }
 
 // ── Browse mode: card grid / list ────────────────────────────────────────────
