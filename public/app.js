@@ -6710,6 +6710,7 @@ function _notesRenderEditMode(section) {
 
   // Save button
   const saveBtn = $(".notes-save-btn", section);
+  let _savedSinceEdit = !!note.id; // existing notes are already saved
   if (saveBtn) {
     saveBtn.addEventListener("click", async () => {
       if (saveBtn.disabled) return;
@@ -6731,18 +6732,33 @@ function _notesRenderEditMode(section) {
             state.notes[idx].updated_at = new Date().toISOString();
           }
         }
+        _savedSinceEdit = true;
         showToast("Note saved");
+        state.notesTileMode = "browse";
+        state.notesEditingId = null;
+        _notesRefreshTile();
       } catch (e) {
         console.error("Note save failed:", e);
         showToast("Failed to save note", true);
+        saveBtn.disabled = false;
       }
-      saveBtn.disabled = false;
     });
   }
+
+  // Mark as unsaved when user edits
+  editor.addEventListener("input", () => { _savedSinceEdit = false; });
+  titleEl.addEventListener("input", () => { _savedSinceEdit = false; });
 
   // Back button — discard warning
   const backHandler = async () => {
     if (backBtn.disabled) return;
+    if (_savedSinceEdit) {
+      // Already saved — go back without dialog
+      state.notesTileMode = "browse";
+      state.notesEditingId = null;
+      _notesRefreshTile();
+      return;
+    }
     const currentTitle = (titleEl.textContent || "").trim();
     const currentContent = editor.value;
     const hasContent = currentContent.trim().length > 0 || currentTitle.length > 0;
