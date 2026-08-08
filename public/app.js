@@ -6981,14 +6981,14 @@ function _notesRenderBrowseMode(section) {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M13.58 13.79c.27 .68 .42 1.43 .42 2.21c0 1.77 -.77 3.37 -2 4.46a5.93 5.93 0 0 1 -4 1.54c-3.31 0 -6 -2.69 -6 -6c0 -2.76 1.88 -5.1 4.42 -5.79"/><path d="M17.58 10.21c2.54 .69 4.42 3.03 4.42 5.79c0 3.31 -2.69 6 -6 6a5.93 5.93 0 0 1 -4 -1.54"/><path d="M6 8a6 6 0 1 0 12 0a6 6 0 1 0 -12 0"/></svg>
       </button>
       <span style="flex:1"></span>
-      <button type="button" class="btn btn-ghost btn-small notes-archive-toggle" title="${state.notesArchived ? 'View active notes' : 'View archived notes'}">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12h4"/><path d="M4 12m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v4a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-4z"/><path d="M4 4m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v4a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-4z"/></svg>
+      <button type="button" class="btn btn-ghost btn-small btn-icon-only notes-archive-toggle" title="${state.notesArchived ? 'View active notes' : 'View archived notes'}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><rect x="6" y="5" width="3" height="2" rx="0.5"/><rect x="15" y="5" width="3" height="2" rx="0.5"/><rect x="6" y="11" width="3" height="2" rx="0.5"/><rect x="15" y="11" width="3" height="2" rx="0.5"/></svg>
         ${state.notesArchived ? '<span class="notes-archive-label">Archived</span>' : ''}
       </button>
-      <button type="button" class="btn btn-ghost btn-small notes-search-toggle" title="Search notes">
+      <button type="button" class="btn btn-ghost btn-small btn-icon-only notes-search-toggle" title="Search notes">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
       </button>
-      <button type="button" class="btn btn-ghost btn-small notes-view-toggle" title="Toggle view">
+      <button type="button" class="btn btn-ghost btn-small btn-icon-only notes-view-toggle" title="Toggle view">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
       </button>
     </div>
@@ -11554,21 +11554,7 @@ function ensureTasksNewTaskButton(tileEl) {
   const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
   if (!toolbar) return;
 
-  // Get or create .tile-toolbar-tools container for wrap-able buttons
-  let tools = toolbar.querySelector(":scope > .tile-toolbar-tools");
-  if (!tools) {
-    tools = document.createElement("div");
-    tools.className = "tile-toolbar-tools";
-    // Insert before .tile-toolbar-actions so it stays left of the action buttons
-    const actions = toolbar.querySelector(":scope > .tile-toolbar-actions");
-    if (actions) {
-      toolbar.insertBefore(tools, actions);
-    } else {
-      toolbar.appendChild(tools);
-    }
-  }
-
-  let archiveBtn = tools.querySelector("#tasks-list-btn");
+  let archiveBtn = toolbar.querySelector("#tasks-list-btn");
   if (!archiveBtn) {
     archiveBtn = document.createElement("button");
     archiveBtn.type = "button";
@@ -11576,23 +11562,37 @@ function ensureTasksNewTaskButton(tileEl) {
     archiveBtn.className = "btn btn-ghost btn-tasks-list";
     archiveBtn.title = "View all tasks (open + completed)";
     archiveBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><rect x="6" y="5" width="3" height="2" rx="0.5"/><rect x="15" y="5" width="3" height="2" rx="0.5"/><rect x="6" y="11" width="3" height="2" rx="0.5"/><rect x="15" y="11" width="3" height="2" rx="0.5"/></svg>`;
-    tools.appendChild(archiveBtn);
+    const tabs = toolbar.querySelector(".tasks-tabs");
+    if (tabs && tabs.nextSibling) {
+      toolbar.insertBefore(archiveBtn, tabs.nextSibling);
+    } else if (tabs) {
+      tabs.after(archiveBtn);
+    } else {
+      toolbar.appendChild(archiveBtn);
+    }
     archiveBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       openTasksListModal().catch((err) => showToast(err.message, true));
     });
   }
 
-  if (!tools.querySelector(".btn-new-task")) {
+  if (!toolbar.querySelector(".btn-new-task")) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "btn btn-primary btn-new-task";
-    btn.textContent = "New task";
+    btn.className = "btn btn-ghost btn-icon-only btn-new-task";
+    btn.title = "New task";
+    btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 3c7.2 0 9 1.8 9 9c0 7.2 -1.8 9 -9 9c-7.2 0 -9 -1.8 -9 -9c0 -7.2 1.8 -9 9 -9"/><path d="M15 12h-6"/><path d="M12 9v6"/></svg>`;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       openTaskPreviewModal(null, { isNew: true });
     });
-    tools.appendChild(btn);
+    if (archiveBtn && archiveBtn.nextSibling) {
+      toolbar.insertBefore(btn, archiveBtn.nextSibling);
+    } else if (archiveBtn) {
+      archiveBtn.after(btn);
+    } else {
+      toolbar.appendChild(btn);
+    }
   }
 }
 
@@ -31548,7 +31548,7 @@ async function refreshAll({ force = false } = {}) {
       loadStages(),
       loadAllTags(),
       loadOpportunityCustomFieldDefs(),
-      _notesLoadAll().catch(() => {}),
+      _notesLoadAll().catch((e) => console.error("Notes load failed:", e)),
     ]);
     let hadNonTransientError = false;
     for (const r of settled) {

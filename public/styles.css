@@ -1808,24 +1808,7 @@ body {
 
 .dashboard-tile.presence-panel .tile-toolbar,
 .dashboard-tile.tasks-panel .tile-toolbar {
-  flex-wrap: wrap;
-}
-
-/* Tasks tile: toolbar-tools wraps archive + new task to row 2 on narrow screens */
-.dashboard-tile.tasks-panel .tile-toolbar-tools {
-  flex-wrap: wrap;
-  gap: 0.25rem;
-}
-
-/* Tasks tile: action buttons (refresh, minimize) always stay on row 1 */
-.dashboard-tile.tasks-panel .tile-toolbar-actions {
-  flex-shrink: 0;
-  margin-left: auto;
-}
-
-/* Tasks tile: columns button stays on row 1 */
-.dashboard-tile.tasks-panel .tasks-columns-btn {
-  flex-shrink: 0;
+  flex-wrap: nowrap;
 }
 
 /* Team tile body fills available height with scroll constraint */
