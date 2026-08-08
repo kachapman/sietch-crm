@@ -7060,12 +7060,6 @@ function openNoteEditModal(noteId, { isNew = false } = {}) {
   body.innerHTML = `
     <input type="text" class="note-edit-title-input" placeholder="Note title…" value="${escapeHtml(note.title || "")}" />
     <div class="note-edit-toolbar">
-      <button type="button" class="btn btn-ghost btn-small btn-icon-only notes-mode-toggle" data-mode="edit" title="Edit">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 7h-1a2 2 0 0 0 -2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2 -2v-1"/><path d="M20.385 6.585a2.1 2.1 0 0 0 -2.97 -2.97l-8.415 8.385v3h3l8.385 -8.415"/><path d="M16 5l3 3"/></svg>
-      </button>
-      <button type="button" class="btn btn-ghost btn-small btn-icon-only notes-mode-toggle" data-mode="preview" title="Preview">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6"/></svg>
-      </button>
       <button type="button" class="btn btn-ghost btn-small btn-icon-only note-edit-color-btn" title="Change color">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M13.58 13.79c.27 .68 .42 1.43 .42 2.21c0 1.77 -.77 3.37 -2 4.46a5.93 5.93 0 0 1 -4 1.54c-3.31 0 -6 -2.69 -6 -6c0 -2.76 1.88 -5.1 4.42 -5.79"/><path d="M17.58 10.21c2.54 .69 4.42 3.03 4.42 5.79c0 3.31 -2.69 6 -6 6a5.93 5.93 0 0 1 -4 -1.54"/><path d="M6 8a6 6 0 1 0 12 0a6 6 0 1 0 -12 0"/></svg>
       </button>
@@ -7109,8 +7103,8 @@ function openNoteEditModal(noteId, { isNew = false } = {}) {
   // Auto-continue lists on Enter
   _notesAutoContinueList(editor, updateStats);
 
-  // Mode toggle
-  const modeBtns = body.querySelectorAll(".notes-mode-toggle");
+  // Mode toggle — buttons are in .note-edit-head-actions (sibling of body)
+  const modeBtns = modal.querySelectorAll(".notes-mode-toggle");
   const syncMode = (m) => {
     modeBtns.forEach((b) => b.classList.toggle("tile-btn-active", b.dataset.mode === m));
     if (m === "preview") {
