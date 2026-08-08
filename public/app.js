@@ -6506,7 +6506,7 @@ function _notesRenderEditMode(section) {
       <span class="notes-edit-title" contenteditable="true" spellcheck="false" data-placeholder="Note title…">${escapeHtml(note.title || "")}</span>
       <span style="flex:1"></span>
       <button type="button" class="btn btn-ghost btn-small notes-save-btn" title="Save note">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 7h-1a2 2 0 0 0 -2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2 -2v-1"/><path d="M20.385 6.585a2.1 2.1 0 0 0 -2.97 -2.97l-8.415 8.385v3h3l8.385 -8.415"/><path d="M16 5l3 3"/></svg>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M6 4h10l4 4v10a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2"/><path d="M10 14a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M14 4l0 4l-6 0l0 -4"/></svg>
       </button>
       <button type="button" class="btn btn-ghost btn-small notes-link-btn" title="Link to project">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
@@ -6750,7 +6750,8 @@ function _notesRenderEditMode(section) {
 
     if (hasChanges || isNew) {
       const msg = isNew ? "Discard this note?" : "Discard unsaved changes?";
-      if (!confirm(msg)) return;
+      const ok = await confirmDialog({ title: "Discard?", message: msg, confirmLabel: "Discard", danger: true });
+      if (!ok) return;
     }
 
     backBtn.disabled = true;
@@ -6766,7 +6767,8 @@ function _notesRenderEditMode(section) {
 
   // Delete button
   $(".notes-delete-btn", section)?.addEventListener("click", async () => {
-    if (!confirm("Delete this note?")) return;
+    const ok = await confirmDialog({ title: "Delete note?", message: "Delete this note? This cannot be undone.", confirmLabel: "Delete", danger: true });
+    if (!ok) return;
     try {
       await _notesApiDelete(note.id);
       state.notes = state.notes.filter((n) => n.id !== note.id);
@@ -7166,7 +7168,9 @@ function openNoteEditModal(noteId, { isNew = false } = {}) {
 
   // Delete
   deleteBtn.onclick = async () => {
-    if (!note.id || !confirm("Delete this note?")) return;
+    if (!note.id) return;
+    const ok = await confirmDialog({ title: "Delete note?", message: "Delete this note? This cannot be undone.", confirmLabel: "Delete", danger: true });
+    if (!ok) return;
     try {
       await _notesApiDelete(note.id);
       state.notes = state.notes.filter((n) => n.id !== note.id);
@@ -7265,7 +7269,8 @@ function _notesShowContextMenu(e, note) {
     try { await _notesApiUpdate(note.id, { archived: true }); state.notes = state.notes.filter((n) => n.id !== note.id); _notesRefreshTile(); showToast("Note archived"); } catch (err) { showToast("Archive failed", true); }
   }));
   menu.appendChild(mkItem("✕", "Delete", "ctx-menu-item--danger", async () => {
-    if (!confirm("Delete this note?")) return;
+    const ok = await confirmDialog({ title: "Delete note?", message: "Delete this note? This cannot be undone.", confirmLabel: "Delete", danger: true });
+    if (!ok) return;
     try { await _notesApiDelete(note.id); state.notes = state.notes.filter((n) => n.id !== note.id); _notesRefreshTile(); showToast("Note deleted"); } catch (err) { showToast("Delete failed", true); }
   }));
 
