@@ -7262,6 +7262,9 @@ function _notesShowContextMenu(e, note) {
       showToast("Note duplicated");
     } catch (err) { showToast("Duplicate failed", true); }
   }));
+  menu.appendChild(mkItem("↗", "Copy to Project", "", () => {
+    openQuickNoteModalFromNotes({ content: note.content });
+  }));
 
   // Divider
   const d1 = document.createElement("div"); d1.className = "ctx-menu-divider"; menu.appendChild(d1);

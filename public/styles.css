@@ -1811,6 +1811,11 @@ body {
   flex-wrap: nowrap;
 }
 
+/* Hide empty toolbar-tools div so it doesn't push action buttons to row 2 */
+.dashboard-tile .tile-toolbar-tools:empty {
+  display: none;
+}
+
 /* Team tile body fills available height with scroll constraint */
 .dashboard-tile.presence-panel .presence-tile-body {
   flex: 1;
@@ -8461,7 +8466,7 @@ body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 0.65rem 1.5rem;
+  padding: 0.5rem 0.65rem 1.5rem;
 }
 
 .notes-grid-view {
