@@ -6433,6 +6433,7 @@ async function _notesLoadAll() {
   } catch (e) {
     console.error("Failed to load notes:", e.message || e);
     state.notes = [];
+    showToast("Failed to load notes", true);
   }
 }
 
@@ -11556,6 +11557,7 @@ function ensureTasksNewTaskButton(tileEl) {
   if (!tileEl || tileEl.dataset.tileId !== "tile-tasks") return;
   const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
   if (!toolbar) return;
+  const actions = toolbar.querySelector(":scope > .tile-toolbar-actions");
 
   let archiveBtn = toolbar.querySelector("#tasks-list-btn");
   if (!archiveBtn) {
@@ -11565,11 +11567,8 @@ function ensureTasksNewTaskButton(tileEl) {
     archiveBtn.className = "btn btn-ghost btn-tasks-list";
     archiveBtn.title = "View all tasks (open + completed)";
     archiveBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><rect x="6" y="5" width="3" height="2" rx="0.5"/><rect x="15" y="5" width="3" height="2" rx="0.5"/><rect x="6" y="11" width="3" height="2" rx="0.5"/><rect x="15" y="11" width="3" height="2" rx="0.5"/></svg>`;
-    const tabs = toolbar.querySelector(".tasks-tabs");
-    if (tabs && tabs.nextSibling) {
-      toolbar.insertBefore(archiveBtn, tabs.nextSibling);
-    } else if (tabs) {
-      tabs.after(archiveBtn);
+    if (actions) {
+      toolbar.insertBefore(archiveBtn, actions);
     } else {
       toolbar.appendChild(archiveBtn);
     }
@@ -11589,10 +11588,8 @@ function ensureTasksNewTaskButton(tileEl) {
       e.stopPropagation();
       openTaskPreviewModal(null, { isNew: true });
     });
-    if (archiveBtn && archiveBtn.nextSibling) {
-      toolbar.insertBefore(btn, archiveBtn.nextSibling);
-    } else if (archiveBtn) {
-      archiveBtn.after(btn);
+    if (actions) {
+      toolbar.insertBefore(btn, actions);
     } else {
       toolbar.appendChild(btn);
     }
@@ -11616,11 +11613,9 @@ function ensureTasksColumnsButton(tileEl) {
     renderTasksContent();
   });
 
-  const newTaskBtn = toolbar.querySelector(".btn-new-task");
-  if (newTaskBtn && newTaskBtn.nextSibling) {
-    toolbar.insertBefore(btn, newTaskBtn.nextSibling);
-  } else if (newTaskBtn) {
-    newTaskBtn.after(btn);
+  const actions = toolbar.querySelector(":scope > .tile-toolbar-actions");
+  if (actions) {
+    toolbar.insertBefore(btn, actions);
   } else {
     toolbar.appendChild(btn);
   }
