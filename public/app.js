@@ -7359,7 +7359,11 @@ function _notesBindBrowseEvents(section) {
   if (viewToggle) {
     viewToggle.addEventListener("click", () => {
       state.notesView = state.notesView === "grid" ? "list" : "grid";
-      _notesRefreshTile();
+      const container = $(".notes-card-container", section);
+      if (container) {
+        container.classList.toggle("notes-grid-view", state.notesView === "grid");
+        container.classList.toggle("notes-list-view", state.notesView === "list");
+      }
     });
   }
 
