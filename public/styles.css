@@ -8080,6 +8080,18 @@ body {
   flex-shrink: 0;
 }
 
+.notes-mode-toggle.tile-btn-active,
+.note-edit-toolbar .notes-mode-toggle.tile-btn-active {
+  background: var(--accent-soft, rgba(109, 75, 255, 0.15));
+  color: var(--accent, #6d4aff);
+  border-radius: 4px;
+}
+
+.notes-mode-toggle.tile-btn-active svg,
+.note-edit-toolbar .notes-mode-toggle.tile-btn-active svg {
+  stroke-width: 2.5;
+}
+
 .note-edit-editor {
   flex: 1;
   min-height: 0;
@@ -8261,6 +8273,8 @@ body {
   justify-content: space-between;
   align-items: baseline;
   gap: 0.35rem;
+  overflow: hidden;
+  min-width: 0;
 }
 
 .notes-stats-label,
@@ -8268,6 +8282,10 @@ body {
   font-size: 0.65rem;
   color: var(--muted);
   cursor: default;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .notes-tile-footer:hover .notes-updated-label {

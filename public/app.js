@@ -6499,12 +6499,15 @@ function _notesRenderEditMode(section) {
   section.innerHTML = `
     <div class="tile-toolbar group-tile-bar notes-tile-bar">
       <span class="tile-drag-hint" title="Drag to reorder">⋮⋮</span>
-      <button type="button" class="btn btn-ghost btn-small notes-back-btn" title="Back to notes">
+      <button type="button" class="btn btn-ghost btn-small notes-back-btn" title="Discard and go back">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
         <span>Back</span>
       </button>
       <span class="notes-edit-title" contenteditable="true" spellcheck="false" data-placeholder="Note title…">${escapeHtml(note.title || "")}</span>
       <span style="flex:1"></span>
+      <button type="button" class="btn btn-ghost btn-small notes-save-btn" title="Save note">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 7h-1a2 2 0 0 0 -2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2 -2v-1"/><path d="M20.385 6.585a2.1 2.1 0 0 0 -2.97 -2.97l-8.415 8.385v3h3l8.385 -8.415"/><path d="M16 5l3 3"/></svg>
+      </button>
       <button type="button" class="btn btn-ghost btn-small notes-link-btn" title="Link to project">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
       </button>
@@ -6534,16 +6537,18 @@ function _notesRenderEditMode(section) {
       </div>
       <div class="notes-versions-list"></div>
     </div>
-    <div class="notes-edit-color-row">
-      <button type="button" class="btn btn-ghost btn-small btn-icon-only notes-edit-color-btn" title="Change color">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M13.58 13.79c.27 .68 .42 1.43 .42 2.21c0 1.77 -.77 3.37 -2 4.46a5.93 5.93 0 0 1 -4 1.54c-3.31 0 -6 -2.69 -6 -6c0 -2.76 1.88 -5.1 4.42 -5.79"/><path d="M17.58 10.21c2.54 .69 4.42 3.03 4.42 5.79c0 3.31 -2.69 6 -6 6a5.93 5.93 0 0 1 -4 -1.54"/><path d="M6 8a6 6 0 1 0 12 0a6 6 0 1 0 -12 0"/></svg>
-      </button>
-      <div class="notes-color-dropdown hidden"></div>
-    </div>
     <div class="notes-edit-body">
       <div class="notes-edit-toolbar">
-        <button type="button" class="btn btn-ghost btn-small notes-mode-toggle" data-mode="edit">Edit</button>
-        <button type="button" class="btn btn-ghost btn-small notes-mode-toggle" data-mode="preview">Preview</button>
+        <button type="button" class="btn btn-ghost btn-small btn-icon-only notes-mode-toggle" data-mode="edit" title="Edit">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 7h-1a2 2 0 0 0 -2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2 -2v-1"/><path d="M20.385 6.585a2.1 2.1 0 0 0 -2.97 -2.97l-8.415 8.385v3h3l8.385 -8.415"/><path d="M16 5l3 3"/></svg>
+        </button>
+        <button type="button" class="btn btn-ghost btn-small btn-icon-only notes-mode-toggle" data-mode="preview" title="Preview">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6"/></svg>
+        </button>
+        <button type="button" class="btn btn-ghost btn-small btn-icon-only notes-edit-color-btn" title="Change color">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M13.58 13.79c.27 .68 .42 1.43 .42 2.21c0 1.77 -.77 3.37 -2 4.46a5.93 5.93 0 0 1 -4 1.54c-3.31 0 -6 -2.69 -6 -6c0 -2.76 1.88 -5.1 4.42 -5.79"/><path d="M17.58 10.21c2.54 .69 4.42 3.03 4.42 5.79c0 3.31 -2.69 6 -6 6a5.93 5.93 0 0 1 -4 -1.54"/><path d="M6 8a6 6 0 1 0 12 0a6 6 0 1 0 -12 0"/></svg>
+        </button>
+        <div class="notes-color-dropdown hidden"></div>
         <span class="notes-toolbar-sep"></span>
         <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="bold" title="Bold (Ctrl+B)"><b>B</b></button>
         <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="italic" title="Italic (Ctrl+I)"><i>I</i></button>
@@ -6657,7 +6662,7 @@ function _notesRenderEditMode(section) {
 
   // Color dropdown (edit mode)
   const editColorBtn = $(".notes-edit-color-btn", section);
-  const editColorDropdown = $(".notes-edit-color-row .notes-color-dropdown", section);
+  const editColorDropdown = $(".notes-edit-toolbar .notes-color-dropdown", section);
   if (editColorBtn && editColorDropdown) {
     // Render with note's current color as active
     const renderEditColorDropdown = () => {
@@ -6702,23 +6707,53 @@ function _notesRenderEditMode(section) {
     });
   }
 
-  // Back button
-  const backHandler = async () => {
-    editor.blur(); // dismiss keyboard first on mobile
-    // Save before leaving
-    const newTitle = (titleEl.textContent || "").trim();
-    const newContent = editor.value;
-    try {
-      await _notesApiUpdate(note.id, { title: newTitle, content: newContent });
-      const idx = state.notes.findIndex((n) => n.id === note.id);
-      if (idx >= 0) {
-        state.notes[idx].title = newTitle;
-        state.notes[idx].content = newContent;
-        state.notes[idx].updated_at = new Date().toISOString();
+  // Save button
+  const saveBtn = $(".notes-save-btn", section);
+  if (saveBtn) {
+    saveBtn.addEventListener("click", async () => {
+      if (saveBtn.disabled) return;
+      saveBtn.disabled = true;
+      const newTitle = (titleEl.textContent || "").trim();
+      const newContent = editor.value;
+      try {
+        if (!note.id) {
+          const res = await _notesApiCreate({ title: newTitle, content: newContent, color: note.color || "" });
+          note.id = res.id;
+          const newNote = { id: res.id, title: newTitle, content: newContent, color: note.color || "", pinned: false, archived: false, sort_order: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), links: [] };
+          state.notes.unshift(newNote);
+        } else {
+          await _notesApiUpdate(note.id, { title: newTitle, content: newContent });
+          const idx = state.notes.findIndex((n) => n.id === note.id);
+          if (idx >= 0) {
+            state.notes[idx].title = newTitle;
+            state.notes[idx].content = newContent;
+            state.notes[idx].updated_at = new Date().toISOString();
+          }
+        }
+        showToast("Note saved");
+      } catch (e) {
+        console.error("Note save failed:", e);
+        showToast("Failed to save note", true);
       }
-    } catch (e) {
-      console.error("Note save failed:", e);
+      saveBtn.disabled = false;
+    });
+  }
+
+  // Back button — discard warning
+  const backHandler = async () => {
+    if (backBtn.disabled) return;
+    // Check if there are unsaved changes
+    const currentTitle = (titleEl.textContent || "").trim();
+    const currentContent = editor.value;
+    const hasChanges = currentContent !== (note.content || "") || currentTitle !== (note.title || "");
+    const isNew = !note.id;
+
+    if (hasChanges || isNew) {
+      const msg = isNew ? "Discard this note?" : "Discard unsaved changes?";
+      if (!confirm(msg)) return;
     }
+
+    backBtn.disabled = true;
     state.notesTileMode = "browse";
     state.notesEditingId = null;
     _notesRefreshTile();
@@ -6981,15 +7016,17 @@ function openNoteEditModal(noteId, { isNew = false } = {}) {
 
   body.innerHTML = `
     <input type="text" class="note-edit-title-input" placeholder="Note title…" value="${escapeHtml(note.title || "")}" />
-    <div class="note-edit-color-row">
+    <div class="note-edit-toolbar">
+      <button type="button" class="btn btn-ghost btn-small btn-icon-only notes-mode-toggle" data-mode="edit" title="Edit">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 7h-1a2 2 0 0 0 -2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2 -2v-1"/><path d="M20.385 6.585a2.1 2.1 0 0 0 -2.97 -2.97l-8.415 8.385v3h3l8.385 -8.415"/><path d="M16 5l3 3"/></svg>
+      </button>
+      <button type="button" class="btn btn-ghost btn-small btn-icon-only notes-mode-toggle" data-mode="preview" title="Preview">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6"/></svg>
+      </button>
       <button type="button" class="btn btn-ghost btn-small btn-icon-only note-edit-color-btn" title="Change color">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M13.58 13.79c.27 .68 .42 1.43 .42 2.21c0 1.77 -.77 3.37 -2 4.46a5.93 5.93 0 0 1 -4 1.54c-3.31 0 -6 -2.69 -6 -6c0 -2.76 1.88 -5.1 4.42 -5.79"/><path d="M17.58 10.21c2.54 .69 4.42 3.03 4.42 5.79c0 3.31 -2.69 6 -6 6a5.93 5.93 0 0 1 -4 -1.54"/><path d="M6 8a6 6 0 1 0 12 0a6 6 0 1 0 -12 0"/></svg>
       </button>
       <div class="notes-color-dropdown hidden"></div>
-    </div>
-    <div class="note-edit-toolbar">
-      <button type="button" class="btn btn-ghost btn-small notes-mode-toggle" data-mode="edit">Edit</button>
-      <button type="button" class="btn btn-ghost btn-small notes-mode-toggle" data-mode="preview">Preview</button>
       <span class="notes-toolbar-sep"></span>
       <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="bold" title="Bold"><b>B</b></button>
       <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="italic" title="Italic"><i>I</i></button>
@@ -7014,7 +7051,7 @@ function openNoteEditModal(noteId, { isNew = false } = {}) {
   const editor = $(".note-edit-editor", body);
   const preview = $(".note-edit-preview", body);
   const modalColorBtn = $(".note-edit-color-btn", body);
-  const modalColorDropdown = $(".notes-color-dropdown", body);
+  const modalColorDropdown = $(".note-edit-toolbar .notes-color-dropdown", body);
   let currentColor = note.color || "";
 
   // Stats
