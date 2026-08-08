@@ -7263,8 +7263,9 @@ function _notesShowContextMenu(e, note) {
   // Color submenu
   const colorItem = document.createElement("div");
   colorItem.className = "ctx-menu-item";
+  colorItem.style.position = "relative";
   colorItem.style.cursor = "default";
-  colorItem.innerHTML = `<span>●</span><span>Change color</span>`;
+  colorItem.innerHTML = `<span>●</span><span>Change color</span><span style="margin-left:auto;font-size:0.7rem;">▶</span>`;
   const colorSubmenu = document.createElement("div");
   colorSubmenu.className = "notes-ctx-colors";
   for (const c of NOTES_COLORS) {
