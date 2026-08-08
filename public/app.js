@@ -414,6 +414,12 @@ const state = {
   calendarTiles: [],
   calendarCache: {},
   notesTiles: [],
+  notes: [],                 // personal notes from PostgreSQL (/api/v2/notes)
+  notesTileMode: "browse",   // "browse" | "edit" — single notes tile mode
+  notesEditingId: null,      // UUID of note being edited in edit mode
+  notesView: "grid",         // "grid" | "list" — persisted in profile
+  notesSearchQuery: "",      // inline search filter
+  notesColorFilter: "",      // color filter chip
   localKanbanTiles: [],  // local-only kanban boards (no CRM), persisted via profile like notes
   opportunityById: new Map(),
   groupTemplates: [],
@@ -5364,38 +5370,65 @@ function showNotesEmojiPicker(textarea, emojiBtn) {
 }
 
 function renderBasicMarkdown(text) {
-  const lines = String(text || "").split(/\r?\n/);
+  const raw = String(text || "");
+  const lines = raw.split(/\r?\n/);
   const out = [];
   let inUl = false;
   let inOl = false;
   let inCheck = false;
+  let inCodeBlock = false;
+  let codeLang = "";
+  let codeLines = [];
+  let inTable = false;
+  let tableRows = [];
 
   const sectionLevels = [];
 
   const closeLists = () => {
-    if (inUl) {
-      out.push("</ul>");
-      inUl = false;
+    if (inUl) { out.push("</ul>"); inUl = false; }
+    if (inOl) { out.push("</ol>"); inOl = false; }
+    if (inCheck) { out.push("</ul>"); inCheck = false; }
+  };
+
+  const closeTable = () => {
+    if (!inTable) return;
+    if (tableRows.length > 0) {
+      out.push(_renderMdTable(tableRows));
     }
-    if (inOl) {
-      out.push("</ol>");
-      inOl = false;
+    tableRows = [];
+    inTable = false;
+  };
+
+  const closeCodeBlock = () => {
+    if (!inCodeBlock) return;
+    const code = escapeHtml(codeLines.join("\n"));
+    if (codeLang === "mermaid") {
+      out.push(`<div class="notes-md-mermaid" data-mermaid="${escapeHtml(codeLines.join("\n"))}"><pre><code>${code}</code></pre><span class="notes-md-mermaid-label">Mermaid diagram</span></div>`);
+    } else {
+      const langClass = codeLang ? ` class="language-${escapeHtml(codeLang)}"` : "";
+      out.push(`<pre class="notes-md-codeblock"><code${langClass}>${code}</code></pre>`);
     }
-    if (inCheck) {
-      out.push("</ul>");
-      inCheck = false;
-    }
+    codeLines = [];
+    codeLang = "";
+    inCodeBlock = false;
   };
 
   const inlineFormat = (raw) => {
     let s = escapeHtml(raw);
+    // Images: ![alt](url)
+    s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
+      const href = escapeHtml(url.trim());
+      const safeAlt = escapeHtml(alt);
+      if (/^https?:\/\//i.test(href) || /^\//.test(href)) {
+        return `<img src="${href}" alt="${safeAlt}" class="notes-md-img" loading="lazy" />`;
+      }
+      return `![${safeAlt}](${escapeHtml(url)})`;
+    });
     s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
     s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
     s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-    // underline via _text_ (free since italic uses only *)
     s = s.replace(/_([^_]+)_/g, "<u>$1</u>");
-    // highlight via ==text== (common in note apps; rendered as <mark>)
     s = s.replace(/==([^=]+)==/g, "<mark>$1</mark>");
     s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label, url) => {
       const href = escapeHtml(url.trim());
@@ -5404,25 +5437,81 @@ function renderBasicMarkdown(text) {
     });
     s = s.replace(
       /(https?:\/\/[^\s<]+[^\s<.,;:!?)\]'"])/gi,
-      (url) =>
-        `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>`
+      (url) => `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>`
     );
     return s;
   };
 
+  // ── Pre-process: detect TOC directive ──────────────────────────────────
+  let hasToc = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\[\[toc\]\]|\{toc\}$/i.test(lines[i].trim())) {
+      hasToc = true;
+      break;
+    }
+  }
+
+  // ── Main line-by-line pass ─────────────────────────────────────────────
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const trimmed = line.trimEnd();
     const compact = trimmed.trim();
+
+    // Fenced code block open/close
+    if (/^```/.test(compact)) {
+      if (inCodeBlock) {
+        closeCodeBlock();
+      } else {
+        closeLists();
+        closeTable();
+        inCodeBlock = true;
+        codeLang = compact.replace(/^```/, "").trim().toLowerCase();
+      }
+      continue;
+    }
+
+    // Inside code block — collect lines verbatim
+    if (inCodeBlock) {
+      codeLines.push(line);
+      continue;
+    }
+
+    // TOC directive
+    if (/^\[\[toc\]\]|\{toc\}$/i.test(compact)) {
+      closeLists();
+      closeTable();
+      // Will be rendered after the loop
+      out.push("%%TOC%%");
+      continue;
+    }
+
+    // Table detection: line starts with |
+    if (/^\|/.test(trimmed)) {
+      if (!inTable) {
+        closeLists();
+        inTable = true;
+        tableRows = [];
+      }
+      tableRows.push(trimmed);
+      continue;
+    } else if (inTable) {
+      closeTable();
+    }
+
+    // Empty line
     if (!compact) {
       closeLists();
       continue;
     }
+
+    // Horizontal rule
     if (/^---+$/.test(compact) || /^\*\*\*+$/.test(compact)) {
       closeLists();
       out.push('<hr class="notes-md-hr" />');
       continue;
     }
+
+    // Headings (collapsible sections)
     const hm = compact.match(/^(#{1,3})\s+(.+)$/);
     if (hm) {
       closeLists();
@@ -5431,15 +5520,20 @@ function renderBasicMarkdown(text) {
         out.push("</details>");
         sectionLevels.pop();
       }
-      out.push(`<details class="notes-md-section" open><summary class="notes-md-h${level}">${inlineFormat(hm[2])}</summary>`);
+      const headingId = hm[2].toLowerCase().replace(/[^\w]+/g, "-").replace(/^-|-$/g, "");
+      out.push(`<details class="notes-md-section" open><summary class="notes-md-h${level}" id="md-${headingId}">${inlineFormat(hm[2])}</summary>`);
       sectionLevels.push(level);
       continue;
     }
+
+    // Blockquote
     if (/^>\s?/.test(trimmed)) {
       closeLists();
       out.push(`<blockquote class="notes-md-quote">${inlineFormat(trimmed.replace(/^>\s?/, ""))}</blockquote>`);
       continue;
     }
+
+    // Checkbox
     const checkm = compact.match(/^-\s+\[([ xX])\]\s*(.*)$/);
     if (checkm) {
       if (!inCheck) {
@@ -5454,35 +5548,159 @@ function renderBasicMarkdown(text) {
       );
       continue;
     }
-    const ulm = compact.match(/^[-*+]\s+(.+)$/);
+
+    // Unordered list (with nested indent support)
+    const ulm = trimmed.match(/^(\s*)[-*+]\s+(.+)$/);
     if (ulm) {
+      const indent = ulm[1].length;
+      const depth = Math.floor(indent / 2);
       if (!inUl) {
         closeLists();
         out.push('<ul class="notes-md-list">');
         inUl = true;
       }
-      out.push(`<li>${inlineFormat(ulm[1])}</li>`);
+      const li = `<li>${inlineFormat(ulm[2])}</li>`;
+      if (depth > 0) {
+        // Nested: wrap in nested list
+        out.push(`<ul class="notes-md-list notes-md-nested">${li}</ul>`);
+      } else {
+        out.push(li);
+      }
       continue;
     }
-    const olm = compact.match(/^\d+\.\s+(.+)$/);
+
+    // Ordered list (with nested indent support)
+    const olm = trimmed.match(/^(\s*)\d+\.\s+(.+)$/);
     if (olm) {
+      const indent = olm[1].length;
+      const depth = Math.floor(indent / 2);
       if (!inOl) {
         closeLists();
         out.push('<ol class="notes-md-list">');
         inOl = true;
       }
-      out.push(`<li>${inlineFormat(olm[1])}</li>`);
+      const li = `<li>${inlineFormat(olm[2])}</li>`;
+      if (depth > 0) {
+        out.push(`<ol class="notes-md-list notes-md-nested">${li}</ol>`);
+      } else {
+        out.push(li);
+      }
       continue;
     }
+
     closeLists();
     out.push(`<p>${inlineFormat(compact)}</p>`);
   }
+
+  // Close any open blocks
   closeLists();
+  closeCodeBlock();
+  closeTable();
   while (sectionLevels.length > 0) {
     out.push("</details>");
     sectionLevels.pop();
   }
-  return out.join("") || '<p class="notes-md-empty">Nothing to preview yet.</p>';
+
+  // ── Post-process: render TOC ───────────────────────────────────────────
+  let result = out.join("");
+  if (hasToc) {
+    const tocHtml = _buildMdToc(raw);
+    result = result.replace("%%TOC%%", tocHtml);
+  }
+
+  return result || '<p class="notes-md-empty">Nothing to preview yet.</p>';
+}
+
+// ── Table renderer ──────────────────────────────────────────────────────────
+
+function _renderMdTable(rows) {
+  if (rows.length < 2) return `<p>${escapeHtml(rows[0] || "")}</p>`;
+
+  const parseRow = (row) => row.replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+  const headers = parseRow(rows[0]);
+
+  // Check if second row is a separator (|---|---|)
+  const isSep = /^\|?[\s:-]+(\|[\s:-]+)+\|?$/.test(rows[1]);
+  const dataStart = isSep ? 2 : 1;
+
+  // Parse alignment from separator
+  const alignments = [];
+  if (isSep) {
+    const sepCells = parseRow(rows[1]);
+    for (const cell of sepCells) {
+      const c = cell.trim();
+      if (c.startsWith(":") && c.endsWith(":")) alignments.push("center");
+      else if (c.endsWith(":")) alignments.push("right");
+      else alignments.push("left");
+    }
+  }
+
+  let html = '<table class="notes-md-table"><thead><tr>';
+  for (let j = 0; j < headers.length; j++) {
+    const align = alignments[j] ? ` style="text-align:${alignments[j]}"` : "";
+    html += `<th${align}>${inlineFormat(headers[j])}</th>`;
+  }
+  html += "</tr></thead><tbody>";
+
+  for (let r = dataStart; r < rows.length; r++) {
+    const cells = parseRow(rows[r]);
+    html += "<tr>";
+    for (let j = 0; j < headers.length; j++) {
+      const align = alignments[j] ? ` style="text-align:${alignments[j]}"` : "";
+      html += `<td${align}>${inlineFormat(cells[j] || "")}</td>`;
+    }
+    html += "</tr>";
+  }
+
+  html += "</tbody></table>";
+  return html;
+
+  // Use the outer scope inlineFormat — but since it's local, re-implement inline here
+  function inlineFormat(raw) {
+    let s = escapeHtml(String(raw || ""));
+    s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+    s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+    s = s.replace(/==([^=]+)==/g, "<mark>$1</mark>");
+    return s;
+  }
+}
+
+// ── TOC builder ─────────────────────────────────────────────────────────────
+
+function _buildMdToc(markdown) {
+  const headings = [];
+  const lines = markdown.split(/\r?\n/);
+  let inCode = false;
+  for (const line of lines) {
+    if (/^```/.test(line.trim())) { inCode = !inCode; continue; }
+    if (inCode) continue;
+    const m = line.trim().match(/^(#{1,3})\s+(.+)$/);
+    if (m) {
+      const level = m[1].length;
+      const text = m[2].replace(/[*_`\[\]]/g, "").trim();
+      const id = text.toLowerCase().replace(/[^\w]+/g, "-").replace(/^-|-$/g, "");
+      headings.push({ level, text, id });
+    }
+  }
+  if (headings.length === 0) return "";
+
+  let html = '<nav class="notes-md-toc"><p class="notes-md-toc-title">Table of Contents</p><ul>';
+  let prevLevel = headings[0].level;
+  for (const h of headings) {
+    if (h.level > prevLevel) {
+      for (let j = prevLevel; j < h.level; j++) html += "<ul>";
+    } else if (h.level < prevLevel) {
+      for (let j = h.level; j < prevLevel; j++) html += "</ul>";
+    }
+    html += `<li><a href="#md-${h.id}">${escapeHtml(h.text)}</a></li>`;
+    prevLevel = h.level;
+  }
+  // Close remaining open lists
+  for (let j = headings[headings.length - 1].level; j > 1; j--) html += "</ul>";
+  html += "</ul></nav>";
+  return html;
 }
 
 function toggleNotesCheckboxLine(notes, lineIndex, checked) {
@@ -5785,7 +6003,7 @@ function bindNotesTileChrome(section, notes, tileId) {
       { label: "Numbered list",   onSelect: () => numberedBtn.click() },
       { label: "Quote block",     onSelect: () => quoteBtn.click() },
       { label: "Inline code",     onSelect: () => codeBtn.click() },
-      { label: "Quick note",      onSelect: () => crmBtn.click() },
+      { label: "Project Note",      onSelect: () => crmBtn.click() },
     ],
   });
 
@@ -6089,6 +6307,1194 @@ function bindNotesTileChrome(section, notes, tileId) {
   applyNotesTileAccent(section, notes);
   syncModeButtons();
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Personal Notes — PostgreSQL-backed single tile (browse + edit modes)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const NOTES_COLORS = [
+  { name: "none",    value: ""            },
+  { name: "coral",   value: "#f28b82"     },
+  { name: "peach",   value: "#fbbc04"     },
+  { name: "sand",    value: "#fff475"     },
+  { name: "mint",    value: "#ccff90"     },
+  { name: "sage",    value: "#a7ffeb"     },
+  { name: "fog",     value: "#cbf0f8"     },
+  { name: "storm",   value: "#aecbfa"     },
+  { name: "dusk",    value: "#d7aefb"     },
+];
+
+function _notesColorHex(colorVal) {
+  if (!colorVal) return "var(--surface-2)";
+  const found = NOTES_COLORS.find((c) => c.value === colorVal);
+  return found ? found.value : colorVal;
+}
+
+function _notesTruncate(text, max) {
+  if (!text) return "";
+  const s = text.replace(/[#*>\-_\[\]`~=!|]/g, "").trim();
+  return s.length > max ? s.slice(0, max) + "…" : s;
+}
+
+function _notesRelativeTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  const now = Date.now();
+  const diff = now - d.getTime();
+  if (diff < 60000) return "just now";
+  if (diff < 3600000) return Math.floor(diff / 60000) + "m ago";
+  if (diff < 86400000) return Math.floor(diff / 3600000) + "h ago";
+  const yesterday = new Date(now - 86400000);
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+  if (diff < 604800000) return Math.floor(diff / 86400000) + "d ago";
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+// ── API helpers ──────────────────────────────────────────────────────────────
+
+async function _notesApiFetch(params = {}) {
+  const qs = new URLSearchParams();
+  if (params.archived) qs.set("archived", "true");
+  if (params.color) qs.set("color", params.color);
+  if (params.q) qs.set("q", params.q);
+  if (params.deal_id) qs.set("deal_id", params.deal_id);
+  const url = "/api/v2/notes" + (qs.toString() ? "?" + qs.toString() : "");
+  const res = await api(url);
+  return res.notes || [];
+}
+
+async function _notesApiCreate(data = {}) {
+  const res = await api("/api/v2/notes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res;
+}
+
+async function _notesApiUpdate(id, patch) {
+  return api(`/api/v2/notes/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+async function _notesApiDelete(id) {
+  return api(`/api/v2/notes/${id}`, { method: "DELETE" });
+}
+
+async function _notesApiReorder(ids) {
+  return api("/api/v2/notes/reorder", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+}
+
+async function _notesApiLinkAdd(noteId, entityType, entityId) {
+  return api(`/api/v2/notes/${noteId}/links`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ entityType, entityId }),
+  });
+}
+
+async function _notesApiLinkRemove(noteId, entityType, entityId) {
+  return api(`/api/v2/notes/${noteId}/links/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}`, {
+    method: "DELETE",
+  });
+}
+
+async function _notesApiVersions(noteId) {
+  return api(`/api/v2/notes/${noteId}/versions`);
+}
+
+async function _notesApiRestore(noteId, version) {
+  return api(`/api/v2/notes/${noteId}/restore`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ version }),
+  });
+}
+
+// ── Load notes from server ───────────────────────────────────────────────────
+
+async function _notesLoadAll() {
+  try {
+    state.notes = await _notesApiFetch();
+  } catch (e) {
+    console.error("Failed to load notes:", e);
+    state.notes = [];
+  }
+}
+
+// ── Filtered notes list ──────────────────────────────────────────────────────
+
+function _notesFilteredList() {
+  let list = state.notes.filter((n) => !n.archived);
+  if (state.notesColorFilter) {
+    list = list.filter((n) => n.color === state.notesColorFilter);
+  }
+  if (state.notesSearchQuery) {
+    const q = state.notesSearchQuery.toLowerCase();
+    list = list.filter(
+      (n) =>
+        (n.title || "").toLowerCase().includes(q) ||
+        (n.content || "").toLowerCase().includes(q)
+    );
+  }
+  // Sort: pinned first, then sort_order, then updated_at desc
+  list.sort((a, b) => {
+    if (a.pinned && !b.pinned) return -1;
+    if (!a.pinned && b.pinned) return 1;
+    if (a.sort_order !== b.sort_order) return (a.sort_order || 0) - (b.sort_order || 0);
+    return new Date(b.updated_at || 0) - new Date(a.updated_at || 0);
+  });
+  return list;
+}
+
+// ── Single notes tile renderer ───────────────────────────────────────────────
+
+function renderPersonalNotesTile(dash) {
+  const tileId = "tile-notes";
+  let section = dash.querySelector(`[data-tile-id="${tileId}"]`);
+  if (!section) {
+    section = document.createElement("section");
+    section.className = "dashboard-tile board-group board-group-tile notes-tile personal-notes-tile";
+    section.dataset.tileId = tileId;
+    section.dataset.tileLabel = "Notes";
+    dash.appendChild(section);
+  }
+
+  const mode = state.notesTileMode || "browse";
+  if (mode === "edit") {
+    _notesRenderEditMode(section);
+  } else {
+    _notesRenderBrowseMode(section);
+  }
+
+  applyTileLayoutClasses(section, tileId);
+  applyTileBodyCollapsed(section, tileId);
+}
+
+// ── Browse mode: card grid / list ────────────────────────────────────────────
+
+function _notesRenderEditMode(section) {
+  const note = state.notes.find((n) => n.id === state.notesEditingId);
+  if (!note) {
+    state.notesTileMode = "browse";
+    state.notesEditingId = null;
+    _notesRenderBrowseMode(section);
+    return;
+  }
+
+  const linkedDeals = (note.links || []).filter((l) => l.entityType === "deal");
+
+  section.innerHTML = `
+    <div class="tile-toolbar group-tile-bar notes-tile-bar">
+      <span class="tile-drag-hint" title="Drag to reorder">⋮⋮</span>
+      <button type="button" class="btn btn-ghost btn-small notes-back-btn" title="Back to notes">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+        <span>Back</span>
+      </button>
+      <span class="notes-edit-title" contenteditable="true" spellcheck="false" data-placeholder="Note title…">${escapeHtml(note.title || "")}</span>
+      <span style="flex:1"></span>
+      <button type="button" class="btn btn-ghost btn-small notes-link-btn" title="Link to project">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      </button>
+      <button type="button" class="btn btn-ghost btn-small notes-versions-btn" title="Version history">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/></svg>
+      </button>
+      <button type="button" class="btn btn-ghost btn-small notes-delete-btn" title="Delete note">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+      </button>
+    </div>
+    ${linkedDeals.length > 0 ? `
+    <div class="notes-linked-chips">
+      ${linkedDeals.map((l) => {
+        const opp = (state.groups || []).flatMap((g) => g.opportunities || []).find((o) => String(o.id || o.ID) === String(l.entityId));
+        const title = opp ? (opp.title || opp.Title || `Project #${l.entityId}`) : `Project #${l.entityId}`;
+        return `<span class="notes-linked-chip" data-entity-id="${escapeHtml(l.entityId)}" title="Linked to project">${escapeHtml(title)} <button type="button" class="notes-linked-chip-remove" data-entity-id="${escapeHtml(l.entityId)}">&times;</button></span>`;
+      }).join("")}
+    </div>` : ""}
+    <div class="notes-link-search hidden">
+      <input type="search" class="notes-link-search-input" placeholder="Search project to link…" autocomplete="off" />
+      <div class="contact-results hidden"></div>
+    </div>
+    <div class="notes-versions-panel hidden">
+      <div class="notes-versions-header">
+        <span class="notes-versions-title">Version History</span>
+        <button type="button" class="btn btn-ghost btn-small notes-versions-close">&times;</button>
+      </div>
+      <div class="notes-versions-list"></div>
+    </div>
+    <div class="notes-edit-color-row">
+      <button type="button" class="btn btn-ghost btn-small btn-icon-only notes-edit-color-btn" title="Change color">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M13.58 13.79c.27 .68 .42 1.43 .42 2.21c0 1.77 -.77 3.37 -2 4.46a5.93 5.93 0 0 1 -4 1.54c-3.31 0 -6 -2.69 -6 -6c0 -2.76 1.88 -5.1 4.42 -5.79"/><path d="M17.58 10.21c2.54 .69 4.42 3.03 4.42 5.79c0 3.31 -2.69 6 -6 6a5.93 5.93 0 0 1 -4 -1.54"/><path d="M6 8a6 6 0 1 0 12 0a6 6 0 1 0 -12 0"/></svg>
+      </button>
+      <div class="notes-color-dropdown hidden"></div>
+    </div>
+    <div class="notes-edit-body">
+      <div class="notes-edit-toolbar">
+        <button type="button" class="btn btn-ghost btn-small notes-mode-toggle" data-mode="edit">Edit</button>
+        <button type="button" class="btn btn-ghost btn-small notes-mode-toggle" data-mode="preview">Preview</button>
+        <span class="notes-toolbar-sep"></span>
+        <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+        <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+        <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="strike" title="Strikethrough"><s>S</s></button>
+        <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+        <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="highlight" title="Highlight">🖍</button>
+        <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="code" title="Inline code">&lt;/&gt;</button>
+        <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="link" title="Insert link">🔗</button>
+        <span class="notes-toolbar-sep"></span>
+        <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="bullet" title="Bullet list">•</button>
+        <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="numbered" title="Numbered list">1.</button>
+        <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="quote" title="Quote block">></button>
+        <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="hr" title="Horizontal rule">—</button>
+        <span class="notes-toolbar-sep"></span>
+        <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="date" title="Insert date">📅</button>
+      </div>
+      <textarea class="notes-editor" placeholder="Write your note… (Markdown supported)" spellcheck="true"></textarea>
+      <div class="notes-preview hidden" aria-live="polite"></div>
+    </div>
+    <div class="notes-tile-footer">
+      <span class="notes-stats-label"></span>
+      <span class="notes-updated-label">${_notesRelativeTime(note.updated_at)}</span>
+    </div>
+  `;
+
+  const editor = $(".notes-editor", section);
+  const preview = $(".notes-preview", section);
+  const titleEl = $(".notes-edit-title", section);
+  editor.value = note.content || "";
+
+  // Mode toggle
+  const modeBtns = section.querySelectorAll(".notes-mode-toggle");
+  const _syncMode = (m) => {
+    modeBtns.forEach((b) => b.classList.toggle("tile-btn-active", b.dataset.mode === m));
+    if (m === "preview") {
+      editor.classList.add("hidden");
+      preview.classList.remove("hidden");
+      preview.innerHTML = renderBasicMarkdown(editor.value);
+      // Bind checklist checkbox interactions for preview mode
+      if (!section.dataset.notesCheckBound) {
+        section.dataset.notesCheckBound = "1";
+        section.addEventListener("change", (e) => {
+          const cb = e.target.closest(".notes-md-check-input");
+          if (!cb || !section.contains(cb)) return;
+          const lineIndex = Number(cb.dataset.line);
+          if (!Number.isFinite(lineIndex)) return;
+          const lines = editor.value.split("\n");
+          if (lineIndex >= 0 && lineIndex < lines.length) {
+            lines[lineIndex] = lines[lineIndex].replace(
+              /\[ \]/, "[x]"
+            ).replace(
+              /\[x\]/, cb.checked ? "[x]" : "[ ]"
+            );
+            editor.value = lines.join("\n");
+            _scheduleSave();
+            preview.innerHTML = renderBasicMarkdown(editor.value);
+          }
+        });
+      }
+    } else {
+      editor.classList.remove("hidden");
+      preview.classList.add("hidden");
+    }
+  };
+  _syncMode("edit");
+  modeBtns.forEach((b) => b.addEventListener("click", () => _syncMode(b.dataset.mode)));
+
+  // Auto-save on input
+  let saveTimer = null;
+  const _scheduleSave = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(async () => {
+      const newTitle = (titleEl.textContent || "").trim();
+      const newContent = editor.value;
+      try {
+        await _notesApiUpdate(note.id, { title: newTitle, content: newContent });
+        // Update local state
+        const idx = state.notes.findIndex((n) => n.id === note.id);
+        if (idx >= 0) {
+          state.notes[idx].title = newTitle;
+          state.notes[idx].content = newContent;
+          state.notes[idx].updated_at = new Date().toISOString();
+        }
+        // Update footer
+        const footer = section.querySelector(".notes-updated-label");
+        if (footer) footer.textContent = _notesRelativeTime(new Date().toISOString());
+      } catch (e) {
+        console.error("Note save failed:", e);
+      }
+    }, 800);
+  };
+
+  editor.addEventListener("input", () => {
+    _scheduleSave();
+    _updateNotesStats(section, editor.value);
+  });
+  titleEl.addEventListener("input", _scheduleSave);
+
+  // Auto-continue lists on Enter
+  _notesAutoContinueList(editor, _scheduleSave);
+
+  // Format buttons
+  section.querySelectorAll(".notes-fmt-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const fmt = btn.dataset.fmt;
+      _notesInsertFormat(editor, fmt);
+      editor.focus();
+      _scheduleSave();
+    });
+  });
+
+  // Color dropdown (edit mode)
+  const editColorBtn = $(".notes-edit-color-btn", section);
+  const editColorDropdown = $(".notes-edit-color-row .notes-color-dropdown", section);
+  if (editColorBtn && editColorDropdown) {
+    // Render with note's current color as active
+    const renderEditColorDropdown = () => {
+      editColorDropdown.innerHTML = NOTES_COLORS.map((c) => {
+        const active = (note.color || "") === c.value ? " notes-dropdown-active" : "";
+        const check = (note.color || "") === c.value ? `<span class="notes-dropdown-check">✓</span>` : "";
+        const dot = c.value ? `<span class="notes-dropdown-dot" style="background:${c.value}"></span>` : `<span class="notes-dropdown-dot notes-dropdown-dot-all">None</span>`;
+        return `<button type="button" class="notes-dropdown-item${active}" data-color="${c.value}">${dot}${check}</button>`;
+      }).join("");
+    };
+    renderEditColorDropdown();
+    editColorBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      editColorDropdown.classList.toggle("hidden");
+      if (!editColorDropdown.classList.contains("hidden")) {
+        const rect = editColorBtn.getBoundingClientRect();
+        editColorDropdown.style.position = "fixed";
+        editColorDropdown.style.top = (rect.bottom + 4) + "px";
+        editColorDropdown.style.left = rect.left + "px";
+        editColorDropdown.style.zIndex = "10000";
+      }
+    });
+    editColorDropdown.addEventListener("click", async (e) => {
+      const item = e.target.closest(".notes-dropdown-item");
+      if (!item) return;
+      const color = item.dataset.color;
+      try {
+        await _notesApiUpdate(note.id, { color });
+        const idx = state.notes.findIndex((n) => n.id === note.id);
+        if (idx >= 0) state.notes[idx].color = color;
+        note.color = color;
+        renderEditColorDropdown();
+        editColorDropdown.classList.add("hidden");
+      } catch (e) {
+        console.error("Color update failed:", e);
+      }
+    });
+    document.addEventListener("click", (e) => {
+      if (!editColorBtn.contains(e.target) && !editColorDropdown.contains(e.target)) {
+        editColorDropdown.classList.add("hidden");
+      }
+    });
+  }
+
+  // Back button
+  const backHandler = async () => {
+    editor.blur(); // dismiss keyboard first on mobile
+    // Save before leaving
+    const newTitle = (titleEl.textContent || "").trim();
+    const newContent = editor.value;
+    try {
+      await _notesApiUpdate(note.id, { title: newTitle, content: newContent });
+      const idx = state.notes.findIndex((n) => n.id === note.id);
+      if (idx >= 0) {
+        state.notes[idx].title = newTitle;
+        state.notes[idx].content = newContent;
+        state.notes[idx].updated_at = new Date().toISOString();
+      }
+    } catch (e) {
+      console.error("Note save failed:", e);
+    }
+    state.notesTileMode = "browse";
+    state.notesEditingId = null;
+    _notesRefreshTile();
+  };
+  const backBtn = $(".notes-back-btn", section);
+  if (backBtn) {
+    backBtn.addEventListener("click", backHandler);
+    backBtn.addEventListener("touchend", (e) => { e.preventDefault(); backHandler(); });
+  }
+
+  // Delete button
+  $(".notes-delete-btn", section)?.addEventListener("click", async () => {
+    if (!confirm("Delete this note?")) return;
+    try {
+      await _notesApiDelete(note.id);
+      state.notes = state.notes.filter((n) => n.id !== note.id);
+      state.notesTileMode = "browse";
+      state.notesEditingId = null;
+      _notesRefreshTile();
+      showToast("Note deleted");
+    } catch (e) {
+      console.error("Note delete failed:", e);
+    }
+  });
+
+  // ── Entity link: toggle search ───────────────────────────────────────────
+  const linkBtn = $(".notes-link-btn", section);
+  const linkSearchWrap = $(".notes-link-search", section);
+  const linkSearchInput = $(".notes-link-search-input", section);
+  const linkResults = $(".contact-results", linkSearchWrap);
+  if (linkBtn && linkSearchWrap) {
+    linkBtn.addEventListener("click", () => {
+      linkSearchWrap.classList.toggle("hidden");
+      if (!linkSearchWrap.classList.contains("hidden")) linkSearchInput?.focus();
+    });
+  }
+
+  // ── Entity link: search + select ─────────────────────────────────────────
+  if (linkSearchInput && linkResults) {
+    let linkDebounce = null;
+    linkSearchInput.addEventListener("input", () => {
+      clearTimeout(linkDebounce);
+      linkDebounce = setTimeout(async () => {
+        const q = linkSearchInput.value.trim();
+        linkResults.innerHTML = "";
+        if (q.length < 1) { linkResults.classList.add("hidden"); return; }
+        try {
+          const opps = await searchOpportunitiesByTitle(q, { limit: 8 });
+          linkResults.classList.remove("hidden");
+          if (!opps.length) {
+            linkResults.innerHTML = '<button type="button" disabled>No matches</button>';
+            return;
+          }
+          for (const o of opps) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.textContent = o.title;
+            btn.addEventListener("click", async () => {
+              linkResults.classList.add("hidden");
+              linkSearchInput.value = "";
+              // Check if already linked
+              const alreadyLinked = (note.links || []).some(
+                (l) => l.entityType === "deal" && String(l.entityId) === String(o.id)
+              );
+              if (alreadyLinked) { showToast("Already linked"); return; }
+              try {
+                await _notesApiLinkAdd(note.id, "deal", String(o.id));
+                if (!note.links) note.links = [];
+                note.links.push({ entityType: "deal", entityId: String(o.id) });
+                linkSearchWrap.classList.add("hidden");
+                _notesRefreshTile();
+                showToast("Linked to " + o.title);
+              } catch (e) {
+                console.error("Link failed:", e);
+                showToast("Failed to link", true);
+              }
+            });
+            linkResults.appendChild(btn);
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      }, 300);
+    });
+    // Close results on click outside
+    document.addEventListener("click", (e) => {
+      if (!linkSearchWrap.contains(e.target)) linkResults.classList.add("hidden");
+    });
+  }
+
+  // ── Entity link: remove chip ─────────────────────────────────────────────
+  section.querySelectorAll(".notes-linked-chip-remove").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const entityId = btn.dataset.entityId;
+      try {
+        await _notesApiLinkRemove(note.id, "deal", entityId);
+        note.links = (note.links || []).filter(
+          (l) => !(l.entityType === "deal" && String(l.entityId) === String(entityId))
+        );
+        _notesRefreshTile();
+        showToast("Link removed");
+      } catch (e) {
+        console.error("Unlink failed:", e);
+      }
+    });
+  });
+
+  // ── Version history ──────────────────────────────────────────────────────
+  const versionsBtn = $(".notes-versions-btn", section);
+  const versionsPanel = $(".notes-versions-panel", section);
+  const versionsList = $(".notes-versions-list", section);
+  const versionsClose = $(".notes-versions-close", section);
+
+  if (versionsBtn && versionsPanel) {
+    versionsBtn.addEventListener("click", async () => {
+      const isHidden = versionsPanel.classList.contains("hidden");
+      // Close link search if open
+      linkSearchWrap?.classList.add("hidden");
+      if (isHidden) {
+        versionsPanel.classList.remove("hidden");
+        // Fetch versions
+        try {
+          const res = await _notesApiVersions(note.id);
+          const versions = res.versions || [];
+          if (versions.length <= 1) {
+            versionsList.innerHTML = '<div class="notes-versions-empty">No previous versions yet.</div>';
+            return;
+          }
+          versionsList.innerHTML = versions.map((v, idx) => {
+            const timeStr = v.at ? _notesRelativeTime(v.at) : "";
+            const isCurrent = idx === 0;
+            const canRestore = !isCurrent && v.content != null;
+            return `
+              <div class="notes-version-item" data-version="${isCurrent ? "" : idx === 1 ? "prev" : "prev2"}">
+                <div class="notes-version-header">
+                  <span class="notes-version-label">${escapeHtml(v.label)}</span>
+                  ${timeStr ? `<span class="notes-version-time">${escapeHtml(timeStr)}</span>` : ""}
+                </div>
+                <div class="notes-version-preview">${escapeHtml((v.content || "").slice(0, 200)) || "<em>Empty</em>"}</div>
+                ${canRestore ? `<button type="button" class="btn btn-ghost btn-small notes-version-restore" data-version="${idx === 1 ? "prev" : "prev2"}">Restore</button>` : ""}
+              </div>
+            `;
+          }).join("");
+          // Bind restore buttons
+          versionsList.querySelectorAll(".notes-version-restore").forEach((btn) => {
+            btn.addEventListener("click", async () => {
+              if (!confirm("Restore this version? Current content will be saved as a version.")) return;
+              try {
+                const restoreRes = await _notesApiRestore(note.id, btn.dataset.version);
+                if (restoreRes.ok) {
+                  // Update local state
+                  const idx = state.notes.findIndex((n) => n.id === note.id);
+                  if (idx >= 0) state.notes[idx].content = restoreRes.content;
+                  _notesRefreshTile();
+                  showToast("Version restored");
+                }
+              } catch (e) {
+                console.error("Restore failed:", e);
+                showToast("Restore failed", true);
+              }
+            });
+          });
+        } catch (e) {
+          console.error("Failed to load versions:", e);
+          versionsList.innerHTML = '<div class="notes-versions-empty">Failed to load versions.</div>';
+        }
+      } else {
+        versionsPanel.classList.add("hidden");
+      }
+    });
+  }
+
+  if (versionsClose) {
+    versionsClose.addEventListener("click", () => versionsPanel.classList.add("hidden"));
+  }
+
+  // Initial stats
+  _updateNotesStats(section, editor.value);
+
+  // Focus editor
+  setTimeout(() => editor.focus(), 50);
+}
+
+function _notesRenderBrowseMode(section) {
+  const list = _notesFilteredList();
+  const totalCount = state.notes.filter((n) => !n.archived).length;
+
+  section.innerHTML = `
+    <div class="tile-toolbar group-tile-bar notes-tile-bar">
+      <span class="tile-drag-hint" title="Drag to reorder">⋮⋮</span>
+      <span class="group-tile-name-display tile-title">Notes</span>
+      <span class="notes-count-badge">${totalCount}</span>
+      <button type="button" class="btn btn-ghost btn-small btn-icon-only notes-add-btn" title="New note">+</button>
+      <button type="button" class="btn btn-ghost btn-small btn-icon-only notes-color-filter-btn" title="Filter by color">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M13.58 13.79c.27 .68 .42 1.43 .42 2.21c0 1.77 -.77 3.37 -2 4.46a5.93 5.93 0 0 1 -4 1.54c-3.31 0 -6 -2.69 -6 -6c0 -2.76 1.88 -5.1 4.42 -5.79"/><path d="M17.58 10.21c2.54 .69 4.42 3.03 4.42 5.79c0 3.31 -2.69 6 -6 6a5.93 5.93 0 0 1 -4 -1.54"/><path d="M6 8a6 6 0 1 0 12 0a6 6 0 1 0 -12 0"/></svg>
+      </button>
+      <span style="flex:1"></span>
+      <button type="button" class="btn btn-ghost btn-small notes-search-toggle" title="Search notes">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+      </button>
+      <button type="button" class="btn btn-ghost btn-small notes-view-toggle" title="Toggle view">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      </button>
+    </div>
+    <div class="notes-color-dropdown hidden"></div>
+    <div class="notes-search-bar hidden">
+      <input type="search" class="notes-search-input" placeholder="Search notes…" autocomplete="off" value="${escapeHtml(state.notesSearchQuery)}" />
+    </div>
+    <div class="notes-card-container ${state.notesView === "list" ? "notes-list-view" : "notes-grid-view"}">
+      ${list.length === 0 ? `<div class="notes-empty-state">${state.notesSearchQuery ? "No notes match your search" : "No notes yet. Click + to create one."}</div>` : ""}
+      ${list.map((n) => _notesRenderCard(n)).join("")}
+    </div>
+    <div class="notes-quick-add">
+      <input type="text" class="notes-quick-add-input" placeholder="Add a note, press Enter…" autocomplete="off" />
+    </div>
+  `;
+
+  // Bind events
+  _notesBindBrowseEvents(section);
+}
+
+function _notesRenderCard(note) {
+  const preview = _notesTruncate(note.content, 100);
+  const time = _notesRelativeTime(note.updated_at);
+  const colorBg = _notesColorHex(note.color);
+  const pinned = note.pinned ? " notes-card-pinned" : "";
+  return `
+    <div class="notes-card${pinned}" data-note-id="${note.id}" style="border-left:3px solid ${colorBg}">
+      <span class="notes-card-drag" title="Drag to reorder">⋮⋮</span>
+      <div class="notes-card-title">${_esc(note.title || "Untitled")}</div>
+      ${preview ? `<div class="notes-card-preview">${_esc(preview)}</div>` : ""}
+      <div class="notes-card-footer">
+        <span class="notes-card-time">${time}</span>
+        ${note.pinned ? `<span class="notes-card-pin">📌</span>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Note Edit Modal
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function openNoteEditModal(noteId, { isNew = false } = {}) {
+  const modal = $("#note-edit-modal");
+  const body = $("#note-edit-body");
+  const titleEl = $("#note-edit-modal-title");
+  const statsEl = $("#note-edit-stats");
+  const saveBtn = $("#note-edit-save");
+  const cancelBtn = $("#note-edit-cancel");
+  const deleteBtn = $("#note-edit-delete");
+  if (!modal || !body) return;
+
+  let note = isNew ? { id: null, title: "", content: "", color: "", links: [] } : state.notes.find((n) => n.id === noteId);
+  if (!note && !isNew) return;
+
+  titleEl.textContent = isNew ? "New Note" : "Edit Note";
+  deleteBtn.style.display = isNew ? "none" : "";
+
+  body.innerHTML = `
+    <input type="text" class="note-edit-title-input" placeholder="Note title…" value="${escapeHtml(note.title || "")}" />
+    <div class="note-edit-color-row">
+      <button type="button" class="btn btn-ghost btn-small btn-icon-only note-edit-color-btn" title="Change color">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M13.58 13.79c.27 .68 .42 1.43 .42 2.21c0 1.77 -.77 3.37 -2 4.46a5.93 5.93 0 0 1 -4 1.54c-3.31 0 -6 -2.69 -6 -6c0 -2.76 1.88 -5.1 4.42 -5.79"/><path d="M17.58 10.21c2.54 .69 4.42 3.03 4.42 5.79c0 3.31 -2.69 6 -6 6a5.93 5.93 0 0 1 -4 -1.54"/><path d="M6 8a6 6 0 1 0 12 0a6 6 0 1 0 -12 0"/></svg>
+      </button>
+      <div class="notes-color-dropdown hidden"></div>
+    </div>
+    <div class="note-edit-toolbar">
+      <button type="button" class="btn btn-ghost btn-small notes-mode-toggle" data-mode="edit">Edit</button>
+      <button type="button" class="btn btn-ghost btn-small notes-mode-toggle" data-mode="preview">Preview</button>
+      <span class="notes-toolbar-sep"></span>
+      <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="bold" title="Bold"><b>B</b></button>
+      <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="italic" title="Italic"><i>I</i></button>
+      <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="strike" title="Strikethrough"><s>S</s></button>
+      <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="underline" title="Underline"><u>U</u></button>
+      <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="highlight" title="Highlight">🖍</button>
+      <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="code" title="Inline code">&lt;/&gt;</button>
+      <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="link" title="Insert link">🔗</button>
+      <span class="notes-toolbar-sep"></span>
+      <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="bullet" title="Bullet list">•</button>
+      <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="numbered" title="Numbered list">1.</button>
+      <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="quote" title="Quote">></button>
+      <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="hr" title="Horizontal rule">—</button>
+      <span class="notes-toolbar-sep"></span>
+      <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="date" title="Insert date">📅</button>
+    </div>
+    <textarea class="note-edit-editor" placeholder="Write your note… (Markdown supported)" spellcheck="true">${escapeHtml(note.content || "")}</textarea>
+    <div class="note-edit-preview notes-preview hidden" aria-live="polite"></div>
+  `;
+
+  const modalTitleInput = $(".note-edit-title-input", body);
+  const editor = $(".note-edit-editor", body);
+  const preview = $(".note-edit-preview", body);
+  const modalColorBtn = $(".note-edit-color-btn", body);
+  const modalColorDropdown = $(".notes-color-dropdown", body);
+  let currentColor = note.color || "";
+
+  // Stats
+  const updateStats = () => {
+    const text = editor.value;
+    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    statsEl.textContent = `${words} word${words !== 1 ? "s" : ""} · ${text.length} char${text.length !== 1 ? "s" : ""}`;
+  };
+  updateStats();
+  editor.addEventListener("input", updateStats);
+
+  // Auto-continue lists on Enter
+  _notesAutoContinueList(editor, updateStats);
+
+  // Mode toggle
+  const modeBtns = body.querySelectorAll(".notes-mode-toggle");
+  const syncMode = (m) => {
+    modeBtns.forEach((b) => b.classList.toggle("tile-btn-active", b.dataset.mode === m));
+    if (m === "preview") {
+      editor.classList.add("hidden");
+      preview.classList.remove("hidden");
+      preview.innerHTML = renderBasicMarkdown(editor.value);
+    } else {
+      editor.classList.remove("hidden");
+      preview.classList.add("hidden");
+    }
+  };
+  syncMode("edit");
+  modeBtns.forEach((b) => b.addEventListener("click", () => syncMode(b.dataset.mode)));
+
+  // Format buttons
+  body.querySelectorAll(".notes-fmt-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      _notesInsertFormat(editor, btn.dataset.fmt);
+      editor.focus();
+    });
+  });
+
+  // Color dropdown
+  if (modalColorBtn && modalColorDropdown) {
+    const renderModalColors = () => {
+      modalColorDropdown.innerHTML = NOTES_COLORS.map((c) => {
+        const active = currentColor === c.value ? " notes-dropdown-active" : "";
+        const check = currentColor === c.value ? `<span class="notes-dropdown-check">✓</span>` : "";
+        const dot = c.value ? `<span class="notes-dropdown-dot" style="background:${c.value}"></span>` : `<span class="notes-dropdown-dot notes-dropdown-dot-all">None</span>`;
+        return `<button type="button" class="notes-dropdown-item${active}" data-color="${c.value}">${dot}${check}</button>`;
+      }).join("");
+    };
+    renderModalColors();
+    modalColorBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      modalColorDropdown.classList.toggle("hidden");
+      if (!modalColorDropdown.classList.contains("hidden")) {
+        const rect = modalColorBtn.getBoundingClientRect();
+        modalColorDropdown.style.position = "fixed";
+        modalColorDropdown.style.top = (rect.bottom + 4) + "px";
+        modalColorDropdown.style.left = rect.left + "px";
+        modalColorDropdown.style.zIndex = "10001";
+      }
+    });
+    modalColorDropdown.addEventListener("click", (e) => {
+      const item = e.target.closest(".notes-dropdown-item");
+      if (!item) return;
+      currentColor = item.dataset.color;
+      renderModalColors();
+      modalColorDropdown.classList.add("hidden");
+    });
+  }
+
+  // Save
+  const doSave = async () => {
+    const newTitle = (modalTitleInput.value || "").trim();
+    const newContent = editor.value;
+    const payload = { title: newTitle, content: newContent, color: currentColor };
+    try {
+      if (isNew || !note.id) {
+        const res = await _notesApiCreate(payload);
+        const newNote = { id: res.id, ...payload, pinned: false, archived: false, sort_order: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), links: [] };
+        state.notes.unshift(newNote);
+      } else {
+        await _notesApiUpdate(note.id, payload);
+        const idx = state.notes.findIndex((n) => n.id === note.id);
+        if (idx >= 0) {
+          state.notes[idx].title = newTitle;
+          state.notes[idx].content = newContent;
+          state.notes[idx].color = currentColor;
+          state.notes[idx].updated_at = new Date().toISOString();
+        }
+      }
+      modal.classList.add("hidden");
+      _notesRefreshTile();
+    } catch (e) {
+      console.error("Note save failed:", e);
+      showToast("Failed to save note", true);
+    }
+  };
+
+  saveBtn.onclick = doSave;
+
+  // Cancel
+  cancelBtn.onclick = () => { modal.classList.add("hidden"); };
+
+  // Close button
+  const closeBtn = $("#note-edit-close", modal);
+  if (closeBtn) closeBtn.onclick = () => { modal.classList.add("hidden"); };
+
+  // Backdrop dismiss
+  const backdrop = $(".modal-backdrop", modal);
+  if (backdrop) backdrop.onclick = () => { modal.classList.add("hidden"); };
+
+  // Delete
+  deleteBtn.onclick = async () => {
+    if (!note.id || !confirm("Delete this note?")) return;
+    try {
+      await _notesApiDelete(note.id);
+      state.notes = state.notes.filter((n) => n.id !== note.id);
+      modal.classList.add("hidden");
+      _notesRefreshTile();
+      showToast("Note deleted");
+    } catch (e) {
+      console.error("Delete failed:", e);
+    }
+  };
+
+  // Escape to close
+  const escHandler = (e) => {
+    if (e.key === "Escape" && !modal.classList.contains("hidden")) {
+      modal.classList.add("hidden");
+      document.removeEventListener("keydown", escHandler);
+    }
+  };
+  document.addEventListener("keydown", escHandler);
+
+  modal.classList.remove("hidden");
+  setTimeout(() => modalTitleInput.focus(), 50);
+}
+
+function _notesRenderColorDropdown(dropdownEl, onSelect) {
+  dropdownEl.innerHTML = NOTES_COLORS.map((c) => {
+    const active = state.notesColorFilter === c.value ? " notes-dropdown-active" : "";
+    const check = state.notesColorFilter === c.value ? `<span class="notes-dropdown-check">✓</span>` : "";
+    const dot = c.value ? `<span class="notes-dropdown-dot" style="background:${c.value}"></span>` : `<span class="notes-dropdown-dot notes-dropdown-dot-all">All</span>`;
+    return `<button type="button" class="notes-dropdown-item${active}" data-color="${c.value}">${dot}${check}</button>`;
+  }).join("");
+}
+
+function _notesShowContextMenu(e, note) {
+  e.preventDefault();
+  e.stopPropagation();
+  document.querySelectorAll(".notes-ctx-menu").forEach((m) => m.remove());
+
+  const menu = document.createElement("div");
+  menu.className = "notes-ctx-menu";
+
+  const mkItem = (icon, label, cls, action) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ctx-menu-item" + (cls ? ` ${cls}` : "");
+    btn.innerHTML = `<span>${icon}</span><span>${label}</span>`;
+    btn.addEventListener("click", () => { menu.remove(); action(); });
+    return btn;
+  };
+
+  menu.appendChild(mkItem("✎", "Edit", "", () => openNoteEditModal(note.id)));
+  menu.appendChild(mkItem("↔", "Edit inline", "", () => { state.notesTileMode = "edit"; state.notesEditingId = note.id; _notesRefreshTile(); }));
+  menu.appendChild(mkItem("⊕", "Duplicate", "", async () => {
+    try {
+      const res = await _notesApiCreate({ title: note.title, content: note.content, color: note.color });
+      state.notes.unshift({ id: res.id, title: note.title, content: note.content, color: note.color, pinned: false, archived: false, sort_order: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), links: [] });
+      _notesRefreshTile();
+      showToast("Note duplicated");
+    } catch (err) { showToast("Duplicate failed", true); }
+  }));
+
+  // Divider
+  const d1 = document.createElement("div"); d1.className = "ctx-menu-divider"; menu.appendChild(d1);
+
+  // Color submenu
+  const colorItem = document.createElement("div");
+  colorItem.className = "ctx-menu-item";
+  colorItem.style.cursor = "default";
+  colorItem.innerHTML = `<span>●</span><span>Change color</span>`;
+  const colorSubmenu = document.createElement("div");
+  colorSubmenu.className = "notes-ctx-colors";
+  for (const c of NOTES_COLORS) {
+    const cbtn = document.createElement("button");
+    cbtn.type = "button";
+    cbtn.className = "notes-ctx-color-btn" + (note.color === c.value ? " notes-ctx-color-active" : "");
+    cbtn.style.background = c.value || "var(--surface-2)";
+    cbtn.title = c.name;
+    cbtn.addEventListener("click", async () => {
+      try {
+        await _notesApiUpdate(note.id, { color: c.value });
+        const idx = state.notes.findIndex((n) => n.id === note.id);
+        if (idx >= 0) state.notes[idx].color = c.value;
+        _notesRefreshTile();
+      } catch (err) { console.error(err); }
+      menu.remove();
+    });
+    colorSubmenu.appendChild(cbtn);
+  }
+  colorItem.appendChild(colorSubmenu);
+  menu.appendChild(colorItem);
+
+  // Divider
+  const d2 = document.createElement("div"); d2.className = "ctx-menu-divider"; menu.appendChild(d2);
+
+  menu.appendChild(mkItem("◫", "Archive", "", async () => {
+    try { await _notesApiUpdate(note.id, { archived: true }); state.notes = state.notes.filter((n) => n.id !== note.id); _notesRefreshTile(); showToast("Note archived"); } catch (err) { showToast("Archive failed", true); }
+  }));
+  menu.appendChild(mkItem("✕", "Delete", "ctx-menu-item--danger", async () => {
+    if (!confirm("Delete this note?")) return;
+    try { await _notesApiDelete(note.id); state.notes = state.notes.filter((n) => n.id !== note.id); _notesRefreshTile(); showToast("Note deleted"); } catch (err) { showToast("Delete failed", true); }
+  }));
+
+  document.body.appendChild(menu);
+
+  const x = Math.min(e.clientX, window.innerWidth - 200);
+  const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8);
+  menu.style.left = x + "px";
+  menu.style.top = y + "px";
+
+  const closeMenu = (ev) => {
+    if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener("click", closeMenu); }
+  };
+  setTimeout(() => document.addEventListener("click", closeMenu), 10);
+}
+
+function _notesBindBrowseEvents(section) {
+  // Card click → edit modal
+  section.querySelectorAll(".notes-card").forEach((card) => {
+    card.addEventListener("click", (e) => {
+      if (e.target.closest(".notes-card-drag")) return;
+      const id = card.dataset.noteId;
+      openNoteEditModal(id);
+    });
+    card.addEventListener("contextmenu", (e) => {
+      const id = card.dataset.noteId;
+      const note = state.notes.find((n) => n.id === id);
+      if (note) _notesShowContextMenu(e, note);
+    });
+  });
+
+  // SortableJS: reorder notes within the tile
+  const cardContainer = $(".notes-card-container", section);
+  if (cardContainer && window.Sortable && !cardContainer.dataset.sortableBound) {
+    cardContainer.dataset.sortableBound = "1";
+    window.Sortable.create(cardContainer, {
+      handle: ".notes-card-drag",
+      animation: 150,
+      ghostClass: "sortable-ghost",
+      chosenClass: "sortable-chosen",
+      onEnd: async (evt) => {
+        const ids = [...cardContainer.querySelectorAll(".notes-card")]
+          .map((card) => card.dataset.noteId)
+          .filter(Boolean);
+        // Update local state order
+        const orderMap = new Map(ids.map((id, i) => [id, i]));
+        for (const n of state.notes) {
+          if (orderMap.has(n.id)) n.sort_order = orderMap.get(n.id);
+        }
+        // Save to server
+        try {
+          await _notesApiReorder(ids);
+        } catch (e) {
+          console.error("Reorder failed:", e);
+          showToast("Reorder failed to save", true);
+        }
+      },
+    });
+  }
+
+  // Search toggle
+  const searchToggle = $(".notes-search-toggle", section);
+  const searchBar = $(".notes-search-bar", section);
+  const searchInput = $(".notes-search-input", section);
+  if (searchToggle && searchBar) {
+    searchToggle.addEventListener("click", () => {
+      searchBar.classList.toggle("hidden");
+      if (!searchBar.classList.contains("hidden")) searchInput?.focus();
+    });
+  }
+
+  // Search input
+  if (searchInput) {
+    let searchTimer = null;
+    searchInput.addEventListener("input", () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => {
+        state.notesSearchQuery = searchInput.value.trim();
+        _notesRefreshTile();
+      }, 300);
+    });
+  }
+
+  // View toggle
+  const viewToggle = $(".notes-view-toggle", section);
+  if (viewToggle) {
+    viewToggle.addEventListener("click", () => {
+      state.notesView = state.notesView === "grid" ? "list" : "grid";
+      _notesRefreshTile();
+    });
+  }
+
+  // Color filter dropdown
+  const colorFilterBtn = $(".notes-color-filter-btn", section);
+  const colorDropdown = $(".notes-color-dropdown", section);
+  if (colorFilterBtn && colorDropdown) {
+    _notesRenderColorDropdown(colorDropdown);
+    colorFilterBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isHidden = colorDropdown.classList.contains("hidden");
+      // Close other open elements
+      $(".notes-search-bar", section)?.classList.add("hidden");
+      if (isHidden) {
+        colorDropdown.classList.remove("hidden");
+        // Position below the button, aligned left
+        const rect = colorFilterBtn.getBoundingClientRect();
+        colorDropdown.style.position = "fixed";
+        colorDropdown.style.top = (rect.bottom + 4) + "px";
+        colorDropdown.style.left = rect.left + "px";
+        colorDropdown.style.zIndex = "10000";
+      } else {
+        colorDropdown.classList.add("hidden");
+      }
+    });
+    colorDropdown.addEventListener("click", (e) => {
+      const item = e.target.closest(".notes-dropdown-item");
+      if (!item) return;
+      const color = item.dataset.color;
+      state.notesColorFilter = state.notesColorFilter === color ? "" : color;
+      _notesRenderColorDropdown(colorDropdown);
+      colorDropdown.classList.add("hidden");
+      _notesRefreshTile();
+    });
+    // Close on outside click
+    document.addEventListener("click", (e) => {
+      if (!colorFilterBtn.contains(e.target) && !colorDropdown.contains(e.target)) {
+        colorDropdown.classList.add("hidden");
+      }
+    });
+  }
+
+  // Add button
+  const addBtn = $(".notes-add-btn", section);
+  if (addBtn) {
+    addBtn.addEventListener("click", () => _notesCreateAndEdit(section));
+  }
+
+  // Quick-add input
+  const quickAdd = $(".notes-quick-add-input", section);
+  if (quickAdd) {
+    quickAdd.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && quickAdd.value.trim()) {
+        e.preventDefault();
+        _notesCreateAndEdit(section, quickAdd.value.trim());
+        quickAdd.value = "";
+      }
+    });
+  }
+}
+
+async function _notesCreateAndEdit(section, title = "") {
+  try {
+    const res = await _notesApiCreate({ title, content: "" });
+    const newNote = { id: res.id, title, content: "", color: "", pinned: false, archived: false, sort_order: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), links: [] };
+    state.notes.unshift(newNote);
+    state.notesTileMode = "edit";
+    state.notesEditingId = res.id;
+    _notesRefreshTile();
+  } catch (e) {
+    console.error("Failed to create note:", e);
+    showToast("Failed to create note", true);
+  }
+}
+
+function _notesRefreshTile() {
+  const dash = document.querySelector(".dashboard-grid, .dashboard-tiles");
+  if (dash) renderPersonalNotesTile(dash);
+}
+
+function _notesAutoContinueList(editor, saveCallback) {
+  if (!editor) return;
+  editor.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.shiftKey) return;
+    const val = editor.value;
+    const pos = editor.selectionStart || 0;
+    const ls = val.lastIndexOf("\n", pos - 1) + 1;
+    const lineEnd = val.indexOf("\n", pos);
+    const fullLine = val.slice(ls, lineEnd > -1 ? lineEnd : undefined);
+
+    // Bullet list (supports indent)
+    const bMatch = fullLine.match(/^(\s*)([-*+])(\s+)/);
+    if (bMatch) {
+      e.preventDefault();
+      const prefix = bMatch[1] + bMatch[2] + bMatch[3];
+      insertNotesEditorText(editor, "\n" + prefix);
+      if (saveCallback) saveCallback();
+      return;
+    }
+
+    // Numbered list: increment
+    const nMatch = fullLine.match(/^(\s*)(\d+)(\.\s+)/);
+    if (nMatch) {
+      e.preventDefault();
+      const num = parseInt(nMatch[2], 10) + 1;
+      const prefix = nMatch[1] + num + nMatch[3];
+      insertNotesEditorText(editor, "\n" + prefix);
+      if (saveCallback) saveCallback();
+    }
+  });
+}
+
+function _notesInsertFormat(textarea, fmt) {
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const selected = textarea.value.substring(start, end);
+  let before = "", after = "";
+
+  switch (fmt) {
+    case "bold": before = "**"; after = "**"; break;
+    case "italic": before = "*"; after = "*"; break;
+    case "strike": before = "~~"; after = "~~"; break;
+    case "underline": before = "_"; after = "_"; break;
+    case "highlight": before = "=="; after = "=="; break;
+    case "code": before = "`"; after = "`"; break;
+    case "link": before = "["; after = "](url)"; break;
+    case "bullet": {
+      // Insert at line start
+      const lineStart = textarea.value.lastIndexOf("\n", start - 1) + 1;
+      textarea.value = textarea.value.substring(0, lineStart) + "- " + textarea.value.substring(lineStart);
+      textarea.selectionStart = textarea.selectionEnd = lineStart + 2;
+      textarea.focus();
+      return;
+    }
+    case "numbered": {
+      const lineStart = textarea.value.lastIndexOf("\n", start - 1) + 1;
+      textarea.value = textarea.value.substring(0, lineStart) + "1. " + textarea.value.substring(lineStart);
+      textarea.selectionStart = textarea.selectionEnd = lineStart + 3;
+      textarea.focus();
+      return;
+    }
+    case "quote": {
+      const lineStart = textarea.value.lastIndexOf("\n", start - 1) + 1;
+      textarea.value = textarea.value.substring(0, lineStart) + "> " + textarea.value.substring(lineStart);
+      textarea.selectionStart = textarea.selectionEnd = lineStart + 2;
+      textarea.focus();
+      return;
+    }
+    case "hr": {
+      const insertion = "\n\n---\n\n";
+      textarea.value = textarea.value.substring(0, start) + insertion + textarea.value.substring(end);
+      textarea.selectionStart = textarea.selectionEnd = start + insertion.length;
+      textarea.focus();
+      return;
+    }
+    case "date": {
+      const dateStr = new Date().toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
+      textarea.value = textarea.value.substring(0, start) + dateStr + textarea.value.substring(end);
+      textarea.selectionStart = textarea.selectionEnd = start + dateStr.length;
+      textarea.focus();
+      return;
+    }
+  }
+
+  if (before || after) {
+    const replacement = before + (selected || "text") + after;
+    textarea.value = textarea.value.substring(0, start) + replacement + textarea.value.substring(end);
+    textarea.selectionStart = start + before.length;
+    textarea.selectionEnd = start + before.length + (selected || "text").length;
+  }
+}
+
+function _updateNotesStats(section, text) {
+  const stats = $(".notes-stats-label", section);
+  if (!stats) return;
+  const words = (text || "").trim() ? (text || "").trim().split(/\s+/).length : 0;
+  const chars = (text || "").length;
+  stats.textContent = `${words} word${words !== 1 ? "s" : ""} · ${chars} char${chars !== 1 ? "s" : ""}`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Legacy notes tile (deprecated — kept for migration, will be removed)
+// ═══════════════════════════════════════════════════════════════════════════════
 
 function renderNotesTiles(dash) {
   for (const notes of activeNotesTiles()) {
@@ -8367,8 +9773,8 @@ function renderBoardGroups() {
 
   const expectedIds = new Set(state.groups.map((g) => `group-${g.id}`));
 
-  // Remove orphaned group tiles (deleted groups) but keep local-kanban tiles.
-  dash.querySelectorAll(".board-group-tile:not(.local-kanban-tile)").forEach((el) => {
+  // Remove orphaned group tiles (deleted groups) but keep local-kanban tiles and notes tile.
+  dash.querySelectorAll(".board-group-tile:not(.local-kanban-tile):not(.personal-notes-tile)").forEach((el) => {
     if (!expectedIds.has(el.dataset.tileId)) el.remove();
   });
 
@@ -8640,7 +10046,7 @@ function renderBoardGroups() {
   }
 
   renderCalendarTiles(dash);
-  renderNotesTiles(dash);
+  renderPersonalNotesTile(dash);
   renderLocalKanbanTiles(dash);
 
   ensureTileLayout();
@@ -30044,6 +31450,7 @@ async function refreshAll({ force = false } = {}) {
       loadStages(),
       loadAllTags(),
       loadOpportunityCustomFieldDefs(),
+      _notesLoadAll().catch(() => {}),
     ]);
     let hadNonTransientError = false;
     for (const r of settled) {
@@ -30895,6 +32302,9 @@ async function init() {
   });
 
   $("#documents-btn")?.addEventListener("click", () => openDocumentsModal());
+  $("#my-notes-btn")?.addEventListener("click", () => {
+    openNoteEditModal(null, { isNew: true });
+  });
 
   bindAddTileModal();
   bindCalendarEventModal();

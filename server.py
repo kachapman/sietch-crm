@@ -376,6 +376,117 @@ try:
 except Exception:
     pass
 
+# ── Personal notes: PostgreSQL storage + entity linking ────────────────────────
+try:
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS personal_notes (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            owner INTEGER NOT NULL REFERENCES users(id),
+            title VARCHAR(200) NOT NULL DEFAULT '',
+            content TEXT NOT NULL DEFAULT '',
+            content_prev TEXT,
+            content_prev2 TEXT,
+            content_prev_at TIMESTAMPTZ,
+            content_prev2_at TIMESTAMPTZ,
+            color VARCHAR(32) NOT NULL DEFAULT '',
+            pinned BOOLEAN NOT NULL DEFAULT false,
+            archived BOOLEAN NOT NULL DEFAULT false,
+            archived_at TIMESTAMPTZ,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+    """)
+except Exception:
+    pass
+# Add version history columns to existing databases
+for _col in [
+    "content_prev TEXT",
+    "content_prev2 TEXT",
+    "content_prev_at TIMESTAMPTZ",
+    "content_prev2_at TIMESTAMPTZ",
+]:
+    try:
+        db.execute(f"ALTER TABLE personal_notes ADD COLUMN IF NOT EXISTS {_col}")
+    except Exception:
+        pass
+try:
+    db.execute("CREATE INDEX IF NOT EXISTS ix_personal_notes_owner ON personal_notes(owner, archived, sort_order)")
+except Exception:
+    pass
+try:
+    db.execute("""
+        CREATE INDEX IF NOT EXISTS ix_personal_notes_fts ON personal_notes USING gin(
+            to_tsvector('english', coalesce(title,'') || ' ' || coalesce(content,''))
+        )
+    """)
+except Exception:
+    pass
+try:
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS personal_note_links (
+            note_id UUID NOT NULL REFERENCES personal_notes(id) ON DELETE CASCADE,
+            entity_type VARCHAR NOT NULL,
+            entity_id VARCHAR NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (note_id, entity_type, entity_id)
+        )
+    """)
+except Exception:
+    pass
+try:
+    db.execute("CREATE INDEX IF NOT EXISTS ix_personal_note_links_entity ON personal_note_links(entity_type, entity_id)")
+except Exception:
+    pass
+
+# ── Migrate notesTiles from profile JSON to personal_notes table ──────────────
+try:
+    from pathlib import Path as _Path
+    _profiles_dir = _Path(__file__).resolve().parent / "data" / "user-profiles"
+    if _profiles_dir.is_dir():
+        _migrated_count = 0
+        for _portal_dir in _profiles_dir.iterdir():
+            if not _portal_dir.is_dir():
+                continue
+            for _profile_file in _portal_dir.glob("*.json"):
+                try:
+                    _data = json.loads(_profile_file.read_text(encoding="utf-8"))
+                    _tiles = _data.get("notesTiles") or []
+                    if not _tiles:
+                        continue
+                    # Find the user ID from the filename (without .json extension)
+                    _user_email = _profile_file.stem
+                    _user_row = db.query_one("SELECT id FROM users WHERE email = %s", (_user_email,))
+                    if not _user_row:
+                        continue
+                    _user_id = _user_row[0]
+                    # Check if notes already exist for this user
+                    _existing = db.query_one("SELECT 1 FROM personal_notes WHERE owner = %s LIMIT 1", (_user_id,))
+                    if _existing:
+                        continue
+                    # Insert each tile as a personal note
+                    for _tile in _tiles:
+                        _title = (_tile.get("name") or "Notes")[:200]
+                        _content = _tile.get("content") or ""
+                        _color = (_tile.get("accent") or "")[:32]
+                        _archived = bool(_tile.get("archived", False))
+                        _archived_at = _tile.get("archivedAt")
+                        db.execute(
+                            "INSERT INTO personal_notes (owner, title, content, color, archived, archived_at) "
+                            "VALUES (%s, %s, %s, %s, %s, %s)",
+                            (_user_id, _title, _content, _color, _archived, _archived_at),
+                        )
+                        _migrated_count += 1
+                    # Clear notesTiles from the profile JSON
+                    _data["notesTiles"] = []
+                    _profile_file.write_text(json.dumps(_data, indent=2), encoding="utf-8")
+                except Exception:
+                    continue
+        if _migrated_count:
+            print(f"Notes migration: migrated {_migrated_count} notes from profile JSON to PostgreSQL")
+except Exception as e:
+    print(f"Notes migration skipped: {e}")
+
 # Classifier training data schema
 try:
     db.execute("ALTER TABLE classifier_training_data ADD COLUMN IF NOT EXISTS message_id INTEGER REFERENCES mail_messages(id)")
@@ -1360,6 +1471,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/tasks":
             self._handle_tasks_get(qs)
             return
+        if api_path == "/api/v2/notes":
+            self._handle_notes_get(qs)
+            return
+        m = re.match(r"^/api/v2/notes/([^/]+)/versions$", api_path)
+        if m:
+            self._handle_note_versions(m.group(1))
+            return
         if api_path == "/api/v2/users":
             self._handle_users_get()
             return
@@ -2006,6 +2124,31 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if m and method == "DELETE":
             self._handle_task_delete(int(m.group(1)))
+            return
+        if api_path == "/api/v2/notes" and method == "POST":
+            self._handle_note_create()
+            return
+        if api_path == "/api/v2/notes/reorder" and method == "POST":
+            self._handle_notes_reorder()
+            return
+        m = re.match(r"^/api/v2/notes/([^/]+)$", api_path)
+        if m and method == "PUT":
+            self._handle_note_update(m.group(1))
+            return
+        if m and method == "DELETE":
+            self._handle_note_delete(m.group(1))
+            return
+        m = re.match(r"^/api/v2/notes/([^/]+)/links$", api_path)
+        if m and method == "POST":
+            self._handle_note_link_add(m.group(1))
+            return
+        m = re.match(r"^/api/v2/notes/([^/]+)/links/([^/]+)/([^/]+)$", api_path)
+        if m and method == "DELETE":
+            self._handle_note_link_remove(m.group(1), m.group(2), m.group(3))
+            return
+        m = re.match(r"^/api/v2/notes/([^/]+)/restore$", api_path)
+        if m and method == "POST":
+            self._handle_note_restore(m.group(1))
             return
         if api_path == "/api/v2/users" and method == "POST":
             self._handle_user_create()
@@ -3106,6 +3249,322 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if n:
                 count += 1
         _json_response(self, 200, {"ok": True, "count": count})
+
+    # ── Personal Notes ────────────────────────────────────────────────────────
+
+    def _handle_notes_get(self, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        archived = qs.get("archived", [""])[0]
+        color = qs.get("color", [""])[0]
+        search_q = qs.get("q", [""])[0]
+        deal_id = qs.get("deal_id", [""])[0]
+
+        conditions = ["owner = %s"]
+        params: list = [user["id"]]
+
+        if archived == "true":
+            conditions.append("archived = TRUE")
+        else:
+            conditions.append("archived = FALSE")
+
+        if color:
+            conditions.append("color = %s")
+            params.append(color)
+
+        if search_q:
+            conditions.append(
+                "to_tsvector('english', coalesce(title,'') || ' ' || coalesce(content,'')) @@ plainto_tsquery('english', %s)"
+            )
+            params.append(search_q)
+
+        where = " AND ".join(conditions)
+
+        if deal_id:
+            rows = db.query_dicts(
+                f"SELECT DISTINCT pn.* FROM personal_notes pn "
+                f"JOIN personal_note_links pnl ON pnl.note_id = pn.id "
+                f"WHERE {where} AND pnl.entity_type = 'deal' AND pnl.entity_id = %s "
+                f"ORDER BY pn.pinned DESC, pn.sort_order ASC, pn.updated_at DESC",
+                (*params, str(deal_id)),
+            )
+        else:
+            rows = db.query_dicts(
+                f"SELECT * FROM personal_notes WHERE {where} "
+                f"ORDER BY pinned DESC, sort_order ASC, updated_at DESC",
+                tuple(params),
+            )
+
+        # Attach entity links
+        note_ids = [r["id"] for r in rows]
+        links_map: dict = {}
+        if note_ids:
+            placeholders = ",".join(["%s"] * len(note_ids))
+            link_rows = db.query(
+                f"SELECT note_id, entity_type, entity_id FROM personal_note_links WHERE note_id IN ({placeholders})",
+                tuple(note_ids),
+            )
+            for lr in link_rows:
+                nid = str(lr[0])
+                if nid not in links_map:
+                    links_map[nid] = []
+                links_map[nid].append({"entityType": lr[1], "entityId": lr[2]})
+
+        for r in rows:
+            r["id"] = str(r["id"])
+            r["links"] = links_map.get(r["id"], [])
+            # Serialize timestamps
+            for key in ("created_at", "updated_at", "archived_at"):
+                if r.get(key):
+                    r[key] = r[key].isoformat() if hasattr(r[key], "isoformat") else str(r[key])
+
+        _json_response(self, 200, {"notes": rows})
+
+    def _handle_note_create(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        title = (payload.get("title") or "")[:200]
+        content = payload.get("content") or ""
+        color = (payload.get("color") or "")[:32]
+        pinned = bool(payload.get("pinned", False))
+
+        note_id = db.insert_returning(
+            "INSERT INTO personal_notes (owner, title, content, color, pinned) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (user["id"], title, content, color, pinned),
+        )
+
+        _json_response(self, 201, {"id": str(note_id), "ok": True})
+
+    def _handle_note_update(self, note_id: str) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        owned = db.query_one(
+            "SELECT id FROM personal_notes WHERE id = %s AND owner = %s",
+            (note_id, user["id"]),
+        )
+        if not owned:
+            _json_response(self, 404, {"error": "Note not found"})
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+
+        # Handle content version rotation separately
+        if "content" in payload:
+            new_content = payload["content"] or ""
+            current = db.query_one(
+                "SELECT content FROM personal_notes WHERE id = %s", (note_id,)
+            )
+            old_content = (current.get("content") or "") if current else ""
+            if new_content != old_content:
+                # Rotate: current → prev, prev → prev2
+                db.execute(
+                    "UPDATE personal_notes SET "
+                    "content_prev2 = content_prev, content_prev2_at = content_prev_at, "
+                    "content_prev = content, content_prev_at = NOW(), "
+                    "content = %s, updated_at = NOW() "
+                    "WHERE id = %s",
+                    (new_content, note_id),
+                )
+            else:
+                # Content unchanged, just update timestamp
+                db.execute(
+                    "UPDATE personal_notes SET updated_at = NOW() WHERE id = %s",
+                    (note_id,),
+                )
+
+        fields = [
+            ("title", "title"), ("color", "color"),
+            ("pinned", "pinned"), ("archived", "archived"), ("sortOrder", "sort_order"),
+        ]
+        for field, col in fields:
+            if field not in payload:
+                continue
+            val = payload[field]
+            if field == "title":
+                val = (val or "")[:200]
+            if field == "color":
+                val = (val or "")[:32]
+            if field in ("pinned", "archived"):
+                val = bool(val)
+                if field == "archived" and val:
+                    db.execute(
+                        f"UPDATE personal_notes SET {col} = %s, archived_at = NOW(), updated_at = NOW() WHERE id = %s",
+                        (val, note_id),
+                    )
+                    continue
+                if field == "archived" and not val:
+                    db.execute(
+                        f"UPDATE personal_notes SET {col} = %s, archived_at = NULL, updated_at = NOW() WHERE id = %s",
+                        (val, note_id),
+                    )
+                    continue
+            db.execute(
+                f"UPDATE personal_notes SET {col} = %s, updated_at = NOW() WHERE id = %s",
+                (val, note_id),
+            )
+
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_note_delete(self, note_id: str) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        owned = db.query_one(
+            "SELECT id FROM personal_notes WHERE id = %s AND owner = %s",
+            (note_id, user["id"]),
+        )
+        if not owned:
+            _json_response(self, 404, {"error": "Note not found"})
+            return
+        db.execute("DELETE FROM personal_notes WHERE id = %s", (note_id,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_notes_reorder(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        ids = payload.get("ids") or []
+        count = 0
+        for i, nid in enumerate(ids):
+            n = db.execute(
+                "UPDATE personal_notes SET sort_order = %s, updated_at = NOW() WHERE id = %s AND owner = %s",
+                (i, str(nid), user["id"]),
+            )
+            if n:
+                count += 1
+        _json_response(self, 200, {"ok": True, "count": count})
+
+    def _handle_note_link_add(self, note_id: str) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        owned = db.query_one(
+            "SELECT id FROM personal_notes WHERE id = %s AND owner = %s",
+            (note_id, user["id"]),
+        )
+        if not owned:
+            _json_response(self, 404, {"error": "Note not found"})
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        entity_type = (payload.get("entityType") or "").strip()
+        entity_id = (payload.get("entityId") or "").strip()
+        if not entity_type or not entity_id:
+            _json_response(self, 400, {"error": "entityType and entityId required"})
+            return
+        try:
+            db.execute(
+                "INSERT INTO personal_note_links (note_id, entity_type, entity_id) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                (note_id, entity_type, entity_id),
+            )
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+            return
+        _json_response(self, 201, {"ok": True})
+
+    def _handle_note_link_remove(self, note_id: str, entity_type: str, entity_id: str) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        owned = db.query_one(
+            "SELECT id FROM personal_notes WHERE id = %s AND owner = %s",
+            (note_id, user["id"]),
+        )
+        if not owned:
+            _json_response(self, 404, {"error": "Note not found"})
+            return
+        db.execute(
+            "DELETE FROM personal_note_links WHERE note_id = %s AND entity_type = %s AND entity_id = %s",
+            (note_id, entity_type, entity_id),
+        )
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_note_versions(self, note_id: str) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        row = db.query_one(
+            "SELECT id, content, content_prev, content_prev2, content_prev_at, content_prev2_at "
+            "FROM personal_notes WHERE id = %s AND owner = %s",
+            (note_id, user["id"]),
+        )
+        if not row:
+            _json_response(self, 404, {"error": "Note not found"})
+            return
+        versions = [{"label": "Current", "content": row.get("content") or "", "at": None}]
+        if row.get("content_prev") is not None:
+            at = row["content_prev_at"].isoformat() if hasattr(row.get("content_prev_at"), "isoformat") else str(row.get("content_prev_at")) if row.get("content_prev_at") else None
+            versions.append({"label": "Previous", "content": row["content_prev"] or "", "at": at})
+        if row.get("content_prev2") is not None:
+            at = row["content_prev2_at"].isoformat() if hasattr(row.get("content_prev2_at"), "isoformat") else str(row.get("content_prev2_at")) if row.get("content_prev2_at") else None
+            versions.append({"label": "Older", "content": row["content_prev2"] or "", "at": at})
+        _json_response(self, 200, {"versions": versions})
+
+    def _handle_note_restore(self, note_id: str) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        version = payload.get("version", "")
+        if version not in ("prev", "prev2"):
+            _json_response(self, 400, {"error": "version must be 'prev' or 'prev2'"})
+            return
+        row = db.query_one(
+            "SELECT id, content, content_prev, content_prev2 FROM personal_notes WHERE id = %s AND owner = %s",
+            (note_id, user["id"]),
+        )
+        if not row:
+            _json_response(self, 404, {"error": "Note not found"})
+            return
+        if version == "prev":
+            restore_content = row.get("content_prev")
+            if restore_content is None:
+                _json_response(self, 400, {"error": "No previous version available"})
+                return
+            # Rotate: current → prev2, prev → current
+            db.execute(
+                "UPDATE personal_notes SET content = content_prev, content_prev2 = content, "
+                "content_prev2_at = content_prev_at, content_prev_at = NOW(), updated_at = NOW() "
+                "WHERE id = %s",
+                (note_id,),
+            )
+        else:  # prev2
+            restore_content = row.get("content_prev2")
+            if restore_content is None:
+                _json_response(self, 400, {"error": "No older version available"})
+                return
+            # Rotate: current → prev, prev2 → current
+            db.execute(
+                "UPDATE personal_notes SET content = content_prev2, content_prev = content, "
+                "content_prev_at = content_prev2_at, content_prev2_at = NOW(), updated_at = NOW() "
+                "WHERE id = %s",
+                (note_id,),
+            )
+        _json_response(self, 200, {"ok": True, "content": restore_content or ""})
 
     # ── Users ───────────────────────────────────────────────────────────────
 

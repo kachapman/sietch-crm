@@ -2,6 +2,28 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Notes Tile Revamp — PostgreSQL-Backed Personal Notes (2026-08-08)
+
+- **New `personal_notes` table.** PostgreSQL-backed notes with UUID primary key, owner (user id), title, content, color, pinned, archived, sort_order, timestamps. Full-text search via GIN index on title+content. Migration from profile JSON on server startup.
+- **New `personal_note_links` junction table.** Links notes to CRM entities (deals, contacts). API endpoints for add/remove/list.
+- **Full CRUD API at `/api/v2/notes`.** List (with search, color filter, deal_id filter), create, update (with version rotation), delete, reorder.
+- **Version history.** Two previous content versions stored per note. "Version history" button in edit mode shows versions with timestamps and restore capability.
+- **Single notes tile replaces multi-tile system.** One tile on the dashboard with two modes: browse (card grid / list view) and edit (inline in tile). Tile is resizable, movable, collapsible like other dashboard tiles.
+- **Card grid browse mode.** Responsive grid with card color backgrounds, content previews, timestamps. Grid/list view toggle. Quick-add input at bottom. Search inline in toolbar.
+- **Color filter dropdown.** Pull-down menu with Tabler color-filter icon, lists all colors, opens downward. Replaces chip row.
+- **Edit modal.** Full edit modal with all formatting options, color picker, save/cancel/delete. Full-screen on mobile (100dvh).
+- **Right-click context menu.** Edit, Edit inline, Duplicate, Change color (submenu), Archive, Delete.
+- **Click behavior.** Clicking a card opens edit modal. "Edit inline" from context menu opens inline tile editor. Header "My Notes" button opens edit modal with new blank note.
+- **Enhanced markdown renderer.** Fenced code blocks (with language class), tables (with alignment), nested lists, images (`![alt](url)` with safe src), Mermaid diagrams (detected in fenced blocks), TOC (`[[toc]]` directive).
+- **All formatting buttons restored.** Bold, italic, strikethrough, underline, highlight, inline code, link, bullet list, numbered list, quote, horizontal rule, insert date (12 total).
+- **CRM entity linking.** Link picker in edit mode toolbar. Entity chips display. Add/remove via API.
+- **List auto-continue on Enter.** Bullet and numbered lists auto-continue on Enter. Shift+Enter for plain newline.
+- **"Quick note" renamed to "Project Note".** All UI labels updated (header button, modal title, edit menu).
+- **Back button mobile fix.** `touch-action: manipulation` CSS, `editor.blur()` on click, `touchend` fallback listener.
+- **Orphan cleanup fix.** Notes tile excluded from `renderBoardGroups` orphan removal.
+- **Color palette updated.** Replaced pastel colors with Google Keep vibrant colors (coral, peach, sand, mint, sage, fog, storm, dusk).
+- **Files:** `server.py`, `public/app.js`, `public/styles.css`, `public/index.html`, `migrations/007_add_personal_notes.sql`, `CHANGELOG.md`, `AGENTS.md`.
+
 ## Phase 4 — Bug Fixes: Dead Code, Admin Backup, Board Group Refresh (2026-08-07)
 
 - **Dead code cleanup.** Removed 4 empty function stubs that were never called: `startConnectingGrace`, `enqueueCrmMutation`, `processMutationQueue`, `updateNoteQueueList`.

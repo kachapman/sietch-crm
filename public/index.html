@@ -131,7 +131,7 @@
           <h1 class="hero-title">Workspace <em>dashboard</em></h1>
         </div>
         <div class="hero-actions">
-          <button type="button" id="quick-note-btn" class="btn btn-primary btn-icon-only" title="Quick note" aria-label="Quick note">
+          <button type="button" id="quick-note-btn" class="btn btn-primary btn-icon-only" title="Project Note" aria-label="Project Note">
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4"/><path d="M2 6h4"/><path d="M2 10h4"/><path d="M2 14h4"/><path d="M2 18h4"/><path d="M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z"/></svg>
           </button>
           <button type="button" id="new-opportunity-btn" class="btn btn-primary btn-icon-only" title="New opportunity" aria-label="New opportunity">
@@ -182,6 +182,13 @@
               <path d="M15 3v4a1 1 0 0 0 1 1h4"/>
               <path d="M18 17h-7a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2h4l5 5v7a2 2 0 0 1 -2 2"/>
               <path d="M16 17v2a2 2 0 0 1 -2 2h-7a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2h2"/>
+            </svg>
+          </button>
+          <button type="button" id="my-notes-btn" class="btn btn-secondary btn-icon-only" title="My Notes" aria-label="My Notes">
+            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+              <path d="M6 4h12a2 2 0 0 1 2 2v7h-5a2 2 0 0 0 -2 2v5h-7a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2" />
+              <path d="M20 13v.172a2 2 0 0 1 -.586 1.414l-4.828 4.828a2 2 0 0 1 -1.414 .586h-.172" />
             </svg>
           </button>
           <button type="button" id="add-tile-btn" class="btn btn-secondary btn-icon-only" title="Add tile" aria-label="Add tile">
@@ -1531,7 +1538,7 @@
     <div class="modal-backdrop" data-quick-note-dismiss></div>
     <div class="modal-card modal-card-form modal-card-deal-edit">
       <div class="deal-edit-modal-head">
-        <h2 id="quick-note-modal-title" class="modal-title">Quick note</h2>
+        <h2 id="quick-note-modal-title" class="modal-title">Project Note</h2>
         <a id="quick-note-crm-link" class="deal-edit-crm-link hidden" href="#" target="_blank" rel="noopener noreferrer">Open Project</a>
       </div>
       <form id="quick-note-form" class="modal-form">
@@ -1594,6 +1601,27 @@
       <div class="modal-actions">
         <button type="button" id="quick-note-cancel" class="btn btn-secondary">Cancel</button>
         <button type="submit" id="quick-note-submit" class="btn btn-primary" form="quick-note-form">Save note</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="note-edit-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="note-edit-modal-title">
+    <div class="modal-backdrop" data-note-edit-dismiss></div>
+    <div class="modal-card modal-card-note-edit">
+      <div class="note-edit-modal-head">
+        <h2 id="note-edit-modal-title" class="modal-title">Edit Note</h2>
+        <div class="note-edit-head-actions">
+          <button type="button" id="note-edit-delete" class="btn btn-icon-only btn-danger" title="Delete note" aria-label="Delete note"><i class="ti ti-trash"></i></button>
+          <button type="button" id="note-edit-close" class="btn btn-icon-only modal-header-control" title="Close" data-note-edit-dismiss><i class="ti ti-x"></i></button>
+        </div>
+      </div>
+      <div id="note-edit-body" class="note-edit-body"></div>
+      <div class="note-edit-footer">
+        <span id="note-edit-stats" class="notes-stats-label"></span>
+        <div class="note-edit-footer-actions">
+          <button type="button" id="note-edit-cancel" class="btn btn-secondary">Cancel</button>
+          <button type="button" id="note-edit-save" class="btn btn-primary">Save &amp; Close</button>
+        </div>
       </div>
     </div>
   </div>
