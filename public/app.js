@@ -6365,7 +6365,9 @@ async function _notesApiFetch(params = {}) {
   if (params.q) qs.set("q", params.q);
   if (params.deal_id) qs.set("deal_id", params.deal_id);
   const url = "/api/v2/notes" + (qs.toString() ? "?" + qs.toString() : "");
+  console.log("[NOTES] Fetching:", url);
   const res = await api(url);
+  console.log("[NOTES] Response:", res);
   return res.notes || [];
 }
 
@@ -6427,11 +6429,13 @@ async function _notesApiRestore(noteId, version) {
 // ── Load notes from server ───────────────────────────────────────────────────
 
 async function _notesLoadAll() {
+  console.log("[NOTES] _notesLoadAll called, state.notes currently:", state.notes.length, "notes");
   try {
     const notes = await _notesApiFetch();
+    console.log("[NOTES] _notesApiFetch returned:", Array.isArray(notes) ? notes.length : "NOT ARRAY", "notes");
     state.notes = Array.isArray(notes) ? notes : [];
   } catch (e) {
-    console.error("Failed to load notes:", e.message || e);
+    console.error("[NOTES] Failed to load notes:", e.message || e);
     state.notes = [];
     showToast("Failed to load notes", true);
   }
