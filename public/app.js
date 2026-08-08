@@ -6715,6 +6715,7 @@ function _notesRenderEditMode(section) {
     saveBtn.addEventListener("click", async () => {
       if (saveBtn.disabled) return;
       saveBtn.disabled = true;
+      clearTimeout(saveTimer);
       const newTitle = (titleEl.textContent || "").trim();
       const newContent = editor.value;
       try {
@@ -6752,6 +6753,7 @@ function _notesRenderEditMode(section) {
   // Back button — discard warning
   const backHandler = async () => {
     if (backBtn.disabled) return;
+    clearTimeout(saveTimer);
     if (_savedSinceEdit) {
       // Already saved — go back without dialog
       state.notesTileMode = "browse";
@@ -7009,8 +7011,8 @@ function _notesRenderCard(note) {
   return `
     <div class="notes-card${pinned}" data-note-id="${note.id}" style="border-left:3px solid ${colorBg}">
       <span class="notes-card-drag" title="Drag to reorder">⋮⋮</span>
-      <div class="notes-card-title">${_esc(note.title || "Untitled")}</div>
-      ${preview ? `<div class="notes-card-preview">${_esc(preview)}</div>` : ""}
+      <div class="notes-card-title">${escapeHtml(note.title || "Untitled")}</div>
+      ${preview ? `<div class="notes-card-preview">${escapeHtml(preview)}</div>` : ""}
       <div class="notes-card-footer">
         <span class="notes-card-time">${time}</span>
         ${note.pinned ? `<span class="notes-card-pin">📌</span>` : ""}
