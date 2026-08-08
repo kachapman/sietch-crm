@@ -6563,7 +6563,7 @@ function _notesRenderEditMode(section) {
         <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="quote" title="Quote block">></button>
         <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="hr" title="Horizontal rule">—</button>
         <span class="notes-toolbar-sep"></span>
-        <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="date" title="Insert date">📅</button>
+        <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="date" title="Insert date"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>
       </div>
       <textarea class="notes-editor" placeholder="Write your note… (Markdown supported)" spellcheck="true"></textarea>
       <div class="notes-preview hidden" aria-live="polite"></div>
@@ -7041,7 +7041,7 @@ function openNoteEditModal(noteId, { isNew = false } = {}) {
       <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="quote" title="Quote">></button>
       <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="hr" title="Horizontal rule">—</button>
       <span class="notes-toolbar-sep"></span>
-      <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="date" title="Insert date">📅</button>
+      <button type="button" class="btn btn-ghost btn-small notes-fmt-btn" data-fmt="date" title="Insert date"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>
     </div>
     <textarea class="note-edit-editor" placeholder="Write your note… (Markdown supported)" spellcheck="true">${escapeHtml(note.content || "")}</textarea>
     <div class="note-edit-preview notes-preview hidden" aria-live="polite"></div>
