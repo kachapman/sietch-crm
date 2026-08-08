@@ -6427,9 +6427,10 @@ async function _notesApiRestore(noteId, version) {
 
 async function _notesLoadAll() {
   try {
-    state.notes = await _notesApiFetch();
+    const notes = await _notesApiFetch();
+    state.notes = Array.isArray(notes) ? notes : [];
   } catch (e) {
-    console.error("Failed to load notes:", e);
+    console.error("Failed to load notes:", e.message || e);
     state.notes = [];
   }
 }
@@ -6742,19 +6743,26 @@ function _notesRenderEditMode(section) {
   // Back button — discard warning
   const backHandler = async () => {
     if (backBtn.disabled) return;
-    // Check if there are unsaved changes
     const currentTitle = (titleEl.textContent || "").trim();
     const currentContent = editor.value;
-    const hasChanges = currentContent !== (note.content || "") || currentTitle !== (note.title || "");
+    const hasContent = currentContent.trim().length > 0 || currentTitle.length > 0;
     const isNew = !note.id;
 
-    if (hasChanges || isNew) {
+    // Empty new note — discard silently
+    if (isNew && !hasContent) {
+      state.notesTileMode = "browse";
+      state.notesEditingId = null;
+      _notesRefreshTile();
+      return;
+    }
+
+    // Has content — confirm discard
+    if (hasContent) {
       const msg = isNew ? "Discard this note?" : "Discard unsaved changes?";
       const ok = await confirmDialog({ title: "Discard?", message: msg, confirmLabel: "Discard", danger: true });
       if (!ok) return;
     }
 
-    backBtn.disabled = true;
     state.notesTileMode = "browse";
     state.notesEditingId = null;
     _notesRefreshTile();
@@ -6762,7 +6770,6 @@ function _notesRenderEditMode(section) {
   const backBtn = $(".notes-back-btn", section);
   if (backBtn) {
     backBtn.addEventListener("click", backHandler);
-    backBtn.addEventListener("touchend", (e) => { e.preventDefault(); backHandler(); });
   }
 
   // Delete button
