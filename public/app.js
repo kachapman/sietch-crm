@@ -825,6 +825,7 @@ function ensureTileLayout() {
   const order = state.tileLayout.order?.length ? [...state.tileLayout.order] : defaultTileOrder();
   const known = new Set(defaultTileOrder());
   known.add("tile-presence");
+  known.add("tile-notes");
   const filtered = order.filter((id) => known.has(id));
   for (const id of known) {
     if (!filtered.includes(id)) filtered.push(id);
@@ -832,6 +833,9 @@ function ensureTileLayout() {
   state.tileLayout.order = filtered;
   if (!state.tileLayout.order.includes("tile-presence")) {
     state.tileLayout.order.push("tile-presence");
+  }
+  if (!state.tileLayout.order.includes("tile-notes")) {
+    state.tileLayout.order.push("tile-notes");
   }
   saveLayoutToStorage();
 }
@@ -7100,10 +7104,12 @@ function openNoteEditModal(noteId, { isNew = false } = {}) {
           state.notes[idx].updated_at = new Date().toISOString();
         }
       }
-      modal.classList.add("hidden");
+      if (modal && !modal.classList.contains("hidden")) {
+        modal.classList.add("hidden");
+      }
       _notesRefreshTile();
     } catch (e) {
-      console.error("Note save failed:", e);
+      console.error("Note save failed:", e.message, e.stack);
       showToast("Failed to save note", true);
     }
   };
@@ -7388,8 +7394,12 @@ async function _notesCreateAndEdit(section, title = "") {
 }
 
 function _notesRefreshTile() {
-  const dash = document.querySelector(".dashboard-grid, .dashboard-tiles");
-  if (dash) renderPersonalNotesTile(dash);
+  try {
+    const dash = document.querySelector(".dashboard-grid, .dashboard-tiles");
+    if (dash) renderPersonalNotesTile(dash);
+  } catch (e) {
+    console.error("Failed to refresh notes tile:", e);
+  }
 }
 
 function _notesAutoContinueList(editor, saveCallback) {
@@ -11451,11 +11461,21 @@ function ensureTasksNewTaskButton(tileEl) {
   const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
   if (!toolbar) return;
 
-  // Place directly on the title line, right after the task counter (like feed hidden button).
-  const count = toolbar.querySelector(".tile-toolbar-count");
-  const insertAfter = count || toolbar.querySelector(".tile-toolbar-title");
+  // Get or create .tile-toolbar-tools container for wrap-able buttons
+  let tools = toolbar.querySelector(":scope > .tile-toolbar-tools");
+  if (!tools) {
+    tools = document.createElement("div");
+    tools.className = "tile-toolbar-tools";
+    // Insert before .tile-toolbar-actions so it stays left of the action buttons
+    const actions = toolbar.querySelector(":scope > .tile-toolbar-actions");
+    if (actions) {
+      toolbar.insertBefore(tools, actions);
+    } else {
+      toolbar.appendChild(tools);
+    }
+  }
 
-  let archiveBtn = toolbar.querySelector("#tasks-list-btn");
+  let archiveBtn = tools.querySelector("#tasks-list-btn");
   if (!archiveBtn) {
     archiveBtn = document.createElement("button");
     archiveBtn.type = "button";
@@ -11463,38 +11483,23 @@ function ensureTasksNewTaskButton(tileEl) {
     archiveBtn.className = "btn btn-ghost btn-tasks-list";
     archiveBtn.title = "View all tasks (open + completed)";
     archiveBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><rect x="6" y="5" width="3" height="2" rx="0.5"/><rect x="15" y="5" width="3" height="2" rx="0.5"/><rect x="6" y="11" width="3" height="2" rx="0.5"/><rect x="15" y="11" width="3" height="2" rx="0.5"/></svg>`;
-    if (insertAfter && insertAfter.nextSibling) {
-      toolbar.insertBefore(archiveBtn, insertAfter.nextSibling);
-    } else if (insertAfter) {
-      insertAfter.after(archiveBtn);
-    } else {
-      toolbar.appendChild(archiveBtn);
-    }
+    tools.appendChild(archiveBtn);
     archiveBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       openTasksListModal().catch((err) => showToast(err.message, true));
     });
   }
 
-  if (toolbar.querySelector(".btn-new-task")) return;
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "btn btn-primary btn-new-task";
-  btn.textContent = "New task";
-  btn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    openTaskPreviewModal(null, { isNew: true });
-  });
-  if (archiveBtn && archiveBtn.nextSibling) {
-    toolbar.insertBefore(btn, archiveBtn.nextSibling);
-  } else if (insertAfter && insertAfter.nextSibling) {
-    toolbar.insertBefore(btn, insertAfter.nextSibling);
-  } else if (archiveBtn) {
-    archiveBtn.after(btn);
-  } else if (insertAfter) {
-    insertAfter.after(btn);
-  } else {
-    toolbar.appendChild(btn);
+  if (!tools.querySelector(".btn-new-task")) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-primary btn-new-task";
+    btn.textContent = "New task";
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openTaskPreviewModal(null, { isNew: true });
+    });
+    tools.appendChild(btn);
   }
 }
 
