@@ -6428,17 +6428,21 @@ async function _notesApiRestore(noteId, version) {
 
 // ── Load notes from server ───────────────────────────────────────────────────
 
-async function _notesLoadAll() {
-  console.log("[NOTES] _notesLoadAll called, state.notes currently:", state.notes.length, "notes");
-  try {
-    const notes = await _notesApiFetch();
-    console.log("[NOTES] _notesApiFetch returned:", Array.isArray(notes) ? notes.length : "NOT ARRAY", "notes");
-    state.notes = Array.isArray(notes) ? notes : [];
-  } catch (e) {
-    console.error("[NOTES] Failed to load notes:", e.message || e);
-    state.notes = [];
-    showToast("Failed to load notes", true);
+async function _notesLoadAll(retries = 2) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const notes = await _notesApiFetch();
+      state.notes = Array.isArray(notes) ? notes : [];
+      return;
+    } catch (e) {
+      console.error("[NOTES] Load attempt", attempt + 1, "failed:", e.message || e);
+      if (attempt < retries) {
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
   }
+  state.notes = [];
+  showToast("Failed to load notes after retries", true);
 }
 
 // ── Filtered notes list ──────────────────────────────────────────────────────
