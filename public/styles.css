@@ -8484,8 +8484,10 @@ body {
 .notes-grid-view {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-auto-rows: minmax(min-content, 1fr);
   gap: 0.5rem;
-  align-content: start;
+  align-content: stretch;
+  height: 100%;
 }
 
 .notes-list-view {
@@ -8541,6 +8543,17 @@ body {
 .notes-card.sortable-chosen {
   border-color: var(--accent, #6d4aff);
   box-shadow: 0 4px 16px rgba(109, 75, 255, 0.2);
+}
+
+.notes-archive-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.notes-archive-label {
+  font-size: 0.7rem;
+  color: var(--muted, #888);
 }
 
 .notes-card-pinned {

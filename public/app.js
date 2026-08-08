@@ -420,6 +420,7 @@ const state = {
   notesView: "grid",         // "grid" | "list" — persisted in profile
   notesSearchQuery: "",      // inline search filter
   notesColorFilter: "",      // color filter chip
+  notesArchived: false,      // true = show archived notes, false = show active notes
   localKanbanTiles: [],  // local-only kanban boards (no CRM), persisted via profile like notes
   opportunityById: new Map(),
   groupTemplates: [],
@@ -6438,7 +6439,7 @@ async function _notesLoadAll() {
 // ── Filtered notes list ──────────────────────────────────────────────────────
 
 function _notesFilteredList() {
-  let list = state.notes.filter((n) => !n.archived);
+  let list = state.notes.filter((n) => state.notesArchived ? n.archived : !n.archived);
   if (state.notesColorFilter) {
     list = list.filter((n) => n.color === state.notesColorFilter);
   }
@@ -6482,6 +6483,7 @@ function renderPersonalNotesTile(dash) {
 
   applyTileLayoutClasses(section, tileId);
   applyTileBodyCollapsed(section, tileId);
+  attachTileCollapseButton(section, tileId);
 }
 
 // ── Browse mode: card grid / list ────────────────────────────────────────────
@@ -6979,6 +6981,10 @@ function _notesRenderBrowseMode(section) {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M13.58 13.79c.27 .68 .42 1.43 .42 2.21c0 1.77 -.77 3.37 -2 4.46a5.93 5.93 0 0 1 -4 1.54c-3.31 0 -6 -2.69 -6 -6c0 -2.76 1.88 -5.1 4.42 -5.79"/><path d="M17.58 10.21c2.54 .69 4.42 3.03 4.42 5.79c0 3.31 -2.69 6 -6 6a5.93 5.93 0 0 1 -4 -1.54"/><path d="M6 8a6 6 0 1 0 12 0a6 6 0 1 0 -12 0"/></svg>
       </button>
       <span style="flex:1"></span>
+      <button type="button" class="btn btn-ghost btn-small notes-archive-toggle" title="${state.notesArchived ? 'View active notes' : 'View archived notes'}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12h4"/><path d="M4 12m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v4a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-4z"/><path d="M4 4m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v4a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-4z"/></svg>
+        ${state.notesArchived ? '<span class="notes-archive-label">Archived</span>' : ''}
+      </button>
       <button type="button" class="btn btn-ghost btn-small notes-search-toggle" title="Search notes">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
       </button>
@@ -6991,7 +6997,7 @@ function _notesRenderBrowseMode(section) {
       <input type="search" class="notes-search-input" placeholder="Search notes…" autocomplete="off" value="${escapeHtml(state.notesSearchQuery)}" />
     </div>
     <div class="notes-card-container ${state.notesView === "list" ? "notes-list-view" : "notes-grid-view"}">
-      ${list.length === 0 ? `<div class="notes-empty-state">${state.notesSearchQuery ? "No notes match your search" : "No notes yet. Click + to create one."}</div>` : ""}
+      ${list.length === 0 ? `<div class="notes-empty-state">${state.notesArchived ? "No archived notes" : state.notesSearchQuery ? "No notes match your search" : "No notes yet. Click + to create one."}</div>` : ""}
       ${list.map((n) => _notesRenderCard(n)).join("")}
     </div>
     <div class="notes-quick-add">
@@ -7291,8 +7297,14 @@ function _notesShowContextMenu(e, note) {
   // Divider
   const d2 = document.createElement("div"); d2.className = "ctx-menu-divider"; menu.appendChild(d2);
 
-  menu.appendChild(mkItem("◫", "Archive", "", async () => {
-    try { await _notesApiUpdate(note.id, { archived: true }); state.notes = state.notes.filter((n) => n.id !== note.id); _notesRefreshTile(); showToast("Note archived"); } catch (err) { showToast("Archive failed", true); }
+  menu.appendChild(mkItem("◫", note.archived ? "Unarchive" : "Archive", "", async () => {
+    try {
+      await _notesApiUpdate(note.id, { archived: !note.archived });
+      const idx = state.notes.findIndex((n) => n.id === note.id);
+      if (idx >= 0) state.notes[idx].archived = !note.archived;
+      _notesRefreshTile();
+      showToast(note.archived ? "Note unarchived" : "Note archived");
+    } catch (err) { showToast("Action failed", true); }
   }));
   menu.appendChild(mkItem("✕", "Delete", "ctx-menu-item--danger", async () => {
     const ok = await confirmDialog({ title: "Delete note?", message: "Delete this note? This cannot be undone.", confirmLabel: "Delete", danger: true });
@@ -7390,6 +7402,15 @@ function _notesBindBrowseEvents(section) {
         container.classList.toggle("notes-grid-view", state.notesView === "grid");
         container.classList.toggle("notes-list-view", state.notesView === "list");
       }
+    });
+  }
+
+  // Archive toggle
+  const archiveToggle = $(".notes-archive-toggle", section);
+  if (archiveToggle) {
+    archiveToggle.addEventListener("click", () => {
+      state.notesArchived = !state.notesArchived;
+      _notesRefreshTile();
     });
   }
 
