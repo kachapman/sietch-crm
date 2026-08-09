@@ -1806,9 +1806,23 @@ body {
   max-height: calc(var(--tile-row-height) * 4 + 3.75rem);
 }
 
+.dashboard-tile.tile-double.presence-panel .presence-tile-body,
+.dashboard-tile.tile-triple.presence-panel .presence-tile-body,
+.dashboard-tile.tile-quad.presence-panel .presence-tile-body {
+  max-height: none;
+  flex: 1;
+}
+
 .dashboard-tile.presence-panel .tile-toolbar,
 .dashboard-tile.tasks-panel .tile-toolbar {
   flex-wrap: nowrap;
+}
+/* Presence tile: hide title, tabs go first */
+.dashboard-tile.presence-panel .tile-toolbar .tile-toolbar-title {
+  display: none;
+}
+.dashboard-tile.presence-panel .tile-toolbar .tile-toolbar-count {
+  display: none;
 }
 
 /* Hide empty toolbar-tools div so it doesn't push action buttons to row 2 */
@@ -1819,7 +1833,7 @@ body {
 /* Team tile body fills available height with scroll constraint */
 .dashboard-tile.presence-panel .presence-tile-body {
   flex: 1;
-  min-height: 240px;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -1856,6 +1870,7 @@ body {
 .dashboard-tile.presence-panel > .tile-body-content {
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
 }
 
 .dashboard-tile.feed-panel .feed-list {
@@ -3567,16 +3582,34 @@ body {
 }
 
 .presence-dot {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
-  border: 1px solid rgba(0,0,0,0.15);
 }
-.presence-dot.online { background: #22c55e; } /* green */
-.presence-dot.offline { background: #475569; } /* dark slate */
-.presence-dot.idle { background: #eab308; }   /* amber for idle >2h */
-.presence-dot.afd { background: #64748b; }   /* subtle slate gray for "away from dashboard" (tab not focused, but session active) */
+.presence-dot.online {
+  background: #22c55e;
+  animation: presence-dot-breathe 2.2s ease-in-out infinite;
+}
+.presence-dot.idle {
+  background: #f59e0b;
+}
+.presence-dot.offline {
+  background: #475569;
+}
+.presence-dot.afd {
+  background: #64748b;
+}
+@keyframes presence-dot-breathe {
+  0%, 100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, #22c55e 60%, transparent);
+    opacity: 0.85;
+  }
+  50% {
+    box-shadow: 0 0 6px 2px color-mix(in srgb, #22c55e 55%, transparent);
+    opacity: 1;
+  }
+}
 
 .presence-name {
   font-weight: 600;
@@ -4820,22 +4853,100 @@ body {
   cursor: default;
 }
 .presence-tile-body .presence-user {
-  padding: 0.2rem 0.35rem;
-  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.35rem;
+  font-size: 0.85rem;
   cursor: pointer;
   border-radius: 4px;
   transition: background 0.1s;
 }
-
-.presence-tile-body .presence-name {
-  font-size: 0.9rem;
-}
-
-.presence-tile-body .presence-recent-who {
-  font-size: 0.9rem;
-}
 .presence-tile-body .presence-user:hover {
+  background: var(--hover-bg, rgba(255, 255, 255, 0.06));
+}
+
+/* Avatar initials */
+.presence-user-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text);
+  opacity: 0.7;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  position: relative;
+}
+/* Presence dot on avatar */
+.presence-user-avatar .presence-dot {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--surface);
+}
+/* User name */
+.presence-user-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Unread DM badge */
+.presence-unread-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent, #3b82f6);
+  flex-shrink: 0;
+  animation: presence-unread-breathe 2.2s ease-in-out infinite;
+}
+@keyframes presence-unread-breathe {
+  0%, 100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent, #3b82f6) 60%, transparent);
+    opacity: 0.85;
+  }
+  50% {
+    box-shadow: 0 0 6px 2px color-mix(in srgb, var(--accent, #3b82f6) 55%, transparent);
+    opacity: 1;
+  }
+}
+/* Section headers */
+.presence-section-header {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 0.35rem 0.5rem 0.15rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+/* Filter input */
+.presence-filter-input {
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-family: var(--font);
+  margin-bottom: 0.25rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.presence-filter-input:focus {
+  border-color: var(--accent);
+}
+.presence-filter-input::placeholder {
+  color: var(--muted);
 }
 /* Manual status: directly right of username, bold */
 .presence-manual-status {
@@ -4860,6 +4971,48 @@ body {
 .presence-tile-divider {
   border-top: 1px solid var(--border);
   margin: 0.3rem 0;
+}
+
+/* Collapsible offline section */
+.presence-offline-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s;
+}
+.presence-offline-toggle:hover {
+  color: var(--text);
+}
+.presence-offline-arrow {
+  display: inline-block;
+  transition: transform 0.2s;
+  font-size: 0.65rem;
+  width: 0.65rem;
+}
+.presence-offline-toggle.expanded .presence-offline-arrow {
+  transform: rotate(90deg);
+}
+/* Domino expand animation for offline users */
+.presence-offline-section.section-just-expanded .presence-user {
+  animation: presence-domino-in 0.36s cubic-bezier(0.22, 1.61, 0.36, 1) backwards;
+}
+.presence-offline-section.section-just-expanded .presence-user:nth-child(1) { animation-delay: 0.04s; }
+.presence-offline-section.section-just-expanded .presence-user:nth-child(2) { animation-delay: 0.08s; }
+.presence-offline-section.section-just-expanded .presence-user:nth-child(3) { animation-delay: 0.12s; }
+.presence-offline-section.section-just-expanded .presence-user:nth-child(4) { animation-delay: 0.16s; }
+.presence-offline-section.section-just-expanded .presence-user:nth-child(5) { animation-delay: 0.20s; }
+.presence-offline-section.section-just-expanded .presence-user:nth-child(6) { animation-delay: 0.24s; }
+.presence-offline-section.section-just-expanded .presence-user:nth-child(7) { animation-delay: 0.28s; }
+.presence-offline-section.section-just-expanded .presence-user:nth-child(8) { animation-delay: 0.32s; }
+@keyframes presence-domino-in {
+  0%   { opacity: 0; transform: translateY(8px) scale(0.92); }
+  60%  { opacity: 1; }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 /* Team tile tabs */
@@ -4934,7 +5087,8 @@ body {
 
 /* All presence bodies (team/messages/dm) constrained uniformly */
 .presence-tile-body {
-  max-height: 280px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -4989,6 +5143,89 @@ body {
 .presence-status-select-tile:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+/* Icon button replacing the status <select> */
+.presence-status-icon-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+.presence-status-icon-btn:hover {
+  background: var(--hover-bg, rgba(255,255,255,0.06));
+  border-color: var(--accent-soft, rgba(109, 75, 255, 0.3));
+}
+.presence-status-icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+/* Status dot overlay on icon button */
+.presence-status-icon-btn .status-dot-indicator {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--surface-2);
+  pointer-events: none;
+}
+.presence-status-icon-btn .status-dot-indicator.online { background: #22c55e; }
+.presence-status-icon-btn .status-dot-indicator.dnd { background: #ef4444; }
+.presence-status-icon-btn .status-dot-indicator.afk { background: #f59e0b; }
+.presence-status-icon-btn .status-dot-indicator.custom { background: #8b5cf6; }
+
+/* Floating status dropdown — reuse template-dropdown pattern */
+.status-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 100;
+  min-width: 160px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  padding: 0.35rem 0;
+}
+.status-dropdown.hidden {
+  display: none;
+}
+.status-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.75rem;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: var(--font);
+  transition: background 0.1s;
+}
+.status-dropdown-item:hover {
+  background: var(--hover-bg, rgba(255, 255, 255, 0.06));
+}
+.status-dropdown-item.active {
+  background: var(--accent-soft, rgba(109, 75, 255, 0.1));
+  color: var(--accent);
 }
 
 /* Inline custom status input in tile toolbar */
@@ -5079,7 +5316,7 @@ body {
 .presence-popup-btn {
   width: 1.6rem;
   height: 1.6rem;
-  padding: 0;
+  padding: 0.15rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface-2);
@@ -5089,32 +5326,266 @@ body {
   align-items: center;
   justify-content: center;
   transition: border-color 0.15s, color 0.15s, background 0.15s;
-  font-size: 1.1rem;
-  line-height: 1;
   flex-shrink: 0;
 }
-
+.presence-popup-btn svg {
+  width: 16px;
+  height: 16px;
+}
 .presence-popup-btn:hover {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--surface);
 }
 
-/* Flashing unread indicator in team title bar */
+/* Flashing unread indicator in tile toolbar */
 .presence-unread-flash {
-  color: #ffffff;
-  font-size: 1.25rem;
+  color: var(--accent, #3b82f6);
+  font-size: 0.9rem;
   line-height: 1;
-  animation: presence-unread-blink 1s ease-in-out infinite;
   flex-shrink: 0;
-  margin-right: 0.15rem;
-  cursor: default;
-  user-select: none;
-  text-shadow: 0 0 6px rgba(255,255,255,0.5);
 }
-@keyframes presence-unread-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.15; }
+.presence-unread-flash.hidden {
+  display: none;
+}
+
+/* Online count in toolbar */
+.presence-online-count {
+  font-size: 0.7rem;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Messages tab styles */
+.msg-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.1s;
+  border-left: 3px solid transparent;
+}
+.msg-row:hover {
+  background: var(--hover-bg, rgba(255, 255, 255, 0.06));
+}
+.msg-row-unread {
+  border-left-color: #3b82f6;
+}
+.msg-row-unread .msg-name {
+  font-weight: 600;
+}
+.msg-name {
+  font-size: 0.85rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-preview {
+  flex: 1;
+  font-size: 0.78rem;
+  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-time {
+  font-size: 0.7rem;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.msg-empty {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+/* Timesheet tab */
+.ts-clock-widget {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.ts-timer-display {
+  font-size: 1.5rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  letter-spacing: 0.05em;
+}
+.ts-clock-btn {
+  padding: 0.5rem 1.5rem;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  font-family: var(--font);
+}
+.ts-clock-btn:active {
+  transform: scale(0.97);
+}
+.ts-clock-btn.clock-in {
+  background: #22c55e;
+  color: #fff;
+}
+.ts-clock-btn.clock-in:hover {
+  background: #16a34a;
+}
+.ts-clock-btn.clock-out {
+  background: #ef4444;
+  color: #fff;
+}
+.ts-clock-btn.clock-out:hover {
+  background: #dc2626;
+}
+.ts-break-btn {
+  padding: 0.35rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.78rem;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: background 0.15s;
+}
+.ts-break-btn:hover {
+  background: var(--hover-bg, rgba(255,255,255,0.06));
+}
+.ts-break-btn.on-break {
+  border-color: #f59e0b;
+  color: #f59e0b;
+}
+/* Date range selector */
+.ts-date-range {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.78rem;
+}
+.ts-date-range button {
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-family: var(--font);
+}
+.ts-date-range button:hover {
+  background: var(--hover-bg, rgba(255,255,255,0.06));
+}
+.ts-date-range .ts-date-label {
+  font-weight: 600;
+  flex: 1;
+  text-align: center;
+}
+/* Entry list */
+.ts-entries-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.25rem 0;
+}
+.ts-entry-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.35rem;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.78rem;
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+}
+.ts-entry-times {
+  color: var(--text);
+}
+.ts-entry-duration {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.ts-entry-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+.ts-entry-actions button {
+  padding: 0.15rem 0.3rem;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 3px;
+  font-size: 0.72rem;
+}
+.ts-entry-actions button:hover {
+  background: var(--hover-bg, rgba(255,255,255,0.06));
+  color: var(--text);
+}
+/* Daily total */
+.ts-daily-total {
+  padding: 0.5rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: right;
+  color: var(--text);
+}
+/* Export buttons */
+.ts-export-bar {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.35rem 0.5rem;
+  border-top: 1px solid var(--border);
+}
+.ts-export-btn {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.72rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font);
+  transition: background 0.15s;
+}
+.ts-export-btn:hover {
+  background: var(--hover-bg, rgba(255,255,255,0.06));
+}
+/* Admin summary table */
+.ts-admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+.ts-admin-table th,
+.ts-admin-table td {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+.ts-admin-table th {
+  background: var(--surface-2);
+  font-weight: 600;
+  font-size: 0.72rem;
+}
+/* Timesheet empty state */
+.ts-empty {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 /* Inline DM inside the tile */

@@ -2,6 +2,73 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Team Tile Revamp + Timesheet System (2026-08-08)
+
+### Heartbeat System Fix (Critical Bug)
+- **`startPresenceHeartbeats()` was dead code — never called.** After login, only one heartbeat fired. The entire periodic heartbeat system, `sendBeacon` disconnect signal, and `visibilitychange` reconnection were unreachable. Fixed by calling `startPresenceHeartbeats()` from `ensurePresenceOnLogin()`.
+- **Network disconnect detection added.** `window.addEventListener('online'/'offline')` now triggers heartbeat restart and presence snapshot refresh.
+- **Heartbeat failure indicator.** 3+ consecutive heartbeat failures show a subtle warning in the toolbar.
+- **`touch_crm_activity()` now called.** CRM proxy requests refresh the user's server-side presence timestamp.
+
+### Height Bug Fix
+- **Removed `max-height: 280px` from `.presence-tile-body`** — was capping all content areas regardless of tile size. Replaced with `flex: 1; min-height: 0; overflow-y: auto` so content fills available space.
+- **Added `overflow-y: auto` to `.presence-panel > .tile-body-content`** — overrides the default `overflow-y: hidden` that was clipping content.
+- **Removed `min-height: 240px` from `.presence-panel .presence-tile-body`** — the tile's `min-height: var(--tile-row-height)` already provides the floor.
+- **Multi-row body overrides added** — `.tile-double/triple/quad.presence-panel .presence-tile-body` now get `max-height: none; flex: 1`.
+
+### Toolbar Restructure (Zulip-Inspired)
+- **Status dropdown replaced with icon button.** The wide `<select>` (140px max) is replaced with a compact `icon-tabler-device-desktop-analytics` SVG icon (28px). Clicking opens a floating dropdown (reuses `template-dropdown` pattern). Colored dot overlay shows current status.
+- **Tile title "Team" removed** — follows the Tasks pattern. Tabs come first in the toolbar.
+- **Tabs moved before icon** — `[⋮⋮] [Team|Messages|Timesheet] [🖥 icon] [ admin ] [⤢] [—] [×]`
+- **Online count shown in toolbar** — muted text "3 online" between tabs and actions.
+- **Pop-out button icon updated** — replaced `⤢` text with `icon-tabler-queue-pop-out` SVG (also in messages popup).
+
+### Offline Users Collapsed by Default
+- **"▸ Offline (N)" toggle** — offline section collapsed by default with a clickable toggle. Clicking expands/collapses with a chevron rotate animation.
+- **Domino expand animation** — adopted from Odysseus: users cascade in staggered (40ms per child) with a spring-bounce keyframe.
+
+### Zulip-Inspired User List
+- **Filter input** — `<input placeholder="Filter team..." />` at the top of the team body, filters users in real-time.
+- **Avatar initials** — 24px round avatar with user initials (adopted from Odysseus user bar pattern). Presence dot overlays bottom-right corner.
+- **Section headers with counts** — "Online (3)" / "Offline (5)" in muted bold text.
+- **Unread DM badges** — small blue breathing dot on user rows with unread messages.
+- **Breathing presence dots** — adopted from Odysseus: 6px circles with `box-shadow` breathing animation instead of static dots.
+
+### Messages Tab Cleanup
+- **Unread indicators** — blue left border on unread conversations (Zulip-style).
+- **Last message preview** — truncated, muted text showing most recent message.
+- **Time ago** — right-aligned timestamp on each row.
+- **Filter input** — real-time search across conversations.
+- **Empty state** — "No messages yet — click a team member to start chatting".
+
+### DM Inline Cleanup
+- **Always-visible compose bar** — fixed at bottom, never scrolls away.
+- **Pop-out button in header** — `icon-tabler-queue-pop-out` SVG to open full DM modal.
+- **Cleaner message bubbles** — subtle background differentiation for sent vs received.
+
+### Timesheet System
+- **New `time_entries` table** (migration 009) — `id`, `user_id`, `clock_in`, `clock_out`, `break_minutes`, `break_start`, `opportunity_id`, `notes`, `created_at`, `updated_at`. Indexes on user_id, clock_in, opportunity_id.
+- **New `time_entries_daily` view** — pre-computed daily totals (entry_count, total_hours, total_break_minutes) grouped by user_id and date.
+- **Clock in/out widget** — large button (green when out, red when in) with live-updating `HH:MM:SS` timer display. Server-side PostgreSQL is source of truth; client timer is cosmetic.
+- **Break management** — "Start Break" / "End Break" buttons. Break duration added to `break_minutes`.
+- **Entry list** — scrollable list showing: clock in/out times, duration, break, project, notes. Edit/delete buttons per entry.
+- **Daily totals** — summary showing total hours per day for the selected date range.
+- **Date range selector** — prev/next day buttons, week/month range presets.
+- **Admin view** — multi-user summary table showing all users' daily hours. Admin can edit/delete any entry.
+- **CSV export** — `GET /api/timesheet/export?from=&to=&user_id=` downloads CSV.
+- **PDF export** — `GET /api/timesheet/export-pdf?from=&to=&user_id=` generates PDF via `fpdf2`. Standard layout: company header, user name, date range, entries table, daily totals, grand total.
+- **12 server endpoints** — clock-in, clock-out, break start/end, active entry, history, daily summary, admin summary, CSV export, PDF export, edit entry, delete entry.
+
+### Reliability
+- **Server-side source of truth** — all clock-in/clock-out operations are PostgreSQL transactions. Client timer is purely cosmetic.
+- **Reconnect resilience** — on network reconnect, client fetches `GET /api/timesheet/active` and recalculates elapsed time from server timestamp.
+- **Orphaned entry cleanup** — entries with `clock_out IS NULL` and `clock_in` >24h old are auto-closed with `auto_closed` flag.
+- **Double clock-in prevention** — server checks for existing active entry before inserting.
+
+### Files Changed
+- **New:** `migrations/009_add_timesheets.sql`, `requirements.txt`
+- **Modified:** `server.py` (12 timesheet endpoints + heartbeat fix + SSE publish), `public/app.js` (heartbeat fix, UI revamp, timesheet tab), `public/styles.css` (height fix, toolbar, offline collapse, timesheet styles), `public/index.html` (pop-out icon), `CHANGELOG.md`, `AGENTS.md`
+
 ## SSE + Multi-Channel Notifications (2026-08-08)
 
 - **SSE (Server-Sent Events) real-time push.** New `event_bus.py` module with thread-safe pub/sub EventBus. `GET /api/events` endpoint on `ThreadingHTTPServer` — one persistent connection per user, 25s heartbeat, auto-reconnect on client. Replaces 6 polling timers (~540 HTTP requests/hour/user saved).

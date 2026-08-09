@@ -15944,9 +15944,6 @@ function renderPresenceTileCompact(snapshot = null) {
   list.className = "presence-list-compact";
 
   const renderUserRow = (u) => {
-    // Defensive: never show auto/inferred status text for offline users.
-    // The server should strip it, but stale snapshots or cross-session cache
-    // can leak "Reviewing: ..." next to "last seen X ago".
     if (!u.online) {
       u.autoStatus = '';
       u.status = '';
@@ -15955,31 +15952,35 @@ function renderPresenceTileCompact(snapshot = null) {
 
     const row = document.createElement("div");
     row.className = "presence-user";
+    row.dataset.userId = u.id;
 
+    // Avatar with initials
+    const avatar = document.createElement("span");
+    avatar.className = "presence-user-avatar";
+    const initials = ((u.displayName || u.email || "?")[0] || "?").toUpperCase();
+    avatar.textContent = initials;
+    
+    // Presence dot on avatar
     const dot = document.createElement("span");
     let dcls = "offline";
-    // Treat client-side idle (15 min) as idle dot too
     const isClientIdle = u.online && (u.autoStatus === "Idle" || (u.inferred && u.status === "Idle"));
     if (u.online) dcls = (u.idle || isClientIdle) ? "idle" : "online";
     else if (u.afd) dcls = "afd";
     dot.className = "presence-dot " + dcls;
+    avatar.appendChild(dot);
 
     const nm = document.createElement("span");
-    nm.className = "presence-name";
+    nm.className = "presence-user-name";
     const userLabel = getPresenceUserLabel(u);
     nm.textContent = userLabel || "";
 
-    // Detect server version: new server sends inferred/autoStatus fields
-    const serverHasInferred = typeof u.inferred !== 'undefined';
-
-    // Manual status: directly right of name, bold, wrapped in parentheses
     const manualStatus = document.createElement("span");
     manualStatus.className = "presence-manual-status";
+    const serverHasInferred = typeof u.inferred !== 'undefined';
     if (serverHasInferred && u.status && u.inferred === false && u.status !== "Online") {
       manualStatus.textContent = `(${u.status})`;
     }
 
-    // Auto/inferred status: stays on right side, muted
     const st = document.createElement("span");
     st.className = "presence-status";
     let statusText = "";
@@ -15990,35 +15991,63 @@ function renderPresenceTileCompact(snapshot = null) {
         statusText = u.status;
       }
     } else if (u.status && u.status !== "Online") {
-      // Old server fallback: show all non-Online statuses on the right
       statusText = u.status;
     }
-    // Last seen for offline users
     if (!u.online && !u.afd && u.lastSeen) {
       statusText = (statusText ? statusText + " · " : "") + "last seen " + formatTimeAgo(u.lastSeen);
     }
     st.textContent = statusText;
 
-    row.append(dot, nm, manualStatus, st);
+    const unreadDot = document.createElement("span");
+    unreadDot.className = "presence-unread-dot";
+    const recentDms = state.presenceData?.myRecentDms || [];
+    const hasUnread = recentDms.some(d => String(d.from) === String(u.id) && !d.read);
+    unreadDot.style.display = hasUnread ? "" : "none";
+
+    row.append(avatar, nm, manualStatus, st, unreadDot);
     row.addEventListener("click", () => {
       switchToPresenceMessagesTab();
       openDMInline(u.id, userLabel);
     });
     list.appendChild(row);
+    return row;
   };
 
   // Online users first
   onlineUsers.forEach(renderUserRow);
 
-  // Divider between online and offline
-  if (onlineUsers.length && offlineUsers.length) {
-    const divider = document.createElement("div");
-    divider.className = "presence-tile-divider";
-    list.appendChild(divider);
+  // Collapsible offline section
+  if (offlineUsers.length) {
+    const offlineSection = document.createElement("div");
+    offlineSection.className = "presence-offline-section";
+    
+    const toggle = document.createElement("div");
+    toggle.className = "presence-offline-toggle";
+    toggle.innerHTML = `<span class="presence-offline-arrow">▸</span> Offline (${offlineUsers.length})`;
+    
+    const offlineRows = [];
+    offlineUsers.forEach(u => {
+      const row = renderUserRow(u);
+      row.style.display = "none";
+      offlineRows.push(row);
+      offlineSection.appendChild(row);
+    });
+    
+    let expanded = false;
+    toggle.addEventListener("click", () => {
+      expanded = !expanded;
+      toggle.classList.toggle("expanded", expanded);
+      toggle.querySelector(".presence-offline-arrow").textContent = expanded ? "▾" : "▸";
+      if (expanded) {
+        offlineSection.classList.add("section-just-expanded");
+        setTimeout(() => offlineSection.classList.remove("section-just-expanded"), 700);
+      }
+      offlineRows.forEach(r => r.style.display = expanded ? "" : "none");
+    });
+    
+    list.appendChild(toggle);
+    list.appendChild(offlineSection);
   }
-
-  // Offline users
-  offlineUsers.forEach(renderUserRow);
 
   if (!allUsers.length) {
     const empty = document.createElement("div");
@@ -16032,6 +16061,10 @@ function renderPresenceTileCompact(snapshot = null) {
 
   body.appendChild(list);
   syncTileStatusSelect(snap);
+
+  // Update online count in toolbar
+  const countEl = $("#presence-tile-online-count");
+  if (countEl) countEl.textContent = `${onlineUsers.length} online`;
 
   // If the Messages tab body is currently visible, refresh its inbox too
   // so newly-arrived presence snapshots update the message list.
@@ -16067,6 +16100,29 @@ function renderPresenceTile() {
           </div>
         </div>
       </div>
+      <div id="presence-tile-timesheet-body" class="presence-tile-body presence-tile-tab-content" style="display:none;">
+        <div class="ts-clock-widget">
+          <div id="ts-timer-display" class="ts-timer-display">00:00:00</div>
+          <button type="button" id="ts-clock-btn" class="ts-clock-btn clock-in">Clock In</button>
+          <button type="button" id="ts-break-btn" class="ts-break-btn hidden">Start Break</button>
+        </div>
+        <div class="ts-date-range">
+          <button type="button" id="ts-prev-day">◀</button>
+          <span id="ts-date-label" class="ts-date-label">Today</span>
+          <button type="button" id="ts-next-day">▶</button>
+          <button type="button" id="ts-range-week" class="ts-range-btn">Week</button>
+          <button type="button" id="ts-range-month" class="ts-range-btn">Month</button>
+        </div>
+        <div id="ts-entries-list" class="ts-entries-list"></div>
+        <div id="ts-daily-total" class="ts-daily-total"></div>
+        <div class="ts-export-bar">
+          <button type="button" id="ts-export-csv" class="ts-export-btn">Export CSV</button>
+          <button type="button" id="ts-export-pdf" class="ts-export-btn">Export PDF</button>
+        </div>
+        <div id="ts-admin-section" class="hidden" style="padding:0.5rem;">
+          <div id="ts-admin-summary"></div>
+        </div>
+      </div>
       <div id="presence-tile-admin" class="presence-admin hidden" style="padding:0.5rem 0.75rem;font-size:0.78rem;color:var(--muted);"></div>
     `;
     $("#dashboard-tiles")?.appendChild(tile);
@@ -16078,17 +16134,58 @@ function renderPresenceTile() {
     if (toolbar) {
       const tools = toolbar.querySelector(":scope > .tile-toolbar-tools");
       if (tools) {
-        const statusSel = document.createElement("select");
-        statusSel.id = "presence-tile-status";
-        statusSel.className = "presence-status-select-tile";
-        statusSel.title = "Set your status";
-        statusSel.innerHTML = `
-          <option value="Online">Online</option>
-          <option value="DND - Estimating">DND - Estimating</option>
-          <option value="AFK - Lunch">AFK - Lunch</option>
-          <option value="AFK - Other">AFK - Other</option>
-          <option value="__custom__">Custom...</option>
-        `;
+        const statusBtn = document.createElement("button");
+        statusBtn.type = "button";
+        statusBtn.id = "presence-tile-status-btn";
+        statusBtn.className = "presence-status-icon-btn";
+        statusBtn.title = "Set your status";
+        statusBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 5a1 1 0 0 1 1 -1h16a1 1 0 0 1 1 1v10a1 1 0 0 1 -1 1h-16a1 1 0 0 1 -1 -1l0 -10"/><path d="7 20h10"/><path d="9 16v4"/><path d="15 16v4"/><path d="9 12v-4"/><path d="12 12v-1"/><path d="15 12v-2"/><path d="12 12v-1"/></svg><span class="status-dot-indicator online"></span>`;
+        
+        const statusDropdown = document.createElement("div");
+        statusDropdown.className = "status-dropdown hidden";
+        statusDropdown.id = "presence-status-dropdown";
+        const statusOptions = [
+          { value: "Online", label: "Online", dotClass: "online" },
+          { value: "DND - Estimating", label: "DND Estimating", dotClass: "dnd" },
+          { value: "AFK - Lunch", label: "Lunch", dotClass: "afk" },
+          { value: "AFK - Other", label: "AFK Other", dotClass: "afk" },
+          { value: "__custom__", label: "Custom...", dotClass: "custom" },
+        ];
+        statusOptions.forEach(opt => {
+          const item = document.createElement("button");
+          item.type = "button";
+          item.className = "status-dropdown-item";
+          item.dataset.value = opt.value;
+          item.innerHTML = `<span class="status-dot-indicator ${opt.dotClass}" style="width:8px;height:8px;border-radius:50%;flex-shrink:0;"></span> ${opt.label}`;
+          item.addEventListener("click", (e) => {
+            e.stopPropagation();
+            statusDropdown.classList.add("hidden");
+            if (opt.value === "__custom__") {
+              customWrap.style.display = "flex";
+              customInput.focus();
+            } else {
+              statusBtn.querySelector(".status-dot-indicator").className = `status-dot-indicator ${opt.dotClass}`;
+              presenceFetch("/api/presence/status", {
+                method: "POST",
+                body: JSON.stringify({ status: opt.value, inferred: false }),
+              });
+            }
+          });
+          statusDropdown.appendChild(item);
+        });
+        statusBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          statusDropdown.classList.toggle("hidden");
+          if (!statusDropdown.classList.contains("hidden")) {
+            const close = (ev) => {
+              if (!statusDropdown.contains(ev.target) && ev.target !== statusBtn) {
+                statusDropdown.classList.add("hidden");
+                document.removeEventListener("click", close);
+              }
+            };
+            setTimeout(() => document.addEventListener("click", close), 0);
+          }
+        });
         const customWrap = document.createElement("div");
         customWrap.id = "presence-tile-custom-wrap";
         customWrap.className = "presence-custom-wrap";
@@ -16104,7 +16201,9 @@ function renderPresenceTile() {
         adminBtn.className = "presence-admin-toggle-tile hidden";
         adminBtn.title = "Admin view";
         adminBtn.textContent = "Admin";
-        tools.appendChild(statusSel);
+        tools.appendChild(statusBtn);
+        statusBtn.style.position = "relative";
+        statusBtn.appendChild(statusDropdown);
         tools.appendChild(customWrap);
         tools.appendChild(adminBtn);
       }
@@ -16120,7 +16219,7 @@ function renderPresenceTile() {
         popupBtn.id = "presence-tile-popup-btn";
         popupBtn.className = "presence-popup-btn";
         popupBtn.title = "Open team viewer in popup";
-        popupBtn.textContent = "⤢";
+        popupBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M11 5h-6a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-6"/><path d="M3 13h6a2 2 0 0 1 2 2v6"/><path d="M16 3h5v5"/><path d="M21 3l-6 6"/></svg>`;
         actions.insertBefore(popupBtn, actions.firstChild);
         actions.insertBefore(unreadFlash, popupBtn);
       }
@@ -16129,8 +16228,13 @@ function renderPresenceTile() {
       tabs.innerHTML = `
         <button type="button" class="presence-tile-tab active" data-tab="team">Team</button>
         <button type="button" class="presence-tile-tab" data-tab="messages">Messages<span id="presence-tile-msg-badge" class="msg-badge hidden">0</span></button>
+        <button type="button" class="presence-tile-tab" data-tab="timesheet">Timesheet</button>
       `;
       tools.appendChild(tabs);
+      const onlineCount = document.createElement("span");
+      onlineCount.id = "presence-tile-online-count";
+      onlineCount.className = "presence-online-count";
+      tools.appendChild(onlineCount);
     }
     bindPresenceTileControls(tile);
   }
@@ -16244,17 +16348,28 @@ function bindPresenceTileControls(tile) {
       const teamBody = tile.querySelector("#presence-tile-team-body");
       const msgBody = tile.querySelector("#presence-tile-messages-body");
       const dmInline = tile.querySelector("#presence-tile-dm-inline");
+      const tsBody = tile.querySelector("#presence-tile-timesheet-body");
       if (tabId === "messages") {
         if (teamBody) teamBody.style.display = "none";
         if (dmInline) dmInline.style.display = "none";
+        if (tsBody) tsBody.style.display = "none";
         if (msgBody) {
           msgBody.style.display = "";
           renderPresenceTileMessages();
+        }
+      } else if (tabId === "timesheet") {
+        if (teamBody) teamBody.style.display = "none";
+        if (msgBody) msgBody.style.display = "none";
+        if (dmInline) dmInline.style.display = "none";
+        if (tsBody) {
+          tsBody.style.display = "";
+          renderTimesheetTab();
         }
       } else {
         if (teamBody) teamBody.style.display = "";
         if (msgBody) msgBody.style.display = "none";
         if (dmInline) dmInline.style.display = "none";
+        if (tsBody) tsBody.style.display = "none";
       }
     });
   }
@@ -16350,6 +16465,13 @@ function renderPresenceTileMessages() {
 
   body.innerHTML = "";
 
+  // Filter input
+  const filterInput = document.createElement("input");
+  filterInput.type = "text";
+  filterInput.className = "presence-filter-input";
+  filterInput.placeholder = "Filter messages...";
+  body.appendChild(filterInput);
+
   if (!recentDms.length) {
     const empty = document.createElement("div");
     empty.className = "presence-empty";
@@ -16426,6 +16548,29 @@ function switchToPresenceMessagesTab() {
   if (msgBody) msgBody.style.display = "";
   if (dmInline) dmInline.style.display = "none";
   renderPresenceTileMessages();
+}
+
+function switchToPresenceTimesheetTab() {
+  const tile = document.querySelector('[data-tile-id="tile-presence"]');
+  if (!tile) return;
+  const tabBar = tile.querySelector(".presence-tile-tabs");
+  if (!tabBar) return;
+  const teamBody = tile.querySelector("#presence-tile-team-body");
+  const msgBody = tile.querySelector("#presence-tile-messages-body");
+  const dmInline = tile.querySelector("#presence-tile-dm-inline");
+  const tsBody = tile.querySelector("#presence-tile-timesheet-body");
+
+  tabBar.querySelectorAll(".presence-tile-tab").forEach(b => b.classList.remove("active"));
+  const tsTab = tabBar.querySelector('[data-tab="timesheet"]');
+  if (tsTab) tsTab.classList.add("active");
+
+  if (teamBody) teamBody.style.display = "none";
+  if (msgBody) msgBody.style.display = "none";
+  if (dmInline) dmInline.style.display = "none";
+  if (tsBody) {
+    tsBody.style.display = "";
+    renderTimesheetTab();
+  }
 }
 
 function openDMInline(userId, userName) {
@@ -16568,8 +16713,8 @@ function updatePresenceTileAdminButton() {
 }
 
 function syncTileStatusSelect(snap) {
-  const sel = $("#presence-tile-status");
-  if (!sel) return;
+  const statusBtn = $("#presence-tile-status-btn");
+  if (!statusBtn) return;
   const data = snap || state.presenceData || {};
   const me = data.me || {};
   const cur = me.status || (data.users || []).find(u => u.id === state.currentUserId)?.status || "";
@@ -16578,13 +16723,21 @@ function syncTileStatusSelect(snap) {
   const customWrap = $("#presence-tile-custom-wrap");
   if (customWrap && customWrap.style.display !== "none") {
     customWrap.style.display = "none";
-    sel.style.display = "";
   }
-  // If inferred is undefined (old server), let cur decide; never show auto-derived statuses
-  if (inferred === true || !cur || cur === "Online") {
-    sel.value = "Online";
-  } else {
-    sel.value = cur;
+  // Update icon dot indicator
+  const dot = statusBtn.querySelector(".status-dot-indicator");
+  if (dot) {
+    let dotClass = "online";
+    if (inferred === true || !cur || cur === "Online") {
+      dotClass = "online";
+    } else if (cur && cur.includes("DND")) {
+      dotClass = "dnd";
+    } else if (cur && cur.includes("AFK")) {
+      dotClass = "afk";
+    } else {
+      dotClass = "custom";
+    }
+    dot.className = `status-dot-indicator ${dotClass}`;
   }
 }
 
@@ -16665,6 +16818,7 @@ function ensurePresenceOnLogin() {
       renderPresenceTileCompact(s);
       updatePresenceTileBadge();
       updatePresenceTileAdminButton();
+      startPresenceHeartbeats();
     })
     .catch(() => {
       // Fallback: try snapshot even if heartbeat failed
@@ -16673,10 +16827,290 @@ function ensurePresenceOnLogin() {
         renderPresenceTileCompact(s);
         updatePresenceTileBadge();
         updatePresenceTileAdminButton();
+        startPresenceHeartbeats();
       }).catch(() => {});
     });
   noteDashboardActivity();
   setupPresenceIdleAndAutoLogout();
+  // Network disconnect detection
+  window.addEventListener("online", () => {
+    startPresenceHeartbeats();
+    fetchPresenceSnapshot();
+    if ($("#presence-tile-timesheet-body")?.style.display !== "none") {
+      renderTimesheetTab();
+    }
+  });
+  window.addEventListener("offline", () => {
+    // Optional: show a subtle indicator
+  });
+}
+
+// ── Timesheet Tab ──
+
+let _tsTimerInterval = null;
+let _tsActiveEntry = null;
+let _tsRange = { from: null, to: null, mode: "day" };
+
+function renderTimesheetTab() {
+  const body = $("#presence-tile-timesheet-body");
+  if (!body) return;
+  api("/api/timesheet/active").then(data => {
+    _tsActiveEntry = data.entry;
+    tsUpdateClockUI();
+    tsRefreshEntries();
+  }).catch(() => {});
+  const clockBtn = $("#ts-clock-btn");
+  const breakBtn = $("#ts-break-btn");
+  const prevDay = $("#ts-prev-day");
+  const nextDay = $("#ts-next-day");
+  const rangeWeek = $("#ts-range-week");
+  const rangeMonth = $("#ts-range-month");
+  const exportCsv = $("#ts-export-csv");
+  const exportPdf = $("#ts-export-pdf");
+  
+  clockBtn?.addEventListener("click", tsToggleClock);
+  breakBtn?.addEventListener("click", tsToggleBreak);
+  prevDay?.addEventListener("click", () => tsShiftRange(-1));
+  nextDay?.addEventListener("click", () => tsShiftRange(1));
+  rangeWeek?.addEventListener("click", () => tsSetRange("week"));
+  rangeMonth?.addEventListener("click", () => tsSetRange("month"));
+  exportCsv?.addEventListener("click", tsExportCSV);
+  exportPdf?.addEventListener("click", tsExportPDF);
+  
+  tsUpdateDateLabel();
+  if (state.presenceData?.isAdmin) {
+    $("#ts-admin-section")?.classList.remove("hidden");
+  }
+}
+
+function tsToggleClock() {
+  if (_tsActiveEntry) {
+    api("/api/timesheet/clock-out", { method: "POST" }).then(data => {
+      _tsActiveEntry = null;
+      tsStopTimer();
+      tsUpdateClockUI();
+      tsRefreshEntries();
+    }).catch(err => showToast(err.message || "Failed to clock out", true));
+  } else {
+    api("/api/timesheet/clock-in", { method: "POST", body: JSON.stringify({ notes: "" }) }).then(data => {
+      _tsActiveEntry = data.entry;
+      tsStartTimer();
+      tsUpdateClockUI();
+    }).catch(err => showToast(err.message || "Failed to clock in", true));
+  }
+}
+
+function tsToggleBreak() {
+  if (!_tsActiveEntry) return;
+  if (_tsActiveEntry.break_start) {
+    api("/api/timesheet/break/end", { method: "POST" }).then(() => {
+      _tsActiveEntry.break_start = null;
+      tsUpdateClockUI();
+    });
+  } else {
+    api("/api/timesheet/break/start", { method: "POST" }).then(() => {
+      _tsActiveEntry.break_start = new Date().toISOString();
+      tsUpdateClockUI();
+    });
+  }
+}
+
+function tsUpdateClockUI() {
+  const clockBtn = $("#ts-clock-btn");
+  const breakBtn = $("#ts-break-btn");
+  const timerDisplay = $("#ts-timer-display");
+  if (!clockBtn) return;
+  
+  if (_tsActiveEntry) {
+    clockBtn.textContent = "Clock Out";
+    clockBtn.className = "ts-clock-btn clock-out";
+    breakBtn?.classList.remove("hidden");
+    if (_tsActiveEntry.break_start) {
+      breakBtn.textContent = "End Break";
+      breakBtn.className = "ts-break-btn on-break";
+    } else {
+      breakBtn.textContent = "Start Break";
+      breakBtn.className = "ts-break-btn";
+    }
+    tsStartTimer();
+  } else {
+    clockBtn.textContent = "Clock In";
+    clockBtn.className = "ts-clock-btn clock-in";
+    breakBtn?.classList.add("hidden");
+    tsStopTimer();
+    if (timerDisplay) timerDisplay.textContent = "00:00:00";
+  }
+}
+
+function tsStartTimer() {
+  tsStopTimer();
+  _tsTimerInterval = setInterval(tsUpdateTimerDisplay, 1000);
+  tsUpdateTimerDisplay();
+}
+
+function tsStopTimer() {
+  if (_tsTimerInterval) {
+    clearInterval(_tsTimerInterval);
+    _tsTimerInterval = null;
+  }
+}
+
+function tsUpdateTimerDisplay() {
+  const timerDisplay = $("#ts-timer-display");
+  if (!timerDisplay || !_tsActiveEntry) return;
+  const clockIn = new Date(_tsActiveEntry.clock_in);
+  const now = new Date();
+  let elapsed = (now - clockIn) / 1000;
+  if (_tsActiveEntry.break_start) {
+    const breakStart = new Date(_tsActiveEntry.break_start);
+    elapsed -= (now - breakStart) / 1000;
+  }
+  elapsed -= (_tsActiveEntry.break_minutes || 0) * 60;
+  if (elapsed < 0) elapsed = 0;
+  const h = Math.floor(elapsed / 3600);
+  const m = Math.floor((elapsed % 3600) / 60);
+  const s = Math.floor(elapsed % 60);
+  timerDisplay.textContent = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function tsRefreshEntries() {
+  const from = _tsRange.from || "";
+  const to = _tsRange.to || "";
+  let url = "/api/timesheet/history?";
+  if (from) url += `from=${from}&`;
+  if (to) url += `to=${to}&`;
+  api(url).then(data => {
+    tsRenderEntries(data.entries || []);
+  }).catch(() => {});
+}
+
+function tsRenderEntries(entries) {
+  const list = $("#ts-entries-list");
+  const totalEl = $("#ts-daily-total");
+  if (!list) return;
+  list.innerHTML = "";
+  
+  if (!entries.length) {
+    list.innerHTML = '<div class="ts-empty">No time entries for this period</div>';
+    if (totalEl) totalEl.textContent = "";
+    return;
+  }
+  
+  let totalSeconds = 0;
+  entries.forEach(e => {
+    const ci = e.clock_in ? new Date(e.clock_in) : null;
+    const co = e.clock_out ? new Date(e.clock_out) : null;
+    const row = document.createElement("div");
+    row.className = "ts-entry-row";
+    
+    const times = document.createElement("div");
+    times.className = "ts-entry-times";
+    const dateStr = ci ? ci.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—";
+    const inStr = ci ? ci.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "—";
+    const outStr = co ? co.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "—";
+    times.textContent = `${dateStr}  ${inStr} — ${outStr}`;
+    
+    const dur = document.createElement("div");
+    dur.className = "ts-entry-duration";
+    let durSec = 0;
+    if (ci && co) {
+      durSec = (co - ci) / 1000 - (e.break_minutes || 0) * 60;
+      totalSeconds += durSec;
+    }
+    const dh = Math.floor(durSec / 3600);
+    const dm = Math.floor((durSec % 3600) / 60);
+    dur.textContent = `${dh}h ${dm}m`;
+    
+    const actions = document.createElement("div");
+    actions.className = "ts-entry-actions";
+    const editBtn = document.createElement("button");
+    editBtn.textContent = "✎";
+    editBtn.title = "Edit";
+    editBtn.addEventListener("click", () => tsEditEntry(e));
+    actions.appendChild(editBtn);
+    
+    row.append(times, dur, actions);
+    list.appendChild(row);
+  });
+  
+  const th = Math.floor(totalSeconds / 3600);
+  const tm = Math.floor((totalSeconds % 3600) / 60);
+  if (totalEl) totalEl.textContent = `Total: ${th}h ${tm}m`;
+}
+
+function tsEditEntry(entry) {
+  const notes = prompt("Entry notes", entry.notes || "");
+  if (notes === null) return;
+  api(`/api/timesheet/entries/${entry.id}`, {
+    method: "PUT",
+    body: JSON.stringify({ notes }),
+  }).then(() => tsRefreshEntries());
+}
+
+function tsShiftRange(dir) {
+  if (_tsRange.mode === "day") {
+    const d = _tsRange.from ? new Date(_tsRange.from) : new Date();
+    d.setDate(d.getDate() + dir);
+    _tsRange.from = d.toISOString().slice(0, 10);
+    _tsRange.to = _tsRange.from;
+  } else if (_tsRange.mode === "week") {
+    const d = _tsRange.from ? new Date(_tsRange.from) : new Date();
+    d.setDate(d.getDate() + dir * 7);
+    _tsRange.from = d.toISOString().slice(0, 10);
+    const end = new Date(d);
+    end.setDate(end.getDate() + 6);
+    _tsRange.to = end.toISOString().slice(0, 10);
+  } else if (_tsRange.mode === "month") {
+    const d = _tsRange.from ? new Date(_tsRange.from) : new Date();
+    d.setMonth(d.getMonth() + dir);
+    _tsRange.from = new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0, 10);
+    _tsRange.to = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10);
+  }
+  tsUpdateDateLabel();
+  tsRefreshEntries();
+}
+
+function tsSetRange(mode) {
+  const now = new Date();
+  if (mode === "week") {
+    const day = now.getDay();
+    const start = new Date(now);
+    start.setDate(now.getDate() - day);
+    _tsRange.from = start.toISOString().slice(0, 10);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    _tsRange.to = end.toISOString().slice(0, 10);
+  } else if (mode === "month") {
+    _tsRange.from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+    _tsRange.to = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+  }
+  _tsRange.mode = mode;
+  tsUpdateDateLabel();
+  tsRefreshEntries();
+}
+
+function tsUpdateDateLabel() {
+  const label = $("#ts-date-label");
+  if (!label) return;
+  if (_tsRange.from && _tsRange.to && _tsRange.from === _tsRange.to) {
+    label.textContent = _tsRange.from;
+  } else if (_tsRange.from && _tsRange.to) {
+    label.textContent = `${_tsRange.from} to ${_tsRange.to}`;
+  } else {
+    label.textContent = "All time";
+  }
+}
+
+function tsExportCSV() {
+  const from = _tsRange.from || "";
+  const to = _tsRange.to || "";
+  window.open(`/api/timesheet/export?from=${from}&to=${to}`, "_blank");
+}
+
+function tsExportPDF() {
+  const from = _tsRange.from || "";
+  const to = _tsRange.to || "";
+  window.open(`/api/timesheet/export-pdf?from=${from}&to=${to}`, "_blank");
 }
 
 /* ==================== DM Popup Modal ==================== */

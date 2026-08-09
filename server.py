@@ -1700,6 +1700,26 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_mail_feedback()
             return
 
+        # ── Timesheet ──
+        if api_path == "/api/timesheet/active":
+            self._handle_timesheet_active()
+            return
+        if api_path == "/api/timesheet/history":
+            self._handle_timesheet_history(qs)
+            return
+        if api_path == "/api/timesheet/daily":
+            self._handle_timesheet_daily(qs)
+            return
+        if api_path == "/api/timesheet/admin/summary":
+            self._handle_timesheet_admin_summary(qs)
+            return
+        if api_path == "/api/timesheet/export":
+            self._handle_timesheet_export_csv(qs)
+            return
+        if api_path == "/api/timesheet/export-pdf":
+            self._handle_timesheet_export_pdf(qs)
+            return
+
         self.send_error(404)
 
     # ── SSE Event Stream ────────────────────────────────────────────────────
@@ -2451,6 +2471,27 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         m = re.match(r"^/api/v2/mail/feedback/(\d+)/review$", api_path)
         if m and method == "POST":
             self._handle_mail_feedback_review(int(m.group(1)))
+            return
+
+        # ── Timesheet ──
+        if api_path == "/api/timesheet/clock-in" and method == "POST":
+            self._handle_timesheet_clock_in()
+            return
+        if api_path == "/api/timesheet/clock-out" and method == "POST":
+            self._handle_timesheet_clock_out()
+            return
+        if api_path == "/api/timesheet/break/start" and method == "POST":
+            self._handle_timesheet_break_start()
+            return
+        if api_path == "/api/timesheet/break/end" and method == "POST":
+            self._handle_timesheet_break_end()
+            return
+        m = re.match(r"^/api/timesheet/entries/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_timesheet_entry_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_timesheet_entry_delete(int(m.group(1)))
             return
 
         self.send_error(404)
@@ -7401,6 +7442,425 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         clear_conversation("sietch", str(user["id"]), with_id)
         _json_response(self, 200, {"ok": True})
+
+    # ── Timesheet handlers ──
+
+    def _handle_timesheet_clock_in(self) -> None:
+        user = _require_auth(self)
+        if not user: return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        existing = db.query_dicts(
+            "SELECT id FROM time_entries WHERE user_id = %s AND clock_out IS NULL",
+            (user["id"],),
+        )
+        if existing:
+            _json_response(self, 400, {"error": "Already clocked in. Clock out first."})
+            return
+        opp_id = payload.get("opportunity_id")
+        notes = str(payload.get("notes") or "").strip()
+        entry = db.insert_returning(
+            "INSERT INTO time_entries (user_id, clock_in, opportunity_id, notes) VALUES (%s, NOW(), %s, %s) RETURNING *",
+            (user["id"], opp_id if opp_id else None, notes),
+        )
+        _json_response(self, 200, {"ok": True, "entry": entry})
+
+    def _handle_timesheet_clock_out(self) -> None:
+        user = _require_auth(self)
+        if not user: return
+        entries = db.query_dicts(
+            "SELECT id, break_start FROM time_entries WHERE user_id = %s AND clock_out IS NULL",
+            (user["id"],),
+        )
+        if not entries:
+            _json_response(self, 400, {"error": "Not currently clocked in"})
+            return
+        entry = entries[0]
+        extra_break = 0
+        if entry.get("break_start"):
+            bs = _parse_iso_datetime(str(entry["break_start"]))
+            if bs:
+                extra_break = int((datetime.now(timezone.utc) - bs).total_seconds() / 60)
+        if extra_break:
+            db.execute(
+                "UPDATE time_entries SET break_minutes = break_minutes + %s, break_start = NULL WHERE id = %s",
+                (extra_break, entry["id"]),
+            )
+        db.execute(
+            "UPDATE time_entries SET clock_out = NOW(), updated_at = NOW() WHERE id = %s",
+            (entry["id"],),
+        )
+        updated = db.query_dicts("SELECT * FROM time_entries WHERE id = %s", (entry["id"],))
+        _json_response(self, 200, {"ok": True, "entry": updated[0] if updated else None})
+
+    def _handle_timesheet_break_start(self) -> None:
+        user = _require_auth(self)
+        if not user: return
+        entries = db.query_dicts(
+            "SELECT id, break_start FROM time_entries WHERE user_id = %s AND clock_out IS NULL",
+            (user["id"],),
+        )
+        if not entries:
+            _json_response(self, 400, {"error": "Not currently clocked in"})
+            return
+        entry = entries[0]
+        if entry.get("break_start"):
+            _json_response(self, 400, {"error": "Already on break"})
+            return
+        db.execute(
+            "UPDATE time_entries SET break_start = NOW(), updated_at = NOW() WHERE id = %s",
+            (entry["id"],),
+        )
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_timesheet_break_end(self) -> None:
+        user = _require_auth(self)
+        if not user: return
+        entries = db.query_dicts(
+            "SELECT id, break_start FROM time_entries WHERE user_id = %s AND clock_out IS NULL",
+            (user["id"],),
+        )
+        if not entries:
+            _json_response(self, 400, {"error": "Not currently clocked in"})
+            return
+        entry = entries[0]
+        if not entry.get("break_start"):
+            _json_response(self, 400, {"error": "Not currently on break"})
+            return
+        bs = _parse_iso_datetime(str(entry["break_start"]))
+        break_mins = int((datetime.now(timezone.utc) - bs).total_seconds() / 60) if bs else 0
+        db.execute(
+            "UPDATE time_entries SET break_minutes = break_minutes + %s, break_start = NULL, updated_at = NOW() WHERE id = %s",
+            (break_mins, entry["id"]),
+        )
+        _json_response(self, 200, {"ok": True, "break_minutes": break_mins})
+
+    def _handle_timesheet_active(self) -> None:
+        user = _require_auth(self)
+        if not user: return
+        entries = db.query_dicts(
+            """SELECT te.*, o.title as opportunity_title FROM time_entries te
+               LEFT JOIN opportunities o ON o.id = te.opportunity_id
+               WHERE te.user_id = %s AND te.clock_out IS NULL""",
+            (user["id"],),
+        )
+        _json_response(self, 200, {"entry": entries[0] if entries else None})
+
+    def _handle_timesheet_history(self, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user: return
+        uid = (qs.get("user_id") or [""])[0]
+        from_date = (qs.get("from") or [""])[0]
+        to_date = (qs.get("to") or [""])[0]
+        target_user = int(uid) if uid.isdigit() else user["id"]
+        if target_user != user["id"] and not user.get("is_admin"):
+            target_user = user["id"]
+        conditions = ["te.user_id = %s"]
+        params: list = [target_user]
+        if from_date:
+            conditions.append("te.clock_in >= %s")
+            params.append(from_date)
+        if to_date:
+            conditions.append("te.clock_in < (%s::date + interval '1 day')")
+            params.append(to_date)
+        where = " AND ".join(conditions)
+        rows = db.query_dicts(
+            f"""SELECT te.*, o.title as opportunity_title, u.display_name as user_name
+                FROM time_entries te
+                LEFT JOIN opportunities o ON o.id = te.opportunity_id
+                LEFT JOIN users u ON u.id = te.user_id
+                WHERE {where}
+                ORDER BY te.clock_in DESC""",
+            tuple(params),
+        )
+        _json_response(self, 200, {"entries": rows})
+
+    def _handle_timesheet_daily(self, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user: return
+        uid = (qs.get("user_id") or [""])[0]
+        from_date = (qs.get("from") or [""])[0]
+        to_date = (qs.get("to") or [""])[0]
+        target_user = int(uid) if uid.isdigit() else user["id"]
+        if target_user != user["id"] and not user.get("is_admin"):
+            target_user = user["id"]
+        conditions = ["user_id = %s"]
+        params: list = [target_user]
+        if from_date:
+            conditions.append("work_date >= %s")
+            params.append(from_date)
+        if to_date:
+            conditions.append("work_date <= %s")
+            params.append(to_date)
+        where = " AND ".join(conditions)
+        rows = db.query_dicts(
+            f"SELECT * FROM time_entries_daily WHERE {where} ORDER BY work_date DESC",
+            tuple(params),
+        )
+        _json_response(self, 200, {"daily": rows})
+
+    def _handle_timesheet_admin_summary(self, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user: return
+        if not user.get("is_admin"):
+            _json_response(self, 403, {"error": "Admin required"})
+            return
+        from_date = (qs.get("from") or [""])[0]
+        to_date = (qs.get("to") or [""])[0]
+        conditions = []
+        params: list = []
+        if from_date:
+            conditions.append("ted.work_date >= %s")
+            params.append(from_date)
+        if to_date:
+            conditions.append("ted.work_date <= %s")
+            params.append(to_date)
+        where = " AND ".join(conditions)
+        if where:
+            where = "WHERE " + where
+        rows = db.query_dicts(
+            f"""SELECT ted.*, u.display_name as user_name, u.email as user_email
+                FROM time_entries_daily ted
+                JOIN users u ON u.id = ted.user_id
+                {where}
+                ORDER BY u.display_name, ted.work_date DESC""",
+            tuple(params),
+        )
+        _json_response(self, 200, {"summary": rows})
+
+    def _handle_timesheet_entry_update(self, entry_id: int) -> None:
+        user = _require_auth(self)
+        if not user: return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        entries = db.query_dicts("SELECT * FROM time_entries WHERE id = %s", (entry_id,))
+        if not entries:
+            _json_response(self, 404, {"error": "Entry not found"})
+            return
+        entry = entries[0]
+        if entry["user_id"] != user["id"] and not user.get("is_admin"):
+            _json_response(self, 403, {"error": "Not authorized"})
+            return
+        opp_id = payload.get("opportunity_id")
+        notes = payload.get("notes")
+        break_mins = payload.get("break_minutes")
+        updates = ["updated_at = NOW()"]
+        params: list = []
+        if opp_id is not None:
+            updates.append("opportunity_id = %s")
+            params.append(opp_id if opp_id else None)
+        if notes is not None:
+            updates.append("notes = %s")
+            params.append(notes)
+        if break_mins is not None:
+            updates.append("break_minutes = %s")
+            params.append(int(break_mins))
+        params.append(entry_id)
+        db.execute(
+            f"UPDATE time_entries SET {', '.join(updates)} WHERE id = %s",
+            tuple(params),
+        )
+        updated = db.query_dicts("SELECT * FROM time_entries WHERE id = %s", (entry_id,))
+        _json_response(self, 200, {"ok": True, "entry": updated[0] if updated else None})
+
+    def _handle_timesheet_entry_delete(self, entry_id: int) -> None:
+        user = _require_auth(self)
+        if not user: return
+        entries = db.query_dicts("SELECT * FROM time_entries WHERE id = %s", (entry_id,))
+        if not entries:
+            _json_response(self, 404, {"error": "Entry not found"})
+            return
+        if entries[0]["user_id"] != user["id"] and not user.get("is_admin"):
+            _json_response(self, 403, {"error": "Not authorized"})
+            return
+        db.execute("DELETE FROM time_entries WHERE id = %s", (entry_id,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_timesheet_export_csv(self, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user: return
+        uid = (qs.get("user_id") or [""])[0]
+        from_date = (qs.get("from") or [""])[0]
+        to_date = (qs.get("to") or [""])[0]
+        target_user = int(uid) if uid.isdigit() else user["id"]
+        if target_user != user["id"] and not user.get("is_admin"):
+            target_user = user["id"]
+        conditions = ["te.user_id = %s"]
+        params: list = [target_user]
+        if from_date:
+            conditions.append("te.clock_in >= %s")
+            params.append(from_date)
+        if to_date:
+            conditions.append("te.clock_in < (%s::date + interval '1 day')")
+            params.append(to_date)
+        where = " AND ".join(conditions)
+        rows = db.query_dicts(
+            f"""SELECT te.*, o.title as opportunity_title, u.display_name as user_name
+                FROM time_entries te
+                LEFT JOIN opportunities o ON o.id = te.opportunity_id
+                LEFT JOIN users u ON u.id = te.user_id
+                WHERE {where}
+                ORDER BY te.clock_in""",
+            tuple(params),
+        )
+        import csv
+        import io
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=[
+            "user_name", "clock_in", "clock_out", "break_minutes",
+            "opportunity_title", "notes", "auto_closed"
+        ])
+        writer.writeheader()
+        for r in rows:
+            writer.writerow({
+                "user_name": r.get("user_name", ""),
+                "clock_in": r.get("clock_in", ""),
+                "clock_out": r.get("clock_out", ""),
+                "break_minutes": r.get("break_minutes", 0),
+                "opportunity_title": r.get("opportunity_title", ""),
+                "notes": r.get("notes", ""),
+                "auto_closed": r.get("auto_closed", False),
+            })
+        csv_data = output.getvalue().encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv")
+        self.send_header("Content-Length", str(len(csv_data)))
+        self.send_header("Content-Disposition",
+            f'attachment; filename="timesheet-{target_user}-{from_date or "all"}-to-{to_date or "all"}.csv"')
+        self.end_headers()
+        self.wfile.write(csv_data)
+
+    def _handle_timesheet_export_pdf(self, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user: return
+        try:
+            from fpdf import FPDF
+        except ImportError:
+            _json_response(self, 500, {"error": "fpdf2 not installed. Run: pip install fpdf2"})
+            return
+        uid = (qs.get("user_id") or [""])[0]
+        from_date = (qs.get("from") or [""])[0]
+        to_date = (qs.get("to") or [""])[0]
+        target_user = int(uid) if uid.isdigit() else user["id"]
+        if target_user != user["id"] and not user.get("is_admin"):
+            target_user = user["id"]
+        users = db.query_dicts("SELECT display_name, email FROM users WHERE id = %s", (target_user,))
+        user_info = users[0] if users else {"display_name": "Unknown", "email": ""}
+        conditions = ["te.user_id = %s"]
+        params: list = [target_user]
+        if from_date:
+            conditions.append("te.clock_in >= %s")
+            params.append(from_date)
+        if to_date:
+            conditions.append("te.clock_in < (%s::date + interval '1 day')")
+            params.append(to_date)
+        where = " AND ".join(conditions)
+        rows = db.query_dicts(
+            f"""SELECT te.*, o.title as opportunity_title
+                FROM time_entries te
+                LEFT JOIN opportunities o ON o.id = te.opportunity_id
+                WHERE {where}
+                ORDER BY te.clock_in""",
+            tuple(params),
+        )
+        daily_conditions = ["user_id = %s"]
+        daily_params: list = [target_user]
+        if from_date:
+            daily_conditions.append("work_date >= %s")
+            daily_params.append(from_date)
+        if to_date:
+            daily_conditions.append("work_date <= %s")
+            daily_params.append(to_date)
+        daily_where = " AND ".join(daily_conditions)
+        daily_rows = db.query_dicts(
+            f"SELECT * FROM time_entries_daily WHERE {daily_where} ORDER BY work_date",
+            tuple(daily_params),
+        )
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Helvetica", "B", 16)
+        pdf.cell(0, 10, "Sietch CRM", ln=True, align="C")
+        pdf.set_font("Helvetica", "", 12)
+        pdf.cell(0, 8, "Timesheet Report", ln=True, align="C")
+        pdf.ln(5)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.cell(0, 7, f"Employee: {user_info['display_name']}", ln=True)
+        period = f"{from_date or 'All time'}"
+        if to_date:
+            period += f" to {to_date}"
+        pdf.cell(0, 7, f"Period: {period}", ln=True)
+        pdf.ln(5)
+        if rows:
+            col_widths = [25, 22, 22, 18, 16, 35, 42]
+            headers = ["Date", "In", "Out", "Hrs", "Brk", "Project", "Notes"]
+            pdf.set_font("Helvetica", "B", 8)
+            pdf.set_fill_color(230, 230, 230)
+            for w, h in zip(col_widths, headers):
+                pdf.cell(w, 6, h, border=1, fill=True, align="C")
+            pdf.ln()
+            pdf.set_font("Helvetica", "", 7)
+            for r in rows:
+                ci = _parse_iso_datetime(str(r["clock_in"])) if r.get("clock_in") else None
+                co = _parse_iso_datetime(str(r["clock_out"])) if r.get("clock_out") else None
+                date_str = ci.strftime("%Y-%m-%d") if ci else "—"
+                in_str = ci.strftime("%H:%M") if ci else "—"
+                out_str = co.strftime("%H:%M") if co else "—"
+                dur = 0
+                if ci and co:
+                    dur = (co - ci).total_seconds() / 3600 - (r.get("break_minutes") or 0) / 60
+                dur_str = f"{dur:.1f}" if dur else "—"
+                brk_str = f"{r.get('break_minutes', 0)}m"
+                proj = (r.get("opportunity_title") or "—")[:20]
+                notes = (r.get("notes") or "—")[:25]
+                pdf.cell(col_widths[0], 5, date_str, border=1)
+                pdf.cell(col_widths[1], 5, in_str, border=1, align="C")
+                pdf.cell(col_widths[2], 5, out_str, border=1, align="C")
+                pdf.cell(col_widths[3], 5, dur_str, border=1, align="C")
+                pdf.cell(col_widths[4], 5, brk_str, border=1, align="C")
+                pdf.cell(col_widths[5], 5, proj, border=1)
+                pdf.cell(col_widths[6], 5, notes, border=1)
+                pdf.ln()
+        pdf.ln(5)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(0, 7, "Daily Totals", ln=True)
+        if daily_rows:
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_fill_color(230, 230, 230)
+            pdf.cell(50, 6, "Date", border=1, fill=True, align="C")
+            pdf.cell(25, 6, "Hours", border=1, fill=True, align="C")
+            pdf.cell(25, 6, "Break", border=1, fill=True, align="C")
+            pdf.ln()
+            pdf.set_font("Helvetica", "", 9)
+            grand_hours = 0
+            grand_break = 0
+            for d in daily_rows:
+                h = float(d.get("total_hours") or 0)
+                b = int(d.get("total_break_minutes") or 0)
+                grand_hours += h
+                grand_break += b
+                pdf.cell(50, 6, str(d["work_date"]), border=1, align="C")
+                pdf.cell(25, 6, f"{h:.1f}", border=1, align="C")
+                pdf.cell(25, 6, f"{b}m", border=1, align="C")
+                pdf.ln()
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.cell(50, 6, "TOTAL", border=1, align="C")
+            pdf.cell(25, 6, f"{grand_hours:.1f}", border=1, align="C")
+            pdf.cell(25, 6, f"{grand_break}m", border=1, align="C")
+            pdf.ln()
+        pdf_output = pdf.output()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Length", str(len(pdf_output)))
+        self.send_header("Content-Disposition",
+            f'attachment; filename="timesheet-{target_user}-{from_date or "all"}-to-{to_date or "all"}.pdf"')
+        self.end_headers()
+        self.wfile.write(pdf_output)
 
     # ── OAuth Handlers ───────────────────────────────────────────────────────
 
