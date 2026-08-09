@@ -8818,6 +8818,19 @@ body {
   border-radius: 10px;
   cursor: default;
 }
+.notes-linked-icon {
+  font-size: 0.75rem;
+  flex-shrink: 0;
+}
+/* Mobile/narrow: hide project name, show only link icon */
+@container (max-width: 400px) {
+  .notes-linked-chip-text { display: none; }
+  .notes-linked-chip { padding: 0.15rem 0.35rem; }
+}
+@media (max-width: 600px) {
+  .notes-linked-chip-text { display: none; }
+  .notes-linked-chip { padding: 0.15rem 0.35rem; }
+}
 
 .notes-linked-chip-remove {
   background: none;
@@ -9602,7 +9615,7 @@ body {
 
 .notes-grid-view {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   grid-auto-rows: minmax(min-content, 1fr);
   gap: 0.5rem;
   align-content: stretch;

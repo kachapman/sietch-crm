@@ -7229,7 +7229,7 @@ function _notesRenderEditMode(section) {
       ${linkedDeals.map((l) => {
         const opp = (state.groups || []).flatMap((g) => g.opportunities || []).find((o) => String(o.id || o.ID) === String(l.entityId));
         const title = opp ? (opp.title || opp.Title || `Project #${l.entityId}`) : `Project #${l.entityId}`;
-        return `<span class="notes-linked-chip" data-entity-id="${escapeHtml(l.entityId)}" title="Linked to project">${escapeHtml(title)} <button type="button" class="notes-linked-chip-remove" data-entity-id="${escapeHtml(l.entityId)}">&times;</button></span>`;
+        return `<span class="notes-linked-chip" data-entity-id="${escapeHtml(l.entityId)}" title="Linked to project"><i class="ti ti-link notes-linked-icon"></i><span class="notes-linked-chip-text">${escapeHtml(title)}</span> <button type="button" class="notes-linked-chip-remove" data-entity-id="${escapeHtml(l.entityId)}">&times;</button></span>`;
       }).join("")}
     </div>` : ""}
     <div class="notes-link-search hidden">
@@ -17980,15 +17980,14 @@ function modalRefreshEntries() {
       proj.className = 'ts-entry-project';
       proj.textContent = entry.opportunity_title || '';
       proj.title = entry.opportunity_title || '';
-      const editBtn = document.createElement('button');
-      editBtn.className = 'ts-entry-edit-btn';
-      editBtn.title = 'Edit';
-      editBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M13 20l7 -7"/><path d="M13 20v-6a1 1 0 0 1 1 -1h6v-7a2 2 0 0 0 -2 -2h-12a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h7"/></svg>`;
-      editBtn.addEventListener("click", () => tsEditEntry(entry));
+      // Tooltip: show note on hover
+      if (entry.notes) {
+        row.title = entry.notes;
+      }
       row.addEventListener("contextmenu", (ev) => tsEntryContextMenu(ev, entry));
       const rightGroup = document.createElement("div");
       rightGroup.className = "ts-entry-right";
-      rightGroup.append(dur, editBtn);
+      rightGroup.append(dur);
       row.append(times, proj, rightGroup);
       list.appendChild(row);
     });
@@ -18248,10 +18247,10 @@ function tsRenderEntries(entries) {
     
     const times = document.createElement("div");
     times.className = "ts-entry-times";
-    const dateStr = ci ? ci.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—";
-    const inStr = ci ? ci.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "—";
-    const outStr = co ? co.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "—";
-    times.textContent = `${dateStr}  ${inStr} — ${outStr}`;
+    const dateStr = ci ? ci.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "\u2014";
+    const inStr = ci ? ci.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "\u2014";
+    const outStr = co ? co.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "\u2014";
+    times.textContent = `${dateStr}  ${inStr} \u2014 ${outStr}`;
     
     const dur = document.createElement("div");
     dur.className = "ts-entry-duration";
@@ -18269,16 +18268,15 @@ function tsRenderEntries(entries) {
     proj.textContent = entry.opportunity_title || "";
     proj.title = entry.opportunity_title || "";
     
-    const editBtn = document.createElement("button");
-    editBtn.className = "ts-entry-edit-btn";
-    editBtn.title = "Edit";
-    editBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M13 20l7 -7"/><path d="M13 20v-6a1 1 0 0 1 1 -1h6v-7a2 2 0 0 0 -2 -2h-12a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h7"/></svg>`;
-    editBtn.addEventListener("click", () => tsEditEntry(entry));
+    // Tooltip: show note on hover
+    if (entry.notes) {
+      row.title = entry.notes;
+    }
     
     row.addEventListener("contextmenu", (ev) => tsEntryContextMenu(ev, entry));
     const rightGroup = document.createElement("div");
     rightGroup.className = "ts-entry-right";
-    rightGroup.append(dur, editBtn);
+    rightGroup.append(dur);
     row.append(times, proj, rightGroup);
     list.appendChild(row);
   });
@@ -18289,12 +18287,54 @@ function tsRenderEntries(entries) {
 }
 
 function tsEditEntry(entry) {
-  const notes = prompt("Entry notes", entry.notes || "");
-  if (notes === null) return;
-  api(`/api/timesheet/entries/${entry.id}`, {
-    method: "PUT",
-    body: JSON.stringify({ notes }),
-  }).then(() => tsRefreshEntries());
+  // Close any existing popup
+  document.querySelectorAll(".ts-note-popup").forEach(m => m.remove());
+  
+  const popup = document.createElement("div");
+  popup.className = "ts-note-popup";
+  popup.style.cssText = "position:fixed;z-index:10001;background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);padding:0.75rem;width:min(320px,90vw);";
+  
+  popup.innerHTML = `
+    <div style="font-size:0.78rem;font-weight:600;color:var(--muted);margin-bottom:0.4rem;">Entry Note</div>
+    <textarea class="ts-note-textarea" rows="4" style="width:100%;font:inherit;font-size:0.82rem;padding:0.4rem;border:1px solid var(--border);border-radius:4px;background:var(--surface-2);color:var(--text);resize:vertical;box-sizing:border-box;" placeholder="Add a note...">${escapeHtml(entry.notes || "")}</textarea>
+    <div style="display:flex;gap:0.5rem;margin-top:0.5rem;justify-content:flex-end;">
+      <button type="button" class="btn btn-secondary btn-small ts-note-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary btn-small ts-note-save">Save</button>
+    </div>
+  `;
+  
+  // Position near the right-click or center of screen
+  popup.style.left = "50%";
+  popup.style.top = "50%";
+  popup.style.transform = "translate(-50%, -50%)";
+  document.body.appendChild(popup);
+  
+  const textarea = popup.querySelector(".ts-note-textarea");
+  textarea.focus();
+  textarea.select();
+  
+  const save = () => {
+    const notes = textarea.value;
+    popup.remove();
+    api(`/api/timesheet/entries/${entry.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ notes }),
+    }).then(() => tsRefreshEntries());
+  };
+  const cancel = () => popup.remove();
+  
+  popup.querySelector(".ts-note-save").addEventListener("click", save);
+  popup.querySelector(".ts-note-cancel").addEventListener("click", cancel);
+  textarea.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) save();
+    if (e.key === "Escape") cancel();
+  });
+  // Close on backdrop click
+  setTimeout(() => {
+    document.addEventListener("click", function close(ev) {
+      if (!popup.contains(ev.target)) { popup.remove(); document.removeEventListener("click", close); }
+    });
+  }, 0);
 }
 
 function tsEntryContextMenu(e, entry) {
@@ -18306,15 +18346,15 @@ function tsEntryContextMenu(e, entry) {
   menu.style.cssText = "position:fixed;z-index:1000;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 4px 12px rgba(0,0,0,0.3);padding:0.25rem 0;min-width:140px;";
   
   const items = [
-    { label: "Add Note", icon: "\u{1f4dd}", action: () => tsEditEntry(entry) },
-    { label: "Assign to Project", icon: "\u{1f4c1}", action: () => tsAssignProject(entry) },
-    { label: "Delete", icon: "\u{1f5d1}\u{fe0f}", action: () => tsDeleteEntry(entry), danger: true },
+    { label: "Add/Edit Note", action: () => tsEditEntry(entry) },
+    { label: "Assign to Project", action: () => tsAssignProject(entry, e) },
+    { label: "Delete", action: () => tsDeleteEntry(entry), danger: true },
   ];
   
   items.forEach(item => {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = `${item.icon} ${item.label}`;
+    btn.textContent = item.label;
     btn.style.cssText = `display:block;width:100%;padding:0.4rem 0.75rem;border:none;background:transparent;text-align:left;cursor:pointer;font-size:0.82rem;font-family:var(--font);color:${item.danger ? 'var(--danger, #ef4444)' : 'var(--text)'};`;
     btn.addEventListener("mouseenter", () => btn.style.background = "var(--hover-bg, rgba(255,255,255,0.06))");
     btn.addEventListener("mouseleave", () => btn.style.background = "transparent");
@@ -18331,17 +18371,67 @@ function tsEntryContextMenu(e, entry) {
   }, 0);
 }
 
-function tsAssignProject(entry) {
-  api("/api/v2/projects?limit=200").then(data => {
-    const projects = data.projects || data || [];
-    const choice = prompt("Assign to project:\n" + projects.map((p, i) => `${i + 1}. ${p.title || 'Project #' + p.id}`).join("\n") + "\n\nEnter number:");
-    if (choice && projects[parseInt(choice) - 1]) {
-      api(`/api/timesheet/entries/${entry.id}`, {
-        method: "PUT",
-        body: JSON.stringify({ opportunity_id: projects[parseInt(choice) - 1].id }),
-      }).then(() => tsRefreshEntries());
-    }
-  }).catch(() => {});
+function tsAssignProject(entry, mouseEvent) {
+  // Close any existing menus/popups
+  document.querySelectorAll(".ts-context-menu, .ts-project-popup").forEach(m => m.remove());
+  
+  const popup = document.createElement("div");
+  popup.className = "ts-project-popup";
+  popup.style.cssText = "position:fixed;z-index:10001;background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);padding:0.5rem;width:min(280px,90vw);";
+  
+  popup.innerHTML = `
+    <input type="search" class="ts-project-search" placeholder="Search projects..." autocomplete="off"
+      style="width:100%;padding:0.4rem;border:1px solid var(--border);border-radius:4px;font:inherit;font-size:0.82rem;box-sizing:border-box;" />
+    <div class="ts-project-results" style="max-height:200px;overflow-y:auto;margin-top:0.3rem;"></div>
+  `;
+  
+  popup.style.left = (mouseEvent?.clientX || 400) + "px";
+  popup.style.top = (mouseEvent?.clientY || 300) + "px";
+  document.body.appendChild(popup);
+  
+  const input = popup.querySelector(".ts-project-search");
+  const results = popup.querySelector(".ts-project-results");
+  input.focus();
+  
+  let searchTimer;
+  const doSearch = (q) => {
+    searchOpportunitiesByTitle(q, { limit: 8 }).then(items => {
+      results.innerHTML = "";
+      if (!items.length) {
+        results.innerHTML = '<div style="font-size:0.78rem;color:var(--muted);padding:0.3rem;">No projects found</div>';
+        return;
+      }
+      items.forEach(opp => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = opp.title || `Project #${opp.id}`;
+        btn.style.cssText = "display:block;width:100%;padding:0.35rem 0.5rem;border:none;background:transparent;text-align:left;cursor:pointer;font-size:0.82rem;font-family:var(--font);color:var(--text);border-radius:4px;";
+        btn.addEventListener("mouseenter", () => btn.style.background = "var(--hover-bg, rgba(255,255,255,0.06))");
+        btn.addEventListener("mouseleave", () => btn.style.background = "transparent");
+        btn.addEventListener("click", () => {
+          popup.remove();
+          api(`/api/timesheet/entries/${entry.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ opportunity_id: opp.id }),
+          }).then(() => tsRefreshEntries());
+        });
+        results.appendChild(btn);
+      });
+    }).catch(() => {});
+  };
+  
+  input.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => doSearch(input.value.trim()), 250);
+  });
+  doSearch("");
+  
+  // Close on click outside
+  setTimeout(() => {
+    document.addEventListener("click", function close(ev) {
+      if (!popup.contains(ev.target)) { popup.remove(); document.removeEventListener("click", close); }
+    });
+  }, 0);
 }
 
 function tsDeleteEntry(entry) {
