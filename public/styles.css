@@ -2962,6 +2962,8 @@ body {
 /* Make the Team/Presence popup resizable (user can drag bottom-right corner to see more messages) */
 #presence-modal .modal-card {
   width: min(624px, 96vw);
+  height: min(80vh, 80dvh);
+  min-height: 500px;
   resize: both;
   overflow: hidden;
   min-width: 408px;
@@ -2970,6 +2972,14 @@ body {
   padding: 0.75rem 1rem;
   display: flex;
   flex-direction: column;
+}
+#presence-modal .modal-card > * {
+  flex-shrink: 0;
+}
+#presence-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 #presence-modal .modal-header,
 #presence-modal .presence-header,
@@ -2990,8 +3000,9 @@ body {
   #presence-modal .modal-card {
     width: 100% !important;
     max-width: 100% !important;
-    height: 100dvh;
-    max-height: 100dvh;
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    max-height: 100dvh !important;
     border-radius: 0;
     resize: none;
     min-width: 0;
@@ -7719,6 +7730,7 @@ body {
 .dashboard-tile.tasks-panel.tile-body-collapsed,
 .dashboard-tile.presence-panel.tile-body-collapsed {
   min-height: 0 !important;
+  max-height: none !important;
   height: auto;
 }
 
