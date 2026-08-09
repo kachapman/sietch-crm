@@ -15877,6 +15877,13 @@ function renderPresenceModal(snapshot = null, usersCache = null) {
         openPresenceDMThread(id, name);
       });
     }
+  } else if (activeTab === 'timesheet') {
+    // Timesheet tab: clock in/out, entry list, daily totals, export
+    if (dmEl) dmEl.classList.add("hidden");
+    state.presenceSelectedUserId = null;
+    clearPresenceReplyTo();
+    listEl.innerHTML = '';
+    renderPresenceTimesheetModal(listEl, snap);
   } else {
     // Team tab: the user roster (online/offline + last seen) — hide any open DM thread
     if (dmEl) dmEl.classList.add("hidden");
@@ -16139,7 +16146,7 @@ function renderPresenceTile() {
         statusBtn.id = "presence-tile-status-btn";
         statusBtn.className = "presence-status-icon-btn";
         statusBtn.title = "Set your status";
-        statusBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 5a1 1 0 0 1 1 -1h16a1 1 0 0 1 1 1v10a1 1 0 0 1 -1 1h-16a1 1 0 0 1 -1 -1l0 -10"/><path d="7 20h10"/><path d="9 16v4"/><path d="15 16v4"/><path d="9 12v-4"/><path d="12 12v-1"/><path d="15 12v-2"/><path d="12 12v-1"/></svg><span class="status-dot-indicator online"></span>`;
+        statusBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 5a1 1 0 0 1 1 -1h16a1 1 0 0 1 1 1v10a1 1 0 0 1 -1 1h-16a1 1 0 0 1 -1 -1l0 -10"/><path d="M7 20h10"/><path d="M9 16v4"/><path d="M15 16v4"/><path d="M9 12v-4"/><path d="M12 12v-1"/><path d="M15 12v-2"/><path d="M12 12v-1"/></svg><span class="status-dot-indicator online"></span>`;
         
         const statusDropdown = document.createElement("div");
         statusDropdown.className = "status-dropdown hidden";
@@ -16850,6 +16857,193 @@ function ensurePresenceOnLogin() {
 let _tsTimerInterval = null;
 let _tsActiveEntry = null;
 let _tsRange = { from: null, to: null, mode: "day" };
+
+function renderPresenceTimesheetModal(container, snap) {
+  if (!container) return;
+  container.innerHTML = '';
+  // Clock widget
+  const clockWidget = document.createElement('div');
+  clockWidget.className = 'ts-clock-widget';
+  const timerDisplay = document.createElement('div');
+  timerDisplay.className = 'ts-timer-display';
+  timerDisplay.id = 'modal-ts-timer';
+  timerDisplay.textContent = '00:00:00';
+  const clockBtn = document.createElement('button');
+  clockBtn.type = 'button';
+  clockBtn.id = 'modal-ts-clock-btn';
+  clockBtn.className = 'ts-clock-btn clock-in';
+  clockBtn.textContent = 'Clock In';
+  const breakBtn = document.createElement('button');
+  breakBtn.type = 'button';
+  breakBtn.id = 'modal-ts-break-btn';
+  breakBtn.className = 'ts-break-btn hidden';
+  breakBtn.textContent = 'Start Break';
+  clockWidget.append(timerDisplay, clockBtn, breakBtn);
+  container.appendChild(clockWidget);
+  // Date range
+  const rangeBar = document.createElement('div');
+  rangeBar.className = 'ts-date-range';
+  const prevBtn = document.createElement('button');
+  prevBtn.type = 'button'; prevBtn.textContent = '◀';
+  const label = document.createElement('span');
+  label.className = 'ts-date-label'; label.textContent = 'Today';
+  const nextBtn = document.createElement('button');
+  nextBtn.type = 'button'; nextBtn.textContent = '▶';
+  const weekBtn = document.createElement('button');
+  weekBtn.type = 'button'; weekBtn.textContent = 'Week';
+  const monthBtn = document.createElement('button');
+  monthBtn.type = 'button'; monthBtn.textContent = 'Month';
+  rangeBar.append(prevBtn, label, nextBtn, weekBtn, monthBtn);
+  container.appendChild(rangeBar);
+  // Entries list
+  const entriesList = document.createElement('div');
+  entriesList.className = 'ts-entries-list';
+  entriesList.id = 'modal-ts-entries';
+  container.appendChild(entriesList);
+  // Daily total
+  const totalEl = document.createElement('div');
+  totalEl.className = 'ts-daily-total';
+  totalEl.id = 'modal-ts-total';
+  container.appendChild(totalEl);
+  // Export bar
+  const exportBar = document.createElement('div');
+  exportBar.className = 'ts-export-bar';
+  const csvBtn = document.createElement('button');
+  csvBtn.type = 'button'; csvBtn.className = 'ts-export-btn'; csvBtn.textContent = 'Export CSV';
+  const pdfBtn = document.createElement('button');
+  pdfBtn.type = 'button'; pdfBtn.className = 'ts-export-btn'; pdfBtn.textContent = 'Export PDF';
+  exportBar.append(csvBtn, pdfBtn);
+  container.appendChild(exportBar);
+  // Fetch active entry
+  api("/api/timesheet/active").then(data => {
+    _tsActiveEntry = data.entry;
+    updateModalClockUI();
+    modalRefreshEntries();
+  }).catch(() => {});
+  // Bind controls
+  clockBtn.addEventListener("click", modalToggleClock);
+  breakBtn.addEventListener("click", modalToggleBreak);
+  prevBtn.addEventListener("click", () => { tsShiftRange(-1); modalRefreshEntries(); updateModalRangeLabel(); });
+  nextBtn.addEventListener("click", () => { tsShiftRange(1); modalRefreshEntries(); updateModalRangeLabel(); });
+  weekBtn.addEventListener("click", () => { tsSetRange("week"); modalRefreshEntries(); updateModalRangeLabel(); });
+  monthBtn.addEventListener("click", () => { tsSetRange("month"); modalRefreshEntries(); updateModalRangeLabel(); });
+  csvBtn.addEventListener("click", tsExportCSV);
+  pdfBtn.addEventListener("click", tsExportPDF);
+}
+
+function updateModalRangeLabel() {
+  const label = document.querySelector('#modal-ts-entries')?.parentElement?.querySelector('.ts-date-label');
+  if (!label) return;
+  if (_tsRange.from && _tsRange.to && _tsRange.from === _tsRange.to) {
+    label.textContent = _tsRange.from;
+  } else if (_tsRange.from && _tsRange.to) {
+    label.textContent = `${_tsRange.from} to ${_tsRange.to}`;
+  } else {
+    label.textContent = 'Today';
+  }
+}
+
+function updateModalClockUI() {
+  const clockBtn = document.getElementById('modal-ts-clock-btn');
+  const breakBtn = document.getElementById('modal-ts-break-btn');
+  const timerDisplay = document.getElementById('modal-ts-timer');
+  if (!clockBtn) return;
+  if (_tsActiveEntry) {
+    clockBtn.textContent = 'Clock Out';
+    clockBtn.className = 'ts-clock-btn clock-out';
+    breakBtn?.classList.remove('hidden');
+    if (_tsActiveEntry.break_start) {
+      breakBtn.textContent = 'End Break';
+      breakBtn.className = 'ts-break-btn on-break';
+    } else {
+      breakBtn.textContent = 'Start Break';
+      breakBtn.className = 'ts-break-btn';
+    }
+  } else {
+    clockBtn.textContent = 'Clock In';
+    clockBtn.className = 'ts-clock-btn clock-in';
+    breakBtn?.classList.add('hidden');
+    if (timerDisplay) timerDisplay.textContent = '00:00:00';
+  }
+}
+
+function modalToggleClock() {
+  if (_tsActiveEntry) {
+    api("/api/timesheet/clock-out", { method: "POST" }).then(() => {
+      _tsActiveEntry = null;
+      updateModalClockUI();
+      modalRefreshEntries();
+    }).catch(err => showToast(err.message || "Failed to clock out", true));
+  } else {
+    api("/api/timesheet/clock-in", { method: "POST", body: JSON.stringify({ notes: "" }) }).then(data => {
+      _tsActiveEntry = data.entry;
+      updateModalClockUI();
+    }).catch(err => showToast(err.message || "Failed to clock in", true));
+  }
+}
+
+function modalToggleBreak() {
+  if (!_tsActiveEntry) return;
+  if (_tsActiveEntry.break_start) {
+    api("/api/timesheet/break/end", { method: "POST" }).then(() => {
+      _tsActiveEntry.break_start = null;
+      updateModalClockUI();
+    });
+  } else {
+    api("/api/timesheet/break/start", { method: "POST" }).then(() => {
+      _tsActiveEntry.break_start = new Date().toISOString();
+      updateModalClockUI();
+    });
+  }
+}
+
+function modalRefreshEntries() {
+  const from = _tsRange.from || '';
+  const to = _tsRange.to || '';
+  let url = '/api/timesheet/history?';
+  if (from) url += `from=${from}&`;
+  if (to) url += `to=${to}&`;
+  api(url).then(data => {
+    const list = document.getElementById('modal-ts-entries');
+    const totalEl = document.getElementById('modal-ts-total');
+    if (!list) return;
+    list.innerHTML = '';
+    const entries = data.entries || [];
+    if (!entries.length) {
+      list.innerHTML = '<div class="ts-empty">No time entries for this period</div>';
+      if (totalEl) totalEl.textContent = '';
+      return;
+    }
+    let totalSeconds = 0;
+    entries.forEach(e => {
+      const ci = e.clock_in ? new Date(e.clock_in) : null;
+      const co = e.clock_out ? new Date(e.clock_out) : null;
+      const row = document.createElement('div');
+      row.className = 'ts-entry-row';
+      const times = document.createElement('div');
+      times.className = 'ts-entry-times';
+      const dateStr = ci ? ci.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—';
+      const inStr = ci ? ci.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '—';
+      const outStr = co ? co.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '—';
+      times.textContent = `${dateStr}  ${inStr} — ${outStr}`;
+      const dur = document.createElement('div');
+      dur.className = 'ts-entry-duration';
+      let durSec = 0;
+      if (ci && co) {
+        durSec = (co - ci) / 1000 - (e.break_minutes || 0) * 60;
+        totalSeconds += durSec;
+      }
+      const dh = Math.floor(durSec / 3600);
+      const dm = Math.floor((durSec % 3600) / 60);
+      dur.textContent = `${dh}h ${dm}m`;
+      row.append(times, dur);
+      list.appendChild(row);
+    });
+    const th = Math.floor(totalSeconds / 3600);
+    const tm = Math.floor((totalSeconds % 3600) / 60);
+    if (totalEl) totalEl.textContent = `Total: ${th}h ${tm}m`;
+  }).catch(() => {});
+}
 
 function renderTimesheetTab() {
   const body = $("#presence-tile-timesheet-body");
