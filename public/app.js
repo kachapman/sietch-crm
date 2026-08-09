@@ -15691,6 +15691,9 @@ async function openPresenceModal() {
     if (dmBack) dmBack.addEventListener("click", () => {
       state.presenceSelectedUserId = null;
       clearPresenceReplyTo();
+      // Restore message list visibility
+      const listEl = $("#presence-list");
+      if (listEl) listEl.style.display = "";
       const snap = state.presenceData;
       const users = state.presenceUsersCache ? state.presenceUsersCache.users : [];
       renderPresenceModal(snap, users);
@@ -15829,6 +15832,9 @@ function openPresenceDMThread(id, name) {
   markPresenceDMRead(id);
   updatePresenceHeaderIndicators(state.presenceData);
   dmEl.classList.remove("hidden");
+  // Hide message list when showing DM thread
+  const listEl = $("#presence-list");
+  if (listEl) listEl.style.display = "none";
   $("#presence-dm-with").textContent = `Chat with ${name || id}`;
 
   // Ensure a Clear button in the thread header (for archive/delete of history)
@@ -15979,6 +15985,8 @@ function renderPresenceModal(snapshot = null, usersCache = null) {
     // Messages tab: dedicated inbox of past/recent DMs with delete/archive
     // Clear any open DM thread so inbox is visible
     if (dmEl) dmEl.classList.add("hidden");
+    // Restore message list visibility (was hidden when DM thread opened)
+    if (listEl) listEl.style.display = "";
     state.presenceSelectedUserId = null;
     clearPresenceReplyTo();
     listEl.innerHTML = '';
@@ -16417,7 +16425,7 @@ function renderPresenceTile() {
       tabs.className = "presence-tile-tabs presence-tile-tabs-inline";
       tabs.innerHTML = `
         <button type="button" class="presence-tile-tab active" data-tab="team">Team<span id="presence-tile-team-badge" class="online-badge hidden"></span></button>
-        <button type="button" class="presence-tile-tab" data-tab="messages">Messages<span id="presence-tile-msg-badge" class="msg-badge hidden">0</span></button>
+        <button type="button" class="presence-tile-tab" data-tab="messages">Messages <span id="presence-tile-msg-badge" class="online-badge hidden">0</span></button>
         <button type="button" class="presence-tile-tab" data-tab="timesheet">Timesheet</button>
       `;
       tools.appendChild(tabs);
