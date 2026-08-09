@@ -20,13 +20,15 @@ SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Sietch CRM")
 SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
 
 
-def send_email(to_addr: str, subject: str, html_body: str, text_body: str | None = None) -> bool:
+def send_email(to_addr: str, subject: str, html_body: str, text_body: str | None = None,
+                from_name_override: str | None = None) -> bool:
     """Send email via external SMTP relay. Returns True on success, False on failure."""
     if not SMTP_HOST or not SMTP_USER:
         return False
 
     msg = MIMEMultipart("alternative")
-    msg["From"] = f"{SMTP_FROM_NAME} <{SMTP_USER}>"
+    from_name = from_name_override or SMTP_FROM_NAME
+    msg["From"] = f"{from_name} <{SMTP_USER}>"
     msg["To"] = to_addr
     msg["Subject"] = subject
 

@@ -27,6 +27,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import db
+from event_bus import event_bus
 from user_profile_store import load_user_profile, save_user_profile
 import oauth_providers
 
@@ -251,11 +252,17 @@ def _execute_custom_behavior(
             else:
                 # Insert notifications for each user
                 for uid in user_ids:
+                    payload = {"title": title, "link": f"/project/{deal_id}" if deal_id else None}
                     db.execute(
-                        """INSERT INTO notifications (user_id, title, message, type, link, created_at)
-                           VALUES (%s, %s, %s, 'email_linked', %s, NOW())""",
-                        (uid, title, f"New email linked to {ctx['project']}", f"/project/{deal_id}" if deal_id else None),
+                        """INSERT INTO notifications (user_id, message, type, payload, created_at)
+                           VALUES (%s, %s, 'email_linked', %s::jsonb, NOW())""",
+                        (uid, f"New email linked to {ctx['project']}", json.dumps(payload)),
                     )
+                    event_bus.publish("notification:new", {
+                        "type": "email_linked",
+                        "message": f"New email linked to {ctx['project']}",
+                        "payload": payload,
+                    }, user_ids=[str(uid)])
                 result["users_notified"] = len(user_ids)
 
         elif behavior_type == "create_deal":
@@ -287,11 +294,17 @@ def _execute_custom_behavior(
                     # Notify user if configured
                     notify_uid = config.get("notify_user_id")
                     if notify_uid:
+                        payload = {"title": f"New deal created: {title}", "link": f"/project/{new_deal['id']}"}
                         db.execute(
-                            """INSERT INTO notifications (user_id, title, message, type, link, created_at)
-                               VALUES (%s, %s, %s, 'deal_created', %s, NOW())""",
-                            (notify_uid, f"New deal created: {title}", f"Auto-created from email '{ctx['subject']}'", f"/project/{new_deal['id']}"),
+                            """INSERT INTO notifications (user_id, message, type, payload, created_at)
+                               VALUES (%s, %s, 'deal_created', %s::jsonb, NOW())""",
+                            (notify_uid, f"Auto-created from email '{ctx['subject']}'", json.dumps(payload)),
                         )
+                        event_bus.publish("notification:new", {
+                            "type": "deal_created",
+                            "message": f"New deal created: {title}",
+                            "payload": payload,
+                        }, user_ids=[str(notify_uid)])
 
         elif behavior_type == "add_email_tags":
             tag_ids = config.get("tag_ids", [])
@@ -1507,6 +1520,20 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
         log_entry["status"] = "store_failed"
         _append_log(log_entry)
         return log_entry
+
+    # Publish mail:new event via SSE for real-time inbox updates
+    account_id = mailbox_cfg.get("account_id")
+    if account_id:
+        try:
+            acct_row = db.query_one("SELECT owner_user_id FROM mail_accounts WHERE id = %s", (account_id,))
+            if acct_row and acct_row.get("owner_user_id"):
+                event_bus.publish("mail:new", {
+                    "account_id": account_id,
+                    "subject": msg.get("subject") or "",
+                    "from": msg.get("from") or "",
+                }, user_ids=[str(acct_row["owner_user_id"])])
+        except Exception:
+            pass  # non-fatal
 
     classification = _classify_message(msg)
     log_entry["classification"] = classification["classification"]

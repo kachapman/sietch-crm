@@ -94,6 +94,135 @@ def _format_notification(notification: dict, project_title: str, actor_name: str
     return None
 
 
+# ── Email formatting ───────────────────────────────────────────────────────
+
+_branding_cache: dict[str, Any] | None = None
+_branding_cache_ts: float = 0
+
+def _get_branding() -> dict[str, Any]:
+    """Fetch branding row, cached for 60s."""
+    global _branding_cache, _branding_cache_ts
+    now = time.time()
+    if _branding_cache and now - _branding_cache_ts < 60:
+        return _branding_cache
+    try:
+        row = db.query_one(
+            "SELECT company_name, logo_path, primary_color, email_header_color, "
+            "email_footer_text, email_from_name FROM branding ORDER BY id LIMIT 1"
+        )
+        if row:
+            _branding_cache = {
+                "company_name": row.get("company_name"),
+                "logo_path": row.get("logo_path"),
+                "primary_color": row.get("primary_color"),
+                "email_header_color": row.get("email_header_color"),
+                "email_footer_text": row.get("email_footer_text"),
+                "email_from_name": row.get("email_from_name"),
+            }
+            _branding_cache_ts = now
+            return _branding_cache
+    except Exception:
+        logger.exception("Failed to load branding for email")
+    return {}
+
+
+def _format_email_notification(notification: dict, project_title: str, actor_name: str,
+                                project_id: int | None = None) -> tuple[str | None, str | None]:
+    """Build branded HTML email from notification. Returns (subject, html) or (None, None)."""
+    branding = _get_branding()
+    header_color = branding.get("email_header_color") or branding.get("primary_color") or "#3b82f6"
+    company = branding.get("company_name") or "Sietch CRM"
+    footer = branding.get("email_footer_text") or "Sietch CRM — Confidential"
+    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+
+    ntype = notification.get("type")
+    if ntype == "note_tagged":
+        subject = f"{actor_name} tagged you on {project_title}"
+        body = notification.get("message") or "You were tagged in a note."
+    elif ntype == "task_assigned":
+        payload = notification.get("payload") or {}
+        subject = f"Task assigned: {payload.get('task_title', '')}"
+        body = f"You've been assigned a task on {project_title}."
+        if payload.get("due_date"):
+            body += f" Due: {payload['due_date']}."
+    elif ntype == "task_reminder":
+        payload = notification.get("payload") or {}
+        subject = f"Reminder: {payload.get('taskTitle', 'Task')}"
+        body = payload.get("taskTitle") or notification.get("message") or "Task reminder."
+    elif ntype == "email_linked":
+        subject = f"New email linked to {project_title}"
+        body = notification.get("message") or "A new email was linked to this project."
+    elif ntype == "deal_created":
+        subject = notification.get("message") or "New project created"
+        body = notification.get("message") or "A new project was auto-created from an email."
+    else:
+        return None, None
+
+    cta = ""
+    if link:
+        cta = (f'<p style="text-align:center;margin:24px 0;">'
+               f'<a href="{link}" style="display:inline-block;padding:12px 24px;'
+               f'background:{header_color};color:#fff;text-decoration:none;'
+               f'border-radius:6px;font-weight:600;">View Project</a></p>')
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+<div style="background:{header_color};padding:24px;text-align:center;">
+  <h1 style="color:#fff;margin:0;font-size:20px;">{company}</h1>
+</div>
+<div style="padding:32px 24px;max-width:600px;margin:0 auto;">
+  <h2 style="color:#1a1a1a;margin:0 0 16px;">{subject}</h2>
+  <p style="color:#333;font-size:15px;line-height:1.6;">{body}</p>
+  {cta}
+</div>
+<div style="padding:16px 24px;text-align:center;color:#999;font-size:12px;border-top:1px solid #eee;">
+  {footer}
+</div>
+</body>
+</html>"""
+
+    return subject, html
+
+
+def _get_user_email(user_id: int) -> str | None:
+    """Look up a user's email address."""
+    try:
+        row = db.query_one("SELECT email FROM users WHERE id = %s AND is_active = TRUE", (user_id,))
+        return row["email"] if row else None
+    except Exception:
+        return None
+
+
+def _get_email_pref(user_id: int) -> str | None:
+    """Get email notification preference for a user. Returns 'immediate', 'disabled', or None."""
+    try:
+        row = db.query_one(
+            "SELECT enabled FROM notification_preferences WHERE user_id = %s AND notification_type = 'email_digest'",
+            (user_id,),
+        )
+        if row is None:
+            return "disabled"  # default
+        val = row["enabled"]
+        if val is True or val == "true" or val == "immediate":
+            return "immediate"
+        return "disabled"
+    except Exception:
+        return None
+
+
+def _mark_email_sent(notification_id: int) -> None:
+    """Mark a notification as sent via email."""
+    try:
+        db.execute(
+            "UPDATE notifications SET email_sent = TRUE, email_sent_at = NOW() WHERE id = %s",
+            (notification_id,),
+        )
+    except Exception:
+        logger.exception("Failed to mark notification %s as email_sent", notification_id)
+
+
 # ── Telegram API ────────────────────────────────────────────────────────────
 
 def _send_telegram_message(chat_id: int, text: str, reply_to_message_id: int | None = None) -> int | None:
@@ -139,21 +268,22 @@ def _get_employee_chat_id(user_id: int) -> int | None:
 # ── Main dispatcher ─────────────────────────────────────────────────────────
 
 def _process_pending_notifications() -> int:
-    """Process unsent notifications. Returns number of notifications sent."""
-    if not TELEGRAM_BOT_TOKEN:
-        return 0
+    """Process unsent notifications for both Telegram and email channels.
+    Returns number of notifications sent (across both channels)."""
+    from smtp_client import send_email
 
     try:
-        # Find notifications not yet sent via Telegram
+        # Find notifications that need at least one channel sent
         rows = db.query_dicts(
             """SELECT n.id, n.user_id, n.type, n.message, n.payload,
                       n.opportunity_id, n.actor_user_id,
+                      n.telegram_sent, n.email_sent,
                       u.display_name AS actor_name,
                       o.title AS project_title
                FROM notifications n
                LEFT JOIN users u ON u.id = n.actor_user_id
                LEFT JOIN opportunities o ON o.id = n.opportunity_id
-               WHERE n.telegram_sent IS NOT TRUE
+               WHERE (n.telegram_sent IS NOT TRUE OR n.email_sent IS NOT TRUE)
                ORDER BY n.created_at ASC
                LIMIT %s""",
             (BATCH_SIZE,),
@@ -166,47 +296,82 @@ def _process_pending_notifications() -> int:
     for row in rows:
         notification_id = row["id"]
         user_id = row["user_id"]
-
-        # Check if user has Telegram notifications enabled
-        if not _user_telegram_enabled(user_id):
-            _mark_telegram_sent(notification_id)
-            continue
-
-        # Skip customers — only employees get Telegram notifications
-        if _is_customer(user_id):
-            _mark_telegram_sent(notification_id)
-            continue
-
-        # Look up employee chat_id
-        chat_id = _get_employee_chat_id(user_id)
-        if not chat_id:
-            # Employee not linked to bot — mark as sent to avoid retrying
-            _mark_telegram_sent(notification_id)
-            continue
-
-        # Format message
         project_id = row.get("opportunity_id")
-        text = _format_notification(
-            row,
-            row.get("project_title") or "Unknown Project",
-            row.get("actor_name") or "Someone",
-            project_id,
-        )
-        if not text:
-            _mark_telegram_sent(notification_id)
-            continue
+        project_title = row.get("project_title") or "Unknown Project"
+        actor_name = row.get("actor_name") or "Someone"
 
-        # Send
-        message_id = _send_telegram_message(chat_id, text)
-        if message_id:
-            _log_telegram_message(notification_id, chat_id, message_id)
-            _mark_telegram_sent(notification_id)
-            sent_count += 1
-        else:
-            # Failed to send — will retry on next poll
-            logger.warning("Failed to send notification %s to chat %s", notification_id, chat_id)
+        # ── Telegram channel ──
+        if not row.get("telegram_sent"):
+            _process_telegram(notification_id, user_id, row, project_title, actor_name, project_id)
+            if row.get("telegram_sent"):
+                sent_count += 1
+
+        # ── Email channel ──
+        if not row.get("email_sent"):
+            _process_email(notification_id, user_id, row, project_title, actor_name, project_id)
+            if row.get("email_sent"):
+                sent_count += 1
 
     return sent_count
+
+
+def _process_telegram(notification_id: int, user_id: int, row: dict,
+                       project_title: str, actor_name: str, project_id: int | None) -> None:
+    """Handle Telegram delivery for a single notification."""
+    if not _user_telegram_enabled(user_id):
+        _mark_telegram_sent(notification_id)
+        return
+
+    if _is_customer(user_id):
+        _mark_telegram_sent(notification_id)
+        return
+
+    chat_id = _get_employee_chat_id(user_id)
+    if not chat_id:
+        _mark_telegram_sent(notification_id)
+        return
+
+    text = _format_notification(row, project_title, actor_name, project_id)
+    if not text:
+        _mark_telegram_sent(notification_id)
+        return
+
+    message_id = _send_telegram_message(chat_id, text)
+    if message_id:
+        _log_telegram_message(notification_id, chat_id, message_id)
+        _mark_telegram_sent(notification_id)
+    else:
+        logger.warning("Failed to send notification %s to chat %s", notification_id, chat_id)
+
+
+def _process_email(notification_id: int, user_id: int, row: dict,
+                    project_title: str, actor_name: str, project_id: int | None) -> None:
+    """Handle email delivery for a single notification."""
+    from smtp_client import send_email as _send_email
+
+    email_pref = _get_email_pref(user_id)
+    if email_pref != "immediate":
+        _mark_email_sent(notification_id)
+        return
+
+    user_email = _get_user_email(user_id)
+    if not user_email:
+        _mark_email_sent(notification_id)
+        return
+
+    subject, html = _format_email_notification(row, project_title, actor_name, project_id)
+    if not subject or not html:
+        _mark_email_sent(notification_id)
+        return
+
+    branding = _get_branding()
+    from_name = branding.get("email_from_name")
+
+    success = _send_email(user_email, subject, html, from_name_override=from_name)
+    if success:
+        _mark_email_sent(notification_id)
+    else:
+        logger.warning("Failed to send email notification %s to %s", notification_id, user_email)
 
 
 def _user_telegram_enabled(user_id: int) -> bool:

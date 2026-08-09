@@ -21,6 +21,7 @@ import threading
 from datetime import datetime, timedelta
 
 import db
+from event_bus import event_bus
 
 logger = logging.getLogger("task-reminders")
 
@@ -116,6 +117,13 @@ def _sweep_once() -> int:
                     json.dumps({"taskId": task_id, "taskTitle": title}),
                 ),
             )
+            event_bus.publish("notification:new", {
+                "type": "task_reminder", "message": f"Reminder: {title}",
+                "payload": {"task_id": task_id, "taskTitle": title},
+            }, user_ids=[str(owner_id)])
+            event_bus.publish("task:reminder", {
+                "task_id": task_id, "title": title,
+            }, user_ids=[str(owner_id)])
             count += 1
         except Exception:
             logger.exception("Failed to insert reminder notification for task %s", task_id)

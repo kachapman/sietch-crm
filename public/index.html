@@ -2082,6 +2082,24 @@
                   <span id="branding-color-hex" class="color-hex">#4f8cff</span>
                 </div>
               </div>
+              <hr style="border:none;border-top:1px solid var(--border-light,#ddd);margin:12px 0;">
+              <h4 style="margin:0 0 8px;font-size:13px;color:var(--text-muted,#888);">Email Notification Branding</h4>
+              <div class="field">
+                <label for="branding-email-header-color">Email Header Color</label>
+                <div class="color-input-row">
+                  <input type="color" id="branding-email-header-color" value="#3b82f6" />
+                  <span id="branding-email-header-hex" class="color-hex">#3b82f6</span>
+                </div>
+              </div>
+              <div class="field">
+                <label for="branding-email-footer-text">Email Footer Text</label>
+                <input type="text" id="branding-email-footer-text" placeholder="Sietch CRM — Confidential" maxlength="200" />
+              </div>
+              <div class="field">
+                <label for="branding-email-from-name">Email From Name</label>
+                <input type="text" id="branding-email-from-name" placeholder="Sietch CRM" maxlength="100" />
+                <span class="field-hint">Overrides SMTP_FROM_NAME for notification emails</span>
+              </div>
             </form>
             <div id="branding-error" class="modal-error hidden"></div>
             <div class="modal-actions">
@@ -2299,13 +2317,11 @@
           </div>
           <div class="profile-toggle-row">
             <label class="profile-toggle-label" for="pref-telegram">Telegram</label>
-            <input type="checkbox" id="pref-telegram" class="toggle-input" checked disabled title="Coming soon — Telegram notifications are being integrated" />
-            <span class="profile-field-hint">Telegram notifications are coming soon.</span>
+            <input type="checkbox" id="pref-telegram" class="toggle-input" checked />
           </div>
           <div class="profile-toggle-row">
-            <label class="profile-toggle-label" for="pref-email">Email</label>
-            <input type="checkbox" id="pref-email" class="toggle-input" checked disabled title="Coming soon — Email notifications are being integrated" />
-            <span class="profile-field-hint">Email notifications are coming soon.</span>
+            <label class="profile-toggle-label" for="pref-email">Email (immediate)</label>
+            <input type="checkbox" id="pref-email" class="toggle-input" checked />
           </div>
         </fieldset>
       </div>

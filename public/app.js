@@ -89,6 +89,110 @@ const PRESENCE_CUSTOM_MAX = 120; // modest char limit for custom status (emojis 
 const PRESENCE_IDLE_15M_MS = 15 * 60 * 1000; // auto-derived idle threshold
 const PRESENCE_AUTO_STATUS_TIMEOUT_MS = 300000; // 5 min — clear auto-status if no new deal activity
 
+// ── SSE (Server-Sent Events) ──────────────────────────────────────────────
+let _evtSource = null;
+let _sseReconnectTimer = null;
+
+function connectSSE() {
+  if (_evtSource) return;
+  _evtSource = new EventSource("/api/events");
+  _evtSource.addEventListener("connected", () => {
+    console.log("[SSE] Connected");
+  });
+  _evtSource.onmessage = (e) => {
+    try {
+      const { type, data } = JSON.parse(e.data);
+      handleSSEEvent(type, data);
+    } catch (err) {
+      console.error("[SSE] Parse error:", err);
+    }
+  };
+  _evtSource.onerror = () => {
+    console.log("[SSE] Connection lost, reconnecting in 5s...");
+    _evtSource.close();
+    _evtSource = null;
+    _sseReconnectTimer = setTimeout(connectSSE, 5000);
+  };
+}
+
+function disconnectSSE() {
+  if (_sseReconnectTimer) { clearTimeout(_sseReconnectTimer); _sseReconnectTimer = null; }
+  if (_evtSource) { _evtSource.close(); _evtSource = null; }
+}
+
+function handleSSEEvent(type, data) {
+  switch (type) {
+    case "dm:new": handleNewDM(data); break;
+    case "dm:read": handleDMRead(data); break;
+    case "presence:update": handlePresenceUpdate(data); break;
+    case "task:created":
+    case "task:updated":
+    case "task:deleted": loadTasks(); break;
+    case "task:reminder":
+      showToast(`Reminder: ${data.title || data.data?.title || "Task reminder"}`);
+      loadTasks();
+      break;
+    case "notification:new":
+      updateNotificationBadge();
+      if (state.feedModalOpen) loadNotificationFeed({ force: true });
+      break;
+    case "mail:new":
+      if (state.mailModalOpen) loadMailMessagesForModal(true);
+      renderMailUnreadBadge();
+      break;
+  }
+}
+
+function handleNewDM(data) {
+  const d = data.data || data;
+  const selectedUser = state.presenceSelectedUserId;
+  if (selectedUser && String(selectedUser) === String(d.from)) {
+    // Refresh the DM popup thread for this user
+    presenceFetch(`/api/presence/dm?with=${encodeURIComponent(d.from)}`)
+      .then(res => res.json())
+      .then(d2 => {
+        const log = $("#dm-popup-log");
+        if (log) {
+          const msgs = (d2 && d2.messages) || [];
+          renderDMLog(log, msgs);
+        }
+      })
+      .catch(() => {});
+  }
+  renderPresenceTileCompact(state.presenceData);
+  updateUnreadBadge();
+  if (document.hidden && Notification.permission === "granted") {
+    new Notification(d.fromName || "New message", { body: d.text, tag: `dm-${d.from}` });
+  }
+}
+
+function handleDMRead(data) {
+  const d = data.data || data;
+  const selectedUser = state.presenceSelectedUserId;
+  if (selectedUser && String(selectedUser) === String(d.with_user)) {
+    presenceFetch(`/api/presence/dm?with=${encodeURIComponent(d.with_user)}`)
+      .then(res => res.json())
+      .then(d2 => {
+        const log = $("#dm-popup-log");
+        if (log) {
+          const msgs = (d2 && d2.messages) || [];
+          renderDMLog(log, msgs);
+        }
+      })
+      .catch(() => {});
+  }
+}
+
+function handlePresenceUpdate(data) {
+  const d = data.data || data;
+  if (state.presenceData) {
+    const idx = state.presenceData.findIndex(u => String(u.id) === String(d.user_id));
+    if (idx >= 0) Object.assign(state.presenceData[idx], d);
+    if (state.presenceModalOpen) renderPresenceModal(state.presenceData);
+    if (state.hasPresenceTile) renderPresenceTileCompact(state.presenceData);
+  }
+}
+
 function newId() {
   try {
     if (typeof crypto !== "undefined" && crypto && typeof crypto.randomUUID === "function") {
@@ -814,7 +918,8 @@ function calendarTileId(cal) {
 }
 
 function isAutoRefreshTileId(tileId) {
-  return tileId === "tile-feed" || tileId === "tile-tasks" || (typeof tileId === "string" && (tileId.startsWith("calendar-") || tileId.startsWith("group-")));
+  // SSE handles tasks and feed updates in real-time; only calendars and groups need manual refresh
+  return (typeof tileId === "string" && (tileId.startsWith("calendar-") || tileId.startsWith("group-")));
 }
 
 function getCalendarByTileId(tileId) {
@@ -15467,8 +15572,7 @@ async function openPresenceModal() {
     const snap = await fetchPresenceSnapshot();
     renderPresenceModal(snap, users);
     updatePresenceHeaderIndicators(snap);
-    startPresencePolling();
-    startPresenceHeartbeats();
+    // SSE handles real-time updates; initial data loaded above
   }).catch(() => {});
 
   if (!presenceModalBound) {
@@ -16549,16 +16653,29 @@ function ensurePresenceOnLogin() {
     state.tileLayout = layout;
     saveLayoutToStorage();
   } catch {}
-  startPresenceHeartbeats();
-  if (presenceHeaderPollTimer) clearInterval(presenceHeaderPollTimer);
-  presenceHeaderPollTimer = setInterval(() => {
-    fetchPresenceSnapshot().then(s => {
+  // Send initial heartbeat (mark online) + fetch presence snapshot once
+  // SSE handles ongoing real-time updates after this
+  presenceFetch("/api/presence/heartbeat", {
+    method: "POST",
+    body: JSON.stringify({visible: true}),
+  })
+    .then(() => fetchPresenceSnapshot())
+    .then(s => {
       state.presenceData = s;
       renderPresenceTileCompact(s);
       updatePresenceTileBadge();
       updatePresenceTileAdminButton();
-    }).catch(() => {});
-  }, 30000);
+    })
+    .catch(() => {
+      // Fallback: try snapshot even if heartbeat failed
+      fetchPresenceSnapshot().then(s => {
+        state.presenceData = s;
+        renderPresenceTileCompact(s);
+        updatePresenceTileBadge();
+        updatePresenceTileAdminButton();
+      }).catch(() => {});
+    });
+  noteDashboardActivity();
   setupPresenceIdleAndAutoLogout();
 }
 
@@ -16962,18 +17079,8 @@ async function openMailInboxModal() {
   await updateTrashCount();
   attachMailModalListeners();
 
-  // Auto-refresh inbox every 30 seconds while modal is open (background — preserves expanded emails)
-  if (_mailInboxAutoRefreshTimer) clearInterval(_mailInboxAutoRefreshTimer);
-  _mailInboxAutoRefreshTimer = setInterval(() => {
-    const m = $("#mail-inbox-modal");
-    if (!m || m.classList.contains("hidden")) {
-      clearInterval(_mailInboxAutoRefreshTimer);
-      _mailInboxAutoRefreshTimer = null;
-      return;
-    }
-    loadMailMessagesForModal(true);
-    renderMailUnreadBadge();
-  }, 30000);
+  // SSE handles real-time mail updates (mail:new events)
+  // No periodic auto-refresh needed
 }
 
  async function renderMailTabs() {
@@ -31616,6 +31723,7 @@ function showApp() {
 function showLogin() {
   stopPanelTileAutoRefresh();
   stopNotificationBadgePoll();
+  disconnectSSE();
   if (presenceHeaderPollTimer) { clearInterval(presenceHeaderPollTimer); presenceHeaderPollTimer = null; }
   userProfileReady = false;
   const app = $("#app");
@@ -31794,6 +31902,13 @@ async function populateBrandingForm() {
   $("#branding-primary-color").value = color;
   $("#branding-color-hex").textContent = color;
 
+  // Email branding fields
+  let emailColor = _brandingData.emailHeaderColor || color;
+  $("#branding-email-header-color").value = emailColor;
+  $("#branding-email-header-hex").textContent = emailColor;
+  $("#branding-email-footer-text").value = _brandingData.emailFooterText || "";
+  $("#branding-email-from-name").value = _brandingData.emailFromName || "";
+
   $("#branding-error")?.classList.add("hidden");
 }
 
@@ -31825,6 +31940,9 @@ async function saveBranding() {
     watermarkPath: $("#branding-watermark-path").value.trim() || null,
     faviconPath: $("#branding-favicon-path").value.trim() || null,
     primaryColor: $("#branding-primary-color").value || null,
+    emailHeaderColor: $("#branding-email-header-color").value || null,
+    emailFooterText: $("#branding-email-footer-text").value.trim() || null,
+    emailFromName: $("#branding-email-from-name").value.trim() || null,
   };
 
   try {
@@ -31862,6 +31980,14 @@ function bindBrandingModal() {
     colorInput.addEventListener("input", () => {
       colorHex.textContent = colorInput.value;
       setAccentColor(colorInput.value);
+    });
+  }
+  const emailColorInput = $("#branding-email-header-color");
+  const emailColorHex = $("#branding-email-header-hex");
+  if (emailColorInput && emailColorHex && !emailColorInput.dataset.colorBound) {
+    emailColorInput.dataset.colorBound = "1";
+    emailColorInput.addEventListener("input", () => {
+      emailColorHex.textContent = emailColorInput.value;
     });
   }
 }
@@ -32077,7 +32203,7 @@ async function _profileLoadPrefs() {
     const emailEl = $("#pref-email");
     if (dashEl) dashEl.checked = prefs.inDashboard !== false;
     if (tgEl) tgEl.checked = prefs.telegram !== false;
-    if (emailEl) emailEl.checked = prefs.email !== false;
+    if (emailEl) emailEl.checked = prefs.emailDigest && prefs.emailDigest !== "disabled";
   } catch { /* use defaults */ }
 }
 
@@ -32118,12 +32244,14 @@ async function _profileSave() {
   // Save notification prefs
   const dashEl = $("#pref-in-dashboard");
   const tgEl = $("#pref-telegram");
+  const emailEl = $("#pref-email");
   try {
     await api("/api/v2/me/notification-prefs", {
       method: "PUT",
       body: JSON.stringify({
         inDashboard: dashEl?.checked ?? true,
         telegram: tgEl?.checked ?? true,
+        emailDigest: emailEl?.checked ? "immediate" : "disabled",
       }),
     });
   } catch { /* non-fatal */ }
@@ -32158,6 +32286,7 @@ function _setupProfileEvents() {
     });
     $("#dropdown-signout-btn")?.addEventListener("click", async () => {
       settingsDropdown.classList.add("hidden");
+      disconnectSSE();
       try {
         await fetch("/api/v2/auth/logout", { method: "POST", credentials: "same-origin" });
       } catch (_) {}
@@ -32908,17 +33037,12 @@ function _updateNotificationBadgeUI(count) {
 }
 
 function startNotificationBadgePoll() {
+  // One-shot initial fetch; SSE notification:new events handle ongoing updates
   _pollNotificationBadge();
-  _notificationBadgePollTimer = setInterval(() => {
-    if (!document.hidden) _pollNotificationBadge();
-  }, 60000);
 }
 
 function stopNotificationBadgePoll() {
-  if (_notificationBadgePollTimer) {
-    clearInterval(_notificationBadgePollTimer);
-    _notificationBadgePollTimer = null;
-  }
+  // No-op — no interval to clear (SSE handles updates)
 }
 
 // ── Mark all read ──────────────────────────────────────────────────────────
@@ -32967,11 +33091,11 @@ function bindNotificationDrawer() {
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", () => {
     bindNotificationDrawer();
-    startNotificationBadgePoll();
+    connectSSE();
   });
 } else {
   bindNotificationDrawer();
-  startNotificationBadgePoll();
+  connectSSE();
 }
 
 // ════════════════════════════════════════════════════════════════════════════

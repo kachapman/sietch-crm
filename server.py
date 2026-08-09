@@ -20,6 +20,7 @@ import hmac
 import io
 import json
 import os
+import queue
 import re
 import socket
 import ssl
@@ -34,6 +35,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse, urlencode
+
+from event_bus import event_bus
 
 try:
     from PIL import Image
@@ -1249,6 +1252,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         api_path = urlparse(self.path).path
         qs = parse_qs(urlparse(self.path).query)
 
+        # ── SSE Event Stream ──
+        if api_path == "/api/events":
+            self._handle_sse_stream()
+            return
+
         # ── Config / Info ──
         if api_path == "/api/config":
             _json_response(self, 200, {"version": APP_VERSION})
@@ -1257,7 +1265,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             try:
                 row = db.query_one(
                     """SELECT company_name, logo_path, watermark_path, login_title,
-                              header_eyebrow, header_title, primary_color, favicon_path
+                              header_eyebrow, header_title, primary_color, favicon_path,
+                              email_header_color, email_footer_text, email_from_name
                        FROM branding ORDER BY id LIMIT 1"""
                 )
                 if row:
@@ -1270,6 +1279,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         "headerTitle": row["header_title"] or "Workspace <em>dashboard</em>",
                         "primaryColor": row["primary_color"] or "#3b82f6",
                         "faviconPath": row["favicon_path"] or "/favicon.ico",
+                        "emailHeaderColor": row["email_header_color"],
+                        "emailFooterText": row["email_footer_text"],
+                        "emailFromName": row["email_from_name"],
                     })
                 else:
                     _json_response(self, 200, {
@@ -1690,6 +1702,58 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
         self.send_error(404)
 
+    # ── SSE Event Stream ────────────────────────────────────────────────────
+
+    def _handle_sse_stream(self) -> None:
+        """Long-lived SSE connection for real-time event push."""
+        user = _require_auth(self)
+        if not user:
+            return
+
+        user_id = str(user["id"])
+        q = event_bus.subscribe(user_id)
+
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+
+            self.wfile.write(b"event: connected\ndata: {}\n\n")
+            self.wfile.flush()
+
+            last_sweep_ts = time.time()
+            last_heartbeat_ts = time.time()
+
+            while True:
+                try:
+                    msg = q.get(timeout=2)  # 2s check interval for sweep responsiveness
+                    if msg is None:
+                        break
+                    self.wfile.write(f"data: {msg}\n\n".encode())
+                    self.wfile.flush()
+                except queue.Empty:
+                    pass
+                # Sweep for DB-triggered notifications every 5s
+                now = time.time()
+                if now - last_sweep_ts >= 5:
+                    _sse_publish_recent_notifications(user_id, last_sweep_ts)
+                    last_sweep_ts = now
+                # Heartbeat every 25s
+                if now - last_heartbeat_ts >= 25:
+                    try:
+                        self.wfile.write(b": heartbeat\n\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        break
+                    last_heartbeat_ts = now
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            event_bus.unsubscribe(user_id)
+
     # ── API POST/PUT/DELETE Router ──────────────────────────────────────────
 
     def _handle_api_post_put(self, method: str) -> None:
@@ -1782,19 +1846,25 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             header_title = COALESCE(%s, header_title),
                             primary_color = COALESCE(%s, primary_color),
                             favicon_path = COALESCE(%s, favicon_path),
+                            email_header_color = COALESCE(%s, email_header_color),
+                            email_footer_text = COALESCE(%s, email_footer_text),
+                            email_from_name = COALESCE(%s, email_from_name),
                             updated_at = NOW()
                         WHERE id = %s""",
                         (payload.get("companyName"), payload.get("logoPath"),
                          payload.get("watermarkPath"), payload.get("loginTitle"),
                          payload.get("headerEyebrow"), payload.get("headerTitle"),
                          payload.get("primaryColor"), payload.get("faviconPath"),
+                         payload.get("emailHeaderColor"), payload.get("emailFooterText"),
+                         payload.get("emailFromName"),
                          existing["id"]),
                     )
                 else:
                     db.execute(
                         """INSERT INTO branding (company_name, logo_path, watermark_path,
-                            login_title, header_eyebrow, header_title, primary_color, favicon_path)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                            login_title, header_eyebrow, header_title, primary_color, favicon_path,
+                            email_header_color, email_footer_text, email_from_name)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                         (payload.get("companyName", "Sietch CRM"),
                          payload.get("logoPath", "/assets/sietch-logo-2-nobg2.png"),
                          payload.get("watermarkPath"),
@@ -1802,7 +1872,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                          payload.get("headerEyebrow", "Sietch CRM"),
                          payload.get("headerTitle", "Workspace <em>dashboard</em>"),
                          payload.get("primaryColor", "#3b82f6"),
-                         payload.get("faviconPath", "/favicon.ico")),
+                         payload.get("faviconPath", "/favicon.ico"),
+                         payload.get("emailHeaderColor"),
+                         payload.get("emailFooterText"),
+                         payload.get("emailFromName")),
                     )
                 _json_response(self, 200, {"ok": True})
             except Exception:
@@ -2854,6 +2927,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                            FROM users u, opportunities p WHERE p.id = %s AND u.id = %s""",
                         (int(uid), opp_id, user["id"], event_id, snippet, opp_id, user["id"]),
                     )
+                    event_bus.publish("notification:new", {
+                        "type": "note_tagged", "message": f"{user.get('display_name', 'Someone')} tagged you",
+                        "payload": {"event_id": event_id, "snippet": snippet},
+                        "opportunity_id": opp_id, "actor_user_id": user["id"],
+                    }, user_ids=[str(uid)])
                 except Exception as e:
                     print(f"[WARN] Failed to create notification for user {uid}: {e}", file=sys.stderr)
                     traceback.print_exc(file=sys.stderr)
@@ -3734,10 +3812,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             (user["id"],),
         )
         prefs = {r[0]: r[1] for r in rows}
+        # email_digest is stored as BOOLEAN (true=immediate, false=disabled)
+        email_val = prefs.get("email_digest")
+        if email_val is True:
+            email_digest = "immediate"
+        elif email_val is False:
+            email_digest = "disabled"
+        else:
+            email_digest = "disabled"
         _json_response(self, 200, {
             "inDashboard": prefs.get("in_dashboard", True),
             "telegram": prefs.get("telegram", True),
-            "emailDigest": prefs.get("email_digest", "disabled"),
+            "emailDigest": email_digest,
         })
 
     def _handle_notification_prefs_put(self) -> None:
@@ -3760,11 +3846,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 )
         if "emailDigest" in payload:
             val = str(payload["emailDigest"])[:20]
+            enabled = val != "disabled"
             db.execute(
                 """INSERT INTO notification_preferences (user_id, notification_type, enabled)
                    VALUES (%s, %s, %s)
                    ON CONFLICT (user_id, notification_type) DO UPDATE SET enabled = %s""",
-                (user["id"], "email_digest", val, val),
+                (user["id"], "email_digest", enabled, enabled),
             )
         _json_response(self, 200, {"ok": True})
 
@@ -9621,6 +9708,27 @@ def _lan_urls(port):
     except:
         pass
     return [f"http://{a}:{port}" for a in sorted(set(addrs))]
+
+
+def _sse_publish_recent_notifications(user_id: str, since_ts: float) -> None:
+    """Publish any notifications inserted since since_ts for this user.
+    Catches DB-triggered inserts (e.g. task assignment) that bypass event_bus."""
+    try:
+        rows = db.query(
+            "SELECT id, type, message, payload, opportunity_id, actor_user_id "
+            "FROM notifications WHERE created_at > to_timestamp(%s) AND user_id = %s "
+            "ORDER BY created_at ASC LIMIT 20",
+            (since_ts, int(user_id)),
+        )
+        for row in rows:
+            event_bus.publish("notification:new", {
+                "id": row[0], "type": row[1], "message": row[2],
+                "payload": row[3], "opportunity_id": row[4],
+                "actor_user_id": row[5],
+            }, user_ids=[user_id])
+    except Exception:
+        pass  # non-fatal — will retry on next sweep
+
 
 def main() -> None:
     server = ThreadingHTTPServer(("0.0.0.0", PORT), KanbanHandler)

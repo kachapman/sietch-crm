@@ -2,6 +2,18 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## SSE + Multi-Channel Notifications (2026-08-08)
+
+- **SSE (Server-Sent Events) real-time push.** New `event_bus.py` module with thread-safe pub/sub EventBus. `GET /api/events` endpoint on `ThreadingHTTPServer` — one persistent connection per user, 25s heartbeat, auto-reconnect on client. Replaces 6 polling timers (~540 HTTP requests/hour/user saved).
+- **Multi-channel notification delivery.** Notifications now fire simultaneously through three channels: (1) SSE push to dashboard (instant), (2) Telegram via Bot API (5s poll), (3) email via SMTP relay (immediate). Each channel respects user preferences (`notification_preferences` table).
+- **Email notification channel.** New branded HTML email template with customizable header color, footer text, and from-name in admin branding section. `email_sent`/`email_sent_at` columns on `notifications` table. Formatter supports all notification types (note_tagged, task_assigned, task_reminder, email_linked, deal_created).
+- **Branded email templates.** Admin branding section extended with three new fields: Email Header Color (color picker), Email Footer Text, Email From Name. Saved via existing `POST /api/branding` endpoint.
+- **Notification preference UI enabled.** Telegram and Email checkboxes in profile modal now functional (were disabled with "Coming soon"). Email preference saved as `emailDigest` (values: "immediate" or "disabled").
+- **Event bus for cross-module pub/sub.** Standalone `event_bus.py` avoids circular imports between `server.py`, `mail_scanner.py`, and `task_reminders.py`. All notification insert sites publish `notification:new` events via the bus.
+- **DB trigger sweep.** 5-second sweep in SSE loop catches notifications inserted by PostgreSQL triggers (task assignment) that bypass the Python event_bus.
+- **Pre-existing bug fixes.** Fixed `mail_scanner.py` notification inserts using nonexistent columns (`title`, `link` → `message`, `payload` as JSONB). Fixed frontend email preference key mismatch (`prefs.email` → `prefs.emailDigest`). Fixed save handler omitting `emailDigest` payload.
+- **Files:** `event_bus.py` (new), `server.py`, `task_reminders.py`, `scanner/mail_scanner.py`, `notification_dispatcher.py`, `smtp_client.py`, `public/app.js`, `public/index.html`, `migrations/008_add_email_notification_channel.sql`, `docs/SSE_IMPLEMENTATION_PLAN.md`.
+
 ## Notes Tile Revamp — PostgreSQL-Backed Personal Notes (2026-08-08)
 
 - **New `personal_notes` table.** PostgreSQL-backed notes with UUID primary key, owner (user id), title, content, color, pinned, archived, sort_order, timestamps. Full-text search via GIN index on title+content. Migration from profile JSON on server startup.
