@@ -5551,13 +5551,12 @@ body {
   padding: 0.25rem 0;
 }
 .ts-entry-row {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 0.35rem;
-  padding: 0.3rem 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
   font-size: 0.78rem;
   border-bottom: 1px solid var(--border);
-  align-items: center;
 }
 .ts-entry-times {
   color: var(--text);
@@ -5566,20 +5565,18 @@ body {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
-.ts-entry-actions {
-  display: flex;
-  gap: 0.25rem;
-}
-.ts-entry-actions button {
+.ts-entry-edit-btn {
   padding: 0.15rem 0.3rem;
   border: none;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
   border-radius: 3px;
-  font-size: 0.72rem;
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
 }
-.ts-entry-actions button:hover {
+.ts-entry-edit-btn:hover {
   background: var(--hover-bg, rgba(255,255,255,0.06));
   color: var(--text);
 }
@@ -5666,6 +5663,23 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 100px;
+}
+.ts-clock-indicator {
+  font-size: 0.7rem;
+  margin-left: auto;
+  opacity: 0.7;
+}
+.ts-admin-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+.ts-admin-toggle .presence-offline-arrow {
+  display: inline-block;
+  margin-right: 0.25rem;
+  transition: transform 0.15s;
+}
+.ts-admin-toggle.expanded .presence-offline-arrow {
+  transform: rotate(0deg);
 }
 .ts-project-select {
   width: 100%;

@@ -7495,10 +7495,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         opp_id = payload.get("opportunity_id")
         notes = str(payload.get("notes") or "").strip()
-        entry = db.insert_returning(
-            "INSERT INTO time_entries (user_id, clock_in, opportunity_id, notes) VALUES (%s, NOW(), %s, %s) RETURNING *",
+        entry_id = db.insert_returning(
+            "INSERT INTO time_entries (user_id, clock_in, opportunity_id, notes) VALUES (%s, NOW(), %s, %s) RETURNING id",
             (user["id"], opp_id if opp_id else None, notes),
         )
+        entry = db.query_dicts("SELECT * FROM time_entries WHERE id = %s", (entry_id,))[0]
         _json_response(self, 200, {"ok": True, "entry": entry})
 
     def _handle_timesheet_clock_out(self) -> None:

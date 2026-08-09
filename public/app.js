@@ -14908,6 +14908,14 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
     unreadDot.style.display = hasUnread ? "" : "none";
 
     row.append(avatar, nm, manualStatus, st, unreadDot);
+    // Clock-in indicator for current user
+    if (String(id) === String(state.currentUser?.id) && _tsActiveEntry) {
+      const clockIcon = document.createElement("span");
+      clockIcon.className = "ts-clock-indicator";
+      clockIcon.title = "Currently clocked in";
+      clockIcon.textContent = "\u23f1";
+      row.appendChild(clockIcon);
+    }
 
     if (typeof onUserClick === "function") {
       row.addEventListener("click", () => onUserClick(id, name, p));
@@ -16143,6 +16151,14 @@ function renderPresenceTileCompact(snapshot = null) {
     unreadDot.style.display = hasUnread ? "" : "none";
 
     row.append(avatar, nm, manualStatus, st, unreadDot);
+    // Clock-in indicator for current user
+    if (String(u.id) === String(state.currentUser?.id) && _tsActiveEntry) {
+      const clockIcon = document.createElement("span");
+      clockIcon.className = "ts-clock-indicator";
+      clockIcon.title = "Currently clocked in";
+      clockIcon.textContent = "\u23f1";
+      row.appendChild(clockIcon);
+    }
     row.addEventListener("click", () => {
       switchToPresenceMessagesTab();
       openDMInline(u.id, userLabel);
@@ -17182,9 +17198,9 @@ function modalRefreshEntries() {
       return;
     }
     let totalSeconds = 0;
-    entries.forEach(e => {
-      const ci = e.clock_in ? new Date(e.clock_in) : null;
-      const co = e.clock_out ? new Date(e.clock_out) : null;
+    entries.forEach(entry => {
+      const ci = entry.clock_in ? new Date(entry.clock_in) : null;
+      const co = entry.clock_out ? new Date(entry.clock_out) : null;
       const row = document.createElement('div');
       row.className = 'ts-entry-row';
       const times = document.createElement('div');
@@ -17197,7 +17213,7 @@ function modalRefreshEntries() {
       dur.className = 'ts-entry-duration';
       let durSec = 0;
       if (ci && co) {
-        durSec = (co - ci) / 1000 - (e.break_minutes || 0) * 60;
+        durSec = (co - ci) / 1000 - (entry.break_minutes || 0) * 60;
         totalSeconds += durSec;
       }
       const dh = Math.floor(durSec / 3600);
@@ -17205,9 +17221,15 @@ function modalRefreshEntries() {
       dur.textContent = `${dh}h ${dm}m`;
       const proj = document.createElement('div');
       proj.className = 'ts-entry-project';
-      proj.textContent = e.opportunity_title || '';
-      proj.title = e.opportunity_title || '';
-      row.append(times, dur, proj);
+      proj.textContent = entry.opportunity_title || '';
+      proj.title = entry.opportunity_title || '';
+      const editBtn = document.createElement('button');
+      editBtn.className = 'ts-entry-edit-btn';
+      editBtn.title = 'Edit';
+      editBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M13 20l7 -7"/><path d="M13 20v-6a1 1 0 0 1 1 -1h6v-7a2 2 0 0 0 -2 -2h-12a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h7"/></svg>`;
+      editBtn.addEventListener("click", () => tsEditEntry(entry));
+      row.addEventListener("contextmenu", (ev) => tsEntryContextMenu(ev, entry));
+      row.append(proj, times, dur, editBtn);
       list.appendChild(row);
     });
     const th = Math.floor(totalSeconds / 3600);
@@ -17250,7 +17272,23 @@ function renderTimesheetTab() {
     const adminEl = $("#ts-admin-section");
     if (adminEl) {
       adminEl.classList.remove("hidden");
-      tsRenderAdminSummary(adminEl);
+      // Add collapsible header
+      if (!adminEl.querySelector(".ts-admin-toggle")) {
+        const toggle = document.createElement("div");
+        toggle.className = "ts-admin-toggle presence-offline-toggle";
+        toggle.innerHTML = '<span class="presence-offline-arrow">\u25b8</span> Admin Summary';
+        toggle.addEventListener("click", () => {
+          const summary = adminEl.querySelector("#ts-admin-summary");
+          const expanded = toggle.classList.toggle("expanded");
+          toggle.querySelector(".presence-offline-arrow").textContent = expanded ? "\u25be" : "\u25b8";
+          if (summary) summary.style.display = expanded ? "" : "none";
+          if (expanded) tsRenderAdminSummary(adminEl.querySelector("#ts-admin-summary"));
+        });
+        adminEl.insertBefore(toggle, adminEl.firstChild);
+        // Hide summary by default
+        const summary = adminEl.querySelector("#ts-admin-summary");
+        if (summary) summary.style.display = "none";
+      }
     }
   }
 }
@@ -17405,9 +17443,9 @@ function tsRenderEntries(entries) {
   }
   
   let totalSeconds = 0;
-  entries.forEach(e => {
-    const ci = e.clock_in ? new Date(e.clock_in) : null;
-    const co = e.clock_out ? new Date(e.clock_out) : null;
+  entries.forEach(entry => {
+    const ci = entry.clock_in ? new Date(entry.clock_in) : null;
+    const co = entry.clock_out ? new Date(entry.clock_out) : null;
     const row = document.createElement("div");
     row.className = "ts-entry-row";
     
@@ -17422,7 +17460,7 @@ function tsRenderEntries(entries) {
     dur.className = "ts-entry-duration";
     let durSec = 0;
     if (ci && co) {
-      durSec = (co - ci) / 1000 - (e.break_minutes || 0) * 60;
+      durSec = (co - ci) / 1000 - (entry.break_minutes || 0) * 60;
       totalSeconds += durSec;
     }
     const dh = Math.floor(durSec / 3600);
@@ -17431,18 +17469,17 @@ function tsRenderEntries(entries) {
     
     const proj = document.createElement("div");
     proj.className = "ts-entry-project";
-    proj.textContent = e.opportunity_title || "";
-    proj.title = e.opportunity_title || "";
+    proj.textContent = entry.opportunity_title || "";
+    proj.title = entry.opportunity_title || "";
     
-    const actions = document.createElement("div");
-    actions.className = "ts-entry-actions";
     const editBtn = document.createElement("button");
-    editBtn.textContent = "✎";
+    editBtn.className = "ts-entry-edit-btn";
     editBtn.title = "Edit";
-    editBtn.addEventListener("click", () => tsEditEntry(e));
-    actions.appendChild(editBtn);
+    editBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M13 20l7 -7"/><path d="M13 20v-6a1 1 0 0 1 1 -1h6v-7a2 2 0 0 0 -2 -2h-12a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h7"/></svg>`;
+    editBtn.addEventListener("click", () => tsEditEntry(entry));
     
-    row.append(times, dur, proj, actions);
+    row.addEventListener("contextmenu", (ev) => tsEntryContextMenu(ev, entry));
+    row.append(proj, times, dur, editBtn);
     list.appendChild(row);
   });
   
@@ -17458,6 +17495,60 @@ function tsEditEntry(entry) {
     method: "PUT",
     body: JSON.stringify({ notes }),
   }).then(() => tsRefreshEntries());
+}
+
+function tsEntryContextMenu(e, entry) {
+  e.preventDefault();
+  document.querySelectorAll(".ts-context-menu").forEach(m => m.remove());
+  
+  const menu = document.createElement("div");
+  menu.className = "ts-context-menu";
+  menu.style.cssText = "position:fixed;z-index:1000;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 4px 12px rgba(0,0,0,0.3);padding:0.25rem 0;min-width:140px;";
+  
+  const items = [
+    { label: "Add Note", icon: "\u{1f4dd}", action: () => tsEditEntry(entry) },
+    { label: "Assign to Project", icon: "\u{1f4c1}", action: () => tsAssignProject(entry) },
+    { label: "Delete", icon: "\u{1f5d1}\u{fe0f}", action: () => tsDeleteEntry(entry), danger: true },
+  ];
+  
+  items.forEach(item => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = `${item.icon} ${item.label}`;
+    btn.style.cssText = `display:block;width:100%;padding:0.4rem 0.75rem;border:none;background:transparent;text-align:left;cursor:pointer;font-size:0.82rem;font-family:var(--font);color:${item.danger ? 'var(--danger, #ef4444)' : 'var(--text)'};`;
+    btn.addEventListener("mouseenter", () => btn.style.background = "var(--hover-bg, rgba(255,255,255,0.06))");
+    btn.addEventListener("mouseleave", () => btn.style.background = "transparent");
+    btn.addEventListener("click", () => { menu.remove(); item.action(); });
+    menu.appendChild(btn);
+  });
+  
+  menu.style.left = e.clientX + "px";
+  menu.style.top = e.clientY + "px";
+  document.body.appendChild(menu);
+  
+  setTimeout(() => {
+    document.addEventListener("click", function close() { menu.remove(); document.removeEventListener("click", close); }, { once: true });
+  }, 0);
+}
+
+function tsAssignProject(entry) {
+  api("/api/v2/projects?limit=200").then(data => {
+    const projects = data.projects || data || [];
+    const choice = prompt("Assign to project:\n" + projects.map((p, i) => `${i + 1}. ${p.title || 'Project #' + p.id}`).join("\n") + "\n\nEnter number:");
+    if (choice && projects[parseInt(choice) - 1]) {
+      api(`/api/timesheet/entries/${entry.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ opportunity_id: projects[parseInt(choice) - 1].id }),
+      }).then(() => tsRefreshEntries());
+    }
+  }).catch(() => {});
+}
+
+function tsDeleteEntry(entry) {
+  if (!confirm("Delete this time entry?")) return;
+  api(`/api/timesheet/entries/${entry.id}`, { method: "DELETE" })
+    .then(() => tsRefreshEntries())
+    .catch(err => showToast(err.message || "Failed to delete", true));
 }
 
 function tsShiftRange(dir) {
@@ -17483,7 +17574,10 @@ function tsShiftRange(dir) {
   tsRefreshEntries();
   tsSyncDateInputs();
   const adminEl = $("#ts-admin-section");
-  if (adminEl && !adminEl.classList.contains("hidden")) tsRenderAdminSummary(adminEl);
+  if (adminEl && !adminEl.classList.contains("hidden")) {
+    const toggle = adminEl.querySelector(".ts-admin-toggle");
+    if (toggle && toggle.classList.contains("expanded")) tsRenderAdminSummary(adminEl.querySelector("#ts-admin-summary"));
+  }
 }
 
 function tsSetRange(mode) {
@@ -17505,7 +17599,10 @@ function tsSetRange(mode) {
   tsRefreshEntries();
   tsSyncDateInputs();
   const adminEl = $("#ts-admin-section");
-  if (adminEl && !adminEl.classList.contains("hidden")) tsRenderAdminSummary(adminEl);
+  if (adminEl && !adminEl.classList.contains("hidden")) {
+    const toggle = adminEl.querySelector(".ts-admin-toggle");
+    if (toggle && toggle.classList.contains("expanded")) tsRenderAdminSummary(adminEl.querySelector("#ts-admin-summary"));
+  }
 }
 
 function tsUpdateDateLabel() {
