@@ -4653,8 +4653,7 @@ async function loadCalendarSourcesList() {
   const list = $("#calendar-settings-sources-list");
   if (!list) return;
   try {
-    const res = await api("/api/v2/calendar/sources");
-    const data = await res.json();
+    const data = await api("/api/v2/calendar/sources");
     const sources = data.sources || [];
     if (!sources.length) {
       list.innerHTML = '<p class="calendar-settings-empty">No calendars connected yet.</p>';
@@ -4723,16 +4722,14 @@ function bindCalendarSettingsModal() {
     } else if (activeType === "google_oauth" || activeType === "microsoft_oauth") {
       const provider = activeType === "google_oauth" ? "google" : "microsoft";
       try {
-        const res = await api(`/api/v2/calendar/oauth/authorize?provider=${provider}`, { method: "POST" });
-        const data = await res.json();
+        const data = await api(`/api/v2/calendar/oauth/authorize?provider=${provider}`, { method: "POST" });
         if (data.url) { window.location.href = data.url; return; }
       } catch (e) { showToast(e.message, true); return; }
     }
     try {
-      const res = await api("/api/v2/calendar/sources", {
+      const data = await api("/api/v2/calendar/sources", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
-      const data = await res.json();
       if (data.ok) {
         addForm?.classList.add("hidden");
         loadCalendarSourcesList();
@@ -4793,7 +4790,7 @@ function openCalendarEventEditModal(ev, cal) {
   // Populate source dropdown
   const srcSel = $("#cal-edit-source");
   srcSel.innerHTML = '<option value="">Local</option>';
-  api("/api/v2/calendar/sources").then(r => r.json()).then(data => {
+  api("/api/v2/calendar/sources").then(data => {
     for (const s of (data.sources || [])) {
       const opt = document.createElement("option");
       opt.value = s.id;
@@ -4961,8 +4958,7 @@ async function loadCalendarForTile(cal, { quiet = false } = {}) {
       const endDate = new Date(y, m, 0, 23, 59, 59);
       const startStr = startDate.toISOString().split("T")[0];
       const endStr = endDate.toISOString().split("T")[0];
-      const res = await api(`/api/v2/calendar/events?start=${startStr}&end=${endStr}`);
-      const data = await res.json();
+      const data = await api(`/api/v2/calendar/events?start=${startStr}&end=${endStr}`);
       events = (data.events || []).map(ev => ({
         uid: ev.uid || String(ev.id),
         summary: ev.summary || "",
@@ -4984,7 +4980,7 @@ async function loadCalendarForTile(cal, { quiet = false } = {}) {
       calendarName = data.events?.[0]?.source_name || cal.name || "Calendar";
       timezone = getBrowserTimezone();
     } else if (cal.feedUrl) {
-      // Legacy ICS proxy mode
+      // Legacy ICS proxy mode — also fetch local DB events and merge
       const data = await fetchCalendarFeed(cal.feedUrl);
       events = Array.isArray(data.events) ? data.events : [];
       calendarName = data.name || cal.name || "Calendar";
@@ -4992,6 +4988,39 @@ async function loadCalendarForTile(cal, { quiet = false } = {}) {
       if (data.name && (!cal.name || cal.name === "Calendar")) {
         cal.name = data.name;
         saveCalendarsToStorage();
+      }
+      // Merge local DB events (events not tied to any ICS source)
+      try {
+        const y = cal.viewYear || new Date().getFullYear();
+        const m = cal.viewMonth || new Date().getMonth() + 1;
+        const startDate = new Date(y, m - 1, 1);
+        const endDate = new Date(y, m, 0, 23, 59, 59);
+        const startStr = startDate.toISOString().split("T")[0];
+        const endStr = endDate.toISOString().split("T")[0];
+        const dbData = await api(`/api/v2/calendar/events?start=${startStr}&end=${endStr}`);
+        const dbEvents = (dbData.events || []).map(ev => ({
+          uid: ev.uid || String(ev.id),
+          summary: ev.summary || "",
+          description: ev.description || "",
+          location: ev.location || "",
+          color: ev.color || "#5b8abf",
+          status: ev.status || "CONFIRMED",
+          start: ev.all_day
+            ? { allDay: true, year: new Date(ev.dtstart).getFullYear(), month: new Date(ev.dtstart).getMonth() + 1, day: new Date(ev.dtstart).getDate() }
+            : { allDay: false, iso: ev.dtstart, year: new Date(ev.dtstart).getFullYear(), month: new Date(ev.dtstart).getMonth() + 1, day: new Date(ev.dtstart).getDate(), hour: new Date(ev.dtstart).getHours(), minute: new Date(ev.dtstart).getMinutes(), tzid: "UTC" },
+          end: ev.all_day
+            ? { allDay: true, year: new Date(ev.dtend).getFullYear(), month: new Date(ev.dtend).getMonth() + 1, day: new Date(ev.dtend).getDate() }
+            : { allDay: false, iso: ev.dtend, year: new Date(ev.dtend).getFullYear(), month: new Date(ev.dtend).getMonth() + 1, day: new Date(ev.dtend).getDate(), hour: new Date(ev.dtend).getHours(), minute: new Date(ev.dtend).getMinutes(), tzid: "UTC" },
+          rrule: ev.rrule || "",
+          recurrence: ev.rrule || "",
+          _dbId: ev.id,
+          _sourceId: ev.source_id,
+        }));
+        // Merge: DB events take precedence (dedupe by uid)
+        const uidSet = new Set(dbEvents.map(e => e.uid));
+        events = [...dbEvents, ...events.filter(e => !uidSet.has(e.uid))];
+      } catch {
+        // DB fetch failed — show ICS events only
       }
     }
 
@@ -5039,6 +5068,7 @@ function bindCalendarTileChrome(section, cal, tileId) {
   const nameDisplay = document.createElement("span");
   nameDisplay.className = "group-tile-name-display";
   nameDisplay.textContent = cal.name || "Calendar";
+  nameDisplay.style.display = "none"; // hidden — calendar name shown via settings
 
   const nameInput = document.createElement("input");
   nameInput.type = "text";
@@ -5056,9 +5086,10 @@ function bindCalendarTileChrome(section, cal, tileId) {
     placeholder: "Calendar",
   });
 
+  // Event count — hidden (redundant with toolbar density)
   const countEl = document.createElement("span");
   countEl.className = "group-tile-count calendar-tile-count";
-  countEl.textContent = "0 events";
+  countEl.style.display = "none";
 
   // View tabs (Month / Week / Day / Agenda)
   const viewTabs = document.createElement("div");
@@ -14604,12 +14635,11 @@ async function addCalendarTileFromForm() {
     setAddTileError("");
     // Create source via API first
     try {
-      const res = await api("/api/v2/calendar/sources", {
+      const data = await api("/api/v2/calendar/sources", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, source_type: "ics", ics_url: feedUrl }),
       });
-      const data = await res.json();
       if (data.ok && data.id) {
         const cal = newCalendarTile({ name, sourceId: data.id });
         state.calendarTiles.push(cal);
@@ -14639,12 +14669,11 @@ async function addCalendarTileFromForm() {
     }
     setAddTileError("");
     try {
-      const res = await api("/api/v2/calendar/sources", {
+      const data = await api("/api/v2/calendar/sources", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, source_type: "caldav", caldav_url: url, caldav_username: user, caldav_password: pass }),
       });
-      const data = await res.json();
       if (data.ok && data.id) {
         const cal = newCalendarTile({ name, sourceId: data.id });
         state.calendarTiles.push(cal);
@@ -14668,8 +14697,7 @@ async function addCalendarTileFromForm() {
     const provider = activeType === "google_oauth" ? "google" : "microsoft";
     const stateToken = Math.random().toString(36).slice(2);
     try {
-      const res = await api(`/api/v2/calendar/oauth/authorize?provider=${provider}&tile_name=${encodeURIComponent(name)}`, { method: "POST" });
-      const data = await res.json();
+      const data = await api(`/api/v2/calendar/oauth/authorize?provider=${provider}&tile_name=${encodeURIComponent(name)}`, { method: "POST" });
       if (data.url) {
         window.location.href = data.url;
       } else {
@@ -14700,8 +14728,19 @@ function bindAddTileModal() {
   $("#add-tile-local-kanban")?.addEventListener("click", addLocalKanbanTile);
   $("#add-tile-calendar-back")?.addEventListener("click", showAddTileChooser);
   $("#add-tile-notes-back")?.addEventListener("click", showAddTileChooser);
-  $("#add-tile-calendar-create")?.addEventListener("click", () => {
-    addCalendarTileFromForm().catch((err) => setAddTileError(err.message));
+  $("#add-tile-calendar-create")?.addEventListener("click", async () => {
+    const btn = $("#add-tile-calendar-create");
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Loading\u2026";
+    try {
+      await addCalendarTileFromForm();
+    } catch (err) {
+      setAddTileError(err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
   });
   $("#add-tile-notes-create")?.addEventListener("click", addNotesTileFromForm);
 

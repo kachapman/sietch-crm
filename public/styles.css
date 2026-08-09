@@ -7732,10 +7732,18 @@ body {
 
 /* Calendar settings modal */
 .modal-card-calendar-settings {
-  width: min(480px, 100%);
+  width: min(480px, calc(100vw - 2rem));
   max-height: 80vh;
   display: flex;
   flex-direction: column;
+  margin: 1rem auto;
+}
+@media (max-width: 600px) {
+  .modal-card-calendar-settings {
+    width: calc(100vw - 1rem);
+    max-height: 90vh;
+    margin: 0.5rem auto;
+  }
 }
 .modal-card-calendar-settings .modal-card-body {
   overflow-y: auto;
@@ -7882,6 +7890,15 @@ body {
     order: 0;
     flex-basis: auto;
   }
+}
+
+/* Calendar tile: consistent button sizing in toolbar */
+.dashboard-tile.calendar-tile .tile-toolbar .btn-ghost {
+  padding: 0.25rem 0.45rem;
+  font-size: 0.78rem;
+}
+.dashboard-tile.calendar-tile .tile-toolbar .btn-ghost i {
+  font-size: 0.95rem;
 }
 
 /* Calendar tile: flex-wrap:nowrap so tabs + actions stay on one row */

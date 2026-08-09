@@ -8286,6 +8286,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         rrule = (body.get("rrule") or "").strip() or None
         reminder = body.get("reminder_minutes")
         source_id = body.get("source_id")
+        if source_id == "" or source_id == "null":
+            source_id = None
+        elif source_id and str(source_id).isdigit():
+            source_id = int(source_id)
+        else:
+            source_id = None
         uid = f"local-{user['id']}-{int(time.time()*1000)}"
         event_id = db.insert_returning(
             """INSERT INTO calendar_events (user_id, source_id, uid, summary, description, location,
