@@ -5436,6 +5436,7 @@ body {
   gap: 0.5rem;
   padding: 0.75rem;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 .ts-timer-display {
   font-size: 1.5rem;
@@ -5497,6 +5498,7 @@ body {
   padding: 0.35rem 0.5rem;
   border-bottom: 1px solid var(--border);
   font-size: 0.78rem;
+  flex-shrink: 0;
 }
 .ts-date-range button {
   padding: 0.2rem 0.5rem;
@@ -5519,6 +5521,7 @@ body {
 /* Entry list */
 .ts-entries-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 0.25rem 0;
 }
@@ -5563,6 +5566,7 @@ body {
   font-weight: 600;
   text-align: right;
   color: var(--text);
+  flex-shrink: 0;
 }
 /* Export buttons */
 .ts-export-bar {
@@ -5570,6 +5574,7 @@ body {
   gap: 0.35rem;
   padding: 0.35rem 0.5rem;
   border-top: 1px solid var(--border);
+  flex-shrink: 0;
 }
 .ts-export-btn {
   display: inline-flex;
