@@ -135,6 +135,10 @@ function handleSSEEvent(type, data) {
     case "notification:new":
       updateNotificationBadge();
       if (state.feedModalOpen) loadNotificationFeed({ force: true });
+      // Browser notification for calendar reminders
+      if (data.type === "calendar_reminder" && document.hidden && Notification.permission === "granted") {
+        new Notification("Calendar Reminder", { body: data.message || "Event starting soon", tag: "cal-reminder" });
+      }
       break;
     case "mail:new":
       if (state.mailModalOpen) loadMailMessagesForModal(true);
@@ -4739,6 +4743,36 @@ function bindCalendarSettingsModal() {
       }
     } catch (e) { showToast(e.message, true); }
   });
+
+  // Notification preference checkboxes
+  const browserCb = $("#cal-settings-browser-notif");
+  const telegramCb = $("#cal-settings-telegram-notif");
+  async function loadCalendarSettings() {
+    try {
+      const data = await api("/api/v2/calendar/settings");
+      if (browserCb) browserCb.checked = data.browser_notifications !== false;
+      if (telegramCb) telegramCb.checked = data.telegram_notifications !== false;
+    } catch { /* ignore */ }
+  }
+  async function saveCalendarNotifPref() {
+    try {
+      await api("/api/v2/calendar/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          browser_notifications: browserCb?.checked,
+          telegram_notifications: telegramCb?.checked,
+        }),
+      });
+    } catch { /* ignore */ }
+  }
+  browserCb?.addEventListener("change", saveCalendarNotifPref);
+  telegramCb?.addEventListener("change", saveCalendarNotifPref);
+  // Load settings when modal opens
+  const observer = new MutationObserver(() => {
+    if (!modal.classList.contains("hidden")) loadCalendarSettings();
+  });
+  observer.observe(modal, { attributes: true, attributeFilter: ["class"] });
 }
 
 // ── Calendar Event Edit Modal ────────────────────────────────────────────────

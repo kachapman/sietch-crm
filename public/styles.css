@@ -7901,6 +7901,14 @@ body {
   font-size: 0.95rem;
 }
 
+/* Calendar tile: actions row never wraps, close button always last + rightmost */
+.dashboard-tile.calendar-tile .tile-toolbar-actions {
+  flex-wrap: nowrap;
+}
+.dashboard-tile.calendar-tile .tile-toolbar-actions .btn-tile-remove {
+  margin-left: 0.35rem;
+}
+
 /* Calendar tile: flex-wrap:nowrap so tabs + actions stay on one row */
 .dashboard-tile.calendar-tile .tile-toolbar {
   flex-wrap: nowrap;

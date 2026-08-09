@@ -230,6 +230,19 @@ def _sweep_calendar_reminders() -> int:
     fired = 0
     for ev in due_events:
         user_id = ev["user_id"]
+        # Check if user has calendar notifications enabled
+        try:
+            pref = db.query_one(
+                "SELECT enabled FROM notification_preferences WHERE user_id = %s AND notification_type = 'calendar_browser'",
+                (user_id,),
+            )
+            if pref and pref.get("enabled") is False:
+                # User disabled browser notifications — still mark as sent to avoid retry
+                db.execute("UPDATE calendar_events SET reminder_sent = TRUE WHERE id = %s", (ev["id"],))
+                continue
+        except Exception:
+            pass  # Default: allow notification
+
         summary = ev.get("summary") or "Calendar event"
         dtstart = ev.get("dtstart")
         mins = ev.get("reminder_minutes", 15)

@@ -83,6 +83,16 @@ def _format_task_reminder(notification: dict, project_title: str, actor_name: st
     )
 
 
+def _format_calendar_reminder(notification: dict) -> str:
+    payload = notification.get("payload") or {}
+    summary = _escape_html(payload.get("summary") or notification.get("message") or "Calendar event")
+    return (
+        f"\U0001f4c5 <b>Calendar reminder</b>\n\n"
+        f"{summary}\n\n"
+        f"Check your calendar for details."
+    )
+
+
 def _format_notification(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str | None:
     ntype = notification.get("type")
     if ntype == "note_tagged":
@@ -91,6 +101,8 @@ def _format_notification(notification: dict, project_title: str, actor_name: str
         return _format_task_assigned(notification, project_title, actor_name, project_id)
     elif ntype == "task_reminder":
         return _format_task_reminder(notification, project_title, actor_name, project_id)
+    elif ntype == "calendar_reminder":
+        return _format_calendar_reminder(notification)
     return None
 
 
