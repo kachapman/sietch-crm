@@ -16272,13 +16272,30 @@ function renderPresenceTile() {
           <button type="button" id="ts-range-month" class="ts-range-btn">Month</button>
         </div>
         <div id="ts-entries-list" class="ts-entries-list"></div>
-        <div id="ts-daily-total" class="ts-daily-total"></div>
-        <div class="ts-export-bar">
-          <input type="date" id="ts-export-from" class="ts-export-date" />
-          <span class="ts-export-sep">to</span>
-          <input type="date" id="ts-export-to" class="ts-export-date" />
-          <button type="button" id="ts-export-csv" class="ts-export-btn" title="Export CSV"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M7 16.5a1.5 1.5 0 0 0 -3 0v3a1.5 1.5 0 0 0 3 0"/><path d="M10 20.25c0 .414 .336 .75 .75 .75h1.25a1 1 0 0 0 1 -1v-1a1 1 0 0 0 -1 -1h-1a1 1 0 0 1 -1 -1v-1a1 1 0 0 1 1 -1h1.25a.75 .75 0 0 1 .75 .75"/><path d="M16 15l2 6l2 -6"/></svg></button>
-          <button type="button" id="ts-export-pdf" class="ts-export-btn" title="Export PDF"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M5 18h1.5a1.5 1.5 0 0 0 0 -3h-1.5v6"/><path d="M17 18h2"/><path d="M20 15h-3v6"/><path d="M11 15v6h1a2 2 0 0 0 2 -2v-2a2 2 0 0 0 -2 -2h-1"/></svg></button>
+        <div class="ts-footer-bar">
+          <div id="ts-daily-total" class="ts-daily-total"></div>
+          <div class="ts-export-btns">
+            <div class="ts-export-wrap">
+              <button type="button" id="ts-export-csv" class="ts-export-btn" title="Export CSV"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M7 16.5a1.5 1.5 0 0 0 -3 0v3a1.5 1.5 0 0 0 3 0"/><path d="M10 20.25c0 .414 .336 .75 .75 .75h1.25a1 1 0 0 0 1 -1v-1a1 1 0 0 0 -1 -1h-1a1 1 0 0 1 -1 -1v-1a1 1 0 0 1 1 -1h1.25a.75 .75 0 0 1 .75 .75"/><path d="M16 15l2 6l2 -6"/></svg></button>
+              <div id="ts-csv-dropdown" class="ts-export-dropdown hidden">
+                <label>From</label>
+                <input type="date" id="ts-csv-from" class="ts-export-dropdown-date" />
+                <label>To</label>
+                <input type="date" id="ts-csv-to" class="ts-export-dropdown-date" />
+                <button type="button" id="ts-csv-go" class="ts-export-go">Export</button>
+              </div>
+            </div>
+            <div class="ts-export-wrap">
+              <button type="button" id="ts-export-pdf" class="ts-export-btn" title="Export PDF"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M5 18h1.5a1.5 1.5 0 0 0 0 -3h-1.5v6"/><path d="M17 18h2"/><path d="M20 15h-3v6"/><path d="M11 15v6h1a2 2 0 0 0 2 -2v-2a2 2 0 0 0 -2 -2h-1"/></svg></button>
+              <div id="ts-pdf-dropdown" class="ts-export-dropdown hidden">
+                <label>From</label>
+                <input type="date" id="ts-pdf-from" class="ts-export-dropdown-date" />
+                <label>To</label>
+                <input type="date" id="ts-pdf-to" class="ts-export-dropdown-date" />
+                <button type="button" id="ts-pdf-go" class="ts-export-go">Export</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <div id="presence-tile-admin" class="presence-admin hidden" style="padding:0.5rem 0.75rem;font-size:0.78rem;color:var(--muted);"></div>
@@ -17129,28 +17146,39 @@ function renderPresenceTimesheetModal(container, snap) {
   entriesList.className = 'ts-entries-list';
   entriesList.id = 'modal-ts-entries';
   container.appendChild(entriesList);
-  // Daily total
+  // Footer bar (total + export)
+  const footerBar = document.createElement('div');
+  footerBar.className = 'ts-footer-bar';
   const totalEl = document.createElement('div');
   totalEl.className = 'ts-daily-total';
   totalEl.id = 'modal-ts-total';
-  container.appendChild(totalEl);
-  // Export bar
-  const exportBar = document.createElement('div');
-  exportBar.className = 'ts-export-bar';
-  const fromDate = document.createElement('input');
-  fromDate.type = 'date'; fromDate.className = 'ts-export-date'; fromDate.id = 'modal-ts-export-from';
-  const sepEl = document.createElement('span');
-  sepEl.className = 'ts-export-sep'; sepEl.textContent = 'to';
-  const toDate = document.createElement('input');
-  toDate.type = 'date'; toDate.className = 'ts-export-date'; toDate.id = 'modal-ts-export-to';
+  const exportBtns = document.createElement('div');
+  exportBtns.className = 'ts-export-btns';
+  // CSV wrapper
+  const csvWrap = document.createElement('div');
+  csvWrap.className = 'ts-export-wrap';
   const csvBtn = document.createElement('button');
   csvBtn.type = 'button'; csvBtn.className = 'ts-export-btn'; csvBtn.title = 'Export CSV';
   csvBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M7 16.5a1.5 1.5 0 0 0 -3 0v3a1.5 1.5 0 0 0 3 0"/><path d="M10 20.25c0 .414 .336 .75 .75 .75h1.25a1 1 0 0 0 1 -1v-1a1 1 0 0 0 -1 -1h-1a1 1 0 0 1 -1 -1v-1a1 1 0 0 1 1 -1h1.25a.75 .75 0 0 1 .75 .75"/><path d="M16 15l2 6l2 -6"/></svg>';
+  const csvDrop = document.createElement('div');
+  csvDrop.className = 'ts-export-dropdown hidden';
+  csvDrop.id = 'modal-ts-csv-dropdown';
+  csvDrop.innerHTML = '<label>From</label><input type="date" id="modal-ts-csv-from" class="ts-export-dropdown-date" /><label>To</label><input type="date" id="modal-ts-csv-to" class="ts-export-dropdown-date" /><button type="button" id="modal-ts-csv-go" class="ts-export-go">Export</button>';
+  csvWrap.append(csvBtn, csvDrop);
+  // PDF wrapper
+  const pdfWrap = document.createElement('div');
+  pdfWrap.className = 'ts-export-wrap';
   const pdfBtn = document.createElement('button');
   pdfBtn.type = 'button'; pdfBtn.className = 'ts-export-btn'; pdfBtn.title = 'Export PDF';
   pdfBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M5 18h1.5a1.5 1.5 0 0 0 0 -3h-1.5v6"/><path d="M17 18h2"/><path d="M20 15h-3v6"/><path d="M11 15v6h1a2 2 0 0 0 2 -2v-2a2 2 0 0 0 -2 -2h-1"/></svg>';
-  exportBar.append(fromDate, sepEl, toDate, csvBtn, pdfBtn);
-  container.appendChild(exportBar);
+  const pdfDrop = document.createElement('div');
+  pdfDrop.className = 'ts-export-dropdown hidden';
+  pdfDrop.id = 'modal-ts-pdf-dropdown';
+  pdfDrop.innerHTML = '<label>From</label><input type="date" id="modal-ts-pdf-from" class="ts-export-dropdown-date" /><label>To</label><input type="date" id="modal-ts-pdf-to" class="ts-export-dropdown-date" /><button type="button" id="modal-ts-pdf-go" class="ts-export-go">Export</button>';
+  pdfWrap.append(pdfBtn, pdfDrop);
+  exportBtns.append(csvWrap, pdfWrap);
+  footerBar.append(totalEl, exportBtns);
+  container.appendChild(footerBar);
   // Fetch active entry
   api("/api/timesheet/active").then(data => {
     _tsActiveEntry = data.entry;
@@ -17165,9 +17193,8 @@ function renderPresenceTimesheetModal(container, snap) {
   nextBtn.addEventListener("click", () => { tsShiftRange(1); modalRefreshEntries(); updateModalRangeLabel(); });
   weekBtn.addEventListener("click", () => { tsSetRange("week"); modalRefreshEntries(); updateModalRangeLabel(); });
   monthBtn.addEventListener("click", () => { tsSetRange("month"); modalRefreshEntries(); updateModalRangeLabel(); });
-  csvBtn.addEventListener("click", tsExportCSV);
-  pdfBtn.addEventListener("click", tsExportPDF);
   bindTimesheetProjectSearch("modal-ts-project-search", "modal-ts-project-results");
+  tsWireModalExportDropdowns();
 }
 
 function updateModalRangeLabel() {
@@ -17294,7 +17321,7 @@ function modalRefreshEntries() {
     });
     const th = Math.floor(totalSeconds / 3600);
     const tm = Math.floor((totalSeconds % 3600) / 60);
-    if (totalEl) totalEl.textContent = `Total: ${th}h ${tm}m`;
+  if (totalEl) totalEl.textContent = entries.length ? `Total: ${th}h ${tm}m` : "";
   }).catch(() => {});
 }
 
@@ -17312,9 +17339,6 @@ function renderTimesheetTab() {
   const nextDay = $("#ts-next-day");
   const rangeWeek = $("#ts-range-week");
   const rangeMonth = $("#ts-range-month");
-  const exportCsv = $("#ts-export-csv");
-  const exportPdf = $("#ts-export-pdf");
-  
   bindTimesheetProjectSearch("ts-project-search", "ts-project-results");
   
   clockBtn?.addEventListener("click", tsToggleClock);
@@ -17323,11 +17347,10 @@ function renderTimesheetTab() {
   nextDay?.addEventListener("click", () => tsShiftRange(1));
   rangeWeek?.addEventListener("click", () => tsSetRange("week"));
   rangeMonth?.addEventListener("click", () => tsSetRange("month"));
-  exportCsv?.addEventListener("click", tsExportCSV);
-  exportPdf?.addEventListener("click", tsExportPDF);
   
   tsUpdateDateLabel();
   tsSyncDateInputs();
+  tsWireExportDropdowns();
 }
 
 function tsRenderAdminSummary(container) {
@@ -17711,27 +17734,109 @@ function tsUpdateDateLabel() {
   }
 }
 
-function tsExportCSV() {
-  const fromEl = document.getElementById("ts-export-from") || document.getElementById("modal-ts-export-from");
-  const toEl = document.getElementById("ts-export-to") || document.getElementById("modal-ts-export-to");
-  const from = fromEl?.value || _tsRange.from || "";
-  const to = toEl?.value || _tsRange.to || "";
-  window.open(`/api/timesheet/export?from=${from}&to=${to}`, "_blank");
+function tsWireExportDropdowns() {
+  const csvBtn = document.getElementById("ts-export-csv");
+  const csvDrop = document.getElementById("ts-csv-dropdown");
+  if (csvBtn && csvDrop) {
+    csvBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      document.getElementById("ts-pdf-dropdown")?.classList.add("hidden");
+      csvDrop.classList.toggle("hidden");
+      if (!csvDrop.classList.contains("hidden")) {
+        const fromEl = document.getElementById("ts-csv-from");
+        const toEl = document.getElementById("ts-csv-to");
+        if (fromEl && !fromEl.value) fromEl.value = _tsRange.from || "";
+        if (toEl && !toEl.value) toEl.value = _tsRange.to || "";
+      }
+    });
+  }
+  const pdfBtn = document.getElementById("ts-export-pdf");
+  const pdfDrop = document.getElementById("ts-pdf-dropdown");
+  if (pdfBtn && pdfDrop) {
+    pdfBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      document.getElementById("ts-csv-dropdown")?.classList.add("hidden");
+      pdfDrop.classList.toggle("hidden");
+      if (!pdfDrop.classList.contains("hidden")) {
+        const fromEl = document.getElementById("ts-pdf-from");
+        const toEl = document.getElementById("ts-pdf-to");
+        if (fromEl && !fromEl.value) fromEl.value = _tsRange.from || "";
+        if (toEl && !toEl.value) toEl.value = _tsRange.to || "";
+      }
+    });
+  }
+  document.getElementById("ts-csv-go")?.addEventListener("click", () => {
+    const from = document.getElementById("ts-csv-from")?.value || "";
+    const to = document.getElementById("ts-csv-to")?.value || "";
+    window.open(`/api/timesheet/export?from=${from}&to=${to}`, "_blank");
+    csvDrop?.classList.add("hidden");
+  });
+  document.getElementById("ts-pdf-go")?.addEventListener("click", () => {
+    const from = document.getElementById("ts-pdf-from")?.value || "";
+    const to = document.getElementById("ts-pdf-to")?.value || "";
+    window.open(`/api/timesheet/export-pdf?from=${from}&to=${to}`, "_blank");
+    pdfDrop?.classList.add("hidden");
+  });
+  document.addEventListener("click", () => {
+    csvDrop?.classList.add("hidden");
+    pdfDrop?.classList.add("hidden");
+  });
 }
 
-function tsExportPDF() {
-  const fromEl = document.getElementById("ts-export-from") || document.getElementById("modal-ts-export-from");
-  const toEl = document.getElementById("ts-export-to") || document.getElementById("modal-ts-export-to");
-  const from = fromEl?.value || _tsRange.from || "";
-  const to = toEl?.value || _tsRange.to || "";
-  window.open(`/api/timesheet/export-pdf?from=${from}&to=${to}`, "_blank");
+function tsWireModalExportDropdowns() {
+  const csvBtn = document.getElementById("modal-ts-csv-dropdown")?.previousElementSibling;
+  const csvDrop = document.getElementById("modal-ts-csv-dropdown");
+  if (csvBtn && csvDrop) {
+    csvBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      document.getElementById("modal-ts-pdf-dropdown")?.classList.add("hidden");
+      csvDrop.classList.toggle("hidden");
+      if (!csvDrop.classList.contains("hidden")) {
+        const fromEl = document.getElementById("modal-ts-csv-from");
+        const toEl = document.getElementById("modal-ts-csv-to");
+        if (fromEl && !fromEl.value) fromEl.value = _tsRange.from || "";
+        if (toEl && !toEl.value) toEl.value = _tsRange.to || "";
+      }
+    });
+  }
+  const pdfBtn = document.getElementById("modal-ts-pdf-dropdown")?.previousElementSibling;
+  const pdfDrop = document.getElementById("modal-ts-pdf-dropdown");
+  if (pdfBtn && pdfDrop) {
+    pdfBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      document.getElementById("modal-ts-csv-dropdown")?.classList.add("hidden");
+      pdfDrop.classList.toggle("hidden");
+      if (!pdfDrop.classList.contains("hidden")) {
+        const fromEl = document.getElementById("modal-ts-pdf-from");
+        const toEl = document.getElementById("modal-ts-pdf-to");
+        if (fromEl && !fromEl.value) fromEl.value = _tsRange.from || "";
+        if (toEl && !toEl.value) toEl.value = _tsRange.to || "";
+      }
+    });
+  }
+  document.getElementById("modal-ts-csv-go")?.addEventListener("click", () => {
+    const from = document.getElementById("modal-ts-csv-from")?.value || "";
+    const to = document.getElementById("modal-ts-csv-to")?.value || "";
+    window.open(`/api/timesheet/export?from=${from}&to=${to}`, "_blank");
+    csvDrop?.classList.add("hidden");
+  });
+  document.getElementById("modal-ts-pdf-go")?.addEventListener("click", () => {
+    const from = document.getElementById("modal-ts-pdf-from")?.value || "";
+    const to = document.getElementById("modal-ts-pdf-to")?.value || "";
+    window.open(`/api/timesheet/export-pdf?from=${from}&to=${to}`, "_blank");
+    pdfDrop?.classList.add("hidden");
+  });
 }
 
 function tsSyncDateInputs() {
-  const fromEl = document.getElementById("ts-export-from") || document.getElementById("modal-ts-export-from");
-  const toEl = document.getElementById("ts-export-to") || document.getElementById("modal-ts-export-to");
-  if (fromEl) fromEl.value = _tsRange.from || "";
-  if (toEl) toEl.value = _tsRange.to || "";
+  const ids = ["ts-csv-from", "ts-csv-to", "ts-pdf-from", "ts-pdf-to",
+    "modal-ts-csv-from", "modal-ts-csv-to", "modal-ts-pdf-from", "modal-ts-pdf-to"];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.value = (id.includes("from") ? _tsRange.from : _tsRange.to) || "";
+    }
+  });
 }
 
 /* ==================== DM Popup Modal ==================== */

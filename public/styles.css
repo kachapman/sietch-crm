@@ -5601,21 +5601,27 @@ body {
   background: var(--hover-bg, rgba(255,255,255,0.06));
   color: var(--text);
 }
-/* Daily total */
-.ts-daily-total {
-  padding: 0.5rem;
+/* Footer bar (total + export) */
+.ts-footer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.5rem;
   border-top: 1px solid var(--border);
+  min-height: 32px;
+}
+.ts-daily-total {
   font-size: 0.82rem;
   font-weight: 600;
-  text-align: right;
   color: var(--text);
+  white-space: nowrap;
 }
-/* Export buttons */
-.ts-export-bar {
+.ts-export-btns {
   display: flex;
   gap: 0.35rem;
-  padding: 0.35rem 0.5rem;
-  border-top: 1px solid var(--border);
+}
+.ts-export-wrap {
+  position: relative;
 }
 .ts-export-btn {
   display: inline-flex;
@@ -5639,7 +5645,31 @@ body {
 .ts-export-btn:hover {
   background: var(--hover-bg, rgba(255,255,255,0.06));
 }
-.ts-export-date {
+.ts-export-dropdown {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+  padding: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+  z-index: 50;
+  min-width: 200px;
+}
+.ts-export-dropdown.hidden {
+  display: none;
+}
+.ts-export-dropdown label {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.ts-export-dropdown-date {
   padding: 0.2rem 0.35rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -5647,16 +5677,26 @@ body {
   color: var(--text);
   font-size: 0.72rem;
   font-family: var(--font);
-  max-width: 120px;
+  max-width: 130px;
 }
-.ts-export-date:focus {
+.ts-export-dropdown-date:focus {
   outline: none;
   border-color: var(--accent);
 }
-.ts-export-sep {
-  font-size: 0.72rem;
-  color: var(--muted);
-  align-self: center;
+.ts-export-go {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.75rem;
+  font-family: var(--font);
+  cursor: pointer;
+  margin-left: 0.25rem;
+  transition: opacity 0.15s;
+}
+.ts-export-go:hover {
+  opacity: 0.85;
 }
 /* Admin summary table */
 .ts-admin-table {
