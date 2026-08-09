@@ -1832,9 +1832,11 @@ body {
 
 /* Team tile body fills available height with scroll constraint */
 .dashboard-tile.presence-panel .presence-tile-body {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .dashboard-tile.feed-panel .panel-header,
@@ -1871,6 +1873,20 @@ body {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+}
+
+/* Presence panel: constrain height so entries list scrolls instead of expanding tile */
+.dashboard-tile.presence-panel > .tile-body-content {
+  max-height: var(--tile-row-height);
+}
+.dashboard-tile.presence-panel.tile-double > .tile-body-content {
+  max-height: calc(var(--tile-row-height) * 2 + 1.25rem);
+}
+.dashboard-tile.presence-panel.tile-triple > .tile-body-content {
+  max-height: calc(var(--tile-row-height) * 3 + 2.5rem);
+}
+.dashboard-tile.presence-panel.tile-quad > .tile-body-content {
+  max-height: calc(var(--tile-row-height) * 4 + 3.75rem);
 }
 
 .dashboard-tile.feed-panel .feed-list {
@@ -5439,25 +5455,26 @@ body {
 /* Timesheet tab */
 .ts-clock-widget {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 .ts-timer-display {
-  font-size: 1.5rem;
+  font-size: 1.3rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--text);
   letter-spacing: 0.05em;
 }
 .ts-clock-btn {
-  padding: 0.5rem 1.5rem;
+  padding: 0.4rem 1rem;
   border: none;
   border-radius: var(--radius);
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s, transform 0.1s;
