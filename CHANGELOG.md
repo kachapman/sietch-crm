@@ -2,6 +2,53 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Team Modal Improvements + Feature Parity (2026-08-08)
+
+### Modal Responsive Layout
+- **Fullscreen on mobile (600px).** Modal goes full `100dvh` with `border-radius: 0`, matching the email modal pattern.
+- **Tablet breakpoint (768px).** Modal width `95vw`, `min-width: 0` for narrow screens.
+- **Reduced padding.** Modal card padding reduced from `1.25rem 1.5rem` to `0.75rem 1rem`.
+
+### Modal Header Restructure
+- **Close button moved to title bar.** Top-right `×` icon button (same pattern as all other modals: `btn btn-icon-only modal-header-control`).
+- **Minimize button added.** `ti-window-minimize` icon to left of close button. Minimizes to right sidebar trigger.
+- **Footer close button removed.** Only the title bar close remains.
+
+### Minimize to Sidebar
+- **`minimizePresenceModal()`** saves: current tab, selected user, DM draft text, scroll position. Persists to localStorage + server via `PUT /api/v2/minimized-state`.
+- **`restorePresenceModal()`** restores all saved state: reopens modal at correct tab, restores DM thread, restores draft text, restores scroll.
+- **`initPresenceTrigger()`** reads localStorage on page load, shows sidebar trigger button if state exists.
+- **Backdrop click minimizes** (like email modal) instead of closing.
+- **Sidebar trigger button** with `icon-tabler-users-group` SVG icon in `.right-sidebar-triggers`.
+
+### Feature Parity: Tile vs Modal
+- **Collapsible offline list.** Modal now has `▸ Offline (N)` toggle with domino expand animation (matching tile).
+- **Avatar initials.** Modal user rows now show 24px circular avatar with initial + presence dot overlay (matching tile).
+- **Unread DM badges.** Modal team tab rows show blue breathing dot for users with unread messages.
+- **Filter input on Messages tab.** Modal inbox gets "Filter messages..." input.
+- **Messages tab badge.** Modal Messages tab button now shows unread count badge.
+- **Online user count.** Modal title shows "(N online)" count.
+- **Heartbeat in admin.** Modal admin section now shows all 3 metrics (heartbeat, CRM, dashboard).
+
+### Basic Markdown in DMs
+- **`renderMarkdownLite()`** function: escapes HTML first (XSS prevention), then converts `*bold*` → `<strong>`, `_italic_` → `<em>`, `~strikethrough~` → `<del>`.
+- Applied in `renderDMLog()` for both tile inline DM and modal DM thread.
+
+### DM Draft Persistence
+- **`state.presenceDmDraft`** stores `{ userId, text }` across tab switches within the modal.
+- Draft saved when switching from Messages to Team tab, restored when switching back.
+- Draft included in minimize state for cross-session persistence.
+
+### Export Improvements
+- **Icon-only export buttons.** CSV uses `icon-tabler-file-type-csv` SVG, PDF uses `icon-tabler-file-type-pdf` SVG.
+- **Date range inputs.** Two `<input type="date">` fields in export bar. Week/Month/prev/next buttons populate the inputs. Export reads from inputs.
+- **Tile popup button icon** changed to `icon-tabler-users-group` (users group icon).
+
+### Files Changed
+- `public/index.html` — Modal header restructure, sidebar trigger, export bar, Messages tab badge, backdrop handler
+- `public/app.js` — Minimize/restore functions, trigger init, markdown renderer, feature gap fixes, DM draft persistence, export date sync, popup icon
+- `public/styles.css` — Responsive rules, reduced padding, sidebar trigger, export date styles
+
 ## Team Tile Revamp + Timesheet System (2026-08-08)
 
 ### Heartbeat System Fix (Critical Bug)

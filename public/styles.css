@@ -2944,6 +2944,28 @@ body {
   min-height: 504px;
   max-width: 90vw;
   max-height: 85vh;
+  padding: 0.75rem 1rem;
+}
+
+/* Team modal responsive */
+@media (max-width: 768px) {
+  #presence-modal .modal-card {
+    width: 95vw;
+    min-width: 0;
+  }
+}
+@media (max-width: 600px) {
+  #presence-modal { padding: 0; }
+  #presence-modal .modal-card {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    resize: none;
+    min-width: 0;
+    padding: 0.5rem 0.75rem;
+  }
 }
 
 .modal-title {
@@ -5550,8 +5572,12 @@ body {
   border-top: 1px solid var(--border);
 }
 .ts-export-btn {
-  padding: 0.3rem 0.6rem;
-  font-size: 0.72rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0.15rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface-2);
@@ -5560,8 +5586,31 @@ body {
   font-family: var(--font);
   transition: background 0.15s;
 }
+.ts-export-btn svg {
+  width: 16px;
+  height: 16px;
+}
 .ts-export-btn:hover {
   background: var(--hover-bg, rgba(255,255,255,0.06));
+}
+.ts-export-date {
+  padding: 0.2rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.72rem;
+  font-family: var(--font);
+  max-width: 120px;
+}
+.ts-export-date:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.ts-export-sep {
+  font-size: 0.72rem;
+  color: var(--muted);
+  align-self: center;
 }
 /* Admin summary table */
 .ts-admin-table {
@@ -10375,6 +10424,7 @@ body {
 
 #email-trigger { order: 4; }
 #documents-trigger { order: 5; }
+#presence-trigger { order: 3; }
 
 /* ── Modal header controls: minimize + close buttons ── */
 .modal-header-control {

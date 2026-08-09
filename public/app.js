@@ -14832,6 +14832,10 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
     row.className = "presence-user";
     row.dataset.userId = id;
 
+    const avatar = document.createElement("span");
+    avatar.className = "presence-user-avatar";
+    const initial = (u.displayName || u.email || "?")[0]?.toUpperCase() || "?";
+    avatar.textContent = initial;
     const dot = document.createElement("span");
     const isOnline = !!p.online;
     const isIdle = !!p.idle;
@@ -14840,9 +14844,10 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
     if (isOnline) dotClass = isIdle ? "idle" : "online";
     else if (isAfd) dotClass = "afd";
     dot.className = "presence-dot " + dotClass;
+    avatar.appendChild(dot);
 
     const nm = document.createElement("span");
-    nm.className = "presence-name";
+    nm.className = "presence-user-name";
     nm.textContent = name;
 
     // Detect server version: new server sends inferred/autoStatus fields
@@ -14878,7 +14883,14 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
     }
     st.textContent = statusText;
 
-    row.append(dot, nm, manualStatus, st);
+    // Unread DM badge
+    const unreadDot = document.createElement("span");
+    unreadDot.className = "presence-unread-dot";
+    const recentDms = data?.myRecentDms || [];
+    const hasUnread = recentDms.some(d => String(d.from) === String(u.id) && !d.read);
+    unreadDot.style.display = hasUnread ? "" : "none";
+
+    row.append(avatar, nm, manualStatus, st, unreadDot);
 
     if (typeof onUserClick === "function") {
       row.addEventListener("click", () => onUserClick(id, name, p));
@@ -14916,18 +14928,48 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
     afdRows.forEach(r => container.appendChild(r));
   }
 
-  // Offline (signed out or no active dashboard heartbeat record)
+  // Collapsible offline section
   if (offlineRows.length) {
     if (onlineRows.length || afdRows.length) {
       const sep = document.createElement("div");
       sep.className = "presence-divider";
       container.appendChild(sep);
     }
-    const header = document.createElement("div");
-    header.className = "presence-section-header";
-    header.textContent = `Offline (${offlineRows.length})`;
-    container.appendChild(header);
-    offlineRows.forEach(r => container.appendChild(r));
+    const offlineSection = document.createElement("div");
+    offlineSection.className = "presence-offline-section";
+    const toggle = document.createElement("div");
+    toggle.className = "presence-offline-toggle";
+    toggle.innerHTML = `<span class="presence-offline-arrow">▸</span> Offline (${offlineRows.length})`;
+    const collapsibleRows = [];
+    offlineRows.forEach(u => {
+      const row = document.createElement("div");
+      row.className = "presence-user";
+      row.dataset.userId = u.dataset.userId;
+      // Clone the row content from the original
+      row.innerHTML = u.innerHTML;
+      // Re-wire click handler
+      row.addEventListener("click", () => {
+        const uid = row.dataset.userId;
+        const uname = row.querySelector(".presence-user-name")?.textContent || uid;
+        if (typeof onUserClick === "function") onUserClick(uid, uname, {});
+      });
+      row.style.display = "none";
+      collapsibleRows.push(row);
+      offlineSection.appendChild(row);
+    });
+    let expanded = false;
+    toggle.addEventListener("click", () => {
+      expanded = !expanded;
+      toggle.classList.toggle("expanded", expanded);
+      toggle.querySelector(".presence-offline-arrow").textContent = expanded ? "▾" : "▸";
+      if (expanded) {
+        offlineSection.classList.add("section-just-expanded");
+        setTimeout(() => offlineSection.classList.remove("section-just-expanded"), 700);
+      }
+      collapsibleRows.forEach(r => r.style.display = expanded ? "" : "none");
+    });
+    container.appendChild(toggle);
+    container.appendChild(offlineSection);
   }
 
   if (!baseUsers.length) {
@@ -14948,6 +14990,15 @@ function renderPresenceInbox(container, recentDms, cache, snap) {
   if (!container) return;
   container.innerHTML = '';
 
+  const filterInput = document.createElement('input');
+  filterInput.type = 'text';
+  filterInput.className = 'presence-filter-input';
+  filterInput.placeholder = 'Filter messages...';
+  container.appendChild(filterInput);
+
+  const rowsContainer = document.createElement('div');
+  container.appendChild(rowsContainer);
+
   const recent = Array.isArray(recentDms) ? recentDms : [];
   if (!recent.length) {
     const empty = document.createElement('div');
@@ -14955,14 +15006,14 @@ function renderPresenceInbox(container, recentDms, cache, snap) {
     empty.style.padding = '0.5rem';
     empty.style.color = 'var(--muted)';
     empty.textContent = 'No messages yet. Send or receive DMs and they will appear here (with delete option).';
-    container.appendChild(empty);
+    rowsContainer.appendChild(empty);
     return;
   }
 
   const head = document.createElement('div');
   head.className = 'presence-section-header';
   head.textContent = 'Recent messages';
-  container.appendChild(head);
+  rowsContainer.appendChild(head);
 
   // Group latest per other party
   const byOther = new Map();
@@ -15026,7 +15077,16 @@ function renderPresenceInbox(container, recentDms, cache, snap) {
       openPresenceDMThread(otherId, disp);
     });
 
-    container.appendChild(row);
+    rowsContainer.appendChild(row);
+  });
+
+  // Wire filter
+  filterInput.addEventListener('input', () => {
+    const q = filterInput.value.toLowerCase();
+    rowsContainer.querySelectorAll('.presence-recent-row').forEach(r => {
+      const name = r.querySelector('.presence-recent-who')?.textContent || '';
+      r.style.display = name.toLowerCase().includes(q) ? '' : 'none';
+    });
   });
 }
 
@@ -15095,7 +15155,7 @@ function createMessageElement(m, replyHandler) {
   // Main message text
   const textEl = document.createElement("div");
   textEl.className = "presence-msg-text";
-  textEl.textContent = m.text || "";
+  textEl.innerHTML = renderMarkdownLite(m.text || "");
   div.appendChild(textEl);
 
   // Discreet timestamp
@@ -15124,6 +15184,18 @@ function createMessageElement(m, replyHandler) {
   div.addEventListener("click", () => { replyHandler(m); });
 
   return div;
+}
+
+function renderMarkdownLite(text) {
+  if (!text) return "";
+  let s = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  s = s.replace(/\*([^*]+)\*/g, "<strong>$1</strong>");
+  s = s.replace(/_([^_]+)_/g, "<em>$1</em>");
+  s = s.replace(/~([^~]+)~/g, "<del>$1</del>");
+  return s;
 }
 
 function renderDMLog(logEl, msgs, onReplyClick, options) {
@@ -15577,9 +15649,12 @@ async function openPresenceModal() {
 
   if (!presenceModalBound) {
     presenceModalBound = true;
-    modal.querySelectorAll("[data-presence-dismiss]").forEach(el => {
-      el.addEventListener("click", closePresenceModal);
-    });
+    // Minimize button
+    $("#presence-modal-minimize")?.addEventListener("click", minimizePresenceModal);
+    // Close button (new in title bar)
+    $("#presence-modal-close")?.addEventListener("click", closePresenceModal);
+    // Backdrop click → minimize (not close)
+    $("#presence-modal-backdrop")?.addEventListener("click", minimizePresenceModal);
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && !modal.classList.contains("hidden")) closePresenceModal();
     });
@@ -15782,6 +15857,11 @@ function openPresenceDMThread(id, name) {
         onLoadMore: hasMore ? () => loadMoreDMs(id, log, setPresenceReplyTo) : null,
       });
       enhanceDMInputForCurrentThread();
+      // Restore draft if matches
+      if (state.presenceDmDraft?.userId === id) {
+        const ta = $("#presence-dm-text");
+        if (ta && state.presenceDmDraft.text) ta.value = state.presenceDmDraft.text;
+      }
     })
     .catch((err) => {
       const msg = (err && err.message) ? err.message : 'server error';
@@ -15799,6 +15879,11 @@ function renderPresenceModal(snapshot = null, usersCache = null) {
 
   const snap = snapshot || state.presenceData || { users: [] };
   const cache = usersCache || (state.presenceUsersCache ? state.presenceUsersCache.users : []);
+
+  // Update modal title with online count
+  const onlineCount = (snap?.users || []).filter(u => u.online || u.idle).length;
+  const titleEl = $("#presence-modal-title");
+  if (titleEl) titleEl.textContent = `Team (${onlineCount} online)`;
 
   if (!state.presenceTab) state.presenceTab = 'team';
 
@@ -15833,6 +15918,11 @@ function renderPresenceModal(snapshot = null, usersCache = null) {
       if (!btn.dataset.tabBound) {
         btn.dataset.tabBound = '1';
         btn.addEventListener('click', () => {
+          // Save DM draft before switching tabs
+          const currentDmText = $("#presence-dm-text")?.value || "";
+          if (currentDmText && state.presenceSelectedUserId) {
+            state.presenceDmDraft = { userId: state.presenceSelectedUserId, text: currentDmText };
+          }
           state.presenceTab = t;
           state.presenceSelectedUserId = null;
           clearPresenceReplyTo();
@@ -15893,6 +15983,14 @@ function renderPresenceModal(snapshot = null, usersCache = null) {
       // Open DM thread for this user (uses shared helper which wires Clear too)
       openPresenceDMThread(id, name);
     });
+  }
+
+  // Update Messages tab badge
+  const badge = $("#presence-modal-msg-badge");
+  if (badge) {
+    const unreadCount = (snap?.myRecentDms || []).filter(d => !d.read).length;
+    badge.textContent = unreadCount;
+    badge.classList.toggle("hidden", unreadCount === 0);
   }
 
   // Admin area: hidden by default, toggleable via button that says "Admin" when hidden.
@@ -16123,8 +16221,11 @@ function renderPresenceTile() {
         <div id="ts-entries-list" class="ts-entries-list"></div>
         <div id="ts-daily-total" class="ts-daily-total"></div>
         <div class="ts-export-bar">
-          <button type="button" id="ts-export-csv" class="ts-export-btn">Export CSV</button>
-          <button type="button" id="ts-export-pdf" class="ts-export-btn">Export PDF</button>
+          <input type="date" id="ts-export-from" class="ts-export-date" />
+          <span class="ts-export-sep">to</span>
+          <input type="date" id="ts-export-to" class="ts-export-date" />
+          <button type="button" id="ts-export-csv" class="ts-export-btn" title="Export CSV"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M7 16.5a1.5 1.5 0 0 0 -3 0v3a1.5 1.5 0 0 0 3 0"/><path d="M10 20.25c0 .414 .336 .75 .75 .75h1.25a1 1 0 0 0 1 -1v-1a1 1 0 0 0 -1 -1h-1a1 1 0 0 1 -1 -1v-1a1 1 0 0 1 1 -1h1.25a.75 .75 0 0 1 .75 .75"/><path d="M16 15l2 6l2 -6"/></svg></button>
+          <button type="button" id="ts-export-pdf" class="ts-export-btn" title="Export PDF"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M5 18h1.5a1.5 1.5 0 0 0 0 -3h-1.5v6"/><path d="M17 18h2"/><path d="M20 15h-3v6"/><path d="M11 15v6h1a2 2 0 0 0 2 -2v-2a2 2 0 0 0 -2 -2h-1"/></svg></button>
         </div>
         <div id="ts-admin-section" class="hidden" style="padding:0.5rem;">
           <div id="ts-admin-summary"></div>
@@ -16226,7 +16327,7 @@ function renderPresenceTile() {
         popupBtn.id = "presence-tile-popup-btn";
         popupBtn.className = "presence-popup-btn";
         popupBtn.title = "Open team viewer in popup";
-        popupBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M11 5h-6a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-6"/><path d="M3 13h6a2 2 0 0 1 2 2v6"/><path d="M16 3h5v5"/><path d="M21 3l-6 6"/></svg>`;
+        popupBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M10 13a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M8 21v-1a2 2 0 0 1 2 -2h4a2 2 0 0 1 2 2v1"/><path d="M15 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M17 10h2a2 2 0 0 1 2 2v1"/><path d="M5 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M3 13v-1a2 2 0 0 1 2 -2h2"/></svg>`;
         actions.insertBefore(popupBtn, actions.firstChild);
         actions.insertBefore(unreadFlash, popupBtn);
       }
@@ -16908,17 +17009,26 @@ function renderPresenceTimesheetModal(container, snap) {
   // Export bar
   const exportBar = document.createElement('div');
   exportBar.className = 'ts-export-bar';
+  const fromDate = document.createElement('input');
+  fromDate.type = 'date'; fromDate.className = 'ts-export-date'; fromDate.id = 'modal-ts-export-from';
+  const sepEl = document.createElement('span');
+  sepEl.className = 'ts-export-sep'; sepEl.textContent = 'to';
+  const toDate = document.createElement('input');
+  toDate.type = 'date'; toDate.className = 'ts-export-date'; toDate.id = 'modal-ts-export-to';
   const csvBtn = document.createElement('button');
-  csvBtn.type = 'button'; csvBtn.className = 'ts-export-btn'; csvBtn.textContent = 'Export CSV';
+  csvBtn.type = 'button'; csvBtn.className = 'ts-export-btn'; csvBtn.title = 'Export CSV';
+  csvBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M7 16.5a1.5 1.5 0 0 0 -3 0v3a1.5 1.5 0 0 0 3 0"/><path d="M10 20.25c0 .414 .336 .75 .75 .75h1.25a1 1 0 0 0 1 -1v-1a1 1 0 0 0 -1 -1h-1a1 1 0 0 1 -1 -1v-1a1 1 0 0 1 1 -1h1.25a.75 .75 0 0 1 .75 .75"/><path d="M16 15l2 6l2 -6"/></svg>';
   const pdfBtn = document.createElement('button');
-  pdfBtn.type = 'button'; pdfBtn.className = 'ts-export-btn'; pdfBtn.textContent = 'Export PDF';
-  exportBar.append(csvBtn, pdfBtn);
+  pdfBtn.type = 'button'; pdfBtn.className = 'ts-export-btn'; pdfBtn.title = 'Export PDF';
+  pdfBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M5 18h1.5a1.5 1.5 0 0 0 0 -3h-1.5v6"/><path d="M17 18h2"/><path d="M20 15h-3v6"/><path d="M11 15v6h1a2 2 0 0 0 2 -2v-2a2 2 0 0 0 -2 -2h-1"/></svg>';
+  exportBar.append(fromDate, sepEl, toDate, csvBtn, pdfBtn);
   container.appendChild(exportBar);
   // Fetch active entry
   api("/api/timesheet/active").then(data => {
     _tsActiveEntry = data.entry;
     updateModalClockUI();
     modalRefreshEntries();
+    tsSyncDateInputs();
   }).catch(() => {});
   // Bind controls
   clockBtn.addEventListener("click", modalToggleClock);
@@ -17072,6 +17182,7 @@ function renderTimesheetTab() {
   exportPdf?.addEventListener("click", tsExportPDF);
   
   tsUpdateDateLabel();
+  tsSyncDateInputs();
   if (state.presenceData?.isAdmin) {
     $("#ts-admin-section")?.classList.remove("hidden");
   }
@@ -17262,6 +17373,7 @@ function tsShiftRange(dir) {
   }
   tsUpdateDateLabel();
   tsRefreshEntries();
+  tsSyncDateInputs();
 }
 
 function tsSetRange(mode) {
@@ -17281,6 +17393,7 @@ function tsSetRange(mode) {
   _tsRange.mode = mode;
   tsUpdateDateLabel();
   tsRefreshEntries();
+  tsSyncDateInputs();
 }
 
 function tsUpdateDateLabel() {
@@ -17296,15 +17409,26 @@ function tsUpdateDateLabel() {
 }
 
 function tsExportCSV() {
-  const from = _tsRange.from || "";
-  const to = _tsRange.to || "";
+  const fromEl = document.getElementById("ts-export-from") || document.getElementById("modal-ts-export-from");
+  const toEl = document.getElementById("ts-export-to") || document.getElementById("modal-ts-export-to");
+  const from = fromEl?.value || _tsRange.from || "";
+  const to = toEl?.value || _tsRange.to || "";
   window.open(`/api/timesheet/export?from=${from}&to=${to}`, "_blank");
 }
 
 function tsExportPDF() {
-  const from = _tsRange.from || "";
-  const to = _tsRange.to || "";
+  const fromEl = document.getElementById("ts-export-from") || document.getElementById("modal-ts-export-from");
+  const toEl = document.getElementById("ts-export-to") || document.getElementById("modal-ts-export-to");
+  const from = fromEl?.value || _tsRange.from || "";
+  const to = toEl?.value || _tsRange.to || "";
   window.open(`/api/timesheet/export-pdf?from=${from}&to=${to}`, "_blank");
+}
+
+function tsSyncDateInputs() {
+  const fromEl = document.getElementById("ts-export-from") || document.getElementById("modal-ts-export-from");
+  const toEl = document.getElementById("ts-export-to") || document.getElementById("modal-ts-export-to");
+  if (fromEl) fromEl.value = _tsRange.from || "";
+  if (toEl) toEl.value = _tsRange.to || "";
 }
 
 /* ==================== DM Popup Modal ==================== */
@@ -24457,6 +24581,89 @@ function restoreEmailModal() {
         api('/api/v2/minimized-state', { method: 'PUT', body: JSON.stringify({}) }).catch(() => {});
       }
     }).catch(() => {});
+  }
+}
+
+// ── Presence modal minimize/restore ─────────────────────────────────────────
+const PRESENCE_MINIMIZED_STORAGE_KEY = "oo_presence_minimized_v1";
+let minimizedPresenceState = null;
+
+function minimizePresenceModal() {
+  const modal = $("#presence-modal");
+  if (!modal) return;
+  const activeTab = state.presenceTab || "team";
+  const selectedUser = state.presenceSelectedUserId || null;
+  const dmText = $("#presence-dm-text")?.value || "";
+  const scrollEl = $("#presence-list");
+  minimizedPresenceState = {
+    tab: activeTab,
+    selectedUser,
+    dmText,
+    scroll: scrollEl ? scrollEl.scrollTop : 0,
+  };
+  try { localStorage.setItem(PRESENCE_MINIMIZED_STORAGE_KEY, JSON.stringify(minimizedPresenceState)); } catch {}
+  api("/api/v2/minimized-state", {
+    method: "PUT",
+    body: JSON.stringify({ presence: minimizedPresenceState }),
+  }).catch(() => {});
+  modal.classList.add("hidden");
+  state.presenceModalOpen = false;
+  stopPresencePolling();
+  const trigger = $("#presence-trigger");
+  if (trigger) {
+    const sidebar = $("#bookmark-sidebar");
+    if (sidebar && !sidebar.classList.contains("sidebar-hidden")) {
+      trigger.classList.add("trigger-hidden");
+    } else {
+      trigger.classList.remove("trigger-hidden");
+    }
+  }
+}
+
+function restorePresenceModal() {
+  let saved = minimizedPresenceState;
+  minimizedPresenceState = null;
+  try { localStorage.removeItem(PRESENCE_MINIMIZED_STORAGE_KEY); } catch {}
+  const doRestore = (s) => {
+    const trigger = $("#presence-trigger");
+    if (trigger) trigger.classList.add("trigger-hidden");
+    if (s?.tab) state.presenceTab = s.tab;
+    if (s?.selectedUser) state.presenceSelectedUserId = s.selectedUser;
+    openPresenceModal().then(() => {
+      if (s?.dmText) {
+        const ta = $("#presence-dm-text");
+        if (ta) ta.value = s.dmText;
+      }
+      const scrollEl = $("#presence-list");
+      if (scrollEl && s?.scroll) scrollEl.scrollTop = s.scroll;
+    }).catch(() => {});
+  };
+  if (saved) {
+    doRestore(saved);
+  } else {
+    api("/api/v2/minimized-state").then(serverState => {
+      if (serverState?.presence) {
+        minimizedPresenceState = serverState.presence;
+        doRestore(serverState.presence);
+        api("/api/v2/minimized-state", { method: "PUT", body: JSON.stringify({}) }).catch(() => {});
+      }
+    }).catch(() => {});
+  }
+}
+
+function initPresenceTrigger() {
+  const trigger = $("#presence-trigger");
+  if (!trigger || trigger.dataset.bound) return;
+  trigger.dataset.bound = "1";
+  trigger.addEventListener("click", () => {
+    trigger.classList.add("trigger-hidden");
+    restorePresenceModal();
+  });
+  const sidebar = $("#bookmark-sidebar");
+  const stored = tryParseJSON(localStorage.getItem(PRESENCE_MINIMIZED_STORAGE_KEY));
+  if (stored && (!sidebar || sidebar.classList.contains("sidebar-hidden"))) {
+    minimizedPresenceState = stored;
+    trigger.classList.remove("trigger-hidden");
   }
 }
 
@@ -33146,6 +33353,7 @@ async function init() {
   bindBrandingModal();
   initSearchTrigger();
   initEmailTrigger();
+  initPresenceTrigger();
   initDocumentsTrigger();
   initNoteEditorPasteHandlers();
 

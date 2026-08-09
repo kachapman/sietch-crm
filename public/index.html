@@ -237,6 +237,18 @@
         <i class="ti ti-files"></i>
       </button>
 
+      <button type="button" id="presence-trigger" class="modal-sidebar-trigger trigger-hidden" title="Team" aria-label="Team">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+          <path d="M10 13a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/>
+          <path d="M8 21v-1a2 2 0 0 1 2 -2h4a2 2 0 0 1 2 2v1"/>
+          <path d="M15 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/>
+          <path d="M17 10h2a2 2 0 0 1 2 2v1"/>
+          <path d="M5 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/>
+          <path d="M3 13v-1a2 2 0 0 1 2 -2h2"/>
+        </svg>
+      </button>
+
       <button type="button" id="bookmark-trigger" class="bookmark-trigger" title="Open bookmarks" aria-label="Open bookmarks">
         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
         <span class="bookmark-trigger-text">Bookmarks</span>
@@ -401,9 +413,19 @@
        top-right "Pin as top tile" (or "Move back to header" when the tile exists).
        Admin details (for kenc only) are behind a tab, never on the main team list. -->
   <div id="presence-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="presence-modal-title">
-    <div class="modal-backdrop" data-presence-dismiss></div>
+    <div class="modal-backdrop" id="presence-modal-backdrop"></div>
     <div class="modal-card">
-      <h2 id="presence-modal-title" class="modal-title">Team</h2>
+      <div class="modal-header" style="display:flex; align-items:center; justify-content:space-between; padding-bottom:0.5rem; border-bottom:1px solid var(--border);">
+        <h2 id="presence-modal-title" class="modal-title" style="margin:0;">Team</h2>
+        <div style="display:flex; gap:4px; flex-shrink:0;">
+          <button type="button" id="presence-modal-minimize" class="btn btn-icon-only modal-header-control modal-minimize-btn" title="Minimize to sidebar">
+            <i class="ti ti-window-minimize"></i>
+          </button>
+          <button type="button" id="presence-modal-close" class="btn btn-icon-only modal-header-control" title="Close">
+            <i class="ti ti-x"></i>
+          </button>
+        </div>
+      </div>
       <div class="presence-header">
         <div id="presence-my-status" class="presence-my-status">
           <!-- Your status controls populated by JS: pulldown for templates + custom textarea -->
@@ -413,7 +435,7 @@
       <!-- Tabs for Team roster, Messages inbox, and Timesheet -->
       <div id="presence-tabs" class="presence-tabs">
         <button type="button" class="presence-tab active" data-tab="team">Team</button>
-        <button type="button" class="presence-tab" data-tab="messages">Messages</button>
+        <button type="button" class="presence-tab" data-tab="messages">Messages<span id="presence-modal-msg-badge" class="msg-badge hidden">0</span></button>
         <button type="button" class="presence-tab" data-tab="timesheet">Timesheet</button>
       </div>
 
@@ -441,7 +463,6 @@
 
       <div class="modal-actions">
         <button type="button" id="presence-admin-toggle" class="btn btn-secondary hidden">Admin</button>
-        <button type="button" class="btn btn-secondary" data-presence-dismiss>Close</button>
       </div>
     </div>
   </div>
