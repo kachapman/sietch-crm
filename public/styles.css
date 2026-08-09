@@ -1836,7 +1836,12 @@ body {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+}
+.presence-list-compact {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .dashboard-tile.feed-panel .panel-header,
@@ -2955,12 +2960,19 @@ body {
 #presence-modal .modal-card {
   width: min(624px, 96vw);
   resize: both;
-  overflow: auto;
+  overflow: hidden;
   min-width: 408px;
-  min-height: 504px;
   max-width: 90vw;
   max-height: 85vh;
   padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+}
+#presence-modal .modal-header,
+#presence-modal .presence-header,
+#presence-modal .presence-tabs,
+#presence-modal .modal-actions {
+  flex-shrink: 0;
 }
 
 /* Team modal responsive */
@@ -2981,6 +2993,7 @@ body {
     resize: none;
     min-width: 0;
     padding: 0.5rem 0.75rem;
+    overflow: hidden;
   }
 }
 
@@ -3595,9 +3608,9 @@ body {
 }
 
 .presence-list {
-  max-height: 480px;
-  min-height: 320px;
-  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
@@ -3670,13 +3683,14 @@ body {
 }
 
 .presence-dm {
+  flex: 1;
+  min-height: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
   margin-bottom: 0.5rem;
   display: flex;
   flex-direction: column;
-  max-height: 480px;
 }
 
 .presence-dm-header {
@@ -5462,6 +5476,7 @@ body {
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 .ts-timer-display {
   font-size: 1.3rem;
@@ -5574,7 +5589,13 @@ body {
   border-radius: 3px;
   display: inline-flex;
   align-items: center;
+}
+.ts-entry-right {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
 }
 .ts-entry-edit-btn:hover {
   background: var(--hover-bg, rgba(255,255,255,0.06));
@@ -14076,5 +14097,114 @@ body {
 .trigger-condition input[type="number"] {
   flex: 1;
   min-width: 80px;
+}
+
+#ts-admin-summary {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.ts-project-search-input {
+  width: 100%;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-family: var(--font);
+}
+.ts-project-search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.ts-context-menu {
+  position: fixed;
+  z-index: 1000;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  padding: 0.25rem 0;
+  min-width: 140px;
+}
+.ts-context-menu button {
+  display: block;
+  width: 100%;
+  padding: 0.4rem 0.75rem;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-family: var(--font);
+  color: var(--text);
+}
+.ts-context-menu button:hover {
+  background: var(--hover-bg, rgba(255, 255, 255, 0.06));
+}
+.ts-context-menu button.danger {
+  color: var(--danger, #ef4444);
+}
+
+.ts-admin-week-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  margin-top: 0.5rem;
+}
+.ts-admin-week-table th,
+.ts-admin-week-table td {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  text-align: center;
+}
+.ts-admin-week-table th {
+  background: var(--surface-2);
+  font-weight: 600;
+  font-size: 0.72rem;
+}
+.ts-admin-week-table td:first-child {
+  text-align: left;
+  font-weight: 500;
+}
+.ts-admin-week-table .today-col {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.ts-admin-week-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+}
+.ts-admin-week-nav button {
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-family: var(--font);
+}
+.ts-live-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.7rem;
+  color: var(--color-success, #22c55e);
+}
+.ts-live-indicator::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-success, #22c55e);
+  animation: ts-live-dot 1.5s ease-in-out infinite;
+}
+@keyframes ts-live-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 

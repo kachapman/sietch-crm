@@ -16259,9 +16259,10 @@ function renderPresenceTile() {
           <div id="ts-timer-display" class="ts-timer-display">00:00:00</div>
           <button type="button" id="ts-clock-btn" class="ts-clock-btn clock-in">Clock In</button>
           <button type="button" id="ts-break-btn" class="ts-break-btn hidden">Start Break</button>
-          <select id="ts-project-select" class="ts-project-select">
-            <option value="">No project</option>
-          </select>
+          <div class="ts-project-search" style="position:relative; flex: 1 1 150px;">
+            <input type="search" id="ts-project-search" class="ts-project-search-input" placeholder="Search project..." autocomplete="off" />
+            <div id="ts-project-results" class="contact-results hidden"></div>
+          </div>
         </div>
         <div class="ts-date-range">
           <button type="button" id="ts-prev-day">◀</button>
@@ -16278,9 +16279,6 @@ function renderPresenceTile() {
           <input type="date" id="ts-export-to" class="ts-export-date" />
           <button type="button" id="ts-export-csv" class="ts-export-btn" title="Export CSV"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M7 16.5a1.5 1.5 0 0 0 -3 0v3a1.5 1.5 0 0 0 3 0"/><path d="M10 20.25c0 .414 .336 .75 .75 .75h1.25a1 1 0 0 0 1 -1v-1a1 1 0 0 0 -1 -1h-1a1 1 0 0 1 -1 -1v-1a1 1 0 0 1 1 -1h1.25a.75 .75 0 0 1 .75 .75"/><path d="M16 15l2 6l2 -6"/></svg></button>
           <button type="button" id="ts-export-pdf" class="ts-export-btn" title="Export PDF"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M5 18h1.5a1.5 1.5 0 0 0 0 -3h-1.5v6"/><path d="M17 18h2"/><path d="M20 15h-3v6"/><path d="M11 15v6h1a2 2 0 0 0 2 -2v-2a2 2 0 0 0 -2 -2h-1"/></svg></button>
-        </div>
-        <div id="ts-admin-section" class="hidden" style="padding:0.5rem;">
-          <div id="ts-admin-summary"></div>
         </div>
       </div>
       <div id="presence-tile-admin" class="presence-admin hidden" style="padding:0.5rem 0.75rem;font-size:0.78rem;color:var(--muted);"></div>
@@ -17010,6 +17008,51 @@ function ensurePresenceOnLogin() {
 let _tsTimerInterval = null;
 let _tsActiveEntry = null;
 let _tsRange = { from: null, to: null, mode: "day" };
+let tsSelectedProject = null;
+
+function bindTimesheetProjectSearch(inputId, resultsId) {
+  const input = document.getElementById(inputId);
+  const results = document.getElementById(resultsId);
+  if (!input || !results || input.dataset.bound) return;
+  input.dataset.bound = "1";
+  
+  let debounce = null;
+  input.addEventListener("input", () => {
+    clearTimeout(debounce);
+    const q = input.value.trim();
+    if (q.length < 1) { results.classList.add("hidden"); return; }
+    debounce = setTimeout(() => {
+      searchOpportunitiesByTitle(q, { limit: 10 }).then(items => {
+        results.innerHTML = "";
+        if (!items.length) {
+          results.classList.add("hidden");
+          return;
+        }
+        results.classList.remove("hidden");
+        items.forEach(p => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = p.title;
+          btn.addEventListener("mousedown", (ev) => {
+            ev.preventDefault();
+            tsSelectedProject = p;
+            input.value = p.title;
+            results.classList.add("hidden");
+          });
+          results.appendChild(btn);
+        });
+      }).catch(() => {});
+    }, 300);
+  });
+  
+  input.addEventListener("blur", () => {
+    setTimeout(() => results.classList.add("hidden"), 150);
+  });
+  
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") { results.classList.add("hidden"); input.blur(); }
+  });
+}
 
 function tsPopulateProjectSelect(selectEl) {
   if (!selectEl) return;
@@ -17045,13 +17088,21 @@ function renderPresenceTimesheetModal(container, snap) {
   breakBtn.id = 'modal-ts-break-btn';
   breakBtn.className = 'ts-break-btn hidden';
   breakBtn.textContent = 'Start Break';
-  const projectSelect = document.createElement('select');
-  projectSelect.id = 'modal-ts-project-select';
-  projectSelect.className = 'ts-project-select';
-  projectSelect.innerHTML = '<option value="">No project</option>';
-  clockWidget.append(timerDisplay, clockBtn, breakBtn, projectSelect);
+  const projectSearchWrap = document.createElement('div');
+  projectSearchWrap.className = 'ts-project-search';
+  projectSearchWrap.style.cssText = 'position:relative; flex:1 1 150px;';
+  const projectSearchInput = document.createElement('input');
+  projectSearchInput.type = 'search';
+  projectSearchInput.id = 'modal-ts-project-search';
+  projectSearchInput.className = 'ts-project-search-input';
+  projectSearchInput.placeholder = 'Search project...';
+  projectSearchInput.autocomplete = 'off';
+  const projectResults = document.createElement('div');
+  projectResults.id = 'modal-ts-project-results';
+  projectResults.className = 'contact-results hidden';
+  projectSearchWrap.append(projectSearchInput, projectResults);
+  clockWidget.append(timerDisplay, clockBtn, breakBtn, projectSearchWrap);
   container.appendChild(clockWidget);
-  tsPopulateProjectSelect(projectSelect);
   // Date range
   const rangeBar = document.createElement('div');
   rangeBar.className = 'ts-date-range';
@@ -17110,6 +17161,7 @@ function renderPresenceTimesheetModal(container, snap) {
   monthBtn.addEventListener("click", () => { tsSetRange("month"); modalRefreshEntries(); updateModalRangeLabel(); });
   csvBtn.addEventListener("click", tsExportCSV);
   pdfBtn.addEventListener("click", tsExportPDF);
+  bindTimesheetProjectSearch("modal-ts-project-search", "modal-ts-project-results");
 }
 
 function updateModalRangeLabel() {
@@ -17156,8 +17208,7 @@ function modalToggleClock() {
       modalRefreshEntries();
     }).catch(err => showToast(err.message || "Failed to clock out", true));
   } else {
-    const projectSelect = document.getElementById("modal-ts-project-select");
-    const opportunityId = projectSelect?.value || null;
+    const opportunityId = tsSelectedProject?.id || null;
     api("/api/timesheet/clock-in", { method: "POST", body: JSON.stringify({ notes: "", opportunity_id: opportunityId || undefined }) }).then(data => {
       _tsActiveEntry = data.entry;
       updateModalClockUI();
@@ -17229,7 +17280,10 @@ function modalRefreshEntries() {
       editBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M13 20l7 -7"/><path d="M13 20v-6a1 1 0 0 1 1 -1h6v-7a2 2 0 0 0 -2 -2h-12a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h7"/></svg>`;
       editBtn.addEventListener("click", () => tsEditEntry(entry));
       row.addEventListener("contextmenu", (ev) => tsEntryContextMenu(ev, entry));
-      row.append(proj, times, dur, editBtn);
+      const rightGroup = document.createElement("div");
+      rightGroup.className = "ts-entry-right";
+      rightGroup.append(dur, editBtn);
+      row.append(times, proj, rightGroup);
       list.appendChild(row);
     });
     const th = Math.floor(totalSeconds / 3600);
@@ -17255,7 +17309,7 @@ function renderTimesheetTab() {
   const exportCsv = $("#ts-export-csv");
   const exportPdf = $("#ts-export-pdf");
   
-  tsPopulateProjectSelect($("#ts-project-select"));
+  bindTimesheetProjectSearch("ts-project-search", "ts-project-results");
   
   clockBtn?.addEventListener("click", tsToggleClock);
   breakBtn?.addEventListener("click", tsToggleBreak);
@@ -17268,29 +17322,6 @@ function renderTimesheetTab() {
   
   tsUpdateDateLabel();
   tsSyncDateInputs();
-  if (state.presenceData?.isAdmin) {
-    const adminEl = $("#ts-admin-section");
-    if (adminEl) {
-      adminEl.classList.remove("hidden");
-      // Add collapsible header
-      if (!adminEl.querySelector(".ts-admin-toggle")) {
-        const toggle = document.createElement("div");
-        toggle.className = "ts-admin-toggle presence-offline-toggle";
-        toggle.innerHTML = '<span class="presence-offline-arrow">\u25b8</span> Admin Summary';
-        toggle.addEventListener("click", () => {
-          const summary = adminEl.querySelector("#ts-admin-summary");
-          const expanded = toggle.classList.toggle("expanded");
-          toggle.querySelector(".presence-offline-arrow").textContent = expanded ? "\u25be" : "\u25b8";
-          if (summary) summary.style.display = expanded ? "" : "none";
-          if (expanded) tsRenderAdminSummary(adminEl.querySelector("#ts-admin-summary"));
-        });
-        adminEl.insertBefore(toggle, adminEl.firstChild);
-        // Hide summary by default
-        const summary = adminEl.querySelector("#ts-admin-summary");
-        if (summary) summary.style.display = "none";
-      }
-    }
-  }
 }
 
 function tsRenderAdminSummary(container) {
@@ -17327,6 +17358,71 @@ function tsRenderAdminSummary(container) {
   });
 }
 
+function tsRenderAdminWeeklyView(container) {
+  if (!container) return;
+  container.innerHTML = '<div style="color:var(--muted);font-size:0.78rem;">Loading weekly data...</div>';
+  
+  const now = new Date();
+  const day = now.getDay();
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() - day);
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekStart.getDate() + 6);
+  const from = weekStart.toISOString().slice(0, 10);
+  const to = weekEnd.toISOString().slice(0, 10);
+  
+  api(`/api/timesheet/admin/summary?from=${from}&to=${to}`).then(data => {
+    const summary = data.summary || [];
+    if (!summary.length) {
+      container.innerHTML = '<div style="color:var(--muted);font-size:0.78rem;">No timesheet data this week</div>';
+      return;
+    }
+    
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(weekStart);
+      d.setDate(weekStart.getDate() + i);
+      days.push(d.toISOString().slice(0, 10));
+    }
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    
+    const byUser = {};
+    summary.forEach(row => {
+      if (!byUser[row.user_id]) byUser[row.user_id] = { name: row.user_name, email: row.user_email, hours: {} };
+      byUser[row.user_id].hours[row.work_date] = parseFloat(row.total_hours || 0);
+    });
+    
+    const today = now.toISOString().slice(0, 10);
+    
+    let html = '<table class="ts-admin-week-table"><thead><tr><th>User</th>';
+    days.forEach((d, i) => {
+      const isToday = d === today;
+      html += `<th class="${isToday ? 'today-col' : ''}">${dayNames[i]}<br>${d.slice(5)}</th>`;
+    });
+    html += '<th>Total</th></tr></thead><tbody>';
+    
+    Object.values(byUser).forEach(u => {
+      let total = 0;
+      html += `<tr><td>${escapeHtml(u.name || u.email)}</td>`;
+      days.forEach(d => {
+        const h = u.hours[d] || 0;
+        total += h;
+        const hrs = Math.floor(h);
+        const mins = Math.round((h - hrs) * 60);
+        html += `<td>${h > 0 ? `${hrs}h ${mins}m` : '—'}</td>`;
+      });
+      const th = Math.floor(total);
+      const tm = Math.round((total - th) * 60);
+      html += `<td><strong>${th}h ${tm}m</strong></td></tr>`;
+    });
+    
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  }).catch(err => {
+    container.innerHTML = `<div style="color:var(--danger);font-size:0.78rem;">Failed to load: ${escapeHtml(err.message)}</div>`;
+  });
+}
+
 function tsToggleClock() {
   if (_tsActiveEntry) {
     api("/api/timesheet/clock-out", { method: "POST" }).then(data => {
@@ -17336,8 +17432,7 @@ function tsToggleClock() {
       tsRefreshEntries();
     }).catch(err => showToast(err.message || "Failed to clock out", true));
   } else {
-    const projectSelect = document.getElementById("ts-project-select");
-    const opportunityId = projectSelect?.value || null;
+    const opportunityId = tsSelectedProject?.id || null;
     api("/api/timesheet/clock-in", { method: "POST", body: JSON.stringify({ notes: "", opportunity_id: opportunityId || undefined }) }).then(data => {
       _tsActiveEntry = data.entry;
       tsStartTimer();
@@ -17479,7 +17574,10 @@ function tsRenderEntries(entries) {
     editBtn.addEventListener("click", () => tsEditEntry(entry));
     
     row.addEventListener("contextmenu", (ev) => tsEntryContextMenu(ev, entry));
-    row.append(proj, times, dur, editBtn);
+    const rightGroup = document.createElement("div");
+    rightGroup.className = "ts-entry-right";
+    rightGroup.append(dur, editBtn);
+    row.append(times, proj, rightGroup);
     list.appendChild(row);
   });
   
@@ -17573,11 +17671,6 @@ function tsShiftRange(dir) {
   tsUpdateDateLabel();
   tsRefreshEntries();
   tsSyncDateInputs();
-  const adminEl = $("#ts-admin-section");
-  if (adminEl && !adminEl.classList.contains("hidden")) {
-    const toggle = adminEl.querySelector(".ts-admin-toggle");
-    if (toggle && toggle.classList.contains("expanded")) tsRenderAdminSummary(adminEl.querySelector("#ts-admin-summary"));
-  }
 }
 
 function tsSetRange(mode) {
@@ -17598,11 +17691,6 @@ function tsSetRange(mode) {
   tsUpdateDateLabel();
   tsRefreshEntries();
   tsSyncDateInputs();
-  const adminEl = $("#ts-admin-section");
-  if (adminEl && !adminEl.classList.contains("hidden")) {
-    const toggle = adminEl.querySelector(".ts-admin-toggle");
-    if (toggle && toggle.classList.contains("expanded")) tsRenderAdminSummary(adminEl.querySelector("#ts-admin-summary"));
-  }
 }
 
 function tsUpdateDateLabel() {
@@ -28738,6 +28826,11 @@ async function populateAdminUsersList() {
       return `<div style="padding:2px 0; border-bottom:1px solid var(--border);">${escapeHtml(u.displayName || u.email)} &lt;${escapeHtml(u.email)}&gt;${adminBadge}${active}</div>`;
     }).join("") || "<p>No users.</p>";
     container.innerHTML = `<p><strong>Users (read-only):</strong></p>${list}<p style="font-size:0.75rem;color:var(--muted);margin-top:0.5rem;">Full CRUD later in 2C.</p>`;
+    const tsSection = document.createElement("div");
+    tsSection.style.cssText = "margin-top:1rem; padding-top:0.75rem; border-top:1px solid var(--border);";
+    tsSection.innerHTML = '<h4 style="margin:0 0 0.5rem; font-size:0.85rem;">Timesheets</h4><div id="admin-users-ts-week"></div>';
+    container.appendChild(tsSection);
+    tsRenderAdminWeeklyView(tsSection.querySelector("#admin-users-ts-week"));
   } catch (e) {
     container.innerHTML = `<p style="color:#b00;">Failed to load users: ${escapeHtml(e.message)}</p>`;
   }
