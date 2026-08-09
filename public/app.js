@@ -2536,6 +2536,8 @@ function newCalendarTile(overrides = {}) {
     id: newId(),
     name: "Calendar",
     feedUrl: "",
+    sourceId: null,
+    view: "month",
     timezone: "",
     viewYear: now.getFullYear(),
     viewMonth: now.getMonth() + 1,
@@ -2887,6 +2889,164 @@ function buildCalendarMonthGrid(year, month) {
     cells.push({ year: ny, month: nm, day: nd, outside: true });
   }
   return cells;
+}
+
+function renderCalendarView(section, cal) {
+  const view = cal.view || "month";
+  const body = section?.querySelector(".calendar-month-body") || section?.querySelector(".tile-body-content");
+  if (!body) return;
+  // Clear existing view
+  body.innerHTML = "";
+  if (view === "week") renderCalendarWeekView(body, section, cal);
+  else if (view === "day") renderCalendarDayView(body, section, cal);
+  else if (view === "agenda") renderCalendarAgendaView(body, section, cal);
+  else renderCalendarMonthBody(section, cal);
+}
+
+function renderCalendarWeekView(body, section, cal) {
+  const tid = calendarTileId(cal);
+  const events = state.calendarCache[tid]?.events || [];
+  const tz = resolveCalendarTimezone(cal);
+  const today = todayYmdInTimezone(tz);
+  const y = cal.viewYear || today.year;
+  const m = cal.viewMonth || today.month;
+  const d = cal.viewDay || today.day;
+  const weekStart = new Date(y, m - 1, d);
+  weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+
+  const hours = [];
+  for (let h = 6; h <= 22; h++) hours.push(h);
+
+  let html = '<div class="calendar-week-grid">';
+  for (let i = 0; i < 7; i++) {
+    const day = new Date(weekStart);
+    day.setDate(day.getDate() + i);
+    const dayY = day.getFullYear();
+    const dayM = day.getMonth() + 1;
+    const dayD = day.getDate();
+    const isToday = dayY === today.year && dayM === today.month && dayD === today.day;
+    const dayEvents = eventsForCalendarDay(events, dayY, dayM, dayD, tz);
+
+    html += `<div class="calendar-time-col">`;
+    html += `<div class="calendar-time-header${isToday ? " calendar-time-today" : ""}">${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][day.getDay()]} ${dayD}</div>`;
+    html += `<div class="calendar-time-slots">`;
+    for (const h of hours) {
+      const slotEvents = dayEvents.filter(ev => {
+        if (ev.start?.allDay) return false;
+        const ms = eventStartUtcMs(ev);
+        if (!ms) return false;
+        const p = getZonedParts(ms, tz);
+        return p.hour === h;
+      });
+      html += `<div class="calendar-time-slot" data-date="${dayY}-${String(dayM).padStart(2,"0")}-${String(dayD).padStart(2,"0")}" data-hour="${h}">`;
+      for (const ev of slotEvents) {
+        const color = ev.color || "#5b8abf";
+        const startMs = eventStartUtcMs(ev);
+        const p = startMs ? getZonedParts(startMs, tz) : { hour: h, minute: 0 };
+        const timeStr = `${String(p.hour).padStart(2,"0")}:${String(p.minute).padStart(2,"0")}`;
+        html += `<div class="calendar-time-event" style="--event-color:${escapeHtml(color)}" data-event-uid="${escapeHtml(ev.uid || "")}" title="${escapeHtml((ev.summary || "").replace(/"/g, "&quot;"))}">`;
+        html += `<div class="calendar-time-event-title">${escapeHtml(ev.summary || "")}</div>`;
+        html += `<div class="calendar-time-event-time">${timeStr}</div>`;
+        html += `</div>`;
+      }
+      html += `</div>`;
+    }
+    html += `</div></div>`;
+  }
+  html += '</div>';
+  body.innerHTML = html;
+  bindCalendarEventClicks(body.closest(".dashboard-tile") || section, cal);
+}
+
+function renderCalendarDayView(body, section, cal) {
+  const tid = calendarTileId(cal);
+  const events = state.calendarCache[tid]?.events || [];
+  const tz = resolveCalendarTimezone(cal);
+  const today = todayYmdInTimezone(tz);
+  const y = cal.viewYear || today.year;
+  const m = cal.viewMonth || today.month;
+  const d = cal.viewDay || today.day;
+  const isToday = y === today.year && m === today.month && d === today.day;
+  const dayEvents = eventsForCalendarDay(events, y, m, d, tz);
+
+  const hours = [];
+  for (let h = 6; h <= 22; h++) hours.push(h);
+
+  let html = '<div class="calendar-day-grid"><div class="calendar-time-col">';
+  html += `<div class="calendar-time-header${isToday ? " calendar-time-today" : ""}">${["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][new Date(y, m-1, d).getDay()]} ${m}/${d}/${y}</div>`;
+  html += `<div class="calendar-time-slots">`;
+  for (const h of hours) {
+    const slotEvents = dayEvents.filter(ev => {
+      if (ev.start?.allDay) return false;
+      const ms = eventStartUtcMs(ev);
+      if (!ms) return false;
+      const p = getZonedParts(ms, tz);
+      return p.hour === h;
+    });
+    html += `<div class="calendar-time-slot" data-date="${y}-${String(m).padStart(2,"0")}-${String(d).padStart(2,"0")}" data-hour="${h}">`;
+    for (const ev of slotEvents) {
+      const color = ev.color || "#5b8abf";
+      const startMs = eventStartUtcMs(ev);
+      const p = startMs ? getZonedParts(startMs, tz) : { hour: h, minute: 0 };
+      const timeStr = `${String(p.hour).padStart(2,"0")}:${String(p.minute).padStart(2,"0")}`;
+      html += `<div class="calendar-time-event" style="--event-color:${escapeHtml(color)}" data-event-uid="${escapeHtml(ev.uid || "")}" title="${escapeHtml((ev.summary || "").replace(/"/g, "&quot;"))}">`;
+      html += `<div class="calendar-time-event-title">${escapeHtml(ev.summary || "")}</div>`;
+      html += `<div class="calendar-time-event-time">${timeStr}</div>`;
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+  html += `</div></div></div>`;
+  body.innerHTML = html;
+  bindCalendarEventClicks(body.closest(".dashboard-tile") || section, cal);
+}
+
+function renderCalendarAgendaView(body, section, cal) {
+  const tid = calendarTileId(cal);
+  const events = state.calendarCache[tid]?.events || [];
+  const tz = resolveCalendarTimezone(cal);
+  const today = todayYmdInTimezone(tz);
+
+  const futureEvents = events.filter(ev => {
+    if (ev.status === "CANCELLED") return false;
+    const endMs = eventEndUtcMs(ev);
+    return endMs && endMs >= Date.now();
+  }).sort((a, b) => {
+    const aMs = eventStartUtcMs(a) || 0;
+    const bMs = eventStartUtcMs(b) || 0;
+    return aMs - bMs;
+  }).slice(0, 50);
+
+  if (!futureEvents.length) {
+    body.innerHTML = '<div class="calendar-agenda-empty">No upcoming events</div>';
+    return;
+  }
+
+  let html = '<div class="calendar-agenda">';
+  let lastDay = "";
+  for (const ev of futureEvents) {
+    const startMs = eventStartUtcMs(ev);
+    const p = startMs ? getZonedParts(startMs, tz) : null;
+    const dayKey = p ? `${p.year}-${String(p.month).padStart(2,"0")}-${String(p.day).padStart(2,"0")}` : "";
+    const isToday = dayKey === `${today.year}-${String(today.month).padStart(2,"0")}-${String(today.day).padStart(2,"0")}`;
+
+    if (dayKey !== lastDay) {
+      lastDay = dayKey;
+      const dayDate = p ? new Date(p.year, p.month - 1, p.day) : new Date();
+      const dayLabel = isToday ? "Today" : dayDate.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+      html += `<div class="calendar-agenda-day"><div class="calendar-agenda-day-header${isToday ? " agenda-today" : ""}">${escapeHtml(dayLabel)}</div>`;
+    }
+    const color = ev.color || "#5b8abf";
+    const timeLabel = ev.start?.allDay ? "All day" : (p ? `${String(p.hour).padStart(2,"0")}:${String(p.minute).padStart(2,"0")}` : "");
+    html += `<div class="calendar-agenda-event" data-event-uid="${escapeHtml(ev.uid || "")}">`;
+    html += `<div class="calendar-agenda-dot" style="background:${escapeHtml(color)}"></div>`;
+    html += `<div class="calendar-agenda-event-info"><div class="calendar-agenda-event-title">${escapeHtml(ev.summary || "")}</div>`;
+    if (timeLabel) html += `<div class="calendar-agenda-event-time">${escapeHtml(timeLabel)}</div>`;
+    html += `</div></div>`;
+  }
+  html += '</div>';
+  body.innerHTML = html;
+  bindCalendarEventClicks(body.closest(".dashboard-tile") || section, cal);
 }
 
 function renderCalendarMonthBody(section, cal) {
@@ -4476,6 +4636,277 @@ function bindDocumentsModal() {
   }
 }
 
+// ── Calendar Settings Modal ──────────────────────────────────────────────────
+
+function openCalendarSettingsModal() {
+  const modal = $("#calendar-settings-modal");
+  if (!modal) return;
+  loadCalendarSourcesList();
+  modal.classList.remove("hidden");
+}
+
+function closeCalendarSettingsModal() {
+  $("#calendar-settings-modal")?.classList.add("hidden");
+}
+
+async function loadCalendarSourcesList() {
+  const list = $("#calendar-settings-sources-list");
+  if (!list) return;
+  try {
+    const res = await api("/api/v2/calendar/sources");
+    const data = await res.json();
+    const sources = data.sources || [];
+    if (!sources.length) {
+      list.innerHTML = '<p class="calendar-settings-empty">No calendars connected yet.</p>';
+      return;
+    }
+    list.innerHTML = sources.map(s => `
+      <div class="calendar-settings-source-row" data-source-id="${s.id}">
+        <div class="source-color-dot" style="background:${escapeHtml(s.color || "#5b8abf")}"></div>
+        <div class="source-info">
+          <div class="source-name">${escapeHtml(s.name || "Calendar")}</div>
+          <div class="source-detail">${escapeHtml(s.oauth_email || s.ics_url || s.caldav_url || s.source_type)}</div>
+        </div>
+        <button type="button" class="source-remove" title="Remove" data-remove-source="${s.id}"><i class="ti ti-trash"></i></button>
+      </div>
+    `).join("");
+    list.querySelectorAll("[data-remove-source]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.removeSource;
+        if (!confirm("Remove this calendar source?")) return;
+        try {
+          await api(`/api/v2/calendar/sources/${id}`, { method: "DELETE" });
+          loadCalendarSourcesList();
+        } catch (e) { showToast(e.message, true); }
+      });
+    });
+  } catch (e) {
+    list.innerHTML = `<p class="calendar-settings-empty">Failed to load: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function bindCalendarSettingsModal() {
+  const modal = $("#calendar-settings-modal");
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = "1";
+  modal.querySelectorAll("[data-calendar-settings-dismiss]").forEach(el => {
+    el.addEventListener("click", closeCalendarSettingsModal);
+  });
+  const addBtn = $("#calendar-settings-add-source");
+  const addForm = $("#calendar-settings-add-form");
+  const cancelBtn = $("#cal-settings-add-cancel");
+  const saveBtn = $("#cal-settings-add-save");
+  addBtn?.addEventListener("click", () => addForm?.classList.toggle("hidden"));
+  cancelBtn?.addEventListener("click", () => addForm?.classList.add("hidden"));
+
+  // Source type switching in settings modal
+  modal.querySelectorAll(".calendar-source-type-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      modal.querySelectorAll(".calendar-source-type-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      const t = btn.dataset.sourceType;
+      $("#cal-settings-ics-fields")?.classList.toggle("hidden", t !== "ics");
+      $("#cal-settings-caldav-fields")?.classList.toggle("hidden", t !== "caldav");
+      $("#cal-settings-oauth-info")?.classList.toggle("hidden", t !== "google_oauth" && t !== "microsoft_oauth");
+    });
+  });
+
+  saveBtn?.addEventListener("click", async () => {
+    const activeType = modal.querySelector(".calendar-source-type-btn.active")?.dataset.sourceType || "ics";
+    const name = $("#cal-settings-src-name")?.value?.trim() || "Calendar";
+    let body = { name, source_type: activeType };
+    if (activeType === "ics") body.ics_url = $("#cal-settings-ics-url")?.value?.trim();
+    else if (activeType === "caldav") {
+      body.caldav_url = $("#cal-settings-caldav-url")?.value?.trim();
+      body.caldav_username = $("#cal-settings-caldav-user")?.value?.trim();
+      body.caldav_password = $("#cal-settings-caldav-pass")?.value;
+    } else if (activeType === "google_oauth" || activeType === "microsoft_oauth") {
+      const provider = activeType === "google_oauth" ? "google" : "microsoft";
+      try {
+        const res = await api(`/api/v2/calendar/oauth/authorize?provider=${provider}`, { method: "POST" });
+        const data = await res.json();
+        if (data.url) { window.location.href = data.url; return; }
+      } catch (e) { showToast(e.message, true); return; }
+    }
+    try {
+      const res = await api("/api/v2/calendar/sources", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        addForm?.classList.add("hidden");
+        loadCalendarSourcesList();
+        showToast("Calendar connected");
+      } else {
+        showToast(data.error || "Failed", true);
+      }
+    } catch (e) { showToast(e.message, true); }
+  });
+}
+
+// ── Calendar Event Edit Modal ────────────────────────────────────────────────
+
+function openCalendarEventEditModal(ev, cal) {
+  const modal = $("#calendar-event-edit-modal");
+  if (!modal) return;
+  const isEdit = !!ev;
+  $("#cal-edit-title").textContent = isEdit ? "Edit Event" : "New Event";
+  $("#cal-edit-id").value = isEdit ? (ev._dbId || "") : "";
+  $("#cal-edit-summary").value = isEdit ? (ev.summary || "") : "";
+  $("#cal-edit-allday").checked = isEdit ? !!ev.start?.allDay : false;
+  $("#cal-edit-location").value = isEdit ? (ev.location || "") : "";
+  $("#cal-edit-description").value = isEdit ? (ev.description || "") : "";
+  $("#cal-edit-delete").classList.toggle("hidden", !isEdit);
+
+  const tz = resolveCalendarTimezone(cal || {});
+  if (isEdit && ev.start) {
+    if (ev.start.allDay) {
+      $("#cal-edit-start-date").value = `${ev.start.year}-${String(ev.start.month).padStart(2,"0")}-${String(ev.start.day).padStart(2,"0")}`;
+      $("#cal-edit-start-time").value = "";
+      if (ev.end) {
+        const adj = new Date(ev.end.year, ev.end.month - 1, ev.end.day - 1);
+        $("#cal-edit-end-date").value = `${adj.getFullYear()}-${String(adj.getMonth()+1).padStart(2,"0")}-${String(adj.getDate()).padStart(2,"0")}`;
+      }
+    } else {
+      const startMs = eventStartUtcMs(ev);
+      const endMs = eventEndUtcMs(ev);
+      if (startMs) {
+        const sp = getZonedParts(startMs, tz);
+        $("#cal-edit-start-date").value = `${sp.year}-${String(sp.month).padStart(2,"0")}-${String(sp.day).padStart(2,"0")}`;
+        $("#cal-edit-start-time").value = `${String(sp.hour).padStart(2,"0")}:${String(sp.minute).padStart(2,"0")}`;
+      }
+      if (endMs) {
+        const ep = getZonedParts(endMs, tz);
+        $("#cal-edit-end-date").value = `${ep.year}-${String(ep.month).padStart(2,"0")}-${String(ep.day).padStart(2,"0")}`;
+        $("#cal-edit-end-time").value = `${String(ep.hour).padStart(2,"0")}:${String(ep.minute).padStart(2,"0")}`;
+      }
+    }
+  } else {
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
+    $("#cal-edit-start-date").value = today;
+    $("#cal-edit-start-time").value = `${String(now.getHours()+1).padStart(2,"0")}:00`;
+    $("#cal-edit-end-date").value = today;
+    $("#cal-edit-end-time").value = `${String(now.getHours()+2).padStart(2,"0")}:00`;
+  }
+
+  // Populate source dropdown
+  const srcSel = $("#cal-edit-source");
+  srcSel.innerHTML = '<option value="">Local</option>';
+  api("/api/v2/calendar/sources").then(r => r.json()).then(data => {
+    for (const s of (data.sources || [])) {
+      const opt = document.createElement("option");
+      opt.value = s.id;
+      opt.textContent = s.name;
+      srcSel.appendChild(opt);
+    }
+    if (isEdit && ev._sourceId) srcSel.value = ev._sourceId;
+  }).catch(() => {});
+
+  modal.classList.remove("hidden");
+  setTimeout(() => $("#cal-edit-summary")?.focus(), 100);
+}
+
+function closeCalendarEventEditModal() {
+  $("#calendar-event-edit-modal")?.classList.add("hidden");
+}
+
+function bindCalendarEventEditModal() {
+  const modal = $("#calendar-event-edit-modal");
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = "1";
+  modal.querySelectorAll("[data-calendar-edit-dismiss]").forEach(el => {
+    el.addEventListener("click", closeCalendarEventEditModal);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.classList.contains("hidden")) closeCalendarEventEditModal();
+  });
+  $("#cal-edit-cancel")?.addEventListener("click", closeCalendarEventEditModal);
+
+  // All-day toggle
+  $("#cal-edit-allday")?.addEventListener("change", (e) => {
+    const timeEls = modal.querySelectorAll(".cal-edit-time");
+    timeEls.forEach(el => el.style.display = e.target.checked ? "none" : "");
+  });
+
+  // Save
+  $("#cal-edit-save")?.addEventListener("click", async () => {
+    const summary = $("#cal-edit-summary")?.value?.trim();
+    if (!summary) { showToast("Title is required", true); return; }
+    const allDay = $("#cal-edit-allday")?.checked;
+    const startDate = $("#cal-edit-start-date")?.value;
+    const startTime = $("#cal-edit-start-time")?.value;
+    const endDate = $("#cal-edit-end-date")?.value;
+    const endTime = $("#cal-edit-end-time")?.value;
+    let dtstart, dtend;
+    if (allDay) {
+      dtstart = startDate;
+      dtend = endDate || startDate;
+    } else {
+      dtstart = startDate + "T" + (startTime || "09:00");
+      dtend = endDate + "T" + (endTime || "10:00");
+    }
+    const body = {
+      summary, all_day: allDay, dtstart, dtend,
+      location: $("#cal-edit-location")?.value?.trim() || "",
+      description: $("#cal-edit-description")?.value?.trim() || "",
+      source_id: $("#cal-edit-source")?.value || null,
+      reminder_minutes: parseInt($("#cal-edit-reminder")?.value) || null,
+    };
+    const editId = $("#cal-edit-id")?.value;
+    try {
+      if (editId) {
+        await api(`/api/v2/calendar/events/${editId}`, {
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+      } else {
+        await api("/api/v2/calendar/events", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+      }
+      closeCalendarEventEditModal();
+      // Refresh all calendar tiles
+      for (const cal of state.calendarTiles) {
+        if (cal._el) loadCalendarForTile(cal, { quiet: true }).catch(() => {});
+      }
+      showToast(editId ? "Event updated" : "Event created");
+    } catch (e) { showToast(e.message, true); }
+  });
+
+  // Delete
+  $("#cal-edit-delete")?.addEventListener("click", async () => {
+    const editId = $("#cal-edit-id")?.value;
+    if (!editId) return;
+    if (!confirm("Delete this event?")) return;
+    try {
+      await api(`/api/v2/calendar/events/${editId}`, { method: "DELETE" });
+      closeCalendarEventEditModal();
+      for (const cal of state.calendarTiles) {
+        if (cal._el) loadCalendarForTile(cal, { quiet: true }).catch(() => {});
+      }
+      showToast("Event deleted");
+    } catch (e) { showToast(e.message, true); }
+  });
+}
+
+// ── Source type switching in Add Tile form ───────────────────────────────────
+
+function bindAddTileCalendarSourceType() {
+  const form = $("#add-tile-calendar-form");
+  if (!form || form.dataset.sourceTypeBound) return;
+  form.dataset.sourceTypeBound = "1";
+  form.querySelectorAll(".calendar-source-type-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      form.querySelectorAll(".calendar-source-type-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      const t = btn.dataset.sourceType;
+      $("#add-tile-calendar-ics-fields")?.classList.toggle("hidden", t !== "ics");
+      $("#add-tile-calendar-caldav-fields")?.classList.toggle("hidden", t !== "caldav");
+      $("#add-tile-calendar-oauth-info")?.classList.toggle("hidden", t !== "google_oauth" && t !== "microsoft_oauth");
+    });
+  });
+}
+
 function bindCalendarEventModal() {
   const modal = $("#calendar-event-modal");
   if (!modal || modal.dataset.bound) return;
@@ -4518,34 +4949,71 @@ async function loadCalendarForTile(cal, { quiet = false } = {}) {
   const section = cal._el;
   if (section) section.classList.toggle("calendar-loading", true);
   try {
-    const data = await fetchCalendarFeed(cal.feedUrl);
+    let events = [];
+    let calendarName = cal.name || "Calendar";
+    let timezone = cal.timezone || "";
+
+    if (cal.sourceId) {
+      // New DB-backed mode: fetch events from local API
+      const y = cal.viewYear || new Date().getFullYear();
+      const m = cal.viewMonth || new Date().getMonth() + 1;
+      const startDate = new Date(y, m - 1, 1);
+      const endDate = new Date(y, m, 0, 23, 59, 59);
+      const startStr = startDate.toISOString().split("T")[0];
+      const endStr = endDate.toISOString().split("T")[0];
+      const res = await api(`/api/v2/calendar/events?start=${startStr}&end=${endStr}`);
+      const data = await res.json();
+      events = (data.events || []).map(ev => ({
+        uid: ev.uid || String(ev.id),
+        summary: ev.summary || "",
+        description: ev.description || "",
+        location: ev.location || "",
+        color: ev.color || "#5b8abf",
+        status: ev.status || "CONFIRMED",
+        start: ev.all_day
+          ? { allDay: true, year: new Date(ev.dtstart).getFullYear(), month: new Date(ev.dtstart).getMonth() + 1, day: new Date(ev.dtstart).getDate() }
+          : { allDay: false, iso: ev.dtstart, year: new Date(ev.dtstart).getFullYear(), month: new Date(ev.dtstart).getMonth() + 1, day: new Date(ev.dtstart).getDate(), hour: new Date(ev.dtstart).getHours(), minute: new Date(ev.dtstart).getMinutes(), tzid: "UTC" },
+        end: ev.all_day
+          ? { allDay: true, year: new Date(ev.dtend).getFullYear(), month: new Date(ev.dtend).getMonth() + 1, day: new Date(ev.dtend).getDate() }
+          : { allDay: false, iso: ev.dtend, year: new Date(ev.dtend).getFullYear(), month: new Date(ev.dtend).getMonth() + 1, day: new Date(ev.dtend).getDate(), hour: new Date(ev.dtend).getHours(), minute: new Date(ev.dtend).getMinutes(), tzid: "UTC" },
+        rrule: ev.rrule || "",
+        recurrence: ev.rrule || "",
+        _dbId: ev.id,
+        _sourceId: ev.source_id,
+      }));
+      calendarName = data.events?.[0]?.source_name || cal.name || "Calendar";
+      timezone = getBrowserTimezone();
+    } else if (cal.feedUrl) {
+      // Legacy ICS proxy mode
+      const data = await fetchCalendarFeed(cal.feedUrl);
+      events = Array.isArray(data.events) ? data.events : [];
+      calendarName = data.name || cal.name || "Calendar";
+      timezone = data.timezone || "";
+      if (data.name && (!cal.name || cal.name === "Calendar")) {
+        cal.name = data.name;
+        saveCalendarsToStorage();
+      }
+    }
+
     state.calendarCache[tid] = {
-      name: data.name,
-      timezone: data.timezone,
-      events: Array.isArray(data.events) ? data.events : [],
+      name: typeof calendarName === "function" ? calendarName() : calendarName,
+      timezone: timezone,
+      events: events,
       fetchedAt: Date.now(),
     };
-    if (data.name && (!cal.name || cal.name === "Calendar")) {
-      cal.name = data.name;
-      saveCalendarsToStorage();
-      const nameInput = section?.querySelector(".calendar-tile-name");
-      if (nameInput) nameInput.value = cal.name;
-      const nameDisplay = section?.querySelector(".group-tile-name-display");
-      if (nameDisplay) nameDisplay.textContent = cal.name;
-      if (section) section.dataset.tileLabel = cal.name;
-    }
-    if (!cal.timezone && data.timezone) {
-      cal.timezone = data.timezone;
-      saveCalendarsToStorage();
-    }
+
+    const nameDisplay = section?.querySelector(".group-tile-name-display");
+    if (nameDisplay && typeof calendarName === "string") nameDisplay.textContent = calendarName;
+    if (section) section.dataset.tileLabel = typeof calendarName === "string" ? calendarName : cal.name;
+
     const tzSelect = section?.querySelector(".calendar-tz-select");
     if (tzSelect) {
       populateCalendarTimezoneSelect(tzSelect, resolveCalendarTimezone(cal));
     }
-    if (section) requestAnimationFrame(() => renderCalendarMonthBody(section, cal));
+    if (section) requestAnimationFrame(() => renderCalendarView(section, cal));
   } catch (err) {
     if (!quiet) showToast(err.message, true);
-    const body = section?.querySelector(".calendar-month-body");
+    const body = section?.querySelector(".calendar-month-body") || section?.querySelector(".tile-body-content");
     if (body) {
       body.innerHTML = `<p class="calendar-error">${escapeHtml(err.message || "Could not load calendar")}</p>`;
     }
@@ -4564,11 +5032,10 @@ function bindCalendarTileChrome(section, cal, tileId) {
 
   const hint = document.createElement("span");
   hint.className = "tile-drag-hint";
-  hint.textContent = "⋮⋮";
+  hint.textContent = "\u22EE\u22EE";
   hint.setAttribute("aria-hidden", "true");
-  hint.title = "Drag to reorder (left/right or up/down)";
+  hint.title = "Drag to reorder";
 
-  // --- Click-to-edit title (was an always-visible static-width input) ---
   const nameDisplay = document.createElement("span");
   nameDisplay.className = "group-tile-name-display";
   nameDisplay.textContent = cal.name || "Calendar";
@@ -4585,11 +5052,7 @@ function bindCalendarTileChrome(section, cal, tileId) {
     displayEl: nameDisplay,
     inputEl: nameInput,
     getName: () => cal.name,
-    setName: (v) => {
-      cal.name = v || "Calendar";
-      section.dataset.tileLabel = cal.name;
-      saveCalendarsToStorage();
-    },
+    setName: (v) => { cal.name = v || "Calendar"; section.dataset.tileLabel = cal.name; saveCalendarsToStorage(); },
     placeholder: "Calendar",
   });
 
@@ -4597,21 +5060,48 @@ function bindCalendarTileChrome(section, cal, tileId) {
   countEl.className = "group-tile-count calendar-tile-count";
   countEl.textContent = "0 events";
 
+  // View tabs (Month / Week / Day / Agenda)
+  const viewTabs = document.createElement("div");
+  viewTabs.className = "calendar-view-tabs";
+  const views = [
+    { key: "month", label: "Month", icon: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12z"/><path d="M8 4v4"/><path d="M16 4v4"/><path d="M4 12h16"/></svg>' },
+    { key: "week", label: "Week", icon: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12z"/><path d="M4 7l5 0"/><path d="M10 7l0 0"/><path d="M14 7l5 0"/><path d="M4 12l5 0"/><path d="M10 12l0 0"/><path d="M14 12l5 0"/><path d="M4 17l5 0"/><path d="M10 17l0 0"/><path d="M14 17l5 0"/></svg>' },
+    { key: "day", label: "Day", icon: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12z"/><path d="M8 4v4"/><path d="M16 4v4"/><path d="M8 12h8"/><path d="M8 16h8"/></svg>' },
+    { key: "agenda", label: "Agenda", icon: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12z"/><path d="M8 4v4"/><path d="M16 4v4"/><path d="M8 12h.01"/><path d="M12 12h.01"/><path d="M16 12h.01"/><path d="M8 16h.01"/><path d="M12 16h.01"/><path d="M16 16h.01"/></svg>' },
+  ];
+  for (const v of views) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `calendar-view-tab${(cal.view || "month") === v.key ? " active" : ""}`;
+    btn.dataset.view = v.key;
+    btn.innerHTML = `<span class="tab-icon">${v.icon}</span><span class="tab-label">${v.label}</span>`;
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      cal.view = v.key;
+      saveCalendarsToStorage();
+      viewTabs.querySelectorAll(".calendar-view-tab").forEach(b => b.classList.toggle("active", b.dataset.view === v.key));
+      updateCalendarNavVisibility(section, cal);
+      renderCalendarView(section, cal);
+    });
+    viewTabs.appendChild(btn);
+  }
+
+  // Month navigation (shown for month view)
   const nav = document.createElement("div");
   nav.className = "calendar-month-nav";
   const prevBtn = document.createElement("button");
   prevBtn.type = "button";
   prevBtn.className = "btn btn-ghost btn-calendar-nav";
-  prevBtn.textContent = "‹";
-  prevBtn.title = "Previous month";
+  prevBtn.textContent = "\u2039";
+  prevBtn.title = "Previous";
   const monthLabel = document.createElement("span");
   monthLabel.className = "calendar-month-label";
   monthLabel.textContent = calendarViewMonthLabel(cal);
   const nextBtn = document.createElement("button");
   nextBtn.type = "button";
   nextBtn.className = "btn btn-ghost btn-calendar-nav";
-  nextBtn.textContent = "›";
-  nextBtn.title = "Next month";
+  nextBtn.textContent = "\u203A";
+  nextBtn.title = "Next";
   nav.appendChild(prevBtn);
   nav.appendChild(monthLabel);
   nav.appendChild(nextBtn);
@@ -4625,11 +5115,36 @@ function bindCalendarTileChrome(section, cal, tileId) {
   populateCalendarTimezoneSelect(tzSelect, resolveCalendarTimezone(cal));
   tzWrap.appendChild(tzSelect);
 
+  // New Event button
+  const newEventBtn = document.createElement("button");
+  newEventBtn.type = "button";
+  newEventBtn.className = "btn btn-ghost";
+  newEventBtn.title = "New event";
+  newEventBtn.innerHTML = '<i class="ti ti-plus"></i>';
+  newEventBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openCalendarEventEditModal(null, cal);
+  });
+
+  // Settings gear
+  const settingsBtn = document.createElement("button");
+  settingsBtn.type = "button";
+  settingsBtn.className = "btn btn-ghost";
+  settingsBtn.title = "Calendar settings";
+  settingsBtn.innerHTML = '<i class="ti ti-settings"></i>';
+  settingsBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openCalendarSettingsModal();
+  });
+
   const removeBtn = createTileRemoveButton("Remove this calendar tile from the dashboard", "btn-remove-calendar");
 
   const { tools, actions } = buildTileToolbarShell();
+  tools.appendChild(viewTabs);
   tools.appendChild(nav);
   tools.appendChild(tzWrap);
+  actions.appendChild(newEventBtn);
+  actions.appendChild(settingsBtn);
   actions.appendChild(removeBtn);
 
   toolbar.appendChild(hint);
@@ -4648,7 +5163,7 @@ function bindCalendarTileChrome(section, cal, tileId) {
 
   const syncMonth = () => {
     monthLabel.textContent = calendarViewMonthLabel(cal);
-    renderCalendarMonthBody(section, cal);
+    renderCalendarView(section, cal);
   };
 
   prevBtn.addEventListener("click", (e) => {
@@ -4667,14 +5182,14 @@ function bindCalendarTileChrome(section, cal, tileId) {
     e.stopPropagation();
     cal.timezone = tzSelect.value;
     saveCalendarsToStorage();
-    renderCalendarMonthBody(section, cal);
+    renderCalendarView(section, cal);
   });
 
   removeBtn.addEventListener("click", async () => {
     const label = cal.name?.trim() || "this calendar";
     const ok = await confirmDialog({
       title: "Remove calendar tile?",
-      message: `Remove “${label}” from the dashboard?`,
+      message: `Remove \u201C${label}\u201D from the dashboard?`,
       confirmLabel: "Remove",
       danger: true,
     });
@@ -4689,6 +5204,14 @@ function bindCalendarTileChrome(section, cal, tileId) {
     saveLayoutToStorage();
     renderBoardGroups();
   });
+
+  // Initial nav visibility
+  updateCalendarNavVisibility(section, cal);
+}
+
+function updateCalendarNavVisibility(section, cal) {
+  const nav = section?.querySelector(".calendar-month-nav");
+  if (nav) nav.style.display = (cal.view || "month") === "month" ? "" : "none";
 }
 
 function renderCalendarTiles(dash) {
@@ -14066,31 +14589,95 @@ function addOpportunityGroupTile() {
 
 async function addCalendarTileFromForm() {
   const name = $("#add-tile-calendar-name")?.value?.trim() || "Calendar";
-  const feedUrl = $("#add-tile-calendar-url")?.value?.trim() || "";
-  if (!feedUrl) {
-    setAddTileError("Calendar URL is required");
-    return;
-  }
-  if (!/^https?:\/\//i.test(feedUrl)) {
-    setAddTileError("URL must start with http:// or https://");
-    return;
-  }
-  setAddTileError("");
-  const cal = newCalendarTile({ name, feedUrl });
-  state.calendarTiles.push(cal);
-  saveCalendarsToStorage();
-  const tid = calendarTileId(cal);
-  if (!state.tileLayout.order.includes(tid)) {
-    state.tileLayout.order.push(tid);
-    saveLayoutToStorage();
-  }
-  closeAddTileModal();
-  renderBoardGroups();
-  showToast("Calendar tile added");
-  try {
-    await loadCalendarForTile(cal);
-  } catch {
-    /* toast from loader */
+  const activeType = document.querySelector("#add-tile-calendar-form .calendar-source-type-btn.active")?.dataset.sourceType || "ics";
+
+  if (activeType === "ics") {
+    const feedUrl = $("#add-tile-calendar-url")?.value?.trim() || "";
+    if (!feedUrl) {
+      setAddTileError("Calendar URL is required");
+      return;
+    }
+    if (!/^https?:\/\//i.test(feedUrl)) {
+      setAddTileError("URL must start with http:// or https://");
+      return;
+    }
+    setAddTileError("");
+    // Create source via API first
+    try {
+      const res = await api("/api/v2/calendar/sources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, source_type: "ics", ics_url: feedUrl }),
+      });
+      const data = await res.json();
+      if (data.ok && data.id) {
+        const cal = newCalendarTile({ name, sourceId: data.id });
+        state.calendarTiles.push(cal);
+        saveCalendarsToStorage();
+        const tid = calendarTileId(cal);
+        if (!state.tileLayout.order.includes(tid)) {
+          state.tileLayout.order.push(tid);
+          saveLayoutToStorage();
+        }
+        closeAddTileModal();
+        renderBoardGroups();
+        showToast("Calendar added");
+        loadCalendarForTile(cal).catch(() => {});
+      } else {
+        setAddTileError(data.error || "Failed to add calendar");
+      }
+    } catch (e) {
+      setAddTileError(e.message || "Failed to add calendar");
+    }
+  } else if (activeType === "caldav") {
+    const url = $("#add-tile-calendar-caldav-url")?.value?.trim() || "";
+    const user = $("#add-tile-calendar-caldav-user")?.value?.trim() || "";
+    const pass = $("#add-tile-calendar-caldav-pass")?.value || "";
+    if (!url || !user || !pass) {
+      setAddTileError("CalDAV URL, username, and password are required");
+      return;
+    }
+    setAddTileError("");
+    try {
+      const res = await api("/api/v2/calendar/sources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, source_type: "caldav", caldav_url: url, caldav_username: user, caldav_password: pass }),
+      });
+      const data = await res.json();
+      if (data.ok && data.id) {
+        const cal = newCalendarTile({ name, sourceId: data.id });
+        state.calendarTiles.push(cal);
+        saveCalendarsToStorage();
+        const tid = calendarTileId(cal);
+        if (!state.tileLayout.order.includes(tid)) {
+          state.tileLayout.order.push(tid);
+          saveLayoutToStorage();
+        }
+        closeAddTileModal();
+        renderBoardGroups();
+        showToast("CalDAV calendar added");
+      } else {
+        setAddTileError(data.error || "Failed to connect");
+      }
+    } catch (e) {
+      setAddTileError(e.message || "Failed to connect");
+    }
+  } else if (activeType === "google_oauth" || activeType === "microsoft_oauth") {
+    // OAuth redirect
+    const provider = activeType === "google_oauth" ? "google" : "microsoft";
+    const stateToken = Math.random().toString(36).slice(2);
+    try {
+      const res = await api(`/api/v2/calendar/oauth/authorize?provider=${provider}&tile_name=${encodeURIComponent(name)}`, { method: "POST" });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        setAddTileError(data.error || "OAuth not configured");
+      }
+    } catch (e) {
+      setAddTileError(e.message || "OAuth setup failed");
+    }
   }
 }
 
@@ -33803,6 +34390,9 @@ async function init() {
 
   bindAddTileModal();
   bindCalendarEventModal();
+  bindCalendarSettingsModal();
+  bindCalendarEventEditModal();
+  bindAddTileCalendarSourceType();
   bindMailInboxButton();
   bindDocumentsModal();
 

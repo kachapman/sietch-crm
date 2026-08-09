@@ -2,6 +2,40 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Calendar Tile Revamp — Phase 1 (2026-08-09)
+
+### Database
+- New migration `010_add_calendar.sql`: `calendar_sources` (OAuth/CalDAV/ICS connections), `calendar_events` (unified local event store), `ics_feed_cache` (server-side ICS caching to fix dashboard hang).
+
+### Backend (server.py)
+- **Dashboard hang fix:** `calendar_sync.py` background thread refreshes ICS feeds every 15 minutes into `ics_feed_cache` table. Dashboard serves from cache instantly.
+- **14 new calendar API endpoints:** Sources CRUD (`/api/v2/calendar/sources`), events CRUD (`/api/v2/calendar/events`), settings, sync-all, source-sync.
+- **Inline migrations** for all 3 new tables added to server startup.
+
+### Frontend (app.js + styles.css + index.html)
+- **Odysseus panel-style toolbar:** Inline view tabs (Month/Week/Day/Agenda), settings gear, new event (+) button. Same toolbar pattern as Team tile.
+- **4 calendar views:** Month (existing, enhanced), Week (7-column time grid with hourly slots), Day (single column time grid), Agenda (upcoming events list grouped by day).
+- **Calendar settings modal:** Source management (add/remove calendars), reminder preferences (browser/Telegram).
+- **Event create/edit modal:** Full CRUD form with title, date/time, all-day toggle, location, description, calendar source, reminder.
+- **Add tile form:** Updated to support ICS/Google/Outlook/CalDAV source types with appropriate sub-forms.
+- **CSS:** Calendar view tabs, week/day grids, agenda list, settings modal, event edit modal, responsive (icon-only tabs on ≤768px, tools kept on title row via `@container`).
+
+### Files
+- `calendar_sync.py` (new) — ICS feed cache + reminder sweep background thread
+- `migrations/010_add_calendar.sql` (new) — DB schema
+- `server.py` (+460 lines) — Calendar API, inline migrations
+- `public/app.js` (+710 lines) — Calendar tile revamp, 4 views, modals
+- `public/styles.css` (+420 lines) — Calendar panel styles, grids, responsive
+- `public/index.html` (+140 lines) — New modals, updated add-tile form
+
+### Not yet implemented
+- OAuth calendar scopes in `oauth_providers.py` (Google Calendar API, MS Graph Calendars)
+- CalDAV sync engine (caldav library integration)
+- Browser push notification integration for calendar reminders
+- Telegram calendar reminder formatting in notification_dispatcher
+- CSS polish for height/width edge cases
+- Keyboard shortcuts (M/W/D/A/T)
+
 ## Team Tile Revamp + Timesheet System — COMPLETED (2026-08-09)
 
 ### Session Summary — All items completed across multiple commits:

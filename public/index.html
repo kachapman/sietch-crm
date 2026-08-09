@@ -379,27 +379,47 @@
 
       <div id="add-tile-calendar-form" class="add-tile-calendar-form hidden">
         <div class="field">
+          <label>Calendar source</label>
+          <div class="calendar-source-type-btns">
+            <button type="button" class="btn btn-ghost calendar-source-type-btn active" data-source-type="ics"><i class="ti ti-link"></i> ICS Feed</button>
+            <button type="button" class="btn btn-ghost calendar-source-type-btn" data-source-type="google_oauth"><i class="ti ti-brand-google"></i> Google</button>
+            <button type="button" class="btn btn-ghost calendar-source-type-btn" data-source-type="microsoft_oauth"><i class="ti ti-brand-microsoft"></i> Outlook</button>
+            <button type="button" class="btn btn-ghost calendar-source-type-btn" data-source-type="caldav"><i class="ti ti-server"></i> CalDAV</button>
+          </div>
+        </div>
+        <div class="field">
           <label for="add-tile-calendar-name">Calendar name</label>
           <input type="text" id="add-tile-calendar-name" autocomplete="off" placeholder="My calendar" />
         </div>
-        <div class="field">
-          <label for="add-tile-calendar-url">Public calendar URL (ICS)</label>
-          <input
-            type="url"
-            id="add-tile-calendar-url"
-            autocomplete="off"
-            spellcheck="false"
-            placeholder="https://calendar.proton.me/api/calendar/v1/url/…/calendar.ics?…"
-          />
-          <span class="field-hint" title="Proton Calendar → Settings → Calendar → Share → Subscribe / public link">
-            Tip: In Proton Calendar, open your calendar’s <strong>Share</strong> settings and copy the public
-            <strong>ICS subscribe link</strong>, then paste it here.
-          </span>
+        <div id="add-tile-calendar-ics-fields">
+          <div class="field">
+            <label for="add-tile-calendar-url">Public calendar URL (ICS)</label>
+            <input type="url" id="add-tile-calendar-url" autocomplete="off" spellcheck="false"
+              placeholder="https://calendar.google.com/calendar/ical/.../basic.ics" />
+            <span class="field-hint">Google, Outlook, Apple, Proton — any public ICS link.</span>
+          </div>
+        </div>
+        <div id="add-tile-calendar-caldav-fields" class="hidden">
+          <div class="field">
+            <label for="add-tile-calendar-caldav-url">CalDAV server URL</label>
+            <input type="url" id="add-tile-calendar-caldav-url" autocomplete="off" placeholder="https://dav.example.com/dav/" />
+          </div>
+          <div class="field">
+            <label for="add-tile-calendar-caldav-user">Username</label>
+            <input type="text" id="add-tile-calendar-caldav-user" autocomplete="off" placeholder="user@example.com" />
+          </div>
+          <div class="field">
+            <label for="add-tile-calendar-caldav-pass">Password</label>
+            <input type="password" id="add-tile-calendar-caldav-pass" autocomplete="off" />
+          </div>
+        </div>
+        <div id="add-tile-calendar-oauth-info" class="hidden">
+          <p class="calendar-oauth-info-text">You’ll be redirected to sign in with your calendar provider. The CRM will be able to read and create events.</p>
         </div>
         <p id="add-tile-error" class="modal-error hidden" role="alert"></p>
         <div class="modal-actions">
           <button type="button" id="add-tile-calendar-back" class="btn btn-secondary">Back</button>
-          <button type="button" id="add-tile-calendar-create" class="btn btn-primary">Add calendar tile</button>
+          <button type="button" id="add-tile-calendar-create" class="btn btn-primary">Add calendar</button>
         </div>
       </div>
       <div class="modal-actions" id="add-tile-modal-actions">
@@ -1389,6 +1409,98 @@
       <div id="calendar-event-modal-body" class="calendar-event-modal-body"></div>
       <div class="modal-actions">
         <button type="button" id="calendar-event-modal-close" class="btn btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Calendar Settings Modal (gear icon) -->
+  <div id="calendar-settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="calendar-settings-title">
+    <div class="modal-backdrop" data-calendar-settings-dismiss></div>
+    <div class="modal-card modal-card-calendar-settings">
+      <div class="modal-card-head">
+        <h2 id="calendar-settings-title" class="modal-title" style="margin:0;font-size:1rem;">Calendar Settings</h2>
+        <button type="button" class="btn btn-icon-only modal-header-control" title="Close" data-calendar-settings-dismiss><i class="ti ti-x"></i></button>
+      </div>
+      <div class="modal-card-body">
+        <div class="calendar-settings-section">
+          <h3>Connected Calendars</h3>
+          <div id="calendar-settings-sources-list" class="calendar-settings-sources-list">
+            <p class="calendar-settings-empty">No calendars connected yet.</p>
+          </div>
+          <button type="button" id="calendar-settings-add-source" class="btn btn-ghost btn-small" style="margin-top:0.4rem;"><i class="ti ti-plus"></i> Add Calendar</button>
+        </div>
+        <div id="calendar-settings-add-form" class="calendar-settings-add-form hidden">
+          <h3>Add Calendar Source</h3>
+          <div class="calendar-source-type-btns" style="margin-bottom:0.5rem;">
+            <button type="button" class="btn btn-ghost calendar-source-type-btn active" data-source-type="ics"><i class="ti ti-link"></i> ICS</button>
+            <button type="button" class="btn btn-ghost calendar-source-type-btn" data-source-type="google_oauth"><i class="ti ti-brand-google"></i> Google</button>
+            <button type="button" class="btn btn-ghost calendar-source-type-btn" data-source-type="microsoft_oauth"><i class="ti ti-brand-microsoft"></i> Outlook</button>
+            <button type="button" class="btn btn-ghost calendar-source-type-btn" data-source-type="caldav"><i class="ti ti-server"></i> CalDAV</button>
+          </div>
+          <div class="field"><label>Name</label><input type="text" id="cal-settings-src-name" placeholder="My calendar" /></div>
+          <div id="cal-settings-ics-fields">
+            <div class="field"><label>ICS URL</label><input type="url" id="cal-settings-ics-url" placeholder="https://..." /></div>
+          </div>
+          <div id="cal-settings-caldav-fields" class="hidden">
+            <div class="field"><label>CalDAV URL</label><input type="url" id="cal-settings-caldav-url" placeholder="https://dav.example.com/dav/" /></div>
+            <div class="field"><label>Username</label><input type="text" id="cal-settings-caldav-user" /></div>
+            <div class="field"><label>Password</label><input type="password" id="cal-settings-caldav-pass" /></div>
+          </div>
+          <div id="cal-settings-oauth-info" class="hidden"><p class="calendar-oauth-info-text">You’ll be redirected to sign in.</p></div>
+          <div style="display:flex;gap:0.5rem;margin-top:0.5rem;">
+            <button type="button" id="cal-settings-add-cancel" class="btn btn-secondary btn-small">Cancel</button>
+            <button type="button" id="cal-settings-add-save" class="btn btn-primary btn-small">Connect</button>
+          </div>
+        </div>
+        <div class="calendar-settings-section">
+          <h3>Reminders</h3>
+          <label class="toggle-row"><input type="checkbox" id="cal-settings-browser-notif" checked /> Browser notifications</label>
+          <label class="toggle-row"><input type="checkbox" id="cal-settings-telegram-notif" checked /> Telegram messages</label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Calendar Event Create/Edit Modal -->
+  <div id="calendar-event-edit-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="cal-edit-title">
+    <div class="modal-backdrop" data-calendar-edit-dismiss></div>
+    <div class="modal-card modal-card-calendar-edit">
+      <div class="modal-card-head">
+        <h2 id="cal-edit-title" class="modal-title" style="margin:0;font-size:1rem;">New Event</h2>
+        <button type="button" class="btn btn-icon-only modal-header-control" title="Close" data-calendar-edit-dismiss><i class="ti ti-x"></i></button>
+      </div>
+      <div class="modal-card-body">
+        <input type="hidden" id="cal-edit-id" />
+        <div class="field"><label>Title</label><input type="text" id="cal-edit-summary" placeholder="Event title" /></div>
+        <div class="field">
+          <label><input type="checkbox" id="cal-edit-allday" /> All day</label>
+        </div>
+        <div class="cal-edit-datetime-row">
+          <div class="field" style="flex:1"><label>Start</label><input type="date" id="cal-edit-start-date" /><input type="time" id="cal-edit-start-time" class="cal-edit-time" /></div>
+          <div class="field" style="flex:1"><label>End</label><input type="date" id="cal-edit-end-date" /><input type="time" id="cal-edit-end-time" class="cal-edit-time" /></div>
+        </div>
+        <div class="field"><label>Location</label><input type="text" id="cal-edit-location" placeholder="Optional" /></div>
+        <div class="field"><label>Description</label><textarea id="cal-edit-description" rows="3" placeholder="Optional"></textarea></div>
+        <div class="field">
+          <label>Calendar</label>
+          <select id="cal-edit-source"></select>
+        </div>
+        <div class="field">
+          <label>Reminder</label>
+          <select id="cal-edit-reminder">
+            <option value="">None</option>
+            <option value="5">5 minutes before</option>
+            <option value="15" selected>15 minutes before</option>
+            <option value="30">30 minutes before</option>
+            <option value="60">1 hour before</option>
+            <option value="1440">1 day before</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" id="cal-edit-delete" class="btn btn-danger btn-small hidden" style="margin-right:auto;">Delete</button>
+        <button type="button" id="cal-edit-cancel" class="btn btn-secondary">Cancel</button>
+        <button type="button" id="cal-edit-save" class="btn btn-primary">Save</button>
       </div>
     </div>
   </div>

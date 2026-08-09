@@ -240,6 +240,7 @@ from presence_store import (
     set_status, touch_crm_activity, touch_heartbeat,
 )
 from notification_dispatcher import start_dispatcher, stop_dispatcher
+from calendar_sync import start_calendar_sync, stop_calendar_sync
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent
@@ -516,6 +517,90 @@ except Exception:
 
 # History category id for email link events ("Email" in history_categories)
 EMAIL_HISTORY_CATEGORY_ID = 16
+
+# ── Calendar system (migration 010) ──────────────────────────────────────────
+try:
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS calendar_sources (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            name TEXT NOT NULL,
+            source_type TEXT NOT NULL CHECK (source_type IN ('ics', 'google_oauth', 'microsoft_oauth', 'caldav')),
+            oauth_provider TEXT,
+            oauth_access_token TEXT,
+            oauth_refresh_token TEXT,
+            oauth_token_expires_at TIMESTAMPTZ,
+            oauth_email TEXT,
+            caldav_url TEXT,
+            caldav_username TEXT,
+            caldav_password_encrypted TEXT,
+            ics_url TEXT,
+            last_synced_at TIMESTAMPTZ,
+            sync_cursor TEXT,
+            color TEXT DEFAULT '#5b8abf',
+            visible BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+except Exception:
+    pass
+try:
+    db.execute("CREATE INDEX IF NOT EXISTS idx_cal_sources_user ON calendar_sources(user_id)")
+except Exception:
+    pass
+try:
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS calendar_events (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            source_id INTEGER REFERENCES calendar_sources(id) ON DELETE CASCADE,
+            uid TEXT NOT NULL,
+            summary TEXT,
+            description TEXT,
+            location TEXT,
+            dtstart TIMESTAMPTZ NOT NULL,
+            dtend TIMESTAMPTZ,
+            all_day BOOLEAN DEFAULT FALSE,
+            rrule TEXT,
+            color TEXT,
+            status TEXT DEFAULT 'confirmed',
+            external_id TEXT,
+            last_modified TIMESTAMPTZ,
+            reminder_minutes INTEGER,
+            reminder_sent BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(user_id, uid)
+        )
+    """)
+except Exception:
+    pass
+try:
+    db.execute("CREATE INDEX IF NOT EXISTS idx_cal_events_user_time ON calendar_events(user_id, dtstart, dtend)")
+except Exception:
+    pass
+try:
+    db.execute("CREATE INDEX IF NOT EXISTS idx_cal_events_source ON calendar_events(source_id) WHERE source_id IS NOT NULL")
+except Exception:
+    pass
+try:
+    db.execute("CREATE INDEX IF NOT EXISTS idx_cal_events_reminder ON calendar_events(user_id, dtstart) WHERE reminder_sent = FALSE AND reminder_minutes IS NOT NULL")
+except Exception:
+    pass
+try:
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS ics_feed_cache (
+            id SERIAL PRIMARY KEY,
+            url_hash TEXT NOT NULL UNIQUE,
+            raw_ics TEXT,
+            parsed_events JSONB,
+            fetched_at TIMESTAMPTZ,
+            expires_at TIMESTAMPTZ,
+            calendar_name TEXT,
+            timezone TEXT
+        )
+    """)
+except Exception:
+    pass
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -1412,6 +1497,24 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # ── Calendar feed (local handler, unchanged) ──
         if api_path == "/api/calendar/feed":
             self._handle_calendar_feed()
+            return
+
+        # ── Calendar v2 API (DB-backed) ──
+        if api_path == "/api/v2/calendar/sources":
+            self._handle_calendar_sources_get()
+            return
+        if api_path == "/api/v2/calendar/events":
+            self._handle_calendar_events_get(qs)
+            return
+        if api_path == "/api/v2/calendar/settings":
+            self._handle_calendar_settings_get()
+            return
+        m = re.match(r"^/api/v2/calendar/sources/(\d+)/sync$", api_path)
+        if m:
+            self._handle_calendar_source_sync(int(m.group(1)))
+            return
+        if api_path == "/api/v2/calendar/sync-all" and method == "POST":
+            self._handle_calendar_sync_all()
             return
 
         # ── Admin check ──
@@ -2496,6 +2599,31 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if m and method == "DELETE":
             self._handle_timesheet_entry_delete(int(m.group(1)))
+            return
+
+        # ── Calendar v2 API (DB-backed) ──
+        if api_path == "/api/v2/calendar/sources" and method == "POST":
+            self._handle_calendar_source_create()
+            return
+        m = re.match(r"^/api/v2/calendar/sources/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_calendar_source_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_calendar_source_delete(int(m.group(1)))
+            return
+        if api_path == "/api/v2/calendar/events" and method == "POST":
+            self._handle_calendar_event_create()
+            return
+        m = re.match(r"^/api/v2/calendar/events/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_calendar_event_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_calendar_event_delete(int(m.group(1)))
+            return
+        if api_path == "/api/v2/calendar/settings" and method == "PUT":
+            self._handle_calendar_settings_put()
             return
 
         self.send_error(404)
@@ -7902,6 +8030,328 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(pdf_output)
 
+    # ── Calendar v2 API Handlers ──────────────────────────────────────────────
+
+    def _handle_calendar_sources_get(self) -> None:
+        """List user's calendar sources."""
+        user = _require_auth(self)
+        if not user: return
+        sources = db.query_dicts(
+            "SELECT id, name, source_type, color, visible, last_synced_at, ics_url, oauth_email, caldav_url "
+            "FROM calendar_sources WHERE user_id = %s ORDER BY name",
+            (user["id"],),
+        )
+        # Sanitize: never expose tokens
+        for s in sources:
+            s.pop("oauth_access_token", None)
+            s.pop("oauth_refresh_token", None)
+            s.pop("caldav_password_encrypted", None)
+            s["has_password"] = bool(s.get("caldav_password_encrypted"))
+        _json_response(self, 200, {"sources": sources})
+
+    def _handle_calendar_events_get(self, qs: dict) -> None:
+        """List events in a date range from the local DB."""
+        user = _require_auth(self)
+        if not user: return
+        start_str = (qs.get("start") or [""])[0]
+        end_str = (qs.get("end") or [""])[0]
+        source_id = (qs.get("source_id") or [""])[0]
+        if not start_str or not end_str:
+            _json_response(self, 400, {"error": "start and end query params required"})
+            return
+        try:
+            start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+            if start_dt.tzinfo: start_dt = start_dt.astimezone(timezone.utc).replace(tzinfo=None)
+            end_dt = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+            if end_dt.tzinfo: end_dt = end_dt.astimezone(timezone.utc).replace(tzinfo=None)
+        except ValueError:
+            _json_response(self, 400, {"error": "Invalid date format"})
+            return
+        conditions = ["ce.user_id = %s", "ce.status != 'CANCELLED'", "ce.dtstart < %s", "ce.dtend > %s"]
+        params: list = [user["id"], end_dt, start_dt]
+        if source_id and source_id.isdigit():
+            conditions.append("ce.source_id = %s")
+            params.append(int(source_id))
+        where = " AND ".join(conditions)
+        events = db.query_dicts(
+            f"""SELECT ce.id, ce.uid, ce.summary, ce.description, ce.location,
+                       ce.dtstart, ce.dtend, ce.all_day, ce.rrule, ce.color, ce.status,
+                       ce.reminder_minutes, ce.source_id, cs.name AS source_name, cs.source_type
+                FROM calendar_events ce
+                LEFT JOIN calendar_sources cs ON cs.id = ce.source_id
+                WHERE {where}
+                ORDER BY ce.dtstart""",
+            tuple(params),
+        )
+        _json_response(self, 200, {"events": events})
+
+    def _handle_calendar_settings_get(self) -> None:
+        """Get user's calendar reminder/notification settings."""
+        user = _require_auth(self)
+        if not user: return
+        rows = db.query_dicts(
+            "SELECT notification_type, enabled FROM notification_preferences WHERE user_id = %s",
+            (user["id"],),
+        )
+        prefs = {r["notification_type"]: r["enabled"] for r in rows}
+        _json_response(self, 200, {
+            "browser_notifications": prefs.get("calendar_browser", True),
+            "telegram_notifications": prefs.get("calendar_telegram", True),
+            "default_reminder_minutes": 15,
+        })
+
+    def _handle_calendar_settings_put(self) -> None:
+        """Update user's calendar reminder/notification settings."""
+        user = _require_auth(self)
+        if not user: return
+        try:
+            body = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            body = {}
+        for key, db_type in [("browser_notifications", "calendar_browser"), ("telegram_notifications", "calendar_telegram")]:
+            if key in body:
+                val = bool(body[key])
+                db.execute(
+                    """INSERT INTO notification_preferences (user_id, notification_type, enabled)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT (user_id, notification_type) DO UPDATE SET enabled = %s""",
+                    (user["id"], db_type, val, val),
+                )
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_calendar_source_create(self) -> None:
+        """Add a new calendar source (ICS URL, CalDAV, or OAuth)."""
+        user = _require_auth(self)
+        if not user: return
+        try:
+            body = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            body = {}
+        source_type = (body.get("source_type") or "").strip()
+        name = (body.get("name") or "").strip()
+        color = (body.get("color") or "#5b8abf").strip()
+        if source_type not in ("ics", "google_oauth", "microsoft_oauth", "caldav"):
+            _json_response(self, 400, {"error": "Invalid source_type"})
+            return
+        if not name:
+            name = {"ics": "ICS Feed", "google_oauth": "Google Calendar", "microsoft_oauth": "Outlook Calendar", "caldav": "CalDAV"}.get(source_type, "Calendar")
+        ics_url = (body.get("ics_url") or "").strip() or None
+        caldav_url = (body.get("caldav_url") or "").strip() or None
+        caldav_username = (body.get("caldav_username") or "").strip() or None
+        caldav_password = (body.get("caldav_password") or "").strip() or None
+        caldav_password_encrypted = caldav_password if caldav_password else None
+        source_id = db.insert_returning(
+            """INSERT INTO calendar_sources (user_id, name, source_type, color, ics_url, caldav_url, caldav_username, caldav_password_encrypted)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (user["id"], name, source_type, color, ics_url, caldav_url, caldav_username, caldav_password_encrypted),
+        )
+        # If ICS, trigger immediate sync
+        if source_type == "ics" and ics_url:
+            try:
+                from calendar_sync import _fetch_ics_feed, _store_ics_cache, _sync_ics_events_to_db
+                from ics_calendar import parse_ics_calendar
+                raw_text, error = _fetch_ics_feed(ics_url)
+                if raw_text:
+                    parsed = parse_ics_calendar(raw_text)
+                    _store_ics_cache(ics_url, raw_text, parsed)
+                    _sync_ics_events_to_db(user["id"], source_id, parsed)
+                    db.execute("UPDATE calendar_sources SET last_synced_at = NOW() WHERE id = %s", (source_id,))
+            except Exception as e:
+                print(f"[WARN] Initial ICS sync failed: {e}", file=sys.stderr)
+        _json_response(self, 200, {"ok": True, "id": source_id})
+
+    def _handle_calendar_source_update(self, source_id: int) -> None:
+        """Update a calendar source (name, color, visibility)."""
+        user = _require_auth(self)
+        if not user: return
+        src = db.query_one("SELECT * FROM calendar_sources WHERE id = %s AND user_id = %s", (source_id, user["id"]))
+        if not src:
+            _json_response(self, 404, {"error": "Source not found"})
+            return
+        try:
+            body = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            body = {}
+        if "name" in body:
+            db.execute("UPDATE calendar_sources SET name = %s WHERE id = %s", ((body["name"] or "").strip() or "Calendar", source_id))
+        if "color" in body:
+            db.execute("UPDATE calendar_sources SET color = %s WHERE id = %s", ((body["color"] or "#5b8abf").strip(), source_id))
+        if "visible" in body:
+            db.execute("UPDATE calendar_sources SET visible = %s WHERE id = %s", (bool(body["visible"]), source_id))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_calendar_source_delete(self, source_id: int) -> None:
+        """Delete a calendar source and its events."""
+        user = _require_auth(self)
+        if not user: return
+        src = db.query_one("SELECT * FROM calendar_sources WHERE id = %s AND user_id = %s", (source_id, user["id"]))
+        if not src:
+            _json_response(self, 404, {"error": "Source not found"})
+            return
+        db.execute("DELETE FROM calendar_events WHERE source_id = %s", (source_id,))
+        db.execute("DELETE FROM calendar_sources WHERE id = %s", (source_id,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_calendar_source_sync(self, source_id: int) -> None:
+        """Trigger sync for a specific ICS source."""
+        user = _require_auth(self)
+        if not user: return
+        src = db.query_one("SELECT * FROM calendar_sources WHERE id = %s AND user_id = %s", (source_id, user["id"]))
+        if not src:
+            _json_response(self, 404, {"error": "Source not found"})
+            return
+        if src["source_type"] != "ics" or not src.get("ics_url"):
+            _json_response(self, 400, {"error": "Only ICS sources can be synced manually"})
+            return
+        try:
+            from calendar_sync import _fetch_ics_feed, _store_ics_cache, _sync_ics_events_to_db
+            from ics_calendar import parse_ics_calendar
+            raw_text, error = _fetch_ics_feed(src["ics_url"])
+            if error:
+                _json_response(self, 502, {"error": f"Feed fetch failed: {error}"})
+                return
+            parsed = parse_ics_calendar(raw_text)
+            _store_ics_cache(src["ics_url"], raw_text, parsed)
+            count = _sync_ics_events_to_db(user["id"], source_id, parsed)
+            db.execute("UPDATE calendar_sources SET last_synced_at = NOW() WHERE id = %s", (source_id,))
+            _json_response(self, 200, {"ok": True, "events_synced": count})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_calendar_sync_all(self) -> None:
+        """Trigger sync for all user's sources."""
+        user = _require_auth(self)
+        if not user: return
+        sources = db.query_dicts("SELECT id, source_type, ics_url FROM calendar_sources WHERE user_id = %s", (user["id"],))
+        synced = 0
+        for src in sources:
+            if src["source_type"] == "ics" and src.get("ics_url"):
+                try:
+                    from calendar_sync import _fetch_ics_feed, _store_ics_cache, _sync_ics_events_to_db
+                    from ics_calendar import parse_ics_calendar
+                    raw_text, _ = _fetch_ics_feed(src["ics_url"])
+                    if raw_text:
+                        parsed = parse_ics_calendar(raw_text)
+                        _store_ics_cache(src["ics_url"], raw_text, parsed)
+                        _sync_ics_events_to_db(user["id"], src["id"], parsed)
+                        db.execute("UPDATE calendar_sources SET last_synced_at = NOW() WHERE id = %s", (src["id"],))
+                        synced += 1
+                except Exception:
+                    pass
+        _json_response(self, 200, {"ok": True, "synced": synced})
+
+    def _handle_calendar_event_create(self) -> None:
+        """Create a local calendar event."""
+        user = _require_auth(self)
+        if not user: return
+        try:
+            body = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            body = {}
+        summary = (body.get("summary") or "").strip()
+        if not summary:
+            _json_response(self, 400, {"error": "summary is required"})
+            return
+        dtstart_str = (body.get("dtstart") or "").strip()
+        if not dtstart_str:
+            _json_response(self, 400, {"error": "dtstart is required"})
+            return
+        all_day = bool(body.get("all_day", False))
+        try:
+            if all_day and len(dtstart_str) == 10:
+                dtstart = datetime.strptime(dtstart_str, "%Y-%m-%d")
+            else:
+                dtstart = datetime.fromisoformat(dtstart_str.replace("Z", "+00:00"))
+                if dtstart.tzinfo: dtstart = dtstart.astimezone(timezone.utc).replace(tzinfo=None)
+        except ValueError:
+            _json_response(self, 400, {"error": "Invalid dtstart format"})
+            return
+        dtend_str = (body.get("dtend") or "").strip()
+        if dtend_str:
+            try:
+                if all_day and len(dtend_str) == 10:
+                    dtend = datetime.strptime(dtend_str, "%Y-%m-%d")
+                else:
+                    dtend = datetime.fromisoformat(dtend_str.replace("Z", "+00:00"))
+                    if dtend.tzinfo: dtend = dtend.astimezone(timezone.utc).replace(tzinfo=None)
+            except ValueError:
+                dtend = dtstart + (timedelta(days=1) if all_day else timedelta(hours=1))
+        else:
+            dtend = dtstart + (timedelta(days=1) if all_day else timedelta(hours=1))
+        if dtend <= dtstart:
+            dtend = dtstart + (timedelta(days=1) if all_day else timedelta(hours=1))
+        description = (body.get("description") or "").strip()
+        location = (body.get("location") or "").strip()
+        color = (body.get("color") or "").strip() or None
+        rrule = (body.get("rrule") or "").strip() or None
+        reminder = body.get("reminder_minutes")
+        source_id = body.get("source_id")
+        uid = f"local-{user['id']}-{int(time.time()*1000)}"
+        event_id = db.insert_returning(
+            """INSERT INTO calendar_events (user_id, source_id, uid, summary, description, location,
+               dtstart, dtend, all_day, rrule, color, reminder_minutes)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (user["id"], source_id, uid, summary, description, location, dtstart, dtend, all_day, rrule, color, reminder),
+        )
+        _json_response(self, 200, {"ok": True, "id": event_id, "uid": uid})
+
+    def _handle_calendar_event_update(self, event_id: int) -> None:
+        """Update a local calendar event."""
+        user = _require_auth(self)
+        if not user: return
+        ev = db.query_one("SELECT * FROM calendar_events WHERE id = %s AND user_id = %s", (event_id, user["id"]))
+        if not ev:
+            _json_response(self, 404, {"error": "Event not found"})
+            return
+        try:
+            body = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            body = {}
+        updates = []
+        params = []
+        for field in ["summary", "description", "location", "color", "rrule", "status"]:
+            if field in body:
+                updates.append(f"{field} = %s")
+                params.append((body[field] or "").strip() if isinstance(body[field], str) else body[field])
+        if "reminder_minutes" in body:
+            updates.append("reminder_minutes = %s")
+            updates.append("reminder_sent = FALSE")
+            params.append(body["reminder_minutes"])
+        if "dtstart" in body:
+            try:
+                dtstart = datetime.fromisoformat(body["dtstart"].replace("Z", "+00:00"))
+                if dtstart.tzinfo: dtstart = dtstart.astimezone(timezone.utc).replace(tzinfo=None)
+                updates.append("dtstart = %s")
+                params.append(dtstart)
+            except ValueError:
+                pass
+        if "dtend" in body:
+            try:
+                dtend = datetime.fromisoformat(body["dtend"].replace("Z", "+00:00"))
+                if dtend.tzinfo: dtend = dtend.astimezone(timezone.utc).replace(tzinfo=None)
+                updates.append("dtend = %s")
+                params.append(dtend)
+            except ValueError:
+                pass
+        if "all_day" in body:
+            updates.append("all_day = %s")
+            params.append(bool(body["all_day"]))
+        if updates:
+            params.append(event_id)
+            db.execute(f"UPDATE calendar_events SET {', '.join(updates)}, last_modified = NOW() WHERE id = %s", tuple(params))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_calendar_event_delete(self, event_id: int) -> None:
+        """Delete a calendar event."""
+        user = _require_auth(self)
+        if not user: return
+        ev = db.query_one("SELECT * FROM calendar_events WHERE id = %s AND user_id = %s", (event_id, user["id"]))
+        if not ev:
+            _json_response(self, 404, {"error": "Event not found"})
+            return
+        db.execute("DELETE FROM calendar_events WHERE id = %s", (event_id,))
+        _json_response(self, 200, {"ok": True})
+
     # ── OAuth Handlers ───────────────────────────────────────────────────────
 
     def _handle_oauth_authorize(self) -> None:
@@ -10240,6 +10690,7 @@ def main() -> None:
     scanner_stop = mail_scanner.start_scanner() if mail_scanner else None
     backup_stop = None
     reminders_stop = None
+    calendar_sync_stop = None
     try:
         from backup_service import start_backup_scheduler
         backup_stop = start_backup_scheduler()
@@ -10251,6 +10702,11 @@ def main() -> None:
     except Exception as e:
         print(f"Task reminder sweep not started: {e}")
     try:
+        calendar_sync_stop = start_calendar_sync()
+        print("Calendar sync service started")
+    except Exception as e:
+        print(f"Calendar sync not started: {e}")
+    try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down...")
@@ -10261,6 +10717,8 @@ def main() -> None:
         if reminders_stop:
             from task_reminders import stop_reminder_sweep
             stop_reminder_sweep(reminders_stop)
+        if calendar_sync_stop:
+            stop_calendar_sync(calendar_sync_stop)
         server.shutdown()
 
 
