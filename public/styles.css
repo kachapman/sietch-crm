@@ -5126,6 +5126,25 @@ body {
   font-family: var(--font);
   transition: color 0.15s, border-color 0.15s;
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.tab-icon {
+  flex-shrink: 0;
+}
+.tab-label {
+  white-space: nowrap;
+}
+/* Icon-only tabs on narrow screens */
+@media (max-width: 768px) {
+  .tab-label {
+    display: none;
+  }
+  .presence-tile-tab,
+  .presence-tab {
+    padding: 0.35rem 0.5rem;
+  }
 }
 
 .presence-tile-tab:hover {
