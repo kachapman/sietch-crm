@@ -5676,7 +5676,7 @@ body {
 .ts-export-dropdown {
   position: absolute;
   bottom: 100%;
-  right: 0;
+  left: 0;
   margin-bottom: 4px;
   background: var(--surface);
   border: 1px solid var(--border);
