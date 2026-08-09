@@ -16256,8 +16256,8 @@ function renderPresenceTile() {
       </div>
       <div id="presence-tile-timesheet-body" class="presence-tile-body presence-tile-tab-content" style="display:none;">
         <div class="ts-clock-widget">
-          <div id="ts-timer-display" class="ts-timer-display">00:00:00</div>
           <button type="button" id="ts-clock-btn" class="ts-clock-btn clock-in">Clock In</button>
+          <div id="ts-timer-display" class="ts-timer-display">00:00:00</div>
           <button type="button" id="ts-break-btn" class="ts-break-btn hidden">Start Break</button>
           <div class="ts-project-search" style="position:relative; flex: 1 1 150px;">
             <input type="search" id="ts-project-search" class="ts-project-search-input" placeholder="Search project..." autocomplete="off" />
@@ -16325,8 +16325,14 @@ function renderPresenceTile() {
               statusBtn.querySelector(".status-dot-indicator").className = `status-dot-indicator ${opt.dotClass}`;
               presenceFetch("/api/presence/status", {
                 method: "POST",
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ status: opt.value, inferred: false }),
-              });
+              }).then(() => {
+                fetchPresenceSnapshot().then(snap => {
+                  renderPresenceTileCompact(snap);
+                  syncTileStatusSelect(snap);
+                });
+              }).catch(() => {});
             }
           });
           statusDropdown.appendChild(item);
@@ -17101,7 +17107,7 @@ function renderPresenceTimesheetModal(container, snap) {
   projectResults.id = 'modal-ts-project-results';
   projectResults.className = 'contact-results hidden';
   projectSearchWrap.append(projectSearchInput, projectResults);
-  clockWidget.append(timerDisplay, clockBtn, breakBtn, projectSearchWrap);
+  clockWidget.append(clockBtn, timerDisplay, breakBtn, projectSearchWrap);
   container.appendChild(clockWidget);
   // Date range
   const rangeBar = document.createElement('div');
