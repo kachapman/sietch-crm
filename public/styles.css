@@ -11037,6 +11037,19 @@ body {
 #documents-trigger { order: 5; }
 #presence-trigger { order: 3; }
 
+/* Modal card head: flex row with title left, close button right */
+.modal-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.modal-card-head .modal-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
 /* ── Modal header controls: minimize + close buttons ── */
 .modal-header-control {
   display: inline-flex;
