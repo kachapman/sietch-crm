@@ -15908,7 +15908,13 @@ function renderPresenceModal(snapshot = null, usersCache = null) {
   // Update modal title with online count
   const onlineCount = (snap?.users || []).filter(u => u.online || u.idle).length;
   const titleEl = $("#presence-modal-title");
-  if (titleEl) titleEl.textContent = `Team (${onlineCount} online)`;
+  if (titleEl) titleEl.textContent = "Team";
+  // Update online badge on Team tab
+  const teamBadge = $("#presence-modal-team-badge");
+  if (teamBadge) {
+    teamBadge.textContent = onlineCount;
+    teamBadge.classList.toggle("hidden", onlineCount === 0);
+  }
 
   if (!state.presenceTab) state.presenceTab = 'team';
 
@@ -16216,9 +16222,12 @@ function renderPresenceTileCompact(snapshot = null) {
   body.appendChild(list);
   syncTileStatusSelect(snap);
 
-  // Update online count in toolbar
-  const countEl = $("#presence-tile-online-count");
-  if (countEl) countEl.textContent = `${onlineUsers.length} online`;
+  // Update online count on Team tab badge
+  const teamBadge = $("#presence-tile-team-badge");
+  if (teamBadge) {
+    teamBadge.textContent = onlineUsers.length;
+    teamBadge.classList.toggle("hidden", onlineUsers.length === 0);
+  }
 
   // If the Messages tab body is currently visible, refresh its inbox too
   // so newly-arrived presence snapshots update the message list.
@@ -16273,7 +16282,6 @@ function renderPresenceTile() {
         </div>
         <div id="ts-entries-list" class="ts-entries-list"></div>
         <div class="ts-footer-bar">
-          <div id="ts-daily-total" class="ts-daily-total"></div>
           <div class="ts-export-btns">
             <div class="ts-export-wrap">
               <button type="button" id="ts-export-csv" class="ts-export-btn" title="Export CSV"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M7 16.5a1.5 1.5 0 0 0 -3 0v3a1.5 1.5 0 0 0 3 0"/><path d="M10 20.25c0 .414 .336 .75 .75 .75h1.25a1 1 0 0 0 1 -1v-1a1 1 0 0 0 -1 -1h-1a1 1 0 0 1 -1 -1v-1a1 1 0 0 1 1 -1h1.25a.75 .75 0 0 1 .75 .75"/><path d="M16 15l2 6l2 -6"/></svg></button>
@@ -16296,6 +16304,7 @@ function renderPresenceTile() {
               </div>
             </div>
           </div>
+          <div id="ts-daily-total" class="ts-daily-total"></div>
         </div>
       </div>
       <div id="presence-tile-admin" class="presence-admin hidden" style="padding:0.5rem 0.75rem;font-size:0.78rem;color:var(--muted);"></div>
@@ -16407,15 +16416,11 @@ function renderPresenceTile() {
       const tabs = document.createElement("div");
       tabs.className = "presence-tile-tabs presence-tile-tabs-inline";
       tabs.innerHTML = `
-        <button type="button" class="presence-tile-tab active" data-tab="team">Team</button>
+        <button type="button" class="presence-tile-tab active" data-tab="team">Team<span id="presence-tile-team-badge" class="online-badge hidden"></span></button>
         <button type="button" class="presence-tile-tab" data-tab="messages">Messages<span id="presence-tile-msg-badge" class="msg-badge hidden">0</span></button>
         <button type="button" class="presence-tile-tab" data-tab="timesheet">Timesheet</button>
       `;
       tools.appendChild(tabs);
-      const onlineCount = document.createElement("span");
-      onlineCount.id = "presence-tile-online-count";
-      onlineCount.className = "presence-online-count";
-      tools.appendChild(onlineCount);
     }
     bindPresenceTileControls(tile);
   }
@@ -17177,7 +17182,7 @@ function renderPresenceTimesheetModal(container, snap) {
   pdfDrop.innerHTML = '<label>From</label><input type="date" id="modal-ts-pdf-from" class="ts-export-dropdown-date" /><label>To</label><input type="date" id="modal-ts-pdf-to" class="ts-export-dropdown-date" /><button type="button" id="modal-ts-pdf-go" class="ts-export-go">Export</button>';
   pdfWrap.append(pdfBtn, pdfDrop);
   exportBtns.append(csvWrap, pdfWrap);
-  footerBar.append(totalEl, exportBtns);
+  footerBar.append(exportBtns, totalEl);
   container.appendChild(footerBar);
   // Fetch active entry
   api("/api/timesheet/active").then(data => {
@@ -17737,6 +17742,7 @@ function tsUpdateDateLabel() {
 function tsWireExportDropdowns() {
   const csvBtn = document.getElementById("ts-export-csv");
   const csvDrop = document.getElementById("ts-csv-dropdown");
+  const csvWrap = csvBtn?.closest(".ts-export-wrap");
   if (csvBtn && csvDrop) {
     csvBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -17752,6 +17758,7 @@ function tsWireExportDropdowns() {
   }
   const pdfBtn = document.getElementById("ts-export-pdf");
   const pdfDrop = document.getElementById("ts-pdf-dropdown");
+  const pdfWrap = pdfBtn?.closest(".ts-export-wrap");
   if (pdfBtn && pdfDrop) {
     pdfBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -17765,21 +17772,24 @@ function tsWireExportDropdowns() {
       }
     });
   }
-  document.getElementById("ts-csv-go")?.addEventListener("click", () => {
+  document.getElementById("ts-csv-go")?.addEventListener("click", (e) => {
+    e.stopPropagation();
     const from = document.getElementById("ts-csv-from")?.value || "";
     const to = document.getElementById("ts-csv-to")?.value || "";
     window.open(`/api/timesheet/export?from=${from}&to=${to}`, "_blank");
     csvDrop?.classList.add("hidden");
   });
-  document.getElementById("ts-pdf-go")?.addEventListener("click", () => {
+  document.getElementById("ts-pdf-go")?.addEventListener("click", (e) => {
+    e.stopPropagation();
     const from = document.getElementById("ts-pdf-from")?.value || "";
     const to = document.getElementById("ts-pdf-to")?.value || "";
     window.open(`/api/timesheet/export-pdf?from=${from}&to=${to}`, "_blank");
     pdfDrop?.classList.add("hidden");
   });
-  document.addEventListener("click", () => {
-    csvDrop?.classList.add("hidden");
-    pdfDrop?.classList.add("hidden");
+  // Close dropdowns when clicking outside
+  document.addEventListener("click", (e) => {
+    if (csvWrap && !csvWrap.contains(e.target)) csvDrop?.classList.add("hidden");
+    if (pdfWrap && !pdfWrap.contains(e.target)) pdfDrop?.classList.add("hidden");
   });
 }
 
