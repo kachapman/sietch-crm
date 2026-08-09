@@ -2,6 +2,101 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Team Tile Revamp + Timesheet System — COMPLETED (2026-08-09)
+
+### Session Summary — All items completed across multiple commits:
+
+**Heartbeat Fix (Critical Bug):**
+- `startPresenceHeartbeats()` was dead code — never called. Fixed by calling from `ensurePresenceOnLogin()`.
+- Network disconnect detection via `window.addEventListener('online'/'offline')`.
+- Heartbeat failure indicator after 3+ consecutive failures.
+- `touch_crm_activity()` now called from API proxy.
+
+**Height Bug Fix:**
+- Removed `max-height: 280px` from `.presence-tile-body`.
+- Added `overflow-y: auto` to `.tile-body-content` for panels.
+- Removed `min-height: 240px` from `.presence-panel .presence-tile-body`.
+- Added `max-height` to `.dashboard-tile.presence-panel` (single/double/triple/quad) to prevent tile expansion from content.
+- Export bar and daily total: removed `flex-shrink: 0` so they don't push tile height.
+
+**Toolbar Restructure (Zulip-Inspired):**
+- Status `<select>` replaced with `icon-tabler-device-desktop-analytics` SVG icon button + floating dropdown.
+- Tile title "Team" removed (follows Tasks pattern).
+- Tabs moved before icon in toolbar.
+- Online count shown as green badge on Team tab (not in toolbar).
+
+**Tab Icons:**
+- SVG icons on all three tabs (Team=users-group, Messages=messages, Timesheet=report).
+- Icon-only on ≤768px screens, icon+text on desktop.
+
+**Offline Collapse:**
+- "▸ Offline (N)" toggle with domino expand animation (40ms stagger, spring-bounce).
+
+**Zulip-Inspired User List:**
+- Filter input at top of team body.
+- 24px avatar initials with profile photo support.
+- Section headers with counts: "Online (3)" / "Offline (5)".
+- Unread DM badges per user row.
+- Breathing presence dots (box-shadow animation).
+
+**Messages Tab:**
+- Unread indicators (blue left border).
+- Last message preview, time ago.
+- Filter input.
+- DM thread hides message list (replaces, not stacks).
+- Empty state: "No messages yet — click a team member to start chatting".
+
+**DM Inline:**
+- Always-visible compose bar at bottom.
+- Pop-out button in header (icon-tabler-queue-pop-out).
+- Cleaner message bubbles.
+- Basic markdown support: `*bold*`, `_italic_`, `~strikethrough~` (XSS-safe).
+- Draft persistence across tab switches and minimize/restore.
+
+**Timesheet System:**
+- New `time_entries` table (migration 009) + `time_entries_daily` view.
+- Clock in/out with live timer.
+- Break management (start/end).
+- Project search field (typeahead using `searchOpportunitiesByTitle()`).
+- Entry list with context menu (Add Note / Assign to Project / Delete).
+- Daily totals.
+- CSV/PDF export with dropdown date pickers.
+- Admin weekly matrix in admin console Users tab.
+- 12 server endpoints.
+- Server-side PostgreSQL source of truth, reconnect resilience, orphaned entry cleanup.
+
+**PDF Export:**
+- `fpdf2` library for server-side PDF generation.
+- `_pdf_safe()` sanitizer for Latin-1 characters.
+- Standard layout: header, entries table, daily totals, grand total.
+
+**Modal Improvements:**
+- Fixed height (80vh desktop, 100dvh mobile) — consistent across all tabs.
+- Flex layout fills available space.
+- DM thread hides message list (replaces, not stacks).
+- Close/minimize in title bar (removed footer close).
+- Sidebar trigger with `icon-tabler-users-group` SVG.
+- Minimize saves state (tab, user, DM draft, scroll) to localStorage + server.
+
+**Online Count:**
+- Green `.online-badge` on Team tab buttons (modal + tile).
+- Removed from modal title text.
+
+**Opportunity → Project Rename:**
+- 48 user-facing text strings renamed across `index.html` and `app.js`.
+
+**Export Consolidation:**
+- Total + CSV/PDF buttons on one line (footer bar).
+- Date pickers in dropdown menus on each button.
+- Icon-only buttons (icon-tabler-file-type-csv / icon-tabler-file-type-pdf).
+
+**Pop-out Icon:**
+- `icon-tabler-queue-pop-out` SVG for tile popup button.
+
+**Files Changed:** `migrations/009_add_timesheets.sql` (new), `requirements.txt` (new), `server.py`, `public/app.js`, `public/styles.css`, `public/index.html`.
+
+---
+
 ## Team Modal Improvements + Feature Parity (2026-08-08)
 
 ### Modal Responsive Layout
