@@ -574,7 +574,7 @@ function groupFilterSummary(group) {
   if (group.dealStatus && group.dealStatus !== "all") {
     parts.push(group.dealStatus === "open" ? "Open deals" : "Closed deals");
   }
-  if (group.showOnlyRedOpportunities) parts.push("Red opportunities only");
+  if (group.showOnlyRedOpportunities) parts.push("Red projects only");
   return parts.join(" · ");
 }
 
@@ -1073,7 +1073,7 @@ function showTileCollapsedHint(tileId, message) {
 function updateDashboardStatusText() {
   const openOpps = countOpenOpportunities();
   const openTasks = state.tasks.length;
-  let text = `${openOpps} open opportunities · ${openTasks} open tasks`;
+  let text = `${openOpps} open projects · ${openTasks} open tasks`;
   const status = $("#status-text");
   if (status) status.textContent = text;
 }
@@ -1858,7 +1858,7 @@ function applyGroupTemplate(group, template) {
   Object.assign(group, newGroup(), cfg, keep);
   const el = groupDomEl(group);
   if (el) {
-    el.dataset.tileLabel = group.name || "Opportunity group";
+    el.dataset.tileLabel = group.name || "Project group";
     if (group._syncNameDisplay) group._syncNameDisplay();
     else {
       const nameInput = $(".group-tile-name-input", el);
@@ -1884,7 +1884,7 @@ function bindGroupTileChrome(section, group, tileId) {
   // --- Click-to-edit title (no pencil button — click the title itself) ---
   const nameDisplay = document.createElement("span");
   nameDisplay.className = "group-tile-name-display";
-  nameDisplay.textContent = group.name || "Opportunity group";
+  nameDisplay.textContent = group.name || "Project group";
 
   const nameInput = document.createElement("input");
   nameInput.type = "text";
@@ -1903,7 +1903,7 @@ function bindGroupTileChrome(section, group, tileId) {
       section.dataset.tileLabel = group.name;
       saveGroupsToStorage();
     },
-    placeholder: "Opportunity group",
+    placeholder: "Project group",
   });
 
   const countEl = document.createElement("span");
@@ -2079,9 +2079,9 @@ function bindGroupTileChrome(section, group, tileId) {
 
   group._setFiltersCollapsed = setFiltersCollapsed;
   group._syncNameDisplay = () => {
-    nameDisplay.textContent = group.name || "Opportunity group";
+    nameDisplay.textContent = group.name || "Project group";
     nameInput.value = group.name || "";
-    section.dataset.tileLabel = group.name || "Opportunity group";
+    section.dataset.tileLabel = group.name || "Project group";
   };
 }
 
@@ -9619,7 +9619,7 @@ function renderGroupBoard(group, container, onComplete) {
   const showStagePill = group.groupBy !== "stage";
 
   if (!columns.length) {
-    container.innerHTML = '<p class="board-loading">No opportunities match this group\'s filters.</p>';
+    container.innerHTML = '<p class="board-loading">No projects match this group\'s filters.</p>';
     if (onComplete) onComplete();
     return;
   }
@@ -9999,7 +9999,7 @@ function renderBoardGroups() {
 
     if (section) {
       // ── UPDATE PATH: sync filter controls + re-render board only ──────
-      section.dataset.tileLabel = group.name || "Opportunity group";
+      section.dataset.tileLabel = group.name || "Project group";
 
       section.querySelectorAll("[data-status]").forEach((btn) => {
         btn.classList.toggle("chip-active", btn.dataset.status === group.dealStatus);
@@ -10070,7 +10070,7 @@ function renderBoardGroups() {
     section = document.createElement("section");
     section.className = "dashboard-tile board-group board-group-tile";
     section.dataset.tileId = tileId;
-    section.dataset.tileLabel = group.name || "Opportunity group";
+    section.dataset.tileLabel = group.name || "Project group";
     section.dataset.groupId = group.id;
 
     section.innerHTML = `
@@ -10110,7 +10110,7 @@ function renderBoardGroups() {
             <div class="field field-checkbox">
               <label class="checkbox-filter">
                 <input type="checkbox" class="show-only-red" />
-                <span>Show only red opportunities</span>
+                <span>Show only red projects</span>
               </label>
             </div>
             <div class="field">
@@ -10118,7 +10118,7 @@ function renderBoardGroups() {
               <div class="tag-multiselect"></div>
             </div>
             <div class="field contact-field">
-              <label>Opportunity contact</label>
+              <label>Project contact</label>
               <input type="search" class="contact-search" placeholder="Search name…" autocomplete="off" />
               <div class="contact-results hidden"></div>
               <div class="contact-selected"></div>
@@ -10505,7 +10505,7 @@ function parseRelationshipNotifyEvent(ev) {
   if (!id) return null;
 
   const title = String(
-    entity?.entityTitle || entity?.EntityTitle || ev.opportunityTitle || `Opportunity #${id}`
+    entity?.entityTitle || entity?.EntityTitle || ev.opportunityTitle || `Project #${id}`
   )
     .replace(/^CRM\.\s*New event added to\s+/i, "")
     .trim();
@@ -11104,7 +11104,7 @@ function extractCrmNotifyFromText(text, meta = {}) {
     meta.title ||
     plain.match(/CRM\.\s*New event added to\s+(.+?)(?:\n|$)/i)?.[1]?.trim() ||
     plain.match(/New event added to\s+"([^"]+)"/i)?.[1]?.trim();
-  title = (title || `Opportunity #${id}`).replace(/\s*\(.*\)\s*$/, "").trim();
+  title = (title || `Project #${id}`).replace(/\s*\(.*\)\s*$/, "").trim();
 
   let eventText = toPlainDisplayText(plain);
   const lines = plain.split("\n").map((l) => toPlainDisplayText(l)).filter(Boolean);
@@ -11117,7 +11117,7 @@ function extractCrmNotifyFromText(text, meta = {}) {
     break;
   }
   if (!eventText || isNotifyTemplateSpam(eventText)) {
-    eventText = "New opportunity event";
+    eventText = "New project event";
   }
 
   return {
@@ -11184,9 +11184,9 @@ function parseMailNotifyMessage(mail) {
       const eventText = toPlainDisplayText(body || subject);
       parsed = {
         id,
-        title: subject.replace(/^CRM\.\s*New event added to\s+/i, "").trim() || `Opportunity #${id}`,
+        title: subject.replace(/^CRM\.\s*New event added to\s+/i, "").trim() || `Project #${id}`,
         author,
-        text: eventText && !isNotifyTemplateSpam(eventText) ? eventText : "New opportunity event",
+        text: eventText && !isNotifyTemplateSpam(eventText) ? eventText : "New project event",
         date,
         source: "mail",
       };
@@ -11457,7 +11457,7 @@ function renderFeedHiddenModalList() {
       a.href = crmOpportunityUrl(snap.id);
       a.target = "_blank";
       a.rel = "noopener noreferrer";
-      a.textContent = snap.title || `Opportunity #${snap.id}`;
+      a.textContent = snap.title || `Project #${snap.id}`;
       body.appendChild(a);
     } else {
       const span = document.createElement("span");
@@ -12012,7 +12012,7 @@ async function openDealEditModal(opp, group) {
   if (!modal || !form) return;
 
   const id = opp.id ?? opp.ID;
-  if (id == null) throw new Error("Opportunity id missing");
+  if (id == null) throw new Error("Project id missing");
 
   setDealEditError("");
   form.reset();
@@ -12033,7 +12033,7 @@ async function openDealEditModal(opp, group) {
   try {
     dealEditCustomFieldValues = await fetchOpportunityCustomFieldValues(id);
   } catch { /* non-fatal */ }
-  const oppTitle = opp.title || opp.Title || `Opportunity #${id}`;
+  const oppTitle = opp.title || opp.Title || `Project #${id}`;
   state.dealEdit = {
     oppId: Number(id),
     group,
@@ -12172,7 +12172,7 @@ async function uploadAttachmentForNote(file, oppId) {
   }
   const id = Number(oppId);
   if (!Number.isFinite(id) || id <= 0) {
-    throw new Error("Opportunity id is required for attachment upload");
+    throw new Error("Project id is required for attachment upload");
   }
   if (!state.currentUserId) {
     try { await loadCurrentUser(); } catch {}
@@ -12579,7 +12579,7 @@ async function submitDealEditForm(e) {
           title: titleChanged ? titleVal : undefined,
         });
       } catch (err) {
-        throw dealEditStepError("Opportunity update", err);
+        throw dealEditStepError("Project update", err);
       }
     }
 
@@ -12760,7 +12760,7 @@ function updateQuickNoteOpportunitySelectedUi() {
   const crmLink = $("#quick-note-crm-link");
   if (!selected) return;
   if (ctx?.oppId) {
-    selected.innerHTML = `${escapeHtml(ctx.oppTitle || `Opportunity #${ctx.oppId}`)} <span class="contact-clear" role="button" tabindex="0">clear</span>`;
+    selected.innerHTML = `${escapeHtml(ctx.oppTitle || `Project #${ctx.oppId}`)} <span class="contact-clear" role="button" tabindex="0">clear</span>`;
     $(".contact-clear", selected)?.addEventListener("click", () => {
       clearQuickNoteOpportunitySelection();
       renderQuickNoteTagChips();
@@ -12778,10 +12778,10 @@ function updateQuickNoteOpportunitySelectedUi() {
 
 async function applyQuickNoteOpportunity(oppSummary) {
   const id = Number(oppSummary.id ?? oppSummary.ID);
-  if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid opportunity");
+  if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid project");
 
   const opp = await fetchOpportunityForUpdate(id);
-  if (!opp) throw new Error("Could not load opportunity");
+  if (!opp) throw new Error("Could not load project");
 
   if (!state.allTags.length) await loadAllTags();
   const tags = await loadDealEditTags(opp);
@@ -12789,7 +12789,7 @@ async function applyQuickNoteOpportunity(oppSummary) {
 
   state.quickNote = {
     oppId,
-    oppTitle: opp.title || opp.Title || oppSummary.title || `Opportunity #${oppId}`,
+    oppTitle: opp.title || opp.Title || oppSummary.title || `Project #${oppId}`,
     initialTags: [...tags],
     tags: [...tags],
     initialDue: dueDateToInputValue(opportunityDueDateRaw(opp)),
@@ -12858,7 +12858,7 @@ async function submitQuickNoteForm(e) {
   setQuickNoteError("");
   const ctx = state.quickNote;
   if (!ctx?.oppId) {
-    setQuickNoteError("Select an opportunity for this note.");
+    setQuickNoteError("Select a project for this note.");
     return;
   }
 
@@ -13837,7 +13837,7 @@ async function submitCreateOpportunityForm(e) {
     }
     const created = unwrapCreatedEntity(data);
     const oppId = created?.id ?? created?.ID ?? data?.id ?? data?.ID;
-    if (oppId == null) throw new Error("Opportunity created but no id returned");
+    if (oppId == null) throw new Error("Project created but no id returned");
 
     if (customFields.length) {
       // Small delay before per-field custom value POSTs (timing/CRM indexing hypothesis per ISSUE-001).
@@ -13845,7 +13845,7 @@ async function submitCreateOpportunityForm(e) {
       try {
         await applyCreateOpportunityCustomFields(oppId, customFields);
       } catch (cfErr) {
-        showToast(`Opportunity created; user fields not saved: ${cfErr.message}`, true);
+        showToast(`Project created; user fields not saved: ${cfErr.message}`, true);
       }
     }
 
@@ -13863,7 +13863,7 @@ async function submitCreateOpportunityForm(e) {
     closeCreateOpportunityModal();
     hideCRMSyncStatus();
     onCRMSuccess();
-    showCRMSyncStatus('Opportunity created successfully');
+    showCRMSyncStatus('Project created successfully');
     setTimeout(() => {
       hideCRMSyncStatus();
     }, 1500);
@@ -13872,7 +13872,7 @@ async function submitCreateOpportunityForm(e) {
     openOpportunityPreviewModal(oppId, titleHint, null, true).catch(() => {});
     await refreshAll({ force: true });
   } catch (err) {
-    setCreateOpportunityError(err.message || "Could not create opportunity");
+    setCreateOpportunityError(err.message || "Could not create project");
     hideCRMSyncStatus();
   } finally {
     if (submitBtn) submitBtn.disabled = false;
@@ -14061,7 +14061,7 @@ function addOpportunityGroupTile() {
   closeAddTileModal();
   renderBoardGroups();
   refreshGroup(state.groups[state.groups.length - 1]).catch((err) => showToast(err.message, true));
-  showToast("Opportunity group added");
+  showToast("Project group added");
 }
 
 async function addCalendarTileFromForm() {
@@ -14822,6 +14822,12 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
   const afdRows = [];
   const offlineRows = [];
 
+  // Build avatar URL map from users cache for photo avatars
+  const avatarMap = {};
+  baseUsers.forEach(u => { avatarMap[u.id] = u.thumbnailUrl || u.avatarUrl; });
+  const cacheUsers = usersCache || (state.presenceUsersCache ? state.presenceUsersCache.users : []);
+  cacheUsers.forEach(u => { if (!avatarMap[u.id]) avatarMap[u.id] = u.thumbnailUrl || u.avatarUrl; });
+
   baseUsers.forEach(u => {
     const id = getPresenceUserId(u);
     if (!id) return;
@@ -14835,7 +14841,18 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
     const avatar = document.createElement("span");
     avatar.className = "presence-user-avatar";
     const initial = (u.displayName || u.email || "?")[0]?.toUpperCase() || "?";
-    avatar.textContent = initial;
+    const avatarUrl = avatarMap[id];
+    if (avatarUrl) {
+      const img = document.createElement("img");
+      img.src = avatarUrl;
+      img.alt = "";
+      img.loading = "lazy";
+      img.onerror = () => { img.remove(); avatar.textContent = initial; };
+      avatar.textContent = "";
+      avatar.appendChild(img);
+    } else {
+      avatar.textContent = initial;
+    }
     const dot = document.createElement("span");
     const isOnline = !!p.online;
     const isIdle = !!p.idle;
@@ -16048,6 +16065,11 @@ function renderPresenceTileCompact(snapshot = null) {
   const list = document.createElement("div");
   list.className = "presence-list-compact";
 
+  // Build avatar URL map from users cache (presence snapshot may not have photos)
+  const usersCache = state.presenceUsersCache?.users || state.portalUsers || [];
+  const avatarMap = {};
+  usersCache.forEach(u => { avatarMap[u.id] = u.thumbnailUrl || u.avatarUrl; });
+
   const renderUserRow = (u) => {
     if (!u.online) {
       u.autoStatus = '';
@@ -16059,11 +16081,22 @@ function renderPresenceTileCompact(snapshot = null) {
     row.className = "presence-user";
     row.dataset.userId = u.id;
 
-    // Avatar with initials
+    // Avatar with initials + optional photo
     const avatar = document.createElement("span");
     avatar.className = "presence-user-avatar";
     const initials = ((u.displayName || u.email || "?")[0] || "?").toUpperCase();
-    avatar.textContent = initials;
+    const avatarUrl = avatarMap[u.id] || u.thumbnailUrl || u.avatarUrl;
+    if (avatarUrl) {
+      const img = document.createElement("img");
+      img.src = avatarUrl;
+      img.alt = "";
+      img.loading = "lazy";
+      img.onerror = () => { img.remove(); avatar.textContent = initials; };
+      avatar.textContent = "";
+      avatar.appendChild(img);
+    } else {
+      avatar.textContent = initials;
+    }
     
     // Presence dot on avatar
     const dot = document.createElement("span");
@@ -16210,6 +16243,9 @@ function renderPresenceTile() {
           <div id="ts-timer-display" class="ts-timer-display">00:00:00</div>
           <button type="button" id="ts-clock-btn" class="ts-clock-btn clock-in">Clock In</button>
           <button type="button" id="ts-break-btn" class="ts-break-btn hidden">Start Break</button>
+          <select id="ts-project-select" class="ts-project-select">
+            <option value="">No project</option>
+          </select>
         </div>
         <div class="ts-date-range">
           <button type="button" id="ts-prev-day">◀</button>
@@ -16959,6 +16995,20 @@ let _tsTimerInterval = null;
 let _tsActiveEntry = null;
 let _tsRange = { from: null, to: null, mode: "day" };
 
+function tsPopulateProjectSelect(selectEl) {
+  if (!selectEl) return;
+  api("/api/v2/projects?limit=200").then(data => {
+    const projects = data.projects || data || [];
+    selectEl.innerHTML = '<option value="">No project</option>';
+    projects.forEach(p => {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = p.title || `Project #${p.id}`;
+      selectEl.appendChild(opt);
+    });
+  }).catch(() => {});
+}
+
 function renderPresenceTimesheetModal(container, snap) {
   if (!container) return;
   container.innerHTML = '';
@@ -16979,8 +17029,13 @@ function renderPresenceTimesheetModal(container, snap) {
   breakBtn.id = 'modal-ts-break-btn';
   breakBtn.className = 'ts-break-btn hidden';
   breakBtn.textContent = 'Start Break';
-  clockWidget.append(timerDisplay, clockBtn, breakBtn);
+  const projectSelect = document.createElement('select');
+  projectSelect.id = 'modal-ts-project-select';
+  projectSelect.className = 'ts-project-select';
+  projectSelect.innerHTML = '<option value="">No project</option>';
+  clockWidget.append(timerDisplay, clockBtn, breakBtn, projectSelect);
   container.appendChild(clockWidget);
+  tsPopulateProjectSelect(projectSelect);
   // Date range
   const rangeBar = document.createElement('div');
   rangeBar.className = 'ts-date-range';
@@ -17085,7 +17140,9 @@ function modalToggleClock() {
       modalRefreshEntries();
     }).catch(err => showToast(err.message || "Failed to clock out", true));
   } else {
-    api("/api/timesheet/clock-in", { method: "POST", body: JSON.stringify({ notes: "" }) }).then(data => {
+    const projectSelect = document.getElementById("modal-ts-project-select");
+    const opportunityId = projectSelect?.value || null;
+    api("/api/timesheet/clock-in", { method: "POST", body: JSON.stringify({ notes: "", opportunity_id: opportunityId || undefined }) }).then(data => {
       _tsActiveEntry = data.entry;
       updateModalClockUI();
     }).catch(err => showToast(err.message || "Failed to clock in", true));
@@ -17146,7 +17203,11 @@ function modalRefreshEntries() {
       const dh = Math.floor(durSec / 3600);
       const dm = Math.floor((durSec % 3600) / 60);
       dur.textContent = `${dh}h ${dm}m`;
-      row.append(times, dur);
+      const proj = document.createElement('div');
+      proj.className = 'ts-entry-project';
+      proj.textContent = e.opportunity_title || '';
+      proj.title = e.opportunity_title || '';
+      row.append(times, dur, proj);
       list.appendChild(row);
     });
     const th = Math.floor(totalSeconds / 3600);
@@ -17172,6 +17233,8 @@ function renderTimesheetTab() {
   const exportCsv = $("#ts-export-csv");
   const exportPdf = $("#ts-export-pdf");
   
+  tsPopulateProjectSelect($("#ts-project-select"));
+  
   clockBtn?.addEventListener("click", tsToggleClock);
   breakBtn?.addEventListener("click", tsToggleBreak);
   prevDay?.addEventListener("click", () => tsShiftRange(-1));
@@ -17184,8 +17247,46 @@ function renderTimesheetTab() {
   tsUpdateDateLabel();
   tsSyncDateInputs();
   if (state.presenceData?.isAdmin) {
-    $("#ts-admin-section")?.classList.remove("hidden");
+    const adminEl = $("#ts-admin-section");
+    if (adminEl) {
+      adminEl.classList.remove("hidden");
+      tsRenderAdminSummary(adminEl);
+    }
   }
+}
+
+function tsRenderAdminSummary(container) {
+  if (!container) return;
+  container.innerHTML = '<div style="color:var(--muted);font-size:0.78rem;">Loading team summary...</div>';
+  const from = _tsRange.from || "";
+  const to = _tsRange.to || "";
+  let url = "/api/timesheet/admin/summary?";
+  if (from) url += `from=${from}&`;
+  if (to) url += `to=${to}&`;
+  api(url).then(data => {
+    const summary = data.summary || [];
+    if (!summary.length) {
+      container.innerHTML = '<div style="color:var(--muted);font-size:0.78rem;">No timesheet data for this period</div>';
+      return;
+    }
+    const byUser = {};
+    summary.forEach(row => {
+      if (!byUser[row.user_id]) byUser[row.user_id] = { name: row.user_name, email: row.user_email, days: [], totalHours: 0, totalBreak: 0 };
+      byUser[row.user_id].days.push(row);
+      byUser[row.user_id].totalHours += parseFloat(row.total_hours || 0);
+      byUser[row.user_id].totalBreak += parseInt(row.total_break_minutes || 0);
+    });
+    let html = '<table class="ts-admin-table"><thead><tr><th>User</th><th>Days</th><th>Total Hours</th><th>Break</th></tr></thead><tbody>';
+    Object.values(byUser).forEach(u => {
+      const h = Math.floor(u.totalHours);
+      const m = Math.round((u.totalHours - h) * 60);
+      html += `<tr><td>${escapeHtml(u.name || u.email)}</td><td>${u.days.length}</td><td>${h}h ${m}m</td><td>${u.totalBreak}m</td></tr>`;
+    });
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  }).catch(err => {
+    container.innerHTML = `<div style="color:var(--danger);font-size:0.78rem;">Failed to load: ${escapeHtml(err.message)}</div>`;
+  });
 }
 
 function tsToggleClock() {
@@ -17197,7 +17298,9 @@ function tsToggleClock() {
       tsRefreshEntries();
     }).catch(err => showToast(err.message || "Failed to clock out", true));
   } else {
-    api("/api/timesheet/clock-in", { method: "POST", body: JSON.stringify({ notes: "" }) }).then(data => {
+    const projectSelect = document.getElementById("ts-project-select");
+    const opportunityId = projectSelect?.value || null;
+    api("/api/timesheet/clock-in", { method: "POST", body: JSON.stringify({ notes: "", opportunity_id: opportunityId || undefined }) }).then(data => {
       _tsActiveEntry = data.entry;
       tsStartTimer();
       tsUpdateClockUI();
@@ -17326,6 +17429,11 @@ function tsRenderEntries(entries) {
     const dm = Math.floor((durSec % 3600) / 60);
     dur.textContent = `${dh}h ${dm}m`;
     
+    const proj = document.createElement("div");
+    proj.className = "ts-entry-project";
+    proj.textContent = e.opportunity_title || "";
+    proj.title = e.opportunity_title || "";
+    
     const actions = document.createElement("div");
     actions.className = "ts-entry-actions";
     const editBtn = document.createElement("button");
@@ -17334,7 +17442,7 @@ function tsRenderEntries(entries) {
     editBtn.addEventListener("click", () => tsEditEntry(e));
     actions.appendChild(editBtn);
     
-    row.append(times, dur, actions);
+    row.append(times, dur, proj, actions);
     list.appendChild(row);
   });
   
@@ -17374,6 +17482,8 @@ function tsShiftRange(dir) {
   tsUpdateDateLabel();
   tsRefreshEntries();
   tsSyncDateInputs();
+  const adminEl = $("#ts-admin-section");
+  if (adminEl && !adminEl.classList.contains("hidden")) tsRenderAdminSummary(adminEl);
 }
 
 function tsSetRange(mode) {
@@ -17394,6 +17504,8 @@ function tsSetRange(mode) {
   tsUpdateDateLabel();
   tsRefreshEntries();
   tsSyncDateInputs();
+  const adminEl = $("#ts-admin-section");
+  if (adminEl && !adminEl.classList.contains("hidden")) tsRenderAdminSummary(adminEl);
 }
 
 function tsUpdateDateLabel() {
@@ -21620,7 +21732,7 @@ async function searchOpportunitiesByTitle(query, { limit = 30 } = {}) {
     for (const o of g.opportunities || []) {
       const id = o.id ?? o.ID;
       if (id == null) continue;
-      const title = (o.title || o.Title || `Opportunity #${id}`).trim();
+      const title = (o.title || o.Title || `Project #${id}`).trim();
       const key = String(id);
       if (seen.has(key)) continue;
       // Match by title OR by ID (if query is numeric)
@@ -21641,7 +21753,7 @@ async function searchOpportunitiesByTitle(query, { limit = 30 } = {}) {
         const key = String(id);
         if (seen.has(key)) continue;
         seen.add(key);
-        local.push({ id: Number(id), title: (o.title || o.Title || `Opportunity #${id}`).trim() });
+        local.push({ id: Number(id), title: (o.title || o.Title || `Project #${id}`).trim() });
         indexOpportunity(o);
       }
     } catch {
@@ -23734,7 +23846,7 @@ async function fetchAllOpportunityHistory(oppId, maxPages) {
 
 async function fetchOpportunityPreviewData(oppId, quick = false) {
   const id = Number(oppId);
-  if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid opportunity id");
+  if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid project id");
 
   await Promise.all([
     state.stages.length ? Promise.resolve() : loadStages(),
@@ -23909,7 +24021,7 @@ function setOpportunityPreviewContext(oppId, opp = null, group = null) {
 async function openDealEditFromOpportunityPreview() {
   const { oppId, opp, group } = oppPreviewContext;
   if (oppId == null) {
-    showToast("Opportunity not loaded", true);
+    showToast("Project not loaded", true);
     return;
   }
   let deal = opp;
@@ -24164,8 +24276,8 @@ async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, 
   const id = Number(oppId);
   oppPreviewMailCache.clear();
   setOpportunityPreviewContext(id, null, group);
-  titleEl.textContent = titleHint || "Opportunity";
-  body.innerHTML = '<p class="opp-preview-loading">Loading opportunity…</p>';
+  titleEl.textContent = titleHint || "Project";
+  body.innerHTML = '<p class="opp-preview-loading">Loading project…</p>';
   setOpportunityPreviewCrmLink(id);
   modal.classList.remove("hidden");
   updatePreviewModalBookmarkButton(id);
@@ -24174,7 +24286,7 @@ async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, 
     const data = await fetchOpportunityPreviewData(id, quick);
     const resolvedGroup = group || findGroupForOpportunity(id);
     setOpportunityPreviewContext(id, data.opp, resolvedGroup);
-    titleEl.textContent = data.opp.title || data.opp.Title || titleHint || `Opportunity #${id}`;
+    titleEl.textContent = data.opp.title || data.opp.Title || titleHint || `Project #${id}`;
 
     // Project number badge
     const existingBadge = titleEl.parentElement?.querySelector('.opp-project-number-badge');
@@ -25531,7 +25643,7 @@ async function openSearchPreviewTab(oppId, titleHint, { activate = true } = {}) 
         </div>
       </div>
       <div class="search-popup-preview-body" data-preview-body="${id}">
-        <p class="opp-preview-loading">Loading opportunity…</p>
+        <p class="opp-preview-loading">Loading project…</p>
       </div>
     </div>
   `;
@@ -26050,10 +26162,10 @@ async function activateBookmarkTab(oppId) {
     bodyEl.innerHTML = "";
     renderOpportunityPreviewContent(bodyEl, deal._cachedData);
     linkifyPhonesAndEmails(bodyEl);
-    updateInferredStatus("preview", deal.title || `Opportunity #${id}`);
+    updateInferredStatus("preview", deal.title || `Project #${id}`);
   } else {
-    titleEl.textContent = deal?.title || `Opportunity #${id}`;
-    bodyEl.innerHTML = '<p class="opp-preview-loading">Loading opportunity…</p>';
+    titleEl.textContent = deal?.title || `Project #${id}`;
+    bodyEl.innerHTML = '<p class="opp-preview-loading">Loading project…</p>';
   }
 
   // Fetch data in background (always refresh if not cached, or on explicit refresh only)
@@ -26063,11 +26175,11 @@ async function activateBookmarkTab(oppId) {
       if (state.activeBookmarkTab !== id) return; // tab changed while loading
       // Cache it
       if (deal) deal._cachedData = data;
-      titleEl.textContent = data.opp?.title || data.opp?.Title || deal?.title || `Opportunity #${id}`;
+      titleEl.textContent = data.opp?.title || data.opp?.Title || deal?.title || `Project #${id}`;
       bodyEl.innerHTML = "";
       renderOpportunityPreviewContent(bodyEl, data);
       linkifyPhonesAndEmails(bodyEl);
-      updateInferredStatus("preview", data.opp?.title || data.opp?.Title || deal?.title || `Opportunity #${id}`);
+      updateInferredStatus("preview", data.opp?.title || data.opp?.Title || deal?.title || `Project #${id}`);
       // Update tab's stage/due info
       renderBookmarkTabs();
     } catch (err) {
@@ -26106,7 +26218,7 @@ function addBookmarkDeal(oppId, title) {
   state.bookmarkedDeals.push({
     type: "deal",
     oppId: id,
-    title: String(title || "").trim() || `Opportunity #${id}`,
+    title: String(title || "").trim() || `Project #${id}`,
     addedAt: new Date().toISOString(),
   });
 

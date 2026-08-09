@@ -1499,6 +1499,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/my/avatar":
             self._handle_avatar_get()
             return
+        m = re.match(r"^/api/v2/users/(\d+)/avatar$", api_path)
+        if m and method == "GET":
+            self._handle_user_avatar_get(int(m.group(1)))
+            return
         if api_path == "/api/v2/me/notification-prefs":
             self._handle_notification_prefs_get()
             return
@@ -3692,11 +3696,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not user:
             return
         rows = db.query(
-            "SELECT id, email, display_name, first_name, last_name, is_admin, is_active FROM users ORDER BY display_name"
+            "SELECT id, email, display_name, first_name, last_name, is_admin, is_active, avatar_url FROM users ORDER BY display_name"
         )
         _json_response(self, 200, [
             {"id": r[0], "email": r[1], "displayName": r[2], "firstName": r[3],
-             "lastName": r[4], "isAdmin": r[5], "isActive": r[6]}
+             "lastName": r[4], "isAdmin": r[5], "isActive": r[6],
+             "avatarUrl": f"/api/v2/users/{r[0]}/avatar" if r[7] else None,
+             "thumbnailUrl": f"/api/v2/users/{r[0]}/avatar?thumbnail=1" if r[7] else None}
             for r in rows
         ])
 
@@ -3745,6 +3751,33 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         qs = parse_qs(urlparse(self.path).query)
         want_thumb = (qs.get("thumbnail") or [""])[0].lower() in ("1", "true")
         row = db.query_one("SELECT avatar_url FROM users WHERE id = %s", (user["id"],))
+        avatar_url = row.get("avatar_url") if row else None
+        if not avatar_url:
+            self.send_error(404)
+            return
+        avatar_path = ROOT / avatar_url
+        if want_thumb:
+            thumb_path = avatar_path.parent / f"thumb_{avatar_path.name}"
+            if thumb_path.exists():
+                avatar_path = thumb_path
+        if not avatar_path.exists():
+            self.send_error(404)
+            return
+        data = avatar_path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "private, max-age=86400")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _handle_user_avatar_get(self, target_user_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        want_thumb = (qs.get("thumbnail") or [""])[0].lower() in ("1", "true")
+        row = db.query_one("SELECT avatar_url FROM users WHERE id = %s", (target_user_id,))
         avatar_url = row.get("avatar_url") if row else None
         if not avatar_url:
             self.send_error(404)
@@ -7805,19 +7838,25 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 pdf.cell(w, 6, h, border=1, fill=True, align="C")
             pdf.ln()
             pdf.set_font("Helvetica", "", 7)
+            def _pdf_safe(text):
+                """Strip non-Latin-1 characters for fpdf2 Helvetica font."""
+                if not text:
+                    return ""
+                return text.encode("latin-1", errors="replace").decode("latin-1")
+
             for r in rows:
                 ci = _parse_iso_datetime(str(r["clock_in"])) if r.get("clock_in") else None
                 co = _parse_iso_datetime(str(r["clock_out"])) if r.get("clock_out") else None
-                date_str = ci.strftime("%Y-%m-%d") if ci else "—"
-                in_str = ci.strftime("%H:%M") if ci else "—"
-                out_str = co.strftime("%H:%M") if co else "—"
+                date_str = ci.strftime("%Y-%m-%d") if ci else "-"
+                in_str = ci.strftime("%H:%M") if ci else "-"
+                out_str = co.strftime("%H:%M") if co else "-"
                 dur = 0
                 if ci and co:
                     dur = (co - ci).total_seconds() / 3600 - (r.get("break_minutes") or 0) / 60
-                dur_str = f"{dur:.1f}" if dur else "—"
+                dur_str = f"{dur:.1f}" if dur else "-"
                 brk_str = f"{r.get('break_minutes', 0)}m"
-                proj = (r.get("opportunity_title") or "—")[:20]
-                notes = (r.get("notes") or "—")[:25]
+                proj = _pdf_safe((r.get("opportunity_title") or "-")[:20])
+                notes = _pdf_safe((r.get("notes") or "-")[:25])
                 pdf.cell(col_widths[0], 5, date_str, border=1)
                 pdf.cell(col_widths[1], 5, in_str, border=1, align="C")
                 pdf.cell(col_widths[2], 5, out_str, border=1, align="C")

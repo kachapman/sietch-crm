@@ -4,17 +4,17 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Sietch CRM</title>
-  <meta name="description" content="CRM Viewer and organizer for Opportunities, Notifications and Tasks." />
+  <meta name="description" content="CRM Viewer and organizer for Projects, Notifications and Tasks." />
   <link rel="icon" href="favicon.ico?v=5" sizes="any" />
   <!-- Thick exclamation mark (instead of ship) as data SVG so it always renders (no missing asset) and is visible in both dark and light browser tab bars. -->
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' width='32' height='32'%3E%3Crect x='2' y='2' width='28' height='28' rx='4' fill='%23f8fafc' stroke='%230f172a' stroke-width='2'/%3E%3Crect x='14' y='6' width='4' height='14' rx='1' fill='%230f172a'/%3E%3Ccircle cx='16' cy='23' r='2.2' fill='%230f172a'/%3E%3C/svg%3E" />
   <meta property="og:type" content="website" />
   <meta property="og:title" content="Sietch CRM" />
-  <meta property="og:description" content="CRM Viewer and organizer for Opportunities, Notifications and Tasks." />
+  <meta property="og:description" content="CRM Viewer and organizer for Projects, Notifications and Tasks." />
   <meta property="og:image" content="ship-logo-white.png" />
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="Sietch CRM" />
-  <meta name="twitter:description" content="CRM Viewer and organizer for Opportunities, Notifications and Tasks." />
+  <meta name="twitter:description" content="CRM Viewer and organizer for Projects, Notifications and Tasks." />
   <meta name="twitter:image" content="ship-logo-white.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -134,7 +134,7 @@
           <button type="button" id="quick-note-btn" class="btn btn-primary btn-icon-only" title="Project Note" aria-label="Project Note">
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4"/><path d="M2 6h4"/><path d="M2 10h4"/><path d="M2 14h4"/><path d="M2 18h4"/><path d="M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z"/></svg>
           </button>
-          <button type="button" id="new-opportunity-btn" class="btn btn-primary btn-icon-only" title="New opportunity" aria-label="New opportunity">
+          <button type="button" id="new-opportunity-btn" class="btn btn-primary btn-icon-only" title="New project" aria-label="New project">
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 14h6"/><path d="M12 17v-6"/></svg>
           </button>
           <div class="global-opp-search" id="global-opp-search">
@@ -265,7 +265,7 @@
           <button type="button" id="bookmark-preview-collapse" class="bookmark-sidebar-toggle" title="Collapse preview" aria-label="Collapse preview">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
           </button>
-          <h3 class="bookmark-preview-title" id="bookmark-preview-title">Opportunity</h3>
+          <h3 class="bookmark-preview-title" id="bookmark-preview-title">Project</h3>
           <div class="bookmark-preview-actions">
             <button type="button" id="bookmark-preview-refresh" class="bookmark-preview-action-btn" title="Refresh" aria-label="Refresh">⟳</button>
             <button type="button" id="bookmark-preview-unbookmark" class="bookmark-preview-action-btn" title="Remove bookmark" aria-label="Remove bookmark">
@@ -342,8 +342,8 @@
       <p class="modal-message">Choose a tile type for your dashboard.</p>
       <div id="add-tile-options" class="add-tile-options">
         <button type="button" id="add-tile-opportunity-group" class="add-tile-option">
-          <span class="add-tile-option-title">Opportunity Group</span>
-           <span class="add-tile-option-desc">Kanban board organizer for opportunities</span>
+          <span class="add-tile-option-title">Project Group</span>
+           <span class="add-tile-option-desc">Kanban board organizer for projects</span>
         </button>
         <button type="button" id="add-tile-calendar" class="add-tile-option">
           <span class="add-tile-option-title">Calendar</span>
@@ -1409,7 +1409,7 @@
     <div class="modal-backdrop" data-opp-preview-dismiss></div>
     <div class="modal-card modal-card-opp-preview">
        <div class="opp-preview-head">
-        <h2 id="opp-preview-title" class="modal-title">Opportunity</h2>
+        <h2 id="opp-preview-title" class="modal-title">Project</h2>
          <div class="opp-preview-head-actions">
              <button type="button" id="opp-preview-bookmark" class="opp-preview-bookmark-btn" title="Bookmark deal" aria-label="Bookmark deal"></button>
              <button type="button" id="opp-preview-edit" class="opp-preview-edit-btn" title="Edit deal" aria-label="Edit deal">✎</button>
@@ -1565,8 +1565,8 @@
       </div>
       <form id="quick-note-form" class="modal-form">
         <div class="field opportunity-picker-field">
-          <label for="quick-note-opportunity-search">Opportunity <span class="field-required">(required)</span></label>
-          <input type="search" id="quick-note-opportunity-search" placeholder="Search opportunity title…" autocomplete="off" />
+          <label for="quick-note-opportunity-search">Project <span class="field-required">(required)</span></label>
+          <input type="search" id="quick-note-opportunity-search" placeholder="Search project title…" autocomplete="off" />
           <div id="quick-note-opportunity-results" class="contact-results hidden"></div>
           <div id="quick-note-opportunity-selected" class="contact-selected"></div>
         </div>
@@ -1666,7 +1666,7 @@
       <form id="create-opportunity-form" class="modal-form">
         <div class="field">
           <label for="create-opp-title">Title</label>
-          <input type="text" id="create-opp-title" name="title" required autocomplete="off" placeholder="Opportunity name" />
+          <input type="text" id="create-opp-title" name="title" required autocomplete="off" placeholder="Project name" />
         </div>
         <div class="field">
           <label for="create-opp-description">Description</label>
@@ -1702,7 +1702,7 @@
         </div>
         <label class="checkbox-filter modal-checkbox">
           <input type="checkbox" id="create-opp-private" name="isPrivate" />
-          <span>Private opportunity</span>
+          <span>Private project</span>
         </label>
         <div class="field hidden" id="create-opp-access-field">
           <label for="create-opp-access">Who has access</label>
