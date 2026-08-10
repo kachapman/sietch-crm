@@ -7040,12 +7040,6 @@ function _notesColorHex(colorVal) {
   return found ? found.value : colorVal;
 }
 
-function _notesTruncate(text, max) {
-  if (!text) return "";
-  const s = text.replace(/[#*>\-_\[\]`~=!|]/g, "").trim();
-  return s.length > max ? s.slice(0, max) + "…" : s;
-}
-
 function _notesRelativeTime(iso) {
   if (!iso) return "";
   const d = new Date(iso);
@@ -7725,7 +7719,7 @@ function _notesRenderBrowseMode(section) {
 }
 
 function _notesRenderCard(note) {
-  const preview = _notesTruncate(note.content, 300);
+  const preview = renderBasicMarkdown(note.content || "");
   const time = _notesRelativeTime(note.updated_at);
   const colorBg = _notesColorHex(note.color);
   const pinned = note.pinned ? " notes-card-pinned" : "";
@@ -7733,7 +7727,7 @@ function _notesRenderCard(note) {
     <div class="notes-card${pinned}" data-note-id="${note.id}" style="border-left:3px solid ${colorBg}">
       <span class="notes-card-drag" title="Drag to reorder">⋮⋮</span>
       <div class="notes-card-title">${escapeHtml(note.title || "Untitled")}</div>
-      ${preview ? `<div class="notes-card-preview">${escapeHtml(preview)}</div>` : ""}
+      ${preview ? `<div class="notes-card-preview">${preview}</div>` : ""}
       <div class="notes-card-footer">
         <span class="notes-card-time">${time}</span>
         ${note.pinned ? `<span class="notes-card-pin">📌</span>` : ""}
