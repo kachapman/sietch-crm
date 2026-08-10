@@ -2,6 +2,74 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Calendar Tile Revamp — COMPLETE (2026-08-09)
+
+All phases delivered except OAuth wiring/testing (pending final phase).
+
+### Calendar tile
+- Full revamp with DB-backed calendar_sources, calendar_events, ics_feed_cache
+- ICS feed cache background thread (calendar_sync.py) — fixes dashboard hang
+- 4 views: Month, Week (7-column time grid), Day (single column), Agenda (list)
+- Calendar settings modal: source management, reminder prefs
+- Event create/edit modal: full CRUD form with date/time, all-day, location, description, calendar source, reminder
+- Add tile form: ICS/Google/Outlook/CalDAV source types with sub-forms
+- Odysseus panel-style toolbar: inline view tabs, settings gear, new event button
+- Browser notifications via SSE calendar_reminder events
+- Telegram notifications via _format_calendar_reminder() in dispatcher
+- Reminder sweep: respects user notification preferences
+- Mobile responsive: icon-only tabs ≤768px, tools kept on title row via @container
+- Loading indicator on "Add calendar" button
+- Calendar settings modal: responsive width on mobile
+- Title text and event count hidden from toolbar
+- Consistent button padding (0.25rem 0.45rem)
+- ICS-backed tiles now also fetch local DB events and merge them
+- Modal close button: flex row with title left, X right
+
+### Notes tile
+- Dynamic grid: auto-fit columns, auto rows, full markdown preview
+- renderBasicMarkdown() renders full body (headers, bold, lists, code, links, tables)
+- No truncation — all text flows naturally
+- Narrow-tile single-column fallback via @container (max-width: 500px)
+- Linked project chips: link icon + responsive show/hide
+
+### Timesheet tab
+- Context menu: removed emoji icons, renamed "Add Note" → "Add/Edit Note"
+- Removed inline edit button (pencil SVG) from entry rows
+- Entry rows show note as native tooltip on hover
+- "Add/Edit Note" opens HTML popup with textarea (Ctrl+Enter to save)
+- "Assign to Project" opens search dropdown using searchOpportunitiesByTitle()
+
+### Team tile
+- Collapsed state hides all toolbar extras, matches title-bar height
+
+### Tile layout persistence
+- _clean_calendar_tiles preserves view+sourceId fields
+- load_user_profile preserves tasksColumns
+- applyUserProfile preserves tasksColumns and feedKeywordFilter
+- buildUserProfilePayload includes feedKeywordFilter
+- beforeunload flushes pending profile saves via sendBeacon
+- ensureTileLayout only saves if order actually changed
+- Server /api/user-profile accepts POST (for sendBeacon)
+
+### Modal close button
+- .modal-card-head uses flex with justify-content:space-between
+- Close button (X) now positioned at far right of modal header
+
+### Files
+- `calendar_sync.py` (new) — ICS feed cache + reminder sweep background thread
+- `migrations/010_add_calendar.sql` (new) — DB schema
+- `server.py` (+~700 changes across multiple commits)
+- `public/app.js` (+~1500 changes across multiple commits)
+- `public/styles.css` (+~900 changes across multiple commits)
+- `public/index.html` (+~200 changes)
+- `user_profile_store.py` (~30 lines)
+
+### Pending (final phase)
+- Wire Google OAuth scopes (Google Calendar API) in oauth_providers.py
+- Wire Microsoft OAuth scopes (MS Graph Calendars) in oauth_providers.py
+- Add calendar OAuth callback routes
+- Test end-to-end OAuth flow on both providers
+
 ## Calendar Tile Revamp — Phase 1 (2026-08-09)
 
 ### Database
