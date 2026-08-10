@@ -78,20 +78,26 @@ def _clean_calendar_tiles(tiles: Any) -> list[dict[str, Any]]:
     for item in tiles:
         if not isinstance(item, dict) or not item.get("id"):
             continue
-        out.append(
-            {
-                "id": str(item["id"]),
-                "name": str(item.get("name") or "Calendar")[:200],
-                "feedUrl": str(item.get("feedUrl") or "")[:4000],
-                "timezone": str(item.get("timezone") or "")[:80],
-                "viewYear": int(item.get("viewYear") or 0) or None,
-                "viewMonth": int(item.get("viewMonth") or 0) or None,
-            }
-        )
-        if out[-1]["viewYear"] is None:
-            del out[-1]["viewYear"]
-        if out[-1]["viewMonth"] is None:
-            del out[-1]["viewMonth"]
+        cleaned = {
+            "id": str(item["id"]),
+            "name": str(item.get("name") or "Calendar")[:200],
+            "feedUrl": str(item.get("feedUrl") or "")[:4000],
+            "timezone": str(item.get("timezone") or "")[:80],
+            "viewYear": int(item.get("viewYear") or 0) or None,
+            "viewMonth": int(item.get("viewMonth") or 0) or None,
+        }
+        if cleaned["viewYear"] is None:
+            del cleaned["viewYear"]
+        if cleaned["viewMonth"] is None:
+            del cleaned["viewMonth"]
+        # Preserve calendar view mode and DB source reference
+        view = str(item.get("view") or "").strip()
+        if view and view in ("month", "week", "day", "agenda"):
+            cleaned["view"] = view
+        source_id = item.get("sourceId")
+        if source_id is not None:
+            cleaned["sourceId"] = int(source_id) if str(source_id).isdigit() else None
+        out.append(cleaned)
     return out
 
 
@@ -221,6 +227,9 @@ def load_user_profile(portal: str, user_id: str) -> dict[str, Any]:
             "collapsed": dict(layout.get("collapsed") or {}),
             "pinned": dict(layout.get("pinned") or {}),
         }
+        # Preserve tasksColumns mode
+        if "tasksColumns" in layout:
+            profile["tileLayout"]["tasksColumns"] = bool(layout["tasksColumns"])
     profile["calendarTiles"] = _clean_calendar_tiles(data.get("calendarTiles"))
     profile["notesTiles"] = _clean_notes_tiles(data.get("notesTiles"))
     templates = data.get("groupTemplates")

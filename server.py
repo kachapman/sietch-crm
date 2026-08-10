@@ -1913,7 +1913,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         # ── User profile (local) ──
-        if api_path == "/api/user-profile" and method == "PUT":
+        if api_path == "/api/user-profile" and method in ("PUT", "POST"):
             self._handle_user_profile_put()
             return
 

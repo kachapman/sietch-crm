@@ -940,6 +940,9 @@ function ensureTileLayout() {
   for (const id of known) {
     if (!filtered.includes(id)) filtered.push(id);
   }
+  // Only save if order actually changed
+  const origOrder = state.tileLayout.order?.join(",") || "";
+  const newOrder = filtered.join(",");
   state.tileLayout.order = filtered;
   if (!state.tileLayout.order.includes("tile-presence")) {
     state.tileLayout.order.push("tile-presence");
@@ -947,7 +950,9 @@ function ensureTileLayout() {
   if (!state.tileLayout.order.includes("tile-notes")) {
     state.tileLayout.order.push("tile-notes");
   }
-  saveLayoutToStorage();
+  if (state.tileLayout.order.join(",") !== origOrder) {
+    saveLayoutToStorage();
+  }
 }
 
 function tileWidth(tileId) {
@@ -5609,6 +5614,7 @@ function buildUserProfilePayload() {
     localKanbanTiles: (state.localKanbanTiles || []).map((k) => stripLocalKanbanRuntimeFields(k)),
     groupTemplates: state.groupTemplates,
     hiddenFeedKeys: serializeHiddenFeedEntries(),
+    feedKeywordFilter: state.feedKeywordFilter || "",
     bookmarkedDeals: state.bookmarkedDeals.map((d) => stripBookmarkedRuntimeFields(d)),
     minimizedSearchTabs: (minimizedSearchTabs || []).map((t) => ({ oppId: t.oppId, title: t.title })),
   };
@@ -5630,6 +5636,7 @@ function applyUserProfile(profile) {
       heights: layout.heights && typeof layout.heights === "object" ? layout.heights : {},
       collapsed: layout.collapsed && typeof layout.collapsed === "object" ? layout.collapsed : {},
       pinned: layout.pinned && typeof layout.pinned === "object" ? layout.pinned : {},
+      tasksColumns: !!layout.tasksColumns,
     };
   } else {
     state.tileLayout = loadLayoutFromStorage();
@@ -5705,6 +5712,11 @@ function applyUserProfile(profile) {
         }
       }
     } catch { /* ignore */ }
+  }
+
+  // Feed keyword filter
+  if (typeof profile.feedKeywordFilter === "string") {
+    state.feedKeywordFilter = profile.feedKeywordFilter;
   }
 }
 
@@ -7713,7 +7725,7 @@ function _notesRenderBrowseMode(section) {
 }
 
 function _notesRenderCard(note) {
-  const preview = _notesTruncate(note.content, 100);
+  const preview = _notesTruncate(note.content, 300);
   const time = _notesRelativeTime(note.updated_at);
   const colorBg = _notesColorHex(note.color);
   const pinned = note.pinned ? " notes-card-pinned" : "";
@@ -15016,8 +15028,18 @@ function startPresenceHeartbeats() {
   };
   state._presenceVisHandler = onVis;
   document.addEventListener("visibilitychange", onVis, { once: false });
-  // On tab/window close — send an offline signal so the server marks the user offline immediately
+  // On tab/window close — flush pending profile saves and send offline signal
   const onUnload = () => {
+    // Flush any pending profile save immediately
+    if (userProfileReady && profileSaveTimer) {
+      clearTimeout(profileSaveTimer);
+      profileSaveTimer = null;
+      try {
+        persistProfileToLocalStorage();
+        const payload = JSON.stringify(buildUserProfilePayload());
+        navigator.sendBeacon("/api/user-profile", new Blob([payload], { type: "application/json" }));
+      } catch { /* ignore */ }
+    }
     if (navigator.sendBeacon) {
       navigator.sendBeacon("/api/presence/heartbeat", new Blob(['{"offline":true}'], {type:"application/json"}));
     }
