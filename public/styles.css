@@ -8023,18 +8023,27 @@ body {
   display: none !important;
 }
 
-/* Collapsed Team/Presence tile: hide tabs to match uniform toolbar height;
-   override panel-header padding to match .tile-toolbar (0.45rem 0.65rem);
-   override min-height on tile body so it collapses cleanly. */
-.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-tabs-inline {
+/* Collapsed Team/Presence tile: hide tabs AND all toolbar extras
+   so minimized height matches the title bar of other tiles. */
+.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-tabs-inline,
+.dashboard-tile.presence-panel.tile-body-collapsed .presence-popup-btn,
+.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-status-btn,
+.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-admin-btn,
+.dashboard-tile.presence-panel.tile-body-collapsed .presence-online-count,
+.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-toolbar,
+.dashboard-tile.presence-panel.tile-body-collapsed .tile-toolbar-tools > :not(.tile-toolbar-spacer) {
   display: none !important;
 }
 .dashboard-tile.presence-panel.tile-body-collapsed .panel-header {
   padding: 0.45rem 0.65rem;
   margin-bottom: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  cursor: grab;
 }
 .dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-body {
   min-height: 0 !important;
+  padding: 0;
 }
 
 .calendar-tile-bar .calendar-month-nav {
@@ -8296,18 +8305,27 @@ body {
   display: none !important;
 }
 
-/* Collapsed Team/Presence tile: hide tabs to match uniform toolbar height;
-   override panel-header padding to match .tile-toolbar (0.45rem 0.65rem);
-   override min-height on tile body so it collapses cleanly. */
-.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-tabs-inline {
+/* Collapsed Team/Presence tile: hide tabs AND all toolbar extras
+   so minimized height matches the title bar of other tiles. */
+.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-tabs-inline,
+.dashboard-tile.presence-panel.tile-body-collapsed .presence-popup-btn,
+.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-status-btn,
+.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-admin-btn,
+.dashboard-tile.presence-panel.tile-body-collapsed .presence-online-count,
+.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-toolbar,
+.dashboard-tile.presence-panel.tile-body-collapsed .tile-toolbar-tools > :not(.tile-toolbar-spacer) {
   display: none !important;
 }
 .dashboard-tile.presence-panel.tile-body-collapsed .panel-header {
   padding: 0.45rem 0.65rem;
   margin-bottom: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  cursor: grab;
 }
 .dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-body {
   min-height: 0 !important;
+  padding: 0;
 }
 
 .notes-editor {
