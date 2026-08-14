@@ -30654,7 +30654,6 @@ function populateContactForm(c) {
   $("#admin-contact-about").value = c.about || "";
   const title = isCompany ? (c.company || "Company") : `${c.firstName || ''} ${c.lastName || ''}`.trim() || "Person";
   $("#admin-contacts-detail-title").textContent = title;
-  loadContactHistory(c.id);
 }
 
 function clearContactForm() {
@@ -30670,7 +30669,6 @@ function clearContactForm() {
   ].forEach(id => { const el = $(`#${id}`); if (el) el.value = ""; });
   $("#admin-contact-type").value = "";
   $("#admin-contact-status").value = "";
-  $("#admin-contact-history-list").innerHTML = "";
   const title = isCompany ? "New Company" : "New Person";
   $("#admin-contacts-detail-title").textContent = title;
   resetContactAvatar();
@@ -30798,44 +30796,6 @@ function getAdminContactsFilter() {
   return active ? active.dataset.filter : "";
 }
 
-async function loadContactHistory(contactId) {
-  const listEl = $("#admin-contact-history-list");
-  if (!listEl) return;
-  try {
-    const events = await api(`/api/v2/contacts/${contactId}/history?count=100`);
-    const list = unwrap(events) || events || [];
-    listEl.innerHTML = list.map(ev => {
-      const catTitle = ev.category?.title || 'Note';
-      const dateStr = ev.backdatedCreated || ev.created || '';
-      const date = dateStr ? new Date(dateStr).toLocaleString() : '';
-      const content = (ev.content || '').replace(/<[^>]+>/g, '').substring(0, 200);
-      return `<div class="contact-history-item">
-        <div class="contact-history-meta"><strong>${escapeHtml(catTitle)}</strong> &mdash; ${escapeHtml(ev.author || '')} &mdash; ${escapeHtml(date)}</div>
-        <div class="contact-history-content">${escapeHtml(content)}</div>
-      </div>`;
-    }).join("") || '<p style="color:var(--muted); font-size:0.85rem;">No history yet.</p>';
-  } catch (e) {
-    listEl.innerHTML = `<p style="color:#b00; font-size:0.85rem;">Failed to load history.</p>`;
-  }
-}
-
-async function submitContactHistoryEvent(contactId) {
-  const content = $("#admin-contact-history-body")?.innerHTML?.trim();
-  if (!content || content === "<br>") { showToast("Write a note first", true); return; }
-  const categoryId = $("#admin-contact-history-category")?.value || "1";
-  const dateVal = $("#admin-contact-history-date")?.value;
-  const payload = { content, categoryId: parseInt(categoryId) };
-  if (dateVal) payload.created = new Date(dateVal).toISOString();
-  try {
-    await api(`/api/v2/contacts/${contactId}/history`, { method: "POST", body: JSON.stringify(payload) });
-    showToast("Note added");
-    $("#admin-contact-history-body").innerHTML = "";
-    loadContactHistory(contactId);
-  } catch (e) {
-    showToast("Failed to add note: " + (e.message || e), true);
-  }
-}
-
 function bindAdminContacts() {
   // Search
   const search = $("#admin-contacts-search");
@@ -30907,30 +30867,6 @@ function bindAdminContacts() {
       if (delBtn) { deleteAdminContact(parseInt(delBtn.dataset.id)); return; }
       const row = e.target.closest(".contact-row");
       if (row) openAdminContactDetail(parseInt(row.dataset.id));
-    });
-  }
-  // History toggle
-  const histToggle = $("#admin-contact-history-toggle");
-  if (histToggle) {
-    histToggle.addEventListener("click", () => {
-      const editor = $("#admin-contact-history-editor");
-      if (editor) editor.style.display = editor.style.display === "none" ? "" : "none";
-    });
-  }
-  // History submit
-  const histSubmit = $("#admin-contact-history-submit");
-  if (histSubmit) {
-    histSubmit.addEventListener("click", () => {
-      const id = $("#admin-contact-editing-id").value;
-      if (id) submitContactHistoryEvent(parseInt(id));
-    });
-  }
-  // History cancel
-  const histCancel = $("#admin-contact-history-cancel");
-  if (histCancel) {
-    histCancel.addEventListener("click", () => {
-      const editor = $("#admin-contact-history-editor");
-      if (editor) editor.style.display = "none";
     });
   }
   // Import CSV

@@ -15013,14 +15013,13 @@ select.form-control {
 /* Admin contacts — dark mode for controls outside .contact-form-section */
 #admin-contacts-search,
 #admin-contacts-type-filter,
-#admin-contact-history-category,
-#admin-contact-history-date {
+#admin-contacts-import-file {
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
 }
 
-/* Contact history */
+/* Contact history (search modal preview) */
 .admin-contact-history-list {
   max-height: 300px;
   overflow-y: auto;

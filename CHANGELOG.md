@@ -4,6 +4,13 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Contacts Tab Fixes — Modal Height, Auto-List, Dark Mode, History Migration (2026-08-14)
 
+### Admin Contacts — History Removed
+- **Removed history/notes section** from admin contacts detail view — history is now only managed via the search modal contact preview tab
+- Cleaned up associated JS functions (`loadContactHistory`, `submitContactHistoryEvent`) and event bindings
+
+### Admin Contacts — CSV Import Dark Mode Fixed
+- **Fixed file input** in Import CSV modal not respecting dark mode theming
+
 ### Search Modal — Fixed Height on Tab Switch
 - **Fixed modal shrinking** when switching from Projects to Contacts tab
 - `#search-popup-preview-containers` now hidden on the contacts list tab (no longer steals flex space)
