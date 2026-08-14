@@ -15019,6 +15019,188 @@ select.form-control {
   border: 1px solid var(--border);
 }
 
+/* ── Customize Projects tab — multi-column layout ─────────────────────────── */
+.admin-customize-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.75rem;
+  min-height: 0;
+  flex: 1;
+}
+@media (max-width: 900px) {
+  .admin-customize-grid { grid-template-columns: 1fr; }
+}
+.admin-customize-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.admin-customize-col-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.admin-customize-col-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+.admin-customize-search {
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.8rem;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+}
+.admin-customize-search:focus {
+  border-bottom-color: var(--accent);
+}
+.admin-customize-list {
+  flex: 1;
+  min-height: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  font-size: 0.85rem;
+}
+.admin-customize-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  cursor: default;
+  transition: background 0.12s;
+}
+.admin-customize-row:last-child { border-bottom: none; }
+.admin-customize-row:hover { background: var(--hover); }
+.admin-customize-row-info { flex: 1; min-width: 0; }
+.admin-customize-row-label {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.admin-customize-row-meta {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.admin-customize-row-actions {
+  display: flex;
+  gap: 0.15rem;
+  flex-shrink: 0;
+  opacity: 0.4;
+  transition: opacity 0.15s;
+}
+.admin-customize-row:hover .admin-customize-row-actions { opacity: 1; }
+.admin-customize-row-actions .btn {
+  padding: 0.1rem 0.3rem;
+  font-size: 0.75rem;
+  min-width: 1.4rem;
+  min-height: 1.4rem;
+}
+.admin-customize-color-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.admin-customize-badge {
+  display: inline-block;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  font-size: 0.65rem;
+  font-weight: 500;
+  background: var(--bg-elevated);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+.admin-customize-form {
+  display: none;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+.admin-customize-form-row {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+.admin-customize-input,
+.admin-customize-select {
+  padding: 0.3rem 0.4rem;
+  font-size: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  flex: 1;
+  min-width: 0;
+}
+.admin-customize-input:focus,
+.admin-customize-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.admin-customize-color {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.admin-customize-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.admin-customize-checkbox-label input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+.admin-customize-form-actions {
+  display: flex;
+  gap: 0.25rem;
+  margin-top: 0.15rem;
+}
+.admin-customize-empty {
+  padding: 0.75rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-align: center;
+}
+.admin-customize-reorder-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 0.1rem;
+  font-size: 0.7rem;
+  line-height: 1;
+  opacity: 0.5;
+  transition: opacity 0.12s;
+}
+.admin-customize-reorder-btn:hover { opacity: 1; color: var(--text); }
+
 /* Contact history (search modal preview) */
 .admin-contact-history-list {
   max-height: 300px;

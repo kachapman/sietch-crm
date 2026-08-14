@@ -28117,6 +28117,7 @@ function openAdminConsoleModal() {
     bindAdminContacts();
     bindAdminStages();
     bindAdminTags();
+    bindAdminCustomFields();
     bindAlternateSmtp();
     // Sync buttons — real implementation
     function getSyncPayload() {
@@ -28620,8 +28621,8 @@ function switchAdminTab(tab) {
   if (tab === "customize") {
     const s = $("#admin-stages-search")?.value.trim() || "";
     populateAdminStagesList(s);
-    populateAdminCustomFieldsList();
-    populateAdminTagsList();
+    populateAdminCustomFieldsList($("#admin-cf-search")?.value.trim() || "");
+    populateAdminTagsList($("#admin-tag-search")?.value.trim() || "");
   }
   if (tab === "logs") {
     loadEventLogFromServer().then(() => {
@@ -30973,17 +30974,31 @@ async function populateAdminStagesList(search = "") {
       const q = search.toLowerCase();
       stages = stages.filter(s => (s.title || "").toLowerCase().includes(q));
     }
-    const list = (stages || []).map(s => {
+    if (!stages.length) {
+      listEl.innerHTML = '<div class="admin-customize-empty">No stages found.</div>';
+      return;
+    }
+    listEl.innerHTML = stages.map((s, i) => {
       const color = s.color || "#888";
       const prob = s.probability != null ? `${s.probability}%` : "";
-      return `<div style="padding:3px 0; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:6px;">
-        <span style="display:inline-block; width:14px; height:14px; background:${escapeHtml(color)}; border-radius:2px; border:1px solid var(--border);"></span>
-        ${escapeHtml(s.title || "Stage")} ${prob ? `<span style="color:var(--muted); font-size:0.75em;">(${escapeHtml(prob)})</span>` : ""}
+      const typeBadge = s.stageType != null ? `<span class="admin-customize-badge">${escapeHtml(String(s.stageType))}</span>` : "";
+      const activeBadge = s.isActive === false ? '<span class="admin-customize-badge" style="color:var(--danger);">inactive</span>' : "";
+      return `<div class="admin-customize-row" data-stage-id="${s.id}">
+        <button class="admin-customize-reorder-btn" data-dir="up" data-stage-id="${s.id}" title="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
+        <button class="admin-customize-reorder-btn" data-dir="down" data-stage-id="${s.id}" title="Move down" ${i === stages.length - 1 ? 'disabled' : ''}>▼</button>
+        <span class="admin-customize-color-swatch" style="background:${escapeHtml(color)};"></span>
+        <div class="admin-customize-row-info">
+          <div class="admin-customize-row-label">${escapeHtml(s.title || "Stage")}</div>
+          <div class="admin-customize-row-meta">${prob} ${typeBadge} ${activeBadge}</div>
+        </div>
+        <div class="admin-customize-row-actions">
+          <button class="btn btn-ghost" data-edit-stage="${s.id}" title="Edit">✎</button>
+          <button class="btn btn-ghost" data-delete-stage="${s.id}" title="Delete">×</button>
+        </div>
       </div>`;
-    }).join("") || "<p>No stages.</p>";
-    listEl.innerHTML = list;
+    }).join("");
   } catch (e) {
-    listEl.innerHTML = `<p style="color:#b00;">Failed to load stages: ${escapeHtml(e.message)}</p>`;
+    listEl.innerHTML = `<div class="admin-customize-empty" style="color:var(--danger);">Failed to load stages.</div>`;
   }
 }
 
@@ -30996,109 +31011,368 @@ function bindAdminStages() {
       t = setTimeout(() => populateAdminStagesList(search.value.trim()), 250);
     });
   }
-  const addBtn = $("#admin-add-stage");
   const form = $("#admin-stage-form");
-  if (addBtn && form) {
+  const addBtn = $("#admin-add-stage");
+  if (addBtn) {
     addBtn.addEventListener("click", () => {
-      form.style.display = "block";
-      const t = $("#admin-stage-title"); if (t) t.value = "";
-      const c = $("#admin-stage-color"); if (c) c.value = "#6d4aff";
-      const p = $("#admin-stage-prob"); if (p) p.value = "";
+      $("#admin-stage-editing-id").value = "";
+      $("#admin-stage-title").value = "";
+      $("#admin-stage-color").value = "#6d4aff";
+      $("#admin-stage-prob").value = "";
+      $("#admin-stage-type").value = "Open";
+      if (form) form.style.display = "flex";
+      $("#admin-stage-title")?.focus();
     });
   }
   const cancel = $("#admin-stage-cancel");
-  if (cancel && form) cancel.addEventListener("click", () => { form.style.display = "none"; });
+  if (cancel) cancel.addEventListener("click", () => { if (form) form.style.display = "none"; });
   const save = $("#admin-stage-save");
-  if (save && form) {
+  if (save) {
     save.addEventListener("click", async () => {
-      const title = $("#admin-stage-title")?.value.trim() || "";
+      const editingId = $("#admin-stage-editing-id")?.value;
+      const title = $("#admin-stage-title")?.value.trim();
       if (!title) { showToast("Title required", true); return; }
+      const stageTypeMap = { "Open": 0, "Closed": 1, "Won": 2 };
       const payload = {
         title,
         color: $("#admin-stage-color")?.value || "#6d4aff",
         probability: parseInt($("#admin-stage-prob")?.value) || 0,
-        sort_order: 999,
-        stage_type: "Open",
-        is_active: true
+        stageType: stageTypeMap[$("#admin-stage-type")?.value] ?? 0,
       };
       try {
-        await api("/api/v2/stages", { method: "POST", body: JSON.stringify(payload) });
-        form.style.display = "none";
-        await populateAdminStagesList( $("#admin-stages-search")?.value.trim() || "" );
-        showToast("Stage added");
-        // refresh global stages for kanban etc.
+        if (editingId) {
+          await api(`/api/v2/stages/${editingId}`, { method: "PUT", body: JSON.stringify(payload) });
+          showToast("Stage updated");
+        } else {
+          payload.sortOrder = 999;
+          payload.isActive = true;
+          await api("/api/v2/stages", { method: "POST", body: JSON.stringify(payload) });
+          showToast("Stage added");
+        }
+        if (form) form.style.display = "none";
+        await populateAdminStagesList($("#admin-stages-search")?.value.trim() || "");
         if (typeof loadStages === "function") await loadStages();
       } catch (e) {
-        showToast("Failed to add stage: " + (e.message || e), true);
+        showToast("Failed to save stage: " + (e.message || e), true);
+      }
+    });
+  }
+  const listEl = $("#admin-stages-list");
+  if (listEl) {
+    listEl.addEventListener("click", async (e) => {
+      const editBtn = e.target.closest("[data-edit-stage]");
+      if (editBtn) {
+        const id = editBtn.dataset.editStage;
+        try {
+          const data = await api("/api/v2/stages");
+          const stages = unwrap(data) || data || [];
+          const s = stages.find(x => String(x.id) === String(id));
+          if (!s) return;
+          const stageTypeNames = { 0: "Open", 1: "Closed", 2: "Won" };
+          $("#admin-stage-editing-id").value = s.id;
+          $("#admin-stage-title").value = s.title || "";
+          $("#admin-stage-color").value = s.color || "#6d4aff";
+          $("#admin-stage-prob").value = s.probability ?? "";
+          $("#admin-stage-type").value = stageTypeNames[s.stageType] || "Open";
+          if (form) form.style.display = "flex";
+          $("#admin-stage-title")?.focus();
+        } catch (err) { showToast("Failed to load stage", true); }
+        return;
+      }
+      const delBtn = e.target.closest("[data-delete-stage]");
+      if (delBtn) {
+        const id = delBtn.dataset.deleteStage;
+        const ok = await confirmDialog("Delete this stage? Projects using it will need reassignment.");
+        if (!ok) return;
+        try {
+          await api(`/api/v2/stages/${id}`, { method: "DELETE" });
+          showToast("Stage deleted");
+          await populateAdminStagesList($("#admin-stages-search")?.value.trim() || "");
+          if (typeof loadStages === "function") await loadStages();
+        } catch (e) { showToast("Failed to delete: " + (e.message || e), true); }
+        return;
+      }
+      const reorderBtn = e.target.closest(".admin-customize-reorder-btn");
+      if (reorderBtn) {
+        const id = parseInt(reorderBtn.dataset.stageId);
+        const dir = reorderBtn.dataset.dir;
+        try {
+          const data = await api("/api/v2/stages");
+          const stages = unwrap(data) || data || [];
+          const idx = stages.findIndex(s => s.id === id);
+          if (idx < 0) return;
+          const swapIdx = dir === "up" ? idx - 1 : idx + 1;
+          if (swapIdx < 0 || swapIdx >= stages.length) return;
+          const ids = stages.map(s => s.id);
+          [ids[idx], ids[swapIdx]] = [ids[swapIdx], ids[idx]];
+          await api("/api/v2/stages/reorder", { method: "POST", body: JSON.stringify({ ids }) });
+          await populateAdminStagesList($("#admin-stages-search")?.value.trim() || "");
+          if (typeof loadStages === "function") await loadStages();
+        } catch (e) { showToast("Failed to reorder: " + (e.message || e), true); }
       }
     });
   }
 }
 
-async function populateAdminCustomFieldsList() {
-  const listEl = $('#admin-custom-fields-list');
+async function populateAdminTagsList(search = "") {
+  const listEl = $("#admin-tags-list");
   if (!listEl) return;
   try {
-    const data = await api('/api/v2/custom-fields');
-    const fields = unwrap(data) || data || [];
-    const list = fields.map((f) => {
-      const type = f.type || f.fieldType || 'text';
-      const req = f.isRequired ? 'required' : '';
-      return `<div style='padding:3px 0; border-bottom:1px solid var(--border);'>
-        <strong>${escapeHtml(f.label || f.key || 'Field')}</strong>
-        <span style='color:var(--muted); font-size:0.75em;'>(${escapeHtml(type)}${req ? ` · ${req}` : ''})</span>
+    const data = await api("/api/v2/tags");
+    let tags = unwrap(data) || data || [];
+    if (search) {
+      const q = search.toLowerCase();
+      tags = tags.filter(t => (t.title || "").toLowerCase().includes(q));
+    }
+    if (!tags.length) {
+      listEl.innerHTML = '<div class="admin-customize-empty">No tags found.</div>';
+      return;
+    }
+    listEl.innerHTML = tags.map(t => {
+      const color = t.color || "#888";
+      return `<div class="admin-customize-row" data-tag-id="${t.id}">
+        <span class="admin-customize-color-swatch" style="background:${escapeHtml(color)}; border-radius:50%;"></span>
+        <div class="admin-customize-row-info">
+          <div class="admin-customize-row-label">${escapeHtml(t.title || "Tag")}</div>
+        </div>
+        <div class="admin-customize-row-actions">
+          <button class="btn btn-ghost" data-edit-tag="${t.id}" title="Edit">✎</button>
+          <button class="btn btn-ghost" data-delete-tag="${t.id}" title="Delete">×</button>
+        </div>
       </div>`;
-    }).join('') || '<p>No custom fields.</p>';
-    listEl.innerHTML = list;
+    }).join("");
   } catch (e) {
-    listEl.innerHTML = `<p style='color:#b00;'>Failed to load custom fields: ${escapeHtml(e.message)}</p>`;
-  }
-}
-
-async function populateAdminTagsList() {
-  const listEl = $('#admin-tags-list');
-  if (!listEl) return;
-  try {
-    const data = await api('/api/v2/tags');
-    const tags = unwrap(data) || data || [];
-    const list = tags.map((t) => {
-      const color = t.color || '#888';
-      return `<div style='padding:3px 0; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:6px;'>
-        <span style='display:inline-block; width:14px; height:14px; background:${escapeHtml(color)}; border-radius:50%; border:1px solid var(--border);'></span>
-        ${escapeHtml(t.title || t.Title || 'Tag')}
-      </div>`;
-    }).join('') || '<p>No tags.</p>';
-    listEl.innerHTML = list;
-  } catch (e) {
-    listEl.innerHTML = `<p style='color:#b00;'>Failed to load tags: ${escapeHtml(e.message)}</p>`;
+    listEl.innerHTML = `<div class="admin-customize-empty" style="color:var(--danger);">Failed to load tags.</div>`;
   }
 }
 
 function bindAdminTags() {
-  const addBtn = $('#admin-add-tag');
-  const form = $('#admin-tag-form');
-  if (addBtn && form) {
-    addBtn.addEventListener('click', () => {
-      form.style.display = 'block';
-      const t = $('#admin-tag-title'); if (t) t.value = '';
-      const c = $('#admin-tag-color'); if (c) c.value = '#6d4aff';
+  const search = $("#admin-tag-search");
+  if (search) {
+    let t;
+    search.addEventListener("input", () => {
+      clearTimeout(t);
+      t = setTimeout(() => populateAdminTagsList(search.value.trim()), 250);
     });
   }
-  const cancel = $('#admin-tag-cancel');
-  if (cancel && form) cancel.addEventListener('click', () => { form.style.display = 'none'; });
-  const save = $('#admin-tag-save');
-  if (save && form) {
-    save.addEventListener('click', async () => {
-      const title = $('#admin-tag-title')?.value.trim() || '';
-      if (!title) { showToast('Tag name required', true); return; }
-      const payload = { title, color: $('#admin-tag-color')?.value || '#6d4aff' };
+  const form = $("#admin-tag-form");
+  const addBtn = $("#admin-add-tag");
+  if (addBtn) {
+    addBtn.addEventListener("click", () => {
+      $("#admin-tag-editing-id").value = "";
+      $("#admin-tag-title").value = "";
+      $("#admin-tag-color").value = "#6d4aff";
+      if (form) form.style.display = "flex";
+      $("#admin-tag-title")?.focus();
+    });
+  }
+  const cancel = $("#admin-tag-cancel");
+  if (cancel) cancel.addEventListener("click", () => { if (form) form.style.display = "none"; });
+  const save = $("#admin-tag-save");
+  if (save) {
+    save.addEventListener("click", async () => {
+      const editingId = $("#admin-tag-editing-id")?.value;
+      const title = $("#admin-tag-title")?.value.trim();
+      if (!title) { showToast("Tag name required", true); return; }
+      const payload = { title, color: $("#admin-tag-color")?.value || "#6d4aff" };
       try {
-        await api('/api/v2/tags', { method: 'POST', body: JSON.stringify(payload) });
-        form.style.display = 'none';
-        await populateAdminTagsList();
-        showToast('Tag added');
+        if (editingId) {
+          await api(`/api/v2/tags/${editingId}`, { method: "PUT", body: JSON.stringify(payload) });
+          showToast("Tag updated");
+        } else {
+          await api("/api/v2/tags", { method: "POST", body: JSON.stringify(payload) });
+          showToast("Tag added");
+        }
+        if (form) form.style.display = "none";
+        await populateAdminTagsList($("#admin-tag-search")?.value.trim() || "");
       } catch (e) {
-        showToast('Failed to add tag: ' + (e.message || e), true);
+        showToast("Failed to save tag: " + (e.message || e), true);
+      }
+    });
+  }
+  const listEl = $("#admin-tags-list");
+  if (listEl) {
+    listEl.addEventListener("click", async (e) => {
+      const editBtn = e.target.closest("[data-edit-tag]");
+      if (editBtn) {
+        const id = editBtn.dataset.editTag;
+        try {
+          const data = await api("/api/v2/tags");
+          const tags = unwrap(data) || data || [];
+          const t = tags.find(x => String(x.id) === String(id));
+          if (!t) return;
+          $("#admin-tag-editing-id").value = t.id;
+          $("#admin-tag-title").value = t.title || "";
+          $("#admin-tag-color").value = t.color || "#6d4aff";
+          if (form) form.style.display = "flex";
+          $("#admin-tag-title")?.focus();
+        } catch (err) { showToast("Failed to load tag", true); }
+        return;
+      }
+      const delBtn = e.target.closest("[data-delete-tag]");
+      if (delBtn) {
+        const id = delBtn.dataset.deleteTag;
+        const ok = await confirmDialog("Delete this tag?");
+        if (!ok) return;
+        try {
+          await api(`/api/v2/tags/${id}`, { method: "DELETE" });
+          showToast("Tag deleted");
+          await populateAdminTagsList($("#admin-tag-search")?.value.trim() || "");
+        } catch (e) { showToast("Failed to delete: " + (e.message || e), true); }
+      }
+    });
+  }
+}
+
+async function populateAdminCustomFieldsList(search = "") {
+  const listEl = $("#admin-custom-fields-list");
+  if (!listEl) return;
+  try {
+    const data = await api("/api/v2/custom-fields");
+    let fields = unwrap(data) || data || [];
+    if (search) {
+      const q = search.toLowerCase();
+      fields = fields.filter(f => (f.label || f.key || "").toLowerCase().includes(q));
+    }
+    if (!fields.length) {
+      listEl.innerHTML = '<div class="admin-customize-empty">No custom fields.</div>';
+      return;
+    }
+    listEl.innerHTML = fields.map(f => {
+      const type = f.type || f.fieldType || "text";
+      const req = f.isRequired ? '<span class="admin-customize-badge" style="color:var(--accent);">required</span>' : "";
+      const optCount = f.options && f.options.length ? `<span class="admin-customize-badge">${f.options.length} opts</span>` : "";
+      return `<div class="admin-customize-row" data-cf-id="${f.id}">
+        <div class="admin-customize-row-info">
+          <div class="admin-customize-row-label">${escapeHtml(f.label || f.key || "Field")}</div>
+          <div class="admin-customize-row-meta"><span class="admin-customize-badge">${escapeHtml(type)}</span> ${req} ${optCount}</div>
+        </div>
+        <div class="admin-customize-row-actions">
+          <button class="btn btn-ghost" data-edit-cf="${f.id}" title="Edit">✎</button>
+          <button class="btn btn-ghost" data-delete-cf="${f.id}" title="Delete">×</button>
+        </div>
+      </div>`;
+    }).join("");
+  } catch (e) {
+    listEl.innerHTML = `<div class="admin-customize-empty" style="color:var(--danger);">Failed to load custom fields.</div>`;
+  }
+}
+
+function bindAdminCustomFields() {
+  const search = $("#admin-cf-search");
+  if (search) {
+    let t;
+    search.addEventListener("input", () => {
+      clearTimeout(t);
+      t = setTimeout(() => populateAdminCustomFieldsList(search.value.trim()), 250);
+    });
+  }
+  const form = $("#admin-cf-form");
+  const addBtn = $("#admin-add-cf");
+  if (addBtn) {
+    addBtn.addEventListener("click", () => {
+      $("#admin-cf-editing-id").value = "";
+      $("#admin-cf-label").value = "";
+      $("#admin-cf-key").value = "";
+      $("#admin-cf-type").value = "text";
+      $("#admin-cf-required").checked = false;
+      $("#admin-cf-options").value = "";
+      const optWrap = $("#admin-cf-options-wrap");
+      if (optWrap) optWrap.style.display = "none";
+      if (form) form.style.display = "flex";
+      $("#admin-cf-label")?.focus();
+    });
+  }
+  const typeSelect = $("#admin-cf-type");
+  if (typeSelect) {
+    typeSelect.addEventListener("change", () => {
+      const optWrap = $("#admin-cf-options-wrap");
+      if (optWrap) optWrap.style.display = typeSelect.value === "select" ? "" : "none";
+    });
+  }
+  const labelInput = $("#admin-cf-label");
+  const keyInput = $("#admin-cf-key");
+  if (labelInput && keyInput) {
+    labelInput.addEventListener("input", () => {
+      if (!$("#admin-cf-editing-id")?.value) {
+        keyInput.value = labelInput.value.trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_|_$/g, "");
+      }
+    });
+  }
+  const cancel = $("#admin-cf-cancel");
+  if (cancel) cancel.addEventListener("click", () => { if (form) form.style.display = "none"; });
+  const save = $("#admin-cf-save");
+  if (save) {
+    save.addEventListener("click", async () => {
+      const editingId = $("#admin-cf-editing-id")?.value;
+      const label = $("#admin-cf-label")?.value.trim();
+      if (!label) { showToast("Label required", true); return; }
+      let key = $("#admin-cf-key")?.value.trim();
+      if (!key) key = label.toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_|_$/g, "");
+      const payload = {
+        label,
+        key,
+        type: $("#admin-cf-type")?.value || "text",
+        isRequired: $("#admin-cf-required")?.checked || false,
+      };
+      const fieldType = $("#admin-cf-type")?.value;
+      if (fieldType === "select") {
+        const optsText = $("#admin-cf-options")?.value || "";
+        payload.options = optsText.split("\n").map(s => s.trim()).filter(Boolean).map(s => ({ value: s, label: s }));
+      }
+      try {
+        if (editingId) {
+          await api(`/api/v2/custom-fields/${editingId}`, { method: "PUT", body: JSON.stringify(payload) });
+          showToast("Field updated");
+        } else {
+          await api("/api/v2/custom-fields", { method: "POST", body: JSON.stringify(payload) });
+          showToast("Field added");
+        }
+        if (form) form.style.display = "none";
+        await populateAdminCustomFieldsList($("#admin-cf-search")?.value.trim() || "");
+      } catch (e) {
+        showToast("Failed to save field: " + (e.message || e), true);
+      }
+    });
+  }
+  const listEl = $("#admin-custom-fields-list");
+  if (listEl) {
+    listEl.addEventListener("click", async (e) => {
+      const editBtn = e.target.closest("[data-edit-cf]");
+      if (editBtn) {
+        const id = editBtn.dataset.editCf;
+        try {
+          const data = await api("/api/v2/custom-fields");
+          const fields = unwrap(data) || data || [];
+          const f = fields.find(x => String(x.id) === String(id));
+          if (!f) return;
+          $("#admin-cf-editing-id").value = f.id;
+          $("#admin-cf-label").value = f.label || "";
+          $("#admin-cf-key").value = f.key || f.fieldKey || "";
+          $("#admin-cf-type").value = f.type || f.fieldType || "text";
+          $("#admin-cf-required").checked = !!f.isRequired;
+          const optWrap = $("#admin-cf-options-wrap");
+          if (optWrap) optWrap.style.display = (f.type || f.fieldType) === "select" ? "" : "none";
+          if (f.options && f.options.length) {
+            $("#admin-cf-options").value = f.options.map(o => o.value || o.label || "").join("\n");
+          } else {
+            $("#admin-cf-options").value = "";
+          }
+          if (form) form.style.display = "flex";
+          $("#admin-cf-label")?.focus();
+        } catch (err) { showToast("Failed to load field", true); }
+        return;
+      }
+      const delBtn = e.target.closest("[data-delete-cf]");
+      if (delBtn) {
+        const id = delBtn.dataset.deleteCf;
+        const ok = await confirmDialog("Delete this custom field? Existing values will be lost.");
+        if (!ok) return;
+        try {
+          await api(`/api/v2/custom-fields/${id}`, { method: "DELETE" });
+          showToast("Field deleted");
+          await populateAdminCustomFieldsList($("#admin-cf-search")?.value.trim() || "");
+        } catch (e) { showToast("Failed to delete: " + (e.message || e), true); }
       }
     });
   }

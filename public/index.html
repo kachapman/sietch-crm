@@ -2207,42 +2207,87 @@
             <div id="admin-tab-customize" class="admin-tab-content hidden">
               <p class="modal-message">Manage pipeline stages, custom fields, and tags for projects.</p>
 
-              <h4 style="margin:0.75rem 0 0.3rem; font-size:0.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em;">Stages</h4>
-              <div style="margin-bottom:0.5rem;">
-                <input type="text" id="admin-stages-search" placeholder="Search stages..." style="width:100%; padding:0.4rem; font-size:0.85rem;" />
-              </div>
-              <div id="admin-stages-list" style="max-height:200px; overflow:auto; border:1px solid var(--border); padding:0.25rem; font-size:0.85rem;"></div>
-              <div style="margin-top:0.4rem;">
-                <button type="button" id="admin-add-stage" class="btn btn-secondary btn-small">+ Add Stage</button>
-              </div>
-              <div id="admin-stage-form" style="display:none; margin-top:0.4rem; padding:0.5rem; border:1px solid var(--border);">
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.25rem; font-size:0.8rem;">
-                  <input id="admin-stage-title" placeholder="Stage title" />
-                  <input id="admin-stage-color" type="color" value="#6d4aff" title="Color" />
-                  <input id="admin-stage-prob" placeholder="Probability %" style="grid-column:span 2;" />
+              <div class="admin-customize-grid">
+                <!-- Stages Column -->
+                <div class="admin-customize-col">
+                  <div class="admin-customize-col-header">
+                    <span class="admin-customize-col-title">Stages</span>
+                    <button type="button" id="admin-add-stage" class="btn btn-primary btn-small">+ Add</button>
+                  </div>
+                  <input type="search" id="admin-stages-search" class="admin-customize-search" placeholder="Search stages..." />
+                  <div id="admin-stages-list" class="admin-customize-list"></div>
+                  <div id="admin-stage-form" class="admin-customize-form">
+                    <input type="hidden" id="admin-stage-editing-id" />
+                    <input id="admin-stage-title" class="admin-customize-input" placeholder="Stage title" />
+                    <div class="admin-customize-form-row">
+                      <input id="admin-stage-color" type="color" value="#6d4aff" title="Color" class="admin-customize-color" />
+                      <input id="admin-stage-prob" class="admin-customize-input" placeholder="Prob %" type="number" min="0" max="100" />
+                      <select id="admin-stage-type" class="admin-customize-select">
+                        <option value="Open">Open</option>
+                        <option value="Closed">Closed</option>
+                        <option value="Won">Won</option>
+                      </select>
+                    </div>
+                    <div class="admin-customize-form-actions">
+                      <button type="button" id="admin-stage-save" class="btn btn-primary btn-small">Save</button>
+                      <button type="button" id="admin-stage-cancel" class="btn btn-ghost btn-small">Cancel</button>
+                    </div>
+                  </div>
                 </div>
-                <div style="margin-top:0.25rem;">
-                  <button type="button" id="admin-stage-save" class="btn btn-primary btn-small">Save</button>
-                  <button type="button" id="admin-stage-cancel" class="btn btn-ghost btn-small">Cancel</button>
-                </div>
-              </div>
 
-              <h4 style="margin:1rem 0 0.3rem; font-size:0.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em;">Custom Fields</h4>
-              <div id="admin-custom-fields-list" style="max-height:200px; overflow:auto; border:1px solid var(--border); padding:0.25rem; font-size:0.85rem;"></div>
-
-              <h4 style="margin:1rem 0 0.3rem; font-size:0.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em;">Tags</h4>
-              <div id="admin-tags-list" style="max-height:200px; overflow:auto; border:1px solid var(--border); padding:0.25rem; font-size:0.85rem;"></div>
-              <div style="margin-top:0.4rem;">
-                <button type="button" id="admin-add-tag" class="btn btn-secondary btn-small">+ Add Tag</button>
-              </div>
-              <div id="admin-tag-form" style="display:none; margin-top:0.4rem; padding:0.5rem; border:1px solid var(--border);">
-                <div style="display:flex; gap:0.25rem; font-size:0.8rem;">
-                  <input id="admin-tag-title" placeholder="Tag name" style="flex:1;" />
-                  <input id="admin-tag-color" type="color" value="#6d4aff" title="Color" />
+                <!-- Tags Column -->
+                <div class="admin-customize-col">
+                  <div class="admin-customize-col-header">
+                    <span class="admin-customize-col-title">Tags</span>
+                    <button type="button" id="admin-add-tag" class="btn btn-primary btn-small">+ Add</button>
+                  </div>
+                  <input type="search" id="admin-tag-search" class="admin-customize-search" placeholder="Search tags..." />
+                  <div id="admin-tags-list" class="admin-customize-list"></div>
+                  <div id="admin-tag-form" class="admin-customize-form">
+                    <input type="hidden" id="admin-tag-editing-id" />
+                    <div class="admin-customize-form-row">
+                      <input id="admin-tag-title" class="admin-customize-input" placeholder="Tag name" />
+                      <input id="admin-tag-color" type="color" value="#6d4aff" title="Color" class="admin-customize-color" />
+                    </div>
+                    <div class="admin-customize-form-actions">
+                      <button type="button" id="admin-tag-save" class="btn btn-primary btn-small">Save</button>
+                      <button type="button" id="admin-tag-cancel" class="btn btn-ghost btn-small">Cancel</button>
+                    </div>
+                  </div>
                 </div>
-                <div style="margin-top:0.25rem;">
-                  <button type="button" id="admin-tag-save" class="btn btn-primary btn-small">Save</button>
-                  <button type="button" id="admin-tag-cancel" class="btn btn-ghost btn-small">Cancel</button>
+
+                <!-- Custom Fields Column -->
+                <div class="admin-customize-col">
+                  <div class="admin-customize-col-header">
+                    <span class="admin-customize-col-title">Custom Fields</span>
+                    <button type="button" id="admin-add-cf" class="btn btn-primary btn-small">+ Add</button>
+                  </div>
+                  <input type="search" id="admin-cf-search" class="admin-customize-search" placeholder="Search fields..." />
+                  <div id="admin-custom-fields-list" class="admin-customize-list"></div>
+                  <div id="admin-cf-form" class="admin-customize-form">
+                    <input type="hidden" id="admin-cf-editing-id" />
+                    <input id="admin-cf-label" class="admin-customize-input" placeholder="Field label" />
+                    <input id="admin-cf-key" class="admin-customize-input" placeholder="Field key (auto-generated)" />
+                    <div class="admin-customize-form-row">
+                      <select id="admin-cf-type" class="admin-customize-select">
+                        <option value="text">Text</option>
+                        <option value="number">Number</option>
+                        <option value="date">Date</option>
+                        <option value="select">Select</option>
+                        <option value="checkbox">Checkbox</option>
+                      </select>
+                      <label class="admin-customize-checkbox-label">
+                        <input type="checkbox" id="admin-cf-required" /> Required
+                      </label>
+                    </div>
+                    <div id="admin-cf-options-wrap" class="admin-customize-form-row" style="display:none;">
+                      <textarea id="admin-cf-options" class="admin-customize-input" placeholder="Options (one per line)" rows="3"></textarea>
+                    </div>
+                    <div class="admin-customize-form-actions">
+                      <button type="button" id="admin-cf-save" class="btn btn-primary btn-small">Save</button>
+                      <button type="button" id="admin-cf-cancel" class="btn btn-ghost btn-small">Cancel</button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

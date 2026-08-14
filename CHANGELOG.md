@@ -2,6 +2,48 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Customize Projects Tab Revamp (2026-08-14)
+
+### Multi-Column Layout
+- **Three-column layout** on desktop (stages | tags | custom fields) that stacks on mobile (<900px)
+- Each column has its own search, list, and inline add/edit form
+- Efficient use of both width and vertical space in the admin console
+
+### Stages — Full CRUD + Reorder
+- **Add** stages with title, color picker, probability %, and stage type (Open/Closed/Won)
+- **Edit** stages inline via ✎ button on each row
+- **Delete** stages with confirmation dialog (refuses if projects reference the stage)
+- **Reorder** stages with ▲/▼ arrow buttons per row
+- Search/filter support
+
+### Tags — Full CRUD + Search
+- **Add** tags with name and color picker
+- **Edit** tags inline via ✎ button on each row
+- **Delete** tags with confirmation dialog (refuses if projects use the tag)
+- **Search** tags with debounced input
+
+### Custom Fields — Full CRUD
+- **Add** custom fields with label, auto-generated key, field type (text/number/date/select/checkbox), required toggle
+- **Edit** fields inline via ✎ button on each row
+- **Delete** fields with confirmation dialog (refuses if projects have values)
+- **Select-type options** managed via textarea (one option per line)
+- Search/filter support
+
+### Server Endpoints Added
+- `DELETE /api/v2/stages/{id}` — delete stage (with FK check)
+- `POST /api/v2/stages/reorder` — reorder stages by ID array
+- `DELETE /api/v2/tags/{id}` — delete tag (with FK check)
+- `POST /api/v2/custom-fields` — create custom field (with options)
+- `PUT /api/v2/custom-fields/{id}` — update custom field (with options sync)
+- `DELETE /api/v2/custom-fields/{id}` — delete custom field (with FK check)
+
+### Dark Mode
+- All form controls use CSS classes with explicit dark mode styling (`var(--bg)`, `var(--text)`, `var(--border)`)
+
+### UI Pattern
+- Shared row style (`.admin-customize-row`) with hover highlight, action buttons (opacity on hover)
+- Consistent with contacts tab admin pattern
+
 ## Contacts Tab Fixes — Modal Height, Auto-List, Dark Mode, History Migration (2026-08-14)
 
 ### Admin Contacts — History Removed

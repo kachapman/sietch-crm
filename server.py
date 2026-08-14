@@ -2721,9 +2721,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/stages" and method == "POST":
             self._handle_stage_create()
             return
+        if api_path == "/api/v2/stages/reorder" and method == "POST":
+            self._handle_stages_reorder()
+            return
         m = re.match(r"^/api/v2/stages/(\d+)$", api_path)
         if m and method == "PUT":
             self._handle_stage_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_stage_delete(int(m.group(1)))
             return
         if api_path == "/api/v2/tags" and method == "POST":
             self._handle_tag_create()
@@ -2732,12 +2738,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if m and method == "PUT":
             self._handle_tag_update(int(m.group(1)))
             return
+        if m and method == "DELETE":
+            self._handle_tag_delete(int(m.group(1)))
+            return
         if api_path == "/api/v2/custom-fields" and method == "POST":
             self._handle_custom_field_create()
             return
         m = re.match(r"^/api/v2/custom-fields/(\d+)$", api_path)
         if m and method == "PUT":
             self._handle_custom_field_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_custom_field_delete(int(m.group(1)))
             return
         if api_path == "/api/v2/contacts" and method == "POST":
             self._handle_contact_create()
@@ -3454,6 +3466,85 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             })
         _json_response(self, 200, fields)
 
+    def _handle_custom_field_create(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        label = str(payload.get("label") or "").strip()
+        if not label:
+            _json_response(self, 400, {"error": "Label is required"})
+            return
+        key = str(payload.get("key") or "").strip()
+        if not key:
+            key = label.lower().replace(" ", "_").replace("-", "_")
+            key = "".join(c for c in key if c.isalnum() or c == "_")
+        field_type = str(payload.get("type") or "text").strip()
+        is_required = bool(payload.get("isRequired"))
+        default_value = payload.get("defaultValue")
+        max_sort = db.query_one("SELECT COALESCE(MAX(sort_order), 0) as mx FROM custom_field_definitions")["mx"]
+        fid = db.insert_returning(
+            """INSERT INTO custom_field_definitions (field_key, label, field_type, is_required, default_value, sort_order, created_by)
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (key, label, field_type, is_required, default_value, max_sort + 1, user["id"]),
+        )
+        options = payload.get("options") or []
+        for i, opt in enumerate(options):
+            val = opt.get("value") or opt.get("label") or ""
+            lbl = opt.get("label") or val
+            if val:
+                db.execute(
+                    "INSERT INTO custom_field_options (field_id, option_value, option_label, sort_order) VALUES (%s, %s, %s, %s)",
+                    (fid, val, lbl, i),
+                )
+        _json_response(self, 201, {"id": fid, "ok": True})
+
+    def _handle_custom_field_update(self, field_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        sets, params = [], []
+        for field, col in [("label", "label"), ("type", "field_type"), ("isRequired", "is_required"),
+                           ("defaultValue", "default_value"), ("sortOrder", "sort_order")]:
+            if field in payload:
+                sets.append(f"{col} = %s")
+                params.append(payload[field])
+        if sets:
+            params.append(field_id)
+            db.execute(f"UPDATE custom_field_definitions SET {', '.join(sets)} WHERE id = %s", (*params,))
+        if "options" in payload and isinstance(payload["options"], list):
+            db.execute("DELETE FROM custom_field_options WHERE field_id = %s", (field_id,))
+            for i, opt in enumerate(payload["options"]):
+                val = opt.get("value") or opt.get("label") or ""
+                lbl = opt.get("label") or val
+                if val:
+                    db.execute(
+                        "INSERT INTO custom_field_options (field_id, option_value, option_label, sort_order) VALUES (%s, %s, %s, %s)",
+                        (field_id, val, lbl, i),
+                    )
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_custom_field_delete(self, field_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        count = db.query_one("SELECT COUNT(*) FROM opportunity_custom_field_values WHERE field_id = %s", (field_id,))["count"]
+        if count:
+            _json_response(self, 409, {"error": f"Cannot delete: {count} project(s) have values for this field"})
+            return
+        db.execute("DELETE FROM custom_field_options WHERE field_id = %s", (field_id,))
+        db.execute("DELETE FROM custom_field_definitions WHERE id = %s", (field_id,))
+        _json_response(self, 200, {"ok": True})
+
     def _handle_project_custom_fields_get(self, opp_id: int) -> None:
         user = _require_auth(self)
         if not user:
@@ -3724,6 +3815,34 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             db.execute(f"UPDATE stages SET {', '.join(sets)} WHERE id = %s", (*params,))
         _json_response(self, 200, {"ok": True})
 
+    def _handle_stage_delete(self, stage_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        count = db.query_one("SELECT COUNT(*) FROM opportunities WHERE stage_id = %s", (stage_id,))["count"]
+        if count:
+            _json_response(self, 409, {"error": f"Cannot delete: {count} project(s) use this stage"})
+            return
+        db.execute("DELETE FROM stages WHERE id = %s", (stage_id,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_stages_reorder(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        ids = payload.get("ids")
+        if not isinstance(ids, list):
+            _json_response(self, 400, {"error": "ids array required"})
+            return
+        for i, sid in enumerate(ids):
+            db.execute("UPDATE stages SET sort_order = %s WHERE id = %s", (i, int(sid)))
+        _json_response(self, 200, {"ok": True})
+
     # ── Tags ────────────────────────────────────────────────────────────────
 
     def _handle_tags_get(self) -> None:
@@ -3765,6 +3884,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             db.execute("UPDATE tag_definitions SET title = %s WHERE id = %s", (payload["title"], tag_id))
         if "color" in payload:
             db.execute("UPDATE tag_definitions SET color = %s WHERE id = %s", (payload["color"], tag_id))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_tag_delete(self, tag_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        count = db.query_one("SELECT COUNT(*) FROM opportunity_tags WHERE tag_id = %s", (tag_id,))["count"]
+        if count:
+            _json_response(self, 409, {"error": f"Cannot delete: {count} project(s) use this tag"})
+            return
+        db.execute("DELETE FROM tag_definitions WHERE id = %s", (tag_id,))
         _json_response(self, 200, {"ok": True})
 
     # ── Contacts ────────────────────────────────────────────────────────────
