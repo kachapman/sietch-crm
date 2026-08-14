@@ -1314,6 +1314,188 @@ function confirmDialog({ title, message, confirmLabel = "OK", danger = true }) {
   });
 }
 
+function showTempPasswordDialog(password, userId, userEmail) {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-backdrop";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;";
+  overlay.innerHTML = `
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.5rem;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+      <h3 style="margin:0 0 0.75rem;font-size:1rem;">Temporary Password Generated</h3>
+      <p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.75rem;">Share this password with the user. They will be required to change it on first login.</p>
+      <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.5rem;">
+        <input type="text" value="${escapeHtml(password)}" readonly id="temp-pw-display"
+          style="flex:1;padding:0.5rem;font-family:monospace;font-size:1.1rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;" />
+        <button type="button" id="temp-pw-copy" class="btn btn-secondary btn-sm" style="white-space:nowrap;">Copy</button>
+      </div>
+      <div style="display:flex; gap:0.3rem; margin-bottom:1rem;">
+        <button type="button" id="temp-pw-send-email" class="btn btn-ghost btn-sm" style="flex:1;">Send via Email</button>
+        <button type="button" id="temp-pw-send-telegram" class="btn btn-ghost btn-sm" style="flex:1;">Send via Telegram</button>
+      </div>
+      <div style="text-align:right;">
+        <button type="button" id="temp-pw-close" class="btn btn-primary btn-sm">Done</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const input = overlay.querySelector("#temp-pw-display");
+  const copyBtn = overlay.querySelector("#temp-pw-copy");
+  const closeBtn = overlay.querySelector("#temp-pw-close");
+  const sendEmailBtn = overlay.querySelector("#temp-pw-send-email");
+  const sendTelegramBtn = overlay.querySelector("#temp-pw-send-telegram");
+  input.select();
+  copyBtn.addEventListener("click", () => {
+    navigator.clipboard.writeText(password).then(() => {
+      copyBtn.textContent = "Copied!";
+      setTimeout(() => { copyBtn.textContent = "Copy"; }, 2000);
+    });
+  });
+  if (sendEmailBtn && userId) {
+    sendEmailBtn.addEventListener("click", async () => {
+      try {
+        await api(`/api/v2/users/${userId}/reset-password/send`, { method: "POST", body: JSON.stringify({ method: "email", password }) });
+        sendEmailBtn.textContent = "Sent!";
+        sendEmailBtn.disabled = true;
+      } catch (err) {
+        showToast(err.message || "Failed to send email", true);
+      }
+    });
+  }
+  if (sendTelegramBtn && userId) {
+    sendTelegramBtn.addEventListener("click", async () => {
+      try {
+        await api(`/api/v2/users/${userId}/reset-password/send`, { method: "POST", body: JSON.stringify({ method: "telegram", password }) });
+        sendTelegramBtn.textContent = "Sent!";
+        sendTelegramBtn.disabled = true;
+      } catch (err) {
+        showToast(err.message || "Failed to send via Telegram", true);
+      }
+    });
+  }
+  closeBtn.addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+}
+
+// ── Forgot Password flow ──────────────────────────────────────────────────
+function initForgotPassword() {
+  const link = $("#forgot-password-link");
+  const loginForm = $("#login-form");
+  const forgotSection = $("#forgot-section");
+  const methodSection = $("#forgot-method-section");
+  const telegramVerify = $("#forgot-telegram-verify");
+  const emailSent = $("#forgot-email-sent");
+  const newPwSection = $("#forgot-new-password");
+  let forgotEmail = "";
+  let forgotChallenge = "";
+
+  function showLogin() {
+    [loginForm, forgotSection, methodSection, telegramVerify, emailSent, newPwSection].forEach(el => { if (el) el.classList.add("hidden"); });
+    loginForm?.classList.remove("hidden");
+  }
+
+  if (link) {
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      loginForm?.classList.add("hidden");
+      forgotSection?.classList.remove("hidden");
+    });
+  }
+
+  // Back buttons
+  ["forgot-back-btn", "forgot-back-btn2", "forgot-back-btn3"].forEach(id => {
+    $(`#${id}`)?.addEventListener("click", showLogin);
+  });
+
+  // Submit email
+  $("#forgot-submit-btn")?.addEventListener("click", async () => {
+    forgotEmail = $("#forgot-email")?.value.trim() || "";
+    if (!forgotEmail) { showToast("Email is required", true); return; }
+    try {
+      const result = await api("/api/v2/auth/reset-request-telegram", { method: "POST", body: JSON.stringify({ email: forgotEmail }) });
+      if (result.telegram) {
+        forgotChallenge = result.challenge || "";
+        forgotSection?.classList.add("hidden");
+        methodSection?.classList.add("hidden");
+        telegramVerify?.classList.remove("hidden");
+      } else {
+        // No Telegram linked, try email
+        await api("/api/v2/auth/reset-request", { method: "POST", body: JSON.stringify({ email: forgotEmail }) });
+        forgotSection?.classList.add("hidden");
+        methodSection?.classList.add("hidden");
+        emailSent?.classList.remove("hidden");
+      }
+    } catch (err) {
+      showToast(err.message || "Failed to send reset", true);
+    }
+  });
+
+  // Method selection
+  $("#forgot-telegram-btn")?.addEventListener("click", async () => {
+    try {
+      const result = await api("/api/v2/auth/reset-request-telegram", { method: "POST", body: JSON.stringify({ email: forgotEmail }) });
+      if (result.challenge) {
+        forgotChallenge = result.challenge;
+        methodSection?.classList.add("hidden");
+        telegramVerify?.classList.remove("hidden");
+      }
+    } catch (err) {
+      showToast(err.message || "Failed to send code", true);
+    }
+  });
+
+  $("#forgot-email-btn")?.addEventListener("click", async () => {
+    try {
+      await api("/api/v2/auth/reset-request", { method: "POST", body: JSON.stringify({ email: forgotEmail }) });
+      methodSection?.classList.add("hidden");
+      emailSent?.classList.remove("hidden");
+    } catch (err) {
+      showToast(err.message || "Failed to send email", true);
+    }
+  });
+
+  // Verify Telegram code
+  $("#forgot-verify-btn")?.addEventListener("click", async () => {
+    const code = $("#forgot-verify-code")?.value.trim() || "";
+    if (!code) { showToast("Code is required", true); return; }
+    try {
+      const result = await api("/api/v2/auth/reset-verify-telegram", { method: "POST", body: JSON.stringify({ challenge: forgotChallenge, code }) });
+      if (result.token) {
+        forgotChallenge = result.token; // Store reset token
+        telegramVerify?.classList.add("hidden");
+        newPwSection?.classList.remove("hidden");
+      }
+    } catch (err) {
+      showToast(err.message || "Invalid code", true);
+    }
+  });
+
+  // Resend code
+  $("#forgot-resend-btn")?.addEventListener("click", async () => {
+    try {
+      const result = await api("/api/v2/auth/reset-request-telegram", { method: "POST", body: JSON.stringify({ email: forgotEmail }) });
+      if (result.challenge) forgotChallenge = result.challenge;
+      showToast("Code resent");
+    } catch (err) {
+      showToast(err.message || "Failed to resend", true);
+    }
+  });
+
+  // Set new password
+  $("#forgot-set-pw-btn")?.addEventListener("click", async () => {
+    const pw = $("#forgot-new-pw")?.value || "";
+    const confirm = $("#forgot-confirm-pw")?.value || "";
+    const errEl = $("#forgot-pw-error");
+    if (pw.length < 6) { if (errEl) { errEl.textContent = "Password must be at least 6 characters"; errEl.classList.remove("hidden"); } return; }
+    if (pw !== confirm) { if (errEl) { errEl.textContent = "Passwords do not match"; errEl.classList.remove("hidden"); } return; }
+    if (errEl) errEl.classList.add("hidden");
+    try {
+      await api("/api/v2/auth/reset", { method: "POST", body: JSON.stringify({ token: forgotChallenge, password: pw }) });
+      showToast("Password updated! Please sign in.");
+      showLogin();
+    } catch (err) {
+      showToast(err.message || "Failed to reset password", true);
+    }
+  });
+}
+
 const TILE_ICON_WINDOW_RESTORE = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="8" width="12" height="12" rx="1"/><rect x="8" y="4" width="12" height="12" rx="1"/></svg>`;
 
 const TILE_ICON_WINDOW_MAXIMIZE = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="1"/></svg>`;
@@ -18969,6 +19151,7 @@ function resetLinkDealDropdown() {
 }
 
 async function openMailInboxModal() {
+  if (state.currentUser?.role === "limited") { showToast("CRM Mail is not available for your role", true); return; }
   const modal = $("#mail-inbox-modal");
   if (!modal) return;
   modal.classList.remove("hidden");
@@ -27592,9 +27775,9 @@ function openAdminConsoleModal() {
   const modal = $("#admin-console-modal");
   if (!modal) return;
   modal.classList.remove("hidden");
-  // default to overview
-  switchAdminTab("overview");
-  populateAdminOverview();
+  // default to general
+  switchAdminTab("general");
+  populateAdminGeneral();
   // bind once
   if (!modal.dataset.bound) {
     modal.dataset.bound = "1";
@@ -27605,6 +27788,7 @@ function openAdminConsoleModal() {
     bindAdminContacts();
     bindAdminStages();
     bindAdminTags();
+    bindAlternateSmtp();
     // Sync buttons — real implementation
     function getSyncPayload() {
       return {
@@ -28101,6 +28285,9 @@ function switchAdminTab(tab) {
   if (tab === "branding") {
     populateBrandingForm();
   }
+  if (tab === "general") {
+    populateAdminGeneral();
+  }
   if (tab === "infra") {
     populateAdminInfra();
   }
@@ -28109,11 +28296,81 @@ function switchAdminTab(tab) {
   }
 }
 
-async function populateAdminOverview() {
-  const el = $("#admin-overview-user");
-  if (!el) return;
-  const me = state.currentUser || {};
-  el.innerHTML = `<strong>You:</strong> ${escapeHtml(me.displayName || me.display_name || state.currentUserName || "Admin")} (${escapeHtml(me.email || state.currentUserEmail || "")}) — isAdmin: ${state.currentUserIsAdmin ? "yes" : "no"}`;
+async function populateAdminGeneral() {
+  // Load alternate SMTP config
+  try {
+    const config = await api("/api/v2/admin/alternate-smtp");
+    const enabled = $("#alt-smtp-enabled");
+    const fields = $("#alt-smtp-fields");
+    if (enabled) enabled.checked = !!config.enabled;
+    if (fields) fields.style.opacity = config.enabled ? "1" : "0.5";
+    if (config.host) $("#alt-smtp-host").value = config.host;
+    if (config.port) $("#alt-smtp-port").value = config.port;
+    if (config.user) $("#alt-smtp-user").value = config.user;
+    if (config.password) $("#alt-smtp-password").value = config.password;
+    if (config.from_name) $("#alt-smtp-from-name").value = config.from_name;
+    if (config.from_email) $("#alt-smtp-from-email").value = config.from_email;
+  } catch (e) {
+    // Config may not exist yet, that's fine
+  }
+}
+
+function bindAlternateSmtp() {
+  const enabled = $("#alt-smtp-enabled");
+  const fields = $("#alt-smtp-fields");
+  if (enabled && fields) {
+    enabled.addEventListener("change", () => {
+      fields.style.opacity = enabled.checked ? "1" : "0.5";
+    });
+  }
+  const saveBtn = $("#alt-smtp-save");
+  if (saveBtn) {
+    saveBtn.addEventListener("click", async () => {
+      const status = $("#alt-smtp-status");
+      try {
+        const payload = {
+          enabled: $("#alt-smtp-enabled")?.checked || false,
+          host: $("#alt-smtp-host")?.value.trim() || "",
+          port: parseInt($("#alt-smtp-port")?.value) || 587,
+          user: $("#alt-smtp-user")?.value.trim() || "",
+          password: $("#alt-smtp-password")?.value || "",
+          from_name: $("#alt-smtp-from-name")?.value.trim() || "",
+          from_email: $("#alt-smtp-from-email")?.value.trim() || "",
+        };
+        await api("/api/v2/admin/alternate-smtp", { method: "POST", body: JSON.stringify(payload) });
+        showToast("Alternate SMTP configuration saved");
+        if (status) status.innerHTML = '<span style="color:var(--accent);">Saved</span>';
+      } catch (err) {
+        showToast(err.message || "Failed to save", true);
+        if (status) status.innerHTML = `<span style="color:var(--danger);">${escapeHtml(err.message)}</span>`;
+      }
+    });
+  }
+  const testBtn = $("#alt-smtp-test");
+  if (testBtn) {
+    testBtn.addEventListener("click", async () => {
+      const status = $("#alt-smtp-status");
+      if (status) status.innerHTML = '<span style="color:var(--muted);">Sending test email...</span>';
+      try {
+        await api("/api/v2/admin/alternate-smtp/test", {
+          method: "POST",
+          body: JSON.stringify({
+            host: $("#alt-smtp-host")?.value.trim() || "",
+            port: parseInt($("#alt-smtp-port")?.value) || 587,
+            user: $("#alt-smtp-user")?.value.trim() || "",
+            password: $("#alt-smtp-password")?.value || "",
+            from_name: $("#alt-smtp-from-name")?.value.trim() || "",
+            from_email: $("#alt-smtp-from-email")?.value.trim() || "",
+          })
+        });
+        showToast("Test email sent — check your inbox");
+        if (status) status.innerHTML = '<span style="color:var(--accent);">Test email sent successfully</span>';
+      } catch (err) {
+        showToast(err.message || "Failed to send test email", true);
+        if (status) status.innerHTML = `<span style="color:var(--danger);">${escapeHtml(err.message)}</span>`;
+      }
+    });
+  }
 }
 
 async function populateAdminInfra() {
@@ -29710,22 +29967,226 @@ function showScannerHelp(topic) {
 async function populateAdminUsersList() {
   const container = $("#admin-tab-users");
   if (!container) return;
-  if (container.dataset.populated === "1") return;
-  container.dataset.populated = "1";
   try {
     const data = await api("/api/v2/users");
     const users = unwrap(data) || data || [];
-    const list = (users || []).map(u => {
-      const adminBadge = u.isAdmin ? ' <span style="color:var(--accent);">[admin]</span>' : '';
-      const active = u.isActive !== false ? '' : ' <span style="color:#888;">(inactive)</span>';
-      return `<div style="padding:2px 0; border-bottom:1px solid var(--border);">${escapeHtml(u.displayName || u.email)} &lt;${escapeHtml(u.email)}&gt;${adminBadge}${active}</div>`;
+    const roleBadge = (role) => {
+      const r = (role || "member").toLowerCase();
+      return `<span class="role-badge role-badge-${r}">${escapeHtml(r)}</span>`;
+    };
+    const rows = (users || []).map(u => {
+      const isActive = u.isActive !== false;
+      const activeLabel = isActive ? "" : `<span style="color:#888;font-size:0.75rem;margin-left:0.3rem;">(inactive)</span>`;
+      const lastLogin = u.lastLogin ? new Date(u.lastLogin).toLocaleDateString() : "—";
+      return `<div class="admin-user-row" data-user-id="${escapeHtml(u.id)}" style="padding:0.5rem 0; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+        <div style="width:2rem;height:2rem;border-radius:50%;background:var(--surface-2);display:flex;align-items:center;justify-content:center;font-size:0.75rem;font-weight:600;color:var(--muted);flex-shrink:0;">${escapeHtml((u.displayName || u.email || "?")[0]).toUpperCase()}</div>
+        <div style="flex:1;min-width:150px;">
+          <div style="font-weight:500;">${escapeHtml(u.displayName || u.email)}${activeLabel}</div>
+          <div style="font-size:0.75rem;color:var(--muted);">${escapeHtml(u.email || "")}</div>
+        </div>
+        ${roleBadge(u.role)}
+        <span style="font-size:0.7rem;color:var(--muted);min-width:80px;">Login: ${escapeHtml(lastLogin)}</span>
+        <div style="display:flex;gap:0.3rem;flex-shrink:0;">
+          <button type="button" class="btn btn-ghost btn-sm admin-user-edit" data-uid="${escapeHtml(u.id)}" title="Edit">Edit</button>
+          <button type="button" class="btn btn-ghost btn-sm admin-user-reset" data-uid="${escapeHtml(u.id)}" data-email="${escapeHtml(u.email || "")}" title="Reset Password">Reset PW</button>
+          <button type="button" class="btn btn-ghost btn-sm admin-user-sessions" data-uid="${escapeHtml(u.id)}" title="Revoke Sessions">Sessions</button>
+          ${isActive
+            ? `<button type="button" class="btn btn-ghost btn-sm admin-user-deactivate" data-uid="${escapeHtml(u.id)}" title="Deactivate" style="color:var(--danger);">Deactivate</button>`
+            : `<button type="button" class="btn btn-ghost btn-sm admin-user-reactivate" data-uid="${escapeHtml(u.id)}" title="Reactivate" style="color:var(--success);">Reactivate</button>`
+          }
+        </div>
+      </div>`;
     }).join("") || "<p>No users.</p>";
-    container.innerHTML = `<p><strong>Users (read-only):</strong></p>${list}<p style="font-size:0.75rem;color:var(--muted);margin-top:0.5rem;">Full CRUD later in 2C.</p>`;
-    const tsSection = document.createElement("div");
-    tsSection.style.cssText = "margin-top:1rem; padding-top:0.75rem; border-top:1px solid var(--border);";
-    tsSection.innerHTML = '<h4 style="margin:0 0 0.5rem; font-size:0.85rem;">Timesheets</h4><div id="admin-users-ts-week"></div>';
-    container.appendChild(tsSection);
-    tsRenderAdminWeeklyView(tsSection.querySelector("#admin-users-ts-week"));
+
+    container.innerHTML = `
+      <div style="margin-bottom:0.75rem;">
+        <input type="text" id="admin-users-search" class="form-control" placeholder="Search users..." style="width:100%;" />
+      </div>
+      <div id="admin-users-list" style="max-height:400px; overflow-y:auto;">${rows}</div>
+      <div id="admin-user-edit-form" class="hidden" style="margin-top:0.75rem; padding:0.75rem; background:var(--surface-2); border-radius:var(--radius); border:1px solid var(--border);"></div>
+      <button type="button" id="admin-add-user-btn" class="btn btn-primary btn-sm" style="margin-top:0.75rem;">Add User</button>
+      <div id="admin-add-user-form" class="hidden" style="margin-top:0.75rem; padding:0.75rem; background:var(--surface-2); border-radius:var(--radius); border:1px solid var(--border);">
+        <div style="display:flex; flex-direction:column; gap:0.4rem; margin-bottom:0.5rem;">
+          <input type="text" id="new-user-first" class="form-control" placeholder="First name" />
+          <input type="text" id="new-user-last" class="form-control" placeholder="Last name" />
+          <input type="email" id="new-user-email" class="form-control" placeholder="Email" />
+          <input type="text" id="new-user-display" class="form-control" placeholder="Display name (optional)" />
+          <select id="new-user-role" class="form-control">
+            <option value="member">Member</option>
+            <option value="limited">Limited</option>
+            <option value="manager">Manager</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <div style="display:flex; gap:0.3rem;">
+          <button type="button" id="admin-save-new-user" class="btn btn-primary btn-sm">Create</button>
+          <button type="button" id="admin-cancel-new-user" class="btn btn-ghost btn-sm">Cancel</button>
+        </div>
+      </div>
+      <div style="margin-top:1rem; padding-top:0.75rem; border-top:1px solid var(--border);">
+        <h4 style="margin:0 0 0.5rem; font-size:0.85rem;">Timesheets</h4>
+        <div id="admin-users-ts-week"></div>
+      </div>`;
+
+    // Search filter
+    const searchInput = $("#admin-users-search");
+    if (searchInput) {
+      searchInput.addEventListener("input", () => {
+        const q = searchInput.value.toLowerCase();
+        container.querySelectorAll(".admin-user-row").forEach(row => {
+          const text = row.textContent.toLowerCase();
+          row.style.display = text.includes(q) ? "" : "none";
+        });
+      });
+    }
+
+    // Edit handler
+    container.addEventListener("click", async (e) => {
+      const editBtn = e.target.closest(".admin-user-edit");
+      if (editBtn) {
+        const uid = editBtn.dataset.uid;
+        const user = (users || []).find(u => String(u.id) === String(uid));
+        if (!user) return;
+        const form = $("#admin-user-edit-form");
+        if (!form) return;
+        form.classList.remove("hidden");
+        form.innerHTML = `
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.4rem 0.6rem; margin-bottom:0.5rem;">
+            <input type="text" id="edit-user-first" class="form-control" placeholder="First name" value="${escapeHtml(user.firstName || "")}" />
+            <input type="text" id="edit-user-last" class="form-control" placeholder="Last name" value="${escapeHtml(user.lastName || "")}" />
+            <input type="email" id="edit-user-email" class="form-control" placeholder="Email" value="${escapeHtml(user.email || "")}" />
+            <input type="text" id="edit-user-display" class="form-control" placeholder="Display name" value="${escapeHtml(user.displayName || "")}" />
+            <select id="edit-user-role" class="form-control" style="width:auto;">
+              <option value="member" ${(user.role || "member") === "member" ? "selected" : ""}>Member</option>
+              <option value="limited" ${user.role === "limited" ? "selected" : ""}>Limited</option>
+              <option value="manager" ${user.role === "manager" ? "selected" : ""}>Manager</option>
+              <option value="admin" ${user.role === "admin" ? "selected" : ""}>Admin</option>
+            </select>
+            <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.8rem; color:var(--muted); cursor:pointer;">
+              <input type="checkbox" id="edit-user-active" ${user.isActive !== false ? "checked" : ""} /> Active
+            </label>
+          </div>
+          <div style="display:flex; gap:0.3rem;">
+            <button type="button" class="btn btn-primary btn-sm" id="admin-save-edit-user">Save</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="admin-cancel-edit-user">Cancel</button>
+          </div>`;
+        $("#admin-cancel-edit-user")?.addEventListener("click", () => form.classList.add("hidden"));
+        $("#admin-save-edit-user")?.addEventListener("click", async () => {
+          const payload = {
+            email: $("#edit-user-email")?.value.trim() || null,
+            firstName: $("#edit-user-first")?.value.trim() || null,
+            lastName: $("#edit-user-last")?.value.trim() || null,
+            displayName: $("#edit-user-display")?.value.trim() || null,
+            role: $("#edit-user-role")?.value || "member",
+            isActive: $("#edit-user-active")?.checked ?? true,
+          };
+          try {
+            await api(`/api/v2/users/${uid}`, { method: "PUT", body: JSON.stringify(payload) });
+            form.classList.add("hidden");
+            showToast("User updated");
+            container.dataset.populated = "";
+            populateAdminUsersList();
+          } catch (err) {
+            showToast(err.message || "Failed to update user", true);
+          }
+        });
+      }
+
+      // Reset password
+      const resetBtn = e.target.closest(".admin-user-reset");
+      if (resetBtn) {
+        const uid = resetBtn.dataset.uid;
+        const ok = await confirmDialog({ title: "Reset Password", message: "Generate a temporary password for this user? You'll need to share it with them verbally.", confirmLabel: "Generate Temp Password" });
+        if (!ok) return;
+        try {
+          const email = resetBtn.dataset.email || "";
+          const result = await api(`/api/v2/users/${uid}/reset-password`, { method: "POST", body: JSON.stringify({ method: "temp" }) });
+          const pw = result.tempPassword || "";
+          if (pw) {
+            showTempPasswordDialog(pw, uid, email);
+          }
+        } catch (err) {
+          showToast(err.message || "Failed to reset password", true);
+        }
+      }
+
+      // Revoke sessions
+      const sessionsBtn = e.target.closest(".admin-user-sessions");
+      if (sessionsBtn) {
+        const uid = sessionsBtn.dataset.uid;
+        const ok = await confirmDialog({ title: "Revoke Sessions", message: "Sign out this user from all devices?", confirmLabel: "Revoke" });
+        if (!ok) return;
+        try {
+          await api(`/api/v2/users/${uid}/sessions`, { method: "DELETE" });
+          showToast("Sessions revoked");
+        } catch (err) {
+          showToast(err.message || "Failed to revoke sessions", true);
+        }
+      }
+
+      // Deactivate
+      const deactivateBtn = e.target.closest(".admin-user-deactivate");
+      if (deactivateBtn) {
+        const uid = deactivateBtn.dataset.uid;
+        const ok = await confirmDialog({ title: "Deactivate User", message: "This user will be signed out and unable to log in.", confirmLabel: "Deactivate" });
+        if (!ok) return;
+        try {
+          await api(`/api/v2/users/${uid}`, { method: "DELETE" });
+          showToast("User deactivated");
+          container.dataset.populated = "";
+          populateAdminUsersList();
+        } catch (err) {
+          showToast(err.message || "Failed to deactivate user", true);
+        }
+      }
+
+      // Reactivate
+      const reactivateBtn = e.target.closest(".admin-user-reactivate");
+      if (reactivateBtn) {
+        const uid = reactivateBtn.dataset.uid;
+        try {
+          await api(`/api/v2/users/${uid}/reactivate`, { method: "POST" });
+          showToast("User reactivated");
+          container.dataset.populated = "";
+          populateAdminUsersList();
+        } catch (err) {
+          showToast(err.message || "Failed to reactivate user", true);
+        }
+      }
+    });
+
+    // Add user form
+    const addBtn = $("#admin-add-user-btn");
+    const addForm = $("#admin-add-user-form");
+    if (addBtn && addForm) {
+      addBtn.addEventListener("click", () => { addForm.classList.toggle("hidden"); });
+      $("#admin-cancel-new-user")?.addEventListener("click", () => addForm.classList.add("hidden"));
+      $("#admin-save-new-user")?.addEventListener("click", async () => {
+        const payload = {
+          firstName: $("#new-user-first")?.value.trim() || null,
+          lastName: $("#new-user-last")?.value.trim() || null,
+          email: $("#new-user-email")?.value.trim() || null,
+          displayName: $("#new-user-display")?.value.trim() || null,
+          role: $("#new-user-role")?.value || "member",
+        };
+        if (!payload.email) { showToast("Email required", true); return; }
+        try {
+          await api("/api/v2/users", { method: "POST", body: JSON.stringify(payload) });
+          addForm.classList.add("hidden");
+          showToast("User created");
+          container.dataset.populated = "";
+          populateAdminUsersList();
+        } catch (err) {
+          showToast(err.message || "Failed to create user", true);
+        }
+      });
+    }
+
+    // Timesheets
+    const tsSection = container.querySelector("#admin-users-ts-week");
+    if (tsSection && typeof tsRenderAdminWeeklyView === "function") {
+      tsRenderAdminWeeklyView(tsSection);
+    }
   } catch (e) {
     container.innerHTML = `<p style="color:#b00;">Failed to load users: ${escapeHtml(e.message)}</p>`;
   }
@@ -33023,7 +33484,8 @@ function createTaskRow(task) {
     ent.type = "button";
     ent.className = "task-chip task-chip-project";
     ent.title = "Open project";
-    ent.textContent = task.opportunity?.title || `Project #${task.opportunityId}`;
+    const projName = task.opportunity?.title || `Project #${task.opportunityId}`;
+    ent.innerHTML = `<i class="ti ti-link" style="font-size:0.65rem;flex-shrink:0;"></i><span class="task-chip-project-text">${escapeHtml(projName)}</span>`;
     ent.addEventListener("click", (ev) => {
       ev.preventDefault();
       openOpportunityPreviewModal(task.opportunityId, task.opportunity?.title || "");
@@ -34036,6 +34498,7 @@ function openProfileModal() {
   if (emailEl) emailEl.value = state.currentUserEmail || "";
   _profileLoadAvatar();
   _profileLoadPrefs();
+  _profileLoad2FA();
   // Clear password fields
   for (const id of ["profile-current-password", "profile-new-password", "profile-confirm-password"]) {
     const el = $(`#${id}`);
@@ -34227,6 +34690,26 @@ function _hideCropUI() {
 
 /* ── Notification prefs ───────────────────────────────────────────────── */
 
+async function _profileLoad2FA() {
+  const statusEl = $("#twofa-status");
+  const setupSection = $("#twofa-setup-section");
+  const disableSection = $("#twofa-disable-section");
+  const verifySetup = $("#twofa-verify-setup");
+  if (!statusEl) return;
+  const method = state.currentUser?.twofaMethod;
+  if (method) {
+    statusEl.innerHTML = `<span class="twofa-badge twofa-badge-enabled">2FA enabled via ${escapeHtml(method === "telegram" ? "Telegram" : "Email")}</span>`;
+    if (setupSection) setupSection.classList.add("hidden");
+    if (disableSection) disableSection.classList.remove("hidden");
+    if (verifySetup) verifySetup.classList.add("hidden");
+  } else {
+    statusEl.innerHTML = `<span class="twofa-badge twofa-badge-disabled">2FA is not enabled</span>`;
+    if (setupSection) setupSection.classList.remove("hidden");
+    if (disableSection) disableSection.classList.add("hidden");
+    if (verifySetup) verifySetup.classList.add("hidden");
+  }
+}
+
 async function _profileLoadPrefs() {
   try {
     const prefs = await api("/api/v2/me/notification-prefs");
@@ -34391,6 +34874,60 @@ function _setupProfileEvents() {
   const saveBtn = $("#profile-save-btn");
   if (saveBtn) saveBtn.addEventListener("click", _profileSave);
 
+  // 2FA Enable button
+  const twofaEnableBtn = $("#twofa-enable-btn");
+  if (twofaEnableBtn) {
+    twofaEnableBtn.addEventListener("click", async () => {
+      const method = ($("#twofa-method-select")?.value || "email");
+      try {
+        const data = await api("/api/v2/auth/twofa/setup", { method: "POST", body: JSON.stringify({ method }) });
+        const verifySection = $("#twofa-verify-setup");
+        if (verifySection) verifySection.classList.remove("hidden");
+        twofaEnableBtn.dataset.challenge = data.challenge || "";
+        const codeInput = $("#twofa-setup-code");
+        if (codeInput) { codeInput.value = ""; codeInput.focus(); }
+        showToast(`Code sent via ${method === "telegram" ? "Telegram" : "email"}`);
+      } catch (e) {
+        showToast(e.message || "Failed to start 2FA setup", true);
+      }
+    });
+  }
+
+  // 2FA Verify button (setup flow)
+  const twofaSetupVerifyBtn = $("#twofa-setup-verify-btn");
+  if (twofaSetupVerifyBtn) {
+    twofaSetupVerifyBtn.addEventListener("click", async () => {
+      const code = ($("#twofa-setup-code")?.value || "").trim();
+      const challenge = ($("#twofa-enable-btn")?.dataset.challenge || "");
+      if (!code || code.length !== 6) { showToast("Enter a 6-digit code", true); return; }
+      try {
+        await api("/api/v2/auth/twofa/verify-setup", { method: "POST", body: JSON.stringify({ challenge, code }) });
+        showToast("2FA enabled");
+        await loadCurrentUser();
+        _profileLoad2FA();
+      } catch (e) {
+        showToast(e.message || "Verification failed", true);
+      }
+    });
+  }
+
+  // 2FA Disable button
+  const twofaDisableBtn = $("#twofa-disable-btn");
+  if (twofaDisableBtn) {
+    twofaDisableBtn.addEventListener("click", async () => {
+      const password = ($("#twofa-disable-password")?.value || "").trim();
+      if (!password) { showToast("Enter your password", true); return; }
+      try {
+        await api("/api/v2/auth/twofa/disable", { method: "POST", body: JSON.stringify({ password }) });
+        showToast("2FA disabled");
+        await loadCurrentUser();
+        _profileLoad2FA();
+      } catch (e) {
+        showToast(e.message || "Failed to disable 2FA", true);
+      }
+    });
+  }
+
   // Escape key
   const modal = $("#profile-modal");
   if (modal) {
@@ -34402,6 +34939,7 @@ function _setupProfileEvents() {
 
 async function init() {
   // Attach login handler as early as possible so form submit never causes native refresh
+  let _twofaChallenge = "";
   const loginForm = $("#login-form");
   if (loginForm) {
     loginForm.addEventListener("submit", async (e) => {
@@ -34433,6 +34971,33 @@ async function init() {
         clearTimeout(timeoutId);
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || data.detail || "Login failed");
+
+        // 2FA challenge
+        if (data.requiresTwoFactor && data.challenge) {
+          if (loadingEl) loadingEl.classList.add("hidden");
+          if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Sign in"; }
+          // Hide password field and login submit, show 2FA section
+          const pwLabel = $("#password")?.closest("label");
+          if (pwLabel) pwLabel.classList.add("hidden");
+          const emailLabel = $("#username")?.closest("label");
+          if (emailLabel) emailLabel.classList.add("hidden");
+          const submitBtnEl = $("#login-submit-btn");
+          if (submitBtnEl) submitBtnEl.classList.add("hidden");
+          const twofaSection = $("#twofa-section");
+          if (twofaSection) twofaSection.classList.remove("hidden");
+          const descEl = $("#twofa-description");
+          if (descEl) {
+            const method = data.twofaMethod || "email";
+            descEl.textContent = method === "telegram"
+              ? "Enter the 6-digit code sent to your Telegram"
+              : "Enter the 6-digit code sent to your email";
+          }
+          _twofaChallenge = data.challenge;
+          const codeInput = $("#twofa-code");
+          if (codeInput) { codeInput.value = ""; codeInput.focus(); }
+          return;
+        }
+
         showApp();
         try { ensurePresenceOnLogin(); } catch {}
         bindChangelogModal(config.version);
@@ -34461,10 +35026,68 @@ async function init() {
     });
   }
 
+  // Forgot password flow
+  initForgotPassword();
+
+  // 2FA verify + resend handlers
+  const twofaVerifyBtn = $("#twofa-verify-btn");
+  if (twofaVerifyBtn) {
+    twofaVerifyBtn.addEventListener("click", async () => {
+      const errEl = $("#twofa-error");
+      const code = ($("#twofa-code")?.value || "").trim();
+      if (errEl) errEl.classList.add("hidden");
+      if (!code || code.length !== 6) { if (errEl) { errEl.textContent = "Enter a 6-digit code"; errEl.classList.remove("hidden"); } return; }
+      try {
+        const res = await fetch("/api/v2/auth/twofa/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ challenge: _twofaChallenge, code }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Verification failed");
+        // Login success
+        showApp();
+        try { ensurePresenceOnLogin(); } catch {}
+        const config = await (await fetch("/api/config")).json();
+        bindChangelogModal(config.version);
+        maybeShowChangelog(config.version);
+        setTimeout(async () => {
+          await initCaches();
+          await refreshAll();
+          try { ensurePresenceOnLogin(); } catch {}
+          loadTaskCategories({ force: true }).catch(() => {});
+        }, 0);
+      } catch (e) {
+        if (errEl) { errEl.textContent = e.message || "Verification failed"; errEl.classList.remove("hidden"); }
+      }
+    });
+  }
+  const twofaResendBtn = $("#twofa-resend-btn");
+  if (twofaResendBtn) {
+    twofaResendBtn.addEventListener("click", async () => {
+      try {
+        const res = await fetch("/api/v2/auth/twofa/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ challenge: _twofaChallenge }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to resend");
+        if (data.challenge) _twofaChallenge = data.challenge;
+        showToast("Code resent");
+      } catch (e) {
+        showToast(e.message || "Failed to resend code", true);
+      }
+    });
+  }
+
   const mailBtnEarly = $("#mail-inbox-btn");
   if (mailBtnEarly && !mailBtnEarly.dataset.earlyBound) {
     mailBtnEarly.dataset.earlyBound = "1";
     mailBtnEarly.addEventListener("click", () => {
+      if (state.currentUser?.role === "limited") { showToast("CRM Mail is not available for your role", true); return; }
       openMailInboxModal().catch(err => showToast(err.message || 'Could not open mail inbox', true));
     });
   }

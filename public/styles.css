@@ -2346,6 +2346,15 @@ body {
 .task-chip-project:hover {
   text-decoration: underline;
 }
+.task-chip-project-text { /* visible by default */ }
+@container (max-width: 400px) {
+  .task-chip-project-text { display: none; }
+  .task-chip-project { padding: 0.15rem 0.35rem; }
+}
+@media (max-width: 600px) {
+  .task-chip-project-text { display: none; }
+  .task-chip-project { padding: 0.15rem 0.35rem; }
+}
 
 /* Task preview/edit modal */
 .task-edit-grid {
@@ -12467,7 +12476,7 @@ body {
 /* ── Admin Console Modal ─────────────────────────────────────────────────────── */
 #admin-console-modal .modal-card,
 .admin-modal-card {
-  width: 980px;
+  width: 1200px;
   max-width: 95vw;
   height: min(840px, 85vh);
   display: flex;
@@ -12525,6 +12534,29 @@ body {
 #admin-console-modal .admin-tab-btn.active {
   border-color: var(--accent);
   background: rgba(59, 130, 246, 0.1);
+}
+
+/* Form controls — dark mode support */
+.form-control {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+.form-control:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+select.form-control {
+  appearance: auto;
+}
+.form-control::placeholder {
+  color: var(--muted);
 }
 
 /* Icon-only mode when tabs don't fit */
@@ -14815,4 +14847,28 @@ body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
+
+.role-badge {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.role-badge-admin { background: var(--accent); color: #fff; }
+.role-badge-manager { background: #3b82f6; color: #fff; }
+.role-badge-member { background: var(--border); color: var(--muted); }
+.role-badge-limited { background: #f59e0b; color: #000; }
+
+.twofa-badge {
+  display: inline-block;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  font-size: 0.65rem;
+  margin-left: 0.3rem;
+}
+.twofa-badge-enabled { color: #10b981; }
+.twofa-badge-disabled { color: var(--muted); }
 

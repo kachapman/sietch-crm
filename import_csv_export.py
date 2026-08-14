@@ -135,11 +135,13 @@ def _get_or_create_user(conn: Any, display_name: str, by_name: dict[str, dict[st
 
     cur = conn.cursor()
     cur.execute(
-        """INSERT INTO users (email, display_name, is_admin, is_active, must_change_password)
-           VALUES (%s, %s, %s, TRUE, TRUE)
-           ON CONFLICT (email) DO UPDATE SET display_name = EXCLUDED.display_name
+        """INSERT INTO users (email, display_name, is_admin, role, is_active, must_change_password)
+           VALUES (%s, %s, %s, CASE WHEN %s THEN 'admin' ELSE 'member' END, TRUE, TRUE)
+           ON CONFLICT (email) DO UPDATE SET
+               display_name = EXCLUDED.display_name,
+               role = CASE WHEN EXCLUDED.is_admin THEN 'admin' ELSE 'member' END
            RETURNING id""",
-        (email, name, is_admin),
+        (email, name, is_admin, is_admin),
     )
     user_id = cur.fetchone()[0]
     cur.close()

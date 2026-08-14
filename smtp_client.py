@@ -134,19 +134,53 @@ def send_email_from_account(
         return False, str(e)
 
 
-def send_password_reset_email(to_addr: str, reset_url: str) -> bool:
-    """Send a password reset email with the given link."""
-    subject = "Sietch CRM — Password Reset"
-    html_body = f"""
-    <html>
-    <body style="font-family: sans-serif; color: #333;">
-        <h2>Password Reset</h2>
-        <p>You requested a password reset for your Sietch CRM account.</p>
-        <p>Click the link below to set a new password. This link expires in 1 hour.</p>
-        <p><a href="{reset_url}" style="display:inline-block;padding:10px 20px;background:#6d4aff;color:#fff;text-decoration:none;border-radius:4px;">Reset Password</a></p>
-        <p style="color:#888;font-size:12px;">If you did not request this, you can safely ignore this email.</p>
-    </body>
-    </html>
-    """
-    text_body = f"Sietch CRM — Password Reset\n\nClick the link to reset your password (expires in 1 hour):\n{reset_url}\n\nIf you did not request this, ignore this email."
+def send_password_reset_email(to_addr: str, reset_url: str, smtp_config: dict | None = None) -> bool:
+    """Send a password reset email. If smtp_config provided, use CRM mail account; else fallback to env vars."""
+    subject = "Your Sietch CRM password reset link"
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;background:#f5f5f5;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f5;padding:40px 20px;">
+<tr><td align="center">
+<table width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;">
+<tr><td style="padding:32px 40px;text-align:center;border-bottom:1px solid #eeeeee;">
+  <img src="https://dashboard.publicadjustermidwest.com/assets/sietch-logo-2-nobg2.png" alt="Sietch CRM" height="40" style="display:block;margin:0 auto 16px;">
+  <h2 style="margin:0;font-size:20px;color:#333333;">Password Reset</h2>
+</td></tr>
+<tr><td style="padding:32px 40px;">
+  <p style="margin:0 0 16px;font-size:15px;color:#555555;">You requested a password reset for your Sietch CRM account.</p>
+  <p style="margin:0 0 24px;font-size:15px;color:#555555;">Use the link below to set a new password. This link expires in 1 hour.</p>
+  <p style="margin:0 0 24px;font-size:15px;word-break:break-all;"><a href="{reset_url}" style="color:#6d4aff;">{reset_url}</a></p>
+  <p style="margin:0;font-size:13px;color:#999999;">If you did not request this, you can safely ignore this email. Your password will not be changed unless you click the link above.</p>
+</td></tr>
+<tr><td style="padding:20px 40px;background:#f9f9f9;text-align:center;border-top:1px solid #eeeeee;">
+  <p style="margin:0;font-size:12px;color:#aaaaaa;">Sietch CRM</p>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
+    text_body = f"Password Reset\n\nYou requested a password reset for your Sietch CRM account.\n\nUse the link below to set a new password (expires in 1 hour):\n{reset_url}\n\nIf you did not request this, ignore this email. Your password will not be changed unless you click the link."
+    if smtp_config:
+        use_oauth = bool(smtp_config.get("oauth_provider") and smtp_config.get("oauth_access_token")
+                         and not smtp_config.get("smtp_password_encrypted"))
+        ok, err = send_email_from_account(
+            smtp_host=smtp_config.get("smtp_host") or "",
+            smtp_port=int(smtp_config.get("smtp_port") or 587),
+            smtp_user=smtp_config.get("smtp_user") or smtp_config.get("email", ""),
+            smtp_password=smtp_config.get("smtp_password_encrypted") or "",
+            from_name="Sietch CRM",
+            from_addr=smtp_config.get("email", ""),
+            to_addr=to_addr,
+            subject=subject,
+            html_body=html_body,
+            text_body=text_body,
+            oauth_provider=smtp_config["oauth_provider"] if use_oauth else None,
+            oauth_access_token=smtp_config["oauth_access_token"] if use_oauth else None,
+        )
+        if not ok:
+            logger.warning("Password reset email to %s failed: %s", to_addr, err)
+        return ok
     return send_email(to_addr, subject, html_body, text_body)

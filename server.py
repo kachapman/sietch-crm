@@ -654,7 +654,8 @@ def _require_auth(handler: SimpleHTTPRequestHandler) -> dict | None:
 
 
 def _require_admin(handler: SimpleHTTPRequestHandler) -> dict | None:
-    """Return admin user dict or None after sending error response."""
+    """Return admin user dict or None after sending error response.
+    Checks is_admin (which includes admin and manager roles via migration backfill)."""
     user = _require_auth(handler)
     if not user:
         return None
@@ -662,6 +663,28 @@ def _require_admin(handler: SimpleHTTPRequestHandler) -> dict | None:
         _json_response(handler, 403, {"error": "Forbidden"})
         return None
     return user
+
+
+def _require_role(handler: SimpleHTTPRequestHandler, *allowed_roles: str) -> dict | None:
+    """Return user dict if user.role is in allowed_roles, else 403."""
+    user = _require_auth(handler)
+    if not user:
+        return None
+    role = user.get("role", "member")
+    if role not in allowed_roles:
+        _json_response(handler, 403, {"error": f"Forbidden: requires one of roles: {', '.join(allowed_roles)}"})
+        return None
+    return user
+
+
+def _require_strict_admin(handler: SimpleHTTPRequestHandler) -> dict | None:
+    """Return user dict only for admin role (not manager). For user-management endpoints."""
+    return _require_role(handler, "admin")
+
+
+def _is_limited(user: dict) -> bool:
+    """True if user has the limited role (own deals only, no CRM mail)."""
+    return user.get("role") == "limited"
 
 
 def _mail_visible_accounts_sql(user_id: int) -> str:
@@ -698,6 +721,85 @@ def _mail_account_manageable(user: dict, account_id: int) -> bool:
         return True
     row = db.query_one("SELECT owner_user_id FROM mail_accounts WHERE id = %s", (account_id,))
     return row is not None and row["owner_user_id"] == user["id"]
+
+
+def _get_system_smtp_account() -> dict | None:
+    """Find the best SMTP config for system emails (password resets, 2FA, notifications).
+    Priority: 1) Alternate SMTP if enabled, 2) CRM mail account.
+    Returns dict with SMTP settings or None if nothing configured."""
+    # Check alternate SMTP first
+    try:
+        alt_row = db.query_one("SELECT value FROM system_settings WHERE key = 'alternate_smtp'")
+        if alt_row and alt_row["value"]:
+            alt = json.loads(alt_row["value"])
+            if alt.get("enabled") and alt.get("host"):
+                return {
+                    "email": alt.get("from_email", ""),
+                    "smtp_host": alt["host"],
+                    "smtp_port": int(alt.get("port", 587)),
+                    "smtp_user": alt.get("user", ""),
+                    "smtp_password_encrypted": alt.get("password", ""),
+                    "oauth_provider": None,
+                    "oauth_access_token": None,
+                }
+    except Exception:
+        logger.debug("Failed to load alternate SMTP config", exc_info=True)
+    # Fall back to CRM mail account
+    row = db.query_one(
+        """SELECT id, email, smtp_host, smtp_port, smtp_user, smtp_password_encrypted,
+                  oauth_provider, oauth_access_token, oauth_refresh_token, oauth_token_expires
+           FROM mail_accounts WHERE is_crm_mail = TRUE AND smtp_host IS NOT NULL
+           ORDER BY id LIMIT 1"""
+    )
+    if not row:
+        return None
+    acct = dict(row)
+    # Refresh OAuth token if expired
+    if acct.get("oauth_provider") and acct.get("oauth_refresh_token"):
+        try:
+            expires = acct.get("oauth_token_expires")
+            if expires and expires < datetime.now(timezone.utc):
+                prov = oauth_providers.get_provider(acct["oauth_provider"])
+                tok = prov.refresh_token(acct["oauth_refresh_token"])
+                if tok and tok.get("access_token"):
+                    acct["oauth_access_token"] = tok["access_token"]
+                    new_refresh = tok.get("refresh_token", acct["oauth_refresh_token"])
+                    new_expires = tok.get("expires_in", 3600)
+                    db.execute(
+                        "UPDATE mail_accounts SET oauth_access_token = %s, oauth_refresh_token = %s, "
+                        "oauth_token_expires = to_timestamp(%s) WHERE id = %s",
+                        (tok["access_token"], new_refresh, int(time.time()) + new_expires, acct["id"]),
+                    )
+        except Exception:
+            logger.exception("Failed to refresh OAuth token for system SMTP")
+    return acct
+
+
+def _send_system_email(to_addr: str, subject: str, html_body: str) -> bool:
+    """Send email via CRM mail account. Returns True on success, False if no CRM account or send failed."""
+    from smtp_client import send_email_from_account
+    acct = _get_system_smtp_account()
+    if not acct:
+        logger.warning("No CRM mail account configured for system email to %s", to_addr)
+        return False
+    use_oauth = bool(acct.get("oauth_provider") and acct.get("oauth_access_token")
+                     and not acct.get("smtp_password_encrypted"))
+    ok, err = send_email_from_account(
+        smtp_host=acct.get("smtp_host") or "",
+        smtp_port=int(acct.get("smtp_port") or 587),
+        smtp_user=acct.get("smtp_user") or acct.get("email", ""),
+        smtp_password=acct.get("smtp_password_encrypted") or "",
+        from_name="Sietch CRM",
+        from_addr=acct.get("email", ""),
+        to_addr=to_addr,
+        subject=subject,
+        html_body=html_body,
+        oauth_provider=acct["oauth_provider"] if use_oauth else None,
+        oauth_access_token=acct["oauth_access_token"] if use_oauth else None,
+    )
+    if not ok:
+        logger.warning("System email to %s failed via %s: %s", to_addr, acct.get("email"), err)
+    return ok
 
 
 def _mail_message_accessible(user: dict, message_id: int) -> bool:
@@ -1182,6 +1284,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/v2/auth/logout":
             self._handle_logout()
             return
+        if self.path == "/api/v2/auth/twofa/verify":
+            self._handle_2fa_verify()
+            return
+        if self.path == "/api/v2/auth/twofa/send":
+            self._handle_2fa_resend()
+            return
+        if self.path == "/api/v2/auth/twofa/setup":
+            self._handle_2fa_setup()
+            return
+        if self.path == "/api/v2/auth/twofa/verify-setup":
+            self._handle_2fa_verify_setup()
+            return
+        if self.path == "/api/v2/auth/twofa/disable":
+            self._handle_2fa_disable()
+            return
         if self.path.startswith("/api/"):
             self._handle_api_post_put("POST")
             return
@@ -1225,6 +1342,43 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 401, {"error": "Invalid email or password"})
             return
 
+        # ── 2FA: if enabled, send challenge instead of session ──
+        twofa_method = user.get("twofa_method")
+        if twofa_method:
+            # Check that the user can actually receive codes via their chosen method
+            if twofa_method == "telegram":
+                from notification_dispatcher import _get_employee_chat_id
+                chat_id = _get_employee_chat_id(user["id"])
+                if not chat_id:
+                    # Fall back to email if Telegram chat not linked
+                    twofa_method = "email"
+
+            challenge_token, code = auth_mod.create_2fa_challenge(user["id"], twofa_method)
+
+            # Send the code
+            if twofa_method == "email":
+                if not _send_system_email(
+                    user["email"],
+                    "Your Sietch CRM Login Code",
+                    f"<p>Your 2FA verification code is:</p><h2>{code}</h2><p>This code expires in 5 minutes.</p>",
+                ):
+                    _json_response(self, 500, {"error": "No CRM mail account configured. Add one in Admin → CRM Mail."})
+                    return
+            elif twofa_method == "telegram":
+                from notification_dispatcher import _get_employee_chat_id, _send_telegram_message
+                chat_id = _get_employee_chat_id(user["id"])
+                if chat_id:
+                    _send_telegram_message(chat_id, f"Your Sietch CRM login code: <b>{code}</b>\nExpires in 5 minutes.")
+
+            _json_response(self, 200, {
+                "ok": False,
+                "requiresTwoFactor": True,
+                "challenge": challenge_token,
+                "twofaMethod": twofa_method,
+            })
+            return
+
+        # ── No 2FA: create session directly ──
         ip = self.client_address[0] if self.client_address else ""
         token = auth_mod.create_session(user["id"], ip)
 
@@ -1246,11 +1400,189 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "displayName": user["display_name"],
                 "isAdmin": user["is_admin"],
                 "mustChangePassword": user["must_change_password"],
+                "role": user.get("role", "member"),
             },
         }).encode("utf-8")
         self.send_header("Content-Length", str(len(body_out)))
         self.end_headers()
         self.wfile.write(body_out)
+
+    def _handle_2fa_verify(self) -> None:
+        """Verify 2FA code during login. Returns session cookie."""
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        challenge = str(payload.get("challenge") or "")
+        code = str(payload.get("code") or "")
+        if not challenge or not code:
+            _json_response(self, 400, {"error": "challenge and code are required"})
+            return
+        user_id = auth_mod.verify_2fa_challenge(challenge, code)
+        if not user_id:
+            _json_response(self, 401, {"error": "Invalid or expired code"})
+            return
+        ip = self.client_address[0] if self.client_address else ""
+        token = auth_mod.create_session(user_id, ip)
+        # Fetch user for response
+        user_row = db.query_one(
+            "SELECT id, email, display_name, is_admin, must_change_password, role FROM users WHERE id = %s",
+            (user_id,),
+        )
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        cookie = cookies.SimpleCookie()
+        cookie[SESSION_COOKIE] = token
+        cookie[SESSION_COOKIE]["path"] = "/"
+        cookie[SESSION_COOKIE]["httponly"] = True
+        cookie[SESSION_COOKIE]["samesite"] = "Lax"
+        if COOKIE_SECURE:
+            cookie[SESSION_COOKIE]["secure"] = True
+        self.send_header("Set-Cookie", cookie.output(header="").strip())
+        body_out = json.dumps({
+            "ok": True,
+            "user": {
+                "id": user_row["id"],
+                "email": user_row["email"],
+                "displayName": user_row["display_name"],
+                "isAdmin": user_row["is_admin"],
+                "mustChangePassword": user_row["must_change_password"],
+                "role": user_row.get("role", "member"),
+            },
+        }).encode("utf-8")
+        self.send_header("Content-Length", str(len(body_out)))
+        self.end_headers()
+        self.wfile.write(body_out)
+
+    def _handle_2fa_resend(self) -> None:
+        """Resend 2FA code for an existing challenge."""
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        challenge = str(payload.get("challenge") or "")
+        if not challenge:
+            _json_response(self, 400, {"error": "challenge is required"})
+            return
+        result = auth_mod.resend_2fa_challenge(challenge)
+        if not result:
+            _json_response(self, 401, {"error": "Invalid or expired challenge"})
+            return
+        new_token, code = result
+        # Look up user to send code
+        row = db.query_one(
+            "SELECT u.id, u.email, u.twofa_method FROM twofa_challenges tc JOIN users u ON tc.user_id = u.id WHERE tc.token = %s",
+            (new_token,),
+        )
+        if row:
+            method = row["twofa_method"] or "email"
+            if method == "email":
+                if not _send_system_email(
+                    row["email"],
+                    "Your Sietch CRM Login Code",
+                    f"<p>Your 2FA verification code is:</p><h2>{code}</h2><p>This code expires in 5 minutes.</p>",
+                ):
+                    _json_response(self, 500, {"error": "No CRM mail account configured. Add one in Admin → CRM Mail."})
+                    return
+            elif method == "telegram":
+                from notification_dispatcher import _get_employee_chat_id, _send_telegram_message
+                chat_id = _get_employee_chat_id(row["id"])
+                if chat_id:
+                    _send_telegram_message(chat_id, f"Your Sietch CRM login code: <b>{code}</b>\nExpires in 5 minutes.")
+        _json_response(self, 200, {"ok": True, "challenge": new_token})
+
+    def _handle_2fa_setup(self) -> None:
+        """Initiate 2FA setup (send verification code)."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        method = str(payload.get("method") or "").strip()
+        if method not in ("email", "telegram"):
+            _json_response(self, 400, {"error": "method must be 'email' or 'telegram'"})
+            return
+        # Validate Telegram has linked chat
+        if method == "telegram":
+            from notification_dispatcher import _get_employee_chat_id
+            chat_id = _get_employee_chat_id(user["id"])
+            if not chat_id:
+                _json_response(self, 400, {"error": "Link your Telegram account via the bot first"})
+                return
+        challenge_token, code = auth_mod.create_2fa_challenge(user["id"], method)
+        # Send code
+        if method == "email":
+            if not _send_system_email(
+                user["email"],
+                "Your Sietch CRM 2FA Setup Code",
+                f"<p>Your 2FA verification code is:</p><h2>{code}</h2><p>This code expires in 5 minutes.</p>",
+            ):
+                _json_response(self, 500, {"error": "No CRM mail account configured. Add one in Admin → CRM Mail."})
+                return
+        elif method == "telegram":
+            from notification_dispatcher import _get_employee_chat_id, _send_telegram_message
+            chat_id = _get_employee_chat_id(user["id"])
+            if chat_id:
+                _send_telegram_message(chat_id, f"Your Sietch CRM 2FA setup code: <b>{code}</b>\nExpires in 5 minutes.")
+        _json_response(self, 200, {"ok": True, "challenge": challenge_token, "method": method})
+
+    def _handle_2fa_verify_setup(self) -> None:
+        """Verify 2FA setup code and enable 2FA."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        challenge = str(payload.get("challenge") or "")
+        code = str(payload.get("code") or "")
+        if not challenge or not code:
+            _json_response(self, 400, {"error": "challenge and code are required"})
+            return
+        # Verify challenge belongs to this user
+        row = db.query_one(
+            "SELECT user_id, method FROM twofa_challenges WHERE token = %s AND code = %s AND expires_at > NOW()",
+            (challenge, code),
+        )
+        if not row or row["user_id"] != user["id"]:
+            _json_response(self, 401, {"error": "Invalid or expired code"})
+            return
+        # Enable 2FA
+        auth_mod.set_2fa_method(user["id"], row["method"])
+        auth_mod.verify_2fa_challenge(challenge, code)  # consume the challenge
+        _json_response(self, 200, {"ok": True, "method": row["method"]})
+
+    def _handle_2fa_disable(self) -> None:
+        """Disable 2FA (requires password confirmation)."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        password = str(payload.get("password") or "")
+        if not password:
+            _json_response(self, 400, {"error": "Password is required to disable 2FA"})
+            return
+        # Verify password
+        row = db.query_one(
+            "SELECT password_hash, password_salt FROM users WHERE id = %s",
+            (user["id"],),
+        )
+        if not row or not auth_mod.verify_password(password, row["password_hash"], row["password_salt"]):
+            _json_response(self, 401, {"error": "Invalid password"})
+            return
+        auth_mod.set_2fa_method(user["id"], None)
+        _json_response(self, 200, {"ok": True})
 
     def _handle_logout(self) -> None:
         token = _session_token(self)
@@ -1280,8 +1612,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if user:
             token = auth_mod.create_reset_token(user["id"])
             from smtp_client import send_password_reset_email
-            reset_url = f"{self.headers.get('Origin', 'http://localhost:' + str(PORT))}/reset?token={token}"
-            send_password_reset_email(email, reset_url)
+            reset_url = f"{CRM_PUBLIC_URL}/reset?token={token}"
+            smtp_acct = _get_system_smtp_account()
+            send_password_reset_email(email, reset_url, smtp_config=smtp_acct)
         # Always return success to prevent email enumeration
         _json_response(self, 200, {"ok": True})
 
@@ -1303,6 +1636,54 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         auth_mod.set_password(user_id, new_password)
         auth_mod.consume_reset_token(token)
         _json_response(self, 200, {"ok": True})
+
+    def _handle_reset_request_telegram(self) -> None:
+        """Send 6-digit reset code via Telegram for self-service password reset."""
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        email = str(payload.get("email") or "").strip().lower()
+        if not email:
+            _json_response(self, 400, {"error": "Email is required"})
+            return
+        user = auth_mod.get_user_by_email(email)
+        if not user:
+            # Always return success to prevent email enumeration
+            _json_response(self, 200, {"ok": True})
+            return
+        # Check if user has linked Telegram
+        from notification_dispatcher import _get_employee_chat_id, _send_telegram_message
+        chat_id = _get_employee_chat_id(user["id"])
+        if not chat_id:
+            _json_response(self, 200, {"ok": True, "telegram": False})
+            return
+        # Generate 6-digit code and create challenge
+        challenge_token, code = auth_mod.create_2fa_challenge(user["id"], "telegram")
+        # Send via Telegram
+        _send_telegram_message(chat_id, f"Your Sietch CRM password reset code: <b>{code}</b>\nExpires in 5 minutes.")
+        _json_response(self, 200, {"ok": True, "telegram": True, "challenge": challenge_token})
+
+    def _handle_reset_verify_telegram(self) -> None:
+        """Verify Telegram reset code and return token for setting new password."""
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        challenge = str(payload.get("challenge") or "")
+        code = str(payload.get("code") or "")
+        if not challenge or not code:
+            _json_response(self, 400, {"error": "challenge and code are required"})
+            return
+        user_id = auth_mod.verify_2fa_challenge(challenge, code)
+        if not user_id:
+            _json_response(self, 401, {"error": "Invalid or expired code"})
+            return
+        # Create a password reset token for the user
+        reset_token = auth_mod.create_reset_token(user_id)
+        _json_response(self, 200, {"ok": True, "token": reset_token})
 
     def _handle_change_password(self) -> None:
         user = _require_auth(self)
@@ -1448,6 +1829,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not user:
                 return
             self._handle_backup_config_get()
+            return
+        if api_path == "/api/v2/admin/alternate-smtp":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_alternate_smtp_get()
             return
         if api_path == "/api/v2/admin/backup/history":
             user = _require_admin(self)
@@ -1605,6 +1992,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         m = re.match(r"^/api/v2/users/(\d+)/avatar$", api_path)
         if m and method == "GET":
             self._handle_user_avatar_get(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/users/(\d+)/sessions$", api_path)
+        if m and method == "GET":
+            self._handle_user_sessions_get(int(m.group(1)))
             return
         if api_path == "/api/v2/me/notification-prefs":
             self._handle_notification_prefs_get()
@@ -1935,6 +2326,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/auth/change-password" and method == "POST":
             self._handle_change_password()
             return
+        if api_path == "/api/v2/auth/reset-request-telegram" and method == "POST":
+            self._handle_reset_request_telegram()
+            return
+        if api_path == "/api/v2/auth/reset-verify-telegram" and method == "POST":
+            self._handle_reset_verify_telegram()
+            return
 
         # ── Profile (own) ──
         if api_path == "/api/v2/me" and method == "PUT":
@@ -2162,6 +2559,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             self._handle_backup_config_post()
             return
+        if api_path == "/api/v2/admin/alternate-smtp" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_alternate_smtp_post()
+            return
+        if api_path == "/api/v2/admin/alternate-smtp/test" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_alternate_smtp_test()
+            return
         if api_path == "/api/v2/admin/backup/notify-prefs" and method == "POST":
             user = _require_admin(self)
             if not user:
@@ -2356,6 +2765,26 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         m = re.match(r"^/api/v2/users/(\d+)$", api_path)
         if m and method == "PUT":
             self._handle_user_update(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/users/(\d+)/reset-password$", api_path)
+        if m and method == "POST":
+            self._handle_user_reset_password(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/users/(\d+)/reset-password/send$", api_path)
+        if m and method == "POST":
+            self._handle_user_reset_password_send(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/users/(\d+)/reactivate$", api_path)
+        if m and method == "POST":
+            self._handle_user_reactivate(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/users/(\d+)/sessions$", api_path)
+        if m and method == "DELETE":
+            self._handle_user_sessions_delete(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/users/(\d+)$", api_path)
+        if m and method == "DELETE":
+            self._handle_user_delete(int(m.group(1)))
             return
 
         # ── DELETE handlers ──
@@ -2641,11 +3070,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return qs[k][0] if isinstance(qs[k], (list, tuple)) else qs[k]
         return None
 
-    def _build_projects_where(self, qs: dict) -> tuple[list[str], list]:
+    def _build_projects_where(self, qs: dict, user: dict | None = None) -> tuple[list[str], list]:
         """Build WHERE clauses and params for project list/count queries."""
         qval = self._projects_query_val
         where = ["1=1"]
         params: list = []
+
+        # Limited role: only own deals
+        if user and _is_limited(user):
+            where.append("(o.responsible_user_id = %s OR o.created_by = %s)")
+            params.extend([user["id"], user["id"]])
 
         search = qval(qs, "search", "filterValue")
         if search:
@@ -2717,7 +3151,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_auth(self)
         if not user:
             return
-        where, params = self._build_projects_where(qs)
+        where, params = self._build_projects_where(qs, user)
         where_sql = " AND ".join(where)
         row = db.query(
             f"""SELECT COUNT(o.id)
@@ -2732,7 +3166,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_auth(self)
         if not user:
             return
-        where, params = self._build_projects_where(qs)
+        where, params = self._build_projects_where(qs, user)
 
         count = int(qs.get("count", ["500"])[0])
         start = int(qs.get("startIndex", ["0"])[0])
@@ -2797,6 +3231,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not row:
             _json_response(self, 404, {"error": "Project not found"})
             return
+        # Limited role: only access own deals
+        if _is_limited(user):
+            responsible_id = row[9]
+            created_by_id = row[12]
+            if responsible_id != user["id"] and created_by_id != user["id"]:
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
         _json_response(self, 200, {
             "id": row[0], "title": row[1], "description": row[2],
             "stageId": row[3], "stageType": row[4], "bidValue": float(row[5]) if row[5] else None,
@@ -3824,13 +4265,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not user:
             return
         rows = db.query(
-            "SELECT id, email, display_name, first_name, last_name, is_admin, is_active, avatar_url FROM users ORDER BY display_name"
+            """SELECT id, email, display_name, first_name, last_name, is_admin, is_active,
+                      avatar_url, role, twofa_method, created_at, last_login, must_change_password
+               FROM users ORDER BY display_name"""
         )
         _json_response(self, 200, [
             {"id": r[0], "email": r[1], "displayName": r[2], "firstName": r[3],
              "lastName": r[4], "isAdmin": r[5], "isActive": r[6],
              "avatarUrl": f"/api/v2/users/{r[0]}/avatar" if r[7] else None,
-             "thumbnailUrl": f"/api/v2/users/{r[0]}/avatar?thumbnail=1" if r[7] else None}
+             "thumbnailUrl": f"/api/v2/users/{r[0]}/avatar?thumbnail=1" if r[7] else None,
+             "role": r[8] or "member",
+             "twofaMethod": r[9],
+             "createdAt": r[10].isoformat() if r[10] else None,
+             "lastLogin": r[11].isoformat() if r[11] else None,
+             "mustChangePassword": r[12]}
             for r in rows
         ])
 
@@ -3849,6 +4297,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "lastName": user.get("last_name"),
             "isAdmin": user.get("is_admin", False),
             "mustChangePassword": user.get("must_change_password", False),
+            "role": user.get("role", "member"),
+            "twofaMethod": user.get("twofa_method"),
             "avatarUrl": f"/api/v2/my/avatar" if avatar_url else None,
             "thumbnailUrl": f"/api/v2/my/avatar?thumbnail=1" if avatar_url else None,
         })
@@ -4070,13 +4520,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not email:
             _json_response(self, 400, {"error": "Email is required"})
             return
+        role = payload.get("role", "member")
+        if role not in ("admin", "manager", "member", "limited"):
+            role = "member"
         temp_password = str(payload.get("password") or "changeme")
         pw_hash, salt = auth_mod.hash_password(temp_password)
+        is_admin = role in ("admin", "manager")
         uid = db.insert_returning(
-            """INSERT INTO users (email, password_hash, password_salt, display_name, first_name, last_name, is_admin, must_change_password)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE) RETURNING id""",
+            """INSERT INTO users (email, password_hash, password_salt, display_name, first_name, last_name, is_admin, must_change_password, role)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE, %s) RETURNING id""",
             (email, pw_hash, salt, payload.get("displayName"), payload.get("firstName"),
-             payload.get("lastName"), payload.get("isAdmin", False)),
+             payload.get("lastName"), is_admin, role),
         )
         _json_response(self, 201, {"id": uid, "ok": True})
 
@@ -4089,19 +4543,209 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except json.JSONDecodeError:
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
+
+        # ── Hardened guards ──
+        # Self-demotion block: admin cannot remove their own admin status
+        if user_id == admin["id"]:
+            if "isAdmin" in payload and not payload["isAdmin"]:
+                _json_response(self, 409, {"error": "You cannot remove your own admin privileges"})
+                return
+            if "role" in payload and payload["role"] not in ("admin", "manager"):
+                _json_response(self, 409, {"error": "You cannot remove your own admin privileges"})
+                return
+
+        # Self-deactivation block: admin cannot deactivate themselves
+        if user_id == admin["id"] and "isActive" in payload and not payload["isActive"]:
+            _json_response(self, 409, {"error": "You cannot deactivate your own account"})
+            return
+
+        # Build update sets
         sets, params = [], []
-        for field, col in [("displayName", "display_name"), ("firstName", "first_name"),
-                           ("lastName", "last_name"), ("isAdmin", "is_admin"), ("isActive", "is_active")]:
+        for field, col in [("email", "email"), ("displayName", "display_name"), ("firstName", "first_name"),
+                           ("lastName", "last_name"), ("isAdmin", "is_admin"), ("isActive", "is_active"),
+                           ("role", "role"), ("twofaMethod", "twofa_method")]:
             if field in payload:
                 sets.append(f"{col} = %s")
                 params.append(payload[field])
+
+        # Email uniqueness check
+        if "email" in payload and payload["email"]:
+            new_email = payload["email"].lower().strip()
+            dup = db.query_one("SELECT id FROM users WHERE email = %s AND id != %s", (new_email, user_id))
+            if dup:
+                _json_response(self, 409, {"error": "Email already in use"})
+                return
+
+        # Sync is_admin from role
+        if "role" in payload:
+            role = payload["role"]
+            is_admin = role in ("admin", "manager")
+            if "isAdmin" not in payload:
+                sets.append("is_admin = %s")
+                params.append(is_admin)
+
         if "password" in payload and payload["password"]:
             pw_hash, salt = auth_mod.hash_password(payload["password"])
             sets.extend(["password_hash = %s", "password_salt = %s", "must_change_password = FALSE"])
             params.extend([pw_hash, salt])
+
         if sets:
             params.append(user_id)
             db.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = %s", (*params,))
+
+        # Last-admin guard: ensure at least one admin remains
+        if "isAdmin" in payload and not payload["isAdmin"] or \
+           "role" in payload and payload["role"] not in ("admin", "manager"):
+            admin_count = db.query_one("SELECT COUNT(*) FROM users WHERE role IN ('admin', 'manager')")["count"]
+            if admin_count == 0:
+                # Rollback: restore admin
+                db.execute(
+                    "UPDATE users SET is_admin = TRUE, role = 'admin' WHERE id = %s",
+                    (user_id,),
+                )
+                _json_response(self, 409, {"error": "Cannot remove the last admin"})
+                return
+
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_user_reset_password(self, user_id: int) -> None:
+        admin = _require_strict_admin(self)
+        if not admin:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        method = str(payload.get("method") or "").strip()
+        if method == "temp":
+            password = str(payload.get("password") or "")
+            if not password:
+                import secrets as _secrets
+                password = _secrets.token_urlsafe(9)[:12]
+            pw_hash, salt = auth_mod.hash_password(password)
+            db.execute(
+                "UPDATE users SET password_hash = %s, password_salt = %s, must_change_password = TRUE WHERE id = %s",
+                (pw_hash, salt, user_id),
+            )
+            auth_mod.destroy_all_user_sessions(user_id)
+            _json_response(self, 200, {"ok": True, "tempPassword": password})
+        elif method == "invite":
+            row = db.query_one("SELECT email FROM users WHERE id = %s", (user_id,))
+            if not row:
+                _json_response(self, 404, {"error": "User not found"})
+                return
+            smtp_acct = _get_system_smtp_account()
+            if not smtp_acct:
+                _json_response(self, 500, {"error": "No CRM mail account configured. Add one in Admin → CRM Mail."})
+                return
+            token = auth_mod.create_reset_token(user_id)
+            from smtp_client import send_password_reset_email
+            reset_url = f"{CRM_PUBLIC_URL}/reset?token={token}"
+            sent = send_password_reset_email(row["email"], reset_url, smtp_config=smtp_acct)
+            if not sent:
+                _json_response(self, 500, {"error": "Failed to send password reset email. Check CRM mail account SMTP settings."})
+                return
+            _json_response(self, 200, {"ok": True})
+        else:
+            _json_response(self, 400, {"error": "method must be 'temp' or 'invite'"})
+
+    def _handle_user_reset_password_send(self, user_id: int) -> None:
+        """Send temp password to user via email or Telegram."""
+        admin = _require_strict_admin(self)
+        if not admin:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        method = str(payload.get("method") or "").strip()
+        password = str(payload.get("password") or "")
+        if not password:
+            _json_response(self, 400, {"error": "password is required"})
+            return
+        if method == "email":
+            row = db.query_one("SELECT email FROM users WHERE id = %s", (user_id,))
+            if not row:
+                _json_response(self, 404, {"error": "User not found"})
+                return
+            smtp_acct = _get_system_smtp_account()
+            if not smtp_acct:
+                _json_response(self, 500, {"error": "No CRM mail account configured"})
+                return
+            from smtp_client import send_email_from_account
+            use_oauth = bool(smtp_acct.get("oauth_provider") and smtp_acct.get("oauth_access_token")
+                             and not smtp_acct.get("smtp_password_encrypted"))
+            ok, err = send_email_from_account(
+                smtp_host=smtp_acct.get("smtp_host") or "",
+                smtp_port=int(smtp_acct.get("smtp_port") or 587),
+                smtp_user=smtp_acct.get("smtp_user") or smtp_acct.get("email", ""),
+                smtp_password=smtp_acct.get("smtp_password_encrypted") or "",
+                from_name="Sietch CRM",
+                from_addr=smtp_acct.get("email", ""),
+                to_addr=row["email"],
+                subject="Your Sietch CRM Temporary Password",
+                html_body=f"<p>Your temporary password is: <b>{password}</b></p><p>You will be required to change it on first login.</p>",
+                oauth_provider=smtp_acct["oauth_provider"] if use_oauth else None,
+                oauth_access_token=smtp_acct["oauth_access_token"] if use_oauth else None,
+            )
+            if ok:
+                _json_response(self, 200, {"ok": True})
+            else:
+                _json_response(self, 500, {"error": f"Failed to send email: {err}"})
+        elif method == "telegram":
+            from notification_dispatcher import _get_employee_chat_id, _send_telegram_message
+            chat_id = _get_employee_chat_id(user_id)
+            if not chat_id:
+                _json_response(self, 400, {"error": "User has no linked Telegram account"})
+                return
+            _send_telegram_message(chat_id, f"Your Sietch CRM temporary password: <b>{password}</b>\nYou will be required to change it on first login.")
+            _json_response(self, 200, {"ok": True})
+        else:
+            _json_response(self, 400, {"error": "method must be 'email' or 'telegram'"})
+
+    def _handle_user_sessions_get(self, user_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        if user["id"] != user_id and not user.get("is_admin"):
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        rows = db.query(
+            "SELECT token, created_at, expires_at, ip_address FROM sessions WHERE user_id = %s ORDER BY created_at DESC",
+            (user_id,),
+        )
+        _json_response(self, 200, [
+            {"token": r[0][:8] + "...", "createdAt": r[1].isoformat() if r[1] else None,
+             "expiresAt": r[2].isoformat() if r[2] else None, "ipAddress": r[3]}
+            for r in rows
+        ])
+
+    def _handle_user_sessions_delete(self, user_id: int) -> None:
+        admin = _require_admin(self)
+        if not admin:
+            return
+        count = db.query_one("SELECT COUNT(*) FROM sessions WHERE user_id = %s", (user_id,))
+        auth_mod.destroy_all_user_sessions(user_id)
+        _json_response(self, 200, {"ok": True, "revoked": count["count"] if count else 0})
+
+    def _handle_user_reactivate(self, user_id: int) -> None:
+        admin = _require_admin(self)
+        if not admin:
+            return
+        db.execute("UPDATE users SET is_active = TRUE WHERE id = %s", (user_id,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_user_delete(self, user_id: int) -> None:
+        admin = _require_admin(self)
+        if not admin:
+            return
+        if user_id == admin["id"]:
+            _json_response(self, 409, {"error": "You cannot delete your own account"})
+            return
+        db.execute("UPDATE users SET is_active = FALSE WHERE id = %s", (user_id,))
+        auth_mod.destroy_all_user_sessions(user_id)
         _json_response(self, 200, {"ok": True})
 
     # ── Notifications ───────────────────────────────────────────────────────
@@ -5896,6 +6540,103 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 
+    def _handle_alternate_smtp_get(self) -> None:
+        """GET alternate SMTP config."""
+        try:
+            row = db.query_one("SELECT value FROM system_settings WHERE key = 'alternate_smtp'")
+            config = json.loads(row["value"]) if row and row["value"] else {}
+            # Mask password for security
+            if config.get("password"):
+                config["password"] = "••••••••"
+            _json_response(self, 200, config)
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_alternate_smtp_post(self) -> None:
+        """POST save alternate SMTP config."""
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            config = {
+                "enabled": bool(payload.get("enabled")),
+                "host": str(payload.get("host") or "").strip(),
+                "port": int(payload.get("port") or 587),
+                "user": str(payload.get("user") or "").strip(),
+                "password": str(payload.get("password") or ""),
+                "from_name": str(payload.get("from_name") or "").strip(),
+                "from_email": str(payload.get("from_email") or "").strip(),
+            }
+            # Only update password if a new one was provided (not masked)
+            if config["password"] == "••••••••":
+                row = db.query_one("SELECT value FROM system_settings WHERE key = 'alternate_smtp'")
+                if row and row["value"]:
+                    old = json.loads(row["value"])
+                    config["password"] = old.get("password", "")
+                else:
+                    config["password"] = ""
+            db.execute(
+                """INSERT INTO system_settings (key, value, description)
+                   VALUES ('alternate_smtp', %s, 'Alternate SMTP config for system emails')
+                   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()""",
+                (json.dumps(config),),
+            )
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_alternate_smtp_test(self) -> None:
+        """POST send test email via alternate SMTP."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            # Use form values if provided, else fall back to saved config
+            if payload.get("host"):
+                config = payload
+            else:
+                row = db.query_one("SELECT value FROM system_settings WHERE key = 'alternate_smtp'")
+                config = json.loads(row["value"]) if row and row["value"] else {}
+            if not config.get("host"):
+                _json_response(self, 400, {"error": "Alternate SMTP is not configured. Enter SMTP settings first."})
+                return
+            from smtp_client import send_email_from_account
+            ok, err = send_email_from_account(
+                smtp_host=config["host"],
+                smtp_port=int(config.get("port", 587)),
+                smtp_user=config.get("user", ""),
+                smtp_password=config.get("password", ""),
+                from_name=config.get("from_name", "Sietch CRM"),
+                from_addr=config.get("from_email", ""),
+                to_addr=user["email"],
+                subject="Test Email — Sietch CRM",
+                html_body="""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;background:#f5f5f5;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f5;padding:40px 20px;">
+<tr><td align="center">
+<table width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;">
+<tr><td style="padding:32px 40px;text-align:center;border-bottom:1px solid #eeeeee;">
+  <img src="https://dashboard.publicadjustermidwest.com/assets/sietch-logo-2-nobg2.png" alt="Sietch CRM" height="40" style="display:block;margin:0 auto 16px;">
+  <h2 style="margin:0;font-size:20px;color:#333333;">Test Email</h2>
+</td></tr>
+<tr><td style="padding:32px 40px;">
+  <p style="margin:0;font-size:15px;color:#555555;">If you received this, your alternate SMTP configuration is working correctly.</p>
+</td></tr>
+<tr><td style="padding:20px 40px;background:#f9f9f9;text-align:center;border-top:1px solid #eeeeee;">
+  <p style="margin:0;font-size:12px;color:#aaaaaa;">Sietch CRM</p>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body></html>""",
+            )
+            if ok:
+                _json_response(self, 200, {"ok": True})
+            else:
+                _json_response(self, 500, {"error": f"SMTP send failed: {err}"})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
     def _handle_backup_run(self) -> None:
         """POST trigger immediate backup."""
         try:
@@ -7387,6 +8128,41 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"ok": True, "eventId": event_id})
             return
 
+        if api_path == "/api/bot/reset-password" and method == "POST":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            chat_id = payload.get("chatId")
+            if not chat_id:
+                _json_response(self, 400, {"error": "chatId is required"})
+                return
+            mapping = get_mapping_by_chat("sietch", int(chat_id))
+            if not mapping:
+                _json_response(self, 404, {"error": "No user found for this chat"})
+                return
+            if not mapping.get("employee"):
+                _json_response(self, 403, {"error": "User is not an employee"})
+                return
+            user_id = mapping.get("userId")
+            if not user_id:
+                _json_response(self, 404, {"error": "No user ID associated with this mapping"})
+                return
+            import secrets as _secrets
+            password = _secrets.token_urlsafe(9)[:12]
+            pw_hash, salt = auth_mod.hash_password(password)
+            db.execute(
+                "UPDATE users SET password_hash = %s, password_salt = %s, must_change_password = TRUE WHERE id = %s",
+                (pw_hash, salt, int(user_id)),
+            )
+            auth_mod.destroy_all_user_sessions(int(user_id))
+            _json_response(self, 200, {"ok": True, "tempPassword": password})
+            return
+
         if api_path == "/api/bot/send-message" and method == "POST":
             user = _require_admin(self)
             if not user:
@@ -8570,6 +9346,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return False
 
     def _handle_mail_inbox(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        if _is_limited(user):
+            _json_response(self, 403, {"error": "CRM Mail not available for limited accounts"})
+            return
         qs = parse_qs(urlparse(self.path).query)
         page = int(qs.get("page", ["1"])[0])
         page_size = int(qs.get("page_size", ["50"])[0])
@@ -8596,6 +9378,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         tag = qs.get("tag", [None])[0]
         user = _require_auth(self)
         if not user:
+            return
+        if _is_limited(user):
+            _json_response(self, 403, {"error": "CRM Mail not available for limited accounts"})
             return
         try:
             where = ["m.folder = %s"]
@@ -9173,6 +9958,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         try:
             user = _require_auth(self)
             if not user:
+                return
+            if _is_limited(user):
+                _json_response(self, 403, {"error": "CRM Mail not available for limited accounts"})
                 return
             rows = db.query_dicts(
                 f"""SELECT id, email, display_name, imap_host, imap_port,

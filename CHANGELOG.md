@@ -2,6 +2,58 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Multi-Channel Password Reset + Admin Recovery — COMPLETE (not fully tested) (2026-08-13)
+
+### Password Reset
+- **Admin "Reset PW"**: generates temp password, shows in modal with Copy button + "Send via Email" / "Send via Telegram" buttons
+- **Self-service "Forgot Password"**: email or Telegram code verification; user selects delivery method
+- **Password reset emails**: routed through CRM mail account or alternate SMTP (General tab config)
+
+### Alternate SMTP
+- **Admin tab renamed**: Overview → General
+- **Alternate SMTP config**: toggle, host/port/user/password/from fields, save/test buttons
+- Stored in `system_settings` table as JSON blob, checked first by `_get_system_smtp_account()`
+
+### Admin Recovery
+- **Telegram bot `/reset-password` command**: admin sends command to bot → generates temp password → sends via Telegram
+- **CLI script** `scripts/recover_password.py`: generates temp password for any user via server access
+
+### Email deliverability
+- Password reset URLs now use `CRM_PUBLIC_URL` instead of `Origin` header (fixes HTTP link issue)
+- ProtonMail spam filter blocks emails with certain URL domains; temp password approach bypasses this
+
+## User Roles + Users Tab CRUD + 2FA — IN PROGRESS (2026-08-10)
+
+### Lightweight RBAC
+- **4 roles:** admin, manager, member, limited. Added `users.role` column (CHECK constraint) with `is_admin` kept for backward compat.
+- **admin**: full access (admin console, user mgmt, system config)
+- **manager**: admin console (no user mgmt), stages/tags/custom fields, branding, bot config
+- **member**: standard CRM user (default)
+- **limited**: restricted — own deals only, no CRM mail access
+- Bot account keeps `role='admin'` (legacy; authenticates via Bearer token, not user sessions)
+
+### Role enforcement
+- `_is_limited(user)` helper — injects ownership filter in deal queries (`responsible_user_id = self OR created_by = self`)
+- `_require_role(handler, *allowed_roles)` — generic role gate
+- `_require_strict_admin(handler)` — admin-only for user-management endpoints
+- CRM mail endpoints gated: limited role gets 403 on all `/api/v2/mail/*`
+- Deal scoping: limited users can only view/edit their own deals (enforced in `_build_projects_where` and `_handle_project_get`)
+- User-management guards: self-demotion block, self-deactivation block, last-admin guard
+
+### Users tab (admin console)
+- Full CRUD: search, create user (with invite email), edit profile/role, force password reset, view/revoke sessions, soft-delete, reactivate
+- Role badges in user list (admin=accent, manager=blue, member=muted, limited=orange)
+- 2FA status badge per user
+
+### Two-Factor Authentication (2FA)
+- Optional per-user (admin can see status but not force)
+- Methods: email or Telegram (Telegram requires linked chat via bot)
+- Login flow: credentials → if 2FA enabled, challenge token + code sent → verify → session
+- Profile modal: enable/disable 2FA, method selector, code verification
+- Setup flow: send code → verify → set method
+- Disable flow: verify password → clear method
+- 5-minute code expiry, resend available
+
 ## Calendar Tile Revamp — COMPLETE (2026-08-09)
 
 All phases delivered except OAuth wiring/testing (pending final phase).

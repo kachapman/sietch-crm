@@ -566,6 +566,7 @@ HELP_TEXT_EMPLOYEE = (
     "From the detail screen you can also add notes (choose a category and type your text).\n"
     "Commands:\n"
     "  /tag    — list projects by tag\n"
+    "  /reset-password — reset your dashboard password\n"
     "  /help   — this message\n"
     "  /cancel — abort the current action\n"
     "  /start  — restart the bot"
@@ -1183,10 +1184,24 @@ def main() -> None:
             logger.exception("Failed to post note for reply to notification %s", notification_id)
             await _reply_html(update, "Something went wrong. Please try again.")
 
+    async def reset_password_command(update: Update, _ctx) -> None:
+        """Generate a temporary password for the linked employee's dashboard account."""
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if not mapping or not mapping.get("employee"):
+            await _reply_html(update, "This command is only available to linked employees.")
+            return
+        resp = await _post("/api/bot/reset-password", {"chatId": chat_id})
+        if resp and resp.get("tempPassword"):
+            await _reply_html(update, f"Your temporary password is:\n<code>{html.escape(resp['tempPassword'])}</code>\nUse it to sign in, then change your password.")
+        else:
+            await _reply_html(update, "Failed to generate a temporary password. Please try again later.")
+
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("tag", tag_command))
+    app.add_handler(CommandHandler("reset-password", reset_password_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.REPLY & ~filters.COMMAND, handle_reply))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

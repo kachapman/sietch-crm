@@ -72,6 +72,46 @@
         <p id="login-error" class="error-text hidden"></p>
         <button type="submit" class="btn btn-primary btn-block" id="login-submit-btn">Sign in</button>
       </form>
+      <p style="text-align:center; margin-top:0.5rem;">
+        <a href="#" id="forgot-password-link" style="font-size:0.8rem; color:var(--muted);">Forgot password?</a>
+      </p>
+      <div id="forgot-section" class="hidden" style="margin-top:1rem;">
+        <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.5rem;">Enter your email to reset your password.</p>
+        <input type="email" id="forgot-email" class="login-input" placeholder="Email" style="width:100%; padding:0.5rem; margin-bottom:0.5rem;" />
+        <p id="forgot-error" class="error-text hidden"></p>
+        <button type="button" id="forgot-submit-btn" class="btn btn-primary btn-block">Send Reset Code</button>
+        <button type="button" id="forgot-back-btn" class="btn btn-ghost btn-block" style="margin-top:0.3rem; font-size:0.8rem;">Back to login</button>
+      </div>
+      <div id="forgot-method-section" class="hidden" style="margin-top:1rem;">
+        <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.5rem;">Choose how to receive your reset code:</p>
+        <button type="button" id="forgot-telegram-btn" class="btn btn-primary btn-block" style="margin-bottom:0.3rem;">Send via Telegram</button>
+        <button type="button" id="forgot-email-btn" class="btn btn-secondary btn-block">Send via Email</button>
+        <button type="button" id="forgot-back-btn2" class="btn btn-ghost btn-block" style="margin-top:0.3rem; font-size:0.8rem;">Back to login</button>
+      </div>
+      <div id="forgot-telegram-verify" class="hidden" style="margin-top:1rem;">
+        <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.5rem;">Enter the 6-digit code sent to your Telegram.</p>
+        <input type="text" id="forgot-verify-code" class="login-input" placeholder="6-digit code" maxlength="6" inputmode="numeric" pattern="[0-9]{6}" style="width:100%; padding:0.5rem; text-align:center; font-size:1.1rem; letter-spacing:0.3em; margin-bottom:0.5rem;" />
+        <button type="button" id="forgot-verify-btn" class="btn btn-primary btn-block">Verify Code</button>
+        <button type="button" id="forgot-resend-btn" class="btn btn-ghost btn-block" style="margin-top:0.3rem; font-size:0.8rem;">Resend code</button>
+      </div>
+      <div id="forgot-email-sent" class="hidden" style="margin-top:1rem;">
+        <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.5rem;">Check your email for a password reset link.</p>
+        <button type="button" id="forgot-back-btn3" class="btn btn-ghost btn-block" style="font-size:0.8rem;">Back to login</button>
+      </div>
+      <div id="forgot-new-password" class="hidden" style="margin-top:1rem;">
+        <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.5rem;">Enter your new password.</p>
+        <input type="password" id="forgot-new-pw" class="login-input" placeholder="New password" style="width:100%; padding:0.5rem; margin-bottom:0.5rem;" />
+        <input type="password" id="forgot-confirm-pw" class="login-input" placeholder="Confirm password" style="width:100%; padding:0.5rem; margin-bottom:0.5rem;" />
+        <p id="forgot-pw-error" class="error-text hidden" style="margin-bottom:0.5rem;"></p>
+        <button type="button" id="forgot-set-pw-btn" class="btn btn-primary btn-block">Set New Password</button>
+      </div>
+      <div id="twofa-section" class="hidden" style="margin-top:1rem;">
+        <p id="twofa-description" style="font-size:0.85rem; color:var(--muted); margin-bottom:0.5rem;"></p>
+        <input type="text" id="twofa-code" class="login-input" placeholder="Enter 6-digit code" maxlength="6" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code" style="text-align:center; font-size:1.2rem; letter-spacing:0.3em;" />
+        <p id="twofa-error" class="error-text hidden" style="margin-top:0.5rem;"></p>
+        <button type="button" id="twofa-verify-btn" class="btn btn-primary btn-block" style="margin-top:0.5rem;">Verify</button>
+        <button type="button" id="twofa-resend-btn" class="btn btn-ghost btn-block" style="margin-top:0.3rem; font-size:0.8rem;">Resend code</button>
+      </div>
     </div>
     <div class="sietch-footer login-sietch-footer">
       <img src="assets/sietch-logo-2-nobg1.png" alt="Sietch CRM" class="sietch-footer-logo" />
@@ -1950,9 +1990,9 @@
       <h2 id="admin-console-title" class="modal-title">Admin Console</h2>
       <div class="admin-body">
         <div class="admin-tabs">
-          <button class="admin-tab-btn btn btn-ghost" data-tab="overview" title="Overview">
+          <button class="admin-tab-btn btn btn-ghost" data-tab="general" title="General">
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-            <span class="admin-tab-label">Overview</span>
+            <span class="admin-tab-label">General</span>
           </button>
           <button class="admin-tab-btn btn btn-ghost" data-tab="users" title="Users">
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
@@ -1988,10 +2028,33 @@
           </button>
         </div>
         <div class="admin-main">
-          <div id="admin-tab-overview" class="admin-tab-content">
-            <p>Admin tools for Sietch CRM. Data is self-contained in PostgreSQL. Use Import Sync tab for OnlyOffice transition enrich (tags, tasks, etc) using read-only pull.</p>
-            <div id="admin-overview-user" style="margin:0.5rem 0; padding:0.5rem; background:var(--bg-elevated); border-radius:4px;"></div>
-            <p><strong>Current admins:</strong> bot, kenc (and others with is_admin in DB). Console is auto-available on login for isAdmin users — no extra credentials needed.</p>
+          <div id="admin-tab-general" class="admin-tab-content">
+            <h4 style="margin:0 0 0.5rem; font-size:0.85rem;">Alternate SMTP for System Emails</h4>
+            <p style="font-size:0.8rem; color:var(--muted); margin-bottom:0.75rem;">
+              Configure an alternate SMTP server for password reset emails, 2FA codes, and notifications.
+              Use this when your CRM mail account's SMTP is blocked by spam filters.
+              When enabled, system emails are sent from this server instead of the CRM mail account.
+            </p>
+            <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem;">
+              <label class="toggle-switch" title="Enable alternate SMTP for system emails" style="cursor:pointer;">
+                <input type="checkbox" id="alt-smtp-enabled" />
+                <span class="toggle-slider"></span>
+              </label>
+              <span style="font-size:0.85rem;">Enable alternate SMTP</span>
+            </div>
+            <div id="alt-smtp-fields" style="display:grid; grid-template-columns:1fr 1fr; gap:0.4rem 0.6rem;">
+              <input type="text" id="alt-smtp-host" class="form-control" placeholder="SMTP Host (e.g. smtp.gmail.com)" />
+              <input type="number" id="alt-smtp-port" class="form-control" placeholder="Port (e.g. 587)" value="587" />
+              <input type="text" id="alt-smtp-user" class="form-control" placeholder="Username" />
+              <input type="password" id="alt-smtp-password" class="form-control" placeholder="Password" />
+              <input type="text" id="alt-smtp-from-name" class="form-control" placeholder="From Name (e.g. Sietch CRM)" />
+              <input type="email" id="alt-smtp-from-email" class="form-control" placeholder="From Email" />
+            </div>
+            <div style="margin-top:0.75rem; display:flex; gap:0.3rem;">
+              <button type="button" id="alt-smtp-save" class="btn btn-primary btn-sm">Save</button>
+              <button type="button" id="alt-smtp-test" class="btn btn-secondary btn-sm">Send Test Email</button>
+            </div>
+            <div id="alt-smtp-status" style="margin-top:0.5rem; font-size:0.8rem;"></div>
           </div>
           <div id="admin-tab-sync" class="admin-tab-content hidden">
             <p class="modal-message">Import data from OnlyOffice, export Sietch data for backup or migration, and configure scheduled backups with remote destinations.</p>
@@ -2456,6 +2519,38 @@
           <div class="profile-toggle-row">
             <label class="profile-toggle-label" for="pref-email">Email (immediate)</label>
             <input type="checkbox" id="pref-email" class="toggle-input" checked />
+          </div>
+        </fieldset>
+
+        <fieldset class="profile-fieldset">
+          <legend class="profile-legend">Two-Factor Authentication</legend>
+          <p class="profile-field-hint">Add an extra layer of security to your account.</p>
+          <div id="twofa-status" style="margin-bottom:0.5rem;"></div>
+          <div id="twofa-setup-section" class="hidden">
+            <div style="display:flex; gap:0.5rem; align-items:end; margin-bottom:0.5rem;">
+              <div style="flex:1;">
+                <label for="twofa-method-select" style="font-size:0.8rem; color:var(--muted);">Method</label>
+                <select id="twofa-method-select" class="form-control" style="width:100%;">
+                  <option value="email">Email</option>
+                  <option value="telegram">Telegram</option>
+                </select>
+              </div>
+              <button type="button" id="twofa-enable-btn" class="btn btn-primary btn-sm">Enable 2FA</button>
+            </div>
+            <div id="twofa-verify-setup" class="hidden" style="margin-top:0.5rem;">
+              <p style="font-size:0.8rem; color:var(--muted); margin-bottom:0.3rem;">Enter the code sent to you:</p>
+              <div style="display:flex; gap:0.3rem;">
+                <input type="text" id="twofa-setup-code" class="form-control" placeholder="6-digit code" maxlength="6" inputmode="numeric" style="flex:1;" />
+                <button type="button" id="twofa-setup-verify-btn" class="btn btn-primary btn-sm">Verify</button>
+              </div>
+            </div>
+          </div>
+          <div id="twofa-disable-section" class="hidden" style="margin-top:0.5rem;">
+            <p style="font-size:0.8rem; color:var(--muted); margin-bottom:0.3rem;">Enter your password to disable 2FA:</p>
+            <div style="display:flex; gap:0.3rem;">
+              <input type="password" id="twofa-disable-password" class="form-control" placeholder="Password" style="flex:1;" />
+              <button type="button" id="twofa-disable-btn" class="btn btn-ghost btn-sm" style="color:var(--danger);">Disable</button>
+            </div>
           </div>
         </fieldset>
       </div>

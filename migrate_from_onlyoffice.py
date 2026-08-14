@@ -207,16 +207,17 @@ def _migrate_users(conn, portal: str, token: str) -> int:
             crm_id = str(u.get("id") or u.get("ID") or "")
 
             cur.execute(
-                """INSERT INTO users (email, external_user_id, display_name, first_name, last_name, is_admin, must_change_password)
-                   VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+                """INSERT INTO users (email, external_user_id, display_name, first_name, last_name, is_admin, role, must_change_password)
+                   VALUES (%s, %s, %s, %s, %s, %s, CASE WHEN %s THEN 'admin' ELSE 'member' END, TRUE)
                    ON CONFLICT (email) DO UPDATE SET
                        external_user_id = EXCLUDED.external_user_id,
                        display_name = EXCLUDED.display_name,
                        first_name = EXCLUDED.first_name,
                        last_name = EXCLUDED.last_name,
-                       is_admin = EXCLUDED.is_admin
+                       is_admin = EXCLUDED.is_admin,
+                       role = CASE WHEN EXCLUDED.is_admin THEN 'admin' ELSE 'member' END
                    RETURNING id""",
-                (email, crm_id, display_name, first_name, last_name, is_admin),
+                (email, crm_id, display_name, first_name, last_name, is_admin, is_admin),
             )
             v3_id = cur.fetchone()[0]
             if crm_id:

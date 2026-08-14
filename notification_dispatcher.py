@@ -359,8 +359,6 @@ def _process_telegram(notification_id: int, user_id: int, row: dict,
 def _process_email(notification_id: int, user_id: int, row: dict,
                     project_title: str, actor_name: str, project_id: int | None) -> None:
     """Handle email delivery for a single notification."""
-    from smtp_client import send_email as _send_email
-
     email_pref = _get_email_pref(user_id)
     if email_pref != "immediate":
         _mark_email_sent(notification_id)
@@ -379,11 +377,73 @@ def _process_email(notification_id: int, user_id: int, row: dict,
     branding = _get_branding()
     from_name = branding.get("email_from_name")
 
-    success = _send_email(user_email, subject, html, from_name_override=from_name)
+    # Try CRM mail account first, fall back to env vars
+    smtp_acct = _get_crm_smtp_account()
+    if smtp_acct:
+        from smtp_client import send_email_from_account
+        use_oauth = bool(smtp_acct.get("oauth_provider") and smtp_acct.get("oauth_access_token")
+                         and not smtp_acct.get("smtp_password_encrypted"))
+        success, err = send_email_from_account(
+            smtp_host=smtp_acct.get("smtp_host") or "",
+            smtp_port=int(smtp_acct.get("smtp_port") or 587),
+            smtp_user=smtp_acct.get("smtp_user") or smtp_acct.get("email", ""),
+            smtp_password=smtp_acct.get("smtp_password_encrypted") or "",
+            from_name=from_name or "Sietch CRM",
+            from_addr=smtp_acct.get("email", ""),
+            to_addr=user_email,
+            subject=subject,
+            html_body=html,
+            oauth_provider=smtp_acct["oauth_provider"] if use_oauth else None,
+            oauth_access_token=smtp_acct["oauth_access_token"] if use_oauth else None,
+        )
+        if not success:
+            logger.warning("CRM SMTP error for notification %s to %s: %s", notification_id, user_email, err)
+    else:
+        from smtp_client import send_email as _send_email
+        success = _send_email(user_email, subject, html, from_name_override=from_name)
+
     if success:
         _mark_email_sent(notification_id)
     else:
         logger.warning("Failed to send email notification %s to %s", notification_id, user_email)
+
+
+def _get_crm_smtp_account() -> dict | None:
+    """Find CRM mail account for system notification emails."""
+    try:
+        from db import query_one
+        row = query_one(
+            """SELECT email, smtp_host, smtp_port, smtp_user, smtp_password_encrypted,
+                      oauth_provider, oauth_access_token, oauth_refresh_token, oauth_token_expires
+               FROM mail_accounts WHERE is_crm_mail = TRUE AND smtp_host IS NOT NULL
+               ORDER BY id LIMIT 1"""
+        )
+        if not row:
+            return None
+        acct = dict(row)
+        # Refresh OAuth token if expired
+        if acct.get("oauth_provider") and acct.get("oauth_refresh_token"):
+            from datetime import datetime, timezone
+            expires = acct.get("oauth_token_expires")
+            if expires and expires < datetime.now(timezone.utc):
+                import oauth_providers
+                prov = oauth_providers.get_provider(acct["oauth_provider"])
+                tok = prov.refresh_token(acct["oauth_refresh_token"])
+                if tok and tok.get("access_token"):
+                    acct["oauth_access_token"] = tok["access_token"]
+                    new_refresh = tok.get("refresh_token", acct["oauth_refresh_token"])
+                    new_expires = tok.get("expires_in", 3600)
+                    import time as _time
+                    from db import execute
+                    execute(
+                        "UPDATE mail_accounts SET oauth_access_token = %s, oauth_refresh_token = %s, "
+                        "oauth_token_expires = to_timestamp(%s) WHERE email = %s",
+                        (tok["access_token"], new_refresh, int(_time.time()) + new_expires, acct["email"]),
+                    )
+        return acct
+    except Exception:
+        logger.debug("Could not load CRM mail account for notifications", exc_info=True)
+        return None
 
 
 def _user_telegram_enabled(user_id: int) -> bool:
