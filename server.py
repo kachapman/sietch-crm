@@ -281,6 +281,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 PHOTO_STORAGE_PATH = Path(os.getenv("PHOTO_STORAGE_PATH", str(DATA_DIR / "photos")))
 DOCUMENT_STORAGE_PATH = Path(os.getenv("DOCUMENT_STORAGE_PATH", str(DATA_DIR / "documents")))
 AVATAR_STORAGE_PATH = Path(os.getenv("AVATAR_STORAGE_PATH", str(DATA_DIR / "avatars")))
+CONTACT_PHOTO_STORAGE_PATH = Path(os.getenv("CONTACT_PHOTO_STORAGE_PATH", str(DATA_DIR / "contact-photos")))
 DOCS_JWT_SECRET = os.environ.get("DOCS_JWT_SECRET", "")
 DOCS_INTERNAL_URL = os.environ.get("DOCS_INTERNAL_URL", "").rstrip("/")
 DOCS_PUBLIC_URL = os.environ.get("DOCS_PUBLIC_URL", "").rstrip("/")
@@ -512,6 +513,10 @@ except Exception:
     pass
 try:
     db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS retention_days INTEGER DEFAULT 90")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE history_events ADD COLUMN IF NOT EXISTS contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE")
 except Exception:
     pass
 
@@ -1900,7 +1905,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if m:
             self._handle_calendar_source_sync(int(m.group(1)))
             return
-        if api_path == "/api/v2/calendar/sync-all" and method == "POST":
+        if api_path == "/api/v2/calendar/sync-all":
             self._handle_calendar_sync_all()
             return
 
@@ -1970,6 +1975,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/contacts":
             self._handle_contacts_get(qs)
             return
+        if api_path == "/api/v2/contacts/count":
+            self._handle_contacts_count(qs)
+            return
         if api_path == "/api/v2/tasks":
             self._handle_tasks_get(qs)
             return
@@ -1990,11 +1998,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_avatar_get()
             return
         m = re.match(r"^/api/v2/users/(\d+)/avatar$", api_path)
-        if m and method == "GET":
+        if m:
             self._handle_user_avatar_get(int(m.group(1)))
             return
         m = re.match(r"^/api/v2/users/(\d+)/sessions$", api_path)
-        if m and method == "GET":
+        if m:
             self._handle_user_sessions_get(int(m.group(1)))
             return
         if api_path == "/api/v2/me/notification-prefs":
@@ -2005,6 +2013,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if api_path == "/api/v2/notifications/unread-count":
             self._handle_notifications_unread_count()
+            return
+        m = re.match(r"^/api/v2/contacts/(\d+)/history$", api_path)
+        if m:
+            self._handle_contact_history_get(int(m.group(1)), qs)
+            return
+        if api_path == "/api/v2/contacts/export":
+            self._handle_contacts_export()
+            return
+        m = re.match(r"^/api/v2/contacts/(\d+)/photo$", api_path)
+        if m:
+            self._handle_contact_photo_get(int(m.group(1)), qs)
             return
         if api_path == "/api/v2/history-categories":
             self._handle_history_categories_get()
@@ -2521,6 +2540,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             self._handle_sync_pull_email_bodies()
             return
+        if api_path == "/api/v2/admin/sync/pull-contacts" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_sync_pull_contacts()
+            return
 
         # ── Export / Import / Backup (POST) ──
         if api_path == "/api/v2/admin/export/universal" and method == "POST":
@@ -2717,9 +2742,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/contacts" and method == "POST":
             self._handle_contact_create()
             return
+        if api_path == "/api/v2/contacts/import" and method == "POST":
+            self._handle_contacts_import()
+            return
         m = re.match(r"^/api/v2/contacts/(\d+)$", api_path)
         if m and method == "PUT":
             self._handle_contact_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_contact_delete(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/contacts/(\d+)/history$", api_path)
+        if m and method == "POST":
+            self._handle_contact_history_create(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/contacts/(\d+)/photo$", api_path)
+        if m and method == "POST":
+            self._handle_contact_photo_upload(int(m.group(1)))
             return
         if api_path == "/api/v2/tasks" and method == "POST":
             self._handle_task_create()
@@ -3736,16 +3775,43 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         where, params = ["1=1"], []
         if "q" in qs:
-            where.append("(first_name ILIKE %s OR last_name ILIKE %s OR company ILIKE %s OR email ILIKE %s)")
+            where.append("(first_name ILIKE %s OR last_name ILIKE %s OR company ILIKE %s OR email ILIKE %s OR about ILIKE %s OR website ILIKE %s OR contact_type ILIKE %s)")
             q = f"%{qs['q'][0]}%"
-            params.extend([q, q, q, q])
+            params.extend([q, q, q, q, q, q, q])
+        if "type" in qs:
+            t = qs["type"][0].lower()
+            if t == "company":
+                where.append("is_company = TRUE")
+            elif t == "person":
+                where.append("is_company = FALSE")
+        if "contact_type" in qs:
+            where.append("contact_type = %s")
+            params.append(qs["contact_type"][0])
+        if user.get("role") == "limited":
+            where.append("created_by = %s")
+            params.append(user["id"])
+        limit = min(int(qs.get("count", ["200"])[0]), 500)
+        offset = int(qs.get("startIndex", ["0"])[0])
         rows = db.query(
-            f"SELECT id, first_name, last_name, email, phone, company FROM contacts WHERE {' AND '.join(where)} ORDER BY last_name, first_name LIMIT 200",
-            (*params,),
+            f"""SELECT id, first_name, last_name, email, phone, company, is_company, company_id,
+                       contact_type, website, industry, currency, about, address_street, address_city,
+                       address_state, address_zip, address_country, job_title, onlyoffice_id,
+                       contact_status, avatar_url, mobile_phone, created_at
+                FROM contacts WHERE {' AND '.join(where)}
+                ORDER BY is_company DESC, last_name, first_name
+                LIMIT %s OFFSET %s""",
+            (*params, limit, offset),
         )
         _json_response(self, 200, [
-            {"id": r[0], "firstName": r[1], "lastName": r[2], "email": r[3], "phone": r[4], "company": r[5],
-             "displayName": f"{r[1] or ''} {r[2] or ''}".strip()}
+            {"id": r[0], "firstName": r[1], "lastName": r[2], "email": r[3], "phone": r[4],
+             "company": r[5], "isCompany": r[6], "companyId": r[7],
+             "contactType": r[8], "website": r[9], "industry": r[10],
+             "currency": r[11], "about": r[12], "addressStreet": r[13],
+             "addressCity": r[14], "addressState": r[15], "addressZip": r[16],
+             "addressCountry": r[17], "jobTitle": r[18], "onlyofficeId": r[19],
+             "contactStatus": r[20], "avatarUrl": f"/api/v2/contacts/{r[0]}/photo" if r[21] else None, "mobilePhone": r[22],
+             "createdAt": r[23].isoformat() if r[23] else None,
+             "displayName": (r[5] if r[6] else f"{r[1] or ''} {r[2] or ''}".strip()) or r[3] or "Contact"}
             for r in rows
         ])
 
@@ -3758,11 +3824,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except json.JSONDecodeError:
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
+        is_company = bool(payload.get("isCompany"))
         cid = db.insert_returning(
-            """INSERT INTO contacts (first_name, last_name, email, phone, company, job_title, created_by)
-               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            """INSERT INTO contacts (first_name, last_name, email, phone, mobile_phone, company, company_id,
+               job_title, is_company, contact_type, website, industry, currency, about,
+               address_street, address_city, address_state, address_zip, address_country, created_by)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
             (payload.get("firstName"), payload.get("lastName"), payload.get("email"),
-             payload.get("phone"), payload.get("company"), payload.get("jobTitle"), user["id"]),
+             payload.get("phone"), payload.get("mobilePhone"), payload.get("company"),
+             payload.get("companyId"), payload.get("jobTitle"), is_company,
+             payload.get("contactType"), payload.get("website"), payload.get("industry"),
+             payload.get("currency"), payload.get("about"),
+             payload.get("addressStreet"), payload.get("addressCity"),
+             payload.get("addressState"), payload.get("addressZip"),
+             payload.get("addressCountry"), user["id"]),
         )
         _json_response(self, 201, {"id": cid, "ok": True})
 
@@ -3777,7 +3852,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         sets, params = [], []
         for field, col in [("firstName", "first_name"), ("lastName", "last_name"), ("email", "email"),
-                           ("phone", "phone"), ("company", "company"), ("jobTitle", "job_title")]:
+                           ("phone", "phone"), ("mobilePhone", "mobile_phone"),
+                           ("company", "company"), ("companyId", "company_id"),
+                           ("jobTitle", "job_title"), ("isCompany", "is_company"),
+                           ("contactType", "contact_type"), ("website", "website"),
+                           ("industry", "industry"), ("currency", "currency"),
+                           ("about", "about"), ("addressStreet", "address_street"),
+                           ("addressCity", "address_city"), ("addressState", "address_state"),
+                           ("addressZip", "address_zip"), ("addressCountry", "address_country"),
+                           ("contactStatus", "contact_status"), ("avatarUrl", "avatar_url")]:
             if field in payload:
                 sets.append(f"{col} = %s")
                 params.append(payload[field])
@@ -3785,6 +3868,449 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             params.append(contact_id)
             db.execute(f"UPDATE contacts SET {', '.join(sets)} WHERE id = %s", (*params,))
         _json_response(self, 200, {"ok": True})
+
+    def _handle_contact_delete(self, contact_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        # Check FK references
+        opp_count = db.query_one("SELECT COUNT(*) FROM opportunities WHERE contact_id = %s", (contact_id,))["count"]
+        if opp_count:
+            _json_response(self, 409, {"error": f"Cannot delete: {opp_count} deal(s) reference this contact"})
+            return
+        person_count = db.query_one("SELECT COUNT(*) FROM contacts WHERE company_id = %s", (contact_id,))["count"]
+        if person_count:
+            _json_response(self, 409, {"error": f"Cannot delete: {person_count} person(s) linked to this company"})
+            return
+        db.execute("DELETE FROM contacts WHERE id = %s", (contact_id,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_contacts_count(self, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        where, params = ["1=1"], []
+        if "q" in qs:
+            where.append("(first_name ILIKE %s OR last_name ILIKE %s OR company ILIKE %s OR email ILIKE %s OR about ILIKE %s OR website ILIKE %s OR contact_type ILIKE %s)")
+            q = f"%{qs['q'][0]}%"
+            params.extend([q, q, q, q, q, q, q])
+        if "type" in qs:
+            t = qs["type"][0].lower()
+            if t == "company":
+                where.append("is_company = TRUE")
+            elif t == "person":
+                where.append("is_company = FALSE")
+        if "contact_type" in qs:
+            where.append("contact_type = %s")
+            params.append(qs["contact_type"][0])
+        if user.get("role") == "limited":
+            where.append("created_by = %s")
+            params.append(user["id"])
+        row = db.query_one(f"SELECT COUNT(*) FROM contacts WHERE {' AND '.join(where)}", (*params,))
+        _json_response(self, 200, {"count": row["count"] if row else 0})
+
+    def _handle_contacts_export(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query(
+            """SELECT id, is_company, first_name, last_name, company, contact_type, email, phone,
+                      mobile_phone, website, industry, currency, about, contact_status,
+                      address_street, address_city, address_state, address_zip, address_country,
+                      job_title, onlyoffice_id, created_at
+               FROM contacts ORDER BY is_company DESC, last_name, first_name"""
+        )
+        import io, csv
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["id", "is_company", "first_name", "last_name", "company", "contact_type",
+                         "email", "phone", "mobile_phone", "website", "industry", "currency",
+                         "about", "contact_status", "address_street", "address_city",
+                         "address_state", "address_zip", "address_country", "job_title",
+                         "onlyoffice_id", "created_at"])
+        for r in rows:
+            writer.writerow([r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8],
+                             r[9], r[10], r[11], r[12], r[13], r[14], r[15], r[16],
+                             r[17], r[18], r[19], r[20],
+                             r[21].isoformat() if r[21] else ""])
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition", "attachment; filename=\"contacts_export.csv\"")
+        self.end_headers()
+        self.wfile.write(buf.getvalue().encode("utf-8"))
+
+    def _handle_contacts_import(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        csv_text = str(payload.get("csv") or "").strip()
+        if not csv_text:
+            _json_response(self, 400, {"error": "No CSV data provided"})
+            return
+        import io, csv
+        reader = csv.DictReader(io.StringIO(csv_text))
+        created = 0
+        skipped = 0
+        errors = []
+        for idx, row in enumerate(reader):
+            try:
+                # Auto-detect column mappings
+                first = row.get("First Name") or row.get("first_name") or ""
+                last = row.get("Last Name") or row.get("last_name") or ""
+                company = row.get("Company Name") or row.get("company") or ""
+                email = (row.get("Email (work)") or row.get("Email (home)") or row.get("Email (other)")
+                         or row.get("email") or "")
+                phone = (row.get("Phone (work)") or row.get("Phone (mobile)") or row.get("Phone (home)")
+                         or row.get("phone") or "")
+                contact_type = row.get("Contact Type") or row.get("contact_type") or ""
+                is_company = bool(company.strip()) and not first.strip() and not last.strip()
+                first = first.strip() or None
+                last = last.strip() or None
+                company = company.strip() or None
+                email = email.strip() or None
+                phone = phone.strip() or None
+                contact_type = contact_type.strip() or None
+                db.insert_returning(
+                    """INSERT INTO contacts (first_name, last_name, company, email, phone, contact_type,
+                       is_company, created_by)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                    (first, last, company, email, phone, contact_type, is_company, user["id"]),
+                )
+                created += 1
+            except Exception as e:
+                errors.append(f"Row {idx+1}: {str(e)}")
+        _json_response(self, 200, {"created": created, "skipped": skipped, "errors": errors})
+
+    def _handle_contact_history_get(self, contact_id: int, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        limit = min(int(qs.get("count", ["50"])[0]), 200)
+        offset = int(qs.get("startIndex", ["0"])[0])
+        rows = db.query(
+            """SELECT he.id, he.category_id, hc.title, hc.display_color, he.title, he.content,
+                      he.created_by, he.created_at, he.backdated_created_at, u.display_name
+               FROM history_events he
+               LEFT JOIN history_categories hc ON he.category_id = hc.id
+               LEFT JOIN users u ON he.created_by = u.id
+               WHERE he.contact_id = %s
+               ORDER BY COALESCE(he.backdated_created_at, he.created_at) DESC
+               LIMIT %s OFFSET %s""",
+            (contact_id, limit, offset),
+        )
+        events = []
+        for r in rows:
+            events.append({
+                "id": r[0], "categoryId": r[1],
+                "category": {"title": r[2], "color": r[3]} if r[2] else None,
+                "title": r[4], "content": r[5],
+                "createdBy": r[6],
+                "created": r[7].isoformat() if r[7] else None,
+                "backdatedCreated": r[8].isoformat() if r[8] else None,
+                "author": r[9],
+            })
+        _json_response(self, 200, events)
+
+    def _handle_contact_history_create(self, contact_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        content = str(payload.get("content") or "").strip()
+        category_id = payload.get("categoryId") or 1
+        backdated = str(payload.get("created") or "").strip() or None
+        event_id = db.insert_returning(
+            """INSERT INTO history_events (contact_id, category_id, content, created_by, backdated_created_at)
+               VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+            (contact_id, category_id, content, user["id"], backdated),
+        )
+        # Insert notify users
+        notify_list = payload.get("notifyUserList") or []
+        for uid in notify_list:
+            try:
+                db.execute(
+                    "INSERT INTO history_notify_users (event_id, user_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (event_id, int(uid)),
+                )
+            except (TypeError, ValueError):
+                pass
+        _json_response(self, 201, {"id": event_id, "ok": True})
+
+    def _handle_contact_photo_get(self, contact_id: int, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        row = db.query_one("SELECT avatar_url FROM contacts WHERE id = %s", (contact_id,))
+        if not row or not row["avatar_url"]:
+            self.send_response(404)
+            self.end_headers()
+            return
+        base = Path(row["avatar_url"]).parent
+        is_thumb = qs.get("thumbnail", ["0"])[0] == "1"
+        filename = "thumb_photo.jpg" if is_thumb else "photo.jpg"
+        photo_path = base / filename
+        if not photo_path.exists():
+            # Fallback to full-size
+            photo_path = base / "photo.jpg"
+        if not photo_path.exists():
+            self.send_response(404)
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Cache-Control", "private, max-age=86400")
+        self.end_headers()
+        self.wfile.write(photo_path.read_bytes())
+
+    def _handle_contact_photo_upload(self, contact_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        content_type = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in content_type:
+            _json_response(self, 400, {"error": "Expected multipart/form-data"})
+            return
+        boundary = content_type.split("boundary=")[-1].encode()
+        body = _read_body(self)
+        if not body:
+            _json_response(self, 400, {"error": "Empty body"})
+            return
+        # Parse multipart manually (simple approach)
+        parts = body.split(b"--" + boundary)
+        file_data = None
+        filename = ""
+        for part in parts:
+            if b"filename=" not in part:
+                continue
+            header_end = part.find(b"\r\n\r\n")
+            if header_end == -1:
+                continue
+            header = part[:header_end].decode("utf-8", errors="replace")
+            data = part[header_end + 4:]
+            if data.endswith(b"\r\n"):
+                data = data[:-2]
+            # Extract filename
+            for token in header.split(";"):
+                if "filename=" in token:
+                    filename = token.split("filename=")[-1].strip('" ')
+            if filename:
+                file_data = data
+                break
+        if not file_data:
+            _json_response(self, 400, {"error": "No file uploaded"})
+            return
+        # Validate size (5MB max)
+        if len(file_data) > 5 * 1024 * 1024:
+            _json_response(self, 400, {"error": "File too large (max 5MB)"})
+            return
+        # Validate type by checking magic bytes
+        is_jpeg = file_data[:2] == b"\xff\xd8"
+        is_png = file_data[:4] == b"\x89PNG"
+        if not is_jpeg and not is_png:
+            _json_response(self, 400, {"error": "Only JPG and PNG files are supported"})
+            return
+        # Save to disk
+        photo_dir = CONTACT_PHOTO_STORAGE_PATH / str(contact_id)
+        photo_dir.mkdir(parents=True, exist_ok=True)
+        photo_path = photo_dir / "photo.jpg"
+        thumb_path = photo_dir / "thumb_photo.jpg"
+        try:
+            from PIL import Image as PILImage
+            import io
+            img = PILImage.open(io.BytesIO(file_data))
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB", palette=PILImage.ADAPTIVE)
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+            # Full size (max 400x400)
+            img.thumbnail((400, 400), PILImage.LANCZOS)
+            img.save(str(photo_path), "JPEG", quality=92)
+            # Thumbnail (96x96)
+            thumb = img.copy()
+            thumb.thumbnail((96, 96), PILImage.LANCZOS)
+            thumb.save(str(thumb_path), "JPEG", quality=88)
+        except ImportError:
+            # Pillow not available — save raw
+            photo_path.write_bytes(file_data)
+        # Update DB
+        rel_path = str(photo_path.relative_to(ROOT))
+        db.execute("UPDATE contacts SET avatar_url = %s WHERE id = %s", (rel_path, contact_id))
+        _json_response(self, 200, {"ok": True, "avatarUrl": f"/api/v2/contacts/{contact_id}/photo"})
+
+    def _handle_sync_pull_contacts(self) -> None:
+        global _sync_log, _sync_running
+        if _sync_running:
+            _json_response(self, 409, {"error": "Sync already running"})
+            return
+        _sync_running = True
+        _sync_log.clear()
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            portal = payload.get("portal_url", "").strip()
+            email = payload.get("email", "").strip()
+            password = payload.get("password", "").strip()
+            if not portal or not email or not password:
+                _json_response(self, 400, {"error": "portal_url, email, and password required"})
+                _sync_running = False
+                return
+            _append_sync_log("info", "Authenticating to OnlyOffice CRM...")
+            token = _crm_authenticate(portal, email, password)
+            if not token:
+                _json_response(self, 400, {"error": "Authentication failed"})
+                _sync_running = False
+                return
+
+            # Build onlyoffice_id → local_id map for existing contacts
+            existing_oo_ids = {}
+            for row in db.query("SELECT id, onlyoffice_id FROM contacts WHERE onlyoffice_id IS NOT NULL"):
+                existing_oo_ids[str(row[1])] = row[0]
+
+            _append_sync_log("info", "Fetching contacts from OnlyOffice...")
+            start = 0
+            page_size = 500
+            all_contacts = []
+            while True:
+                sep = "&" if "?" in "/api/2.0/crm/contact" else "?"
+                path = f"/api/2.0/crm/contact{sep}count={page_size}&startIndex={start}"
+                data = _unwrap(_crm_api_get(portal, token, path))
+                if not isinstance(data, list) or not data:
+                    break
+                all_contacts.extend(data)
+                if len(data) < page_size:
+                    break
+                start += page_size
+
+            _append_sync_log("info", f"Total contacts to sync: {len(all_contacts)}")
+            created = 0
+            skipped = 0
+            errors = 0
+            start_time = time.time()
+
+            # First pass: insert all contacts
+            oo_id_to_local = {}
+            for c in all_contacts:
+                if not isinstance(c, dict):
+                    continue
+                oo_id = str(c.get("id") or "")
+                if oo_id in existing_oo_ids:
+                    oo_id_to_local[oo_id] = existing_oo_ids[oo_id]
+                    skipped += 1
+                    continue
+                is_company = bool(c.get("isCompany", False))
+                first_name = str(c.get("firstName") or "").strip() or None
+                last_name = str(c.get("lastName") or "").strip() or None
+                company_name = str(c.get("companyName") or "").strip() or None
+
+                # Extract email
+                common_data = c.get("commonData") or []
+                email = None
+                for item in common_data:
+                    if item.get("infoType") == 1 and item.get("isPrimary"):
+                        email = str(item.get("data") or "").strip() or None
+                        break
+                if not email:
+                    for item in common_data:
+                        if item.get("infoType") == 1:
+                            email = str(item.get("data") or "").strip() or None
+                            break
+
+                # Extract phone
+                phone = None
+                for item in common_data:
+                    if item.get("infoType") == 0 and item.get("isPrimary"):
+                        phone = str(item.get("data") or "").strip() or None
+                        break
+                if not phone:
+                    for item in common_data:
+                        if item.get("infoType") == 0:
+                            phone = str(item.get("data") or "").strip() or None
+                            break
+
+                # Extract website
+                website = None
+                for item in common_data:
+                    if item.get("infoType") == 2:
+                        website = str(item.get("data") or "").strip() or None
+                        break
+
+                # Extract address
+                addresses = c.get("addresses") or []
+                addr = {}
+                for a in addresses:
+                    if a.get("isPrimary"):
+                        addr = a
+                        break
+                if not addr and addresses:
+                    addr = addresses[0]
+
+                about = str(c.get("about") or "").strip() or None
+                industry = str(c.get("industry") or "").strip() or None
+                currency = str(c.get("currency") or "").strip() or None
+                contact_status = None
+                cs = c.get("contactStatus")
+                if isinstance(cs, dict):
+                    contact_status = str(cs.get("title") or "").strip() or None
+                avatar_url = str(c.get("smallFotoUrl") or "").strip() or None
+
+                try:
+                    local_id = db.insert_returning(
+                        """INSERT INTO contacts (first_name, last_name, company, email, phone, is_company,
+                           contact_type, website, industry, currency, about, contact_status, avatar_url,
+                           onlyoffice_id, address_street, address_city, address_state, address_zip,
+                           address_country, created_by)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                           RETURNING id""",
+                        (first_name, last_name, company_name, email, phone, is_company,
+                         None, website, industry, currency, about, contact_status, avatar_url,
+                         oo_id,
+                         str(addr.get("street") or "").strip() or None,
+                         str(addr.get("city") or "").strip() or None,
+                         str(addr.get("state") or "").strip() or None,
+                         str(addr.get("zip") or "").strip() or None,
+                         str(addr.get("country") or "").strip() or None,
+                         user["id"]),
+                    )
+                    oo_id_to_local[oo_id] = local_id
+                    created += 1
+                except Exception as e:
+                    _append_sync_log("error", f"Failed to create contact {oo_id}: {e}")
+                    errors += 1
+
+            # Second pass: resolve person→company linkage
+            for c in all_contacts:
+                if not isinstance(c, dict):
+                    continue
+                if c.get("isCompany"):
+                    continue
+                oo_id = str(c.get("id") or "")
+                local_id = oo_id_to_local.get(oo_id)
+                if not local_id:
+                    continue
+                company_obj = c.get("company")
+                if isinstance(company_obj, dict):
+                    comp_oo_id = str(company_obj.get("id") or "")
+                    comp_local_id = oo_id_to_local.get(comp_oo_id)
+                    if comp_local_id:
+                        db.execute("UPDATE contacts SET company_id = %s, company = COALESCE(company, %s) WHERE id = %s",
+                                   (comp_local_id, str(company_obj.get("displayName") or "").strip() or None, local_id))
+
+            elapsed = round(time.time() - start_time, 1)
+            _append_sync_log("info", f"Contacts sync complete: {created} created, {skipped} skipped, {errors} errors in {elapsed}s")
+            _json_response(self, 200, {"created": created, "skipped": skipped, "errors": errors, "elapsed": elapsed})
+        except Exception as e:
+            _append_sync_log("error", f"Sync failed: {e}")
+            _json_response(self, 500, {"error": str(e)})
+        finally:
+            _sync_running = False
 
     # ── Tasks ───────────────────────────────────────────────────────────────
 

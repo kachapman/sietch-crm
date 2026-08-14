@@ -1911,6 +1911,10 @@
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
           <span>Projects</span>
         </button>
+        <button type="button" class="search-popup-tab search-popup-tab-contacts" data-tab="contacts" title="Contacts">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          <span>Contacts</span>
+        </button>
       </div>
 
       <!-- Projects tab content -->
@@ -1972,6 +1976,30 @@
         </div>
         <div id="search-popup-results" class="search-popup-results"></div>
         <div id="search-popup-error" class="search-popup-error hidden"></div>
+      </div>
+
+      <!-- Contacts tab content -->
+      <div class="search-popup-tab-content" data-tab-content="contacts" style="display:none;">
+        <div class="search-popup-input-wrap">
+          <input type="search" id="search-popup-contacts-input" class="search-popup-input" placeholder="Search contacts by name, email, company..." autocomplete="off" />
+        </div>
+        <div class="search-popup-filter-bar">
+          <select id="search-popup-contacts-type-filter" class="search-popup-filter-select">
+            <option value="">All Types</option>
+            <option value="company">Companies</option>
+            <option value="person">Persons</option>
+          </select>
+          <select id="search-popup-contacts-contact-type-filter" class="search-popup-filter-select">
+            <option value="">All Contact Types</option>
+            <option value="Customer">Customer</option>
+            <option value="Supplier">Supplier</option>
+            <option value="Subcontractor">Subcontractor</option>
+          </select>
+          <button type="button" id="search-popup-contacts-clear-filters" class="btn btn-ghost btn-sm">Clear</button>
+        </div>
+        <div id="search-popup-contacts-results-count" style="font-size:0.8rem; color:var(--muted); padding:0.25rem 0;"></div>
+        <div id="search-popup-contacts-results" class="search-popup-results"></div>
+        <div id="search-popup-contacts-error" class="search-popup-error hidden"></div>
       </div>
 
       <!-- Preview tab containers injected dynamically -->
@@ -2072,6 +2100,7 @@
               <button id="sync-tags-btn" class="btn btn-primary">Pull Tag Definitions</button>
               <button id="sync-tasks-btn" class="btn btn-primary">Pull Tasks</button>
               <button id="sync-email-bodies-btn" class="btn btn-primary">Pull Email Bodies</button>
+              <button id="sync-contacts-btn" class="btn btn-primary">Pull Contacts</button>
               <button id="sync-full-btn" class="btn">Full Reconcile</button>
             </div>
             <div id="sync-status" style="margin-top:0.5rem; font-size:0.85rem; color:var(--muted);"></div>
@@ -2218,28 +2247,166 @@
               </div>
             </div>
             <div id="admin-tab-contacts" class="admin-tab-content hidden">
-             <p class="modal-message">Contacts (imported from OO for use in deals, bot modal, previews, etc.).</p>
-             <div style="margin-bottom:0.5rem;">
-               <input type="text" id="admin-contacts-search" placeholder="Search name, email, company..." style="width:100%; padding:0.4rem; font-size:0.85rem;" />
-             </div>
-             <div id="admin-contacts-list" style="max-height:240px; overflow:auto; border:1px solid var(--border); padding:0.25rem; font-size:0.85rem;"></div>
-             <div style="margin-top:0.5rem;">
-               <button type="button" id="admin-add-contact" class="btn btn-secondary btn-small">+ Add Contact</button>
-             </div>
-             <div id="admin-contact-form" style="display:none; margin-top:0.5rem; padding:0.5rem; border:1px solid var(--border);">
-               <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.25rem; font-size:0.8rem;">
-                 <input id="admin-contact-first" placeholder="First name" />
-                 <input id="admin-contact-last" placeholder="Last name" />
-                 <input id="admin-contact-email" placeholder="Email" />
-                 <input id="admin-contact-phone" placeholder="Phone" />
-                 <input id="admin-contact-company" placeholder="Company" style="grid-column:span 2;" />
+             <!-- List View -->
+             <div id="admin-contacts-list-view">
+               <div class="admin-contacts-toolbar">
+                 <div class="admin-contacts-filter" id="admin-contacts-filter">
+                   <button type="button" class="admin-contacts-filter-btn active" data-filter="all">All</button>
+                   <button type="button" class="admin-contacts-filter-btn" data-filter="company">Companies</button>
+                   <button type="button" class="admin-contacts-filter-btn" data-filter="person">Persons</button>
+                 </div>
+                 <input type="search" id="admin-contacts-search" placeholder="Search contacts..." />
                </div>
-               <div style="margin-top:0.25rem;">
-                 <button type="button" id="admin-contact-save" class="btn btn-primary btn-small">Save</button>
-                 <button type="button" id="admin-contact-cancel" class="btn btn-ghost btn-small">Cancel</button>
+               <div class="admin-contacts-toolbar" style="margin-top:0.35rem;">
+                 <label style="font-size:0.8rem; color:var(--muted);">Contact Type:
+                   <select id="admin-contacts-type-filter" style="padding:0.2rem; font-size:0.8rem;">
+                     <option value="">All Types</option>
+                     <option value="Customer">Customer</option>
+                     <option value="Supplier">Supplier</option>
+                     <option value="Subcontractor">Subcontractor</option>
+                   </select>
+                 </label>
+                 <div style="margin-left:auto; display:flex; gap:0.35rem;">
+                   <button type="button" id="admin-add-company-btn" class="btn btn-primary btn-small">+ Add Company</button>
+                   <button type="button" id="admin-add-person-btn" class="btn btn-primary btn-small">+ Add Person</button>
+                   <button type="button" id="admin-import-contacts-btn" class="btn btn-secondary btn-small">Import CSV</button>
+                   <button type="button" id="admin-export-contacts-btn" class="btn btn-secondary btn-small">Export CSV</button>
+                 </div>
+               </div>
+               <div id="admin-contacts-results-count" style="font-size:0.75rem; color:var(--muted); padding:0.2rem 0;"></div>
+               <div id="admin-contacts-list" class="admin-contacts-list"></div>
+             </div>
+             <!-- Detail View (hidden by default) -->
+             <div id="admin-contacts-detail-view" style="display:none;">
+               <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
+                 <button type="button" id="admin-contacts-back" class="btn btn-ghost btn-small">&larr; Back</button>
+                 <span id="admin-contacts-detail-title" style="font-weight:600; font-size:1rem;"></span>
+                 <div style="margin-left:auto; display:flex; gap:0.35rem;">
+                   <button type="button" id="admin-contact-save" class="btn btn-primary btn-small">Save</button>
+                   <button type="button" id="admin-contact-delete" class="btn btn-danger btn-small">Delete</button>
+                 </div>
+                </div>
+                <div class="contact-photo-upload" id="admin-contact-photo-area" style="text-align:center; margin-bottom:0.5rem;">
+                  <div class="contact-detail-avatar" id="admin-contact-avatar-display" style="width:80px;height:80px;border-radius:50%;background:var(--bg-elevated);display:inline-flex;align-items:center;justify-content:center;font-size:1.5rem;font-weight:600;color:var(--muted);cursor:pointer;overflow:hidden;">
+                    <span id="admin-contact-avatar-initials">?</span>
+                    <img id="admin-contact-avatar-img" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%;" />
+                  </div>
+                  <input type="file" id="admin-contact-photo-input" accept="image/jpeg,image/png" style="display:none;" />
+                  <div style="font-size:0.7rem;color:var(--muted);margin-top:0.2rem;">Click to upload photo (JPG/PNG, max 5MB)</div>
+                </div>
+                <div id="admin-contact-form" class="admin-contact-form">
+                 <input type="hidden" id="admin-contact-editing-id" />
+                 <input type="hidden" id="admin-contact-is-company" value="false" />
+                 <div class="contact-form-section">
+                   <label>Contact Type
+                     <div style="display:flex; gap:0.35rem; align-items:center;">
+                       <select id="admin-contact-type" style="flex:1;">
+                         <option value="">None</option>
+                         <option value="Customer">Customer</option>
+                         <option value="Supplier">Supplier</option>
+                         <option value="Subcontractor">Subcontractor</option>
+                         <option value="custom">Custom...</option>
+                       </select>
+                       <input id="admin-contact-custom-type" placeholder="Custom type" style="display:none; flex:1;" />
+                     </div>
+                   </label>
+                 </div>
+                 <div id="admin-contact-company-fields" class="contact-form-section">
+                   <label>Company Name <input id="admin-contact-company-name" placeholder="Company Name" /></label>
+                 </div>
+                 <div id="admin-contact-person-fields" class="contact-form-section" style="display:none;">
+                   <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.35rem;">
+                     <label>First Name <input id="admin-contact-first" placeholder="First name" /></label>
+                     <label>Last Name <input id="admin-contact-last" placeholder="Last name" /></label>
+                   </div>
+                   <label>Job Title <input id="admin-contact-job-title" placeholder="Job title" /></label>
+                   <label>Linked Company
+                     <input id="admin-contact-company-link" placeholder="Search company..." autocomplete="off" />
+                     <input type="hidden" id="admin-contact-company-link-id" />
+                   </label>
+                 </div>
+                 <div class="contact-form-section">
+                   <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.35rem;">
+                     <label>Email <input id="admin-contact-email" type="email" placeholder="Email" /></label>
+                     <label>Phone <input id="admin-contact-phone" placeholder="Phone" /></label>
+                   </div>
+                   <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.35rem;">
+                     <label>Mobile <input id="admin-contact-mobile" placeholder="Mobile phone" /></label>
+                     <label>Website <input id="admin-contact-website" placeholder="Website" /></label>
+                   </div>
+                   <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:0.35rem;">
+                     <label>Industry <input id="admin-contact-industry" placeholder="Industry" /></label>
+                     <label>Currency <input id="admin-contact-currency" placeholder="USD" /></label>
+                     <label>Status
+                       <select id="admin-contact-status">
+                         <option value="">None</option>
+                         <option value="Hot">Hot</option>
+                         <option value="Cold">Cold</option>
+                       </select>
+                     </label>
+                   </div>
+                 </div>
+                 <div class="contact-form-section">
+                   <label>Street <input id="admin-contact-address-street" placeholder="Street address" /></label>
+                   <div style="display:grid; grid-template-columns:2fr 1fr 1fr 1fr; gap:0.35rem;">
+                     <label>City <input id="admin-contact-address-city" placeholder="City" /></label>
+                     <label>State <input id="admin-contact-address-state" placeholder="State" /></label>
+                     <label>ZIP <input id="admin-contact-address-zip" placeholder="ZIP" /></label>
+                     <label>Country <input id="admin-contact-address-country" placeholder="Country" /></label>
+                   </div>
+                 </div>
+                 <div class="contact-form-section">
+                   <label>Description
+                     <textarea id="admin-contact-about" rows="3" placeholder="Notes / description"></textarea>
+                   </label>
+                 </div>
+               </div>
+               <!-- History Section -->
+               <div id="admin-contact-history-section" style="margin-top:0.75rem; border-top:1px solid var(--border); padding-top:0.75rem;">
+                 <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
+                   <span style="font-weight:600;">History & Notes</span>
+                   <button type="button" id="admin-contact-history-toggle" class="btn btn-ghost btn-small">+ Add Note</button>
+                 </div>
+                 <div id="admin-contact-history-editor" style="display:none;">
+                   <div style="display:flex; gap:0.35rem; margin-bottom:0.35rem;">
+                     <select id="admin-contact-history-category" style="font-size:0.8rem;">
+                       <option value="1">Note</option>
+                       <option value="2">Call</option>
+                       <option value="3">Meeting</option>
+                       <option value="4">Email</option>
+                       <option value="6">Text Message</option>
+                     </select>
+                     <input type="date" id="admin-contact-history-date" style="font-size:0.8rem;" />
+                   </div>
+                   <div id="admin-contact-history-body" class="note-editor" contenteditable="true" data-placeholder="Write a note..." style="min-height:80px;"></div>
+                   <div style="margin-top:0.35rem; display:flex; gap:0.35rem;">
+                     <button type="button" id="admin-contact-history-submit" class="btn btn-primary btn-small">Add This Event</button>
+                     <button type="button" id="admin-contact-history-cancel" class="btn btn-ghost btn-small">Cancel</button>
+                   </div>
+                 </div>
+                 <div id="admin-contact-history-list" class="admin-contact-history-list"></div>
                </div>
              </div>
-              <p style="font-size:0.7rem;color:var(--muted);margin-top:0.25rem;">Full CRUD later; current for import preservation.</p>
+             <!-- Import CSV Modal -->
+             <div id="admin-contacts-import-modal" class="modal hidden" style="position:fixed; top:0; left:0; right:0; bottom:0; z-index:1000;">
+               <div class="modal-backdrop" style="background:rgba(0,0,0,0.5);"></div>
+               <div class="modal-card" style="max-width:600px; margin:5vh auto; max-height:90vh; overflow:auto;">
+                 <div style="padding:1rem; border-bottom:1px solid var(--border); display:flex; align-items:center;">
+                   <span style="font-weight:600;">Import Contacts from CSV</span>
+                   <button type="button" class="btn btn-icon-only" id="admin-contacts-import-close" style="margin-left:auto;">&times;</button>
+                 </div>
+                 <div style="padding:1rem;">
+                   <label style="font-size:0.85rem;">Choose CSV file:<br>
+                     <input type="file" id="admin-contacts-import-file" accept=".csv" style="margin-top:0.25rem;" />
+                   </label>
+                   <div id="admin-contacts-import-preview" style="margin-top:0.5rem; font-size:0.8rem; max-height:200px; overflow:auto;"></div>
+                   <div style="margin-top:0.5rem; display:flex; gap:0.35rem;">
+                     <button type="button" id="admin-contacts-import-confirm" class="btn btn-primary btn-small" disabled>Import</button>
+                     <button type="button" id="admin-contacts-import-cancel" class="btn btn-ghost btn-small">Cancel</button>
+                   </div>
+                 </div>
+               </div>
+             </div>
             </div>
            <div id="admin-tab-branding" class="admin-tab-content hidden">
             <p class="modal-message">Customize how your company appears in the dashboard and login screen.</p>

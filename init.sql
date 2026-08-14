@@ -859,4 +859,40 @@ CREATE TABLE IF NOT EXISTS minimized_modal_state (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
+-- ============================================================================
+-- 7.20 Contacts: Company/Person distinction, contact types, OnlyOffice sync
+-- ============================================================================
+
+ALTER TABLE contacts
+  ADD COLUMN IF NOT EXISTS is_company BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS company_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS contact_type TEXT,
+  ADD COLUMN IF NOT EXISTS website TEXT,
+  ADD COLUMN IF NOT EXISTS industry TEXT,
+  ADD COLUMN IF NOT EXISTS currency TEXT,
+  ADD COLUMN IF NOT EXISTS about TEXT,
+  ADD COLUMN IF NOT EXISTS address_country TEXT,
+  ADD COLUMN IF NOT EXISTS onlyoffice_id TEXT,
+  ADD COLUMN IF NOT EXISTS contact_status TEXT,
+  ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+
+-- Backfill is_company from existing data pattern:
+-- Companies have first_name=NULL, last_name=NULL, company IS NOT NULL
+UPDATE contacts SET is_company = TRUE
+WHERE first_name IS NULL AND last_name IS NULL AND company IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_contacts_company_id ON contacts(company_id);
+CREATE INDEX IF NOT EXISTS idx_contacts_onlyoffice_id ON contacts(onlyoffice_id);
+CREATE INDEX IF NOT EXISTS idx_contacts_is_company ON contacts(is_company);
+CREATE INDEX IF NOT EXISTS idx_contacts_contact_type ON contacts(contact_type);
+
+-- ============================================================================
+-- 7.21 Contact history: link history_events to contacts
+-- ============================================================================
+
+ALTER TABLE history_events
+  ADD COLUMN IF NOT EXISTS contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE;
+
+CREATE INDEX IF NOT EXISTS idx_history_contact ON history_events(contact_id);
+
 COMMIT;

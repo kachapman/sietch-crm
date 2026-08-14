@@ -23051,6 +23051,11 @@ const SEARCH_POPUP_PAGE_SIZE = 50; // projects per page
 let searchPopupTotal = 0; // total matching projects (from count endpoint)
 let searchPopupQueryAbort = null; // debounce abort controller
 
+// Contacts search state
+let searchPopupContactsQueryAbort = null;
+let searchPopupContactsStartIndex = 0;
+const SEARCH_POPUP_CONTACTS_PAGE_SIZE = 50;
+
 function createCrmOpenLink(oppId, { className = "crm-open-external", title = "Open Project" } = {}) {
   const a = document.createElement("a");
   a.href = crmOpportunityUrl(oppId);
@@ -26118,6 +26123,63 @@ function showActiveModalTriggers() {
   }
 }
 
+// ── Contacts search tab ───────────────────────────────────────────────────
+
+function activateContactsSearchTab() {
+  performSearchContactsQuery();
+  const input = $("#search-popup-contacts-input");
+  if (input) input.focus();
+}
+
+async function performSearchContactsQuery() {
+  const container = $("#search-popup-contacts-results");
+  const countEl = $("#search-popup-contacts-results-count");
+  const errorEl = $("#search-popup-contacts-error");
+  if (!container) return;
+  if (errorEl) errorEl.classList.add("hidden");
+  const input = $("#search-popup-contacts-input");
+  const typeFilter = $("#search-popup-contacts-type-filter");
+  const contactTypeFilter = $("#search-popup-contacts-contact-type-filter");
+  const q = input ? input.value.trim() : "";
+  const type = typeFilter ? typeFilter.value : "";
+  const ct = contactTypeFilter ? contactTypeFilter.value : "";
+  let qs = [];
+  if (q) qs.push(`q=${encodeURIComponent(q)}`);
+  if (type) qs.push(`type=${type}`);
+  if (ct) qs.push(`contact_type=${encodeURIComponent(ct)}`);
+  qs.push(`count=${SEARCH_POPUP_CONTACTS_PAGE_SIZE}`);
+  qs.push(`startIndex=${searchPopupContactsStartIndex}`);
+  try {
+    const data = await api(`/api/v2/contacts?${qs.join("&")}`);
+    const contacts = unwrap(data) || data || [];
+    if (countEl) countEl.textContent = `${contacts.length} contact${contacts.length !== 1 ? 's' : ''}`;
+    container.innerHTML = contacts.map(c => renderSearchContactRow(c)).join("") ||
+      '<div style="padding:1rem; color:var(--muted); text-align:center;">No contacts found.</div>';
+  } catch (e) {
+    if (errorEl) {
+      errorEl.textContent = "Failed to load contacts: " + (e.message || e);
+      errorEl.classList.remove("hidden");
+    }
+  }
+}
+
+function renderSearchContactRow(c) {
+  const initials = ((c.firstName || '')[0] || '') + ((c.lastName || '')[0] || '');
+  const name = c.isCompany ? (c.company || c.displayName) : `${c.firstName || ''} ${c.lastName || ''}`.trim();
+  const typeBadge = c.contactType ? `<span class="contact-type-badge">${escapeHtml(c.contactType)}</span>` : '';
+  const companyLabel = !c.isCompany && c.company ? `<span class="contact-row-company">${escapeHtml(c.company)}</span>` : '';
+  const avatarContent = c.avatarUrl
+    ? `<img src="${escapeHtml(c.avatarUrl)}" alt="" />`
+    : `<span>${escapeHtml(initials || '?')}</span>`;
+  return `<div class="search-popup-contact-row" data-contact-id="${c.id}">
+    <div class="contact-avatar">${avatarContent}</div>
+    <div class="search-popup-contact-info">
+      <div class="search-popup-contact-name">${c.isCompany ? '🏢 ' : '👤 '}${escapeHtml(name || 'Contact')}</div>
+      <div class="search-popup-contact-meta">${typeBadge} ${c.email ? escapeHtml(c.email) : ''} ${c.phone ? escapeHtml(c.phone) : ''} ${companyLabel}</div>
+    </div>
+  </div>`;
+}
+
 function showSearchPopupError(msg) {
   const tabs = document.querySelectorAll("#search-popup-modal .search-popup-tab-content");
   let el = $("#search-popup-error");
@@ -26208,6 +26270,11 @@ function bindSearchPopupModal() {
       const closeEl = e.target.closest(".search-popup-tab-close");
       if (closeEl) {
         const closeId = closeEl.dataset.closeTab;
+        const closeContactId = closeEl.dataset.closeContactTab;
+        if (closeContactId != null) {
+          closeSearchContactTab(Number(closeContactId));
+          return;
+        }
         if (closeId != null) {
           closeSearchPreviewTab(Number(closeId));
           return;
@@ -26253,6 +26320,262 @@ function bindSearchPopupModal() {
   $("#search-popup-batch-apply")?.addEventListener("click", applySearchPopupBatchAction);
   $("#search-popup-batch-export")?.addEventListener("click", exportSearchPopupSelected);
   $("#search-popup-batch-clear")?.addEventListener("click", clearSearchPopupSelection);
+
+  // Contacts search bindings
+  const contactsInput = $("#search-popup-contacts-input");
+  if (contactsInput) {
+    let ct;
+    contactsInput.addEventListener("input", () => {
+      clearTimeout(ct);
+      ct = setTimeout(() => { searchPopupContactsStartIndex = 0; performSearchContactsQuery(); }, 300);
+    });
+    contactsInput.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        searchPopupContactsStartIndex = 0;
+        performSearchContactsQuery();
+      }
+    });
+  }
+  $("#search-popup-contacts-type-filter")?.addEventListener("change", () => { searchPopupContactsStartIndex = 0; performSearchContactsQuery(); });
+  $("#search-popup-contacts-contact-type-filter")?.addEventListener("change", () => { searchPopupContactsStartIndex = 0; performSearchContactsQuery(); });
+  $("#search-popup-contacts-clear-filters")?.addEventListener("click", () => {
+    const input = $("#search-popup-contacts-input");
+    const typeF = $("#search-popup-contacts-type-filter");
+    const ctF = $("#search-popup-contacts-contact-type-filter");
+    if (input) input.value = "";
+    if (typeF) typeF.value = "";
+    if (ctF) ctF.value = "";
+    searchPopupContactsStartIndex = 0;
+    performSearchContactsQuery();
+  });
+  // Contacts row click delegation
+  const contactsResults = $("#search-popup-contacts-results");
+  if (contactsResults) {
+    contactsResults.addEventListener("click", e => {
+      const row = e.target.closest(".search-popup-contact-row");
+      if (row && row.dataset.contactId) {
+        const contactId = parseInt(row.dataset.contactId);
+        const name = row.querySelector(".search-popup-contact-name")?.textContent?.trim() || "Contact";
+        openSearchContactTab(contactId, name);
+      }
+    });
+  }
+}
+
+/* ── Contact preview tab in search modal ─────────────────────────────────── */
+
+async function openSearchContactTab(contactId, titleHint) {
+  const id = Number(contactId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  const tabKey = `contact-${id}`;
+
+  // If already open, just activate
+  if (searchPopupPreviewTabs.has(tabKey)) {
+    activateSearchPopupTab(tabKey);
+    return;
+  }
+
+  // Enforce max tabs
+  if (searchPopupPreviewTabs.size >= MAX_SEARCH_PREVIEW_TABS) {
+    showSearchPopupError(`Maximum ${MAX_SEARCH_PREVIEW_TABS} tabs reached. Close a tab to open another.`);
+    return;
+  }
+
+  // Create tab button
+  const tabBar = $("#search-popup-tabs");
+  const tabBtn = document.createElement("button");
+  tabBtn.type = "button";
+  tabBtn.className = "search-popup-tab";
+  tabBtn.dataset.tab = tabKey;
+  const shortTitle = titleHint.length > 24 ? titleHint.slice(0, 22) + "…" : titleHint;
+  tabBtn.innerHTML = `
+    <span class="search-popup-tab-title">${escapeHtml(shortTitle)}</span>
+    <span class="search-popup-tab-close" data-close-contact-tab="${id}" title="Close tab">×</span>
+  `;
+  tabBar.appendChild(tabBtn);
+
+  // Create content container
+  const containers = $("#search-popup-preview-containers");
+  const container = document.createElement("div");
+  container.className = "search-popup-tab-content";
+  container.dataset.tabContent = tabKey;
+  container.style.display = "none";
+  container.innerHTML = `
+    <div class="search-popup-preview-container">
+      <div class="search-popup-preview-head">
+        <h3 class="search-popup-preview-title">${escapeHtml(titleHint)}</h3>
+        <div class="search-popup-preview-actions">
+          <button type="button" class="search-popup-preview-contact-edit" data-contact-id="${id}" title="Edit contact" style="${state.currentUserIsAdmin ? '' : 'display:none;'}">✎</button>
+        </div>
+      </div>
+      <div class="search-popup-preview-body" data-contact-preview-body="${id}">
+        <p class="opp-preview-loading">Loading contact…</p>
+      </div>
+    </div>
+  `;
+  containers.appendChild(container);
+
+  // Edit button
+  const editBtn = container.querySelector(".search-popup-preview-contact-edit");
+  if (editBtn) {
+    editBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openAdminConsoleModal("contacts");
+      setTimeout(() => openAdminContactDetail(id), 300);
+    });
+  }
+
+  // Close button
+  const closeBtn = container.querySelector(".search-popup-tab-close");
+  if (closeBtn) {
+    closeBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      closeSearchContactTab(id);
+    });
+  }
+
+  // Store tab
+  searchPopupPreviewTabs.set(tabKey, { title: titleHint, data: null, container, button: tabBtn });
+
+  // Activate the tab
+  activateSearchPopupTab(tabKey);
+
+  // Fetch contact data + history
+  try {
+    const [contactsData, historyData] = await Promise.all([
+      api(`/api/v2/contacts?q=&count=500`),
+      api(`/api/v2/contacts/${id}/history?count=100`).catch(() => [])
+    ]);
+    const contacts = unwrap(contactsData) || contactsData || [];
+    const contact = contacts.find(c => c.id === id);
+    const history = unwrap(historyData) || historyData || [];
+    if (contact) {
+      renderSearchContactDetail(container, contact, history);
+    } else {
+      const body = container.querySelector(`[data-contact-preview-body="${id}"]`);
+      if (body) body.innerHTML = `<p style="color:var(--muted);">Contact not found.</p>`;
+    }
+  } catch (e) {
+    const body = container.querySelector(`[data-contact-preview-body="${id}"]`);
+    if (body) body.innerHTML = `<p style="color:#b00;">Failed to load contact: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function renderSearchContactDetail(container, contact, history) {
+  const body = container.querySelector(`[data-contact-preview-body="${contact.id}"]`);
+  if (!body) return;
+  const c = contact;
+  const initials = ((c.firstName || '')[0] || '') + ((c.lastName || '')[0] || '');
+  const name = c.isCompany ? (c.company || c.displayName) : `${c.firstName || ''} ${c.lastName || ''}`.trim();
+  const typeBadge = c.contactType ? `<span class="contact-type-badge">${escapeHtml(c.contactType)}</span>` : '';
+  const avatarHtml = c.avatarUrl
+    ? `<img src="${escapeHtml(c.avatarUrl)}" alt="" style="width:100%;height:100%;border-radius:50%;object-fit:cover;">`
+    : `<span>${escapeHtml(initials || '?')}</span>`;
+
+  const fieldRow = (label, val) => val ? `<div class="contact-detail-field"><span class="contact-detail-label">${label}</span> <span>${escapeHtml(val)}</span></div>` : '';
+  const address = [c.addressStreet, c.addressCity, c.addressState, c.addressZip, c.addressCountry].filter(Boolean).join(', ');
+
+  let historyHtml = '';
+  if (history.length > 0) {
+    historyHtml = history.map(ev => {
+      const catTitle = ev.category?.title || 'Note';
+      const dateStr = ev.backdatedCreated || ev.created || '';
+      const date = dateStr ? new Date(dateStr).toLocaleString() : '';
+      const content = (ev.content || '').replace(/<[^>]+>/g, '').substring(0, 300);
+      return `<div class="contact-history-item">
+        <div class="contact-history-meta"><strong>${escapeHtml(catTitle)}</strong> &mdash; ${escapeHtml(ev.author || '')} &mdash; ${escapeHtml(date)}</div>
+        <div class="contact-history-content">${escapeHtml(content)}</div>
+      </div>`;
+    }).join("");
+  } else {
+    historyHtml = '<p style="color:var(--muted); font-size:0.85rem;">No history yet.</p>';
+  }
+
+  body.innerHTML = `
+    <div style="display:flex; gap:1rem; align-items:flex-start; margin-bottom:1rem;">
+      <div class="contact-avatar" style="width:64px;height:64px;font-size:1.2rem;">${avatarHtml}</div>
+      <div>
+        <div style="font-size:1.1rem;font-weight:600;">${c.isCompany ? '🏢 ' : '👤 '}${escapeHtml(name || 'Contact')}</div>
+        <div>${typeBadge}</div>
+      </div>
+    </div>
+    <div class="contact-detail-fields">
+      ${fieldRow('Email', c.email)}
+      ${fieldRow('Phone', c.phone)}
+      ${fieldRow('Mobile', c.mobilePhone)}
+      ${fieldRow('Website', c.website)}
+      ${fieldRow('Industry', c.industry)}
+      ${fieldRow('Currency', c.currency)}
+      ${fieldRow('Status', c.contactStatus)}
+      ${fieldRow('Job Title', c.jobTitle)}
+      ${fieldRow('Company', !c.isCompany ? c.company : null)}
+      ${address ? fieldRow('Address', address) : ''}
+      ${c.about ? fieldRow('Description', c.about) : ''}
+    </div>
+    <div style="margin-top:1rem; border-top:1px solid var(--border); padding-top:0.75rem;">
+      <div style="font-weight:600; margin-bottom:0.5rem;">History & Notes</div>
+      <div id="search-contact-history-add-${c.id}" style="display:none; margin-bottom:0.5rem;">
+        <div id="search-contact-history-body-${c.id}" class="note-editor" contenteditable="true" data-placeholder="Write a note..." style="min-height:60px;"></div>
+        <div style="margin-top:0.25rem; display:flex; gap:0.25rem;">
+          <button type="button" class="btn btn-primary btn-small search-contact-history-submit" data-contact-id="${c.id}">Add Note</button>
+          <button type="button" class="btn btn-ghost btn-small search-contact-history-cancel" data-contact-id="${c.id}">Cancel</button>
+        </div>
+      </div>
+      <button type="button" class="btn btn-ghost btn-small search-contact-history-toggle" data-contact-id="${c.id}" style="margin-bottom:0.5rem;">+ Add Note</button>
+      <div class="admin-contact-history-list">${historyHtml}</div>
+    </div>
+  `;
+
+  // Bind history toggle
+  body.querySelector(`.search-contact-history-toggle`)?.addEventListener("click", () => {
+    const editor = body.querySelector(`#search-contact-history-add-${c.id}`);
+    if (editor) editor.style.display = editor.style.display === "none" ? "" : "none";
+  });
+  body.querySelector(`.search-contact-history-cancel`)?.addEventListener("click", () => {
+    const editor = body.querySelector(`#search-contact-history-add-${c.id}`);
+    if (editor) editor.style.display = "none";
+  });
+  body.querySelector(`.search-contact-history-submit`)?.addEventListener("click", async () => {
+    const noteBody = body.querySelector(`#search-contact-history-body-${c.id}`);
+    const content = noteBody?.innerHTML?.trim();
+    if (!content || content === "<br>") { showToast("Write a note first", true); return; }
+    try {
+      await api(`/api/v2/contacts/${c.id}/history`, { method: "POST", body: JSON.stringify({ content, categoryId: 1 }) });
+      showToast("Note added");
+      noteBody.innerHTML = "";
+      // Refresh history
+      const freshHistory = await api(`/api/v2/contacts/${c.id}/history?count=100`).catch(() => []);
+      const list = body.querySelector(".admin-contact-history-list");
+      if (list && freshHistory.length) {
+        list.innerHTML = (unwrap(freshHistory) || freshHistory).map(ev => {
+          const catTitle = ev.category?.title || 'Note';
+          const dateStr = ev.backdatedCreated || ev.created || '';
+          const date = dateStr ? new Date(dateStr).toLocaleString() : '';
+          const content = (ev.content || '').replace(/<[^>]+>/g, '').substring(0, 300);
+          return `<div class="contact-history-item">
+            <div class="contact-history-meta"><strong>${escapeHtml(catTitle)}</strong> &mdash; ${escapeHtml(ev.author || '')} &mdash; ${escapeHtml(date)}</div>
+            <div class="contact-history-content">${escapeHtml(content)}</div>
+          </div>`;
+        }).join("");
+      }
+    } catch (e) {
+      showToast("Failed to add note: " + (e.message || e), true);
+    }
+  });
+}
+
+function closeSearchContactTab(contactId) {
+  const tabKey = `contact-${contactId}`;
+  const tab = searchPopupPreviewTabs.get(tabKey);
+  if (!tab) return;
+  tab.button?.remove();
+  tab.container?.remove();
+  searchPopupPreviewTabs.delete(tabKey);
+  // Fall back to contacts tab
+  activateSearchPopupTab("contacts");
 }
 
 /* ── Search trigger (right-side vertical tab, shown when search is minimized) ─ */
@@ -27056,15 +27379,21 @@ function activateSearchPopupTab(tabId) {
     el.style.display = isMatch ? "" : "none";
   });
 
-  // Hide preview containers wrapper when projects tab is active so it doesn't take up flex space
+  // Hide preview containers wrapper when projects or contacts list tab is active
+  // so it doesn't steal flex space (causing modal to shrink)
   const previewContainers = $("#search-popup-preview-containers");
   if (previewContainers) {
-    previewContainers.style.display = tabId === "projects" ? "none" : "";
+    const isPreviewTab = !["projects", "contacts", "search"].includes(tabId);
+    previewContainers.style.display = isPreviewTab || (tabId === "contacts" && searchPopupPreviewTabs.size > 0) ? "" : "none";
   }
 
   // Load data for projects tab
   if (tabId === "projects") {
     performSearchPopupQuery();
+  }
+  // Load data for contacts tab
+  if (tabId === "contacts") {
+    activateContactsSearchTab();
   }
 }
 
@@ -27969,6 +28298,35 @@ function openAdminConsoleModal() {
         clearInterval(pollInterval);
         if (data.log) renderSyncLog(data.log);
         showSyncResult({ message: `Email bodies: ${data.emails_imported || 0} imported from ${data.deals_processed || 0} deals` });
+      } catch (e) {
+        if (e.status === 409) {
+          showSyncProgress("Sync already running — showing live log...");
+          return;
+        }
+        clearInterval(pollInterval);
+        showSyncError(e.message);
+        try { const s = await api("/api/v2/admin/sync/status"); if (s.log) renderSyncLog(s.log); } catch {}
+      }
+    });
+
+    $("#sync-contacts-btn")?.addEventListener("click", async () => {
+      showSyncProgress("Pulling contacts from OnlyOffice...");
+      let lastLogLen = 0;
+      const pollInterval = setInterval(async () => {
+        try {
+          const status = await api("/api/v2/admin/sync/status");
+          if (status.log && status.log.length > lastLogLen) {
+            renderSyncLog(status.log);
+            lastLogLen = status.log.length;
+          }
+          if (!status.running && lastLogLen > 0) clearInterval(pollInterval);
+        } catch (e) { console.error("Sync poll error:", e); }
+      }, 3000);
+      try {
+        const data = await api("/api/v2/admin/sync/pull-contacts", { method: "POST", body: JSON.stringify(getSyncPayload()) });
+        clearInterval(pollInterval);
+        if (data.log) renderSyncLog(data.log);
+        showSyncResult({ message: `Contacts: ${data.created || 0} created, ${data.skipped || 0} skipped, ${data.errors || 0} errors` });
       } catch (e) {
         if (e.status === 409) {
           showSyncProgress("Sync already running — showing live log...");
@@ -30192,67 +30550,481 @@ async function populateAdminUsersList() {
   }
 }
 
-async function populateAdminContactsList(search = "") {
-  const container = $("#admin-tab-contacts");
+async function populateAdminContactsList(search = "", typeFilter = "", contactTypeFilter = "") {
   const listEl = $("#admin-contacts-list");
-  if (!container || !listEl) return;
+  const countEl = $("#admin-contacts-results-count");
+  if (!listEl) return;
   try {
-    const qs = search ? `?q=${encodeURIComponent(search)}` : "";
-    const data = await api(`/api/v2/contacts${qs}`);
+    let qs = [];
+    if (search) qs.push(`q=${encodeURIComponent(search)}`);
+    if (typeFilter) qs.push(`type=${typeFilter}`);
+    if (contactTypeFilter) qs.push(`contact_type=${encodeURIComponent(contactTypeFilter)}`);
+    const data = await api(`/api/v2/contacts${qs.length ? '?' + qs.join('&') : ''}`);
     const contacts = unwrap(data) || data || [];
-    const list = (contacts || []).map(c => {
-      const name = [c.firstName, c.lastName].filter(Boolean).join(" ") || c.displayName || c.email || "Contact";
-      return `<div style="padding:3px 0; border-bottom:1px solid var(--border);">${escapeHtml(name)} &lt;${escapeHtml(c.email || "")}&gt; ${c.company ? escapeHtml(c.company) : ""}</div>`;
-    }).join("") || "<p>No contacts.</p>";
-    listEl.innerHTML = list;
+    if (countEl) countEl.textContent = `${contacts.length} contact${contacts.length !== 1 ? 's' : ''}`;
+    listEl.innerHTML = contacts.map(c => renderAdminContactRow(c)).join("") || '<p style="color:var(--muted); padding:0.5rem;">No contacts found.</p>';
   } catch (e) {
-    listEl.innerHTML = `<p style="color:#b00;">Failed to load contacts: ${escapeHtml(e.message)}</p>`;
+    listEl.innerHTML = `<p style="color:#b00; padding:0.5rem;">Failed to load contacts: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function renderAdminContactRow(c) {
+  const initials = ((c.firstName || '')[0] || '') + ((c.lastName || '')[0] || '');
+  const name = c.isCompany ? (c.company || c.displayName) : `${c.firstName || ''} ${c.lastName || ''}`.trim();
+  const typeBadge = c.contactType ? `<span class="contact-type-badge">${escapeHtml(c.contactType)}</span>` : '';
+  const companyLabel = !c.isCompany && c.company ? `<span class="contact-row-company">${escapeHtml(c.company)}</span>` : '';
+  const avatarContent = c.avatarUrl
+    ? `<img src="${escapeHtml(c.avatarUrl)}" alt="" />`
+    : `<span>${escapeHtml(initials || '?')}</span>`;
+  return `<div class="contact-row" data-id="${c.id}">
+    <div class="contact-avatar">${avatarContent}</div>
+    <div class="contact-info">
+      <div class="contact-name">${c.isCompany ? '🏢 ' : '👤 '}${escapeHtml(name || 'Contact')}</div>
+      <div class="contact-meta">${typeBadge} ${c.email ? escapeHtml(c.email) : ''} ${c.phone ? escapeHtml(c.phone) : ''} ${companyLabel}</div>
+    </div>
+    <div class="contact-actions">
+      <button class="btn btn-ghost btn-small contact-edit-btn" data-id="${c.id}" title="Edit">✎</button>
+      <button class="btn btn-ghost btn-small contact-delete-btn" data-id="${c.id}" title="Delete">✕</button>
+    </div>
+  </div>`;
+}
+
+function openAdminContactDetail(contactId) {
+  const listView = $("#admin-contacts-list-view");
+  const detailView = $("#admin-contacts-detail-view");
+  if (!listView || !detailView) return;
+  listView.style.display = "none";
+  detailView.style.display = "";
+  if (contactId) {
+    // Load existing contact
+    api(`/api/v2/contacts?q=&count=500`).then(data => {
+      const contacts = unwrap(data) || data || [];
+      const c = contacts.find(x => x.id === contactId);
+      if (c) populateContactForm(c);
+    });
+  } else {
+    // New contact — isCompany set by caller via hidden field
+    clearContactForm();
+  }
+}
+
+function closeAdminContactDetail() {
+  const listView = $("#admin-contacts-list-view");
+  const detailView = $("#admin-contacts-detail-view");
+  if (listView) listView.style.display = "";
+  if (detailView) detailView.style.display = "none";
+}
+
+function populateContactForm(c) {
+  const isCompany = c.isCompany;
+  $("#admin-contact-editing-id").value = c.id;
+  $("#admin-contact-is-company").value = isCompany ? "true" : "false";
+  // Set avatar
+  const photoUrl = c.avatarUrl || (c.id ? `/api/v2/contacts/${c.id}/photo` : null);
+  setContactAvatar(photoUrl, c.firstName, c.lastName);
+  $("#admin-contact-type").value = c.contactType || "";
+  $("#admin-contact-custom-type").style.display = $("#admin-contact-custom-type").value ? "" : "none";
+  if (c.contactType && !["Customer", "Supplier", "Subcontractor"].includes(c.contactType)) {
+    $("#admin-contact-type").value = "custom";
+    $("#admin-contact-custom-type").style.display = "";
+    $("#admin-contact-custom-type").value = c.contactType;
+  }
+  toggleContactFormType(isCompany);
+  if (isCompany) {
+    $("#admin-contact-company-name").value = c.company || "";
+  } else {
+    $("#admin-contact-first").value = c.firstName || "";
+    $("#admin-contact-last").value = c.lastName || "";
+    $("#admin-contact-job-title").value = c.jobTitle || "";
+    $("#admin-contact-company-link").value = c.company || "";
+    $("#admin-contact-company-link-id").value = c.companyId || "";
+  }
+  $("#admin-contact-email").value = c.email || "";
+  $("#admin-contact-phone").value = c.phone || "";
+  $("#admin-contact-mobile").value = c.mobilePhone || "";
+  $("#admin-contact-website").value = c.website || "";
+  $("#admin-contact-industry").value = c.industry || "";
+  $("#admin-contact-currency").value = c.currency || "";
+  $("#admin-contact-status").value = c.contactStatus || "";
+  $("#admin-contact-address-street").value = c.addressStreet || "";
+  $("#admin-contact-address-city").value = c.addressCity || "";
+  $("#admin-contact-address-state").value = c.addressState || "";
+  $("#admin-contact-address-zip").value = c.addressZip || "";
+  $("#admin-contact-address-country").value = c.addressCountry || "";
+  $("#admin-contact-about").value = c.about || "";
+  const title = isCompany ? (c.company || "Company") : `${c.firstName || ''} ${c.lastName || ''}`.trim() || "Person";
+  $("#admin-contacts-detail-title").textContent = title;
+  loadContactHistory(c.id);
+}
+
+function clearContactForm() {
+  $("#admin-contact-editing-id").value = "";
+  const isCompany = $("#admin-contact-is-company").value === "true";
+  toggleContactFormType(isCompany);
+  ["admin-contact-first", "admin-contact-last", "admin-contact-email", "admin-contact-phone",
+   "admin-contact-mobile", "admin-contact-website", "admin-contact-company-name",
+   "admin-contact-job-title", "admin-contact-industry", "admin-contact-currency",
+   "admin-contact-address-street", "admin-contact-address-city", "admin-contact-address-state",
+   "admin-contact-address-zip", "admin-contact-address-country", "admin-contact-about",
+   "admin-contact-company-link", "admin-contact-company-link-id", "admin-contact-custom-type"
+  ].forEach(id => { const el = $(`#${id}`); if (el) el.value = ""; });
+  $("#admin-contact-type").value = "";
+  $("#admin-contact-status").value = "";
+  $("#admin-contact-history-list").innerHTML = "";
+  const title = isCompany ? "New Company" : "New Person";
+  $("#admin-contacts-detail-title").textContent = title;
+  resetContactAvatar();
+}
+
+function resetContactAvatar() {
+  const img = $("#admin-contact-avatar-img");
+  const initials = $("#admin-contact-avatar-initials");
+  if (img) { img.style.display = "none"; img.src = ""; }
+  if (initials) { initials.style.display = ""; initials.textContent = "?"; }
+}
+
+function setContactAvatar(avatarUrl, firstName, lastName) {
+  const img = $("#admin-contact-avatar-img");
+  const initials = $("#admin-contact-avatar-initials");
+  if (avatarUrl) {
+    if (img) { img.src = avatarUrl; img.style.display = ""; }
+    if (initials) { initials.style.display = "none"; }
+  } else {
+    const init = ((firstName || '')[0] || '') + ((lastName || '')[0] || '');
+    if (img) { img.style.display = "none"; img.src = ""; }
+    if (initials) { initials.style.display = ""; initials.textContent = init || "?"; }
+  }
+}
+
+async function uploadContactPhoto(contactId, file) {
+  if (!contactId || !file) return;
+  // Validate type
+  if (!['image/jpeg', 'image/png'].includes(file.type)) {
+    showToast("Only JPG and PNG files are supported", true);
+    return;
+  }
+  // Validate size
+  if (file.size > 5 * 1024 * 1024) {
+    showToast("File too large (max 5MB)", true);
+    return;
+  }
+  const formData = new FormData();
+  formData.append("file", file);
+  try {
+    const result = await api(`/api/v2/contacts/${contactId}/photo`, {
+      method: "POST",
+      body: formData,
+      headers: {},
+    });
+    showToast("Photo uploaded");
+    // Update display
+    const url = result.avatarUrl || `/api/v2/contacts/${contactId}/photo`;
+    setContactAvatar(url + "?t=" + Date.now(), null, null);
+  } catch (e) {
+    showToast("Upload failed: " + (e.message || e), true);
+  }
+}
+
+function toggleContactFormType(isCompany) {
+  const compFields = $("#admin-contact-company-fields");
+  const personFields = $("#admin-contact-person-fields");
+  if (compFields) compFields.style.display = isCompany ? "" : "none";
+  if (personFields) personFields.style.display = isCompany ? "none" : "";
+}
+
+async function saveAdminContact() {
+  const id = $("#admin-contact-editing-id").value;
+  const isCompany = $("#admin-contact-is-company").value === "true";
+  let contactType = $("#admin-contact-type").value;
+  if (contactType === "custom") contactType = $("#admin-contact-custom-type").value.trim() || null;
+  const payload = {
+    isCompany,
+    contactType,
+    email: $("#admin-contact-email").value.trim() || null,
+    phone: $("#admin-contact-phone").value.trim() || null,
+    mobilePhone: $("#admin-contact-mobile").value.trim() || null,
+    website: $("#admin-contact-website").value.trim() || null,
+    industry: $("#admin-contact-industry").value.trim() || null,
+    currency: $("#admin-contact-currency").value.trim() || null,
+    contactStatus: $("#admin-contact-status").value || null,
+    addressStreet: $("#admin-contact-address-street").value.trim() || null,
+    addressCity: $("#admin-contact-address-city").value.trim() || null,
+    addressState: $("#admin-contact-address-state").value.trim() || null,
+    addressZip: $("#admin-contact-address-zip").value.trim() || null,
+    addressCountry: $("#admin-contact-address-country").value.trim() || null,
+    about: $("#admin-contact-about").value.trim() || null,
+  };
+  if (isCompany) {
+    payload.company = $("#admin-contact-company-name").value.trim() || null;
+  } else {
+    payload.firstName = $("#admin-contact-first").value.trim() || null;
+    payload.lastName = $("#admin-contact-last").value.trim() || null;
+    payload.jobTitle = $("#admin-contact-job-title").value.trim() || null;
+    const companyId = $("#admin-contact-company-link-id").value;
+    if (companyId) payload.companyId = parseInt(companyId);
+    else payload.company = $("#admin-contact-company-link").value.trim() || null;
+  }
+  try {
+    if (id) {
+      await api(`/api/v2/contacts/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+      showToast("Contact updated");
+    } else {
+      await api("/api/v2/contacts", { method: "POST", body: JSON.stringify(payload) });
+      showToast("Contact created");
+    }
+    closeAdminContactDetail();
+    populateAdminContactsList($("#admin-contacts-search")?.value.trim() || "", getAdminContactsFilter(), $("#admin-contacts-type-filter")?.value || "");
+  } catch (e) {
+    showToast("Failed to save contact: " + (e.message || e), true);
+  }
+}
+
+async function deleteAdminContact(id) {
+  if (!id) return;
+  const ok = await confirmDialog("Delete this contact? This cannot be undone.");
+  if (!ok) return;
+  try {
+    await api(`/api/v2/contacts/${id}`, { method: "DELETE" });
+    showToast("Contact deleted");
+    closeAdminContactDetail();
+    populateAdminContactsList($("#admin-contacts-search")?.value.trim() || "", getAdminContactsFilter(), $("#admin-contacts-type-filter")?.value || "");
+  } catch (e) {
+    showToast("Failed to delete: " + (e.message || e), true);
+  }
+}
+
+function getAdminContactsFilter() {
+  const active = document.querySelector("#admin-contacts-filter .admin-contacts-filter-btn.active");
+  return active ? active.dataset.filter : "";
+}
+
+async function loadContactHistory(contactId) {
+  const listEl = $("#admin-contact-history-list");
+  if (!listEl) return;
+  try {
+    const events = await api(`/api/v2/contacts/${contactId}/history?count=100`);
+    const list = unwrap(events) || events || [];
+    listEl.innerHTML = list.map(ev => {
+      const catTitle = ev.category?.title || 'Note';
+      const dateStr = ev.backdatedCreated || ev.created || '';
+      const date = dateStr ? new Date(dateStr).toLocaleString() : '';
+      const content = (ev.content || '').replace(/<[^>]+>/g, '').substring(0, 200);
+      return `<div class="contact-history-item">
+        <div class="contact-history-meta"><strong>${escapeHtml(catTitle)}</strong> &mdash; ${escapeHtml(ev.author || '')} &mdash; ${escapeHtml(date)}</div>
+        <div class="contact-history-content">${escapeHtml(content)}</div>
+      </div>`;
+    }).join("") || '<p style="color:var(--muted); font-size:0.85rem;">No history yet.</p>';
+  } catch (e) {
+    listEl.innerHTML = `<p style="color:#b00; font-size:0.85rem;">Failed to load history.</p>`;
+  }
+}
+
+async function submitContactHistoryEvent(contactId) {
+  const content = $("#admin-contact-history-body")?.innerHTML?.trim();
+  if (!content || content === "<br>") { showToast("Write a note first", true); return; }
+  const categoryId = $("#admin-contact-history-category")?.value || "1";
+  const dateVal = $("#admin-contact-history-date")?.value;
+  const payload = { content, categoryId: parseInt(categoryId) };
+  if (dateVal) payload.created = new Date(dateVal).toISOString();
+  try {
+    await api(`/api/v2/contacts/${contactId}/history`, { method: "POST", body: JSON.stringify(payload) });
+    showToast("Note added");
+    $("#admin-contact-history-body").innerHTML = "";
+    loadContactHistory(contactId);
+  } catch (e) {
+    showToast("Failed to add note: " + (e.message || e), true);
   }
 }
 
 function bindAdminContacts() {
+  // Search
   const search = $("#admin-contacts-search");
   if (search) {
     let t;
     search.addEventListener("input", () => {
       clearTimeout(t);
-      t = setTimeout(() => populateAdminContactsList(search.value.trim()), 250);
+      t = setTimeout(() => populateAdminContactsList(search.value.trim(), getAdminContactsFilter(), $("#admin-contacts-type-filter")?.value || ""), 250);
     });
   }
-  const addBtn = $("#admin-add-contact");
-  const form = $("#admin-contact-form");
-  if (addBtn && form) {
-    addBtn.addEventListener("click", () => {
-      form.style.display = "block";
-      ["first","last","email","phone","company"].forEach(f => {
-        const el = $(`#admin-contact-${f}`);
-        if (el) el.value = "";
-      });
+  // Filter tabs
+  const filterBar = $("#admin-contacts-filter");
+  if (filterBar) {
+    filterBar.addEventListener("click", e => {
+      const btn = e.target.closest(".admin-contacts-filter-btn");
+      if (!btn) return;
+      filterBar.querySelectorAll(".admin-contacts-filter-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      populateAdminContactsList($("#admin-contacts-search")?.value.trim() || "", btn.dataset.filter, $("#admin-contacts-type-filter")?.value || "");
     });
   }
-  const cancel = $("#admin-contact-cancel");
-  if (cancel && form) cancel.addEventListener("click", () => { form.style.display = "none"; });
-  const save = $("#admin-contact-save");
-  if (save && form) {
-    save.addEventListener("click", async () => {
-      const payload = {
-        firstName: $("#admin-contact-first")?.value.trim() || null,
-        lastName: $("#admin-contact-last")?.value.trim() || null,
-        email: $("#admin-contact-email")?.value.trim() || null,
-        phone: $("#admin-contact-phone")?.value.trim() || null,
-        company: $("#admin-contact-company")?.value.trim() || null,
+  // Contact type filter
+  const typeFilter = $("#admin-contacts-type-filter");
+  if (typeFilter) {
+    typeFilter.addEventListener("change", () => {
+      populateAdminContactsList($("#admin-contacts-search")?.value.trim() || "", getAdminContactsFilter(), typeFilter.value);
+    });
+  }
+  // Add Company
+  const addCompBtn = $("#admin-add-company-btn");
+  if (addCompBtn) {
+    addCompBtn.addEventListener("click", () => {
+      $("#admin-contact-is-company").value = "true";
+      openAdminContactDetail(null);
+    });
+  }
+  // Add Person
+  const addPersonBtn = $("#admin-add-person-btn");
+  if (addPersonBtn) {
+    addPersonBtn.addEventListener("click", () => {
+      $("#admin-contact-is-company").value = "false";
+      openAdminContactDetail(null);
+    });
+  }
+  // Back button
+  const backBtn = $("#admin-contacts-back");
+  if (backBtn) backBtn.addEventListener("click", closeAdminContactDetail);
+  // Save
+  const saveBtn = $("#admin-contact-save");
+  if (saveBtn) saveBtn.addEventListener("click", saveAdminContact);
+  // Delete
+  const delBtn = $("#admin-contact-delete");
+  if (delBtn) delBtn.addEventListener("click", () => deleteAdminContact($("#admin-contact-editing-id").value));
+  // Contact type dropdown (custom type toggle)
+  const typeSelect = $("#admin-contact-type");
+  if (typeSelect) {
+    typeSelect.addEventListener("change", () => {
+      const customInput = $("#admin-contact-custom-type");
+      if (customInput) customInput.style.display = typeSelect.value === "custom" ? "" : "none";
+    });
+  }
+  // List row click delegation
+  const listEl = $("#admin-contacts-list");
+  if (listEl) {
+    listEl.addEventListener("click", e => {
+      const editBtn = e.target.closest(".contact-edit-btn");
+      if (editBtn) { openAdminContactDetail(parseInt(editBtn.dataset.id)); return; }
+      const delBtn = e.target.closest(".contact-delete-btn");
+      if (delBtn) { deleteAdminContact(parseInt(delBtn.dataset.id)); return; }
+      const row = e.target.closest(".contact-row");
+      if (row) openAdminContactDetail(parseInt(row.dataset.id));
+    });
+  }
+  // History toggle
+  const histToggle = $("#admin-contact-history-toggle");
+  if (histToggle) {
+    histToggle.addEventListener("click", () => {
+      const editor = $("#admin-contact-history-editor");
+      if (editor) editor.style.display = editor.style.display === "none" ? "" : "none";
+    });
+  }
+  // History submit
+  const histSubmit = $("#admin-contact-history-submit");
+  if (histSubmit) {
+    histSubmit.addEventListener("click", () => {
+      const id = $("#admin-contact-editing-id").value;
+      if (id) submitContactHistoryEvent(parseInt(id));
+    });
+  }
+  // History cancel
+  const histCancel = $("#admin-contact-history-cancel");
+  if (histCancel) {
+    histCancel.addEventListener("click", () => {
+      const editor = $("#admin-contact-history-editor");
+      if (editor) editor.style.display = "none";
+    });
+  }
+  // Import CSV
+  const importBtn = $("#admin-import-contacts-btn");
+  if (importBtn) {
+    importBtn.addEventListener("click", () => {
+      const modal = $("#admin-contacts-import-modal");
+      if (modal) modal.classList.remove("hidden");
+    });
+  }
+  // Import close/cancel
+  const importClose = $("#admin-contacts-import-close");
+  const importCancel = $("#admin-contacts-import-cancel");
+  [importClose, importCancel].forEach(btn => {
+    if (btn) btn.addEventListener("click", () => {
+      const modal = $("#admin-contacts-import-modal");
+      if (modal) modal.classList.add("hidden");
+    });
+  });
+  // Import file selection
+  const importFile = $("#admin-contacts-import-file");
+  if (importFile) {
+    importFile.addEventListener("change", () => {
+      const file = importFile.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const text = reader.result;
+        const lines = text.split("\n").slice(0, 6);
+        const preview = $("#admin-contacts-import-preview");
+        if (preview) {
+          preview.innerHTML = `<pre style="font-size:0.75rem; white-space:pre-wrap;">${escapeHtml(lines.join("\n"))}</pre>`;
+        }
+        const confirmBtn = $("#admin-contacts-import-confirm");
+        if (confirmBtn) confirmBtn.disabled = false;
+        confirmBtn.dataset.csv = text;
       };
+      reader.readAsText(file);
+    });
+  }
+  // Import confirm
+  const importConfirm = $("#admin-contacts-import-confirm");
+  if (importConfirm) {
+    importConfirm.addEventListener("click", async () => {
+      const csv = importConfirm.dataset.csv;
+      if (!csv) return;
       try {
-        await api("/api/v2/contacts", { method: "POST", body: JSON.stringify(payload) });
-        form.style.display = "none";
-        await populateAdminContactsList( $("#admin-contacts-search")?.value.trim() || "" );
-        showToast("Contact added");
+        const result = await api("/api/v2/contacts/import", { method: "POST", body: JSON.stringify({ csv }) });
+        showToast(`Imported ${result.created || 0} contacts`);
+        const modal = $("#admin-contacts-import-modal");
+        if (modal) modal.classList.add("hidden");
+        populateAdminContactsList("", getAdminContactsFilter(), "");
       } catch (e) {
-        showToast("Failed to add contact: " + (e.message || e), true);
+        showToast("Import failed: " + (e.message || e), true);
       }
     });
   }
-  // initial load on tab switch already calls populate
+  // Export CSV
+  const exportBtn = $("#admin-export-contacts-btn");
+  if (exportBtn) {
+    exportBtn.addEventListener("click", () => { window.open("/api/v2/contacts/export", "_blank"); });
+  }
+  // Photo upload
+  const photoArea = $("#admin-contact-photo-area");
+  const photoInput = $("#admin-contact-photo-input");
+  if (photoArea && photoInput) {
+    photoArea.addEventListener("click", () => photoInput.click());
+    photoInput.addEventListener("change", () => {
+      const file = photoInput.files[0];
+      if (!file) return;
+      const contactId = $("#admin-contact-editing-id").value;
+      if (!contactId) { showToast("Save the contact first, then upload a photo", true); return; }
+      uploadContactPhoto(parseInt(contactId), file);
+      photoInput.value = "";
+    });
+  }
+  // Company link autocomplete
+  const compLink = $("#admin-contact-company-link");
+  if (compLink) {
+    let t;
+    compLink.addEventListener("input", () => {
+      clearTimeout(t);
+      t = setTimeout(async () => {
+        const q = compLink.value.trim();
+        if (q.length < 2) return;
+        const data = await api(`/api/v2/contacts?type=company&q=${encodeURIComponent(q)}`);
+        const companies = unwrap(data) || data || [];
+        // Simple autocomplete: show first match inline
+        if (companies.length > 0) {
+          $("#admin-contact-company-link-id").value = companies[0].id;
+        }
+      }, 300);
+    });
+  }
 }
 
 async function populateAdminStagesList(search = "") {

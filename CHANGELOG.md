@@ -2,6 +2,94 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Contacts Tab Fixes — Modal Height, Auto-List, Dark Mode, History Migration (2026-08-14)
+
+### Search Modal — Fixed Height on Tab Switch
+- **Fixed modal shrinking** when switching from Projects to Contacts tab
+- `#search-popup-preview-containers` now hidden on the contacts list tab (no longer steals flex space)
+- Shown again only when a contact preview tab is open
+
+### Search Modal — Auto-List Contacts
+- **Contacts tab now lists all contacts automatically** on open (no need to type first)
+- Empty search query returns all contacts from the API
+
+### Admin Contacts — Dark Mode Inputs
+- **Fixed text fields and dropdowns** in admin contacts tab showing white/high-contrast backgrounds
+- Added dark mode rules for `#admin-contacts-search`, `#admin-contacts-type-filter`, `#admin-contact-history-category`, `#admin-contact-history-date` (controls outside `.contact-form-section`)
+
+### Server — Contact History Migration
+- **Added inline `ALTER TABLE` migration** at startup to ensure `history_events.contact_id` column exists
+- Prevents "Failed to load history" errors if init.sql wasn't fully applied to the database
+
+## Contacts Tab Fixes — Search Preview, History, Photo Upload (2026-08-14)
+
+### Search Modal — Contact Preview Tab
+- **Clicking a contact now opens a preview tab** within the search modal (same as project preview tabs) instead of opening the admin console
+- **Read-only detail view** for all users with full contact fields + history timeline
+- **Add Note** button lets all users add notes to contact history from the preview tab
+- **Edit button** (admin-only) opens the admin contacts detail panel for full editing
+- **Close button** on tab returns to contacts list
+
+### Search Modal — Stable Height
+- **Fixed modal height change** when switching between Projects and Contacts tabs
+- Added `min-height: 500px` to `.modal-card-search-popup` so the modal maintains consistent size
+
+### Admin Contacts — History Fixed
+- **Fixed "Failed to load history" bug** caused by undefined `method` variable in `_handle_api_get()`
+- Removed redundant `method == "GET"` checks from 4 route conditions (was causing `NameError` crashes)
+
+### Contact Photo Upload
+- **New photo upload** in admin contacts detail: click the avatar area to upload JPG/PNG (max 5MB)
+- Photos stored as files on disk in `data/contact-photos/{id}/` with full-size (400x400) and thumbnail (96x96) versions
+- **Served via** `GET /api/v2/contacts/{id}/photo` (with `?thumbnail=1` for thumb)
+- **Displayed in** admin contacts list, search modal contact list, and search modal contact preview tab
+
+### Files
+- `server.py` — fixed 4 `method` checks, added photo upload + serving endpoints, fixed `avatarUrl` to return proper URL
+- `public/app.js` — new `openSearchContactTab`, `renderSearchContactDetail`, `closeSearchContactTab`, `uploadContactPhoto`, `setContactAvatar`, `resetContactAvatar` functions; fixed contacts click handler; updated tab close delegation
+- `public/index.html` — added photo upload area in admin contacts detail
+- `public/styles.css` — added `min-height` to modal, added contact detail field styles
+
+## Contacts Tab — Admin Console + Search Modal (2026-08-14)
+
+### Admin Contacts Tab (full redesign)
+- **Two contact categories:** Companies and Persons, with filter tabs (All / Companies / Persons)
+- **Contact types:** Customer, Supplier, Subcontractor, or Custom (free-text)
+- **Full CRUD:** Create, edit, delete contacts from the admin console
+- **Contact fields:** Name, email, phone, mobile, website, industry, currency, status (Hot/Cold), address (street/city/state/zip/country), description
+- **Company-Person linkage:** Persons can be linked to companies via `company_id` foreign key
+- **Contact history:** Add notes/events (Note, Call, Meeting, Email, Text Message) with rich text editor, date picker, and event timeline — uses existing `history_events` table with new `contact_id` FK
+- **CSV import:** Import contacts from CSV files with auto-detect column mapping (OnlyOffice export format + generic format)
+- **CSV export:** Download all contacts as CSV
+
+### Search Modal — Contacts Tab
+- **New "Contacts" tab** in the search popup modal alongside Projects
+- **Search by name, email, company** with debounced input
+- **Filter by type** (Company/Person) and contact type (Customer/Supplier/Subcontractor)
+- **Role-based visibility:** Limited-role users only see contacts they created
+- **Click to edit:** Clicking a contact row opens the admin contacts detail panel (for admins)
+
+### OnlyOffice Sync
+- **Pull Contacts button** in the Import/Export sync tab
+- Pulls all contacts from OnlyOffice CRM (`/api/2.0/crm/contact`)
+- Maps `isCompany`, `companyName`, `firstName`, `lastName`, `commonData[]` (email/phone/website), `addresses[]`, `about`, `industry`, `currency`, `contactStatus`, `smallFotoUrl`
+- Resolves person→company linkage via `onlyoffice_id` mapping
+- Dedup by `onlyoffice_id` (skips already-synced contacts)
+
+### Database
+- **`contacts` table:** 11 new columns (is_company, company_id, contact_type, website, industry, currency, about, address_country, onlyoffice_id, contact_status, avatar_url)
+- **`history_events` table:** new `contact_id` FK column for contact history events
+- **Backfill:** `is_company` auto-set from existing data pattern (first_name NULL + company NOT NULL = company)
+- **Data enrichment script:** `scripts/enrich_contacts.py` backfills email/phone/website/address from `CRM_export/contacts.json`
+
+### Files
+- `init.sql` — ALTER TABLE migrations for contacts + history_events
+- `server.py` — expanded contacts CRUD, new handlers: count, delete, export, import, history get/create, pull-contacts sync
+- `public/index.html` — redesigned admin contacts tab, new search modal contacts tab, sync pull-contacts button
+- `public/app.js` — rewritten admin contacts JS (~250 lines), new search contacts functions (~80 lines), sync binding
+- `public/styles.css` — contact-specific styles (~180 lines)
+- `scripts/enrich_contacts.py` — one-time data enrichment from OnlyOffice export
+
 ## Multi-Channel Password Reset + Admin Recovery — COMPLETE (not fully tested) (2026-08-13)
 
 ### Password Reset
