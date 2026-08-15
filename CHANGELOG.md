@@ -2,6 +2,25 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Branding Image Upload + Favicon Fix (2026-08-14)
+
+### Favicon Bug Fix
+- **Removed exclamation mark SVG favicon** that was overriding the Sietch logo favicon in browser tabs
+- The inline SVG data URI on line 10 of index.html was being prioritized by modern browsers over the .ico file
+
+### Branding Image Upload
+- **Logo, watermark, and favicon** are now uploadable via file picker instead of manual path entry
+- Each image has a preview thumbnail, "Choose File" button, and "Reset" button
+- Uploads are stored in `data/branding/` directory
+- Favicon uploads are auto-resized to 32x32 via Pillow
+- Reset button reverts to default (logo: `/assets/sietch-logo-2-nobg2.png`, watermark: `NULL`, favicon: `/favicon.ico`)
+- Default favicon is the Sietch logo (desert scene in octagonal frame)
+
+### Server Endpoints Added
+- `GET /api/branding/logo|watermark|favicon` — serve uploaded branding images
+- `POST /api/branding/logo|watermark|favicon` — upload image (multipart, max 5MB)
+- `DELETE /api/branding/logo|watermark|favicon` — reset to default
+
 ## Customize Projects Tab Revamp (2026-08-14)
 
 ### Multi-Column Layout

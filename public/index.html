@@ -6,8 +6,6 @@
   <title>Sietch CRM</title>
   <meta name="description" content="CRM Viewer and organizer for Projects, Notifications and Tasks." />
   <link rel="icon" href="favicon.ico?v=5" sizes="any" />
-  <!-- Thick exclamation mark (instead of ship) as data SVG so it always renders (no missing asset) and is visible in both dark and light browser tab bars. -->
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' width='32' height='32'%3E%3Crect x='2' y='2' width='28' height='28' rx='4' fill='%23f8fafc' stroke='%230f172a' stroke-width='2'/%3E%3Crect x='14' y='6' width='4' height='14' rx='1' fill='%230f172a'/%3E%3Ccircle cx='16' cy='23' r='2.2' fill='%230f172a'/%3E%3C/svg%3E" />
   <meta property="og:type" content="website" />
   <meta property="og:title" content="Sietch CRM" />
   <meta property="og:description" content="CRM Viewer and organizer for Projects, Notifications and Tasks." />
@@ -2448,16 +2446,46 @@
                 <input type="text" id="branding-header-title" placeholder="Workspace &lt;em&gt;dashboard&lt;/em&gt;" maxlength="200" />
               </div>
               <div class="field">
-                <label for="branding-logo-path">Logo Path</label>
-                <input type="text" id="branding-logo-path" placeholder="/assets/sietch-logo-2-nobg2.png" maxlength="500" />
+                <label>Logo</label>
+                <div class="branding-image-row">
+                  <div class="branding-image-preview" id="branding-logo-preview">
+                    <img src="/assets/sietch-logo-2-nobg2.png" alt="Logo" />
+                  </div>
+                  <div class="branding-image-actions">
+                    <button type="button" class="btn btn-secondary btn-small branding-upload-btn" data-target="logo">Choose File</button>
+                    <button type="button" class="btn btn-ghost btn-small branding-reset-btn" data-target="logo" style="display:none;">Reset</button>
+                    <span class="branding-image-name" id="branding-logo-name"></span>
+                  </div>
+                </div>
+                <input type="file" id="branding-logo-input" accept="image/*" class="visually-hidden" />
               </div>
               <div class="field">
-                <label for="branding-watermark-path">Watermark Image Path</label>
-                <input type="text" id="branding-watermark-path" placeholder="/hero-ship-168.png" maxlength="500" />
+                <label>Watermark Image</label>
+                <div class="branding-image-row">
+                  <div class="branding-image-preview branding-image-preview-empty" id="branding-watermark-preview">
+                    <span style="font-size:0.7rem; color:var(--muted);">None</span>
+                  </div>
+                  <div class="branding-image-actions">
+                    <button type="button" class="btn btn-secondary btn-small branding-upload-btn" data-target="watermark">Choose File</button>
+                    <button type="button" class="btn btn-ghost btn-small branding-reset-btn" data-target="watermark" style="display:none;">Reset</button>
+                    <span class="branding-image-name" id="branding-watermark-name"></span>
+                  </div>
+                </div>
+                <input type="file" id="branding-watermark-input" accept="image/*" class="visually-hidden" />
               </div>
               <div class="field">
-                <label for="branding-favicon-path">Favicon Path</label>
-                <input type="text" id="branding-favicon-path" placeholder="/favicon.ico" maxlength="500" />
+                <label>Favicon</label>
+                <div class="branding-image-row">
+                  <div class="branding-image-preview" id="branding-favicon-preview" style="width:32px; height:32px;">
+                    <img src="/favicon.ico?v=5" alt="Favicon" />
+                  </div>
+                  <div class="branding-image-actions">
+                    <button type="button" class="btn btn-secondary btn-small branding-upload-btn" data-target="favicon">Choose File</button>
+                    <button type="button" class="btn btn-ghost btn-small branding-reset-btn" data-target="favicon" style="display:none;">Reset</button>
+                    <span class="branding-image-name" id="branding-favicon-name"></span>
+                  </div>
+                </div>
+                <input type="file" id="branding-favicon-input" accept="image/*" class="visually-hidden" />
               </div>
               <div class="field">
                 <label for="branding-primary-color">Primary Color</label>

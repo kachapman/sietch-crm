@@ -15207,6 +15207,46 @@ select.form-control {
 }
 .admin-customize-reorder-btn:hover { opacity: 1; color: var(--text); }
 
+/* ── Branding image upload widgets ────────────────────────────────────────── */
+.branding-image-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.branding-image-preview {
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.branding-image-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.branding-image-preview-empty {
+  background: var(--surface-2);
+}
+.branding-image-actions {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+.branding-image-name {
+  font-size: 0.72rem;
+  color: var(--muted);
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Contact history (search modal preview) */
 .admin-contact-history-list {
   max-height: 300px;

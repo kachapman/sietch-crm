@@ -282,6 +282,7 @@ PHOTO_STORAGE_PATH = Path(os.getenv("PHOTO_STORAGE_PATH", str(DATA_DIR / "photos
 DOCUMENT_STORAGE_PATH = Path(os.getenv("DOCUMENT_STORAGE_PATH", str(DATA_DIR / "documents")))
 AVATAR_STORAGE_PATH = Path(os.getenv("AVATAR_STORAGE_PATH", str(DATA_DIR / "avatars")))
 CONTACT_PHOTO_STORAGE_PATH = Path(os.getenv("CONTACT_PHOTO_STORAGE_PATH", str(DATA_DIR / "contact-photos")))
+BRANDING_STORAGE_PATH = Path(os.getenv("BRANDING_STORAGE_PATH", str(DATA_DIR / "branding")))
 DOCS_JWT_SECRET = os.environ.get("DOCS_JWT_SECRET", "")
 DOCS_INTERNAL_URL = os.environ.get("DOCS_INTERNAL_URL", "").rstrip("/")
 DOCS_PUBLIC_URL = os.environ.get("DOCS_PUBLIC_URL", "").rstrip("/")
@@ -1732,6 +1733,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/config":
             _json_response(self, 200, {"version": APP_VERSION})
             return
+        m = re.match(r"^/api/branding/(logo|watermark|favicon)$", api_path)
+        if m:
+            self._handle_branding_image_get(m.group(1))
+            return
         if api_path == "/api/branding":
             try:
                 row = db.query_one(
@@ -2367,6 +2372,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         # ── Branding (admin) ──
+        m = re.match(r"^/api/branding/(logo|watermark|favicon)$", api_path)
+        if m and method == "POST":
+            self._handle_branding_image_upload(m.group(1))
+            return
+        if m and method == "DELETE":
+            self._handle_branding_image_delete(m.group(1))
+            return
         if api_path == "/api/branding" and method == "POST":
             user = _require_admin(self)
             if not user:
@@ -3901,6 +3913,121 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         db.execute("DELETE FROM tag_definitions WHERE id = %s", (tag_id,))
         _json_response(self, 200, {"ok": True})
+
+    # ── Branding image upload ──────────────────────────────────────────────
+
+    BRANDING_DEFAULTS = {
+        "logo": "/assets/sietch-logo-2-nobg2.png",
+        "watermark": None,
+        "favicon": "/favicon.ico",
+    }
+    BRANDING_EXT_MAP = {"logo": "png", "watermark": "png", "favicon": "ico"}
+
+    def _branding_image_path(self, img_type: str) -> Path:
+        return BRANDING_STORAGE_PATH / f"{img_type}.{self.BRANDING_EXT_MAP.get(img_type, 'png')}"
+
+    def _handle_branding_image_get(self, img_type: str) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        path = self._branding_image_path(img_type)
+        if not path.exists():
+            self.send_response(404)
+            self.end_headers()
+            return
+        ct = "image/png"
+        if img_type == "favicon":
+            ct = "image/x-icon" if path.suffix == ".ico" else "image/png"
+        self.send_response(200)
+        self.send_header("Content-Type", ct)
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        self.wfile.write(path.read_bytes())
+
+    def _handle_branding_image_upload(self, img_type: str) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        content_type = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in content_type:
+            _json_response(self, 400, {"error": "Expected multipart/form-data"})
+            return
+        boundary = content_type.split("boundary=")[-1].encode()
+        body = _read_body(self)
+        if not body:
+            _json_response(self, 400, {"error": "Empty body"})
+            return
+        parts = body.split(b"--" + boundary)
+        file_data = None
+        for part in parts:
+            if b"filename=" not in part:
+                continue
+            header_end = part.find(b"\r\n\r\n")
+            if header_end == -1:
+                continue
+            data = part[header_end + 4:]
+            if data.endswith(b"\r\n"):
+                data = data[:-2]
+            file_data = data
+            break
+        if not file_data:
+            _json_response(self, 400, {"error": "No file uploaded"})
+            return
+        if len(file_data) > 5 * 1024 * 1024:
+            _json_response(self, 400, {"error": "File too large (max 5MB)"})
+            return
+        is_png = file_data[:4] == b"\x89PNG"
+        is_jpeg = file_data[:2] == b"\xff\xd8"
+        is_ico = file_data[:4] == b"\x00\x00\x01\x00"
+        is_svg = file_data[:5] == b"<svg " or file_data[:4] == b"<?xml"
+        if not (is_png or is_jpeg or is_ico or is_svg):
+            _json_response(self, 400, {"error": "Only PNG, JPG, ICO, or SVG files are supported"})
+            return
+        BRANDING_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
+        dest = self._branding_image_path(img_type)
+        if img_type == "favicon" and not is_ico:
+            try:
+                from PIL import Image as PILImage
+                import io
+                img = PILImage.open(io.BytesIO(file_data))
+                if img.mode in ("RGBA", "P", "LA"):
+                    img = img.convert("RGBA")
+                else:
+                    img = img.convert("RGB")
+                img = img.resize((32, 32), PILImage.LANCZOS)
+                ico_path = dest.with_suffix(".ico")
+                img.save(str(ico_path), format="ICO", sizes=[(32, 32)])
+                dest = ico_path
+            except ImportError:
+                dest.write_bytes(file_data)
+        else:
+            dest.write_bytes(file_data)
+        db_col = {"logo": "logo_path", "watermark": "watermark_path", "favicon": "favicon_path"}[img_type]
+        db_url = f"/api/branding/{img_type}"
+        existing = db.query_one("SELECT id FROM branding LIMIT 1")
+        if existing:
+            db.execute(f"UPDATE branding SET {db_col} = %s WHERE id = %s", (db_url, existing["id"]))
+        else:
+            db.execute(f"INSERT INTO branding ({db_col}) VALUES (%s)", (db_url,))
+        _json_response(self, 200, {"ok": True, "url": db_url})
+
+    def _handle_branding_image_delete(self, img_type: str) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        path = self._branding_image_path(img_type)
+        if path.exists():
+            path.unlink(missing_ok=True)
+        if img_type == "favicon":
+            ico_path = BRANDING_STORAGE_PATH / "favicon.ico"
+            if ico_path.exists():
+                ico_path.unlink(missing_ok=True)
+        db_col = {"logo": "logo_path", "watermark": "watermark_path", "favicon": "favicon_path"}[img_type]
+        default = self.BRANDING_DEFAULTS.get(img_type)
+        existing = db.query_one("SELECT id FROM branding LIMIT 1")
+        if existing:
+            db.execute(f"UPDATE branding SET {db_col} = %s WHERE id = %s", (default, existing["id"]))
+        _json_response(self, 200, {"ok": True, "url": default})
 
     # ── Contacts ────────────────────────────────────────────────────────────
 
