@@ -31030,7 +31030,7 @@ function bindAdminStages() {
       const editingId = $("#admin-stage-editing-id")?.value;
       const title = $("#admin-stage-title")?.value.trim();
       if (!title) { showToast("Title required", true); return; }
-      const stageTypeMap = { "Open": 0, "Closed": 1, "Won": 2 };
+      const stageTypeMap = { "Open": 0, "Won": 1, "Lost": 2 };
       const payload = {
         title,
         color: $("#admin-stage-color")?.value || "#6d4aff",
@@ -31065,7 +31065,7 @@ function bindAdminStages() {
           const stages = unwrap(data) || data || [];
           const s = stages.find(x => String(x.id) === String(id));
           if (!s) return;
-          const stageTypeNames = { 0: "Open", 1: "Closed", 2: "Won" };
+          const stageTypeNames = { 0: "Open", 1: "Won", 2: "Lost" };
           $("#admin-stage-editing-id").value = s.id;
           $("#admin-stage-title").value = s.title || "";
           $("#admin-stage-color").value = s.color || "#6d4aff";
