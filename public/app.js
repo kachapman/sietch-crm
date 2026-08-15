@@ -16864,13 +16864,6 @@ function renderPresenceModal(snapshot = null, usersCache = null) {
         openPresenceDMThread(id, name);
       });
     }
-  } else if (activeTab === 'timesheet') {
-    // Timesheet tab: clock in/out, entry list, daily totals, export
-    if (dmEl) dmEl.classList.add("hidden");
-    state.presenceSelectedUserId = null;
-    clearPresenceReplyTo();
-    listEl.innerHTML = '';
-    renderPresenceTimesheetModal(listEl, snap);
   } else {
     // Team tab: the user roster (online/offline + last seen) — hide any open DM thread
     if (dmEl) dmEl.classList.add("hidden");
@@ -17129,50 +17122,6 @@ function renderPresenceTile() {
           </div>
         </div>
       </div>
-      <div id="presence-tile-timesheet-body" class="presence-tile-body presence-tile-tab-content" style="display:none;">
-        <div class="ts-clock-widget">
-          <button type="button" id="ts-clock-btn" class="ts-clock-btn clock-in">Clock In</button>
-          <div id="ts-timer-display" class="ts-timer-display">00:00:00</div>
-          <button type="button" id="ts-break-btn" class="ts-break-btn hidden">Start Break</button>
-          <div class="ts-project-search" style="position:relative; flex: 1 1 150px;">
-            <input type="search" id="ts-project-search" class="ts-project-search-input" placeholder="Search project..." autocomplete="off" />
-            <div id="ts-project-results" class="contact-results hidden"></div>
-          </div>
-        </div>
-        <div class="ts-date-range">
-          <button type="button" id="ts-prev-day">◀</button>
-          <span id="ts-date-label" class="ts-date-label">Today</span>
-          <button type="button" id="ts-next-day">▶</button>
-          <button type="button" id="ts-range-week" class="ts-range-btn">Week</button>
-          <button type="button" id="ts-range-month" class="ts-range-btn">Month</button>
-        </div>
-        <div id="ts-entries-list" class="ts-entries-list"></div>
-        <div class="ts-footer-bar">
-          <div class="ts-export-btns">
-            <div class="ts-export-wrap">
-              <button type="button" id="ts-export-csv" class="ts-export-btn" title="Export CSV"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M7 16.5a1.5 1.5 0 0 0 -3 0v3a1.5 1.5 0 0 0 3 0"/><path d="M10 20.25c0 .414 .336 .75 .75 .75h1.25a1 1 0 0 0 1 -1v-1a1 1 0 0 0 -1 -1h-1a1 1 0 0 1 -1 -1v-1a1 1 0 0 1 1 -1h1.25a.75 .75 0 0 1 .75 .75"/><path d="M16 15l2 6l2 -6"/></svg></button>
-              <div id="ts-csv-dropdown" class="ts-export-dropdown hidden">
-                <label>From</label>
-                <input type="date" id="ts-csv-from" class="ts-export-dropdown-date" />
-                <label>To</label>
-                <input type="date" id="ts-csv-to" class="ts-export-dropdown-date" />
-                <button type="button" id="ts-csv-go" class="ts-export-go">Export</button>
-              </div>
-            </div>
-            <div class="ts-export-wrap">
-              <button type="button" id="ts-export-pdf" class="ts-export-btn" title="Export PDF"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M5 18h1.5a1.5 1.5 0 0 0 0 -3h-1.5v6"/><path d="M17 18h2"/><path d="M20 15h-3v6"/><path d="M11 15v6h1a2 2 0 0 0 2 -2v-2a2 2 0 0 0 -2 -2h-1"/></svg></button>
-              <div id="ts-pdf-dropdown" class="ts-export-dropdown hidden">
-                <label>From</label>
-                <input type="date" id="ts-pdf-from" class="ts-export-dropdown-date" />
-                <label>To</label>
-                <input type="date" id="ts-pdf-to" class="ts-export-dropdown-date" />
-                <button type="button" id="ts-pdf-go" class="ts-export-go">Export</button>
-              </div>
-            </div>
-          </div>
-          <div id="ts-daily-total" class="ts-daily-total"></div>
-        </div>
-      </div>
       <div id="presence-tile-admin" class="presence-admin hidden" style="padding:0.5rem 0.75rem;font-size:0.78rem;color:var(--muted);"></div>
     `;
     $("#dashboard-tiles")?.appendChild(tile);
@@ -17284,7 +17233,6 @@ function renderPresenceTile() {
       tabs.innerHTML = `
         <button type="button" class="presence-tile-tab active" data-tab="team"><svg class="tab-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M10 13a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M8 21v-1a2 2 0 0 1 2 -2h4a2 2 0 0 1 2 2v1"/><path d="M15 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M17 10h2a2 2 0 0 1 2 2v1"/><path d="M5 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M3 13v-1a2 2 0 0 1 2 -2h2"/></svg><span class="tab-label">Team</span><span id="presence-tile-team-badge" class="online-badge hidden"></span></button>
         <button type="button" class="presence-tile-tab" data-tab="messages"><svg class="tab-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M21 14l-3 -3h-7a1 1 0 0 1 -1 -1v-6a1 1 0 0 1 1 -1h9a1 1 0 0 1 1 1v10"/><path d="M14 15v2a1 1 0 0 1 -1 1h-7l-3 3v-10a1 1 0 0 1 1 -1h2"/></svg><span class="tab-label">Messages</span> <span id="presence-tile-msg-badge" class="online-badge hidden">0</span></button>
-        <button type="button" class="presence-tile-tab" data-tab="timesheet"><svg class="tab-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M8 5h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h5.697"/><path d="M18 14v4h4"/><path d="M18 11v-4a2 2 0 0 0 -2 -2h-2"/><path d="M8 5a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2a2 2 0 0 1 -2 2h-2a2 2 0 0 1 -2 -2"/><path d="M14 18a4 4 0 1 0 8 0a4 4 0 1 0 -8 0"/><path d="M8 11h4"/><path d="M8 15h3"/></svg><span class="tab-label">Timesheet</span></button>
       `;
       tools.appendChild(tabs);
     }
@@ -17400,28 +17348,17 @@ function bindPresenceTileControls(tile) {
       const teamBody = tile.querySelector("#presence-tile-team-body");
       const msgBody = tile.querySelector("#presence-tile-messages-body");
       const dmInline = tile.querySelector("#presence-tile-dm-inline");
-      const tsBody = tile.querySelector("#presence-tile-timesheet-body");
       if (tabId === "messages") {
         if (teamBody) teamBody.style.display = "none";
         if (dmInline) dmInline.style.display = "none";
-        if (tsBody) tsBody.style.display = "none";
         if (msgBody) {
           msgBody.style.display = "";
           renderPresenceTileMessages();
-        }
-      } else if (tabId === "timesheet") {
-        if (teamBody) teamBody.style.display = "none";
-        if (msgBody) msgBody.style.display = "none";
-        if (dmInline) dmInline.style.display = "none";
-        if (tsBody) {
-          tsBody.style.display = "";
-          renderTimesheetTab();
         }
       } else {
         if (teamBody) teamBody.style.display = "";
         if (msgBody) msgBody.style.display = "none";
         if (dmInline) dmInline.style.display = "none";
-        if (tsBody) tsBody.style.display = "none";
       }
     });
   }
@@ -17600,29 +17537,6 @@ function switchToPresenceMessagesTab() {
   if (msgBody) msgBody.style.display = "";
   if (dmInline) dmInline.style.display = "none";
   renderPresenceTileMessages();
-}
-
-function switchToPresenceTimesheetTab() {
-  const tile = document.querySelector('[data-tile-id="tile-presence"]');
-  if (!tile) return;
-  const tabBar = tile.querySelector(".presence-tile-tabs");
-  if (!tabBar) return;
-  const teamBody = tile.querySelector("#presence-tile-team-body");
-  const msgBody = tile.querySelector("#presence-tile-messages-body");
-  const dmInline = tile.querySelector("#presence-tile-dm-inline");
-  const tsBody = tile.querySelector("#presence-tile-timesheet-body");
-
-  tabBar.querySelectorAll(".presence-tile-tab").forEach(b => b.classList.remove("active"));
-  const tsTab = tabBar.querySelector('[data-tab="timesheet"]');
-  if (tsTab) tsTab.classList.add("active");
-
-  if (teamBody) teamBody.style.display = "none";
-  if (msgBody) msgBody.style.display = "none";
-  if (dmInline) dmInline.style.display = "none";
-  if (tsBody) {
-    tsBody.style.display = "";
-    renderTimesheetTab();
-  }
 }
 
 function openDMInline(userId, userName) {
@@ -27904,39 +27818,20 @@ function renderEventLogEntries(entries, container) {
   }
   container.innerHTML = entries.map((e) => {
     const ts = new Date(e.timestamp);
-    const timeStr = Number.isNaN(ts.getTime()) ? "—" : ts.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-    const icons = { edit: "✏️", note: "📝", delete: "🗑️", attach: "📎" };
-    const icon = icons[e.type] || "ℹ️";
+    const timeStr = Number.isNaN(ts.getTime()) ? "\u2014" : ts.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    const typeLabels = { edit: "[EDIT]", note: "[NOTE]", delete: "[DEL]", attach: "[ATTACH]" };
+    const typeLabel = typeLabels[e.type] || "[INFO]";
     const cls = e.success ? "success" : "fail";
-    const statusIcon = e.success ? "✓" : "✗";
     const oppLabel = e.oppTitle ? escapeHtml(e.oppTitle) : e.oppId ? `#${e.oppId}` : "";
     return `<div class="event-log-entry ${cls}">
-      <span class="event-log-entry-icon">${statusIcon}</span>
-      <span class="event-log-entry-icon">${icon}</span>
+      <span class="event-log-entry-type">${typeLabel}</span>
       <div class="event-log-entry-body">
-        <div class="event-log-entry-opp">${oppLabel}</div>
+        ${oppLabel ? `<div class="event-log-entry-opp">${oppLabel}</div>` : ""}
         <div class="event-log-entry-msg">${escapeHtml(e.message)}</div>
       </div>
       <span class="event-log-entry-time">${timeStr}</span>
     </div>`;
   }).join("");
-}
-
-function renderEventLogModal() {
-  renderEventLogEntries(state.eventLog, $("#event-log-list"));
-}
-
-function switchEventLogTab(tabName) {
-  const tabs = $("#event-log-tabs");
-  if (!tabs) return;
-  tabs.querySelectorAll(".event-log-tab").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.tab === tabName);
-  });
-  ["mine", "admin"].forEach((name) => {
-    const pane = $(`#event-log-${name}`);
-    if (pane) pane.classList.toggle("active", name === tabName);
-    if (pane) pane.style.display = name === tabName ? "" : "none";
-  });
 }
 
 async function loadEventLogAdminUsers() {
@@ -27961,119 +27856,463 @@ async function loadEventLogAdminEvents(userId) {
   }
 }
 
-async function renderEventLogAdminTab() {
-  const select = $("#event-log-user-select");
-  const list = $("#event-log-admin-list");
-  if (!select || !list) return;
-  const selected = select.value;
-  if (!selected) {
-    list.innerHTML = '<div class="event-log-empty">Select a user to view their event log.</div>';
+function renderEventLogModal() {
+  renderEventLogEntries(state.eventLog, $("#activity-log-list"));
+}
+
+/* ── Admin Console: Activity Tab ─────────────────────────────────────────── */
+
+async function renderActivityLogTab() {
+  const select = $("#activity-log-user-select");
+  const list = $("#activity-log-list");
+  if (!list) return;
+  const userId = select ? select.value : null;
+  if (!userId) {
+    list.innerHTML = '<div class="event-log-empty">Select a user to view their activity.</div>';
     return;
   }
-  list.innerHTML = '<div class="event-log-empty">Loading…</div>';
-  const events = await loadEventLogAdminEvents(selected);
+  list.innerHTML = '<div class="event-log-empty">Loading\u2026</div>';
+  const events = await loadEventLogAdminEvents(userId);
   renderEventLogEntries(events, list);
 }
 
-async function openEventLogModal() {
-  // Consolidated into admin console per plan: no separate modal/button
-  const adminModal = $("#admin-console-modal");
-  if (adminModal) {
-    adminModal.classList.remove("hidden");
-    switchAdminTab("logs");
-  }
-  return;
-  const modal = $("#event-log-modal");
-  if (!modal) return;
-  await loadEventLogFromServer();
-  renderEventLogModal();
+/* ── Activity / Time Sheet Modal (user-facing) ───────────────────────────── */
 
-  const tabs = $("#event-log-tabs");
-  if (tabs) {
-    const users = await loadEventLogAdminUsers();
-    if (users && users.length) {
-      tabs.classList.remove("hidden");
-      const select = $("#event-log-user-select");
-      if (select) {
-        const currentVal = select.value;
-        const portalUsers = Array.isArray(state.portalUsers) ? state.portalUsers : [];
-        const userMap = new Map(portalUsers.map((u) => [String(u.id || u.ID || u.userId || u.UserId || "").trim(), u]));
-        select.innerHTML = '<option value="">Select a user…</option>' +
-          users.map((uid) => {
-            const u = userMap.get(uid);
-            const label = u ? (u.displayName || u.userName || u.email || uid) : uid;
-            return `<option value="${escapeHtml(uid)}">${escapeHtml(label)}</option>`;
-          }).join("");
-        if (currentVal && users.includes(currentVal)) select.value = currentVal;
-      }
-      switchEventLogTab(tabs.querySelector(".event-log-tab.active")?.dataset.tab || "mine");
-      await renderEventLogAdminTab();
-    } else {
-      tabs.classList.add("hidden");
-      switchEventLogTab("mine");
+async function openActivityModal() {
+  const modal = $("#activity-modal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+  switchActivityTab("timesheet");
+}
+
+function switchActivityTab(tabName) {
+  const tabs = $("#activity-tabs");
+  if (!tabs) return;
+  tabs.querySelectorAll(".presence-tab").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.tab === tabName);
+  });
+  const content = $("#activity-content");
+  if (!content) return;
+  content.innerHTML = "";
+  if (tabName === "timesheet") {
+    renderActivityTimesheet(content);
+  } else if (tabName === "activity") {
+    renderActivityLog(content);
+  }
+}
+
+function renderActivityTimesheet(container) {
+  if (!container) return;
+  container.innerHTML = "";
+  // Clock widget
+  const clockWidget = document.createElement("div");
+  clockWidget.className = "ts-clock-widget";
+  const timerDisplay = document.createElement("div");
+  timerDisplay.className = "ts-timer-display";
+  timerDisplay.id = "modal-ts-timer";
+  timerDisplay.textContent = "00:00:00";
+  const clockBtn = document.createElement("button");
+  clockBtn.type = "button";
+  clockBtn.id = "modal-ts-clock-btn";
+  clockBtn.className = "ts-clock-btn clock-in";
+  clockBtn.textContent = "Clock In";
+  const breakBtn = document.createElement("button");
+  breakBtn.type = "button";
+  breakBtn.id = "modal-ts-break-btn";
+  breakBtn.className = "ts-break-btn hidden";
+  breakBtn.textContent = "Start Break";
+  const projectSearchWrap = document.createElement("div");
+  projectSearchWrap.className = "ts-project-search";
+  projectSearchWrap.style.cssText = "position:relative;flex:1 1 150px;";
+  const projectSearchInput = document.createElement("input");
+  projectSearchInput.type = "search";
+  projectSearchInput.id = "modal-ts-project-search";
+  projectSearchInput.className = "ts-project-search-input";
+  projectSearchInput.placeholder = "Search project\u2026";
+  projectSearchInput.autocomplete = "off";
+  const projectResults = document.createElement("div");
+  projectResults.id = "modal-ts-project-results";
+  projectResults.className = "contact-results hidden";
+  projectSearchWrap.append(projectSearchInput, projectResults);
+  clockWidget.append(clockBtn, timerDisplay, breakBtn, projectSearchWrap);
+  container.appendChild(clockWidget);
+  // Date range
+  const rangeBar = document.createElement("div");
+  rangeBar.className = "ts-date-range";
+  const prevBtn = document.createElement("button");
+  prevBtn.type = "button"; prevBtn.textContent = "\u25C0";
+  const label = document.createElement("span");
+  label.className = "ts-date-label"; label.textContent = "Today";
+  const nextBtn = document.createElement("button");
+  nextBtn.type = "button"; nextBtn.textContent = "\u25B6";
+  const weekBtn = document.createElement("button");
+  weekBtn.type = "button"; weekBtn.textContent = "Week";
+  const monthBtn = document.createElement("button");
+  monthBtn.type = "button"; monthBtn.textContent = "Month";
+  rangeBar.append(prevBtn, label, nextBtn, weekBtn, monthBtn);
+  container.appendChild(rangeBar);
+  // Entries list
+  const entriesList = document.createElement("div");
+  entriesList.className = "ts-entries-list";
+  entriesList.id = "modal-ts-entries";
+  container.appendChild(entriesList);
+  // Footer bar
+  const footerBar = document.createElement("div");
+  footerBar.className = "ts-footer-bar";
+  const exportBtns = document.createElement("div");
+  exportBtns.className = "ts-export-btns";
+  const totalEl = document.createElement("div");
+  totalEl.className = "ts-daily-total";
+  totalEl.id = "modal-ts-total";
+  footerBar.append(exportBtns, totalEl);
+  container.appendChild(footerBar);
+  // Fetch active entry
+  api("/api/timesheet/active").then(data => {
+    _tsActiveEntry = data.entry;
+    updateModalClockUI();
+    updateHeaderClockButton();
+    modalRefreshEntries();
+    tsSyncDateInputs();
+  }).catch(() => {});
+  // Bind controls
+  clockBtn.addEventListener("click", modalToggleClock);
+  breakBtn.addEventListener("click", modalToggleBreak);
+  prevBtn.addEventListener("click", () => { tsShiftRange(-1); modalRefreshEntries(); updateModalRangeLabel(); });
+  nextBtn.addEventListener("click", () => { tsShiftRange(1); modalRefreshEntries(); updateModalRangeLabel(); });
+  weekBtn.addEventListener("click", () => { tsSetRange("week"); modalRefreshEntries(); updateModalRangeLabel(); });
+  monthBtn.addEventListener("click", () => { tsSetRange("month"); modalRefreshEntries(); updateModalRangeLabel(); });
+  bindTimesheetProjectSearch("modal-ts-project-search", "modal-ts-project-results");
+}
+
+async function renderActivityLog(container) {
+  if (!container) return;
+  container.innerHTML = '<div class="event-log-empty">Loading\u2026</div>';
+  const events = await loadEventLogAdminEvents(state.currentUserId);
+  renderEventLogEntries(events, container);
+}
+
+/* ── Admin Console: Enhanced Timesheet Date Views ─────────────────────────── */
+
+let _adminTsRange = { from: null, to: null, mode: "week" };
+
+function renderAdminTimesheet() {
+  const grid = $("#admin-activity-ts-grid");
+  const summary = $("#admin-activity-ts-summary");
+  if (!grid) return;
+  const now = new Date();
+  // Compute date range from mode if not set
+  if (!_adminTsRange.from) {
+    if (_adminTsRange.mode === "day") {
+      _adminTsRange.from = now.toISOString().slice(0, 10);
+      _adminTsRange.to = _adminTsRange.from;
+    } else if (_adminTsRange.mode === "week") {
+      const day = now.getDay();
+      const start = new Date(now); start.setDate(now.getDate() - day);
+      _adminTsRange.from = start.toISOString().slice(0, 10);
+      const end = new Date(start); end.setDate(start.getDate() + 6);
+      _adminTsRange.to = end.toISOString().slice(0, 10);
+    } else if (_adminTsRange.mode === "month") {
+      _adminTsRange.from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+      _adminTsRange.to = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+    } else if (_adminTsRange.mode === "quarter") {
+      const q = Math.floor(now.getMonth() / 3);
+      _adminTsRange.from = new Date(now.getFullYear(), q * 3, 1).toISOString().slice(0, 10);
+      _adminTsRange.to = new Date(now.getFullYear(), q * 3 + 3, 0).toISOString().slice(0, 10);
     }
   }
-
-  modal.classList.remove("hidden");
+  updateAdminTsDateLabel();
+  grid.innerHTML = '<div style="color:var(--muted);font-size:0.78rem;">Loading\u2026</div>';
+  api(`/api/timesheet/admin/summary?from=${_adminTsRange.from}&to=${_adminTsRange.to}`).then(data => {
+    const rows = data.summary || [];
+    renderAdminTsGrid(grid, rows);
+    if (summary) renderAdminTsSummary(summary, rows);
+  }).catch(err => {
+    grid.innerHTML = `<div style="color:var(--danger);font-size:0.78rem;">Failed: ${escapeHtml(err.message)}</div>`;
+  });
 }
 
-function closeEventLogModal() {
-  $("#admin-console-modal")?.classList.add("hidden");
+function renderAdminTsGrid(container, rows) {
+  if (!rows.length) {
+    container.innerHTML = '<div style="color:var(--muted);font-size:0.78rem;">No timesheet data for this period</div>';
+    return;
+  }
+  const byUser = {};
+  rows.forEach(r => {
+    if (!byUser[r.user_id]) byUser[r.user_id] = { name: r.user_name, email: r.user_email, hours: {}, total: 0, breakMin: 0 };
+    byUser[r.user_id].hours[r.work_date] = parseFloat(r.total_hours || 0);
+    byUser[r.user_id].total += parseFloat(r.total_hours || 0);
+    byUser[r.user_id].breakMin += parseInt(r.total_break_minutes || 0);
+  });
+  const today = new Date().toISOString().slice(0, 10);
+  let html = "";
+  if (_adminTsRange.mode === "day") {
+    // Day mode: single column per user
+    html = '<table class="ts-admin-table"><thead><tr><th>User</th><th>Hours</th><th>Break</th></tr></thead><tbody>';
+    Object.values(byUser).forEach(u => {
+      const h = Math.floor(u.total);
+      const m = Math.round((u.total - h) * 60);
+      html += `<tr><td>${escapeHtml(u.name || u.email)}</td><td>${h}h ${m}m</td><td>${u.breakMin}m</td></tr>`;
+    });
+    html += "</tbody></table>";
+  } else if (_adminTsRange.mode === "week") {
+    // Week mode: Sun-Sat columns
+    const from = new Date(_adminTsRange.from + "T00:00:00");
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(from); d.setDate(from.getDate() + i);
+      days.push(d.toISOString().slice(0, 10));
+    }
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    html = '<table class="ts-admin-week-table"><thead><tr><th>User</th>';
+    days.forEach((d, i) => {
+      html += `<th class="${d === today ? "today-col" : ""}">${dayNames[i]}<br>${d.slice(5)}</th>`;
+    });
+    html += "<th>Total</th></tr></thead><tbody>";
+    Object.values(byUser).forEach(u => {
+      html += `<tr><td>${escapeHtml(u.name || u.email)}</td>`;
+      days.forEach(d => {
+        const h = u.hours[d] || 0;
+        const hrs = Math.floor(h); const mins = Math.round((h - hrs) * 60);
+        html += `<td>${h > 0 ? `${hrs}h ${mins}m` : "\u2014"}</td>`;
+      });
+      const th = Math.floor(u.total); const tm = Math.round((u.total - th) * 60);
+      html += `<td><strong>${th}h ${tm}m</strong></td></tr>`;
+    });
+    html += "</tbody></table>";
+  } else if (_adminTsRange.mode === "month") {
+    // Month mode: weekly columns (Week 1, Week 2, etc.)
+    const from = new Date(_adminTsRange.from + "T00:00:00");
+    const to = new Date(_adminTsRange.to + "T00:00:00");
+    const weeks = [];
+    let wkStart = new Date(from);
+    let wkIdx = 1;
+    while (wkStart <= to) {
+      let wkEnd = new Date(wkStart); wkEnd.setDate(wkStart.getDate() + 6);
+      if (wkEnd > to) wkEnd = to;
+      weeks.push({ label: `Wk${wkIdx}`, from: wkStart.toISOString().slice(0, 10), to: wkEnd.toISOString().slice(0, 10) });
+      wkStart = new Date(wkEnd); wkStart.setDate(wkEnd.getDate() + 1);
+      wkIdx++;
+    }
+    html = '<table class="ts-admin-week-table"><thead><tr><th>User</th>';
+    weeks.forEach(w => { html += `<th>${w.label}<br><span style="font-weight:normal;font-size:0.65rem;">${w.from.slice(5)}\u2013${w.to.slice(5)}</span></th>`; });
+    html += "<th>Total</th></tr></thead><tbody>";
+    Object.values(byUser).forEach(u => {
+      html += `<tr><td>${escapeHtml(u.name || u.email)}</td>`;
+      weeks.forEach(w => {
+        let wkTotal = 0;
+        const wd = new Date(w.from + "T00:00:00");
+        const wEnd = new Date(w.to + "T00:00:00");
+        while (wd <= wEnd) {
+          const ds = wd.toISOString().slice(0, 10);
+          wkTotal += u.hours[ds] || 0;
+          wd.setDate(wd.getDate() + 1);
+        }
+        const hrs = Math.floor(wkTotal); const mins = Math.round((wkTotal - hrs) * 60);
+        html += `<td>${wkTotal > 0 ? `${hrs}h ${mins}m` : "\u2014"}</td>`;
+      });
+      const th = Math.floor(u.total); const tm = Math.round((u.total - th) * 60);
+      html += `<td><strong>${th}h ${tm}m</strong></td></tr>`;
+    });
+    html += "</tbody></table>";
+  } else if (_adminTsRange.mode === "quarter") {
+    // Quarter mode: 3 month columns
+    const from = new Date(_adminTsRange.from + "T00:00:00");
+    const months = [];
+    for (let i = 0; i < 3; i++) {
+      const d = new Date(from.getFullYear(), from.getMonth() + i, 1);
+      const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+      months.push({
+        label: d.toLocaleString(undefined, { month: "short" }),
+        from: d.toISOString().slice(0, 10),
+        to: monthEnd.toISOString().slice(0, 10)
+      });
+    }
+    html = '<table class="ts-admin-week-table"><thead><tr><th>User</th>';
+    months.forEach(m => { html += `<th>${m.label}</th>`; });
+    html += "<th>Total</th></tr></thead><tbody>";
+    Object.values(byUser).forEach(u => {
+      html += `<tr><td>${escapeHtml(u.name || u.email)}</td>`;
+      months.forEach(m => {
+        let mTotal = 0;
+        const md = new Date(m.from + "T00:00:00");
+        const mEnd = new Date(m.to + "T00:00:00");
+        while (md <= mEnd) {
+          const ds = md.toISOString().slice(0, 10);
+          mTotal += u.hours[ds] || 0;
+          md.setDate(md.getDate() + 1);
+        }
+        const hrs = Math.floor(mTotal); const mins = Math.round((mTotal - hrs) * 60);
+        html += `<td>${mTotal > 0 ? `${hrs}h ${mins}m` : "\u2014"}</td>`;
+      });
+      const th = Math.floor(u.total); const tm = Math.round((u.total - th) * 60);
+      html += `<td><strong>${th}h ${tm}m</strong></td></tr>`;
+    });
+    html += "</tbody></table>";
+  }
+  container.innerHTML = html;
 }
+
+function renderAdminTsSummary(container, rows) {
+  if (!rows.length) { container.innerHTML = ""; return; }
+  const byUser = {};
+  rows.forEach(r => {
+    if (!byUser[r.user_id]) byUser[r.user_id] = { name: r.user_name, email: r.user_email, days: 0, totalHours: 0, totalBreak: 0 };
+    byUser[r.user_id].days++;
+    byUser[r.user_id].totalHours += parseFloat(r.total_hours || 0);
+    byUser[r.user_id].totalBreak += parseInt(r.total_break_minutes || 0);
+  });
+  let html = '<table class="ts-admin-table"><thead><tr><th>User</th><th>Days</th><th>Total Hours</th><th>Break</th></tr></thead><tbody>';
+  Object.values(byUser).forEach(u => {
+    const h = Math.floor(u.totalHours); const m = Math.round((u.totalHours - h) * 60);
+    html += `<tr><td>${escapeHtml(u.name || u.email)}</td><td>${u.days}</td><td>${h}h ${m}m</td><td>${u.totalBreak}m</td></tr>`;
+  });
+  html += "</tbody></table>";
+  container.innerHTML = html;
+}
+
+function shiftAdminTsRange(dir) {
+  const d = _adminTsRange.from ? new Date(_adminTsRange.from + "T00:00:00") : new Date();
+  if (_adminTsRange.mode === "day") {
+    d.setDate(d.getDate() + dir);
+    _adminTsRange.from = d.toISOString().slice(0, 10);
+    _adminTsRange.to = _adminTsRange.from;
+  } else if (_adminTsRange.mode === "week") {
+    d.setDate(d.getDate() + dir * 7);
+    _adminTsRange.from = d.toISOString().slice(0, 10);
+    const end = new Date(d); end.setDate(d.getDate() + 6);
+    _adminTsRange.to = end.toISOString().slice(0, 10);
+  } else if (_adminTsRange.mode === "month") {
+    d.setMonth(d.getMonth() + dir);
+    _adminTsRange.from = new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0, 10);
+    _adminTsRange.to = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10);
+  } else if (_adminTsRange.mode === "quarter") {
+    d.setMonth(d.getMonth() + dir * 3);
+    const q = Math.floor(d.getMonth() / 3);
+    _adminTsRange.from = new Date(d.getFullYear(), q * 3, 1).toISOString().slice(0, 10);
+    _adminTsRange.to = new Date(d.getFullYear(), q * 3 + 3, 0).toISOString().slice(0, 10);
+  }
+}
+
+function updateAdminTsDateLabel() {
+  const label = $("#admin-ts-date-label");
+  if (!label) return;
+  const from = _adminTsRange.from, to = _adminTsRange.to;
+  if (_adminTsRange.mode === "day") {
+    label.textContent = from || "Today";
+  } else if (_adminTsRange.mode === "week") {
+    label.textContent = from && to ? `${from} to ${to}` : "This Week";
+  } else if (_adminTsRange.mode === "month") {
+    const d = from ? new Date(from + "T00:00:00") : new Date();
+    label.textContent = d.toLocaleString(undefined, { month: "long", year: "numeric" });
+  } else if (_adminTsRange.mode === "quarter") {
+    const d = from ? new Date(from + "T00:00:00") : new Date();
+    const q = Math.floor(d.getMonth() / 3) + 1;
+    label.textContent = `Q${q} ${d.getFullYear()}`;
+  }
+}
+
+function bindAdminTsControls() {
+  ["day", "week", "month", "quarter"].forEach(mode => {
+    $("#admin-ts-" + mode)?.addEventListener("click", () => {
+      _adminTsRange = { from: null, to: null, mode };
+      renderAdminTimesheet();
+      ["day", "week", "month", "quarter"].forEach(m => {
+        const btn = $("#admin-ts-" + m);
+        if (btn) btn.classList.toggle("active", m === mode);
+      });
+    });
+  });
+  $("#admin-ts-prev")?.addEventListener("click", () => { shiftAdminTsRange(-1); renderAdminTimesheet(); });
+  $("#admin-ts-next")?.addEventListener("click", () => { shiftAdminTsRange(1); renderAdminTimesheet(); });
+}
+
+/* ── Header Clock Button ─────────────────────────────────────────────────── */
+
+let _headerClockInterval = null;
+
+function updateHeaderClockButton() {
+  const btn = $("#header-clock-btn");
+  if (!btn) return;
+  const svg = btn.querySelector("svg");
+  if (_tsActiveEntry) {
+    btn.classList.add("header-clock-active");
+    btn.title = "Clock Out \u2014 click to clock out";
+    if (svg) svg.innerHTML = '<path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M20.942 13.018a9 9 0 1 0 -7.909 7.922"/><path d="M12 7v5l2 2"/><path d="M17 17v5"/><path d="M21 17v5"/>';
+    if (_headerClockInterval) clearInterval(_headerClockInterval);
+    _headerClockInterval = setInterval(() => {
+      if (!_tsActiveEntry || !_tsActiveEntry.clock_in) return;
+      const elapsed = Date.now() - new Date(_tsActiveEntry.clock_in).getTime();
+      const h = Math.floor(elapsed / 3600000);
+      const m = Math.floor((elapsed % 3600000) / 60000);
+      btn.title = `Clocked in: ${h}h ${m}m \u2014 click to clock out`;
+    }, 1000);
+  } else {
+    btn.classList.remove("header-clock-active");
+    btn.title = "Clock In";
+    if (svg) svg.innerHTML = '<path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 7v5l2 2"/><path d="M17 22l5 -3l-5 -3l0 6"/><path d="M13.017 20.943a9 9 0 1 1 7.831 -7.292"/>';
+    if (_headerClockInterval) { clearInterval(_headerClockInterval); _headerClockInterval = null; }
+  }
+}
+
+/* ── Event Log Bindings (consolidated) ───────────────────────────────────── */
 
 function bindEventLogModal() {
-  // Consolidated: no separate modal, elements now in admin tab
+  // Clear log button (admin console)
   $("#event-log-clear")?.addEventListener("click", () => {
     state.eventLog = [];
     saveEventLogToStorage();
     renderEventLogModal();
     showToast("Event log cleared");
   });
-
-  // Internal event log tabs (mine/admin) - note: may need delegation if dynamic
-  document.querySelectorAll("#admin-console-modal .event-log-tab").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      switchEventLogTab(btn.dataset.tab);
-      if (btn.dataset.tab === "admin") renderEventLogAdminTab();
-    });
+  // Admin console: user select + refresh
+  $("#activity-log-user-select")?.addEventListener("change", renderActivityLogTab);
+  $("#activity-log-refresh")?.addEventListener("click", renderActivityLogTab);
+  // Admin timesheet controls
+  bindAdminTsControls();
+  // Activity modal: close
+  $("#activity-modal-close")?.addEventListener("click", () => $("#activity-modal")?.classList.add("hidden"));
+  $("#activity-modal")?.querySelector(".modal-backdrop")?.addEventListener("click", () => $("#activity-modal")?.classList.add("hidden"));
+  // Activity modal: tab switching
+  $("#activity-tabs")?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".presence-tab");
+    if (btn && btn.dataset.tab) switchActivityTab(btn.dataset.tab);
   });
-
-  $("#event-log-user-select")?.addEventListener("change", renderEventLogAdminTab);
-  $("#event-log-admin-refresh")?.addEventListener("click", renderEventLogAdminTab);
-
-  $("#event-log-health")?.addEventListener("click", async () => {
-    const statusEl = $("#event-log-health-status");
-    if (statusEl) {
-      statusEl.textContent = "Checking…";
-      statusEl.className = "event-log-health-status";
-    }
+  // Activity modal: minimize
+  $("#activity-modal-minimize")?.addEventListener("click", () => {
+    // TODO: minimize to sidebar
+    $("#activity-modal")?.classList.add("hidden");
+  });
+  // Activity modal: Escape
+  $("#activity-modal")?.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") $("#activity-modal")?.classList.add("hidden");
+  });
+  // Header clock button
+  $("#header-clock-btn")?.addEventListener("click", async () => {
     try {
-      const res = await fetch("/api/health", { credentials: "same-origin" });
-      const data = await res.json();
-      if (statusEl) {
-        if (data.ok) {
-          statusEl.textContent = "CRM reachable";
-          statusEl.className = "event-log-health-status ok";
-        } else {
-          statusEl.textContent = `CRM unreachable: ${data.error || "unknown"}`;
-          statusEl.className = "event-log-health-status fail";
-        }
+      if (_tsActiveEntry) {
+        await api("/api/timesheet/clock-out", { method: "POST" });
+        _tsActiveEntry = null;
+      } else {
+        const data = await api("/api/timesheet/clock-in", { method: "POST", body: JSON.stringify({ notes: "" }) });
+        _tsActiveEntry = data.entry;
       }
-    } catch (e) {
-      if (statusEl) {
-        statusEl.textContent = "Check failed";
-        statusEl.className = "event-log-health-status fail";
+      updateModalClockUI();
+      updateHeaderClockButton();
+      // Refresh modal entries if timesheet tab is open
+      const content = $("#activity-content");
+      if (content && content.querySelector("#modal-ts-clock-btn")) {
+        modalRefreshEntries();
       }
+    } catch (err) {
+      showToast(err.message || "Failed to toggle clock", true);
     }
   });
-
-  const modalEl = $("#admin-console-modal");
-  if (modalEl) {
-    modalEl.querySelector("[data-event-log-dismiss]")?.addEventListener("click", closeEventLogModal);
-    modalEl.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") closeEventLogModal();
-    });
-  }
+  // Settings dropdown: Activity / Time Sheet
+  $("#dropdown-activity-btn")?.addEventListener("click", () => {
+    const dd = $("#settings-dropdown");
+    if (dd) dd.classList.add("hidden");
+    openActivityModal();
+  });
 }
 
 // ── Customer Bot Modal ──
@@ -28625,12 +28864,30 @@ function switchAdminTab(tab) {
     populateAdminTagsList($("#admin-tag-search")?.value.trim() || "");
   }
   if (tab === "logs") {
-    loadEventLogFromServer().then(() => {
-      renderEventLogModal();
-      const tabs = document.querySelector("#admin-console-modal #event-log-tabs");
-      if (tabs) {
-        tabs.classList.remove("hidden");
+    loadEventLogFromServer().then(async () => {
+      // Populate user dropdown
+      const users = await loadEventLogAdminUsers();
+      const select = $("#activity-log-user-select");
+      if (select) {
+        if (users && users.length) {
+          const portalUsers = Array.isArray(state.portalUsers) ? state.portalUsers : [];
+          const userMap = new Map(portalUsers.map(u => [String(u.id || u.ID || ""), u]));
+          select.innerHTML = users.map(uid => {
+            const u = userMap.get(uid);
+            const label = u ? (u.displayName || u.userName || u.email || uid) : uid;
+            return `<option value="${escapeHtml(uid)}">${escapeHtml(label)}</option>`;
+          }).join("");
+          if (state.currentUserId) select.value = String(state.currentUserId);
+        }
+        // Non-admins only see their own log
+        if (!state.currentUserIsAdmin) {
+          select.style.display = "none";
+          const label = select.previousElementSibling;
+          if (label) label.style.display = "none";
+        }
       }
+      renderActivityLogTab();
+      renderAdminTimesheet();
     });
   }
   if (tab === "bot") {
@@ -30381,10 +30638,6 @@ async function populateAdminUsersList() {
           <button type="button" id="admin-save-new-user" class="btn btn-primary btn-sm">Create</button>
           <button type="button" id="admin-cancel-new-user" class="btn btn-ghost btn-sm">Cancel</button>
         </div>
-      </div>
-      <div style="margin-top:1rem; padding-top:0.75rem; border-top:1px solid var(--border);">
-        <h4 style="margin:0 0 0.5rem; font-size:0.85rem;">Timesheets</h4>
-        <div id="admin-users-ts-week"></div>
       </div>`;
 
     // Search filter
@@ -30539,12 +30792,6 @@ async function populateAdminUsersList() {
           showToast(err.message || "Failed to create user", true);
         }
       });
-    }
-
-    // Timesheets
-    const tsSection = container.querySelector("#admin-users-ts-week");
-    if (tsSection && typeof tsRenderAdminWeeklyView === "function") {
-      tsRenderAdminWeeklyView(tsSection);
     }
   } catch (e) {
     container.innerHTML = `<p style="color:#b00;">Failed to load users: ${escapeHtml(e.message)}</p>`;
@@ -36251,6 +36498,11 @@ async function init() {
   if (await checkSession()) {
     showApp();
     _startHealthPoller();
+    // Fetch clock state for header clock button
+    api("/api/timesheet/active").then(data => {
+      _tsActiveEntry = data.entry;
+      updateHeaderClockButton();
+    }).catch(() => {});
     // Start presence so header icon gets indicators right away.
     try { ensurePresenceOnLogin(); } catch {}
     bindChangelogModal(config.version);

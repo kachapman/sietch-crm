@@ -11906,6 +11906,20 @@ body {
   white-space: nowrap;
 }
 
+.event-log-entry-type {
+  flex-shrink: 0;
+  font-weight: 600;
+  font-size: 0.7rem;
+  min-width: 4.5em;
+  color: #888;
+}
+.event-log-entry.success .event-log-entry-type {
+  color: #4ade80;
+}
+.event-log-entry.fail .event-log-entry-type {
+  color: #f87171;
+}
+
 .event-log-entry.success .event-log-entry-icon {
   color: #166534;
 }
@@ -11921,62 +11935,34 @@ body {
   font-style: italic;
 }
 
-.event-log-tabs {
-  display: flex;
-  gap: 0.35rem;
-  margin-bottom: 0.75rem;
-  border-bottom: 1px solid var(--border);
-}
-.event-log-tabs.hidden {
-  display: none;
-}
-.event-log-tab {
-  padding: 0.35rem 0.6rem;
-  font-size: 0.85rem;
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-.event-log-tab.active {
-  color: var(--text);
-  border-bottom-color: var(--accent);
-}
-.event-log-tab-content {
-  display: none;
-}
-.event-log-tab-content.active {
-  display: block;
-}
-.event-log-admin-bar {
+/* ── Activity User Bar (admin console) ── */
+.activity-user-bar {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 0.75rem;
   font-size: 0.85rem;
 }
-.event-log-user-select {
+.activity-user-bar label {
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.activity-user-bar .form-control {
   flex: 1 1 auto;
   min-width: 0;
-  font: inherit;
-  font-size: 0.85rem;
-  padding: 0.25rem 0.4rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  color: var(--text);
 }
-.event-log-health-status {
-  font-size: 0.8rem;
-  color: var(--muted);
-  margin-left: auto;
+.activity-ts-controls {
+  margin-bottom: 0.5rem;
 }
-.event-log-health-status.ok {
-  color: #166534;
+.activity-ts-controls .ts-date-range {
+  flex-wrap: wrap;
 }
-.event-log-health-status.fail {
-  color: #9f1239;
+
+/* ── Header Clock Button ── */
+#header-clock-btn.header-clock-active {
+  color: #00ff88;
+  border-color: #00ff88;
+  text-shadow: 0 0 8px rgba(0, 255, 136, 0.4);
 }
 
 /* ── Infrastructure Tab ── */

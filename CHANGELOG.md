@@ -2,6 +2,51 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Activity Tab Revamp — Admin + User Modal + Header Clock (2026-08-15)
+
+### Admin Console — Activity Tab (renamed from "Logs")
+- **Tab renamed** from "Logs" to "Activity"
+- **Unified log view** — removed My log / Admin sub-tabs; single view with user dropdown
+- **User dropdown** defaults to current user; non-admins see only their own activity
+- **Terminal-style log entries** — monospace font, bracket-style type labels ([EDIT], [NOTE], [DEL], [ATTACH], [INFO]) instead of emojis
+- **Removed dead CRM status button** ("Check CRM status")
+- **Admin timesheet enhanced** with Day / Week / Month / Quarter date range views
+  - Day: per-user total hours for a single day
+  - Week: Sun-Sat grid (default)
+  - Month: weekly columns (Wk1–Wk5)
+  - Quarter: 3 month columns (e.g., Jul, Aug, Sep for Q3)
+  - Navigation arrows shift by the selected range
+  - Summary table below grid (User, Days, Total Hours, Break)
+- **Timesheet moved** from Users tab to Activity tab
+
+### New: Activity / Time Sheet Modal (user-facing)
+- **Standalone modal** with two tabs: Timesheet (default) and Activity
+- **Timesheet tab**: clock in/out, break, project search, date range navigation, entry list
+- **Activity tab**: personal event log (terminal style)
+- Accessible from: settings dropdown menu item "Activity / Time Sheet"
+
+### Header Clock Button
+- **New clock icon button** in header (left of notification bell)
+- **Toggles clock in/out** directly without opening the modal
+- **Visual state**: green glow when clocked in, tooltip shows elapsed time ("Clocked in: 2h 15m")
+- **Swaps SVG** between clock-play (out) and clock-pause (in) icons
+
+### Presence/Team — Timesheet Removed
+- **Timesheet tab removed** from presence modal (Team / Messages only remain)
+- **Timesheet tile body removed** from presence dashboard tile
+- **`switchToPresenceTimesheetTab()` removed** — timesheet now lives in Activity modal
+
+### Dead Code Removed
+- `switchEventLogTab()`, `openEventLogModal()` dead code, `closeEventLogModal()`
+- Event log sub-tab CSS (`.event-log-tabs`, `.event-log-tab`, `.event-log-tab-content`)
+- Event log admin bar CSS (`.event-log-admin-bar`, `.event-log-user-select`)
+- CRM health status CSS (`.event-log-health-status`)
+
+### Files Modified
+- `public/index.html`: Header clock button, settings dropdown item, activity modal, admin tab rename/restructure, presence timesheet tab removal
+- `public/app.js`: Activity modal functions, header clock logic, admin timesheet date views, presence cleanup, dead code removal
+- `public/styles.css`: Activity modal styles, header clock active state, terminal log type labels, admin timesheet controls, dead style removal
+
 ## Contacts Tab Fixes — Search Preview, History, Photo Upload (2026-08-14)
 
 ### Search Modal — Contact Preview Tab
