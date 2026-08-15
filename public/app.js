@@ -35338,8 +35338,16 @@ function applyBranding(branding) {
     const logo = $(".hero-logo");
     if (logo) logo.src = branding.logoPath;
   }
-  // favicon is static (not overridable per non-negotiables); branding watermark/logo still customizable
-  // if (branding.faviconPath) { ... }
+  // Apply custom favicon
+  if (branding.faviconPath) {
+    let link = document.querySelector("link[rel='icon']");
+    if (!link) {
+      link = document.createElement("link");
+      link.rel = "icon";
+      document.head.appendChild(link);
+    }
+    link.href = branding.faviconPath + (branding.faviconPath.includes("?") ? "" : "?v=" + Date.now());
+  }
   // Apply primary color
   if (branding.primaryColor) {
     setAccentColor(branding.primaryColor);
