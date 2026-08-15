@@ -3918,7 +3918,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     BRANDING_DEFAULTS = {
         "logo": "/assets/sietch-logo-2-nobg2.png",
-        "watermark": None,
+        "watermark": "/assets/default-watermark.png",
         "favicon": "/favicon.ico",
     }
     BRANDING_EXT_MAP = {"logo": "png", "watermark": "png", "favicon": "ico"}

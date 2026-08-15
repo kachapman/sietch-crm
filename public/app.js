@@ -35366,7 +35366,7 @@ async function populateBrandingForm() {
   $("#branding-header-title").value = _brandingData.headerTitle || "";
 
   // Branding images — update previews and reset button visibility
-  const defaults = { logo: "/assets/sietch-logo-2-nobg2.png", watermark: null, favicon: "/favicon.ico" };
+  const defaults = { logo: "/assets/sietch-logo-2-nobg2.png", watermark: "/assets/default-watermark.png", favicon: "/favicon-32.png" };
   ["logo", "watermark", "favicon"].forEach(type => {
     const path = _brandingData[type === "logo" ? "logoPath" : type === "watermark" ? "watermarkPath" : "faviconPath"];
     const isCustom = path && path.startsWith("/api/branding/");
@@ -35374,17 +35374,12 @@ async function populateBrandingForm() {
     if (resetBtn) resetBtn.style.display = isCustom ? "" : "none";
     const preview = $(`#branding-${type}-preview`);
     const img = preview?.querySelector("img");
-    if (type === "favicon") {
-      const src = path || defaults.favicon;
-      if (img) img.src = src + (src.includes("?") ? "" : "?v=" + Date.now());
-      else if (preview) { preview.innerHTML = `<img src="${escapeHtml(src)}" alt="Favicon" />`; preview.classList.remove("branding-image-preview-empty"); }
-    } else if (type === "logo") {
-      const src = path || defaults.logo;
-      if (img) img.src = src;
-      else if (preview) { preview.innerHTML = `<img src="${escapeHtml(src)}" alt="Logo" />`; preview.classList.remove("branding-image-preview-empty"); }
-    } else {
-      if (path && img) { img.src = path; preview.classList.remove("branding-image-preview-empty"); }
-      else if (!path && preview) { preview.innerHTML = '<span style="font-size:0.7rem; color:var(--muted);">None</span>'; preview.classList.add("branding-image-preview-empty"); const oldImg = preview.querySelector("img"); if (oldImg) oldImg.remove(); }
+    const src = path || defaults[type];
+    if (img) {
+      img.src = src + (type === "favicon" && !src.includes("?") ? "?v=" + Date.now() : "");
+    } else if (preview) {
+      preview.innerHTML = `<img src="${escapeHtml(src)}" alt="${type}" />`;
+      preview.classList.remove("branding-image-preview-empty");
     }
     const nameEl = $(`#branding-${type}-name`);
     if (nameEl) nameEl.textContent = isCustom ? path.split("/").pop() : "";
