@@ -2,7 +2,27 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
-## Branding Image Upload + Favicon Fix (2026-08-14)
+## Contacts Tab Fixes — Search Preview, History, Photo Upload (2026-08-14)
+
+### Search Modal — Contact Preview Tab
+- **Clicking a contact now opens a preview tab** within the search modal (same as project preview tabs) instead of opening the admin console
+- **Read-only detail view** for all users with full contact fields + history timeline
+- **Add Note** button lets all users add notes to contact history from the preview tab
+- **Edit button** (admin-only) opens the admin contacts detail panel for full editing
+- **Close button** on tab returns to contacts list
+
+### Search Modal — Stable Height
+- **Fixed modal height change** when switching between Projects and Contacts tabs
+- Added `min-height: 500px` to `.modal-card-search-popup` so the modal maintains consistent size
+
+### Admin Contacts — History Fixed
+- **Fixed "Failed to load history" bug** caused by undefined `method` variable in `_handle_api_get()`
+- Removed redundant `method == "GET"` checks from 4 route conditions (was causing `NameError` crashes)
+
+### Contact Photo Upload
+- **New photo upload** in admin contacts detail: click the avatar area to upload JPG/PNG (max 5MB)
+- Photos stored as files on disk in `data/contact-photos/{id}/` with full-size (400x400) and thumbnail (96x96) versions
+- **Served via** `GET /api/v2/contacts/{id}/photo` (with `?thumbnail=1` for thumb)
 
 ### Favicon Bug Fix
 - **Removed exclamation mark SVG favicon** that was overriding the Sietch logo favicon in browser tabs
