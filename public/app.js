@@ -30984,13 +30984,14 @@ async function populateAdminStagesList(search = "") {
       const typeLabel = stageTypeNames[s.stageType] || "";
       const typeBadge = typeLabel ? `<span class="admin-customize-badge">${escapeHtml(typeLabel)}</span>` : "";
       const activeBadge = s.isActive === false ? '<span class="admin-customize-badge" style="color:var(--danger);">inactive</span>' : "";
+      const countBadge = s.projectCount > 0 ? `<span class="admin-customize-badge">${s.projectCount} project${s.projectCount !== 1 ? 's' : ''}</span>` : "";
       return `<div class="admin-customize-row" data-stage-id="${s.id}">
         <button class="admin-customize-reorder-btn" data-dir="up" data-stage-id="${s.id}" title="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
         <button class="admin-customize-reorder-btn" data-dir="down" data-stage-id="${s.id}" title="Move down" ${i === stages.length - 1 ? 'disabled' : ''}>▼</button>
         <span class="admin-customize-color-swatch" style="background:${escapeHtml(color)};"></span>
         <div class="admin-customize-row-info">
           <div class="admin-customize-row-label">${escapeHtml(s.title || "Stage")}</div>
-          <div class="admin-customize-row-meta">${typeBadge} ${activeBadge}</div>
+          <div class="admin-customize-row-meta">${typeBadge} ${countBadge} ${activeBadge}</div>
         </div>
         <div class="admin-customize-row-actions">
           <button class="btn btn-ghost" data-edit-stage="${s.id}" title="Edit">✎</button>

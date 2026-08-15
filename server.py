@@ -3767,11 +3767,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not user:
             return
         rows = db.query(
-            "SELECT id, title, color, sort_order, stage_type, probability, is_active FROM stages ORDER BY sort_order"
+            """SELECT s.id, s.title, s.color, s.sort_order, s.stage_type, s.probability, s.is_active,
+                      COUNT(o.id) as project_count
+               FROM stages s
+               LEFT JOIN opportunities o ON o.stage_id = s.id
+               GROUP BY s.id
+               ORDER BY s.sort_order"""
         )
         _json_response(self, 200, [
             {"id": r[0], "title": r[1], "color": r[2], "sortOrder": r[3],
-             "stageType": r[4], "probability": r[5], "isActive": r[6]}
+             "stageType": r[4], "probability": r[5], "isActive": r[6], "projectCount": r[7]}
             for r in rows
         ])
 
