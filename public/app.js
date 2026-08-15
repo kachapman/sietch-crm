@@ -30980,7 +30980,9 @@ async function populateAdminStagesList(search = "") {
     }
     listEl.innerHTML = stages.map((s, i) => {
       const color = s.color || "#888";
-      const typeBadge = s.stageType != null ? `<span class="admin-customize-badge">${escapeHtml(String(s.stageType))}</span>` : "";
+      const stageTypeNames = { 0: "Open", 1: "Won", 2: "Lost" };
+      const typeLabel = stageTypeNames[s.stageType] || "";
+      const typeBadge = typeLabel ? `<span class="admin-customize-badge">${escapeHtml(typeLabel)}</span>` : "";
       const activeBadge = s.isActive === false ? '<span class="admin-customize-badge" style="color:var(--danger);">inactive</span>' : "";
       return `<div class="admin-customize-row" data-stage-id="${s.id}">
         <button class="admin-customize-reorder-btn" data-dir="up" data-stage-id="${s.id}" title="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
