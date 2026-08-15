@@ -30980,7 +30980,6 @@ async function populateAdminStagesList(search = "") {
     }
     listEl.innerHTML = stages.map((s, i) => {
       const color = s.color || "#888";
-      const prob = s.probability != null ? `${s.probability}%` : "";
       const typeBadge = s.stageType != null ? `<span class="admin-customize-badge">${escapeHtml(String(s.stageType))}</span>` : "";
       const activeBadge = s.isActive === false ? '<span class="admin-customize-badge" style="color:var(--danger);">inactive</span>' : "";
       return `<div class="admin-customize-row" data-stage-id="${s.id}">
@@ -30989,7 +30988,7 @@ async function populateAdminStagesList(search = "") {
         <span class="admin-customize-color-swatch" style="background:${escapeHtml(color)};"></span>
         <div class="admin-customize-row-info">
           <div class="admin-customize-row-label">${escapeHtml(s.title || "Stage")}</div>
-          <div class="admin-customize-row-meta">${prob} ${typeBadge} ${activeBadge}</div>
+          <div class="admin-customize-row-meta">${typeBadge} ${activeBadge}</div>
         </div>
         <div class="admin-customize-row-actions">
           <button class="btn btn-ghost" data-edit-stage="${s.id}" title="Edit">✎</button>
@@ -31018,7 +31017,6 @@ function bindAdminStages() {
       $("#admin-stage-editing-id").value = "";
       $("#admin-stage-title").value = "";
       $("#admin-stage-color").value = "#6d4aff";
-      $("#admin-stage-prob").value = "";
       $("#admin-stage-type").value = "Open";
       if (form) form.style.display = "flex";
       $("#admin-stage-title")?.focus();
@@ -31036,7 +31034,6 @@ function bindAdminStages() {
       const payload = {
         title,
         color: $("#admin-stage-color")?.value || "#6d4aff",
-        probability: parseInt($("#admin-stage-prob")?.value) || 0,
         stageType: stageTypeMap[$("#admin-stage-type")?.value] ?? 0,
       };
       try {
@@ -31072,7 +31069,6 @@ function bindAdminStages() {
           $("#admin-stage-editing-id").value = s.id;
           $("#admin-stage-title").value = s.title || "";
           $("#admin-stage-color").value = s.color || "#6d4aff";
-          $("#admin-stage-prob").value = s.probability ?? "";
           $("#admin-stage-type").value = stageTypeNames[s.stageType] || "Open";
           if (form) form.style.display = "flex";
           $("#admin-stage-title")?.focus();

@@ -15020,6 +15020,13 @@ select.form-control {
 }
 
 /* ── Customize Projects tab — multi-column layout ─────────────────────────── */
+#admin-tab-customize {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
 .admin-customize-grid {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
@@ -15067,7 +15074,6 @@ select.form-control {
 .admin-customize-list {
   flex: 1;
   min-height: 0;
-  max-height: 300px;
   overflow-y: auto;
   font-size: 0.85rem;
 }
