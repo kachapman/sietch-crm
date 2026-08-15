@@ -4000,6 +4000,27 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 dest = ico_path
             except ImportError:
                 dest.write_bytes(file_data)
+        elif img_type == "watermark":
+            try:
+                from PIL import Image as PILImage
+                import io
+                img = PILImage.open(io.BytesIO(file_data)).convert("RGBA")
+                bbox = img.getbbox()
+                if bbox:
+                    img = img.crop(bbox)
+                size = max(img.size)
+                canvas = PILImage.new("RGBA", (size, size), (0, 0, 0, 0))
+                offset = ((size - img.width) // 2, (size - img.height) // 2)
+                canvas.paste(img, offset, img)
+                alpha = canvas.split()[3]
+                alpha = alpha.point(lambda p: int(p * 0.25))
+                canvas.putalpha(alpha)
+                canvas.thumbnail((800, 800), PILImage.LANCZOS)
+                buf = io.BytesIO()
+                canvas.save(buf, format="PNG")
+                dest.write_bytes(buf.getvalue())
+            except ImportError:
+                dest.write_bytes(file_data)
         else:
             dest.write_bytes(file_data)
         db_col = {"logo": "logo_path", "watermark": "watermark_path", "favicon": "favicon_path"}[img_type]
