@@ -27,6 +27,7 @@ services:
     volumes:
       - dashboard-data:/app/data
       - dashboard-uploads:/app/uploads
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "0.0.0.0:8766:8766"
     networks:

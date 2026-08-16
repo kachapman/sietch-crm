@@ -17,6 +17,7 @@ import httpx
 
 import db
 import crm_bot_store
+import infra_log
 
 logger = logging.getLogger("notification_dispatcher")
 
@@ -501,6 +502,7 @@ def _dispatcher_loop(stop_event: threading.Event) -> None:
                 logger.info("Sent %d Telegram notification(s)", sent)
         except Exception:
             logger.exception("Dispatcher loop error")
+            infra_log.log_infra_event("error", "Notification dispatcher loop error", source="dispatcher")
         stop_event.wait(POLL_INTERVAL)
     logger.info("Notification dispatcher stopped")
 

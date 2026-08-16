@@ -48,15 +48,15 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("sietch_server")
 
-# ── Infrastructure ring buffer (rolling 200 events) ───────────────────────────
-_infra_log: collections.deque = collections.deque(maxlen=200)
-_infra_start_time = time.time()
+# ── Infrastructure ring buffer (shared module, rolling 500 events) ─────────────
+from infra_log import (  # noqa: E402
+    log_infra_event,
+    infra_events,
+    infra_uptime,
+    infra_start_time,
+)
 
-def log_infra_event(level: str, msg: str) -> None:
-    """Append an event to the infrastructure ring buffer."""
-    _infra_log.append({"ts": datetime.now(timezone.utc).isoformat(), "level": level, "msg": msg})
-
-log_infra_event("info", "Server started")
+log_infra_event("info", "Server started", source="app")
 
 # ── OnlyOffice Sync State ──────────────────────────────────────────────────────
 _sync_log: collections.deque = collections.deque(maxlen=500)
@@ -66,6 +66,8 @@ def _append_sync_log(level: str, msg: str) -> None:
     """Append a message to the sync log."""
     _sync_log.append({"ts": datetime.now(timezone.utc).isoformat(), "level": level, "msg": msg})
     logger.info("SYNC %s: %s", level, msg)
+    if level == "error":
+        log_infra_event("error", f"Sync: {msg}", source="sync")
 
 def _crm_api_get(portal: str, token: str, path: str, retries: int = 3) -> Any:
     """GET from OnlyOffice CRM API with retry."""
@@ -1041,7 +1043,7 @@ def _proxy_document_server(method: str, ds_path: str, body: bytes | None = None,
     except urllib.error.HTTPError as e:
         return e.code, e.read(), e.headers.get("Content-Type", "application/json")
     except Exception:
-        log_infra_event("error", f"Document Server unreachable: {ds_path}")
+        log_infra_event("error", f"Document Server unreachable: {ds_path}", source="docserver", method=method, path=ds_path)
         return 502, b'{"error": "Document Server unreachable"}', "application/json"
 
 
@@ -1054,6 +1056,201 @@ def _download_from_docserver(url: str, timeout: int = 60) -> bytes:
     ctx.verify_mode = ssl.CERT_NONE
     with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
         return resp.read()
+
+
+# ── Infrastructure helpers ─────────────────────────────────────────────────────
+
+DB_CONTAINER_NAME = os.environ.get("DB_CONTAINER_NAME", "sietch-db")
+REDIS_CONTAINER_NAME = os.environ.get("REDIS_CONTAINER_NAME", "sietch-redis")
+
+
+def _probe_docserver() -> tuple:
+    """Probe the Document Server /healthcheck endpoint.
+
+    Returns (reachable: bool, latency_ms: float | None, error: str | None).
+    Logs to the infra ring only on reachability state transitions to avoid noise.
+    """
+    import infra_log
+    ds_url = _effective_docs_internal_url()
+    if not ds_url:
+        return False, None, "Document Server not configured"
+    url = f"{ds_url.rstrip('/')}/healthcheck"
+    ctx = None
+    if ds_url.lower().startswith("https"):
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    try:
+        start = time.monotonic()
+        with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=5, context=ctx) as resp:
+            latency_ms = round((time.monotonic() - start) * 1000, 1)
+        ok = resp.status == 200
+        if ok != infra_log._last_docserver_ok:
+            if ok:
+                log_infra_event("info", f"Document Server healthy ({latency_ms}ms)", source="docserver", path="/healthcheck")
+            else:
+                log_infra_event("warn", f"Document Server /healthcheck returned HTTP {resp.status}", source="docserver", path="/healthcheck")
+            infra_log._last_docserver_ok = ok
+        if not ok:
+            return False, latency_ms, f"HTTP {resp.status}"
+        return True, latency_ms, None
+    except Exception as exc:
+        if infra_log._last_docserver_ok is not False:
+            log_infra_event("error", f"Document Server unreachable: {exc}", source="docserver", path="/healthcheck")
+            infra_log._last_docserver_ok = False
+        return False, None, str(exc)
+
+
+def _docker_containers() -> list[dict]:
+    """Return status for the known Compose siblings when the docker CLI is available."""
+    names = [
+        (CONTAINER_NAME, "Dashboard"),
+        (DB_CONTAINER_NAME, "Database"),
+        (DOCSERVER_CONTAINER_NAME, "Document Server"),
+        (REDIS_CONTAINER_NAME, "Redis"),
+    ]
+    out: list[dict] = []
+    for name, label in names:
+        if not name:
+            continue
+        try:
+            result = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Status}} {{.RestartCount}}", name],
+                capture_output=True, text=True, timeout=5,
+            )
+        except Exception:
+            continue
+        if result.returncode != 0:
+            continue  # container not present on this host
+        parts = result.stdout.strip().split()
+        out.append({
+            "name": name,
+            "label": label,
+            "status": parts[0] if parts else "unknown",
+            "restartCount": int(parts[1]) if len(parts) > 1 else 0,
+        })
+    return out
+
+
+def _disk_usage() -> list[dict]:
+    """Disk usage for the app's data/upload directories plus cwd (via shutil, no deps)."""
+    paths = []
+    for p in (os.getcwd(), "/app/data", "/app/uploads"):
+        if p and os.path.isdir(p) and p not in paths:
+            paths.append(p)
+    out = []
+    for p in paths:
+        try:
+            usage = shutil.disk_usage(p)
+            out.append({
+                "path": p,
+                "total": usage.total,
+                "used": usage.used,
+                "free": usage.free,
+                "percent": round(usage.used / usage.total * 100, 1) if usage.total else 0,
+            })
+        except Exception:
+            continue
+    return out
+
+
+def _mem_usage() -> dict:
+    try:
+        with open("/proc/meminfo") as f:
+            data = {}
+            for line in f:
+                key, _, val = line.partition(":")
+                data[key.strip()] = int(val.strip().split()[0]) * 1024  # kB → bytes
+        return {
+            "total": data.get("MemTotal", 0),
+            "available": data.get("MemAvailable", 0),
+            "used": max(data.get("MemTotal", 0) - data.get("MemAvailable", 0), 0),
+        }
+    except Exception:
+        return {}
+
+
+def _load_avg() -> list | None:
+    try:
+        return [round(v, 2) for v in os.getloadavg()]
+    except Exception:
+        return None
+
+
+def _infra_error_stats() -> dict:
+    """Count errors/warns from the ring buffer and top recurring error messages."""
+    now = time.time()
+    last1h = 0
+    last24h = 0
+    total_errors = 0
+    total_warns = 0
+    recent_msgs: dict[str, int] = {}
+    for e in infra_events():
+        level = e.get("level", "info")
+        if level == "error":
+            total_errors += 1
+        elif level == "warn":
+            total_warns += 1
+        try:
+            age_s = now - datetime.fromisoformat(e.get("ts", "")).timestamp()
+        except Exception:
+            continue
+        if level == "error":
+            if age_s <= 3600:
+                last1h += 1
+            if age_s <= 86400:
+                last24h += 1
+                msg = e.get("msg", "")
+                if len(msg) > 120:
+                    msg = msg[:117] + "..."
+                recent_msgs[msg] = recent_msgs.get(msg, 0) + 1
+    top = sorted(recent_msgs.items(), key=lambda kv: kv[1], reverse=True)[:5]
+    return {
+        "last1h": last1h,
+        "last24h": last24h,
+        "totalErrors": total_errors,
+        "totalWarns": total_warns,
+        "top": [{"msg": m, "count": c} for m, c in top],
+    }
+
+
+def _backup_summary() -> dict:
+    try:
+        import backup_service
+        status = backup_service.get_backup_status()
+        last = status.get("last_backup") or {}
+        return {
+            "enabled": status.get("enabled", False),
+            "lastStatus": last.get("status", "none"),
+            "lastTs": last.get("ts"),
+            "lastSize": last.get("size"),
+            "lastError": last.get("error"),
+            "nextBackupTs": status.get("next_backup_ts"),
+        }
+    except Exception as exc:
+        return {"enabled": False, "lastStatus": "none", "lastTs": None, "lastError": f"backup_service error: {exc}"}
+
+
+def _docker_status() -> dict:
+    """Combined Docker access + container status. Falls back to probes when no CLI."""
+    accessible = shutil.which("docker") is not None
+    in_docker = _is_running_in_docker()
+    containers = _docker_containers() if accessible else []
+    if in_docker and not accessible:
+        return {
+            "accessible": False,
+            "inDocker": True,
+            "containerName": socket.gethostname(),
+            "containers": [],
+            "note": "Docker CLI/socket not available inside this container. Install the docker CLI and mount /var/run/docker.sock to see container status and use restart controls.",
+        }
+    return {
+        "accessible": accessible,
+        "inDocker": in_docker,
+        "containerName": socket.gethostname() if in_docker else None,
+        "containers": containers,
+        "note": "",
+    }
 
 
 _EXT_TO_MIME = {
@@ -1221,9 +1418,34 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
+    def _run_api_handler(self, fn) -> None:
+        """Run an API handler, logging any unhandled exception to the infra ring."""
+        try:
+            fn()
+        except Exception as exc:
+            logger.exception("Unhandled error handling %s %s", self.command, self.path)
+            user_email = ""
+            try:
+                tok = _session_token(self)
+                if tok:
+                    u = auth_mod.get_session_user(tok)
+                    if u:
+                        user_email = u.get("email", "")
+            except Exception:
+                pass
+            log_infra_event(
+                "error",
+                f"Unhandled error: {type(exc).__name__}: {exc}",
+                source="api", method=self.command, path=urlparse(self.path).path, user=user_email,
+            )
+            try:
+                _json_response(self, 500, {"error": "Internal server error"})
+            except Exception:
+                pass
+
     def do_GET(self) -> None:
         if self.path.startswith("/api/"):
-            self._handle_api_get()
+            self._run_api_handler(self._handle_api_get)
             return
         # Rewrite /project/{id} → /project.html?id={id}
         # Must redirect so the browser URL has ?id= (JS reads window.location.search)
@@ -1306,25 +1528,25 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_2fa_disable()
             return
         if self.path.startswith("/api/"):
-            self._handle_api_post_put("POST")
+            self._run_api_handler(lambda: self._handle_api_post_put("POST"))
             return
         self.send_error(405, "Method Not Allowed")
 
     def do_PUT(self) -> None:
         if self.path.startswith("/api/"):
-            self._handle_api_post_put("PUT")
+            self._run_api_handler(lambda: self._handle_api_post_put("PUT"))
             return
         self.send_error(405)
 
     def do_DELETE(self) -> None:
         if self.path.startswith("/api/"):
-            self._handle_api_post_put("DELETE")
+            self._run_api_handler(lambda: self._handle_api_post_put("DELETE"))
             return
         self.send_error(405)
 
     def do_PATCH(self) -> None:
         if self.path.startswith("/api/"):
-            self._handle_api_post_put("PATCH")
+            self._run_api_handler(lambda: self._handle_api_post_put("PATCH"))
             return
         self.send_error(405)
 
@@ -1345,6 +1567,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
         user = auth_mod.authenticate_user(email, password)
         if not user:
+            log_infra_event("warn", f"Login failed for {email}", source="auth", path="/api/v2/auth/login")
             _json_response(self, 401, {"error": "Invalid email or password"})
             return
 
@@ -1812,13 +2035,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             user = _require_admin(self)
             if not user:
                 return
-            _json_response(self, 200, {"events": list(_infra_log), "uptime": time.time() - _infra_start_time})
+            _json_response(self, 200, {"events": infra_events(), "uptime": infra_uptime()})
             return
         if api_path == "/api/v2/admin/docker-health":
             user = _require_admin(self)
             if not user:
                 return
             self._handle_docker_health()
+            return
+        if api_path == "/api/v2/admin/infrastructure":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_infrastructure()
             return
         if api_path == "/api/v2/admin/sync/status":
             user = _require_admin(self)
@@ -2443,7 +2672,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             user = _require_admin(self)
             if not user:
                 return
-            log_infra_event("info", f"Server restart requested by {user.get('email', 'unknown')}")
+            log_infra_event("info", f"Server restart requested by {user.get('email', 'unknown')}", source="admin", method="POST", path=api_path)
             _json_response(self, 200, {"ok": True, "message": "Server restarting…"})
             import subprocess
             import threading
@@ -2461,7 +2690,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             user = _require_admin(self)
             if not user:
                 return
-            log_infra_event("info", f"Docker container restart requested by {user.get('email', 'unknown')}")
+            log_infra_event("info", f"Docker container restart requested by {user.get('email', 'unknown')}", source="admin", method="POST", path=api_path)
             try:
                 import subprocess
                 # In Docker, socket.gethostname() returns the container id (not the
@@ -2472,18 +2701,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     _json_response(self, 200, {"ok": True, "message": "Container restart triggered"})
                 else:
                     err = result.stderr.strip() or result.stdout.strip() or "docker restart returned non-zero"
-                    log_infra_event("error", f"Docker restart failed: {err}")
+                    log_infra_event("error", f"Docker restart failed: {err}", source="admin", method="POST", path=api_path)
                     _json_response(self, 500, {"error": f"Docker restart failed: {err}"})
             except Exception as exc:
                 logger.exception("Docker restart failed")
-                log_infra_event("error", f"Docker restart exception: {exc}")
+                log_infra_event("error", f"Docker restart exception: {exc}", source="admin", method="POST", path=api_path)
                 _json_response(self, 500, {"error": str(exc)})
             return
         if api_path == "/api/v2/admin/restart-docserver" and method == "POST":
             user = _require_admin(self)
             if not user:
                 return
-            log_infra_event("info", f"Document Server restart requested by {user.get('email', 'unknown')}")
+            log_infra_event("info", f"Document Server restart requested by {user.get('email', 'unknown')}", source="admin", method="POST", path=api_path)
             try:
                 import subprocess
                 # In production the Document Server may live on a separate droplet,
@@ -2495,11 +2724,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     _json_response(self, 200, {"ok": True, "message": "Document Server restart triggered"})
                 else:
                     err = result.stderr.strip() or result.stdout.strip() or "docker restart returned non-zero"
-                    log_infra_event("error", f"Document Server restart failed: {err}")
+                    log_infra_event("error", f"Document Server restart failed: {err}", source="admin", method="POST", path=api_path)
                     _json_response(self, 500, {"error": f"Document Server restart failed: {err}"})
             except Exception as exc:
                 logger.exception("Document Server restart failed")
-                log_infra_event("error", f"Document Server restart exception: {exc}")
+                log_infra_event("error", f"Document Server restart exception: {exc}", source="admin", method="POST", path=api_path)
                 _json_response(self, 500, {"error": str(exc)})
             return
 
@@ -5727,7 +5956,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     thumb_path.unlink(missing_ok=True)
             except Exception:
                 pass
-            log_infra_event("error", f"Photo upload DB insert failed: {exc}")
+            log_infra_event("error", f"Photo upload DB insert failed: {exc}", source="documents", method=self.command, path=api_path)
             _json_response(self, 500, {"error": f"Upload failed: {exc}"})
             return
         _json_response(self, 201, {
@@ -6010,7 +6239,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         (ROOT / new_thumb_path).unlink(missing_ok=True)
                 except Exception:
                     pass
-                log_infra_event("error", f"Photo copy failed for {photo_id}: {exc}")
+                log_infra_event("error", f"Photo copy failed for {photo_id}: {exc}", source="documents", method=self.command, path=api_path)
                 _json_response(self, 500, {"error": f"Copy failed for photo {photo_id}: {exc}"})
                 return
         _json_response(self, 200, {"ok": True, "copied": copied})
@@ -6040,7 +6269,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"documents": docs})
         except Exception as exc:
             logger.exception("projects/{id}/documents failed")
-            log_infra_event("error", f"projects/{opp_id}/documents failed: {exc}")
+            log_infra_event("error", f"projects/{opp_id}/documents failed: {exc}", source="documents", method=self.command, path=api_path)
             _json_response(self, 500, {"error": "Failed to load project documents"})
 
     def _handle_project_document_upload(self, opp_id: int) -> None:
@@ -6099,7 +6328,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         try:
             hostname = socket.gethostname()
             info["containerName"] = hostname
-            import subprocess
             result = subprocess.run(
                 ["docker", "inspect", "--format", "{{.State.Status}} {{.RestartCount}}", hostname],
                 capture_output=True, text=True, timeout=5
@@ -6113,6 +6341,50 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             info["status"] = f"error: {exc}"
         _json_response(self, 200, info)
+
+    def _handle_infrastructure(self) -> None:
+        """GET consolidated infrastructure status for the admin Infrastructure tab."""
+        # Database
+        db_ok = False
+        db_err = None
+        try:
+            db_ok = bool(db.query("SELECT 1", fetch="one"))
+        except Exception as exc:
+            db_err = str(exc)
+        # Document Server
+        ds_ok, ds_latency, ds_err = _probe_docserver()
+        # Docker
+        docker = _docker_status()
+        # Resources
+        resources = {
+            "disk": _disk_usage(),
+            "memory": _mem_usage(),
+            "loadavg": _load_avg(),
+        }
+        payload = {
+            "server": {
+                "version": APP_VERSION,
+                "uptime": round(infra_uptime(), 1),
+                "startTime": datetime.fromtimestamp(infra_start_time(), timezone.utc).isoformat(),
+                "pid": os.getpid(),
+                "inDocker": docker.get("inDocker", False),
+            },
+            "db": {"reachable": db_ok, "error": db_err},
+            "docserver": {
+                "reachable": ds_ok,
+                "latencyMs": ds_latency,
+                "error": ds_err,
+                "internalUrl": _effective_docs_internal_url(),
+                "publicUrl": DOCS_PUBLIC_URL,
+            },
+            "docker": docker,
+            "resources": resources,
+            "errors": _infra_error_stats(),
+            "backup": _backup_summary(),
+            "health": {"dbReachable": db_ok},
+            "events": infra_events(),
+        }
+        _json_response(self, 200, payload)
 
     # ── OnlyOffice Sync Handlers ────────────────────────────────────────────────
 
@@ -7702,7 +7974,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"documents": docs, "folders": folders})
         except Exception as exc:
             logger.exception("documents/personal failed")
-            log_infra_event("error", f"documents/personal failed: {exc}")
+            log_infra_event("error", f"documents/personal failed: {exc}", source="documents", method=self.command, path=api_path)
             _json_response(self, 500, {"error": "Failed to load personal documents"})
 
     def _handle_documents_company(self) -> None:
@@ -7750,7 +8022,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"documents": docs, "folders": folders})
         except Exception as exc:
             logger.exception("documents/company failed")
-            log_infra_event("error", f"documents/company failed: {exc}")
+            log_infra_event("error", f"documents/company failed: {exc}", source="documents", method=self.command, path=api_path)
             _json_response(self, 500, {"error": "Failed to load company documents"})
 
     def _handle_documents_search(self, qs: dict) -> None:
@@ -7816,7 +8088,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"results": list(grouped.values()), "total": len(rows)})
         except Exception as exc:
             logger.exception("documents/search failed")
-            log_infra_event("error", f"documents/search failed: {exc}")
+            log_infra_event("error", f"documents/search failed: {exc}", source="documents", method=self.command, path=api_path)
             _json_response(self, 500, {"error": "Failed to search documents"})
 
     def _handle_projects_simple(self) -> None:
@@ -8200,7 +8472,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"folders": folders})
         except Exception as exc:
             logger.exception("documents/folders failed")
-            log_infra_event("error", f"documents/folders failed: {exc}")
+            log_infra_event("error", f"documents/folders failed: {exc}", source="documents", method=self.command, path=api_path)
             _json_response(self, 500, {"error": "Failed to load folders"})
 
     def _handle_document_folders_tree(self, qs: dict) -> None:
@@ -8227,7 +8499,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"folders": folders})
         except Exception as exc:
             logger.exception("documents/folders/tree failed")
-            log_infra_event("error", f"documents/folders/tree failed: {exc}")
+            log_infra_event("error", f"documents/folders/tree failed: {exc}", source="documents", method=self.command, path=api_path)
             _json_response(self, 500, {"error": "Failed to load folder tree"})
 
     def _handle_document_folder_create(self) -> None:
@@ -8334,7 +8606,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"ok": True})
         except Exception as exc:
             logger.exception("documents/folders/%d delete failed", folder_id)
-            log_infra_event("error", f"documents/folders/{folder_id} delete failed: {exc}")
+            log_infra_event("error", f"documents/folders/{folder_id} delete failed: {exc}", source="documents", method=self.command, path=api_path)
             _json_response(self, 500, {"error": "Failed to delete folder"})
 
     def _handle_document_create_blank(self) -> None:
@@ -8535,9 +8807,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             "UPDATE project_documents SET file_size = %s WHERE id = %s",
                             (len(data), doc_id),
                         )
-                        log_infra_event("info", f"Callback saved doc {doc_id}: {len(data)} bytes (status={status})")
+                        log_infra_event("info", f"Callback saved doc {doc_id}: {len(data)} bytes (status={status})", source="docserver", method="POST", path="/callback")
                 except Exception as exc:
-                    log_infra_event("error", f"Callback download failed for doc {doc_id}: {exc}")
+                    log_infra_event("error", f"Callback download failed for doc {doc_id}: {exc}", source="docserver", method="POST", path="/callback")
         _json_response(self, 200, {"error": 0})
 
     # ── Batch Tags ──────────────────────────────────────────────────────────

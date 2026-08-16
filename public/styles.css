@@ -12047,28 +12047,158 @@ body {
   }
 }
 
-/* ── Infrastructure Tab ── */
+/* ── Infrastructure Tab ──────────────────────────────────────────────────────── */
 
-.infra-section {
-  margin-bottom: 1rem;
+.infra-header-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
 }
-.infra-section h4 {
-  margin: 0 0 0.5rem;
-  font-size: 0.9rem;
-  color: var(--text);
+.infra-header-row h3 { margin: 0; }
+.infra-last-updated {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--muted, #999);
+  white-space: nowrap;
 }
-.infra-status-box {
-  padding: 0.5rem 0.75rem;
-  background: var(--bg-elevated);
-  border-radius: 4px;
+
+/* Status grid */
+.infra-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+.infra-card {
+  background: var(--bg-elevated, #f4f5f7);
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+}
+.infra-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+  color: var(--text, #1f2937);
+}
+.infra-card-body {
   font-size: 0.82rem;
+  line-height: 1.45;
+}
+.infra-card-meta {
+  font-size: 0.76rem;
+  color: var(--muted, #888);
+  margin-top: 0.2rem;
+}
+
+/* Status dots */
+.infra-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.infra-dot-ok   { background: #22c55e; }
+.infra-dot-fail { background: #ef4444; }
+.infra-dot-loading { background: #9ca3af; }
+
+/* Status text */
+.infra-ok   { color: #22c55e; }
+.infra-fail { color: #ef4444; }
+.infra-warn { color: #f59e0b; }
+
+/* Container rows */
+.infra-container-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.2rem;
+}
+.infra-container-name { font-size: 0.75rem; color: var(--muted, #888); }
+
+/* Resource / error / backup strip */
+.infra-row-strip {
+  font-size: 0.82rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--border, #d1d5db);
+  color: var(--text, #1f2937);
   line-height: 1.5;
 }
-.infra-status-box .status-ok {
-  color: #166534;
+.infra-resources { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; }
+.infra-resource-item {
+  white-space: nowrap;
 }
-.infra-status-box .status-fail {
-  color: #9f1239;
+.infra-top-errors {
+  margin-top: 0.25rem;
+  font-size: 0.78rem;
+}
+.infra-top-error-item {
+  display: inline-block;
+  margin-bottom: 0.15rem;
+}
+
+/* Log controls row */
+.infra-log-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
+}
+.infra-log-select, .infra-log-search {
+  font-size: 0.82rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: 4px;
+  background: var(--surface, #fff);
+  color: var(--text, #1f2937);
+}
+.infra-log-search { width: 180px; }
+.infra-log-auto-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  color: var(--muted, #888);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.infra-log-auto-label input[type=checkbox] {
+  width: 14px; height: 14px;
+}
+.infra-log-count {
+  font-size: 0.78rem;
+  color: var(--muted, #999);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* Log entry source badge */
+.event-log-entry-source {
+  display: inline-block;
+  font-size: 0.72rem;
+  color: #7c8aff;
+  background: rgba(124, 138, 255, 0.1);
+  border-radius: 3px;
+  padding: 0 0.3rem;
+  margin-right: 0.35rem;
+  white-space: nowrap;
+}
+
+/* Verify connectivity results */
+.infra-status-indicator {
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+.infra-status-indicator.ok   { color: #22c55e; }
+.infra-status-indicator.fail { color: #ef4444; }
+.infra-verify-target {
+  display: inline-block;
+  margin-right: 0.75rem;
 }
 
 /* ── Customer Bot Modal ── */
@@ -13746,6 +13876,38 @@ select.form-control {
   background: #0f0f0f;
   color: #d0d0d0;
 }
+
+/* Admin infra tab terminal theme overrides */
+#admin-tab-infra .infra-card {
+  background: #1a1a1a;
+  border-color: #333;
+  color: #d0d0d0;
+}
+#admin-tab-infra .infra-card-header { color: #e0e0e0; }
+#admin-tab-infra .infra-card-meta { color: #777; }
+#admin-tab-infra .infra-row-strip { border-top-color: #333; color: #d0d0d0; }
+#admin-tab-infra .infra-ok   { color: #4ade80; }
+#admin-tab-infra .infra-fail { color: #f87171; }
+#admin-tab-infra .infra-warn { color: #fbbf24; }
+#admin-tab-infra .infra-dot-ok   { background: #4ade80; }
+#admin-tab-infra .infra-dot-fail { background: #f87171; }
+#admin-tab-infra .infra-dot-loading { background: #555; }
+#admin-tab-infra .infra-container-name { color: #888; }
+#admin-tab-infra .event-log-entry-source {
+  color: #93c5fd;
+  background: rgba(147, 197, 253, 0.1);
+}
+#admin-tab-infra .infra-log-select, #admin-tab-infra .infra-log-search {
+  background: #1a1a1a;
+  border-color: #333;
+  color: #d0d0d0;
+}
+#admin-tab-infra .infra-log-auto-label { color: #888; }
+#admin-tab-infra .infra-log-count { color: #666; }
+#admin-tab-infra .infra-last-updated { color: #666; }
+#admin-tab-infra .infra-status-indicator { color: #888; }
+#admin-tab-infra .infra-status-indicator.ok   { color: #4ade80; }
+#admin-tab-infra .infra-status-indicator.fail { color: #f87171; }
 
 /* ── Phase 2D: SortableJS Drag Classes ─────────────────────────────────────── */
 .dashboard-tile.sortable-ghost {

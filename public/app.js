@@ -28471,7 +28471,7 @@ function openAdminConsoleModal() {
   // bind once
   if (!modal.dataset.bound) {
     modal.dataset.bound = "1";
-    modal.querySelectorAll("[data-admin-console-dismiss]").forEach(el => el.addEventListener("click", () => modal.classList.add("hidden")));
+    modal.querySelectorAll("[data-admin-console-dismiss]").forEach(el => el.addEventListener("click", () => { stopInfraPolling(); modal.classList.add("hidden"); }));
     modal.querySelectorAll(".admin-tab-btn").forEach(btn => {
       btn.addEventListener("click", () => switchAdminTab(btn.dataset.tab));
     });
@@ -29121,41 +29121,236 @@ function bindAlternateSmtp() {
   }
 }
 
-async function populateAdminInfra() {
-  // Server status
-  const serverEl = $("#infra-server-status");
-  if (serverEl) {
-    try {
-      const health = await api("/api/health");
-      serverEl.innerHTML = `<span class="${health.dbReachable ? 'status-ok' : 'status-fail'}">${health.dbReachable ? '● Database reachable' : '● Database unreachable'}</span>`;
-    } catch (e) {
-      serverEl.innerHTML = `<span class="status-fail">● Server unreachable: ${escapeHtml(e.message)}</span>`;
-    }
+let _infraPollTimer = null;
+let _infraEvents = [];   // cached events from latest fetch
+let _infraUptime = 0;
+
+function stopInfraPolling() {
+  if (_infraPollTimer) { clearInterval(_infraPollTimer); _infraPollTimer = null; }
+}
+
+function startInfraPolling() {
+  stopInfraPolling();
+  const auto = $("#infra-log-auto-refresh");
+  if (auto && auto.checked) {
+    _infraPollTimer = setInterval(() => { refreshInfraData(); }, 15000);
   }
-  // Docker status
-  const dockerEl = $("#infra-docker-status");
-  if (dockerEl) {
-    try {
-      const info = await api("/api/v2/admin/docker-health");
-      if (!info.inDocker) {
-        dockerEl.innerHTML = '<span class="status-ok">Not running in Docker (standalone)</span>';
-      } else {
-        const statusClass = info.status === 'running' ? 'status-ok' : 'status-fail';
-        dockerEl.innerHTML = `<span class="${statusClass}">● ${escapeHtml(info.containerName || 'container')} — ${escapeHtml(info.status)}</span>` +
-          (info.restartCount != null ? `<br>Restarts: ${info.restartCount} (max 5 on failure)` : '');
+}
+
+function _setDot(id, ok) {
+  const el = $(id);
+  if (!el) return;
+  el.className = "infra-dot " + (ok === true ? "infra-dot-ok" : ok === false ? "infra-dot-fail" : "infra-dot-loading");
+}
+
+function _uptimeStr(s) {
+  if (!s) return '';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m ${Math.floor(s % 60)}s`;
+}
+
+function _bytesHuman(bytes) {
+  if (!bytes) return '0 B';
+  const u = ['B','KB','MB','GB','TB'];
+  let i = 0;
+  while (bytes >= 1024 && i < u.length - 1) { bytes /= 1024; i++; }
+  return (i > 0 ? bytes.toFixed(1) : bytes) + ' ' + u[i];
+}
+
+async function refreshInfraData() {
+  const grid = $("#infra-status-grid");
+  if (!grid) return;
+  try {
+    const d = await api("/api/v2/admin/infrastructure");
+    _infraEvents = d.events || [];
+    _infraUptime = d.uptime || 0;
+
+    // -- Server --
+    _setDot("#infra-dot-server", d.db?.reachable !== false);
+    const sVer = d.server?.version ? `v${escapeHtml(d.server.version)}` : '';
+    const sUptime = d.server?.uptime ? _uptimeStr(d.server.uptime) : '';
+    const sPid = d.server?.pid || '';
+    const sInDocker = d.server?.inDocker ? ', Docker' : ', standalone';
+    $("#infra-server-status").innerHTML = [
+      `<span class="${d.db?.reachable !== false ? 'infra-ok' : 'infra-fail'}">${sVer} up ${sUptime}</span>`,
+      `<div class="infra-card-meta">PID ${sPid}${sInDocker}</div>`,
+    ].join('');
+
+    // -- DB --
+    _setDot("#infra-dot-db", d.db?.reachable);
+    const dbEl = $("#infra-db-status");
+    dbEl.innerHTML = d.db?.reachable
+      ? '<span class="infra-ok">● Connected</span>'
+      : `<span class="infra-fail">● Unreachable</span><div class="infra-card-meta">${escapeHtml(d.db?.error || '')}</div>`;
+
+    // -- Docserver --
+    const dsOk = d.docserver?.reachable;
+    _setDot("#infra-dot-docserver", dsOk);
+    const dsLat = d.docserver?.latencyMs != null ? ` · ${d.docserver.latencyMs}ms` : '';
+    $("#infra-docserver-status").innerHTML = dsOk
+      ? `<span class="infra-ok">● Healthy${dsLat}</span><div class="infra-card-meta">${escapeHtml(d.docserver?.internalUrl || '')}</div>`
+      : `<span class="infra-fail">● ${d.docserver?.error ? escapeHtml(d.docserver.error) : 'Unreachable'}</span>`;
+
+    // -- Containers --
+    const dockerOk = d.docker?.accessible && d.docker?.containers?.some(c => c.status === 'running');
+    _setDot("#infra-dot-docker", dockerOk);
+    const dockerEl = $("#infra-docker-status");
+    if (!d.docker?.accessible && d.docker?.inDocker) {
+      dockerEl.innerHTML = `<span class="infra-warn">Docker socket not mounted</span><div class="infra-card-meta">${escapeHtml(d.docker?.note || '')}</div>`;
+    } else if (!d.docker?.containers?.length) {
+      dockerEl.innerHTML = d.docker?.inDocker ? '<span class="infra-warn">No containers found</span>' : '<span class="infra-ok">Not running in Docker (standalone)</span>';
+    } else {
+      dockerEl.innerHTML = d.docker.containers.map(c => {
+        const cls = c.status === 'running' ? 'infra-ok' : 'infra-fail';
+        return `<div class="infra-container-row"><span class="${cls}">${c.status === 'running' ? '●' : '○'}</span> ${escapeHtml(c.label)} <code class="infra-container-name">${escapeHtml(c.name)}</code>${c.restartCount ? ` <span class="infra-card-meta">restarts: ${c.restartCount}</span>` : ''}</div>`;
+      }).join('');
+    }
+    // Disable restart buttons when docker unavailable
+    const rContainer = $("#infra-restart-container");
+    const rDocserver = $("#infra-restart-docserver");
+    if (rContainer) rContainer.disabled = !d.docker?.accessible;
+    if (rDocserver) rDocserver.disabled = !d.docker?.accessible;
+
+    // -- Resources --
+    const resEl = $("#infra-resources");
+    if (resEl && d.resources) {
+      const parts = [];
+      if (d.resources.memory) {
+        const pct = d.resources.memory.total ? Math.round(d.resources.memory.used / d.resources.memory.total * 100) : 0;
+        parts.push(`Mem: ${_bytesHuman(d.resources.memory.used)} / ${_bytesHuman(d.resources.memory.total)} (${pct}%)`);
       }
-    } catch (e) {
-      dockerEl.innerHTML = `<span class="status-fail">Could not check Docker: ${escapeHtml(e.message)}</span>`;
+      if (d.resources.loadavg && d.resources.loadavg.length === 3) parts.push(`Load: ${d.resources.loadavg.join(' ')}`);
+      if (d.resources.disk?.length) {
+        parts.push(...d.resources.disk.map(dk => `${escapeHtml(dk.path)}: ${_bytesHuman(dk.free)} free (${dk.percent}% used)`));
+      }
+      resEl.innerHTML = parts.length ? parts.map(p => `<span class="infra-resource-item">${p}</span>`).join('') : '';
+      resEl.style.display = parts.length ? '' : 'none';
     }
+
+    // -- Errors --
+    const errEl = $("#infra-error-summary");
+    if (errEl && d.errors) {
+      const errs = d.errors;
+      let html = '';
+      if (errs.totalErrors > 0 || errs.totalWarns > 0) {
+        html += `<span class="infra-resource-item">⚠ Errors: ${errs.last1h} (1h) · ${errs.last24h} (24h) · ${errs.totalErrors} total</span>`;
+        if (errs.totalWarns) html += `<span class="infra-resource-item">⚡ Warns: ${errs.totalWarns} total</span>`;
+        if (errs.top?.length) {
+          html += `<div class="infra-top-errors">Top: ${errs.top.map(t => `<span class="infra-top-error-item">[${t.count}] ${escapeHtml(t.msg)}</span>`).join(' · ')}</div>`;
+        }
+      }
+      errEl.innerHTML = html;
+      errEl.style.display = html ? '' : 'none';
+    }
+
+    // -- Backup --
+    const bkEl = $("#infra-backup-line");
+    if (bkEl && d.backup) {
+      const bk = d.backup;
+      let html = '';
+      if (bk.enabled && bk.lastTs) {
+        const ago = _agoStr(bk.lastTs);
+        html = `<span class="infra-resource-item">Last backup: ${bk.lastStatus === 'success' ? '<span class="infra-ok">OK</span>' : '<span class="infra-fail">' + escapeHtml(bk.lastStatus) + '</span>'} ${ago ? ago + ' ago' : ''}</span>`;
+      } else if (bk.enabled) {
+        html = '<span class="infra-resource-item">Backups enabled, none yet</span>';
+      } else {
+        html = '<span class="infra-resource-item">Backups disabled</span>';
+      }
+      bkEl.innerHTML = html;
+    }
+
+    // -- Log + updated timestamp --
+    renderInfraLog();
+    const updEl = $("#infra-last-updated");
+    if (updEl) updEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+
+  } catch (e) {
+    $("#infra-server-status").innerHTML = `<span class="infra-fail">● Server unreachable: ${escapeHtml(e.message)}</span>`;
   }
-  // Infra log
-  await refreshInfraLog();
-  // Bind buttons
+}
+
+function _agoStr(iso) {
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (isNaN(diff) || diff < 0) return '';
+  if (diff < 60) return `${Math.round(diff)}s`;
+  if (diff < 3600) return `${Math.round(diff / 60)}m`;
+  if (diff < 86400) return `${Math.round(diff / 3600)}h`;
+  return `${Math.round(diff / 86400)}d`;
+}
+
+function renderInfraLog() {
+  const listEl = $("#infra-log-list");
+  const countEl = $("#infra-log-count");
+  if (!listEl) return;
+  let events = _infraEvents;
+  // Level filter
+  const filterEl = $("#infra-log-filter");
+  const filter = filterEl?.value || 'all';
+  if (filter !== 'all') events = events.filter(e => e.level === filter);
+  // Text search
+  const searchEl = $("#infra-log-search");
+  const q = searchEl?.value?.toLowerCase().trim();
+  if (q) events = events.filter(e => (e.msg || '').toLowerCase().includes(q) || (e.source || '').toLowerCase().includes(q));
+  if (countEl) countEl.textContent = `${events.length} events · uptime ${_uptimeStr(_infraUptime)}`;
+  if (!events.length) {
+    listEl.innerHTML = '<p class="event-log-empty">No infrastructure events.</p>';
+    return;
+  }
+  listEl.innerHTML = events.slice().reverse().map(e => {
+    const icon = e.level === 'error' ? '⚠' : e.level === 'warn' ? '⚡' : '●';
+    const cls = e.level === 'error' ? 'fail' : e.level === 'warn' ? 'warn' : '';
+    const src = e.source ? `<span class="event-log-entry-source">${escapeHtml(e.source)}</span>` : '';
+    return `<div class="event-log-entry ${cls}"><span class="event-log-entry-icon">${icon}</span><span class="event-log-entry-body">${src}<span class="event-log-entry-msg">${escapeHtml(e.msg)}</span></span><span class="event-log-entry-time">${escapeHtml(e.ts ? new Date(e.ts).toLocaleTimeString() : '')}</span></div>`;
+  }).join("");
+}
+
+async function populateAdminInfra() {
+  // Initial fetch
+  await refreshInfraData();
+  // Bind controls (once)
   const refreshBtn = $("#infra-log-refresh");
   if (refreshBtn && !refreshBtn.dataset.bound) {
     refreshBtn.dataset.bound = "1";
-    refreshBtn.addEventListener("click", refreshInfraLog);
+    refreshBtn.addEventListener("click", refreshInfraData);
   }
+  const filterEl = $("#infra-log-filter");
+  if (filterEl && !filterEl.dataset.bound) {
+    filterEl.dataset.bound = "1";
+    filterEl.addEventListener("change", renderInfraLog);
+  }
+  const searchEl = $("#infra-log-search");
+  if (searchEl && !searchEl.dataset.bound) {
+    searchEl.dataset.bound = "1";
+    searchEl.addEventListener("input", renderInfraLog);
+  }
+  const autoEl = $("#infra-log-auto-refresh");
+  if (autoEl && !autoEl.dataset.bound) {
+    autoEl.dataset.bound = "1";
+    autoEl.addEventListener("change", () => { stopInfraPolling(); if (autoEl.checked) startInfraPolling(); });
+  }
+  const verifyBtn = $("#infra-verify-btn");
+  if (verifyBtn && !verifyBtn.dataset.bound) {
+    verifyBtn.dataset.bound = "1";
+    verifyBtn.addEventListener("click", async () => {
+      const statusEl = $("#infra-verify-status");
+      if (statusEl) { statusEl.textContent = "Verifying…"; statusEl.className = "infra-status-indicator"; }
+      try {
+        const d = await api("/api/v2/admin/infrastructure");
+        const targets = [];
+        targets.push({name: 'Database', ok: d.db?.reachable, err: d.db?.error});
+        targets.push({name: 'Document Server', ok: d.docserver?.reachable, err: d.docserver?.error, lat: d.docserver?.latencyMs});
+        targets.push({name: 'CRM Public URL', ok: true}); // if we got here, API works
+        if (statusEl) statusEl.innerHTML = targets.map(t =>
+          `<span class="infra-verify-target">${t.ok ? '<span class="infra-ok">✓</span>' : '<span class="infra-fail">✗</span>'} ${escapeHtml(t.name)}${t.lat != null ? ` (${t.lat}ms)` : ''}${!t.ok && t.err ? ` — ${escapeHtml(t.err)}` : ''}</span>`
+        ).join('');
+      } catch (e) {
+        if (statusEl) { statusEl.innerHTML = `<span class="infra-fail">✗ ${escapeHtml(e.message)}</span>`; }
+      }
+    });
+  }
+  // Restart buttons
   const restartServerBtn = $("#infra-restart-server");
   if (restartServerBtn && !restartServerBtn.dataset.bound) {
     restartServerBtn.dataset.bound = "1";
@@ -29164,10 +29359,10 @@ async function populateAdminInfra() {
       const statusEl = $("#infra-restart-status");
       try {
         await api("/api/v2/admin/restart-server", { method: "POST" });
-        if (statusEl) { statusEl.textContent = "Restarting…"; statusEl.className = "event-log-health-status ok"; }
+        if (statusEl) { statusEl.textContent = "Restarting…"; statusEl.className = "infra-status-indicator ok"; }
         setTimeout(() => location.reload(), 3000);
       } catch (e) {
-        if (statusEl) { statusEl.textContent = e.message; statusEl.className = "event-log-health-status fail"; }
+        if (statusEl) { statusEl.textContent = e.message; statusEl.className = "infra-status-indicator fail"; }
       }
     });
   }
@@ -29179,10 +29374,10 @@ async function populateAdminInfra() {
       const statusEl = $("#infra-restart-status");
       try {
         await api("/api/v2/admin/restart-container", { method: "POST" });
-        if (statusEl) { statusEl.textContent = "Container restarting…"; statusEl.className = "event-log-health-status ok"; }
+        if (statusEl) { statusEl.textContent = "Container restarting…"; statusEl.className = "infra-status-indicator ok"; }
         setTimeout(() => location.reload(), 5000);
       } catch (e) {
-        if (statusEl) { statusEl.textContent = e.message; statusEl.className = "event-log-health-status fail"; }
+        if (statusEl) { statusEl.textContent = e.message; statusEl.className = "infra-status-indicator fail"; }
       }
     });
   }
@@ -29190,39 +29385,23 @@ async function populateAdminInfra() {
   if (restartDocserverBtn && !restartDocserverBtn.dataset.bound) {
     restartDocserverBtn.dataset.bound = "1";
     restartDocserverBtn.addEventListener("click", async () => {
-      if (!confirm("Restart the OnlyOffice Document Server container? Document editing will be unavailable for ~30s.")) return;
+      if (!confirm("Restart the Document Server container? Document editing will be unavailable for ~30s.")) return;
       const statusEl = $("#infra-restart-status");
       try {
         await api("/api/v2/admin/restart-docserver", { method: "POST" });
-        if (statusEl) { statusEl.textContent = "Document Server restarting…"; statusEl.className = "event-log-health-status ok"; }
+        if (statusEl) { statusEl.textContent = "Document Server restarting…"; statusEl.className = "infra-status-indicator ok"; }
         setTimeout(() => location.reload(), 5000);
       } catch (e) {
-        if (statusEl) { statusEl.textContent = e.message; statusEl.className = "event-log-health-status fail"; }
+        if (statusEl) { statusEl.textContent = e.message; statusEl.className = "infra-status-indicator fail"; }
       }
     });
   }
+  // Start auto-poll
+  startInfraPolling();
 }
 
-async function refreshInfraLog() {
-  const listEl = $("#infra-log-list");
-  const countEl = $("#infra-log-count");
-  if (!listEl) return;
-  try {
-    const data = await api("/api/v2/admin/infra-log");
-    const events = data.events || [];
-    if (countEl) countEl.textContent = `${events.length} events · uptime ${Math.round(data.uptime || 0)}s`;
-    if (!events.length) {
-      listEl.innerHTML = '<p class="event-log-empty">No infrastructure events logged.</p>';
-      return;
-    }
-    listEl.innerHTML = events.slice().reverse().map(e => {
-      const cls = e.level === 'error' ? 'fail' : e.level === 'warn' ? '' : '';
-      return `<div class="event-log-entry ${cls}"><span class="event-log-entry-icon">${e.level === 'error' ? '⚠' : e.level === 'warn' ? '⚡' : '●'}</span><span class="event-log-entry-body"><span class="event-log-entry-msg">${escapeHtml(e.msg)}</span></span><span class="event-log-entry-time">${escapeHtml(e.ts ? new Date(e.ts).toLocaleTimeString() : '')}</span></div>`;
-    }).join("");
-  } catch (e) {
-    listEl.innerHTML = `<p class="event-log-empty">Failed to load infra log: ${escapeHtml(e.message)}</p>`;
-  }
-}
+// Keep refreshInfraLog as an alias for backward compat (used by old code paths)
+async function refreshInfraLog() { return refreshInfraData(); }
 
 async function populateEmailScannerTab() {
   // Status

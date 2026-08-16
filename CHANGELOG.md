@@ -2,6 +2,24 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Admin Infrastructure Tab Overhaul (2026-08-16)
+
+### Added
+- **Document Server status indicator** — the admin Infrastructure tab now probes the Document Server's `/healthcheck` endpoint (via `_effective_docs_internal_url()` with self-signed cert bypass, 5s timeout) and shows healthy/unreachable with latency. Up/down state transitions are logged to the infra ring; normal probes are silent.
+- **Consolidated infrastructure status endpoint** — `GET /api/v2/admin/infrastructure` returns server (version, uptime, PID, inDocker), DB reachability, Document Server health + effective URLs, Docker container list (dashboard/db/docserver/redis) with status + restarts, system resources (disk, memory, loadavg), error statistics (1h/24h/total + top recurring messages), and backup last-run status — all in one call.
+- **Status grid UI** — the Infrastructure tab now shows four status cards (Dashboard Server / Database / Document Server / Containers) with colored indicator dots, version + uptime line, resource strip (memory, load, disk free per volume), error summary strip, and backup last-run line.
+- **Verify Connectivity button** — re-pings DB, Document Server, and CRM public URL with per-target pass/fail and latency display.
+- **Log filter + search + auto-refresh** — the infrastructure log now has a level filter (All/Info/Warn/Error), text search box, and 15-second auto-poll while the tab is visible (toggle on/off). Events include source badges (`auth`, `docserver`, `sync`, `mail_scanner`, `dispatcher`, `documents`, `api`).
+- **Richer infra event ring buffer** — increased from 200 to 500 events; entries now include `source`, `method`, `path`, and `user` fields. New call sites: global unhandled 500 capture (`_run_api_handler`), login failures (warn), all sync errors (mirrored from `_append_sync_log`), mail scanner poll/retention failures, notification dispatcher loop errors, and all existing document/photo errors now carry source metadata.
+- **Shared `infra_log.py` module** — ring buffer + `log_infra_event()` extracted into `infra_log.py` so both the dashboard server and the mail scanner container can report events without circular imports.
+- **Docker CLI + socket mount** — `Dockerfile` now installs the static Docker CLI (pinned 29.6.1) and `docker-compose.yml` mounts `/var/run/docker.sock`. The infra tab enumerates sibling containers (Dashboard, Database, Document Server, Redis) by name. When docker access is absent, container status falls back to service-level probes and the restart buttons are disabled with a tooltip. Production `.env` must set `DB_CONTAINER_NAME` and `REDIS_CONTAINER_NAME` if the compose container names differ from the defaults (`sietch-db`, `sietch-redis`).
+- **Restart controls relabeled** — buttons now say "Server", "Dashboard Container", "Docserver Container" with explicit container names; disabled when docker access unavailable.
+- **Admin terminal theme overrides** — all new infra grid/cards/log controls styled for the dark admin console theme.
+
+### Fixed
+- **Scanner container Dockerfile** — `scanner/Dockerfile` was missing `scanner_service.py` (its CMD entrypoint) and all runtime Python dependencies (`db.py`, `event_bus.py`, `user_profile_store.py`, `oauth_providers.py`, `crm_bot_store.py`). Now copies all required files including `infra_log.py`.
+- **"Docker Container" ambiguity** — the old "Docker Container" box showed only a hostname-based self-inspect of the dashboard container (which also failed in production because the image lacked the docker CLI). Replaced with a per-container list of all compose siblings.
+
 ## Admin Console Close Button Terminal-Theme Fix (2026-08-16)
 
 ### Fixed

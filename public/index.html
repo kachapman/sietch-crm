@@ -2673,27 +2673,51 @@
         </div>
       </div>
       <div id="admin-tab-infra" class="admin-tab-content hidden">
-        <h3 style="margin-top:0;">Infrastructure</h3>
-        <div class="infra-section">
-          <h4>Server Status</h4>
-          <div id="infra-server-status" class="infra-status-box">Loading…</div>
+        <div class="infra-header-row">
+          <h3 style="margin-top:0;">Infrastructure</h3>
+          <span id="infra-last-updated" class="infra-last-updated"></span>
+          <button type="button" id="infra-verify-btn" class="btn btn-ghost btn-sm" style="margin-left:auto;">⟳ Verify Connectivity</button>
+          <span id="infra-verify-status" class="infra-status-indicator"></span>
         </div>
-        <div class="infra-section">
-          <h4>Docker Container</h4>
-          <div id="infra-docker-status" class="infra-status-box">Loading…</div>
+        <div id="infra-status-grid" class="infra-grid">
+          <div class="infra-card" id="infra-card-server">
+            <div class="infra-card-header"><span class="infra-dot infra-dot-loading" id="infra-dot-server"></span>Dashboard Server</div>
+            <div class="infra-card-body" id="infra-server-status">Loading…</div>
+          </div>
+          <div class="infra-card" id="infra-card-db">
+            <div class="infra-card-header"><span class="infra-dot infra-dot-loading" id="infra-dot-db"></span>Database</div>
+            <div class="infra-card-body" id="infra-db-status">Loading…</div>
+          </div>
+          <div class="infra-card" id="infra-card-docserver">
+            <div class="infra-card-header"><span class="infra-dot infra-dot-loading" id="infra-dot-docserver"></span>Document Server</div>
+            <div class="infra-card-body" id="infra-docserver-status">Loading…</div>
+          </div>
+          <div class="infra-card" id="infra-card-containers">
+            <div class="infra-card-header"><span class="infra-dot infra-dot-loading" id="infra-dot-docker"></span>Containers</div>
+            <div class="infra-card-body" id="infra-docker-status">Loading…</div>
+          </div>
         </div>
-        <div class="infra-section">
-          <h4>Infrastructure Log <span id="infra-log-count" class="event-log-health-status"></span></h4>
-          <div id="infra-log-list" class="event-log-list" style="max-height:300px;"></div>
-          <button type="button" id="infra-log-refresh" class="btn btn-secondary btn-sm" style="margin-top:0.5rem;">Refresh</button>
+        <div id="infra-resources" class="infra-row-strip infra-resources"></div>
+        <div id="infra-error-summary" class="infra-row-strip infra-error-summary"></div>
+        <div id="infra-backup-line" class="infra-row-strip infra-backup-line"></div>
+        <div class="infra-section" style="margin-top:0.75rem;">
+          <h4>Infrastructure Log</h4>
+          <div class="infra-log-controls">
+            <select id="infra-log-filter" class="infra-log-select"><option value="all">All Levels</option><option value="error">Errors</option><option value="warn">Warnings</option><option value="info">Info</option></select>
+            <input type="text" id="infra-log-search" class="infra-log-search" placeholder="Search…">
+            <label class="infra-log-auto-label"><input type="checkbox" id="infra-log-auto-refresh" checked> Auto</label>
+            <span id="infra-log-count" class="infra-log-count"></span>
+            <button type="button" id="infra-log-refresh" class="btn btn-ghost btn-sm">⟳</button>
+          </div>
+          <div id="infra-log-list" class="event-log-list" style="max-height:260px;"></div>
         </div>
-        <div class="infra-section" style="margin-top:1rem; padding-top:1rem; border-top:1px solid var(--border);">
+        <div class="infra-section" style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid #333;">
           <h4>Restart Controls</h4>
-          <p style="font-size:0.82rem; color:var(--muted); margin:0 0 0.5rem;">Max 5 automatic restarts on failure (Docker policy). Use manual restart to recover.</p>
-          <button type="button" id="infra-restart-server" class="btn btn-secondary btn-sm">Restart server process</button>
-          <button type="button" id="infra-restart-container" class="btn btn-danger btn-sm" style="margin-left:0.5rem;">Restart dashboard container</button>
-          <button type="button" id="infra-restart-docserver" class="btn btn-danger btn-sm" style="margin-left:0.5rem;">Restart Document Server</button>
-          <span id="infra-restart-status" class="event-log-health-status" style="margin-left:0.5rem;"></span>
+          <p style="font-size:0.8rem; color:#888; margin:0 0 0.5rem;">Max 5 automatic restarts on failure (Docker policy). Use manual restart to recover.</p>
+          <button type="button" id="infra-restart-server" class="btn btn-ghost btn-sm">⟳ Server</button>
+          <button type="button" id="infra-restart-container" class="btn btn-danger btn-sm" style="margin-left:0.5rem;">⟳ Dashboard Container</button>
+          <button type="button" id="infra-restart-docserver" class="btn btn-danger btn-sm" style="margin-left:0.5rem;">⟳ Docserver Container</button>
+          <span id="infra-restart-status" class="infra-status-indicator" style="margin-left:0.5rem;"></span>
         </div>
       </div>
         </div>

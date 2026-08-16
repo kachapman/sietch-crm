@@ -4,7 +4,7 @@ WORKDIR /app
 
 RUN useradd --create-home --uid 10001 appuser
 
-COPY mail_scanner.py train_ml_head.py ./
+COPY mail_scanner.py scanner_service.py train_ml_head.py db.py event_bus.py user_profile_store.py oauth_providers.py crm_bot_store.py infra_log.py ./
 COPY requirements.txt requirements-ml.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 

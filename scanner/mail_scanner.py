@@ -30,6 +30,7 @@ import db
 from event_bus import event_bus
 from user_profile_store import load_user_profile, save_user_profile
 import oauth_providers
+import infra_log
 
 logger = logging.getLogger("sietch.mail_scanner")
 
@@ -1690,6 +1691,7 @@ def _poll_mailboxes() -> list[dict[str, Any]]:
                     results.append(result)
         except Exception as e:
             logger.error("Polling error for %s: %s", cfg["host"], e)
+            infra_log.log_infra_event("error", f"Mail scanner poll failed for {cfg.get('host')}: {e}", source="mail_scanner")
 
     return results
 
@@ -1707,6 +1709,7 @@ def _enforce_retention() -> None:
         )
     except Exception as e:
         logger.error("Retention: failed to fetch accounts: %s", e)
+        infra_log.log_infra_event("error", f"Mail retention failed to fetch accounts: {e}", source="mail_scanner")
         return
     for acct in rows:
         try:
@@ -1734,6 +1737,7 @@ def _enforce_retention() -> None:
                     _save_processed_ids(ids)
         except Exception as e:
             logger.error("Retention: failed for %s: %s", acct["email"], e)
+            infra_log.log_infra_event("error", f"Mail retention failed for {acct.get('email')}: {e}", source="mail_scanner")
 
 
 def _scanner_loop() -> None:
@@ -1757,6 +1761,7 @@ def _scanner_loop() -> None:
                 logger.info("Poll cycle complete")
         except Exception as e:
             logger.error("Scanner loop error: %s", e)
+            infra_log.log_infra_event("error", f"Mail scanner loop error: {e}", source="mail_scanner")
         time.sleep(int(os.environ.get("SCANNER_POLL_INTERVAL", "300")))
 
 
