@@ -27972,6 +27972,29 @@ function renderActivityTimesheet(container) {
   footerBar.className = "ts-footer-bar";
   const exportBtns = document.createElement("div");
   exportBtns.className = "ts-export-btns";
+  // CSV export
+  const csvWrap = document.createElement("div");
+  csvWrap.className = "ts-export-wrap";
+  const csvBtn = document.createElement("button");
+  csvBtn.type = "button"; csvBtn.className = "ts-export-btn"; csvBtn.title = "Export CSV";
+  csvBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M7 16.5a1.5 1.5 0 0 0 -3 0v3a1.5 1.5 0 0 0 3 0"/><path d="M10 20.25c0 .414 .336 .75 .75 .75h1.25a1 1 0 0 0 1 -1v-1a1 1 0 0 0 -1 -1h-1a1 1 0 0 1 -1 -1v-1a1 1 0 0 1 1 -1h1.25a.75 .75 0 0 1 .75 .75"/><path d="M16 15l2 6l2 -6"/></svg>';
+  const csvDrop = document.createElement("div");
+  csvDrop.className = "ts-export-dropdown hidden";
+  csvDrop.id = "modal-ts-csv-dropdown";
+  csvDrop.innerHTML = '<label>From</label><input type="date" id="modal-ts-csv-from" class="ts-export-dropdown-date" /><label>To</label><input type="date" id="modal-ts-csv-to" class="ts-export-dropdown-date" /><button type="button" id="modal-ts-csv-go" class="ts-export-go">Export</button>';
+  csvWrap.append(csvBtn, csvDrop);
+  // PDF export
+  const pdfWrap = document.createElement("div");
+  pdfWrap.className = "ts-export-wrap";
+  const pdfBtn = document.createElement("button");
+  pdfBtn.type = "button"; pdfBtn.className = "ts-export-btn"; pdfBtn.title = "Export PDF";
+  pdfBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M5 18h1.5a1.5 1.5 0 0 0 0 -3h-1.5v6"/><path d="M17 18h2"/><path d="M20 15h-3v6"/><path d="M11 15v6h1a2 2 0 0 0 2 -2v-2a2 2 0 0 0 -2 -2h-1"/></svg>';
+  const pdfDrop = document.createElement("div");
+  pdfDrop.className = "ts-export-dropdown hidden";
+  pdfDrop.id = "modal-ts-pdf-dropdown";
+  pdfDrop.innerHTML = '<label>From</label><input type="date" id="modal-ts-pdf-from" class="ts-export-dropdown-date" /><label>To</label><input type="date" id="modal-ts-pdf-to" class="ts-export-dropdown-date" /><button type="button" id="modal-ts-pdf-go" class="ts-export-go">Export</button>';
+  pdfWrap.append(pdfBtn, pdfDrop);
+  exportBtns.append(csvWrap, pdfWrap);
   const totalEl = document.createElement("div");
   totalEl.className = "ts-daily-total";
   totalEl.id = "modal-ts-total";
@@ -27993,6 +28016,7 @@ function renderActivityTimesheet(container) {
   weekBtn.addEventListener("click", () => { tsSetRange("week"); modalRefreshEntries(); updateModalRangeLabel(); });
   monthBtn.addEventListener("click", () => { tsSetRange("month"); modalRefreshEntries(); updateModalRangeLabel(); });
   bindTimesheetProjectSearch("modal-ts-project-search", "modal-ts-project-results");
+  tsWireModalExportDropdowns();
 }
 
 async function renderActivityLog(container) {
