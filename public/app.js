@@ -946,13 +946,19 @@ function ensureTileLayout() {
   const order = state.tileLayout.order?.length ? [...state.tileLayout.order] : defaultTileOrder();
   const known = new Set(defaultTileOrder());
   known.add("tile-notes");
-  const filtered = order.filter((id) => known.has(id));
+  // tile-presence is user-controllable (Add Tile / X button): preserve it in the
+  // order only if already present — never force-add it (known excludes it) and
+  // never strip it (whitelisted here), so add/remove both survive refresh.
+  const filtered = order.filter((id) => known.has(id) || id === "tile-presence");
   for (const id of known) {
     if (!filtered.includes(id)) filtered.push(id);
   }
+  // Drop stale pin if the tile was removed
+  if (!filtered.includes("tile-presence") && state.tileLayout.pinned) {
+    delete state.tileLayout.pinned["tile-presence"];
+  }
   // Only save if order actually changed
   const origOrder = state.tileLayout.order?.join(",") || "";
-  const newOrder = filtered.join(",");
   state.tileLayout.order = filtered;
   if (!state.tileLayout.order.includes("tile-notes")) {
     state.tileLayout.order.push("tile-notes");
