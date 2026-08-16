@@ -2,6 +2,11 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Admin Console Close Button Terminal-Theme Fix (2026-08-16)
+
+### Fixed
+- The new Admin console title-bar close button used the app theme colors (`var(--surface-2)` background, bluish `var(--border)`, grey icon) and the header divider used `var(--border)`, clashing with the admin console's dedicated terminal theme. The button now matches it: `#1a1a1a` background, `#333` border, `#d0d0d0` icon, hovering to `#252525` with the green `#00ff88` accent (same treatment as the admin tab buttons). Header divider and title text also switched to the terminal theme (`#333`, `#e0e0e0`).
+
 ## Modal Resize Fixes: Email Inbox + Email Preview Body (2026-08-16)
 
 ### Fixed

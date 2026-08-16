@@ -13696,6 +13696,23 @@ select.form-control {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
 }
 
+#admin-console-modal .modal-header {
+  border-bottom-color: #333;
+}
+
+#admin-console-modal .modal-header-control {
+  background: #1a1a1a;
+  border-color: #333;
+  color: #d0d0d0;
+}
+
+#admin-console-modal .modal-header-control:hover,
+#admin-console-modal .modal-header-control:focus-visible {
+  background: #252525;
+  color: #00ff88;
+  border-color: #00ff88;
+}
+
 #admin-console-modal .admin-body {
   background: #0f0f0f;
 }
