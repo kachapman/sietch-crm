@@ -9,8 +9,19 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Settings dropdown Activity icon** — replaced clock-play with calendar-clock SVG (matching old timesheet icon from team modal)
 - **Admin Activity log fixed** — now uses `/api/event-log` for own log (non-admin endpoint) instead of admin-only `/api/event-log/all`; non-admin users can now see their own activity
 - **Admin user dropdown fixed** — populates from all portal users (`/api/v2/users`) instead of only users with existing log files on disk
+- **Admin Activity log defaults to current user** — dropdown has "My Activity" option at top, always selected by default
 - **Users tab list height** — removed hardcoded `max-height:400px`, list now fills available modal space and scrolls within the admin modal
 - **Team button in settings dropdown** — new "Team" menu item opens the team/presence modal directly from the header gear dropdown
+- **Export buttons restored** — CSV and PDF export with date range dropdowns now work in the activity modal timesheet tab
+- **Event logging coverage expanded** — added `addEventLogEntry()` to 10 previously unlogged user actions:
+  - Preview inline "Add note" button
+  - Create new opportunity
+  - Tag add/remove (deal edit, quick note, create opportunity, batch)
+  - Due date change (quick note)
+  - Batch stage/tag changes (search popup)
+  - Task create, complete, delete
+  - Email send (compose modal, tab compose, inline reply)
+  - Email save draft
 
 ### Admin Console — Activity Tab (renamed from "Logs")
 - **Tab renamed** from "Logs" to "Activity"

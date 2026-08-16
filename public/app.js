@@ -13235,11 +13235,13 @@ async function applyDealTagChanges(oppId, initialTags, nextTags) {
 
   for (const title of toAdd) {
     await addOpportunityTag(oppId, title);
+    addEventLogEntry("update", oppId, "", `Tag added: ${title}`, true);
     await new Promise(r => setTimeout(r, 150));
   }
 
   for (const title of toRemove) {
     await removeOpportunityTag(oppId, title);
+    addEventLogEntry("update", oppId, "", `Tag removed: ${title}`, true);
     await new Promise(r => setTimeout(r, 150));
   }
 }
@@ -13669,6 +13671,7 @@ async function submitQuickNoteForm(e) {
     if (dueChanged) {
       try {
         await updateOpportunityDueDate(oppId, dueVal);
+        addEventLogEntry("update", oppId, ctx.oppTitle || "", `Due date changed to ${dueVal || "none"}`, true);
       } catch (err) {
         throw dealEditStepError("Due date", err);
       }
@@ -14640,6 +14643,7 @@ async function submitCreateOpportunityForm(e) {
     hideCRMSyncStatus();
     onCRMSuccess();
     showCRMSyncStatus('Project created successfully');
+    addEventLogEntry("create", oppId, titleHint, `Project created: ${titleHint}`, true);
     setTimeout(() => {
       hideCRMSyncStatus();
     }, 1500);
@@ -14650,6 +14654,7 @@ async function submitCreateOpportunityForm(e) {
   } catch (err) {
     setCreateOpportunityError(err.message || "Could not create project");
     hideCRMSyncStatus();
+    addEventLogEntry("create", null, ($("#create-opp-title")?.value || "").trim(), err.message || "Could not create project", false);
   } finally {
     if (submitBtn) submitBtn.disabled = false;
     if (submittingNote && submittingNote.parentNode) submittingNote.parentNode.removeChild(submittingNote);
@@ -19665,6 +19670,7 @@ async function openComposeModal(opts = {}) {
           body: JSON.stringify(payload)
         });
         showToast('Email sent');
+        addEventLogEntry("email", dealId || null, "", `Email sent to ${to}`, true);
         modal.classList.add('hidden');
         // Reset form
         $('#compose-to').value = '';
@@ -19721,6 +19727,7 @@ async function openComposeModal(opts = {}) {
           body: JSON.stringify({ account_id: accountId, to, subject, body })
         });
         if (statusEl) { statusEl.textContent = 'Saved'; statusEl.style.color = '#3fb950'; }
+        addEventLogEntry("email", null, "", `Draft saved`, true);
         showToast('Draft saved');
         modal.classList.add('hidden');
       } catch (e) {
@@ -20028,6 +20035,7 @@ function renderComposeTabContent(container, tabId, opts = {}) {
       if (attachments.length > 0) payload.attachments = attachments;
       await api('/api/v2/mail/send', { method: 'POST', body: JSON.stringify(payload) });
       showToast('Email sent');
+      addEventLogEntry("email", dealId || null, "", `Email sent to ${to}`, true);
       closeComposeTabNoConfirm(tabId);
     } catch (e) { showToast('Send failed: ' + e.message, true); }
     finally { sendBtn.disabled = false; sendBtn.innerHTML = '<i class="ti ti-send" style="margin-right:0.3rem;"></i>Send'; }
@@ -24326,6 +24334,7 @@ function renderInlineReply(panel, type, messageId, norm) {
         body: JSON.stringify({ account_id: accountId, to: toVal, subject: subjectVal, body: bodyHtml })
       });
       showToast("Reply sent");
+      addEventLogEntry("email", null, "", `Reply sent to ${toVal}`, true);
       replyDiv.remove();
     } catch (e) { showToast("Send failed: " + e.message, true); }
   });
@@ -27039,9 +27048,9 @@ async function applySearchPopupBatchAction() {
   let done = 0;
   for (const id of ids) {
     try {
-      if (addTag) await addOpportunityTag(id, addTag);
-      if (remTag) await removeOpportunityTag(id, remTag);
-      if (stageId) await updateOpportunityStage(id, Number(stageId));
+      if (addTag) { await addOpportunityTag(id, addTag); addEventLogEntry("update", id, "", `Tag added: ${addTag}`, true); }
+      if (remTag) { await removeOpportunityTag(id, remTag); addEventLogEntry("update", id, "", `Tag removed: ${remTag}`, true); }
+      if (stageId) { await updateOpportunityStage(id, Number(stageId)); addEventLogEntry("update", id, "", `Stage changed (batch)`, true); }
       done++;
     } catch (e) {
       showToast(`Batch failed on deal #${id}: ${e.message || e}`, true);
@@ -28913,14 +28922,23 @@ function switchAdminTab(tab) {
       const select = $("#activity-log-user-select");
       if (select) {
         const portalUsers = Array.isArray(state.portalUsers) ? state.portalUsers : [];
-        if (portalUsers.length) {
-          select.innerHTML = portalUsers.map(u => {
-            const uid = String(u.id || u.ID || "");
-            const label = u.displayName || u.userName || u.email || uid;
-            return `<option value="${escapeHtml(uid)}">${escapeHtml(label)}</option>`;
-          }).join("");
-          if (state.currentUserId) select.value = String(state.currentUserId);
+        // Always put "My Activity" first using currentUserId
+        let html = "";
+        if (state.currentUserId) {
+          const myLabel = state.currentUserName || state.currentUserEmail || "Me";
+          html += `<option value="${escapeHtml(String(state.currentUserId))}">My Activity — ${escapeHtml(myLabel)}</option>`;
         }
+        if (portalUsers.length) {
+          html += portalUsers
+            .filter(u => String(u.id || u.ID || "") !== String(state.currentUserId || ""))
+            .map(u => {
+              const uid = String(u.id || u.ID || "");
+              const label = u.displayName || u.userName || u.email || uid;
+              return `<option value="${escapeHtml(uid)}">${escapeHtml(label)}</option>`;
+            }).join("");
+        }
+        select.innerHTML = html;
+        if (state.currentUserId) select.value = String(state.currentUserId);
         // Non-admins only see their own log
         if (!state.currentUserIsAdmin) {
           select.style.display = "none";
@@ -32984,11 +33002,13 @@ function renderOpportunityPreviewContent(container, data) {
           editorWrap.classList.remove("active");
           if (bdbtn) delete bdbtn.dataset.backdateValue;
           showToast("Note added");
+          addEventLogEntry("note", opp.id ?? opp.ID, opp.title || opp.Title || "", "Note added", true);
           // Refresh preview
           const titleHint = opp.title || opp.Title || "";
           openOpportunityPreviewModal(opp.id ?? opp.ID, titleHint, oppPreviewContext?.group || null).catch(() => {});
         } catch (err) {
           showToast(err.message || "Failed to add note", true);
+          addEventLogEntry("note", opp?.id ?? opp?.ID, opp?.title || opp?.Title || "", err.message || "Failed to add note", false);
         } finally {
           submitBtn.disabled = false;
         }
@@ -34900,6 +34920,7 @@ async function createTask(payload) {
   if (id != null) {
     const t = { id, title: body.title, description: body.description, opportunityId: payload.opportunityId ?? null, items: [], labels: "", repeat: "none", color: "", pinned: false, archived: false, isClosed: false, remindAt: payload.remindAt || null, sortOrder: state.tasks.length };
     state.tasks.push(t);
+    addEventLogEntry("task", payload.opportunityId ?? null, "", `Task created: ${body.title}`, true);
     renderTasksContent();
   }
   return res;
@@ -34950,6 +34971,7 @@ function completeTaskWithUndo(task) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ isClosed: true }),
   }).catch((err) => showToast(err.message, true));
+  addEventLogEntry("task", task.opportunityId ?? null, "", `Task completed: ${task.title || "task"}`, true);
 }
 
 function deleteTaskWithUndo(task) {
@@ -34970,6 +34992,7 @@ function deleteTaskWithUndo(task) {
     }
   });
   api(`/api/v2/tasks/${task.id}`, { method: "DELETE" }).catch((err) => showToast(err.message, true));
+  addEventLogEntry("task", task.opportunityId ?? null, "", `Task deleted: ${task.title || "task"}`, true);
 }
 
 function toggleTaskPin(task) {
