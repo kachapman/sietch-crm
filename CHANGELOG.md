@@ -4,6 +4,14 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Activity Tab Revamp — Admin + User Modal + Header Clock (2026-08-15)
 
+### Follow-up Fixes
+- **Activity modal tabs now visible** — added SVG icons to Timesheet and Activity tab buttons (was text-only, invisible on narrow screens due to `.tab-label` hiding)
+- **Settings dropdown Activity icon** — replaced clock-play with calendar-clock SVG (matching old timesheet icon from team modal)
+- **Admin Activity log fixed** — now uses `/api/event-log` for own log (non-admin endpoint) instead of admin-only `/api/event-log/all`; non-admin users can now see their own activity
+- **Admin user dropdown fixed** — populates from all portal users (`/api/v2/users`) instead of only users with existing log files on disk
+- **Users tab list height** — removed hardcoded `max-height:400px`, list now fills available modal space and scrolls within the admin modal
+- **Team button in settings dropdown** — new "Team" menu item opens the team/presence modal directly from the header gear dropdown
+
 ### Admin Console — Activity Tab (renamed from "Logs")
 - **Tab renamed** from "Logs" to "Activity"
 - **Unified log view** — removed My log / Admin sub-tabs; single view with user dropdown

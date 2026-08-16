@@ -27872,7 +27872,18 @@ async function renderActivityLogTab() {
     return;
   }
   list.innerHTML = '<div class="event-log-empty">Loading\u2026</div>';
-  const events = await loadEventLogAdminEvents(userId);
+  let events;
+  const isOwnLog = String(userId) === String(state.currentUserId || "");
+  if (isOwnLog) {
+    // Non-admin endpoint — returns own log for any authenticated user
+    try {
+      const res = await fetch("/api/event-log", { credentials: "same-origin" });
+      const data = await res.json();
+      events = Array.isArray(data.events) ? data.events : [];
+    } catch { events = []; }
+  } else {
+    events = await loadEventLogAdminEvents(userId);
+  }
   renderEventLogEntries(events, list);
 }
 
@@ -28312,6 +28323,12 @@ function bindEventLogModal() {
     const dd = $("#settings-dropdown");
     if (dd) dd.classList.add("hidden");
     openActivityModal();
+  });
+  // Settings dropdown: Team
+  $("#dropdown-team-btn")?.addEventListener("click", () => {
+    const dd = $("#settings-dropdown");
+    if (dd) dd.classList.add("hidden");
+    openPresenceModal();
   });
 }
 
@@ -28865,16 +28882,17 @@ function switchAdminTab(tab) {
   }
   if (tab === "logs") {
     loadEventLogFromServer().then(async () => {
-      // Populate user dropdown
-      const users = await loadEventLogAdminUsers();
+      // Populate user dropdown from all portal users
+      if (!state.portalUsers || !state.portalUsers.length) {
+        try { await loadPortalUsers(); } catch {}
+      }
       const select = $("#activity-log-user-select");
       if (select) {
-        if (users && users.length) {
-          const portalUsers = Array.isArray(state.portalUsers) ? state.portalUsers : [];
-          const userMap = new Map(portalUsers.map(u => [String(u.id || u.ID || ""), u]));
-          select.innerHTML = users.map(uid => {
-            const u = userMap.get(uid);
-            const label = u ? (u.displayName || u.userName || u.email || uid) : uid;
+        const portalUsers = Array.isArray(state.portalUsers) ? state.portalUsers : [];
+        if (portalUsers.length) {
+          select.innerHTML = portalUsers.map(u => {
+            const uid = String(u.id || u.ID || "");
+            const label = u.displayName || u.userName || u.email || uid;
             return `<option value="${escapeHtml(uid)}">${escapeHtml(label)}</option>`;
           }).join("");
           if (state.currentUserId) select.value = String(state.currentUserId);
@@ -30618,7 +30636,7 @@ async function populateAdminUsersList() {
       <div style="margin-bottom:0.75rem;">
         <input type="text" id="admin-users-search" class="form-control" placeholder="Search users..." style="width:100%;" />
       </div>
-      <div id="admin-users-list" style="max-height:400px; overflow-y:auto;">${rows}</div>
+      <div id="admin-users-list" style="overflow-y:auto;">${rows}</div>
       <div id="admin-user-edit-form" class="hidden" style="margin-top:0.75rem; padding:0.75rem; background:var(--surface-2); border-radius:var(--radius); border:1px solid var(--border);"></div>
       <button type="button" id="admin-add-user-btn" class="btn btn-primary btn-sm" style="margin-top:0.75rem;">Add User</button>
       <div id="admin-add-user-form" class="hidden" style="margin-top:0.75rem; padding:0.75rem; background:var(--surface-2); border-radius:var(--radius); border:1px solid var(--border);">
