@@ -8035,8 +8035,15 @@ body {
   display: none !important;
 }
 
-/* Collapsed Team/Presence tile: hide tabs AND all toolbar extras
+/* Collapsed Team/Presence tile: force-hide body content AND all toolbar extras
    so minimized height matches the title bar of other tiles. */
+.dashboard-tile.presence-panel.tile-body-collapsed > .tile-body-content {
+  max-height: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  flex: 0 !important;
+  overflow: hidden !important;
+}
 .dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-tabs-inline,
 .dashboard-tile.presence-panel.tile-body-collapsed .presence-popup-btn,
 .dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-status-btn,
@@ -8055,7 +8062,9 @@ body {
 }
 .dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-body {
   min-height: 0 !important;
+  max-height: 0 !important;
   padding: 0;
+  overflow: hidden;
 }
 
 .calendar-tile-bar .calendar-month-nav {
@@ -8317,8 +8326,15 @@ body {
   display: none !important;
 }
 
-/* Collapsed Team/Presence tile: hide tabs AND all toolbar extras
+/* Collapsed Team/Presence tile: force-hide body content AND all toolbar extras
    so minimized height matches the title bar of other tiles. */
+.dashboard-tile.presence-panel.tile-body-collapsed > .tile-body-content {
+  max-height: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  flex: 0 !important;
+  overflow: hidden !important;
+}
 .dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-tabs-inline,
 .dashboard-tile.presence-panel.tile-body-collapsed .presence-popup-btn,
 .dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-status-btn,
@@ -8337,7 +8353,9 @@ body {
 }
 .dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-body {
   min-height: 0 !important;
+  max-height: 0 !important;
   padding: 0;
+  overflow: hidden;
 }
 
 .notes-editor {

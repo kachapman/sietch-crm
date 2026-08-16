@@ -2,6 +2,20 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Team Tile: Add/Remove + Proper Minimize (2026-08-16)
+
+### Added
+- **Add Tile → Team** — new "Team" option in the Add Tile modal re-adds the team/presence tile to the dashboard (`addPresenceTile()`), after it has been removed. Replaces the old always-present tile.
+- **Remove button (X)** — presence tile title bar now has an X (same pattern as group tiles) that confirms and removes the tile from the dashboard (`removePresenceTile()`). No longer force-created on login or on every `renderBoardGroups()` refresh.
+
+### Fixed
+- **Team tile minimize now matches other tiles** — collapsed presence panel force-hides `.tile-body-content` (`max-height:0 !important`, `opacity:0 !important`, `flex:0 !important`) and the presence body (`max-height:0`), so minimized height equals the title bar instead of staying stuck at the user-list height.
+- **Tile persistence after removal** — `ensureTileLayout()` no longer auto-injects `tile-presence` and `ensurePresenceOnLogin()` no longer force-adds it; `renderBoardGroups()` and `mountDashboardTiles()` only render it when `state.tileLayout.order` contains it. Removing the tile now survives refreshes/reloads.
+- **Team modal minimize button hidden when no tile** — `#presence-modal-minimize` (minimize-to-sidebar) is hidden when the Team tile isn't on the dashboard; the modal stays reachable via the header user menu. Re-evaluated on every open.
+
+### Removed
+- Dead `updatePresenceInstalledFlagFromLayout()` (zero callers); `state.hasPresenceTile` is now set directly by add/remove/login paths.
+
 ## Contacts Admin Tab Fix + Login Branding Race + Tile Persistence (2026-08-16)
 
 ### Fixed

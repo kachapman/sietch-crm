@@ -945,7 +945,6 @@ function getCalendarByTileId(tileId) {
 function ensureTileLayout() {
   const order = state.tileLayout.order?.length ? [...state.tileLayout.order] : defaultTileOrder();
   const known = new Set(defaultTileOrder());
-  known.add("tile-presence");
   known.add("tile-notes");
   const filtered = order.filter((id) => known.has(id));
   for (const id of known) {
@@ -955,9 +954,6 @@ function ensureTileLayout() {
   const origOrder = state.tileLayout.order?.join(",") || "";
   const newOrder = filtered.join(",");
   state.tileLayout.order = filtered;
-  if (!state.tileLayout.order.includes("tile-presence")) {
-    state.tileLayout.order.push("tile-presence");
-  }
   if (!state.tileLayout.order.includes("tile-notes")) {
     state.tileLayout.order.push("tile-notes");
   }
@@ -2292,7 +2288,7 @@ function mountDashboardTiles() {
   if (!root) return;
   ensureTileLayout();
 
-  if (!document.querySelector('[data-tile-id="tile-presence"]')) {
+  if (state.tileLayout.order.includes("tile-presence") && !document.querySelector('[data-tile-id="tile-presence"]')) {
     renderPresenceTile();
   }
 
@@ -10769,7 +10765,7 @@ function bindContactField(group, wrap) {
 function renderBoardGroups() {
   ensureTileLayout();
   renderTasksTile();
-  renderPresenceTile();
+  if (state.tileLayout.order.includes("tile-presence")) renderPresenceTile();
   const dash = $("#dashboard-tiles");
   if (!dash) return;
 
@@ -14964,6 +14960,10 @@ function bindAddTileModal() {
   $("#add-tile-calendar")?.addEventListener("click", showAddTileCalendarForm);
   $("#add-tile-notes")?.addEventListener("click", showAddTileNotesForm);
   $("#add-tile-local-kanban")?.addEventListener("click", addLocalKanbanTile);
+  $("#add-tile-team")?.addEventListener("click", () => {
+    closeAddTileModal();
+    addPresenceTile();
+  });
   $("#add-tile-calendar-back")?.addEventListener("click", showAddTileChooser);
   $("#add-tile-notes-back")?.addEventListener("click", showAddTileChooser);
   $("#add-tile-calendar-create")?.addEventListener("click", async () => {
@@ -16532,6 +16532,14 @@ async function openPresenceModal() {
   state.presenceModalOpen = true;
   modal.classList.remove("hidden");
 
+  // Hide the minimize-to-sidebar button when there's no Team tile on the dashboard
+  // (the modal stays reachable via the header user menu; minimize would orphan it).
+  const minimizeBtn = $("#presence-modal-minimize");
+  if (minimizeBtn) {
+    const hasTile = (state.tileLayout && state.tileLayout.order && state.tileLayout.order.includes("tile-presence")) || false;
+    minimizeBtn.style.display = hasTile ? "" : "none";
+  }
+
   // Immediate render with whatever cache/snapshot we have (from login priming or prior).
   // This makes the button feel instant; no await on full CRM loadPortalUsers or first fetch.
   // The async ensure below will refresh the list + snap and re-render.
@@ -17243,6 +17251,19 @@ function renderPresenceTile() {
         popupBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M11 5h-6a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-6"/><path d="M3 13h6a2 2 0 0 1 2 2v6"/><path d="M16 3h5v5"/><path d="M21 3l-6 6"/></svg>`;
         actions.insertBefore(popupBtn, actions.firstChild);
         actions.insertBefore(unreadFlash, popupBtn);
+        // Remove (X) button — same pattern as group tiles
+        const removeBtn = createTileRemoveButton("Remove team tile from dashboard", "btn-remove-presence");
+        removeBtn.addEventListener("click", async () => {
+          const ok = await confirmDialog({
+            title: "Remove team tile?",
+            message: "Remove the Team tile from the dashboard? You can re-add it from the Add Tile menu.",
+            confirmLabel: "Remove",
+            danger: true,
+          });
+          if (!ok) return;
+          removePresenceTile();
+        });
+        actions.appendChild(removeBtn);
       }
       const tabs = document.createElement("div");
       tabs.className = "presence-tile-tabs presence-tile-tabs-inline";
@@ -17256,6 +17277,36 @@ function renderPresenceTile() {
   }
   renderPresenceTileCompact();
   return tile;
+}
+
+function removePresenceTile() {
+  const tileId = "tile-presence";
+  state.tileLayout.order = state.tileLayout.order.filter((id) => id !== tileId);
+  delete state.tileLayout.widths[tileId];
+  delete state.tileLayout.heights[tileId];
+  delete state.tileLayout.collapsed[tileId];
+  delete state.tileLayout.pinned[tileId];
+  state.hasPresenceTile = false;
+  saveLayoutToStorage();
+  // Remove DOM element
+  const tileEl = document.querySelector(`[data-tile-id="${tileId}"]`);
+  if (tileEl) tileEl.remove();
+  showToast("Team tile removed from dashboard");
+}
+
+function addPresenceTile() {
+  const tileId = "tile-presence";
+  if (state.tileLayout.order.includes(tileId)) {
+    showToast("Team tile is already on the dashboard");
+    return;
+  }
+  state.tileLayout.order.push(tileId);
+  if (!state.tileLayout.pinned) state.tileLayout.pinned = {};
+  state.tileLayout.pinned[tileId] = true;
+  state.hasPresenceTile = true;
+  saveLayoutToStorage();
+  renderBoardGroups();
+  showToast("Team tile added to dashboard");
 }
 
 function bindPresenceTileControls(tile) {
@@ -17764,12 +17815,6 @@ function injectTestMessages() {
 // Called from mount logic (similar to renderFeedTile / renderTasksTile)
 // Note: renderPresenceTile() is now defined above with full toolbar
 
-function updatePresenceInstalledFlagFromLayout() {
-  const order = (state.tileLayout && state.tileLayout.order) || [];
-  const pinned = (state.tileLayout && state.tileLayout.pinned) || {};
-  state.hasPresenceTile = order.includes("tile-presence") && !!pinned["tile-presence"];
-}
-
 // Called from the post-login / refresh path
 function ensurePresenceOnLogin() {
   // Request desktop notification permission once
@@ -17778,13 +17823,14 @@ function ensurePresenceOnLogin() {
   }
   ensurePresenceUsersCache().catch(() => {});
   loadPresenceLastRead();
-  // Always enable the team tile
-  state.hasPresenceTile = true;
+  // Only pin the team tile if it's already in the layout (user can add/remove it)
   try {
     const layout = state.tileLayout || {};
     if (!layout.pinned) layout.pinned = {};
-    layout.pinned["tile-presence"] = true;
-    if (!layout.order.includes("tile-presence")) layout.order.push("tile-presence");
+    if (layout.order.includes("tile-presence")) {
+      layout.pinned["tile-presence"] = true;
+    }
+    state.hasPresenceTile = layout.order.includes("tile-presence");
     state.tileLayout = layout;
     saveLayoutToStorage();
   } catch {}
