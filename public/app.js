@@ -27834,10 +27834,8 @@ function renderEventLogEntries(entries, container) {
     const oppLabel = e.oppTitle ? escapeHtml(e.oppTitle) : e.oppId ? `#${e.oppId}` : "";
     return `<div class="event-log-entry ${cls}">
       <span class="event-log-entry-type">${typeLabel}</span>
-      <div class="event-log-entry-body">
-        ${oppLabel ? `<div class="event-log-entry-opp">${oppLabel}</div>` : ""}
-        <div class="event-log-entry-msg">${escapeHtml(e.message)}</div>
-      </div>
+      ${oppLabel ? `<span class="event-log-entry-opp">${oppLabel}</span>` : ""}
+      <span class="event-log-entry-msg">${escapeHtml(e.message)}</span>
       <span class="event-log-entry-time">${timeStr}</span>
     </div>`;
   }).join("");

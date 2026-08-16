@@ -11868,8 +11868,9 @@ body {
 
 .event-log-entry {
   display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.5rem;
   padding: 0.4rem 0.6rem;
   border-bottom: 1px solid var(--border);
 }
@@ -11890,16 +11891,31 @@ body {
   min-width: 0;
 }
 
+.event-log-entry-type {
+  flex-shrink: 0;
+  font-weight: 600;
+  font-size: 0.7rem;
+  min-width: 4.5em;
+  color: #888;
+  white-space: nowrap;
+}
+
 .event-log-entry-opp {
+  flex-shrink: 0;
   font-weight: 600;
   font-size: 0.78rem;
   color: var(--text);
+  white-space: nowrap;
 }
 
 .event-log-entry-msg {
+  flex-shrink: 1;
+  min-width: 0;
   color: var(--muted);
   font-size: 0.76rem;
-  word-break: break-word;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .event-log-entry-time {
@@ -11907,6 +11923,7 @@ body {
   font-size: 0.7rem;
   color: var(--muted);
   white-space: nowrap;
+  margin-left: auto;
 }
 
 .event-log-entry-type {
