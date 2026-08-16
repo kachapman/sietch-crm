@@ -1096,6 +1096,9 @@ function updateDashboardStatusText() {
   const openOpps = countOpenOpportunities();
   const openTasks = state.tasks.length;
   let text = `${openOpps} open projects · ${openTasks} open tasks`;
+  const users = Array.isArray(state.presenceData?.users) ? state.presenceData.users : [];
+  const onlineCount = users.filter(u => u.online).length;
+  text += ` · ${onlineCount} online`;
   const status = $("#status-text");
   if (status) status.textContent = text;
 }
@@ -15470,6 +15473,8 @@ function computeUnreadMessagesCount(recentDms) {
 function updatePresenceHeaderIndicators(snapshot = null) {
   const snap = snapshot || state.presenceData;
   updatePresenceHeaderBadge(snap);
+  // Keep the status-bar "· N online" count live with the latest snapshot
+  updateDashboardStatusText();
 
   const recent = (snap && snap.myRecentDms) || [];
   const hasWait = computeHasWaitingMessages(recent);

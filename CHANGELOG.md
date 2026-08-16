@@ -4,6 +4,9 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Team Tile: Add/Remove + Proper Minimize (2026-08-16)
 
+### Added
+- **Dashboard status bar shows online users** — the header meta line ("192 open projects · 7 open tasks") now ends with "· N online", counting users from the live presence snapshot (same `u.online` filter as the header presence badge). Refreshes in real time via `updatePresenceHeaderIndicators` on every SSE/heartbeat update.
+
 ### Minor cleanup
 - Removed byte-identical duplicate of the collapsed-presence CSS block (both copies had been edited consistently; the second was dead weight).
 - `ensurePresenceOnLogin()` now only calls `saveLayoutToStorage()` when the tile's pin state actually changed (was firing a redundant debounced profile save on every login).
