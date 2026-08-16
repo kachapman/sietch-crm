@@ -2,10 +2,14 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
-## Contacts Admin Tab Fix (2026-08-16)
+## Contacts Admin Tab Fix + Login Branding Race + Tile Persistence (2026-08-16)
 
 ### Fixed
 - **Admin Contacts tab failing to load** — the `contacts` table was missing 12 columns (`is_company`, `company_id`, `contact_type`, `website`, `industry`, `currency`, `about`, `address_country`, `onlyoffice_id`, `contact_status`, `avatar_url`) that the server code queries. Added all missing columns via ALTER TABLE migration and updated `init.sql` so fresh deployments get the full schema.
+- **Admin contacts list height** — removed artificial `max-height: 400px` from `.admin-contacts-list`; list now fills available modal height and scrolls via parent container.
+- **Login branding flash (blue default)** — `setAccentColor()` now derives `--accent-soft` and `--accent-subtle` from the accent color (was hardcoded to default blue rgba). Login screen gradient now uses `var(--accent-soft)` instead of hardcoded `rgba(79, 140, 255, 0.25)`. Branding response cached in `localStorage` for instant application on subsequent loads.
+- **Login native submit race** — added inline `<script>` in `index.html` that attaches `e.preventDefault()` on the login form immediately, before app.js loads. Prevents native form submit (page refresh) if user clicks "Sign in" before the 37K-line app.js finishes parsing.
+- **Tile layout persistence loss** — login handler referenced `config.version` where `config` was declared later in `init()` with `const` (temporal dead zone). If `init()` hadn't reached the declaration when the login handler fired, `showApp()` ran but `refreshAll()` never executed (crash in catch block), leaving `userProfileReady` permanently `false` — silently skipping all server profile saves. Fixed by fetching config inline in the login handler (matching the 2FA handler pattern).
 
 ## Activity Tab Revamp — Admin + User Modal + Header Clock (2026-08-15)
 

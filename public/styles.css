@@ -74,7 +74,7 @@ body {
   justify-content: center;
   padding: 2rem;
   background:
-    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(79, 140, 255, 0.25), transparent),
+    radial-gradient(ellipse 80% 60% at 50% -10%, var(--accent-soft, rgba(79, 140, 255, 0.25)), transparent),
     var(--bg);
   position: relative;
   overflow: hidden;
@@ -14926,8 +14926,6 @@ select.form-control {
   font-size: 0.85rem;
 }
 .admin-contacts-list {
-  max-height: 400px;
-  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 4px;
   font-size: 0.85rem;

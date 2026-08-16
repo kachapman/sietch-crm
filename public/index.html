@@ -2820,6 +2820,37 @@
     </div>
   </div>
 
+  <!-- Early inline script: apply cached branding instantly + prevent native form submit race -->
+  <script>
+  (function(){
+    // Apply cached branding colors before app.js loads to prevent blue flash
+    try {
+      var cached = localStorage.getItem("sietch_branding_cache");
+      if (cached) {
+        var b = JSON.parse(cached);
+        if (b && b.primaryColor) {
+          var c = b.primaryColor.replace("#", "");
+          if (c.length === 3) c = c[0]+c[0]+c[1]+c[1]+c[2]+c[2];
+          var r = parseInt(c.substr(0,2),16), g = parseInt(c.substr(2,2),16), bl = parseInt(c.substr(4,2),16);
+          var root = document.documentElement;
+          root.style.setProperty("--accent", b.primaryColor);
+          root.style.setProperty("--accent-text", (r*299+g*587+bl*114)/1000 > 160 ? "#111" : "#fff");
+          root.style.setProperty("--accent-soft", "rgba("+r+","+g+","+bl+",0.15)");
+          root.style.setProperty("--accent-subtle", "rgba("+r+","+g+","+bl+",0.1)");
+        }
+        if (b && b.companyName) {
+          document.title = b.companyName;
+          var lt = document.querySelector(".login-title");
+          if (lt) lt.textContent = b.loginTitle || b.companyName;
+        }
+      }
+    } catch(_) {}
+    // Prevent native form submit before app.js attaches its handler
+    var f = document.getElementById("login-form");
+    if (f) f.addEventListener("submit", function(e){ e.preventDefault(); });
+  })();
+  </script>
+
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
   <script src="app.js?v=3.4.20" type="module"></script>
 </body>

@@ -17,6 +17,15 @@ function setAccentColor(color) {
   if (!color) return;
   document.documentElement.style.setProperty("--accent", color);
   document.documentElement.style.setProperty("--accent-text", getContrastText(color));
+  try {
+    let c = color.replace("#", "");
+    if (c.length === 3) c = c[0] + c[0] + c[1] + c[1] + c[2] + c[2];
+    const r = parseInt(c.substr(0, 2), 16);
+    const g = parseInt(c.substr(2, 2), 16);
+    const b = parseInt(c.substr(4, 2), 16);
+    document.documentElement.style.setProperty("--accent-soft", `rgba(${r}, ${g}, ${b}, 0.15)`);
+    document.documentElement.style.setProperty("--accent-subtle", `rgba(${r}, ${g}, ${b}, 0.1)`);
+  } catch {}
 }
 
 // Load branding early for login screen
@@ -25,6 +34,8 @@ function setAccentColor(color) {
     const resp = await fetch("/api/branding");
     if (resp.ok) {
       const branding = await resp.json();
+      // Cache for instant load on next page
+      try { localStorage.setItem("sietch_branding_cache", JSON.stringify(branding)); } catch {}
       // Apply to login screen immediately
       if (branding.companyName) {
         document.title = branding.companyName;
@@ -36361,8 +36372,11 @@ async function init() {
 
         showApp();
         try { ensurePresenceOnLogin(); } catch {}
-        bindChangelogModal(config.version);
-        maybeShowChangelog(config.version);
+        try {
+          const _loginCfg = await (await fetch("/api/config")).json().catch(() => ({}));
+          bindChangelogModal(_loginCfg.version);
+          maybeShowChangelog(_loginCfg.version);
+        } catch {}
         setTimeout(async () => {
           await initCaches();
           await refreshAll();
