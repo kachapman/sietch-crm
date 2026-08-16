@@ -4,6 +4,11 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Team Tile: Add/Remove + Proper Minimize (2026-08-16)
 
+### Minor cleanup
+- Removed byte-identical duplicate of the collapsed-presence CSS block (both copies had been edited consistently; the second was dead weight).
+- `ensurePresenceOnLogin()` now only calls `saveLayoutToStorage()` when the tile's pin state actually changed (was firing a redundant debounced profile save on every login).
+- Add Tile modal's "Team" option is disabled (with tooltip) when the tile is already on the dashboard, instead of closing the modal and only then toasting "already on the dashboard".
+
 ### Follow-up Fix
 - **Add Tile → Team now actually adds the tile** — `ensureTileLayout()` used one `known` set for both whitelisting and force-adding. When `tile-presence` was removed from it to allow removal, it also got stripped from the order on every render — so `addPresenceTile()` pushed it into the order and `renderBoardGroups()`'s `ensureTileLayout()` immediately stripped it back out (no tile appeared, and refresh never restored it). Now `tile-presence` is whitelisted (kept if present) but excluded from the force-add loop (never re-added if removed).
 - **Lost tile positions/sizes on refresh** — root-caused, no code change. The server profile (`data/user-profiles/sietch/59.json`) had empty `widths`/`heights` because profile server-saves were silently skipped before the `config.version` TDZ fix (see previous release). On login, `loadUserProfileFromServer()` prefers the server and overwrites localStorage, clobbering the local-only arrangement. Not caused by the team-tile work and not recoverable from disk — arrange tiles once more; saves now persist.

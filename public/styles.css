@@ -7695,6 +7695,16 @@ body {
   background: var(--accent-soft);
 }
 
+.add-tile-option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.add-tile-option:disabled:hover {
+  border-color: var(--border);
+  background: var(--surface-2);
+}
+
 .add-tile-option-title {
   font-weight: 700;
   font-size: 0.95rem;
@@ -8326,31 +8336,6 @@ body {
   display: none !important;
 }
 
-/* Collapsed Team/Presence tile: force-hide body content AND all toolbar extras
-   so minimized height matches the title bar of other tiles. */
-.dashboard-tile.presence-panel.tile-body-collapsed > .tile-body-content {
-  max-height: 0 !important;
-  opacity: 0 !important;
-  pointer-events: none !important;
-  flex: 0 !important;
-  overflow: hidden !important;
-}
-.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-tabs-inline,
-.dashboard-tile.presence-panel.tile-body-collapsed .presence-popup-btn,
-.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-status-btn,
-.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-admin-btn,
-.dashboard-tile.presence-panel.tile-body-collapsed .presence-online-count,
-.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-toolbar,
-.dashboard-tile.presence-panel.tile-body-collapsed .tile-toolbar-tools > :not(.tile-toolbar-spacer) {
-  display: none !important;
-}
-.dashboard-tile.presence-panel.tile-body-collapsed .panel-header {
-  padding: 0.45rem 0.65rem;
-  margin-bottom: 0;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
-  cursor: grab;
-}
 .dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-body {
   min-height: 0 !important;
   max-height: 0 !important;

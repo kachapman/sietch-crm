@@ -14838,6 +14838,13 @@ function openAddTileModal() {
   const modal = $("#add-tile-modal");
   if (!modal) return;
   showAddTileChooser();
+  // Disable the Team option when the tile is already on the dashboard
+  const teamBtn = $("#add-tile-team");
+  if (teamBtn) {
+    const present = (state.tileLayout?.order || []).includes("tile-presence");
+    teamBtn.disabled = present;
+    teamBtn.title = present ? "Team tile is already on the dashboard" : "";
+  }
   modal.classList.remove("hidden");
 }
 
@@ -17833,12 +17840,16 @@ function ensurePresenceOnLogin() {
   try {
     const layout = state.tileLayout || {};
     if (!layout.pinned) layout.pinned = {};
-    if (layout.order.includes("tile-presence")) {
-      layout.pinned["tile-presence"] = true;
-    }
-    state.hasPresenceTile = layout.order.includes("tile-presence");
+    const hadPin = !!layout.pinned["tile-presence"];
+    const hasTile = layout.order.includes("tile-presence");
+    if (hasTile) layout.pinned["tile-presence"] = true;
+    else delete layout.pinned["tile-presence"];
+    state.hasPresenceTile = hasTile;
     state.tileLayout = layout;
-    saveLayoutToStorage();
+    // Only persist if the pin state actually changed (avoids a redundant save on every login)
+    if (!!layout.pinned["tile-presence"] !== hadPin) {
+      saveLayoutToStorage();
+    }
   } catch {}
   // Send initial heartbeat (mark online) + fetch presence snapshot once
   // SSE handles ongoing real-time updates after this
