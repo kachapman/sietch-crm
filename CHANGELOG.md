@@ -2,6 +2,11 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Contacts Admin Tab Fix (2026-08-16)
+
+### Fixed
+- **Admin Contacts tab failing to load** — the `contacts` table was missing 12 columns (`is_company`, `company_id`, `contact_type`, `website`, `industry`, `currency`, `about`, `address_country`, `onlyoffice_id`, `contact_status`, `avatar_url`) that the server code queries. Added all missing columns via ALTER TABLE migration and updated `init.sql` so fresh deployments get the full schema.
+
 ## Activity Tab Revamp — Admin + User Modal + Header Clock (2026-08-15)
 
 ### Follow-up Fixes

@@ -93,7 +93,18 @@ CREATE TABLE contacts (
     address_zip TEXT,
     notes TEXT,
     created_at TIMESTAMP DEFAULT NOW(),
-    created_by INTEGER REFERENCES users(id)
+    created_by INTEGER REFERENCES users(id),
+    is_company BOOLEAN DEFAULT FALSE,
+    company_id INTEGER REFERENCES contacts(id),
+    contact_type TEXT,
+    website TEXT,
+    industry TEXT,
+    currency TEXT,
+    about TEXT,
+    address_country TEXT,
+    onlyoffice_id TEXT,
+    contact_status TEXT DEFAULT 'active',
+    avatar_url TEXT
 );
 
 CREATE INDEX idx_contacts_name ON contacts(first_name, last_name);
