@@ -11963,6 +11963,17 @@ body {
   color: #00ff88;
   border-color: #00ff88;
   text-shadow: 0 0 8px rgba(0, 255, 136, 0.4);
+  animation: header-clock-breathe 2.2s ease-in-out infinite;
+}
+@keyframes header-clock-breathe {
+  0%, 100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, #00ff88 60%, transparent);
+    opacity: 0.85;
+  }
+  50% {
+    box-shadow: 0 0 6px 2px color-mix(in srgb, #00ff88 55%, transparent);
+    opacity: 1;
+  }
 }
 
 /* ── Infrastructure Tab ── */
