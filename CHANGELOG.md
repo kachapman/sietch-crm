@@ -2,6 +2,17 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Modal Resize Everywhere + Close Button Cleanup (2026-08-16)
+
+### Added
+- **Corner-grab resize on six modals** — the Team modal's dynamic resize ability (CSS `resize: both` on the modal card + flex-column layout + scrollable content) now applies to: Documents, Search, Project preview, Email inbox (header button), Email preview, Admin console, and Notes editor. Each card keeps its default size but can be dragged larger/smaller from the bottom-right corner within sane min/max bounds. On screens ≤600px all of them go full-screen with `resize: none` (new full-screen rules added for Search and Project preview, which lacked them).
+
+### Removed
+- **Lower Close button removed from three modals** — Project preview (`#opp-preview-close` + its JS binding), Email preview (bottom "Close" row), and Admin console (bottom Close). All three still close via their title-bar X (Email preview and Project already had one; Admin console got a new title-bar X on the right, same `.modal-header`/`.modal-header-control` pattern as the other modals, auto-wired via the existing `data-admin-console-dismiss` binding). Notes "Cancel" and "Save & Close" intentionally kept.
+
+### Fixed
+- **Admin console now closable from the title bar** — the header is a proper `.modal-header` row (title left, X right) instead of a bare `<h2>`, matching every other modal.
+
 ## Team Tile: Add/Remove + Proper Minimize (2026-08-16)
 
 ### Added

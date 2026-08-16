@@ -25589,7 +25589,6 @@ function bindOpportunityPreviewModal() {
   const modal = $("#opp-preview-modal");
   if (!modal || modal.dataset.bound) return;
   modal.dataset.bound = "1";
-  $("#opp-preview-close")?.addEventListener("click", closeOpportunityPreviewModal);
   $("#opp-preview-edit")?.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();

@@ -1095,9 +1095,6 @@
       <div id="email-preview-attachments" style="flex-shrink:0; padding:0.3rem 0.75rem; border-top:1px solid var(--border); background:var(--surface);"></div>
       <div id="email-preview-linked" style="flex-shrink:0; padding:0.2rem 0.75rem 0.4rem; font-size:0.78rem; color:var(--muted);"></div>
       <div id="email-preview-reply-area" style="flex-shrink:0; padding:0 0.75rem 0.5rem;"></div>
-      <div style="display:flex; justify-content:flex-end; padding:0.4rem 0.75rem; border-top:1px solid var(--border); flex-shrink:0;">
-        <button type="button" class="btn btn-ghost btn-small" data-email-preview-dismiss><i class="ti ti-x"></i> Close</button>
-      </div>
     </div>
   </div>
 
@@ -1613,9 +1610,6 @@
          </div>
       </div>
       <div id="opp-preview-body" class="opp-preview-body" aria-live="polite"></div>
-      <div class="modal-actions">
-        <button type="button" id="opp-preview-close" class="btn btn-secondary">Close</button>
-      </div>
     </div>
   </div>
 
@@ -2058,7 +2052,10 @@
   <div id="admin-console-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="admin-console-title">
     <div class="modal-backdrop" data-admin-console-dismiss></div>
     <div class="modal-card admin-modal-card">
-      <h2 id="admin-console-title" class="modal-title">Admin Console</h2>
+      <div class="modal-header" style="display:flex; align-items:center; justify-content:space-between; padding:0 0 0.5rem; flex-shrink:0; border-bottom:1px solid var(--border);">
+        <h2 id="admin-console-title" class="modal-title">Admin Console</h2>
+        <button type="button" class="btn btn-icon-only modal-header-control" title="Close" data-admin-console-dismiss><i class="ti ti-x"></i></button>
+      </div>
       <div class="admin-body">
         <div class="admin-tabs">
           <button class="admin-tab-btn btn btn-ghost" data-tab="general" title="General">
@@ -2700,9 +2697,6 @@
         </div>
       </div>
         </div>
-      </div>
-      <div class="modal-actions">
-        <button type="button" data-admin-console-dismiss class="btn btn-ghost">Close</button>
       </div>
     </div>
   </div>

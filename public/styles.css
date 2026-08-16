@@ -3904,6 +3904,9 @@ body {
   flex-direction: column;
   padding: 0;
   overflow: hidden;
+  resize: both;
+  min-width: 560px;
+  min-height: 420px;
 }
 /* Mail pagination */
 .mail-pagination {
@@ -6101,10 +6104,28 @@ body {
   max-height: 92vh;
   display: flex;
   flex-direction: column;
+  resize: both;
+  overflow: hidden;
+  min-width: 420px;
+  max-width: 96vw;
+  min-height: 400px;
 }
 
-.modal-card-opp-preview .modal-actions {
-  padding-top: 0.75rem;
+/* Project preview modal mobile: full-screen, no corner resize */
+@media (max-width: 600px) {
+  #opp-preview-modal {
+    padding: 0;
+  }
+  #opp-preview-modal .modal-card {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    max-height: 100dvh !important;
+    border-radius: 0;
+    resize: none;
+    min-width: 0;
+  }
 }
 
 /* Changelog modal */
@@ -8998,6 +9019,10 @@ body {
   flex-direction: column;
   overflow: hidden;
   padding: 0;
+  resize: both;
+  min-width: 400px;
+  max-width: 96vw;
+  min-height: 400px;
 }
 
 .note-edit-modal-head {
@@ -9137,6 +9162,9 @@ body {
     height: 100dvh;
     max-height: 100dvh;
     border-radius: 0;
+    resize: none;
+    min-width: 0;
+    max-width: 100%;
   }
   .note-edit-modal-head {
     padding: 0.5rem 0.75rem 0.4rem;
@@ -10255,11 +10283,31 @@ body {
   flex-direction: column;
   padding: 0;
   overflow: hidden;
+  resize: both;
+  min-width: 420px;
+  height: min(85vh, 85dvh);
 }
 
 .modal-card-search-popup .modal-actions {
   justify-content: space-between;
   padding: 0.5rem 0.75rem;
+}
+
+/* Search popup modal mobile: full-screen, no corner resize */
+@media (max-width: 600px) {
+  #search-popup-modal {
+    padding: 0;
+  }
+  #search-popup-modal .modal-card {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    max-height: 100dvh !important;
+    border-radius: 0;
+    resize: none;
+    min-width: 0;
+  }
 }
 
 .search-popup-tabs {
@@ -12502,6 +12550,12 @@ body {
   height: min(840px, 85vh);
   display: flex;
   flex-direction: column;
+  resize: both;
+  overflow: hidden;
+  min-width: 520px;
+  max-width: 96vw;
+  min-height: 420px;
+  max-height: 90vh;
 }
 
 #admin-console-modal .admin-body {
@@ -12601,6 +12655,8 @@ select.form-control {
     height: 100dvh;
     max-height: 100dvh;
     border-radius: 0;
+    resize: none;
+    min-width: 0;
   }
   #sync-log {
     max-height: 200px;
@@ -12629,6 +12685,11 @@ select.form-control {
   flex-direction: column;
   padding: 0;
   overflow: hidden;
+  resize: both;
+  min-width: 480px;
+  min-height: 400px;
+  max-width: 96vw;
+  max-height: 90vh;
 }
 
 .documents-modal-header {
@@ -13441,6 +13502,9 @@ select.form-control {
   .documents-modal-card {
     width: 98vw;
     height: 90vh;
+    resize: none;
+    min-width: 0;
+    max-width: 100%;
   }
 }
 
@@ -13780,6 +13844,8 @@ select.form-control {
     width: 100%;
     max-width: 100%;
     border-radius: 0;
+    resize: none;
+    min-width: 0;
   }
   .mail-inbox-header {
     flex-shrink: 0;
@@ -14290,6 +14356,11 @@ select.form-control {
   max-width: 900px;
   width: 95vw;
   max-height: 92vh;
+  resize: both;
+  overflow: hidden;
+  min-width: 420px;
+  min-height: 420px;
+  height: min(85vh, 85dvh);
 }
 #email-preview-head > div {
   line-height: 1.45;
@@ -14333,6 +14404,8 @@ select.form-control {
     max-height: 100vh !important;
     height: 100vh;
     height: 100dvh;
+    resize: none;
+    min-width: 0;
   }
   #email-preview-modal { padding: 0; }
   .email-preview-action[data-action="reply"] .btn-label,
