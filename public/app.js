@@ -28032,7 +28032,11 @@ async function renderActivityLog(container) {
   if (!container) return;
   container.innerHTML = '<div class="event-log-empty">Loading\u2026</div>';
   const events = await loadEventLogAdminEvents(state.currentUserId);
-  renderEventLogEntries(events, container);
+  const wrapper = document.createElement("div");
+  wrapper.className = "event-log-list";
+  container.innerHTML = "";
+  container.appendChild(wrapper);
+  renderEventLogEntries(events, wrapper);
 }
 
 /* ── Admin Console: Enhanced Timesheet Date Views ─────────────────────────── */
