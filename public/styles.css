@@ -3896,10 +3896,10 @@ body {
   padding: 0.5rem;
 }
 #mail-inbox-modal .mail-inbox-card {
-  width: 100%;
-  max-width: 1400px;
+  width: min(1400px, 96vw);
+  max-width: min(1600px, 96vw);
   height: min(85vh, 85dvh);
-  max-height: 900px;
+  max-height: 96vh;
   display: flex;
   flex-direction: column;
   padding: 0;
@@ -14361,6 +14361,32 @@ select.form-control {
   min-width: 420px;
   min-height: 420px;
   height: min(85vh, 85dvh);
+}
+/* Email preview modal: email body fills available height so resizing the modal grows the message view */
+#email-preview-modal #email-preview-body-wrap {
+  display: flex;
+  flex-direction: column;
+}
+#email-preview-modal #email-preview-body {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#email-preview-modal .opp-preview-mail-iframe {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+#email-preview-modal .opp-preview-mail-text {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
 }
 #email-preview-head > div {
   line-height: 1.45;

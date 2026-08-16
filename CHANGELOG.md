@@ -2,6 +2,12 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Modal Resize Fixes: Email Inbox + Email Preview Body (2026-08-16)
+
+### Fixed
+- **Email inbox modal now expands** — the mail card used `width:100%` with `max-width:1400px` / `max-height:900px`, so on typical screens it already opened at maximum size and the corner drag had nothing to grow into (it appeared to not resize at all). The card now uses an explicit `width:min(1400px,96vw)` (same as the other resizable modals) with raised caps (`max-width:min(1600px,96vw)`, `max-height:96vh`), so dragging the bottom-right corner actually grows the window.
+- **Email preview body fills available height** — the HTML body iframe was sized to content height capped at 2000px, and the plain-text body had `max-height:70vh`, so enlarging the modal left the message stuck at its old fixed height. Now `#email-preview-body` fills the flex container (`flex:1; min-height:0`) and the iframe/`<pre>` fill it in turn, so resizing the modal grows the message view (content scrolls inside it). Scoped to `#email-preview-modal` so the opp-preview mail-detail embed is unaffected.
+
 ## Modal Resize Everywhere + Close Button Cleanup (2026-08-16)
 
 ### Added

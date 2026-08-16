@@ -24098,17 +24098,9 @@ function openEmailPreviewModal(messageId) {
         iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts');
         iframe.setAttribute('title', 'Email body');
         iframe.srcdoc = mailBodyIframeSrcdoc(htmlBody);
-        iframe.addEventListener('load', () => {
-          try {
-            const doc = iframe.contentDocument;
-            if (!doc || !doc.body) return;
-            const h = doc.body.scrollHeight;
-            if (h > 10) iframe.style.height = Math.min(Math.max(h + 4, 40), 2000) + 'px';
-          } catch {}
-        });
         bodyEl.appendChild(iframe);
       } else if (bodyPick.mode === 'text' && bodyPick.content) {
-        bodyEl.innerHTML = `<pre class="opp-preview-mail-text" style="max-height:70vh;overflow:auto;">${escapeHtml(bodyPick.content)}</pre>`;
+        bodyEl.innerHTML = `<pre class="opp-preview-mail-text">${escapeHtml(bodyPick.content)}</pre>`;
       } else {
         bodyEl.innerHTML = '<p class="opp-preview-empty">No readable message body available.</p>';
       }
