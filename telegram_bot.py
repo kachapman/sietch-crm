@@ -643,11 +643,11 @@ HELP_TEXT_EMPLOYEE = (
     "Commands:\n"
     "  /today     — today's tasks & events\n"
     "  /tasks     — open tasks assigned to you\n"
-    "  /task-done — mark a task complete\n"
-    "  /new-task  — create a new task\n"
-    "  /my-projects — your assigned projects\n"
+    "  /task_done — mark a task complete\n"
+    "  /new_task  — create a new task\n"
+    "  /my_projects — your assigned projects\n"
     "  /overdue   — overdue projects\n"
-    "  /due-this-week — projects due this week\n"
+    "  /due_this_week — projects due this week\n"
     "  /calendar  — upcoming calendar events\n"
     "  /pipeline  — project pipeline overview\n"
     "  /stats     — project statistics\n"
@@ -657,7 +657,7 @@ HELP_TEXT_EMPLOYEE = (
     "  /quicknote — add a quick note\n"
     "  /stage     — change project stage\n"
     "  /search    — search projects\n"
-    "  /reset-password — reset dashboard password\n"
+    "  /reset_password — reset dashboard password\n"
     "  /help      — this message\n"
     "  /cancel    — abort current action\n"
     "  /start     — restart the bot"
@@ -946,7 +946,7 @@ def main() -> None:
                     "Quick commands:\n"
                     "  /today  — today's tasks &amp; events\n"
                     "  /tasks  — open tasks\n"
-                    "  /my-projects — your projects\n"
+                    "  /my_projects — your projects\n"
                     "  /help   — all commands",
                     reply_markup=_build_deal_detail_keyboard(0, is_employee=True),
                 )
@@ -1430,7 +1430,7 @@ def main() -> None:
         text = (update.message.text or "").strip()
         parts = text.split(maxsplit=1)
         if len(parts) < 2 or not parts[1].isdigit():
-            await _reply_html(update, "Usage: /task-done &lt;task_id&gt;\nUse /tasks to see your open tasks with their IDs.")
+            await _reply_html(update, "Usage: /task_done &lt;task_id&gt;\nUse /tasks to see your open tasks with their IDs.")
             return
         task_id = int(parts[1])
         resp = await _post("/api/bot/task-done", {"chatId": chat_id, "taskId": task_id})
@@ -1450,7 +1450,7 @@ def main() -> None:
         text = (update.message.text or "").strip()
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
-            await _reply_html(update, "Usage: /new-task &lt;task title&gt;")
+            await _reply_html(update, "Usage: /new_task &lt;task title&gt;")
             return
         title = parts[1]
         resp = await _post("/api/bot/task-create", {"chatId": chat_id, "title": title})
@@ -1648,13 +1648,13 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("tag", tag_command))
-    app.add_handler(CommandHandler("reset-password", reset_password_command))
+    app.add_handler(CommandHandler("reset_password", reset_password_command))
     app.add_handler(CommandHandler("tasks", tasks_command))
-    app.add_handler(CommandHandler("task-done", task_done_command))
-    app.add_handler(CommandHandler("new-task", new_task_command))
-    app.add_handler(CommandHandler("my-projects", my_projects_command))
+    app.add_handler(CommandHandler("task_done", task_done_command))
+    app.add_handler(CommandHandler("new_task", new_task_command))
+    app.add_handler(CommandHandler("my_projects", my_projects_command))
     app.add_handler(CommandHandler("overdue", overdue_command))
-    app.add_handler(CommandHandler("due-this-week", due_this_week_command))
+    app.add_handler(CommandHandler("due_this_week", due_this_week_command))
     app.add_handler(CommandHandler("calendar", calendar_command))
     app.add_handler(CommandHandler("pipeline", pipeline_command))
     app.add_handler(CommandHandler("stats", stats_command))

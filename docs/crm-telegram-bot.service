@@ -1,18 +1,18 @@
 [Unit]
-Description=Sietch CRM Telegram Bot (@vanguardupdates_bot)
-Documentation=https://github.com/kachapman/onlyoffice-crm-kanban
-After=network-online.target docker.service
+Description=Sietch CRM Telegram Bot (@SietchCRM_bot)
+Documentation=https://github.com/kachapman/new-crm
+After=network-online.target
 Wants=network-online.target
-Requires=docker.service
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/vanguard/onlyoffice-crm-kanban
-ExecStart=/tmp/botenv/bin/python3 /opt/vanguard/onlyoffice-crm-kanban/telegram_bot.py
+WorkingDirectory=/home/chapman-server/Projects/new-crm
+ExecStart=/home/chapman-server/Projects/new-crm/.venv/bin/python3 /home/chapman-server/Projects/new-crm/telegram_bot.py
 Restart=always
 RestartSec=10
 TimeoutStopSec=30
 KillMode=process
+User=chapman-server
 
 [Install]
 WantedBy=multi-user.target

@@ -2,6 +2,15 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Telegram Bot Deployment Fixes (2026-08-17)
+
+- **Fixed 5 hyphenated bot command names** — Telegram rejects commands with hyphens. Renamed: `reset-password` → `reset_password`, `task-done` → `task_done`, `new-task` → `new_task`, `my-projects` → `my_projects`, `due-this-week` → `due_this_week`. Updated all CommandHandler registrations, help text, and inline usage strings.
+- **Added `python-telegram-bot` dependency** — required by `telegram_bot.py` but not in `requirements.txt` or installed in `.venv`.
+- **Added missing `.env` variables** — `DASHBOARD_URL=http://127.0.0.1:8766` (was defaulting to 8765, wrong port), `ONLYOFFICE_PORTAL_URL`, `TELEGRAM_BOT_TOKEN`. Updated `config.example.env` with documentation.
+- **Created systemd service file** — `docs/crm-telegram-bot.service` updated with correct paths (`/home/chapman-server/Projects/new-crm`), correct venv, removed stale `Requires=docker.service`, added `User=chapman-server`.
+- **Bot confirmed running and heartbeat working** — bot sends `POST /api/bot/heartbeat` every 60s, server returns 200 OK.
+- **Files:** `telegram_bot.py` (command names), `.env` (vars), `config.example.env` (docs), `docs/crm-telegram-bot.service` (systemd unit).
+
 ## Telegram Bot Overhaul — Phase 2K (2026-08-16)
 
 ### Added
