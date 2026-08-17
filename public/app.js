@@ -32587,13 +32587,12 @@ function initBotBroadcastSection() {
 let _botDocSelected = null;
 
 function initBotDocPush() {
-  const searchInput = $("#bot-doc-search");
-  const results = $("#bot-doc-results");
+  const pickBtn = $("#bot-doc-pick-btn");
   const selected = $("#bot-doc-selected");
   const recipient = $("#bot-doc-recipient");
   const sendBtn = $("#bot-doc-send-btn");
   const docStatus = $("#bot-doc-status");
-  if (!searchInput || !results) return;
+  if (!pickBtn) return;
 
   // Populate recipient dropdown from broadcast mappings
   if (recipient) {
@@ -32614,55 +32613,26 @@ function initBotDocPush() {
 
   if (recipient) recipient.addEventListener("change", updateSendBtn);
 
-  // Document search
-  let debounce;
-  searchInput.addEventListener("input", () => {
-    clearTimeout(debounce);
-    debounce = setTimeout(async () => {
-      const q = searchInput.value.trim();
-      results.innerHTML = "";
-      if (q.length < 2) { results.classList.add("hidden"); return; }
-      try {
-        const resp = await api(`/api/v2/documents/search?q=${encodeURIComponent(q)}`);
-        const docs = Array.isArray(resp) ? resp : (resp.documents || resp.results || []);
-        results.classList.remove("hidden");
-        if (!docs.length) {
-          results.innerHTML = '<button type="button" disabled>No documents found</button>';
-          return;
-        }
-        for (const d of docs.slice(0, 15)) {
-          const btn = document.createElement("button");
-          btn.type = "button";
-          const size = d.fileSize ? ` (${Math.round(d.fileSize / 1024)}KB)` : "";
-          btn.textContent = `${d.title || "Untitled"}${size}`;
-          btn.addEventListener("click", () => {
-            _botDocSelected = { id: d.id, title: d.title || "Untitled" };
-            searchInput.value = "";
-            results.classList.add("hidden");
-            if (selected) {
-              selected.innerHTML = `📄 ${escapeHtml(d.title || "Untitled")} <span class="contact-clear" role="button" tabindex="0" id="bot-doc-clear">clear</span>`;
-              selected.classList.remove("hidden");
-              $("#bot-doc-clear")?.addEventListener("click", () => {
-                _botDocSelected = null;
-                selected.innerHTML = "";
-                selected.classList.add("hidden");
-                updateSendBtn();
-              });
-            }
-            updateSendBtn();
-          });
-          results.appendChild(btn);
-        }
-      } catch (err) {
-        results.innerHTML = '<button type="button" disabled>Search failed</button>';
-        results.classList.remove("hidden");
+  // Open the existing document picker modal
+  pickBtn.addEventListener("click", () => {
+    openDocumentPickerModal((file) => {
+      // The modal downloads the file — we need the doc ID too
+      // docPickerState.selectedDocId is still set when callback fires
+      const docId = typeof docPickerState !== "undefined" ? docPickerState.selectedDocId : null;
+      const docTitle = file.name || "Untitled";
+      _botDocSelected = { id: docId, title: docTitle, file };
+      if (selected) {
+        selected.innerHTML = `📄 ${escapeHtml(docTitle)} <span class="contact-clear" role="button" tabindex="0" id="bot-doc-clear">clear</span>`;
+        selected.classList.remove("hidden");
+        $("#bot-doc-clear")?.addEventListener("click", () => {
+          _botDocSelected = null;
+          selected.innerHTML = "";
+          selected.classList.add("hidden");
+          updateSendBtn();
+        });
       }
-    }, 350);
-  });
-
-  document.addEventListener("click", (e) => {
-    const wrap = $("#bot-doc-search-field");
-    if (wrap && !wrap.contains(e.target)) results.classList.add("hidden");
+      updateSendBtn();
+    });
   });
 
   // Send button
