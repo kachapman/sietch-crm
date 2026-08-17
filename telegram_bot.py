@@ -696,6 +696,8 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
         return "Invalid selection."
     d = deals[index]
     amt = _fmt_money(d.get("amount", 0), d.get("currency", ""))
+    deal_id = d.get("id", "")
+    project_url = f"{DASHBOARD_URL}/project/{deal_id}" if deal_id else ""
     lines = [
         _esc(d["title"]),
         "─" * 30,
@@ -721,6 +723,9 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
                     header += f" — <i>{_esc(created)}</i>"
                 lines.append(header + ":")
                 lines.append(_sanitize_html(content))
+        if project_url:
+            lines.append("")
+            lines.append(f'<a href="{project_url}">View project in CRM</a>')
         if lines and lines[-1] != "":
             lines.append("")
         lines.append("───────────────")
@@ -735,6 +740,27 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
         lines.append(f"Status: {_esc(stage)}")
     if amt:
         lines.append(f"Amount: {_esc(amt)}")
+    tags = d.get("tags") or []
+    if tags:
+        lines.append(f"Tags: {_esc(', '.join(tags))}")
+    desc = d.get("description", "")
+    if desc:
+        lines.append(f"Description: {_esc(desc[:200])}")
+    contact = d.get("contact", "")
+    if contact:
+        lines.append(f"Contact: {_esc(contact)}")
+    responsible = d.get("responsible", "")
+    if responsible:
+        lines.append(f"Responsible: {_esc(responsible)}")
+    created = d.get("created", "")
+    if created:
+        lines.append(f"Created: {_esc(_fmt_date(created))}")
+    due = d.get("dueDate", "")
+    if due:
+        lines.append(f"Due Date: {_esc(_fmt_date(due))}")
+    if project_url:
+        lines.append("")
+        lines.append(f'<a href="{project_url}">View project in CRM</a>')
     events = d.get("events", [])
     if events:
         lines.append("")
@@ -776,6 +802,8 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
 
 def format_project_info(deal: dict) -> str:
     """Format all deal fields and user fields for employee Project Info view."""
+    deal_id = deal.get("id", "")
+    project_url = f"{DASHBOARD_URL}/project/{deal_id}" if deal_id else ""
     lines = [
         f"<b>{_esc(deal.get('title', 'Deal'))}</b> — Project Info",
         "─" * 30,
@@ -805,9 +833,6 @@ def format_project_info(deal: dict) -> str:
     due = deal.get("dueDate", "")
     if due:
         lines.append(f"<b>Due Date:</b> {_esc(_fmt_date(due))}")
-    bid = deal.get("bidType", "")
-    if bid:
-        lines.append(f"<b>Bid Type:</b> {_esc(bid)}")
     if deal.get("isPrivate"):
         lines.append(f"<b>Private:</b> Yes")
     # User fields (all non-empty, no header)
@@ -815,6 +840,10 @@ def format_project_info(deal: dict) -> str:
     for key, val in uf.items():
         if val:
             lines.append(f"<b>{_esc(key)}:</b> {_esc(val)}")
+    if project_url:
+        if lines and lines[-1] != "":
+            lines.append("")
+        lines.append(f'<a href="{project_url}">View project in CRM</a>')
     if lines and lines[-1] != "":
         lines.append("")
     lines.append("───────────────")
@@ -874,6 +903,9 @@ def main() -> None:
                 action_row.append(InlineKeyboardButton("📍 Address", url=maps_url))
             if action_row:
                 rows.append(action_row)
+        if deal_id:
+            project_url = f"{DASHBOARD_URL}/project/{deal_id}"
+            rows.append([InlineKeyboardButton("🔗 Open in CRM", url=project_url)])
         rows.append([InlineKeyboardButton("🔍 New Search", callback_data="act:home")])
         return InlineKeyboardMarkup(rows)
 
