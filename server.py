@@ -9444,7 +9444,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
             rows = db.query(
                 f"""SELECT o.id, o.title, o.bid_value, o.description, o.created_at,
-                           o.expected_close_date, o.bid_type, o.is_private,
+                           o.expected_close_date, o.is_private,
                            s.title, c.first_name, c.last_name, c.company,
                            u.display_name, o.responsible_user_id, o.contact_id
                     FROM opportunities o
@@ -9473,12 +9473,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     "description": r[3] or "",
                     "created": r[4].isoformat() if r[4] else "",
                     "dueDate": r[5].isoformat() if r[5] else "",
-                    "bidType": r[6] or "",
-                    "isPrivate": bool(r[7]),
-                    "stage": r[8] or "",
-                    "contact": f"{r[9] or ''} {r[10] or ''}".strip(),
-                    "contactCompany": r[11] or "",
-                    "responsible": r[12] or "",
+                    "isPrivate": bool(r[6]),
+                    "stage": r[7] or "",
+                    "contact": f"{r[8] or ''} {r[9] or ''}".strip(),
+                    "contactCompany": r[10] or "",
+                    "responsible": r[11] or "",
                 }
                 # Enrich with tags
                 try:
