@@ -2,6 +2,22 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Telegram Bot Features + Fixes (2026-08-17)
+
+- **Bot settings pre-fill** — `_get_bot_config()` now fills empty token from env var fallback. Admin Bot tab shows saved settings.
+- **Portal mismatch fixed** — `verify_code` sends `portal: "sietch"` (not ONLYOFFICE_PORTAL_URL). Invite codes now work.
+- **Title switching** — Added `id="bot-section-title"` to HTML. Title now updates between "Invite Telegram User" / "Invite Employee".
+- **Category + broadcast dropdowns populated** — Were dead code (called only in unreachable `openBotCustomersModal`). Now populated on bot tab switch.
+- **Category default** — Resets to "All notes" when employee checkbox is checked.
+- **Text changes** — "Invite Customer" → "Invite Telegram User", "Employee access (view all deals)" → "Employee access (All Projects and Functions)".
+- **Broadcast "All linked users"** — New option in recipient dropdown sends to every linked user. Server handles `chatId: "all"` by iterating all mappings.
+- **Expanded rich text toolbar** — Bold, Italic, Underline, Strikethrough, Code, Link, Horizontal Rule (was 2 buttons, now 7).
+- **Document push to customer** — New admin UI section "Push Document" in bot tab. Search project documents, select recipient, optional caption, send via Telegram Bot API `sendDocument`. Server endpoint `POST /api/v2/admin/bot/send-document`.
+- **Project restriction for customer mappings** — New `allowedProjectIds` field on mapping. Admin can restrict a customer to specific project IDs via "Projects" button in Existing Mappings. Bot deals endpoint filters by allowed IDs. Empty = all projects (backward compatible).
+- **Activity log filter fixed** — Server now handles direct action values (was only hardcoded special cases). Heartbeats excluded by default.
+- **Bot status fixed** — `hb["created_at"]` dict access (was `hb[0]` KeyError). Naive datetime comparison fixed.
+- **Files:** `server.py`, `telegram_bot.py`, `crm_bot_store.py`, `public/app.js`, `public/index.html`, `public/styles.css`.
+
 ## Telegram Bot Deployment Fixes (2026-08-17)
 
 - **Fixed 5 hyphenated bot command names** — Telegram rejects commands with hyphens. Renamed: `reset-password` → `reset_password`, `task-done` → `task_done`, `new-task` → `new_task`, `my-projects` → `my_projects`, `due-this-week` → `due_this_week`. Updated all CommandHandler registrations, help text, and inline usage strings.
