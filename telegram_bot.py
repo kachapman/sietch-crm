@@ -881,12 +881,12 @@ def main() -> None:
         """Persistent keyboard buttons below the chat input."""
         if is_employee:
             keyboard = [
-                [KeyboardButton("📋 My Tasks"), KeyboardButton("📅 Today")],
-                [KeyboardButton("🔍 Search"), KeyboardButton("ℹ️ Help")],
+                [KeyboardButton("Tasks"), KeyboardButton("Tag")],
+                [KeyboardButton("Quick Note"), KeyboardButton("Help")],
             ]
         else:
             keyboard = [
-                [KeyboardButton("🔍 Search"), KeyboardButton("ℹ️ Help")],
+                [KeyboardButton("Search"), KeyboardButton("Help")],
             ]
         return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -1151,16 +1151,19 @@ def main() -> None:
             # ── Reply keyboard button presses ──
             mapping = await get_mapping(chat_id)
             is_emp = mapping.get("employee", False) if mapping else False
-            if text == "📋 My Tasks" and is_emp:
+            if text == "Tasks" and is_emp:
                 update.message.text = "/tasks"
                 lower = "/tasks"
-            elif text == "📅 Today" and is_emp:
-                update.message.text = "/today"
-                lower = "/today"
-            elif text == "🔍 Search":
+            elif text == "Tag" and is_emp:
+                update.message.text = "/tag"
+                lower = "/tag"
+            elif text == "Quick Note" and is_emp:
+                update.message.text = "/quicknote"
+                lower = "/quicknote"
+            elif text == "Search":
                 await _reply_html(update, "Send a project name to search.")
                 return
-            elif text == "ℹ️ Help":
+            elif text == "Help":
                 update.message.text = "/help"
                 lower = "/help"
 
