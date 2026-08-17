@@ -29039,6 +29039,7 @@ function switchAdminTab(tab) {
         if (typeof populateBotCustomersCategorySelect === "function") populateBotCustomersCategorySelect();
       });
     }
+    if (typeof initBotDocPush === "function") initBotDocPush();
   }
   if (tab === "branding") {
     populateBrandingForm();
@@ -32535,6 +32536,126 @@ function initBotBroadcastSection() {
     }
     setTimeout(() => { status.textContent = ""; }, 5000);
   });
+}
+
+// ── Push Document to Customer ──────────────────────────────────────────
+let _botDocSelected = null;
+
+function initBotDocPush() {
+  const searchInput = $("#bot-doc-search");
+  const results = $("#bot-doc-results");
+  const selected = $("#bot-doc-selected");
+  const recipient = $("#bot-doc-recipient");
+  const sendBtn = $("#bot-doc-send-btn");
+  const docStatus = $("#bot-doc-status");
+  if (!searchInput || !results) return;
+
+  // Populate recipient dropdown from broadcast mappings
+  if (recipient) {
+    recipient.innerHTML = '<option value="">— Select a user —</option>';
+    for (const m of _botCustomersMappings) {
+      if (!m.chatId) continue;
+      const label = (m.nickname || m.contactName || `User #${m.contactId}`) + ` (${m.contactName || "Employee"})`;
+      const opt = document.createElement("option");
+      opt.value = m.chatId;
+      opt.textContent = label;
+      recipient.appendChild(opt);
+    }
+  }
+
+  function updateSendBtn() {
+    if (sendBtn) sendBtn.disabled = !_botDocSelected || !recipient || !recipient.value;
+  }
+
+  if (recipient) recipient.addEventListener("change", updateSendBtn);
+
+  // Document search
+  let debounce;
+  searchInput.addEventListener("input", () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(async () => {
+      const q = searchInput.value.trim();
+      results.innerHTML = "";
+      if (q.length < 2) { results.classList.add("hidden"); return; }
+      try {
+        const resp = await api(`/api/v2/documents/search?q=${encodeURIComponent(q)}`);
+        const docs = Array.isArray(resp) ? resp : (resp.documents || resp.results || []);
+        results.classList.remove("hidden");
+        if (!docs.length) {
+          results.innerHTML = '<button type="button" disabled>No documents found</button>';
+          return;
+        }
+        for (const d of docs.slice(0, 15)) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          const size = d.fileSize ? ` (${Math.round(d.fileSize / 1024)}KB)` : "";
+          btn.textContent = `${d.title || "Untitled"}${size}`;
+          btn.addEventListener("click", () => {
+            _botDocSelected = { id: d.id, title: d.title || "Untitled" };
+            searchInput.value = "";
+            results.classList.add("hidden");
+            if (selected) {
+              selected.innerHTML = `📄 ${escapeHtml(d.title || "Untitled")} <span class="contact-clear" role="button" tabindex="0" id="bot-doc-clear">clear</span>`;
+              selected.classList.remove("hidden");
+              $("#bot-doc-clear")?.addEventListener("click", () => {
+                _botDocSelected = null;
+                selected.innerHTML = "";
+                selected.classList.add("hidden");
+                updateSendBtn();
+              });
+            }
+            updateSendBtn();
+          });
+          results.appendChild(btn);
+        }
+      } catch (err) {
+        results.innerHTML = '<button type="button" disabled>Search failed</button>';
+        results.classList.remove("hidden");
+      }
+    }, 350);
+  });
+
+  document.addEventListener("click", (e) => {
+    const wrap = $("#bot-doc-search-field");
+    if (wrap && !wrap.contains(e.target)) results.classList.add("hidden");
+  });
+
+  // Send button
+  if (sendBtn) {
+    sendBtn.addEventListener("click", async () => {
+      if (!_botDocSelected || !recipient || !recipient.value) return;
+      sendBtn.disabled = true;
+      if (docStatus) docStatus.textContent = "Sending…";
+      try {
+        const resp = await fetch("/api/v2/admin/bot/send-document", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            docId: _botDocSelected.id,
+            chatId: Number(recipient.value),
+            caption: ($("#bot-doc-caption")?.value || "").trim(),
+          }),
+        });
+        const data = await resp.json();
+        if (data.ok) {
+          if (docStatus) docStatus.textContent = "✅ Sent!";
+          _botDocSelected = null;
+          if (selected) { selected.innerHTML = ""; selected.classList.add("hidden"); }
+          if ($("#bot-doc-caption")) $("#bot-doc-caption").value = "";
+          recipient.value = "";
+          sendBtn.disabled = true;
+        } else {
+          if (docStatus) docStatus.textContent = "❌ " + (data.error || "Failed");
+          sendBtn.disabled = false;
+        }
+      } catch (e) {
+        if (docStatus) docStatus.textContent = "❌ Network error";
+        sendBtn.disabled = false;
+      }
+      setTimeout(() => { if (docStatus) docStatus.textContent = ""; }, 5000);
+    });
+  }
 }
 
 async function loadBotUsageLog() {
