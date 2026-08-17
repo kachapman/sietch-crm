@@ -13877,6 +13877,130 @@ select.form-control {
   color: #d0d0d0;
 }
 
+/* ── Admin Terminal Theme: Form Elements ────────────────────────────────────── */
+#admin-console-modal .admin-main input[type="text"],
+#admin-console-modal .admin-main input[type="email"],
+#admin-console-modal .admin-main input[type="password"],
+#admin-console-modal .admin-main input[type="number"],
+#admin-console-modal .admin-main input[type="search"],
+#admin-console-modal .admin-main input[type="url"] {
+  background: #1a1a1a;
+  border: 1px solid #444;
+  color: #e0e0e0;
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+}
+#admin-console-modal .admin-main input[type="text"]:focus,
+#admin-console-modal .admin-main input[type="email"]:focus,
+#admin-console-modal .admin-main input[type="password"]:focus,
+#admin-console-modal .admin-main input[type="number"]:focus,
+#admin-console-modal .admin-main input[type="search"]:focus,
+#admin-console-modal .admin-main input[type="url"]:focus {
+  border-color: #00ff88;
+  outline: none;
+  box-shadow: 0 0 0 1px rgba(0, 255, 136, 0.25);
+}
+
+#admin-console-modal .admin-main input[type="file"] {
+  color: #c0c0c0;
+  background: transparent;
+}
+#admin-console-modal .admin-main input[type="file"]::file-selector-button {
+  background: #252525;
+  border: 1px solid #555;
+  color: #d0d0d0;
+  padding: 0.3rem 0.6rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+#admin-console-modal .admin-main input[type="file"]::file-selector-button:hover {
+  background: #333;
+  border-color: #00ff88;
+  color: #00ff88;
+}
+
+#admin-console-modal .admin-main input[type="checkbox"],
+#admin-console-modal .admin-main input[type="radio"] {
+  accent-color: #00ff88;
+}
+
+#admin-console-modal .admin-main select {
+  background: #1a1a1a;
+  border: 1px solid #444;
+  color: #e0e0e0;
+  padding: 0.3rem 0.4rem;
+  border-radius: 4px;
+}
+#admin-console-modal .admin-main select:focus {
+  border-color: #00ff88;
+  outline: none;
+}
+
+#admin-console-modal .admin-main label {
+  color: #c0c0c0;
+}
+
+#admin-console-modal .admin-main h4 {
+  color: #e0e0e0;
+}
+
+#admin-console-modal .admin-main p,
+#admin-console-modal .admin-main .modal-message {
+  color: #999;
+}
+
+#admin-console-modal .admin-main .btn {
+  border: 1px solid #444;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+#admin-console-modal .admin-main .btn-primary {
+  background: #1a6b37;
+  color: #d0f0dc;
+  border-color: #1a6b37;
+}
+#admin-console-modal .admin-main .btn-primary:hover {
+  background: #22834a;
+  border-color: #22834a;
+}
+
+#admin-console-modal .admin-main .btn-secondary {
+  background: #252525;
+  color: #d0d0d0;
+  border-color: #555;
+}
+#admin-console-modal .admin-main .btn-secondary:hover {
+  background: #333;
+  border-color: #00ff88;
+  color: #00ff88;
+}
+
+#admin-console-modal .admin-main .btn-danger {
+  background: #5c1a1a;
+  color: #f8d0d0;
+  border-color: #5c1a1a;
+}
+#admin-console-modal .admin-main .btn-danger:hover {
+  background: #7a2222;
+  border-color: #f87171;
+}
+
+#admin-console-modal .admin-main .btn-ghost {
+  background: transparent;
+  color: #c0c0c0;
+  border-color: transparent;
+}
+#admin-console-modal .admin-main .btn-ghost:hover {
+  background: #252525;
+  color: #00ff88;
+}
+
+#admin-console-modal .admin-main .btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 /* Admin infra tab terminal theme overrides */
 #admin-tab-infra .infra-card {
   background: #1a1a1a;
