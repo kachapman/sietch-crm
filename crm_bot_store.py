@@ -312,6 +312,36 @@ def set_nickname(portal: str, contact_id: int | None, nickname: str) -> bool:
     return False
 
 
+def set_allowed_projects(portal: str, contact_id: int | None, project_ids: list[int]) -> bool:
+    """Set the allowed project IDs for a mapping. Empty list = all projects (no restriction)."""
+    path = _store_path(portal)
+    store = _load_file(path)
+    mappings = store.get("mappings", [])
+    for m in mappings:
+        match = False
+        if contact_id is not None and m.get("contactId") == contact_id and not m.get("employee"):
+            match = True
+        if contact_id is None and m.get("employee"):
+            match = True
+        if match:
+            m["allowedProjectIds"] = project_ids
+            m["updatedAt"] = datetime.now(timezone.utc).isoformat()
+            _save_file(path, store)
+            return True
+    return False
+
+
+def get_allowed_projects(portal: str, contact_id: int | None, is_employee: bool = False) -> list[int] | None:
+    """Get allowed project IDs for a mapping. Returns None if no restriction (all projects)."""
+    store = _load_file(_store_path(portal))
+    for m in store.get("mappings", []):
+        if is_employee and m.get("employee"):
+            return m.get("allowedProjectIds") or None
+        if not is_employee and contact_id is not None and m.get("contactId") == contact_id:
+            return m.get("allowedProjectIds") or None
+    return None
+
+
 # ── Usage tracking ──
 
 def _usage_path(portal: str) -> Path:

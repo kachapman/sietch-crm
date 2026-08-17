@@ -231,7 +231,7 @@ from crm_bot_store import (
     add_mapping, cancel_code, cancel_code_by_value,
     generate_code, get_mapping_by_chat, get_pending_codes,
     get_usage_stats, list_mappings, remove_mapping,
-    remove_mapping_by_chat, set_nickname, set_verify_chat_id,
+    remove_mapping_by_chat, set_allowed_projects, set_nickname, set_verify_chat_id,
     track_request, verify_code,
 )
 from presence_store import (
@@ -9374,6 +9374,24 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             ok = set_nickname("sietch", int(contact_id) if contact_id else None, nickname)
             _json_response(self, 200, {"ok": ok})
             return
+        # ── Bot: set allowed projects for a customer mapping ───────────
+        if api_path == "/api/bot-customers/projects" and method == "PUT":
+            user = _require_admin(self)
+            if not user:
+                return
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            contact_id = payload.get("contactId")
+            project_ids = payload.get("projectIds", [])
+            if contact_id is None:
+                _json_response(self, 400, {"error": "contactId is required"})
+                return
+            ok = set_allowed_projects("sietch", int(contact_id), [int(p) for p in project_ids])
+            _json_response(self, 200, {"ok": ok})
+            return
         self.send_error(404)
 
     def _handle_bot_api_get(self) -> None:
@@ -9436,9 +9454,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     WHERE {' AND '.join(where)} ORDER BY o.created_at DESC LIMIT 100""",
                 (*params,),
             )
+            # Filter by allowedProjectIds if customer mapping has restrictions
+            allowed_ids = None
+            if not is_employee and raw_chat_deals:
+                from crm_bot_store import get_allowed_projects
+                mapping = get_mapping_by_chat("sietch", int(raw_chat_deals))
+                if mapping:
+                    allowed_ids = get_allowed_projects("sietch", contact_id, is_employee=False)
             deals = []
             for r in rows:
                 opp_id = r[0]
+                # Skip if customer has project restrictions and this project isn't allowed
+                if allowed_ids is not None and opp_id not in allowed_ids:
+                    continue
                 deal = {
                     "id": opp_id, "title": r[1],
                     "amount": float(r[2]) if r[2] else 0,

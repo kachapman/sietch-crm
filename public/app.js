@@ -32082,11 +32082,20 @@ function renderBotCustomerMappings() {
       ? `<span class="bot-mapping-nickname">${escapeHtml(nick)}</span>`
       : `<span class="bot-mapping-nickname bot-mapping-nickname-empty">No nickname</span>`;
     const uid = isEmployee ? "employee" : String(m.contactId);
+    const projectsBtn = !isEmployee && m.contactId
+      ? `<button type="button" class="btn btn-ghost btn-sm bot-projects-btn" data-bot-contact-id="${escapeHtml(String(m.contactId))}" title="Restrict to specific projects">Projects</button>`
+      : '';
+    const allowedCount = (m.allowedProjectIds || []).length;
+    const projectsInfo = !isEmployee && allowedCount > 0
+      ? `<span class="bot-mapping-projects">${allowedCount} project(s)</span>`
+      : '';
     return `<div class="bot-mapping-row">
       ${nameHtml}
       ${nickHtml}
       ${catHtml}
+      ${projectsInfo}
       ${statusHtml}
+      ${projectsBtn}
       <button type="button" class="btn btn-ghost btn-sm bot-nickname-edit-btn" data-bot-uid="${escapeHtml(uid)}" data-nickname="${escapeHtml(nick)}" title="Edit nickname">&#9998;</button>
       <button type="button" class="btn btn-ghost btn-sm bot-unlink-btn" data-bot-chat-id="${escapeHtml(String(m.chatId || ""))}" title="Remove mapping">&times;</button>
     </div>`;
@@ -32110,6 +32119,42 @@ function renderBotCustomerMappings() {
       handleSetNickname(uid, newNick.trim());
     });
   });
+
+  list.querySelectorAll(".bot-projects-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const contactId = btn.dataset.botContactId;
+      if (!contactId) return;
+      handleSetAllowedProjects(Number(contactId));
+    });
+  });
+}
+
+function handleSetAllowedProjects(contactId) {
+  const mapping = _botCustomersMappings.find(m => m.contactId === contactId && !m.employee);
+  if (!mapping) return;
+  const current = mapping.allowedProjectIds || [];
+  const input = prompt(
+    `Enter project IDs to restrict this user (comma-separated).\n` +
+    `Current: ${current.length ? current.join(", ") : "All projects (no restriction)"}\n` +
+    `Leave empty to allow all projects:`,
+    current.join(", ")
+  );
+  if (input === null) return;
+  const ids = input.trim() ? input.split(",").map(s => parseInt(s.trim())).filter(n => !isNaN(n)) : [];
+  fetch("/api/bot-customers/projects", {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ contactId, projectIds: ids }),
+  }).then(r => r.json()).then(data => {
+    if (data.ok) {
+      mapping.allowedProjectIds = ids;
+      renderBotCustomerMappings();
+      showToast(ids.length ? `Restricted to ${ids.length} project(s)` : "All projects allowed");
+    } else {
+      showToast(data.error || "Failed", true);
+    }
+  }).catch(e => showToast(e.message, true));
 }
 
 function updateBotCustomersContactSelectedUi() {
