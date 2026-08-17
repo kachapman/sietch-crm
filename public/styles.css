@@ -13862,14 +13862,14 @@ select.form-control {
 
 #admin-console-modal .admin-tab-btn:hover {
   background: #252525;
-  color: #00ff88;
+  color: var(--accent);
 }
 
 #admin-console-modal .admin-tab-btn.active {
   background: #1a1a1a;
-  border-color: #00ff88;
-  color: #00ff88;
-  text-shadow: 0 0 8px rgba(0, 255, 136, 0.4);
+  border-color: var(--accent);
+  color: var(--accent);
+  text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 #admin-console-modal .admin-main {
@@ -13896,9 +13896,9 @@ select.form-control {
 #admin-console-modal .admin-main input[type="number"]:focus,
 #admin-console-modal .admin-main input[type="search"]:focus,
 #admin-console-modal .admin-main input[type="url"]:focus {
-  border-color: #00ff88;
+  border-color: var(--accent);
   outline: none;
-  box-shadow: 0 0 0 1px rgba(0, 255, 136, 0.25);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 #admin-console-modal .admin-main input[type="file"] {
@@ -13915,13 +13915,13 @@ select.form-control {
 }
 #admin-console-modal .admin-main input[type="file"]::file-selector-button:hover {
   background: #333;
-  border-color: #00ff88;
-  color: #00ff88;
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 #admin-console-modal .admin-main input[type="checkbox"],
 #admin-console-modal .admin-main input[type="radio"] {
-  accent-color: #00ff88;
+  accent-color: var(--accent);
 }
 
 #admin-console-modal .admin-main select {
@@ -13932,7 +13932,7 @@ select.form-control {
   border-radius: 4px;
 }
 #admin-console-modal .admin-main select:focus {
-  border-color: #00ff88;
+  border-color: var(--accent);
   outline: none;
 }
 
@@ -13955,13 +13955,13 @@ select.form-control {
 }
 
 #admin-console-modal .admin-main .btn-primary {
-  background: #1a6b37;
-  color: #d0f0dc;
-  border-color: #1a6b37;
+  background: var(--accent);
+  color: var(--accent-text, #fff);
+  border-color: var(--accent);
 }
 #admin-console-modal .admin-main .btn-primary:hover {
-  background: #22834a;
-  border-color: #22834a;
+  background: color-mix(in srgb, var(--accent) 80%, #000);
+  border-color: color-mix(in srgb, var(--accent) 80%, #000);
 }
 
 #admin-console-modal .admin-main .btn-secondary {
@@ -13971,8 +13971,8 @@ select.form-control {
 }
 #admin-console-modal .admin-main .btn-secondary:hover {
   background: #333;
-  border-color: #00ff88;
-  color: #00ff88;
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 #admin-console-modal .admin-main .btn-danger {
@@ -13992,7 +13992,7 @@ select.form-control {
 }
 #admin-console-modal .admin-main .btn-ghost:hover {
   background: #252525;
-  color: #00ff88;
+  color: var(--accent);
 }
 
 #admin-console-modal .admin-main .btn:disabled {
