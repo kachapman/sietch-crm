@@ -9138,10 +9138,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "SELECT created_at FROM bot_activity_log WHERE action = 'heartbeat' ORDER BY created_at DESC LIMIT 1"
             )
             if hb:
-                last_heartbeat = hb[0].isoformat() if hb[0] else None
+                last_heartbeat = hb["created_at"].isoformat() if hb.get("created_at") else None
                 # Consider running if heartbeat within last 120s
-                from datetime import datetime, timezone, timedelta
-                if hb[0] and hb[0] > datetime.now(timezone.utc) - timedelta(seconds=120):
+                # created_at is TIMESTAMP (naive), so compare with naive utcnow
+                from datetime import datetime, timedelta
+                if hb.get("created_at") and hb["created_at"] > datetime.utcnow() - timedelta(seconds=120):
                     running = True
             err_rows = db.query(
                 "SELECT COUNT(*) FROM bot_activity_log WHERE is_error = TRUE AND created_at > NOW() - INTERVAL '24 hours'"

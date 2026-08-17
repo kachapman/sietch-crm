@@ -32372,6 +32372,7 @@ function updateBotCustomersEmployeeSection() {
 
 function bindBotCustomersModal() {
   // Consolidated: buttons now inside admin tab, always bind actions
+  _botCustomersDraft = { contactId: null, contactLabel: "", notesCategoryId: null, employee: false, userId: null, userLabel: "" };
   $("#bot-generate-code-btn")?.addEventListener("click", handleGenerateCode);
   $("#bot-code-cancel-btn")?.addEventListener("click", handleCancelCode);
   $("#bot-code-copy-btn")?.addEventListener("click", () => {
