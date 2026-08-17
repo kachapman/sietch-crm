@@ -30926,12 +30926,12 @@ async function populateAdminUsersList() {
     }).join("") || "<p>No users.</p>";
 
     container.innerHTML = `
-      <div style="margin-bottom:0.75rem;">
-        <input type="text" id="admin-users-search" class="form-control" placeholder="Search users..." style="width:100%;" />
+      <div style="margin-bottom:0.75rem; display:flex; align-items:center; gap:0.5rem;">
+        <input type="text" id="admin-users-search" class="form-control" placeholder="Search users..." style="width:50%;" />
+        <button type="button" id="admin-add-user-btn" class="btn btn-primary btn-sm" style="margin-left:auto; white-space:nowrap;">Add User</button>
       </div>
       <div id="admin-users-list" style="overflow-y:auto;">${rows}</div>
       <div id="admin-user-edit-form" class="hidden" style="margin-top:0.75rem; padding:0.75rem; background:var(--surface-2); border-radius:var(--radius); border:1px solid var(--border);"></div>
-      <button type="button" id="admin-add-user-btn" class="btn btn-primary btn-sm" style="margin-top:0.75rem;">Add User</button>
       <div id="admin-add-user-form" class="hidden" style="margin-top:0.75rem; padding:0.75rem; background:var(--surface-2); border-radius:var(--radius); border:1px solid var(--border);">
         <div style="display:flex; flex-direction:column; gap:0.4rem; margin-bottom:0.5rem;">
           <input type="text" id="new-user-first" class="form-control" placeholder="First name" />
