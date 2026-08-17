@@ -29026,11 +29026,19 @@ function switchAdminTab(tab) {
     if (typeof loadBotCustomersFromServer === "function") {
       loadBotCustomersFromServer().then(() => {
         if (typeof renderBotCustomerMappings === "function") renderBotCustomerMappings();
+        if (typeof populateBotBroadcastDropdown === "function") populateBotBroadcastDropdown();
       });
     }
     if (typeof loadBotSettings === "function") loadBotSettings();
     if (typeof loadBotStatus === "function") loadBotStatus();
     if (typeof loadBotActivityLog === "function") loadBotActivityLog();
+    if (state.historyCategories && state.historyCategories.length) {
+      if (typeof populateBotCustomersCategorySelect === "function") populateBotCustomersCategorySelect();
+    } else if (typeof loadHistoryCategories === "function") {
+      loadHistoryCategories().then(() => {
+        if (typeof populateBotCustomersCategorySelect === "function") populateBotCustomersCategorySelect();
+      });
+    }
   }
   if (tab === "branding") {
     populateBrandingForm();
@@ -32367,7 +32375,12 @@ function updateBotCustomersEmployeeSection() {
   const userField = document.getElementById("bot-customers-user-field");
   if (userField) userField.classList.toggle("hidden", !isEmployee);
   const title = document.getElementById("bot-section-title");
-  if (title) title.textContent = isEmployee ? "Invite Employee" : "Invite Customer";
+  if (title) title.textContent = isEmployee ? "Invite Employee" : "Invite Telegram User";
+  // Reset category to "All" when employee is checked
+  if (isEmployee) {
+    const catSelect = document.getElementById("bot-customers-note-category");
+    if (catSelect) catSelect.selectedIndex = 0;
+  }
 }
 
 function bindBotCustomersModal() {
@@ -32413,6 +32426,13 @@ function populateBotBroadcastDropdown() {
   const select = $("#bot-broadcast-recipient");
   if (!select) return;
   select.innerHTML = '<option value="">— Select a user —</option>';
+  const linkedCount = _botCustomersMappings.filter(m => m.chatId).length;
+  if (linkedCount > 1) {
+    const allOpt = document.createElement("option");
+    allOpt.value = "all";
+    allOpt.textContent = `All linked users (${linkedCount})`;
+    select.appendChild(allOpt);
+  }
   for (const m of _botCustomersMappings) {
     if (!m.chatId) continue;
     const label = (m.nickname || m.contactName || `User #${m.contactId}`) + ` (${m.contactName || "Employee"})`;
@@ -32440,10 +32460,34 @@ function initBotBroadcastSection() {
   // Format buttons: wrap selected text or insert empty tags at cursor
   document.querySelectorAll(".bot-format-btn").forEach(function(btn) {
     btn.addEventListener("click", function() {
+      var action = btn.getAttribute("data-action");
       var tag = btn.getAttribute("data-tag");
       var start = textarea.selectionStart;
       var end = textarea.selectionEnd;
       var sel = textarea.value.slice(start, end);
+      // Special actions
+      if (action === "link") {
+        var url = prompt("Enter URL:", "https://");
+        if (!url) return;
+        var linkText = sel || url;
+        var insert = '<a href="' + url + '">' + linkText + '</a>';
+        textarea.value = textarea.value.slice(0, start) + insert + textarea.value.slice(end);
+        textarea.selectionStart = start + insert.length;
+        textarea.selectionEnd = start + insert.length;
+        textarea.focus();
+        updateSendBtn();
+        return;
+      }
+      if (action === "hr") {
+        var hr = "\n───────────\n";
+        textarea.value = textarea.value.slice(0, start) + hr + textarea.value.slice(end);
+        textarea.selectionStart = textarea.selectionEnd = start + hr.length;
+        textarea.focus();
+        updateSendBtn();
+        return;
+      }
+      // Tag-based wrapping
+      if (!tag) return;
       if (sel) {
         textarea.value = textarea.value.slice(0, start) +
           "<" + tag + ">" + sel + "</" + tag + ">" +
@@ -32473,11 +32517,11 @@ function initBotBroadcastSection() {
         method: "POST",
         credentials: "same-origin",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({chatId: Number(chatId), text}),
+        body: JSON.stringify({chatId: chatId === "all" ? "all" : Number(chatId), text}),
       });
       const data = await resp.json();
       if (data.ok) {
-        status.textContent = "✅ Sent!";
+        status.textContent = data.sent ? `✅ Sent to ${data.sent} user(s)!` : "✅ Sent!";
         textarea.value = "";
         select.value = "";
         sendBtn.disabled = true;

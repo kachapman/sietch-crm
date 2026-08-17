@@ -344,6 +344,9 @@ def _get_bot_config() -> dict:
         row = db.query_one("SELECT value FROM bot_config WHERE key = 'settings'")
         if row and row.get("value"):
             cfg = row["value"] if isinstance(row["value"], dict) else json.loads(str(row["value"]))
+            # Fill empty fields from env vars
+            if not cfg.get("token"):
+                cfg["token"] = os.environ.get("TELEGRAM_BOT_TOKEN", "")
             _bot_config_cache = cfg
             _bot_config_cache_ts = now
             return cfg
@@ -9971,15 +9974,34 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     _json_response(self, 500, {"error": "TELEGRAM_BOT_TOKEN not configured"})
                     return
                 url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-                body: dict = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
-                if reply_to:
-                    body["reply_to_message_id"] = reply_to
-                resp = _httpx.post(url, json=body, timeout=10)
-                data = resp.json()
-                if data.get("ok"):
-                    _json_response(self, 200, {"ok": True, "messageId": data["result"]["message_id"]})
+                # Handle "all" — send to every linked user
+                if chat_id == "all":
+                    from crm_bot_store import list_mappings
+                    mappings = list_mappings("sietch")
+                    targets = [m["chatId"] for m in mappings if m.get("chatId")]
+                    sent = 0
+                    errors = 0
+                    for cid in targets:
+                        body: dict = {"chat_id": cid, "text": text, "parse_mode": parse_mode}
+                        try:
+                            resp = _httpx.post(url, json=body, timeout=10)
+                            if resp.json().get("ok"):
+                                sent += 1
+                            else:
+                                errors += 1
+                        except Exception:
+                            errors += 1
+                    _json_response(self, 200, {"ok": True, "sent": sent, "errors": errors})
                 else:
-                    _json_response(self, 502, {"error": data.get("description", "Telegram API error")})
+                    body = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+                    if reply_to:
+                        body["reply_to_message_id"] = reply_to
+                    resp = _httpx.post(url, json=body, timeout=10)
+                    data = resp.json()
+                    if data.get("ok"):
+                        _json_response(self, 200, {"ok": True, "messageId": data["result"]["message_id"]})
+                    else:
+                        _json_response(self, 502, {"error": data.get("description", "Telegram API error")})
             except Exception as exc:
                 logger.exception("Failed to send Telegram message")
                 _json_response(self, 500, {"error": str(exc)})

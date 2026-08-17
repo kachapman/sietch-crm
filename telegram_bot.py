@@ -251,7 +251,7 @@ async def verify_code(code: str, chat_id: int) -> dict | None:
     return await _post("/api/bot-customers/verify-code", {
         "code": code,
         "chatId": chat_id,
-        "portal": PORTAL,
+        "portal": "sietch",
     })
 
 
