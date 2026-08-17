@@ -342,6 +342,41 @@ CREATE TABLE telegram_notification_log (
 CREATE INDEX idx_telegram_notification_log_notification ON telegram_notification_log(notification_id);
 CREATE INDEX idx_telegram_notification_log_chat ON telegram_notification_log(chat_id, sent_at DESC);
 
+-- Bot configuration (token, settings, feature flags)
+CREATE TABLE bot_config (
+    key TEXT PRIMARY KEY,
+    value JSONB NOT NULL DEFAULT '{}',
+    updated_at TIMESTAMP DEFAULT NOW(),
+    updated_by INTEGER REFERENCES users(id)
+);
+
+INSERT INTO bot_config (key, value) VALUES ('settings', '{
+    "token": "",
+    "botUsername": "",
+    "botLink": "",
+    "maxFileSizeMb": 20,
+    "pollInterval": 5,
+    "enabled": true,
+    "allowCustomerUploads": false,
+    "welcomeMessage": "Welcome! Send an invite code to link your account.",
+    "configVersion": 0
+}'::jsonb);
+
+-- Bot activity log
+CREATE TABLE bot_activity_log (
+    id SERIAL PRIMARY KEY,
+    chat_id BIGINT,
+    user_name TEXT,
+    action TEXT NOT NULL,
+    detail TEXT,
+    project_id INTEGER REFERENCES opportunities(id),
+    is_error BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_bot_activity_log_created ON bot_activity_log(created_at DESC);
+CREATE INDEX idx_bot_activity_log_error ON bot_activity_log(is_error, created_at DESC) WHERE is_error = TRUE;
+
 -- Drop old note-tag trigger (replaced by Python notification creation in server.py)
 DROP TRIGGER IF EXISTS trigger_create_tag_notifications ON history_events;
 DROP FUNCTION IF EXISTS create_tag_notifications();

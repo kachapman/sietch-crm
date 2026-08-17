@@ -2562,11 +2562,54 @@
             </div>
           </div>
       <div id="admin-tab-bot" class="admin-tab-content hidden">
-        <p class="modal-message">Manage customer mappings for the Telegram bot.</p>
+        <p class="modal-message">Configure the Telegram bot and manage user mappings.</p>
+        <div class="bot-status-bar" id="bot-status-bar">
+          <span class="bot-status-dot" id="bot-status-dot"></span>
+          <span id="bot-status-text">Checking bot status…</span>
+          <span id="bot-status-meta" class="bot-status-meta"></span>
+          <div class="bot-status-actions">
+            <label class="checkbox-label bot-enabled-toggle">
+              <input type="checkbox" id="bot-enabled-toggle" />
+              <span>Enabled</span>
+            </label>
+            <button type="button" id="bot-restart-btn" class="btn btn-secondary btn-sm">Restart Bot</button>
+          </div>
+        </div>
         <div class="bot-layout">
           <div class="bot-layout-left">
             <div class="bot-section">
-              <h3 class="bot-section-title" id="bot-section-title">Invite Customer</h3>
+              <h3 class="bot-section-title">Bot Settings</h3>
+              <form id="bot-settings-form" class="bot-settings-form">
+                <div class="field">
+                  <label for="bot-settings-token">Bot Token</label>
+                  <input type="password" id="bot-settings-token" placeholder="123456:ABC-DEF..." autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label for="bot-settings-username">Bot Username</label>
+                  <input type="text" id="bot-settings-username" placeholder="@your_bot" />
+                </div>
+                <div class="field">
+                  <label for="bot-settings-link">Bot Link (deep link)</label>
+                  <input type="text" id="bot-settings-link" placeholder="https://t.me/your_bot" />
+                </div>
+                <div class="field">
+                  <label for="bot-settings-max-file">Max file size (MB)</label>
+                  <input type="number" id="bot-settings-max-file" min="1" max="50" value="20" />
+                </div>
+                <div class="field">
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="bot-settings-customer-uploads" />
+                    <span>Allow customer file uploads</span>
+                  </label>
+                </div>
+                <div class="bot-add-actions">
+                  <button type="submit" id="bot-settings-save-btn" class="btn btn-primary">Save Settings</button>
+                  <span id="bot-settings-status" class="bot-settings-status"></span>
+                </div>
+              </form>
+            </div>
+            <div class="bot-section">
+              <h3 class="bot-section-title">Invite Customer</h3>
               <div class="bot-add-form">
                 <div class="field">
                   <label class="checkbox-label">
@@ -2640,9 +2683,22 @@
             </div>
             <div class="bot-section">
               <h3 class="bot-section-title">Activity Log</h3>
-              <div id="bot-usage-content" class="bot-usage-content">
-                <p class="bot-usage-empty">No usage data yet.</p>
+              <div class="bot-activity-filters">
+                <select id="bot-activity-action-filter" class="form-control form-control-sm" style="max-width:150px;">
+                  <option value="">All actions</option>
+                  <option value="start">Start</option>
+                  <option value="note_added">Note Added</option>
+                  <option value="file_uploaded">File Uploaded</option>
+                  <option value="task_done">Task Done</option>
+                  <option value="task_created">Task Created</option>
+                  <option value="heartbeat">Heartbeat</option>
+                  <option value="error">Errors</option>
+                </select>
               </div>
+              <div id="bot-activity-log" class="bot-activity-log">
+                <p class="bot-usage-empty">No activity yet.</p>
+              </div>
+              <div id="bot-activity-pagination" class="bot-activity-pagination"></div>
             </div>
           </div>
         </div>
@@ -2796,6 +2852,24 @@
           <div class="profile-toggle-row">
             <label class="profile-toggle-label" for="pref-telegram">Telegram</label>
             <input type="checkbox" id="pref-telegram" class="toggle-input" checked />
+          </div>
+          <div class="pref-telegram-types" id="pref-telegram-types">
+            <div class="profile-toggle-row profile-toggle-sub">
+              <label class="profile-toggle-label" for="pref-tg-note-tagged">Note tagged</label>
+              <input type="checkbox" id="pref-tg-note-tagged" class="toggle-input" checked />
+            </div>
+            <div class="profile-toggle-row profile-toggle-sub">
+              <label class="profile-toggle-label" for="pref-tg-task-assigned">Task assigned</label>
+              <input type="checkbox" id="pref-tg-task-assigned" class="toggle-input" checked />
+            </div>
+            <div class="profile-toggle-row profile-toggle-sub">
+              <label class="profile-toggle-label" for="pref-tg-task-reminder">Task reminder</label>
+              <input type="checkbox" id="pref-tg-task-reminder" class="toggle-input" checked />
+            </div>
+            <div class="profile-toggle-row profile-toggle-sub">
+              <label class="profile-toggle-label" for="pref-tg-calendar-reminder">Calendar reminder</label>
+              <input type="checkbox" id="pref-tg-calendar-reminder" class="toggle-input" checked />
+            </div>
           </div>
           <div class="profile-toggle-row">
             <label class="profile-toggle-label" for="pref-email">Email (immediate)</label>

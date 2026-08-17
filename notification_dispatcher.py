@@ -24,11 +24,38 @@ logger = logging.getLogger("notification_dispatcher")
 # ── Config ──────────────────────────────────────────────────────────────────
 
 DASHBOARD_URL = os.getenv("DASHBOARD_URL", "http://127.0.0.1:8766")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_NOTIFY_ENABLED = os.getenv("TELEGRAM_NOTIFY_ENABLED", "true").lower() == "true"
 POLL_INTERVAL = int(os.getenv("TELEGRAM_NOTIFY_POLL_INTERVAL", "5"))
 BATCH_SIZE = int(os.getenv("TELEGRAM_NOTIFY_BATCH_SIZE", "10"))
 PORTAL = "sietch"  # TODO: make configurable per deployment
+
+# Bot token: DB-first with env fallback (60s cache)
+_token_cache: str = ""
+_token_cache_ts: float = 0
+
+
+def _get_bot_token() -> str:
+    """Return bot token from bot_config DB table (cached 60s), falling back to env."""
+    global _token_cache, _token_cache_ts
+    now = time.time()
+    if _token_cache and now - _token_cache_ts < 60:
+        return _token_cache
+    try:
+        row = db.query_one("SELECT value FROM bot_config WHERE key = 'settings'")
+        if row and row.get("value"):
+            import json as _json
+            cfg = row["value"] if isinstance(row["value"], dict) else _json.loads(str(row["value"]))
+            token = cfg.get("token", "")
+            if token:
+                _token_cache = token
+                _token_cache_ts = now
+                return token
+    except Exception:
+        pass
+    fallback = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    _token_cache = fallback
+    _token_cache_ts = now
+    return fallback
 
 
 def _truncate(text: str, max_len: int = 500) -> str:
@@ -94,6 +121,82 @@ def _format_calendar_reminder(notification: dict) -> str:
     )
 
 
+def _format_document_uploaded(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
+    payload = notification.get("payload") or {}
+    filename = _escape_html(payload.get("filename") or notification.get("message") or "a file")
+    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+    return (
+        f"\U0001f4c4 <b>Document uploaded</b>\n\n"
+        f"Project: <b>{_escape_html(project_title)}</b>\n"
+        f"By: {_escape_html(actor_name)}\n"
+        f"File: {filename}\n\n"
+        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
+    )
+
+
+def _format_photo_uploaded(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
+    payload = notification.get("payload") or {}
+    filename = _escape_html(payload.get("filename") or notification.get("message") or "a photo")
+    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+    return (
+        f"\U0001f4f7 <b>Photo uploaded</b>\n\n"
+        f"Project: <b>{_escape_html(project_title)}</b>\n"
+        f"By: {_escape_html(actor_name)}\n"
+        f"File: {filename}\n\n"
+        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
+    )
+
+
+def _format_task_added(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
+    payload = notification.get("payload") or {}
+    task_title = _escape_html(payload.get("task_title") or "")
+    due_date = payload.get("due_date") or "No due date"
+    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+    return (
+        f"\U0001f4cb <b>New task added</b>\n\n"
+        f"Project: <b>{_escape_html(project_title)}</b>\n"
+        f"Task: {task_title}\n"
+        f"Due: {due_date}\n\n"
+        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
+    )
+
+
+def _format_task_completed(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
+    payload = notification.get("payload") or {}
+    task_title = _escape_html(payload.get("task_title") or notification.get("message") or "Task")
+    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+    return (
+        f"\u2705 <b>Task completed</b>\n\n"
+        f"Project: <b>{_escape_html(project_title)}</b>\n"
+        f"Task: {task_title}\n"
+        f"By: {_escape_html(actor_name)}\n\n"
+        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
+    )
+
+
+def _format_project_updated(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
+    payload = notification.get("payload") or {}
+    changes = _escape_html(payload.get("changes") or notification.get("message") or "details updated")
+    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+    return (
+        f"\U0001f504 <b>Project updated</b>\n\n"
+        f"Project: <b>{_escape_html(project_title)}</b>\n"
+        f"By: {_escape_html(actor_name)}\n"
+        f"Changes: {changes}\n\n"
+        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
+    )
+
+
+def _format_project_created(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
+    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+    return (
+        f"\U0001f195 <b>New project created</b>\n\n"
+        f"Project: <b>{_escape_html(project_title)}</b>\n"
+        f"By: {_escape_html(actor_name)}\n\n"
+        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
+    )
+
+
 def _format_notification(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str | None:
     ntype = notification.get("type")
     if ntype == "note_tagged":
@@ -104,6 +207,18 @@ def _format_notification(notification: dict, project_title: str, actor_name: str
         return _format_task_reminder(notification, project_title, actor_name, project_id)
     elif ntype == "calendar_reminder":
         return _format_calendar_reminder(notification)
+    elif ntype in ("document_uploaded", "document.uploaded"):
+        return _format_document_uploaded(notification, project_title, actor_name, project_id)
+    elif ntype in ("photo_uploaded", "photo.uploaded"):
+        return _format_photo_uploaded(notification, project_title, actor_name, project_id)
+    elif ntype in ("task_added", "task.added"):
+        return _format_task_added(notification, project_title, actor_name, project_id)
+    elif ntype in ("task_completed", "task.completed"):
+        return _format_task_completed(notification, project_title, actor_name, project_id)
+    elif ntype in ("project_updated", "project.updated"):
+        return _format_project_updated(notification, project_title, actor_name, project_id)
+    elif ntype in ("project_created", "project.created"):
+        return _format_project_created(notification, project_title, actor_name, project_id)
     return None
 
 
@@ -168,6 +283,29 @@ def _format_email_notification(notification: dict, project_title: str, actor_nam
     elif ntype == "deal_created":
         subject = notification.get("message") or "New project created"
         body = notification.get("message") or "A new project was auto-created from an email."
+    elif ntype in ("document_uploaded", "document.uploaded"):
+        payload = notification.get("payload") or {}
+        subject = f"Document uploaded to {project_title}"
+        body = f"{actor_name} uploaded a file ({payload.get('filename', 'document')}) to {project_title}."
+    elif ntype in ("photo_uploaded", "photo.uploaded"):
+        payload = notification.get("payload") or {}
+        subject = f"Photo uploaded to {project_title}"
+        body = f"{actor_name} uploaded a photo ({payload.get('filename', 'image')}) to {project_title}."
+    elif ntype in ("task_added", "task.added"):
+        payload = notification.get("payload") or {}
+        subject = f"New task on {project_title}"
+        body = f"A new task was added to {project_title}: {payload.get('task_title', '')}."
+        if payload.get("due_date"):
+            body += f" Due: {payload['due_date']}."
+    elif ntype in ("task_completed", "task.completed"):
+        subject = f"Task completed on {project_title}"
+        body = f"{actor_name} completed a task on {project_title}."
+    elif ntype in ("project_updated", "project.updated"):
+        subject = f"Project updated: {project_title}"
+        body = f"{actor_name} updated {project_title}."
+    elif ntype in ("project_created", "project.created"):
+        subject = f"New project: {project_title}"
+        body = f"{actor_name} created a new project: {project_title}."
     else:
         return None, None
 
@@ -240,11 +378,12 @@ def _mark_email_sent(notification_id: int) -> None:
 
 def _send_telegram_message(chat_id: int, text: str, reply_to_message_id: int | None = None) -> int | None:
     """Send a Telegram message. Returns message_id on success, None on failure."""
-    if not TELEGRAM_BOT_TOKEN:
+    token = _get_bot_token()
+    if not token:
         logger.warning("TELEGRAM_BOT_TOKEN not set, cannot send notification")
         return None
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload: dict[str, Any] = {
         "chat_id": chat_id,
         "text": text,
@@ -331,7 +470,8 @@ def _process_pending_notifications() -> int:
 def _process_telegram(notification_id: int, user_id: int, row: dict,
                        project_title: str, actor_name: str, project_id: int | None) -> None:
     """Handle Telegram delivery for a single notification."""
-    if not _user_telegram_enabled(user_id):
+    ntype = row.get("type", "")
+    if not _user_telegram_enabled(user_id, ntype):
         _mark_telegram_sent(notification_id)
         return
 
@@ -447,18 +587,27 @@ def _get_crm_smtp_account() -> dict | None:
         return None
 
 
-def _user_telegram_enabled(user_id: int) -> bool:
-    """Check if user has Telegram notifications enabled in their preferences."""
+def _user_telegram_enabled(user_id: int, notification_type: str = "") -> bool:
+    """Check if user has Telegram notifications enabled in their preferences.
+    Also checks per-type preferences (e.g., telegram_note_tagged) if notification_type is provided."""
     try:
         row = db.query_one(
             "SELECT enabled FROM notification_preferences WHERE user_id = %s AND notification_type = 'telegram'",
             (user_id,),
         )
-        if row is None:
-            return True  # Default: enabled
-        return bool(row["enabled"])
+        if row is not None and not row["enabled"]:
+            return False
+        # Check per-type override
+        if notification_type:
+            type_row = db.query_one(
+                "SELECT enabled FROM notification_preferences WHERE user_id = %s AND notification_type = %s",
+                (user_id, f"telegram_{notification_type}"),
+            )
+            if type_row is not None and not type_row["enabled"]:
+                return False
+        return True
     except Exception:
-        return True  # Default: enabled on error
+        return True
 
 
 def _is_customer(user_id: int) -> bool:

@@ -51,6 +51,8 @@ _last_search: dict[int, str] = {}
 _last_deals: dict[int, list[dict]] = {}
 _last_employee: dict[int, bool] = {}
 _pending_note: dict[int, dict] = {}
+_last_viewed_project: dict[int, int] = {}  # chat_id → project_id for file uploads
+_pending_upload: dict[int, dict] = {}  # chat_id → {projectId, step}
 
 # ── Helpers ──
 
@@ -127,6 +129,82 @@ async def _post(path: str, data: dict) -> dict | None:
     except httpx.RequestError as e:
         logger.error("POST %s failed: %s", path, e)
         return None
+
+
+# ── Background Tasks (heartbeat + config polling) ──
+
+_bg_config_version: int = 0
+_bg_bot_name: str = ""
+
+
+async def log_activity(
+    chat_id: int | None,
+    user_name: str,
+    action: str,
+    detail: str = "",
+    project_id: int | None = None,
+    is_error: bool = False,
+) -> None:
+    """Fire-and-forget activity log to server."""
+    try:
+        await _post("/api/bot/activity", {
+            "chatId": chat_id,
+            "userName": user_name,
+            "action": action,
+            "detail": detail,
+            "projectId": project_id,
+            "isError": is_error,
+        })
+    except Exception:
+        pass
+
+
+async def _heartbeat_loop() -> None:
+    """POST /api/bot/heartbeat every 60s."""
+    while True:
+        try:
+            await _post("/api/bot/heartbeat", {})
+        except Exception:
+            pass
+        await asyncio.sleep(60)
+
+
+async def _config_poll_loop() -> None:
+    """Poll /api/bot/config-check every 5 min; reload settings on change."""
+    global _bg_config_version, _bg_bot_name, TOKEN
+    while True:
+        await asyncio.sleep(300)
+        try:
+            resp = await _post("/api/bot/config-check", {"configVersion": _bg_config_version})
+            if resp and resp.get("changed"):
+                new_ver = resp.get("configVersion", 0)
+                logger.info("Config changed (v%d → v%d), reloading…", _bg_config_version, new_ver)
+                _bg_config_version = new_ver
+                cfg = await _get("/api/v2/admin/bot-settings")
+                if cfg:
+                    new_token = cfg.get("botToken", "")
+                    if new_token and new_token != TOKEN:
+                        logger.info("Bot token changed — restart required to apply")
+                    _bg_bot_name = cfg.get("botName", _bg_bot_name)
+                    logger.info("Config reloaded: botName=%s", _bg_bot_name)
+        except Exception as e:
+            logger.debug("Config poll failed: %s", e)
+
+
+async def _startup_init(application) -> None:
+    """Fetch initial config version and start background tasks."""
+    global _bg_config_version, _bg_bot_name
+    try:
+        cfg = await _get("/api/v2/admin/bot-settings")
+        if cfg:
+            _bg_config_version = cfg.get("configVersion", 0)
+            _bg_bot_name = cfg.get("botName", "")
+            logger.info("Initial config: version=%d botName=%s", _bg_config_version, _bg_bot_name)
+    except Exception:
+        pass
+    asyncio.create_task(_heartbeat_loop(), name="bot-heartbeat")
+    asyncio.create_task(_config_poll_loop(), name="bot-config-poll")
+    logger.info("Background tasks started (heartbeat 60s, config poll 5min)")
 
 
 async def get_mapping(chat_id: int) -> dict | None:
@@ -561,15 +639,28 @@ HELP_TEXT_CUSTOMER = (
     "Need a new invite code? Contact Sietch CRM."
 )
 HELP_TEXT_EMPLOYEE = (
-    "Send a project name (or part of it) to search across all projects.\n"
-    "If several match, tap a button — or reply with the number — to see full details.\n"
-    "From the detail screen you can also add notes (choose a category and type your text).\n"
+    "Send a project name to search across all projects.\n"
     "Commands:\n"
-    "  /tag    — list projects by tag\n"
-    "  /reset-password — reset your dashboard password\n"
-    "  /help   — this message\n"
-    "  /cancel — abort the current action\n"
-    "  /start  — restart the bot"
+    "  /today     — today's tasks & events\n"
+    "  /tasks     — open tasks assigned to you\n"
+    "  /task-done — mark a task complete\n"
+    "  /new-task  — create a new task\n"
+    "  /my-projects — your assigned projects\n"
+    "  /overdue   — overdue projects\n"
+    "  /due-this-week — projects due this week\n"
+    "  /calendar  — upcoming calendar events\n"
+    "  /pipeline  — project pipeline overview\n"
+    "  /stats     — project statistics\n"
+    "  /recent    — recent activity (7 days)\n"
+    "  /team      — team members\n"
+    "  /tag       — list projects by tag\n"
+    "  /quicknote — add a quick note\n"
+    "  /stage     — change project stage\n"
+    "  /search    — search projects\n"
+    "  /reset-password — reset dashboard password\n"
+    "  /help      — this message\n"
+    "  /cancel    — abort current action\n"
+    "  /start     — restart the bot"
 )
 HELP_TEXT_UNLINKED = (
     "To use this bot you need an invite code from Sietch CRM.\n"
@@ -749,7 +840,7 @@ def main() -> None:
         logger.error("python-telegram-bot not installed: pip install python-telegram-bot")
         sys.exit(1)
 
-    app = Application.builder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).post_init(_startup_init).build()
 
     # ── Inline Keyboard Builders ──
 
@@ -765,13 +856,24 @@ def main() -> None:
             keyboard.append([InlineKeyboardButton(title, callback_data=f"sel:{deal_id}")])
         return InlineKeyboardMarkup(keyboard) if keyboard else None
 
-    def _build_deal_detail_keyboard(deal_id: int, is_employee: bool) -> InlineKeyboardMarkup:
-        row: list[InlineKeyboardButton] = []
+    def _build_deal_detail_keyboard(deal_id: int, is_employee: bool, phone: str = "", address: str = "") -> InlineKeyboardMarkup:
+        rows: list[list[InlineKeyboardButton]] = []
         if is_employee:
-            row.append(InlineKeyboardButton("📋 Project Info", callback_data=f"act:info:{deal_id}"))
-            row.append(InlineKeyboardButton("📝 Add Note", callback_data=f"act:note:{deal_id}"))
-        row.append(InlineKeyboardButton("🔍 New Search", callback_data="act:home"))
-        return InlineKeyboardMarkup([row])
+            rows.append([
+                InlineKeyboardButton("📋 Project Info", callback_data=f"act:info:{deal_id}"),
+                InlineKeyboardButton("📝 Add Note", callback_data=f"act:note:{deal_id}"),
+            ])
+            action_row: list[InlineKeyboardButton] = []
+            if phone:
+                action_row.append(InlineKeyboardButton("📞 Call", url=f"tel:{phone}"))
+            if address:
+                import urllib.parse
+                maps_url = f"https://maps.google.com/?q={urllib.parse.quote(address)}"
+                action_row.append(InlineKeyboardButton("📍 Address", url=maps_url))
+            if action_row:
+                rows.append(action_row)
+        rows.append([InlineKeyboardButton("🔍 New Search", callback_data="act:home")])
+        return InlineKeyboardMarkup(rows)
 
     _PREFERRED_CATEGORY_PATTERNS: list[tuple[re.Pattern, str]] = [
         (re.compile(r"quick.?context", re.I), "Quick Context"),
@@ -831,18 +933,21 @@ def main() -> None:
     async def start(update: Update, _ctx) -> None:
         chat_id = update.effective_chat.id
         mapping = await get_mapping(chat_id)
+        name = ""
         if mapping:
             is_employee = mapping.get("employee", False)
             name = _esc(mapping.get("contactName") or mapping.get("nickname") or "")
+            asyncio.create_task(log_activity(chat_id, name, "start", f"employee={is_employee}"))
             if is_employee:
                 greeting = f"Welcome back, <b>{name}</b>!" if name else "Welcome back!"
                 await _reply_html(
                     update,
                     f"{greeting} Send a project name to search across all projects.\n\n"
-                    "Commands:\n"
-                    "  /tag    — list projects by tag\n"
-                    "  /help   — show available commands\n"
-                    "  /cancel  — abort the current action",
+                    "Quick commands:\n"
+                    "  /today  — today's tasks &amp; events\n"
+                    "  /tasks  — open tasks\n"
+                    "  /my-projects — your projects\n"
+                    "  /help   — all commands",
                     reply_markup=_build_deal_detail_keyboard(0, is_employee=True),
                 )
             else:
@@ -933,7 +1038,10 @@ def main() -> None:
                 return
             emp = _last_employee.get(chat_id, False)
             msg = format_deal_detail(deals, idx, is_employee=emp)
-            keyboard = _build_deal_detail_keyboard(deal_id, emp)
+            phone = deal.get("contactPhone") or deal.get("contactMobile") or ""
+            address = deal.get("address") or ""
+            _last_viewed_project[chat_id] = deal_id
+            keyboard = _build_deal_detail_keyboard(deal_id, emp, phone=phone, address=address)
             await query.edit_message_text(msg, parse_mode="HTML", reply_markup=keyboard)
             return
 
@@ -983,6 +1091,7 @@ def main() -> None:
                 await query.edit_message_text("This search has expired. Send a new project name.")
                 return
             msg = format_project_info(deal)
+            _last_viewed_project[chat_id] = deal_id
             await query.message.reply_text(msg, parse_mode="HTML")
             return
 
@@ -1003,6 +1112,9 @@ def main() -> None:
             del _pending_note[chat_id]
             if result and result.get("ok"):
                 await query.edit_message_text("✅ Note added!")
+                mapping = await get_mapping(chat_id)
+                uname = (mapping.get("contactName") or mapping.get("nickname") or "User") if mapping else "User"
+                asyncio.create_task(log_activity(chat_id, uname, "note_added", f"deal={deal_id}", project_id=deal_id))
             else:
                 await query.edit_message_text("❌ Failed to add note. Please try again.")
             return
@@ -1071,7 +1183,9 @@ def main() -> None:
                     if 0 <= idx < len(deals):
                         msg = format_deal_detail(deals, idx, is_employee=emp)
                         deal_id = deals[idx].get("id") or deals[idx].get("ID")
-                        kb = _build_deal_detail_keyboard(deal_id, emp) if deal_id else None
+                        phone = deals[idx].get("contactPhone") or deals[idx].get("contactMobile") or ""
+                        address = deals[idx].get("address") or ""
+                        kb = _build_deal_detail_keyboard(deal_id, emp, phone=phone, address=address) if deal_id else None
                         await _reply_html(update, msg, reply_markup=kb)
                     else:
                         search = _last_search.get(chat_id, "")
@@ -1090,7 +1204,9 @@ def main() -> None:
                 msg = format_search_result(deals, search, is_employee=is_employee)
                 if len(deals) == 1 and deals[0]:
                     deal_id = deals[0].get("id") or deals[0].get("ID")
-                    kb = _build_deal_detail_keyboard(deal_id, is_employee) if deal_id else None
+                    phone = deals[0].get("contactPhone") or deals[0].get("contactMobile") or ""
+                    address = deals[0].get("address") or ""
+                    kb = _build_deal_detail_keyboard(deal_id, is_employee, phone=phone, address=address) if deal_id else None
                 else:
                     kb = _build_search_results_keyboard(deals)
                 await _reply_html(update, msg, reply_markup=kb)
@@ -1184,6 +1300,90 @@ def main() -> None:
             logger.exception("Failed to post note for reply to notification %s", notification_id)
             await _reply_html(update, "Something went wrong. Please try again.")
 
+    async def handle_document(update: Update, _ctx) -> None:
+        """Handle photo/document uploads from employees."""
+        if not update.message:
+            return
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if not mapping or not mapping.get("employee"):
+            return  # silently ignore non-employees
+        # Determine project ID
+        project_id = _last_viewed_project.get(chat_id) or _pending_upload.get(chat_id, {}).get("projectId")
+        if not project_id:
+            await _reply_html(update, "Select a project first (search for it), then send the file.")
+            return
+        # Determine file info
+        msg = update.message
+        if msg.photo:
+            file_id = msg.photo[-1].file_id
+            file_name = f"photo_{chat_id}_{file_id[:8]}.jpg"
+            file_type = "photo"
+        elif msg.document:
+            file_id = msg.document.file_id
+            file_name = msg.document.file_name or f"doc_{chat_id}_{file_id[:8]}"
+            mime = msg.document.mime_type or ""
+            if mime.startswith("video/"):
+                file_type = "photo"  # videos go to photo gallery
+            else:
+                file_type = "document"
+        else:
+            return
+        # Check file size
+        cfg_resp = await _get("/api/v2/admin/bot-settings")
+        max_mb = 20
+        if cfg_resp:
+            max_mb = cfg_resp.get("maxFileSizeMb", 20)
+        # Download from Telegram
+        try:
+            tg_token = TOKEN
+            url = f"https://api.telegram.org/bot{tg_token}/getFile?file_id={file_id}"
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(url)
+                if resp.status_code != 200 or not resp.json().get("ok"):
+                    await _reply_html(update, "Failed to download file from Telegram.")
+                    return
+                file_path = resp.json()["result"]["file_path"]
+                dl_url = f"https://api.telegram.org/file/bot{tg_token}/{file_path}"
+                file_resp = await client.get(dl_url, timeout=60)
+                if file_resp.status_code != 200:
+                    await _reply_html(update, "Failed to download file from Telegram.")
+                    return
+                file_data = file_resp.content
+        except Exception:
+            logger.exception("Failed to download file from Telegram")
+            await _reply_html(update, "Failed to download file. Please try again.")
+            return
+        # Check size
+        if len(file_data) > max_mb * 1024 * 1024:
+            await _reply_html(update, f"File too large. Maximum size is {max_mb}MB.")
+            return
+        # Upload to server
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                import io
+                files = {"file": (file_name, io.BytesIO(file_data), "application/octet-stream")}
+                form_data = {"oppId": str(project_id), "chatId": str(chat_id), "fileType": file_type}
+                resp = await client.post(
+                    f"{DASHBOARD_URL}/api/bot/upload",
+                    headers=_auth_headers(),
+                    files=files,
+                    data=form_data,
+                )
+                if resp.status_code == 200 and resp.json().get("ok"):
+                    await _reply_html(
+                        update,
+                        f"\u2705 File uploaded to project {project_id}: <b>{_esc(file_name)}</b>",
+                    )
+                    uname = (mapping.get("contactName") or "Employee")
+                    asyncio.create_task(log_activity(chat_id, uname, "file_uploaded", file_name, project_id=project_id))
+                else:
+                    err = resp.json().get("error", "Upload failed") if resp.status_code < 500 else "Server error"
+                    await _reply_html(update, f"Upload failed: {_esc(err)}")
+        except Exception:
+            logger.exception("Failed to upload file to server")
+            await _reply_html(update, "Failed to upload file. Please try again.")
+
     async def reset_password_command(update: Update, _ctx) -> None:
         """Generate a temporary password for the linked employee's dashboard account."""
         chat_id = update.effective_chat.id
@@ -1197,13 +1397,275 @@ def main() -> None:
         else:
             await _reply_html(update, "Failed to generate a temporary password. Please try again later.")
 
+    async def tasks_command(update: Update, _ctx) -> None:
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if not mapping or not mapping.get("employee"):
+            await _reply_html(update, "Employee access required.")
+            return
+        resp = await _get("/api/bot/tasks", {"chatId": chat_id})
+        if resp is None:
+            await _reply_html(update, "Could not reach server. Try again shortly.")
+            return
+        if not resp:
+            await _reply_html(update, "No open tasks assigned to you.")
+            return
+        lines = [f"<b>Your open tasks</b> ({len(resp)}):", ""]
+        for i, t in enumerate(resp, 1):
+            due = ""
+            if t.get("dueDate"):
+                due = f" — due {_fmt_date(t['dueDate'])}"
+            proj = f" [{_esc(t['projectTitle'])}]" if t.get("projectTitle") else ""
+            lines.append(f"{i}. <b>{_esc(t['title'])}</b>{due}{proj}")
+            if t.get("description"):
+                lines.append(f"   <i>{_esc(t['description'][:80])}</i>")
+        await _reply_html(update, "\n".join(lines))
+
+    async def task_done_command(update: Update, _ctx) -> None:
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if not mapping or not mapping.get("employee"):
+            await _reply_html(update, "Employee access required.")
+            return
+        text = (update.message.text or "").strip()
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].isdigit():
+            await _reply_html(update, "Usage: /task-done &lt;task_id&gt;\nUse /tasks to see your open tasks with their IDs.")
+            return
+        task_id = int(parts[1])
+        resp = await _post("/api/bot/task-done", {"chatId": chat_id, "taskId": task_id})
+        if resp and resp.get("ok"):
+            await _reply_html(update, f"Task completed: <b>{_esc(resp.get('title', ''))}</b>")
+            asyncio.create_task(log_activity(chat_id, (mapping.get("contactName") or "Employee"), "task_done", f"task={task_id}"))
+        else:
+            msg = resp.get("error", "Task not found or not assigned to you.") if resp else "Could not reach server."
+            await _reply_html(update, f"Failed: {_esc(msg)}")
+
+    async def new_task_command(update: Update, _ctx) -> None:
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if not mapping or not mapping.get("employee"):
+            await _reply_html(update, "Employee access required.")
+            return
+        text = (update.message.text or "").strip()
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            await _reply_html(update, "Usage: /new-task &lt;task title&gt;")
+            return
+        title = parts[1]
+        resp = await _post("/api/bot/task-create", {"chatId": chat_id, "title": title})
+        if resp and resp.get("ok"):
+            await _reply_html(update, f"Task created: <b>{_esc(resp.get('title', ''))}</b> (ID: {resp.get('taskId')})")
+            asyncio.create_task(log_activity(chat_id, (mapping.get("contactName") or "Employee"), "task_created", title))
+        else:
+            msg = resp.get("error", "Failed") if resp else "Could not reach server."
+            await _reply_html(update, f"Failed: {_esc(msg)}")
+
+    async def my_projects_command(update: Update, _ctx) -> None:
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if not mapping or not mapping.get("employee"):
+            await _reply_html(update, "Employee access required.")
+            return
+        resp = await _get("/api/bot/my-projects", {"chatId": chat_id})
+        if resp is None:
+            await _reply_html(update, "Could not reach server.")
+            return
+        if not resp:
+            await _reply_html(update, "No projects assigned to you.")
+            return
+        lines = [f"<b>Your projects</b> ({len(resp)}):", ""]
+        for i, p in enumerate(resp, 1):
+            amt = _fmt_money(p.get("amount", 0), p.get("currency", ""))
+            due = f" — due {_fmt_date(p['dueDate'])}" if p.get("dueDate") else ""
+            contact = f" — {_esc(p['contact'])}" if p.get("contact") else ""
+            lines.append(f"{i}. <b>{_esc(p['title'])}</b> [{_esc(p.get('stage', ''))}]{due}{contact}")
+        await _reply_html(update, "\n".join(lines))
+
+    async def overdue_command(update: Update, _ctx) -> None:
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if not mapping or not mapping.get("employee"):
+            await _reply_html(update, "Employee access required.")
+            return
+        resp = await _get("/api/bot/overdue", {"chatId": chat_id})
+        if resp is None:
+            await _reply_html(update, "Could not reach server.")
+            return
+        if not resp:
+            await _reply_html(update, "No overdue projects.")
+            return
+        lines = [f"<b>Overdue projects</b> ({len(resp)}):", ""]
+        for i, p in enumerate(resp, 1):
+            lines.append(f"{i}. <b>{_esc(p['title'])}</b> — due {_fmt_date(p.get('dueDate', ''))}")
+        await _reply_html(update, "\n".join(lines))
+
+    async def due_this_week_command(update: Update, _ctx) -> None:
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if not mapping or not mapping.get("employee"):
+            await _reply_html(update, "Employee access required.")
+            return
+        resp = await _get("/api/bot/due-this-week", {"chatId": chat_id})
+        if resp is None:
+            await _reply_html(update, "Could not reach server.")
+            return
+        if not resp:
+            await _reply_html(update, "No projects due this week.")
+            return
+        lines = [f"<b>Due this week</b> ({len(resp)}):", ""]
+        for i, p in enumerate(resp, 1):
+            lines.append(f"{i}. <b>{_esc(p['title'])}</b> — due {_fmt_date(p.get('dueDate', ''))}")
+        await _reply_html(update, "\n".join(lines))
+
+    async def calendar_command(update: Update, _ctx) -> None:
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if not mapping or not mapping.get("employee"):
+            await _reply_html(update, "Employee access required.")
+            return
+        resp = await _get("/api/bot/calendar", {"chatId": chat_id})
+        if resp is None:
+            await _reply_html(update, "Could not reach server.")
+            return
+        if not resp:
+            await _reply_html(update, "No upcoming events.")
+            return
+        lines = ["<b>Upcoming events:</b>", ""]
+        for ev in resp[:10]:
+            when = ev.get("dtstart", "")
+            if when:
+                try:
+                    when = when[:16].replace("T", " ")
+                except Exception:
+                    pass
+            loc = f" — {_esc(ev['location'])}" if ev.get("location") else ""
+            lines.append(f"\U0001f4c5 <b>{_esc(ev.get('summary', 'Event'))}</b>\n   {when}{loc}")
+        await _reply_html(update, "\n".join(lines))
+
+    async def pipeline_command(update: Update, _ctx) -> None:
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if not mapping or not mapping.get("employee"):
+            await _reply_html(update, "Employee access required.")
+            return
+        resp = await _get("/api/bot/pipeline", {"chatId": chat_id})
+        if resp is None:
+            await _reply_html(update, "Could not reach server.")
+            return
+        if not resp:
+            await _reply_html(update, "No pipeline data.")
+            return
+        lines = ["<b>Pipeline Overview:</b>", ""]
+        for s in resp:
+            lines.append(f"<b>{_esc(s['stage'])}</b>: {s['count']} projects — {_fmt_money(s['total'], 'USD')}")
+        await _reply_html(update, "\n".join(lines))
+
+    async def stats_command(update: Update, _ctx) -> None:
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if not mapping or not mapping.get("employee"):
+            await _reply_html(update, "Employee access required.")
+            return
+        resp = await _get("/api/bot/stats")
+        if resp is None:
+            await _reply_html(update, "Could not reach server.")
+            return
+        lines = [
+            "<b>Dashboard Stats:</b>",
+            "",
+            f"Open projects: <b>{resp.get('totalProjects', 0)}</b>",
+            f"Total pipeline: <b>{_fmt_money(resp.get('totalValue', 0), 'USD')}</b>",
+            f"Closed won: <b>{resp.get('closedWon', 0)}</b>",
+            f"Open tasks: <b>{resp.get('openTasks', 0)}</b>",
+        ]
+        await _reply_html(update, "\n".join(lines))
+
+    async def recent_command(update: Update, _ctx) -> None:
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if not mapping or not mapping.get("employee"):
+            await _reply_html(update, "Employee access required.")
+            return
+        resp = await _get("/api/bot/recent", {"chatId": chat_id})
+        if resp is None:
+            await _reply_html(update, "Could not reach server.")
+            return
+        if not resp:
+            await _reply_html(update, "No recent activity.")
+            return
+        lines = ["<b>Recent activity (7 days):</b>", ""]
+        for ev in resp[:10]:
+            when = ev.get("createdAt", "")[:16].replace("T", " ") if ev.get("createdAt") else ""
+            proj = f" [{_esc(ev['projectTitle'])}]" if ev.get("projectTitle") else ""
+            snippet = _esc((ev.get("content") or "")[:80])
+            snippet = re.sub(r'<[^>]+>', '', snippet)
+            lines.append(f"\U0001f4dd {when}{proj}\n   {snippet}")
+        await _reply_html(update, "\n".join(lines))
+
+    async def team_command(update: Update, _ctx) -> None:
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if not mapping or not mapping.get("employee"):
+            await _reply_html(update, "Employee access required.")
+            return
+        resp = await _get("/api/bot/team")
+        if resp is None:
+            await _reply_html(update, "Could not reach server.")
+            return
+        lines = [f"<b>Team members</b> ({len(resp)}):", ""]
+        for m in resp:
+            lines.append(f"\U0001f464 <b>{_esc(m.get('displayName', ''))}</b> — {_esc(m.get('email', ''))}")
+        await _reply_html(update, "\n".join(lines))
+
+    async def quicknote_command(update: Update, _ctx) -> None:
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if not mapping or not mapping.get("employee"):
+            await _reply_html(update, "Employee access required.")
+            return
+        text = (update.message.text or "").strip()
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            await _reply_html(update, "Usage: /quicknote &lt;note text&gt;")
+            return
+        _pending_note[chat_id] = {"step": "awaiting_text"}
+        update.message.text = parts[1]
+        await handle_message(update, _ctx)
+
+    async def stage_command(update: Update, _ctx) -> None:
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if not mapping or not mapping.get("employee"):
+            await _reply_html(update, "Employee access required.")
+            return
+        await _reply_html(update, "Send a project name to change its stage, or reply to a project message with /stage &lt;new stage&gt;.")
+
+    async def search_command(update: Update, _ctx) -> None:
+        await _reply_html(update, "Send a project name to search across all projects.")
+
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("tag", tag_command))
     app.add_handler(CommandHandler("reset-password", reset_password_command))
+    app.add_handler(CommandHandler("tasks", tasks_command))
+    app.add_handler(CommandHandler("task-done", task_done_command))
+    app.add_handler(CommandHandler("new-task", new_task_command))
+    app.add_handler(CommandHandler("my-projects", my_projects_command))
+    app.add_handler(CommandHandler("overdue", overdue_command))
+    app.add_handler(CommandHandler("due-this-week", due_this_week_command))
+    app.add_handler(CommandHandler("calendar", calendar_command))
+    app.add_handler(CommandHandler("pipeline", pipeline_command))
+    app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("recent", recent_command))
+    app.add_handler(CommandHandler("team", team_command))
+    app.add_handler(CommandHandler("quicknote", quicknote_command))
+    app.add_handler(CommandHandler("stage", stage_command))
+    app.add_handler(CommandHandler("search", search_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.REPLY & ~filters.COMMAND, handle_reply))
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Bot polling...")

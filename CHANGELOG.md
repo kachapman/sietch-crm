@@ -2,6 +2,33 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Telegram Bot Overhaul — Phase 2K (2026-08-16)
+
+### Added
+- **Multi-tenant bot configuration** — bot token, username, link, max file size, customer upload toggle, and enabled flag stored in new `bot_config` DB table (not hardcoded `.env`). Admin UI to view/edit/save config with masked token display. `configVersion` integer increments on save so the bot process detects changes without polling full token.
+- **Bot status dashboard** — admin Bot tab shows running/stopped indicator, uptime, error count, last heartbeat age, with a Restart button. New `GET /api/v2/admin/bot-status` endpoint.
+- **Bot activity log** — new `bot_activity_log` DB table tracks all bot actions (search, note, upload, errors, heartbeats). Admin tab shows filterable, paginated log with action/user/project/detail columns.
+- **18 new bot commands** — `/tasks` (list open tasks), `/task-done` (mark complete), `/my-projects` (your assigned projects), `/overdue` (past-due follow-ups), `/due-this-week` (upcoming due dates), `/today` (morning briefing: calendar + tasks + overdue), `/quicknote` (fast note addition, default "Note" category), `/stage` (change project stage with confirmation), `/address` (project address + Google Maps link), `/call` (contact phone + tap-to-call), `/new-task` (create task on project), `/calendar` (next 7 days events), `/pipeline` (stage summary with counts/values), `/stats` (quick stats), `/recent` (10 recently updated projects), `/insurance` (insurance-specific fields), `/weekly` (weekly summary), `/team` (team workload), `/search` (explicit search command).
+- **File upload via Telegram** — employees can send photos, documents, or videos directly to the bot. Bot asks which project, downloads from Telegram, saves to `data/photos/` (images/video → Photo Gallery) or `data/documents/` (PDFs/Office → Documents). 20MB configurable limit. New `POST /api/bot/upload` endpoint.
+- **Customer file uploads (toggleable)** — admin can enable file uploads for customers via `allowCustomerUploads` config toggle. When enabled, customer uploads auto-attach to their linked project.
+- **Call + Address buttons** — project info view now shows inline "📞 Call" and "📍 Address" buttons for both customers and employees. Call shows tap-to-call phone link; Address shows formatted address with Google Maps link.
+- **Per-type notification preferences** — users can set Telegram notification toggles per type (note_tagged, task_assigned, task_reminder, calendar_reminder) in profile modal. Dispatcher checks specific type preferences.
+- **Lightweight project page** — new `public/project.html` for mobile Telegram links. Single-project view (title, stage, fields, history, photos) without dashboard chrome. All bot notification links point here instead of full dashboard.
+- **Shared `_get_bot_token()` helper** — DB-cached (60s) token reader with `.env` fallback. Used by notification dispatcher, 2FA handlers, password reset, and broadcast — all Telegram-sending code uses one consistent source.
+- **Config self-restart** — bot process polls server every 5 minutes for `configVersion` changes. On change, rebuilds Application with new token and restarts polling. No manual restart needed after admin config save.
+- **Bot heartbeat** — bot sends `POST /api/bot/heartbeat` every 60s. Server tracks last heartbeat for status display.
+- **Enriched `/api/bot/deals`** — response now includes description, tags, created date, due date, bid type, private flag, user fields, latest update, and last 10 history events (employee only). Fixes empty deal detail and project info views.
+
+### Changed
+- **Admin Bot tab redesigned** — now shows: Bot Status (running/uptime/errors/heartbeat + restart), Bot Configuration (token/username/link/file size/customer uploads/enabled + save), Invite Customer/Employee + Existing Mappings (unchanged), Broadcast Message (unchanged), Notification Preferences (read-only per-user table), Activity Log (filterable by action type).
+- **Updated `/start` and `/help`** — show bot name from config, list all 18+ available commands organized by category.
+- **Updated `/cancel`** — now cancels both note flow and upload flow.
+- **All Telegram notification links** — point to lightweight project page (`/project/{id}`) instead of full dashboard.
+
+### Fixed
+- **Bot note authorship** — `/api/bot/note` now sets `created_by` from the employee's chatId mapping. Reply-to-notification notes also include author.
+- **Missing notification formatting** — `email_linked` and `deal_created` notification types now have Telegram message formatting (were previously silently skipped).
+
 ## Admin Infrastructure Tab Overhaul (2026-08-16)
 
 ### Added

@@ -12566,6 +12566,111 @@ body {
   font-size: 0.85rem;
 }
 
+/* ── Bot Status Bar ─────────────────────────────────────────────────────── */
+
+.bot-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+}
+
+.bot-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.bot-status-dot.online { background: #22c55e; box-shadow: 0 0 6px #22c55e80; }
+.bot-status-dot.warning { background: #eab308; box-shadow: 0 0 6px #eab30880; }
+.bot-status-dot.offline { background: #6b7280; }
+
+.bot-status-meta {
+  color: var(--muted);
+  margin-left: auto;
+  font-size: 0.8rem;
+}
+
+.bot-status-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.bot-enabled-toggle {
+  margin-bottom: 0 !important;
+}
+
+/* ── Bot Settings Form ─────────────────────────────────────────────────── */
+
+.bot-settings-form .field {
+  margin-bottom: 0.6rem;
+}
+
+.bot-settings-form label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-bottom: 0.2rem;
+  color: var(--text-secondary);
+}
+
+.bot-settings-form input[type="text"],
+.bot-settings-form input[type="password"],
+.bot-settings-form input[type="number"] {
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.bot-settings-status {
+  font-size: 0.8rem;
+  margin-left: 0.5rem;
+}
+
+.bot-settings-status.success { color: #22c55e; }
+.bot-settings-status.error { color: #ef4444; }
+
+/* ── Bot Activity Log ──────────────────────────────────────────────────── */
+
+.bot-activity-filters {
+  margin-bottom: 0.5rem;
+}
+
+.bot-activity-log {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.bot-activity-log .bot-usage-table tr.error td {
+  color: #ef4444;
+}
+
+.bot-activity-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.bot-activity-page-info {
+  color: var(--muted);
+}
+
 .checkbox-label {
   display: flex;
   align-items: center;
@@ -12579,6 +12684,26 @@ body {
   width: 1rem;
   height: 1rem;
   cursor: pointer;
+}
+
+.pref-telegram-types {
+  margin-left: 1.5rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--border);
+  margin-top: 0.25rem;
+}
+
+.pref-telegram-types.hidden {
+  display: none;
+}
+
+.profile-toggle-sub {
+  margin: 0.15rem 0;
+}
+
+.profile-toggle-sub .profile-toggle-label {
+  font-size: 0.8rem !important;
+  color: var(--muted);
 }
 
 /* ── Sietch CRM Footer ─────────────────────────────────────────────────────── */

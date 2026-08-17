@@ -302,6 +302,67 @@ OAUTH_REDIRECT_URI = os.environ.get("OAUTH_REDIRECT_URI", "")
 # In-memory OAuth state store: state -> (user_id, provider, expires_at)
 _oauth_states: dict[str, tuple[int, str, float, bool]] = {}
 
+# ── Bot token helper (DB-first with env fallback, 60s cache) ─────────────────
+_bot_token_cache: str = ""
+_bot_config_cache: dict | None = None
+_bot_config_cache_ts: float = 0
+_BOT_CONFIG_CACHE_TTL = 60  # seconds
+
+def _get_bot_token() -> str:
+    """Return bot token from bot_config DB table (cached 60s), falling back to .env."""
+    global _bot_token_cache, _bot_config_cache, _bot_config_cache_ts
+    import time as _time
+    now = _time.time()
+    if _bot_config_cache and now - _bot_config_cache_ts < _BOT_CONFIG_CACHE_TTL:
+        return _bot_token_cache
+    try:
+        row = db.query_one("SELECT value FROM bot_config WHERE key = 'settings'")
+        if row and row.get("value"):
+            cfg = row["value"] if isinstance(row["value"], dict) else json.loads(str(row["value"]))
+            _bot_config_cache = cfg
+            _bot_config_cache_ts = now
+            token = cfg.get("token", "")
+            if token:
+                _bot_token_cache = token
+                return token
+    except Exception:
+        pass
+    # Fallback to env
+    fallback = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    _bot_token_cache = fallback
+    return fallback
+
+
+def _get_bot_config() -> dict:
+    """Return full bot config from DB (cached 60s), falling back to defaults."""
+    global _bot_config_cache, _bot_config_cache_ts
+    import time as _time
+    now = _time.time()
+    if _bot_config_cache and now - _bot_config_cache_ts < _BOT_CONFIG_CACHE_TTL:
+        return _bot_config_cache or {}
+    try:
+        row = db.query_one("SELECT value FROM bot_config WHERE key = 'settings'")
+        if row and row.get("value"):
+            cfg = row["value"] if isinstance(row["value"], dict) else json.loads(str(row["value"]))
+            _bot_config_cache = cfg
+            _bot_config_cache_ts = now
+            return cfg
+    except Exception:
+        pass
+    return {
+        "token": os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+        "botUsername": "", "botLink": "", "maxFileSizeMb": 20,
+        "pollInterval": 5, "enabled": True, "allowCustomerUploads": False,
+        "welcomeMessage": "Welcome!", "configVersion": 0,
+    }
+
+
+def _invalidate_bot_config_cache() -> None:
+    """Force next _get_bot_token()/_get_bot_config() to re-read from DB."""
+    global _bot_config_cache, _bot_config_cache_ts
+    _bot_config_cache = None
+    _bot_config_cache_ts = 0
+
 # ── DB init ────────────────────────────────────────────────────────────────────
 import db
 import auth as auth_mod
@@ -2152,6 +2213,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/bot-customers":
             self._handle_bot_customers_list()
             return
+        if api_path == "/api/v2/admin/bot-settings":
+            self._handle_admin_bot_settings_get()
+            return
+        if api_path == "/api/v2/admin/bot-status":
+            self._handle_admin_bot_status_get()
+            return
+        if api_path == "/api/v2/admin/bot-activity":
+            self._handle_admin_bot_activity_get(qs)
+            return
         if api_path.startswith("/api/bot/"):
             self._handle_bot_api_get()
             return
@@ -2853,6 +2923,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # ── Bot customers (admin) ──
         if api_path.startswith("/api/bot-customers"):
             self._handle_bot_customers_post_put(method)
+            return
+        if api_path == "/api/v2/admin/bot-settings" and method == "PUT":
+            self._handle_admin_bot_settings_put()
+            return
+        if api_path == "/api/v2/admin/bot-restart" and method == "POST":
+            self._handle_admin_bot_restart()
             return
         if api_path.startswith("/api/bot/"):
             self._handle_bot_api_post(method)
@@ -5502,7 +5578,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             (user["id"],),
         )
         prefs = {r[0]: r[1] for r in rows}
-        # email_digest is stored as BOOLEAN (true=immediate, false=disabled)
         email_val = prefs.get("email_digest")
         if email_val is True:
             email_digest = "immediate"
@@ -5510,11 +5585,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             email_digest = "disabled"
         else:
             email_digest = "disabled"
-        _json_response(self, 200, {
+        result = {
             "inDashboard": prefs.get("in_dashboard", True),
             "telegram": prefs.get("telegram", True),
             "emailDigest": email_digest,
-        })
+        }
+        # Per-type Telegram prefs
+        for ntype in ("note_tagged", "task_assigned", "task_reminder", "calendar_reminder"):
+            key = f"telegram_{ntype}"
+            val = prefs.get(key)
+            result[f"tg_{ntype}"] = val if val is not None else True
+        _json_response(self, 200, result)
 
     def _handle_notification_prefs_put(self) -> None:
         user = _require_auth(self)
@@ -5543,6 +5624,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                    ON CONFLICT (user_id, notification_type) DO UPDATE SET enabled = %s""",
                 (user["id"], "email_digest", enabled, enabled),
             )
+        # Per-type Telegram prefs
+        for ntype in ("note_tagged", "task_assigned", "task_reminder", "calendar_reminder"):
+            json_key = f"tg_{ntype}"
+            if json_key in payload:
+                val = bool(payload[json_key])
+                db.execute(
+                    """INSERT INTO notification_preferences (user_id, notification_type, enabled)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT (user_id, notification_type) DO UPDATE SET enabled = %s""",
+                    (user["id"], f"telegram_{ntype}", val, val),
+                )
         _json_response(self, 200, {"ok": True})
 
     def _handle_user_create(self) -> None:
@@ -8982,6 +9074,174 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     # ── Bot Endpoints (DB-backed, no CRM proxy needed) ──────────────────────
 
+    # ── Admin Bot Settings ─────────────────────────────────────────────────
+
+    def _handle_admin_bot_settings_get(self) -> None:
+        """GET /api/v2/admin/bot-settings — return bot config (token masked)."""
+        user = _require_admin(self)
+        if not user:
+            return
+        cfg = _get_bot_config()
+        safe = dict(cfg)
+        if safe.get("token"):
+            safe["token"] = "••••••" + safe["token"][-4:] if len(safe["token"]) > 4 else "••••••"
+        _json_response(self, 200, safe)
+
+    def _handle_admin_bot_settings_put(self) -> None:
+        """PUT /api/v2/admin/bot-settings — save bot config, increment configVersion."""
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        try:
+            existing = db.query_one("SELECT value FROM bot_config WHERE key = 'settings'")
+            if existing and existing.get("value"):
+                cfg = existing["value"] if isinstance(existing["value"], dict) else json.loads(str(existing["value"]))
+            else:
+                cfg = {}
+            # Merge incoming fields (don't overwrite token with mask)
+            for k in ("botUsername", "botLink", "maxFileSizeMb", "pollInterval", "enabled", "allowCustomerUploads", "welcomeMessage"):
+                if k in payload:
+                    cfg[k] = payload[k]
+            if "token" in payload and payload["token"] and not payload["token"].startswith("•••"):
+                cfg["token"] = payload["token"]
+            cfg["configVersion"] = cfg.get("configVersion", 0) + 1
+            db.execute(
+                """INSERT INTO bot_config (key, value, updated_by)
+                   VALUES ('settings', %s, %s)
+                   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW(), updated_by = EXCLUDED.updated_by""",
+                (json.dumps(cfg), user.get("id")),
+            )
+            _invalidate_bot_config_cache()
+            _json_response(self, 200, {"ok": True, "configVersion": cfg["configVersion"]})
+        except Exception:
+            logger.exception("Failed to save bot settings")
+            _json_response(self, 500, {"error": "Failed to save bot settings"})
+
+    def _handle_admin_bot_status_get(self) -> None:
+        """GET /api/v2/admin/bot-status — bot health status."""
+        user = _require_admin(self)
+        if not user:
+            return
+        cfg = _get_bot_config()
+        # Check if bot process is running (look for heartbeat in activity log)
+        running = False
+        last_heartbeat = None
+        error_count = 0
+        recent_errors = []
+        try:
+            hb = db.query_one(
+                "SELECT created_at FROM bot_activity_log WHERE action = 'heartbeat' ORDER BY created_at DESC LIMIT 1"
+            )
+            if hb:
+                last_heartbeat = hb[0].isoformat() if hb[0] else None
+                # Consider running if heartbeat within last 120s
+                from datetime import datetime, timezone, timedelta
+                if hb[0] and hb[0] > datetime.now(timezone.utc) - timedelta(seconds=120):
+                    running = True
+            err_rows = db.query(
+                "SELECT COUNT(*) FROM bot_activity_log WHERE is_error = TRUE AND created_at > NOW() - INTERVAL '24 hours'"
+            )
+            error_count = err_rows[0][0] if err_rows else 0
+            recent = db.query(
+                """SELECT action, detail, created_at FROM bot_activity_log
+                   WHERE is_error = TRUE ORDER BY created_at DESC LIMIT 10"""
+            )
+            recent_errors = [
+                {"action": e[0], "detail": e[1], "time": e[2].isoformat() if e[2] else ""}
+                for e in recent
+            ]
+        except Exception:
+            pass
+        _json_response(self, 200, {
+            "running": running and cfg.get("enabled", True),
+            "enabled": cfg.get("enabled", True),
+            "lastHeartbeat": last_heartbeat,
+            "errorCount": error_count,
+            "recentErrors": recent_errors,
+            "configVersion": cfg.get("configVersion", 0),
+            "botUsername": cfg.get("botUsername", ""),
+        })
+
+    def _handle_admin_bot_activity_get(self, qs: dict) -> None:
+        """GET /api/v2/admin/bot-activity — paginated activity log."""
+        user = _require_admin(self)
+        if not user:
+            return
+        limit = min(int((qs.get("limit") or ["50"])[0]), 200)
+        offset = int((qs.get("offset") or ["0"])[0])
+        action_filter = (qs.get("action") or [""])[0].strip()
+        where = []
+        params: list = []
+        if action_filter:
+            if action_filter == "errors":
+                where.append("is_error = TRUE")
+            elif action_filter == "uploads":
+                where.append("action = 'file_uploaded'")
+            elif action_filter == "user":
+                where.append("action IN ('search', 'note_added', 'file_uploaded', 'code_verified', 'command')")
+            if where:
+                where_sql = "WHERE " + " AND ".join(where)
+            else:
+                where_sql = ""
+        else:
+            where_sql = ""
+        try:
+            rows = db.query(
+                f"""SELECT chat_id, user_name, action, detail, project_id, is_error, created_at
+                    FROM bot_activity_log {where_sql}
+                    ORDER BY created_at DESC LIMIT %s OFFSET %s""",
+                (*params, limit, offset),
+            )
+            activity = [
+                {
+                    "chatId": r[0], "userName": r[1] or "", "action": r[2],
+                    "detail": r[3] or "", "projectId": r[4],
+                    "isError": bool(r[5]), "time": r[6].isoformat() if r[6] else "",
+                }
+                for r in rows
+            ]
+            _json_response(self, 200, {"activity": activity, "offset": offset + len(activity)})
+        except Exception:
+            logger.exception("Failed to load bot activity")
+            _json_response(self, 500, {"error": "Failed to load activity"})
+
+    def _handle_admin_bot_restart(self) -> None:
+        """POST /api/v2/admin/bot-restart — signal bot to restart."""
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            # Increment configVersion to trigger bot self-restart on next poll
+            existing = db.query_one("SELECT value FROM bot_config WHERE key = 'settings'")
+            if existing and existing.get("value"):
+                cfg = existing["value"] if isinstance(existing["value"], dict) else json.loads(str(existing["value"]))
+            else:
+                cfg = {}
+            cfg["configVersion"] = cfg.get("configVersion", 0) + 1
+            cfg["restartRequested"] = True
+            db.execute(
+                """INSERT INTO bot_config (key, value) VALUES ('settings', %s)
+                   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()""",
+                (json.dumps(cfg),),
+            )
+            _invalidate_bot_config_cache()
+            # Also log the restart request
+            try:
+                db.execute(
+                    "INSERT INTO bot_activity_log (action, detail) VALUES ('config_changed', 'Admin requested bot restart')"
+                )
+            except Exception:
+                pass
+            _json_response(self, 200, {"ok": True, "message": "Restart signal sent. Bot will restart on next heartbeat poll."})
+        except Exception:
+            logger.exception("Failed to signal bot restart")
+            _json_response(self, 500, {"error": "Failed to signal restart"})
+
     def _handle_bot_customers_list(self) -> None:
         user = _require_admin(self)
         if not user:
@@ -9035,7 +9295,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"ok": ok})
             return
         if api_path == "/api/bot-customers/verify-code" and method == "POST":
-            bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+            bot_token = _get_bot_token()
             if not bot_token:
                 _json_response(self, 503, {"error": "TELEGRAM_BOT_TOKEN not configured"})
                 return
@@ -9099,7 +9359,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     def _handle_bot_api_get(self) -> None:
         api_path = urlparse(self.path).path
         qs = parse_qs(urlparse(self.path).query)
-        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        bot_token = _get_bot_token()
         auth_header = self.headers.get("Authorization", "").strip()
         if not bot_token or auth_header != f"Bearer {bot_token}":
             _json_response(self, 403, {"error": "Forbidden"})
@@ -9129,7 +9389,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             contact_id = int(raw_contact) if raw_contact else None
 
-            # Query PostgreSQL directly
+            # Query PostgreSQL with enriched fields
             where = ["o.stage_type = 0"]
             params: list = []
             if contact_id:
@@ -9139,10 +9399,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if search:
                 where.append("o.title ILIKE %s")
                 params.append(f"%{search}%")
+            tag = (qs.get("tag") or [""])[0].strip()
+            if tag:
+                where.append("o.id IN (SELECT ot.opportunity_id FROM opportunity_tags ot JOIN tag_definitions t ON t.id = ot.tag_id WHERE t.title = %s)")
+                params.append(tag)
 
             rows = db.query(
-                f"""SELECT o.id, o.title, o.bid_value, o.description, o.created_at, o.expected_close_date,
-                           s.title, c.first_name, c.last_name, u.display_name
+                f"""SELECT o.id, o.title, o.bid_value, o.description, o.created_at,
+                           o.expected_close_date, o.bid_type, o.is_private,
+                           s.title, c.first_name, c.last_name, c.company,
+                           u.display_name, o.responsible_user_id, o.contact_id
                     FROM opportunities o
                     LEFT JOIN stages s ON o.stage_id = s.id
                     LEFT JOIN contacts c ON o.contact_id = c.id
@@ -9152,12 +9418,107 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             )
             deals = []
             for r in rows:
-                deals.append({
-                    "id": r[0], "title": r[1], "amount": float(r[2]) if r[2] else 0,
-                    "stage": r[6] or "", "contact": f"{r[7] or ''} {r[8] or ''}".strip(),
-                    "responsible": r[9] or "",
-                })
-            _json_response(self, 200, deals)
+                opp_id = r[0]
+                deal = {
+                    "id": opp_id, "title": r[1],
+                    "amount": float(r[2]) if r[2] else 0,
+                    "description": r[3] or "",
+                    "created": r[4].isoformat() if r[4] else "",
+                    "dueDate": r[5].isoformat() if r[5] else "",
+                    "bidType": r[6] or "",
+                    "isPrivate": bool(r[7]),
+                    "stage": r[8] or "",
+                    "contact": f"{r[9] or ''} {r[10] or ''}".strip(),
+                    "contactCompany": r[11] or "",
+                    "responsible": r[12] or "",
+                }
+                # Enrich with tags
+                try:
+                    tag_rows = db.query(
+                        "SELECT t.title FROM tag_definitions t JOIN opportunity_tags ot ON t.id = ot.tag_id WHERE ot.opportunity_id = %s",
+                        (opp_id,),
+                    )
+                    deal["tags"] = [tr[0] for tr in tag_rows]
+                except Exception:
+                    deal["tags"] = []
+                # Enrich with user fields (custom fields)
+                try:
+                    cf_rows = db.query(
+                        """SELECT cfd.field_label, cfd.field_key, ocfv.field_value
+                           FROM opportunity_custom_field_values ocfv
+                           JOIN custom_field_definitions cfd ON cfd.id = ocfv.field_id
+                           WHERE ocfv.opportunity_id = %s""",
+                        (opp_id,),
+                    )
+                    uf = {}
+                    for cf in cf_rows:
+                        label = cf[0] or cf[1] or ""
+                        if label and cf[2]:
+                            uf[label] = cf[2]
+                    deal["userFields"] = uf
+                except Exception:
+                    deal["userFields"] = {}
+                # Enrich with contact phone/address for call+address commands
+                try:
+                    if r[14]:  # contact_id
+                        c_row = db.query_one(
+                            "SELECT phone, mobile_phone, address_street, address_city, address_state, address_zip FROM contacts WHERE id = %s",
+                            (r[14],),
+                        )
+                        if c_row:
+                            deal["contactPhone"] = c_row[0] or ""
+                            deal["contactMobile"] = c_row[1] or ""
+                            addr_parts = [c_row[2] or "", c_row[3] or "", c_row[4] or "", c_row[5] or ""]
+                            deal["address"] = ", ".join(p for p in addr_parts if p)
+                except Exception:
+                    deal["contactPhone"] = ""
+                    deal["contactMobile"] = ""
+                    deal["address"] = ""
+                # Enrich with latest update (most recent history event)
+                try:
+                    ev_row = db.query_one(
+                        """SELECT he.content, he.created_at, hc.title
+                           FROM history_events he
+                           LEFT JOIN history_categories hc ON hc.id = he.category_id
+                           WHERE he.opportunity_id = %s
+                           ORDER BY he.created_at DESC LIMIT 1""",
+                        (opp_id,),
+                    )
+                    if ev_row:
+                        deal["latestUpdate"] = {
+                            "content": ev_row[0] or "",
+                            "created": ev_row[1].isoformat() if ev_row[1] else "",
+                            "categoryName": ev_row[2] or "",
+                        }
+                    else:
+                        deal["latestUpdate"] = None
+                except Exception:
+                    deal["latestUpdate"] = None
+                # Enrich with last 10 events (employee only)
+                if is_employee:
+                    try:
+                        ev_rows = db.query(
+                            """SELECT he.content, he.created_at, hc.title, u.display_name
+                               FROM history_events he
+                               LEFT JOIN history_categories hc ON hc.id = he.category_id
+                               LEFT JOIN users u ON u.id = he.created_by
+                               WHERE he.opportunity_id = %s
+                               ORDER BY he.created_at DESC LIMIT 10""",
+                            (opp_id,),
+                        )
+                        deal["events"] = [
+                            {
+                                "content": ev[0] or "",
+                                "created": ev[1].isoformat() if ev[1] else "",
+                                "categoryName": ev[2] or "",
+                                "author": ev[3] or "",
+                            }
+                            for ev in ev_rows
+                        ]
+                    except Exception:
+                        deal["events"] = []
+                deals.append(deal)
+            _json_response(self, 200, {"deals": deals})
             return
 
         if api_path == "/api/bot/categories":
@@ -9178,11 +9539,330 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, stats)
             return
 
+        # ── Bot: list tasks for employee ─────────────────────────────────
+        if api_path == "/api/bot/tasks" and method == "GET":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            raw_chat = (qs.get("chatId") or [""])[0]
+            if not raw_chat:
+                _json_response(self, 400, {"error": "chatId is required"})
+                return
+            mapping = get_mapping_by_chat("sietch", int(raw_chat))
+            if not mapping or not mapping.get("employee"):
+                _json_response(self, 403, {"error": "Employee access required"})
+                return
+            user_id = mapping.get("userId")
+            if not user_id:
+                _json_response(self, 200, [])
+                return
+            show_closed = (qs.get("showClosed") or ["false"])[0].lower() == "true"
+            if show_closed:
+                rows = db.query(
+                    """SELECT t.id, t.title, t.description, t.due_date, t.priority, t.is_closed,
+                              t.closed_at, t.created_at, t.labels, t.color,
+                              o.title AS project_title, t.opportunity_id
+                       FROM tasks t
+                       LEFT JOIN opportunities o ON o.id = t.opportunity_id
+                       WHERE t.responsible_user_id = %s
+                       ORDER BY t.is_closed, t.due_date NULLS LAST, t.priority DESC""",
+                    (user_id,),
+                )
+            else:
+                rows = db.query(
+                    """SELECT t.id, t.title, t.description, t.due_date, t.priority, t.is_closed,
+                              t.closed_at, t.created_at, t.labels, t.color,
+                              o.title AS project_title, t.opportunity_id
+                       FROM tasks t
+                       LEFT JOIN opportunities o ON o.id = t.opportunity_id
+                       WHERE t.responsible_user_id = %s AND t.is_closed = FALSE
+                       ORDER BY t.due_date NULLS LAST, t.priority DESC""",
+                    (user_id,),
+                )
+            tasks = []
+            for r in rows:
+                tasks.append({
+                    "id": r[0], "title": r[1], "description": r[2] or "",
+                    "dueDate": r[3].isoformat() if r[3] else None,
+                    "priority": r[4], "isClosed": r[5],
+                    "closedAt": r[6].isoformat() if r[6] else None,
+                    "createdAt": r[7].isoformat() if r[7] else None,
+                    "labels": r[8] or "", "color": r[9] or "",
+                    "projectTitle": r[10] or None,
+                    "opportunityId": r[11],
+                })
+            _json_response(self, 200, tasks)
+            return
+
+        # ── Bot: my-projects (employee's assigned projects) ──────────────
+        if api_path == "/api/bot/my-projects" and method == "GET":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            raw_chat = (qs.get("chatId") or [""])[0]
+            if not raw_chat:
+                _json_response(self, 400, {"error": "chatId is required"})
+                return
+            mapping = get_mapping_by_chat("sietch", int(raw_chat))
+            if not mapping or not mapping.get("employee"):
+                _json_response(self, 403, {"error": "Employee access required"})
+                return
+            user_id = mapping.get("userId")
+            rows = db.query(
+                """SELECT o.id, o.title, o.amount, o.currency, o.stage,
+                          o.due_date, o.created, o.contact_id,
+                          COALESCE(c.first_name || ' ' || c.last_name, c.company_name, '') as contact_name
+                   FROM opportunities o
+                   LEFT JOIN contacts c ON c.id = o.contact_id
+                   WHERE o.stage_type = 0 AND o.responsible_user_id = %s
+                   ORDER BY o.created DESC""",
+                (user_id,),
+            )
+            projects = []
+            for r in rows:
+                projects.append({
+                    "id": r[0], "title": r[1], "amount": float(r[2] or 0),
+                    "currency": r[3] or "USD", "stage": r[4] or "",
+                    "dueDate": r[5].isoformat() if r[5] else None,
+                    "created": r[6].isoformat() if r[6] else None,
+                    "contact": r[8] or "",
+                })
+            _json_response(self, 200, projects)
+            return
+
+        # ── Bot: overdue projects ────────────────────────────────────────
+        if api_path == "/api/bot/overdue" and method == "GET":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            raw_chat = (qs.get("chatId") or [""])[0]
+            if not raw_chat:
+                _json_response(self, 400, {"error": "chatId is required"})
+                return
+            mapping = get_mapping_by_chat("sietch", int(raw_chat))
+            if not mapping or not mapping.get("employee"):
+                _json_response(self, 403, {"error": "Employee access required"})
+                return
+            user_id = mapping.get("userId")
+            rows = db.query(
+                """SELECT o.id, o.title, o.amount, o.currency, o.stage,
+                          o.due_date, o.contact_id,
+                          COALESCE(c.first_name || ' ' || c.last_name, c.company_name, '') as contact_name
+                   FROM opportunities o
+                   LEFT JOIN contacts c ON c.id = o.contact_id
+                   WHERE o.stage_type = 0 AND o.responsible_user_id = %s
+                     AND o.due_date < NOW() AND o.due_date IS NOT NULL
+                   ORDER BY o.due_date ASC""",
+                (user_id,),
+            )
+            projects = []
+            for r in rows:
+                projects.append({
+                    "id": r[0], "title": r[1], "amount": float(r[2] or 0),
+                    "currency": r[3] or "USD", "stage": r[4] or "",
+                    "dueDate": r[5].isoformat() if r[5] else None,
+                    "contact": r[7] or "",
+                })
+            _json_response(self, 200, projects)
+            return
+
+        # ── Bot: due this week ───────────────────────────────────────────
+        if api_path == "/api/bot/due-this-week" and method == "GET":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            raw_chat = (qs.get("chatId") or [""])[0]
+            if not raw_chat:
+                _json_response(self, 400, {"error": "chatId is required"})
+                return
+            mapping = get_mapping_by_chat("sietch", int(raw_chat))
+            if not mapping or not mapping.get("employee"):
+                _json_response(self, 403, {"error": "Employee access required"})
+                return
+            user_id = mapping.get("userId")
+            rows = db.query(
+                """SELECT o.id, o.title, o.amount, o.currency, o.stage,
+                          o.due_date, o.contact_id,
+                          COALESCE(c.first_name || ' ' || c.last_name, c.company_name, '') as contact_name
+                   FROM opportunities o
+                   LEFT JOIN contacts c ON c.id = o.contact_id
+                   WHERE o.stage_type = 0 AND o.responsible_user_id = %s
+                     AND o.due_date >= NOW()
+                     AND o.due_date < NOW() + INTERVAL '7 days'
+                   ORDER BY o.due_date ASC""",
+                (user_id,),
+            )
+            projects = []
+            for r in rows:
+                projects.append({
+                    "id": r[0], "title": r[1], "amount": float(r[2] or 0),
+                    "currency": r[3] or "USD", "stage": r[4] or "",
+                    "dueDate": r[5].isoformat() if r[5] else None,
+                    "contact": r[7] or "",
+                })
+            _json_response(self, 200, projects)
+            return
+
+        # ── Bot: pipeline stats ──────────────────────────────────────────
+        if api_path == "/api/bot/pipeline" and method == "GET":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            raw_chat = (qs.get("chatId") or [""])[0]
+            if not raw_chat:
+                _json_response(self, 400, {"error": "chatId is required"})
+                return
+            mapping = get_mapping_by_chat("sietch", int(raw_chat))
+            if not mapping or not mapping.get("employee"):
+                _json_response(self, 403, {"error": "Employee access required"})
+                return
+            rows = db.query(
+                """SELECT stage, COUNT(*) as cnt, COALESCE(SUM(amount), 0) as total
+                   FROM opportunities WHERE stage_type = 0
+                   GROUP BY stage ORDER BY total DESC"""
+            )
+            stages = [{"stage": r[0] or "Unknown", "count": r[1], "total": float(r[2])} for r in rows]
+            _json_response(self, 200, stages)
+            return
+
+        # ── Bot: calendar events ─────────────────────────────────────────
+        if api_path == "/api/bot/calendar" and method == "GET":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            raw_chat = (qs.get("chatId") or [""])[0]
+            if not raw_chat:
+                _json_response(self, 400, {"error": "chatId is required"})
+                return
+            mapping = get_mapping_by_chat("sietch", int(raw_chat))
+            if not mapping or not mapping.get("employee"):
+                _json_response(self, 403, {"error": "Employee access required"})
+                return
+            user_id = mapping.get("userId")
+            rows = db.query(
+                """SELECT id, summary, description, location, dtstart, dtend
+                   FROM calendar_events
+                   WHERE user_id = %s AND dtstart >= NOW() - INTERVAL '1 day'
+                   ORDER BY dtstart ASC LIMIT 20""",
+                (user_id,),
+            )
+            events = []
+            for r in rows:
+                events.append({
+                    "id": r[0], "summary": r[1] or "Event",
+                    "description": r[2] or "", "location": r[3] or "",
+                    "dtstart": r[4].isoformat() if r[4] else None,
+                    "dtend": r[5].isoformat() if r[5] else None,
+                })
+            _json_response(self, 200, events)
+            return
+
+        # ── Bot: today summary ───────────────────────────────────────────
+        if api_path == "/api/bot/today" and method == "GET":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            raw_chat = (qs.get("chatId") or [""])[0]
+            if not raw_chat:
+                _json_response(self, 400, {"error": "chatId is required"})
+                return
+            mapping = get_mapping_by_chat("sietch", int(raw_chat))
+            if not mapping or not mapping.get("employee"):
+                _json_response(self, 403, {"error": "Employee access required"})
+                return
+            user_id = mapping.get("userId")
+            tasks = db.query(
+                """SELECT t.id, t.title, t.due_date, o.title as project_title, t.opportunity_id
+                   FROM tasks t LEFT JOIN opportunities o ON o.id = t.opportunity_id
+                   WHERE t.responsible_user_id = %s AND t.is_closed = FALSE
+                     AND (t.due_date IS NULL OR t.due_date::date = NOW()::date)
+                   ORDER BY t.priority DESC""",
+                (user_id,),
+            )
+            events = db.query(
+                """SELECT id, summary, dtstart, dtend
+                   FROM calendar_events
+                   WHERE user_id = %s AND dtstart::date = NOW()::date
+                   ORDER BY dtstart ASC""",
+                (user_id,),
+            )
+            _json_response(self, 200, {
+                "tasks": [{"id": r[0], "title": r[1], "dueDate": r[2].isoformat() if r[2] else None,
+                           "projectTitle": r[3], "opportunityId": r[4]} for r in tasks],
+                "events": [{"id": r[0], "summary": r[1],
+                            "dtstart": r[2].isoformat() if r[2] else None,
+                            "dtend": r[3].isoformat() if r[3] else None} for r in events],
+            })
+            return
+
+        # ── Bot: team members ────────────────────────────────────────────
+        if api_path == "/api/bot/team" and method == "GET":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            rows = db.query(
+                """SELECT id, display_name, email, first_name, last_name
+                   FROM users WHERE is_active = TRUE ORDER BY display_name"""
+            )
+            team = [{"id": r[0], "displayName": r[1] or f"{r[3] or ''} {r[4] or ''}".strip(),
+                      "email": r[2]} for r in rows]
+            _json_response(self, 200, team)
+            return
+
+        # ── Bot: recent activity ─────────────────────────────────────────
+        if api_path == "/api/bot/recent" and method == "GET":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            raw_chat = (qs.get("chatId") or [""])[0]
+            if not raw_chat:
+                _json_response(self, 400, {"error": "chatId is required"})
+                return
+            mapping = get_mapping_by_chat("sietch", int(raw_chat))
+            if not mapping or not mapping.get("employee"):
+                _json_response(self, 403, {"error": "Employee access required"})
+                return
+            rows = db.query(
+                """SELECT he.id, he.created_at, he.content, o.title as project_title,
+                          o.id as opp_id, hc.title as category
+                   FROM history_events he
+                   LEFT JOIN opportunities o ON o.id = he.opportunity_id
+                   LEFT JOIN history_categories hc ON hc.id = he.category_id
+                   WHERE he.created_at > NOW() - INTERVAL '7 days'
+                   ORDER BY he.created_at DESC LIMIT 20"""
+            )
+            events = []
+            for r in rows:
+                events.append({
+                    "id": r[0], "createdAt": r[1].isoformat() if r[1] else None,
+                    "content": r[2] or "", "projectTitle": r[3] or "",
+                    "opportunityId": r[4], "category": r[5] or "",
+                })
+            _json_response(self, 200, events)
+            return
+
+        # ── Bot: stats overview ──────────────────────────────────────────
+        if api_path == "/api/bot/stats" and method == "GET":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            total = db.query_one("SELECT COUNT(*) as cnt FROM opportunities WHERE stage_type = 0")
+            total_value = db.query_one("SELECT COALESCE(SUM(amount), 0) as total FROM opportunities WHERE stage_type = 0")
+            closed_won = db.query_one("SELECT COUNT(*) as cnt FROM opportunities WHERE stage_type = 0 AND stage ILIKE '%won%'")
+            open_tasks = db.query_one("SELECT COUNT(*) as cnt FROM tasks WHERE is_closed = FALSE")
+            _json_response(self, 200, {
+                "totalProjects": total["cnt"] if total else 0,
+                "totalValue": float(total_value["total"]) if total_value else 0,
+                "closedWon": closed_won["cnt"] if closed_won else 0,
+                "openTasks": open_tasks["cnt"] if open_tasks else 0,
+            })
+            return
+
         self.send_error(404)
 
     def _handle_bot_api_post(self, method: str) -> None:
         api_path = urlparse(self.path).path
-        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        bot_token = _get_bot_token()
         auth_header = self.headers.get("Authorization", "").strip()
 
         if api_path == "/api/bot/note" and method == "POST":
@@ -9194,10 +9874,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             except json.JSONDecodeError:
                 _json_response(self, 400, {"error": "Invalid JSON body"})
                 return
-            opp_id = payload.get("opportunityId")
+            opp_id = payload.get("opportunityId") or payload.get("dealId")
             content = str(payload.get("content") or "").strip()
             category_id = int(payload.get("categoryId") or 1)
             created_by = payload.get("createdBy")
+            # Auto-resolve created_by from chatId mapping if not provided
+            if not created_by:
+                chat_id = payload.get("chatId")
+                if chat_id:
+                    mapping = get_mapping_by_chat("sietch", int(chat_id))
+                    if mapping and mapping.get("userId"):
+                        created_by = mapping["userId"]
             if not opp_id or not content:
                 _json_response(self, 400, {"error": "opportunityId and content are required"})
                 return
@@ -9262,7 +9949,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             parse_mode = payload.get("parseMode", "HTML")
             try:
                 import httpx as _httpx
-                bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+                bot_token = _get_bot_token()
                 if not bot_token:
                     _json_response(self, 500, {"error": "TELEGRAM_BOT_TOKEN not configured"})
                     return
@@ -9310,6 +9997,243 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             except Exception:
                 logger.exception("Failed to look up notification by message")
                 _json_response(self, 500, {"error": "Internal error"})
+            return
+
+        # ── Bot: task-done ───────────────────────────────────────────────
+        if api_path == "/api/bot/task-done" and method == "POST":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                payload = {}
+            task_id = payload.get("taskId")
+            chat_id = payload.get("chatId")
+            if not task_id or not chat_id:
+                _json_response(self, 400, {"error": "taskId and chatId are required"})
+                return
+            mapping = get_mapping_by_chat("sietch", int(chat_id))
+            if not mapping or not mapping.get("employee"):
+                _json_response(self, 403, {"error": "Employee access required"})
+                return
+            user_id = mapping.get("userId")
+            task = db.query_one("SELECT id, title FROM tasks WHERE id = %s AND responsible_user_id = %s",
+                                (int(task_id), user_id))
+            if not task:
+                _json_response(self, 404, {"error": "Task not found or not assigned to you"})
+                return
+            db.execute("UPDATE tasks SET is_closed = TRUE, closed_at = NOW(), closed_by = %s WHERE id = %s",
+                       (user_id, int(task_id)))
+            _json_response(self, 200, {"ok": True, "title": task["title"]})
+            return
+
+        # ── Bot: task-create ─────────────────────────────────────────────
+        if api_path == "/api/bot/task-create" and method == "POST":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                payload = {}
+            chat_id = payload.get("chatId")
+            title = str(payload.get("title") or "").strip()
+            if not chat_id or not title:
+                _json_response(self, 400, {"error": "chatId and title are required"})
+                return
+            mapping = get_mapping_by_chat("sietch", int(chat_id))
+            if not mapping or not mapping.get("employee"):
+                _json_response(self, 403, {"error": "Employee access required"})
+                return
+            user_id = mapping.get("userId")
+            opp_id = int(payload["opportunityId"]) if payload.get("opportunityId") else None
+            description = str(payload.get("description") or "").strip()
+            due_date = payload.get("dueDate")
+            task_id = db.insert_returning(
+                """INSERT INTO tasks (title, description, responsible_user_id, owner_user_id,
+                                      opportunity_id, due_date, created_by)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                (title, description, user_id, user_id, opp_id, due_date, user_id),
+            )
+            _json_response(self, 200, {"ok": True, "taskId": task_id, "title": title})
+            return
+
+        # ── Bot: stage update ────────────────────────────────────────────
+        if api_path == "/api/bot/stage" and method == "POST":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                payload = {}
+            chat_id = payload.get("chatId")
+            opp_id = payload.get("opportunityId") or payload.get("dealId")
+            new_stage = str(payload.get("stage") or "").strip()
+            if not chat_id or not opp_id or not new_stage:
+                _json_response(self, 400, {"error": "chatId, opportunityId, and stage are required"})
+                return
+            mapping = get_mapping_by_chat("sietch", int(chat_id))
+            if not mapping or not mapping.get("employee"):
+                _json_response(self, 403, {"error": "Employee access required"})
+                return
+            stage_row = db.query_one("SELECT id FROM stages WHERE title ILIKE %s", (new_stage,))
+            if not stage_row:
+                _json_response(self, 400, {"error": f"Stage '{new_stage}' not found"})
+                return
+            db.execute("UPDATE opportunities SET stage = %s, stage_id = %s WHERE id = %s",
+                       (new_stage, stage_row["id"], int(opp_id)))
+            _json_response(self, 200, {"ok": True, "stage": new_stage})
+            return
+
+        # ── Bot: heartbeat ────────────────────────────────────────────────
+        if api_path == "/api/bot/heartbeat" and method == "POST":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            try:
+                db.execute(
+                    "INSERT INTO bot_activity_log (chat_id, action, detail) VALUES (0, 'heartbeat', 'OK')"
+                )
+            except Exception:
+                pass
+            cfg = _get_bot_config()
+            _json_response(self, 200, {"ok": True, "configVersion": cfg.get("configVersion", 0)})
+            return
+
+        # ── Bot: config check ────────────────────────────────────────────
+        if api_path == "/api/bot/config-check" and method == "POST":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                payload = {}
+            client_version = payload.get("configVersion", 0)
+            cfg = _get_bot_config()
+            server_version = cfg.get("configVersion", 0)
+            changed = client_version != server_version
+            _json_response(self, 200, {"changed": changed, "configVersion": server_version})
+            return
+
+        # ── Bot: upload file to project ──────────────────────────────────
+        if api_path == "/api/bot/upload" and method == "POST":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            try:
+                content_type = self.headers.get("Content-Type", "")
+                if "multipart/form-data" not in content_type:
+                    _json_response(self, 400, {"error": "multipart/form-data required"})
+                    return
+                # Parse multipart form data
+                import cgi
+                import tempfile
+                form = cgi.FieldStorage(
+                    fp=self.rfile,
+                    headers=self.headers,
+                    environ={
+                        "REQUEST_METHOD": "POST",
+                        "CONTENT_TYPE": content_type,
+                    },
+                )
+                file_field = form["file"]
+                opp_id = int(form.getfirst("oppId", "0"))
+                chat_id = int(form.getfirst("chatId", "0"))
+                file_type = form.getfirst("fileType", "document")
+                if not opp_id:
+                    _json_response(self, 400, {"error": "oppId is required"})
+                    return
+                # Verify employee
+                mapping = get_mapping_by_chat("sietch", chat_id)
+                if not mapping or not mapping.get("employee"):
+                    _json_response(self, 403, {"error": "Employee access required"})
+                    return
+                # Check file size
+                cfg = _get_bot_config()
+                max_size_mb = cfg.get("maxFileSizeMb", 20)
+                file_data = file_field.file.read()
+                if len(file_data) > max_size_mb * 1024 * 1024:
+                    _json_response(self, 400, {"error": f"File exceeds {max_size_mb}MB limit"})
+                    return
+                filename = file_field.filename or "upload"
+                mime_type = file_field.type or "application/octet-stream"
+                # Route to photo or document storage
+                if file_type == "photo" or mime_type.startswith("image/") or mime_type.startswith("video/"):
+                    storage_dir = PHOTO_STORAGE_PATH / str(opp_id)
+                    storage_dir.mkdir(parents=True, exist_ok=True)
+                    # Sanitize filename
+                    safe_name = re.sub(r'[^\w.\-]', '_', filename)
+                    timestamp = int(time.time())
+                    save_name = f"{timestamp}_{safe_name}"
+                    save_path = storage_dir / save_name
+                    with open(save_path, "wb") as f:
+                        f.write(file_data)
+                    # Insert into project_photos
+                    file_id = db.insert_returning(
+                        """INSERT INTO project_photos (opportunity_id, filename, file_path, file_size, mime_type, uploaded_by)
+                           VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+                        (opp_id, filename, str(save_path.relative_to(DATA_DIR)), len(file_data), mime_type, mapping.get("userId")),
+                    )
+                    _json_response(self, 200, {"ok": True, "fileId": file_id, "filename": filename, "type": "photo"})
+                else:
+                    storage_dir = DOCUMENT_STORAGE_PATH / str(opp_id)
+                    storage_dir.mkdir(parents=True, exist_ok=True)
+                    safe_name = re.sub(r'[^\w.\-]', '_', filename)
+                    timestamp = int(time.time())
+                    save_name = f"{timestamp}_{safe_name}"
+                    save_path = storage_dir / save_name
+                    with open(save_path, "wb") as f:
+                        f.write(file_data)
+                    # Insert into project_documents
+                    file_id = db.insert_returning(
+                        """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id)
+                           VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+                        (filename, str(save_path.relative_to(DATA_DIR)), len(file_data), mime_type, mapping.get("userId"), opp_id),
+                    )
+                    _json_response(self, 200, {"ok": True, "fileId": file_id, "filename": filename, "type": "document"})
+                # Log activity
+                try:
+                    db.execute(
+                        "INSERT INTO bot_activity_log (chat_id, user_name, action, detail, project_id) VALUES (%s, %s, 'file_uploaded', %s, %s)",
+                        (chat_id, mapping.get("contactName") or mapping.get("nickname") or "Employee", filename, opp_id),
+                    )
+                except Exception:
+                    pass
+            except Exception:
+                logger.exception("Failed to process bot file upload")
+                _json_response(self, 500, {"error": "Upload failed"})
+            return
+
+        # ── Bot: log activity ────────────────────────────────────────────
+        if api_path == "/api/bot/activity" and method == "POST":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+                action = str(payload.get("action", "")).strip()
+                if not action:
+                    _json_response(self, 400, {"error": "action is required"})
+                    return
+                db.execute(
+                    """INSERT INTO bot_activity_log (chat_id, user_name, action, detail, project_id, is_error)
+                       VALUES (%s, %s, %s, %s, %s, %s)""",
+                    (
+                        payload.get("chatId"),
+                        payload.get("userName", ""),
+                        action,
+                        payload.get("detail", ""),
+                        payload.get("projectId"),
+                        payload.get("isError", False),
+                    ),
+                )
+                _json_response(self, 200, {"ok": True})
+            except Exception:
+                logger.exception("Failed to log bot activity")
+                _json_response(self, 500, {"error": "Failed to log activity"})
             return
 
     # ── Presence (local store, ported from v2 — unchanged) ──────────────────

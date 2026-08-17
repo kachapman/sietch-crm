@@ -29023,12 +29023,14 @@ function switchAdminTab(tab) {
     });
   }
   if (tab === "bot") {
-    // bot inits are bound at load, but ensure mappings
     if (typeof loadBotCustomersFromServer === "function") {
       loadBotCustomersFromServer().then(() => {
         if (typeof renderBotCustomerMappings === "function") renderBotCustomerMappings();
       });
     }
+    if (typeof loadBotSettings === "function") loadBotSettings();
+    if (typeof loadBotStatus === "function") loadBotStatus();
+    if (typeof loadBotActivityLog === "function") loadBotActivityLog();
   }
   if (tab === "branding") {
     populateBrandingForm();
@@ -32483,6 +32485,147 @@ async function loadBotUsageLog() {
   } catch (e) {
     content.innerHTML = '<p class="bot-usage-empty">Failed to load usage data.</p>';
   }
+}
+
+/* ── Bot Settings (admin) ─────────────────────────────────────────────── */
+
+let _botSettings = {};
+
+async function loadBotSettings() {
+  try {
+    const resp = await api("/api/v2/admin/bot-settings");
+    _botSettings = resp || {};
+    const token = $("#bot-settings-token");
+    const username = $("#bot-settings-username");
+    const link = $("#bot-settings-link");
+    const maxFile = $("#bot-settings-max-file");
+    const custUploads = $("#bot-settings-customer-uploads");
+    const enabled = $("#bot-enabled-toggle");
+    if (token) token.value = _botSettings.token || "";
+    if (username) username.value = _botSettings.botUsername || "";
+    if (link) link.value = _botSettings.botLink || "";
+    if (maxFile) maxFile.value = _botSettings.maxFileSizeMb || 20;
+    if (custUploads) custUploads.checked = !!_botSettings.allowCustomerUploads;
+    if (enabled) enabled.checked = _botSettings.enabled !== false;
+  } catch (e) {
+    console.warn("Failed to load bot settings:", e);
+  }
+}
+
+async function saveBotSettings(e) {
+  if (e) e.preventDefault();
+  const status = $("#bot-settings-status");
+  if (status) { status.textContent = "Saving…"; status.className = "bot-settings-status"; }
+  try {
+    const payload = {
+      token: ($("#bot-settings-token") || {}).value || "",
+      botUsername: ($("#bot-settings-username") || {}).value || "",
+      botLink: ($("#bot-settings-link") || {}).value || "",
+      maxFileSizeMb: parseInt(($("#bot-settings-max-file") || {}).value) || 20,
+      allowCustomerUploads: !!($("#bot-settings-customer-uploads") || {}).checked,
+      enabled: !!($("#bot-enabled-toggle") || {}).checked,
+    };
+    await api("/api/v2/admin/bot-settings", { method: "PUT", body: payload });
+    if (status) { status.textContent = "Saved!"; status.className = "bot-settings-status success"; }
+    setTimeout(() => { if (status) status.textContent = ""; }, 3000);
+  } catch (e) {
+    if (status) { status.textContent = "Save failed"; status.className = "bot-settings-status error"; }
+  }
+}
+
+async function loadBotStatus() {
+  const dot = $("#bot-status-dot");
+  const text = $("#bot-status-text");
+  const meta = $("#bot-status-meta");
+  try {
+    const resp = await api("/api/v2/admin/bot-status");
+    if (dot) {
+      dot.className = "bot-status-dot " + (resp.running ? "online" : resp.enabled ? "warning" : "offline");
+    }
+    if (text) {
+      text.textContent = resp.running ? "Bot is running" : resp.enabled ? "Bot is stopped" : "Bot is disabled";
+    }
+    if (meta) {
+      const parts = [];
+      if (resp.botUsername) parts.push("@" + resp.botUsername);
+      if (resp.lastHeartbeat) {
+        const ago = Math.round((Date.now() - new Date(resp.lastHeartbeat).getTime()) / 1000);
+        parts.push(ago < 120 ? `Heartbeat ${ago}s ago` : `Heartbeat ${Math.round(ago / 60)}m ago`);
+      }
+      if (resp.configVersion) parts.push("Config v" + resp.configVersion);
+      if (resp.errorCount) parts.push(resp.errorCount + " errors");
+      meta.textContent = parts.join(" · ");
+    }
+  } catch (e) {
+    if (text) text.textContent = "Could not reach server";
+    if (dot) dot.className = "bot-status-dot offline";
+  }
+}
+
+async function restartBot() {
+  const btn = $("#bot-restart-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "Restarting…"; }
+  try {
+    await api("/api/v2/admin/bot-restart", { method: "POST" });
+    if (btn) btn.textContent = "Restarting…";
+    setTimeout(() => { if (btn) { btn.disabled = false; btn.textContent = "Restart Bot"; } loadBotStatus(); }, 3000);
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = "Restart Bot"; }
+  }
+}
+
+/* ── Bot Activity Log (admin) ─────────────────────────────────────────── */
+
+let _botActivityPage = 1;
+const _botActivityPageSize = 25;
+
+async function loadBotActivityLog(page) {
+  _botActivityPage = page || 1;
+  const container = $("#bot-activity-log");
+  const pagination = $("#bot-activity-pagination");
+  if (!container) return;
+  container.innerHTML = '<p class="bot-usage-empty">Loading…</p>';
+  const filter = ($("#bot-activity-action-filter") || {}).value || "";
+  try {
+    const offset = (_botActivityPage - 1) * _botActivityPageSize;
+    let url = `/api/v2/admin/bot-activity?limit=${_botActivityPageSize}&offset=${offset}`;
+    if (filter) url += `&action=${encodeURIComponent(filter)}`;
+    const resp = await api(url);
+    const rows = resp.activity || [];
+    if (!rows.length) {
+      container.innerHTML = '<p class="bot-usage-empty">No activity found.</p>';
+      if (pagination) pagination.innerHTML = "";
+      return;
+    }
+    let html = '<table class="bot-usage-table"><thead><tr><th>Time</th><th>Action</th><th>User</th><th>Detail</th><th>Project</th></tr></thead><tbody>';
+    for (const r of rows) {
+      const t = r.time ? new Date(r.time).toLocaleString() : "";
+      const actionClass = r.isError ? "error" : "";
+      html += `<tr class="${actionClass}"><td>${escapeHtml(t)}</td><td>${escapeHtml(r.action || "")}</td><td>${escapeHtml(r.userName || "")}</td><td>${escapeHtml((r.detail || "").substring(0, 60))}</td><td>${r.projectId ? "#" + r.projectId : ""}</td></tr>`;
+    }
+    html += "</tbody></table>";
+    container.innerHTML = html;
+    // Pagination
+    const hasMore = rows.length === _botActivityPageSize;
+    if (pagination) {
+      let ph = "";
+      if (_botActivityPage > 1) ph += `<button class="btn btn-ghost btn-sm" onclick="loadBotActivityLog(${_botActivityPage - 1})">← Prev</button>`;
+      ph += `<span class="bot-activity-page-info">Page ${_botActivityPage}</span>`;
+      if (hasMore) ph += `<button class="btn btn-ghost btn-sm" onclick="loadBotActivityLog(${_botActivityPage + 1})">Next →</button>`;
+      pagination.innerHTML = ph;
+    }
+  } catch (e) {
+    container.innerHTML = '<p class="bot-usage-empty">Failed to load activity log.</p>';
+  }
+}
+
+function bindBotSettings() {
+  const form = $("#bot-settings-form");
+  if (form) form.addEventListener("submit", saveBotSettings);
+  const restartBtn = $("#bot-restart-btn");
+  if (restartBtn) restartBtn.addEventListener("click", restartBot);
+  const filter = $("#bot-activity-action-filter");
+  if (filter) filter.addEventListener("change", () => loadBotActivityLog(1));
 }
 
 /* ================================================================================
@@ -36329,6 +36472,23 @@ async function _profileLoadPrefs() {
     if (dashEl) dashEl.checked = prefs.inDashboard !== false;
     if (tgEl) tgEl.checked = prefs.telegram !== false;
     if (emailEl) emailEl.checked = prefs.emailDigest && prefs.emailDigest !== "disabled";
+    // Per-type Telegram prefs
+    const typeMap = {
+      "pref-tg-note-tagged": "note_tagged",
+      "pref-tg-task-assigned": "task_assigned",
+      "pref-tg-task-reminder": "task_reminder",
+      "pref-tg-calendar-reminder": "calendar_reminder",
+    };
+    for (const [elId, ntype] of Object.entries(typeMap)) {
+      const el = $(`#${elId}`);
+      if (el) el.checked = prefs[`tg_${ntype}`] !== false;
+    }
+    // Show/hide sub-types based on Telegram toggle
+    const tgTypes = $("#pref-telegram-types");
+    if (tgTypes) tgTypes.classList.toggle("hidden", tgEl && !tgEl.checked);
+    if (tgEl) tgEl.addEventListener("change", () => {
+      if (tgTypes) tgTypes.classList.toggle("hidden", !tgEl.checked);
+    });
   } catch { /* use defaults */ }
 }
 
@@ -36370,14 +36530,26 @@ async function _profileSave() {
   const dashEl = $("#pref-in-dashboard");
   const tgEl = $("#pref-telegram");
   const emailEl = $("#pref-email");
+  const body = {
+    inDashboard: dashEl?.checked ?? true,
+    telegram: tgEl?.checked ?? true,
+    emailDigest: emailEl?.checked ? "immediate" : "disabled",
+  };
+  // Per-type Telegram prefs
+  const typeMap = {
+    "pref-tg-note-tagged": "note_tagged",
+    "pref-tg-task-assigned": "task_assigned",
+    "pref-tg-task-reminder": "task_reminder",
+    "pref-tg-calendar-reminder": "calendar_reminder",
+  };
+  for (const [elId, ntype] of Object.entries(typeMap)) {
+    const el = $(`#${elId}`);
+    body[`tg_${ntype}`] = el?.checked ?? true;
+  }
   try {
     await api("/api/v2/me/notification-prefs", {
       method: "PUT",
-      body: JSON.stringify({
-        inDashboard: dashEl?.checked ?? true,
-        telegram: tgEl?.checked ?? true,
-        emailDigest: emailEl?.checked ? "immediate" : "disabled",
-      }),
+      body: JSON.stringify(body),
     });
   } catch { /* non-fatal */ }
 
@@ -36783,6 +36955,7 @@ async function init() {
   bindNotesArchiveRestoreModal();
   bindEventLogModal();
   bindBotCustomersModal();
+  bindBotSettings();
   bindBrandingModal();
   initSearchTrigger();
   initEmailTrigger();

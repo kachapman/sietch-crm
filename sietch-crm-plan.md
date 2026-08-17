@@ -105,6 +105,7 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 | 2H: Documents modal | ✅ | Full file manager: three scopes (project/personal/company), nested folders in personal/company, breadcrumb navigation, New button (Word/Excel/Folder), folder context menu (rename/delete with recursive CTE), inline rename, move/copy popup, batch ops, search, icon-only toolbar, sidebar toggle, drag-drop upload. Document Server used as editor with title-bar rename sync. |
 | 2I: Preview modal + tile revamp | ✅ | Description→top, "Project Fields" merged, Stage dropdown, "Follow-up Due Date", interactive Tags (add/remove), Checklist 3-col checkboxes, kanban created date + native tooltip. Inline project-fields editor added. Browser verified. |
 | 2J: Re-import CRM data | 🔲 | Re-run `migrate_from_onlyoffice.py` export script (with tasks and user/custom fields fixed) then import into new CRM to verify all data displays correctly in preview modals, deal tiles, kanban stages, tags, and custom fields. |
+| 2K: Telegram Bot Overhaul | 🔲 | Multi-tenant bot config in DB (token, username, link, file size, customer uploads toggle), admin Bot tab UI redesign (status/config/invite/broadcast/prefs/activity log), 18 new bot commands (/tasks, /my-projects, /overdue, /due-this-week, /today, /quicknote, /stage, /address, /call, /new-task, /calendar, /pipeline, /stats, /recent, /insurance, /weekly, /team, /search), file upload handler (photos→Photo Gallery, docs→Documents), per-type notification preferences, lightweight project.html page for mobile Telegram links, Call+Address buttons on project info, config self-restart, heartbeat, activity logging, enriched /api/bot/deals with full data, fix note authorship, format email_linked/deal_created notification types. |
 
 ### Phase 2A Details: Search Modal Expansion (FEAT-007 Phase D)
 
@@ -536,6 +537,7 @@ F. Lightweight `project.html` page for mobile Telegram notification links
 
 ## Progress log
 
+- 2026-08-16: Started Phase 2K: Telegram Bot Overhaul — multi-tenant bot config (DB-stored token), admin Bot tab UI, 18 new commands, file upload, per-type notification prefs, lightweight project page, Call+Address buttons.
 - 2026-07-20: Added Phase 2I: Preview modal + tile revamp (description→top, Project Fields, 2-col user fields, stage dropdown, Follow-up Due Date, tag add/remove, specialty 3-col, deal tile created date, discrete tooltip).
 - 2026-07-19: Created `sietch-crm-plan.md` with confirmed decisions from chat history.
 - 2026-07-18: `9bb823c` — CSV import and project-list fix.
@@ -557,8 +559,6 @@ F. Lightweight `project.html` page for mobile Telegram notification links
 
 ## Next action
 
-Non-negotiables in place. Admin: button position fixed, tabs with icons (current order), contacts stub added for preserve, redirects for old modals. Header static "Sietch CRM [ver]". Logos static. Flashing fixed to original hover (no re-render). Git committed + docs updated after changes.
-
-Header core buttons (mail/add-tile/bookmarks) + sign-out now functional. 2C admin contacts tab enhanced (search + add). Continue filling admin tabs content (move forms, e.g. stages), ensure contacts full for func, keep all preserve rules. Sync moved later. Focus functional new DB/UI. Advance Phase 2C.
+Phase 2K: Telegram Bot Overhaul. DB tables (bot_config, bot_activity_log), server endpoints (_get_bot_token helper, bot settings/status/activity/upload endpoints), enriched /api/bot/deals, fix note authorship, notification formatting, 18 new bot commands, file upload handler, admin Bot tab UI, per-type notification prefs, lightweight project.html, Call+Address buttons on project info, config self-restart, heartbeat, activity logging.
 
 Update AGENTS/CHANGELOG/plan after every change.
