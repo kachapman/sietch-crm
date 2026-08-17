@@ -7893,6 +7893,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         return result
 
     def _handle_document_download(self, doc_id: int) -> None:
+        row = db.query_one(
+            "SELECT opportunity_id, title, file_path, file_size, mime_type FROM project_documents WHERE id = %s AND is_deleted = FALSE",
+            (doc_id,),
+        )
         if not row:
             self.send_error(404)
             return
@@ -9587,7 +9591,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         # ── Bot: list tasks for employee ─────────────────────────────────
-        if api_path == "/api/bot/tasks" and method == "GET":
+        if api_path == "/api/bot/tasks":
             if not bot_token or auth_header != f"Bearer {bot_token}":
                 _json_response(self, 403, {"error": "Forbidden"})
                 return
@@ -9642,7 +9646,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         # ── Bot: my-projects (employee's assigned projects) ──────────────
-        if api_path == "/api/bot/my-projects" and method == "GET":
+        if api_path == "/api/bot/my-projects":
             if not bot_token or auth_header != f"Bearer {bot_token}":
                 _json_response(self, 403, {"error": "Forbidden"})
                 return
@@ -9678,7 +9682,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         # ── Bot: overdue projects ────────────────────────────────────────
-        if api_path == "/api/bot/overdue" and method == "GET":
+        if api_path == "/api/bot/overdue":
             if not bot_token or auth_header != f"Bearer {bot_token}":
                 _json_response(self, 403, {"error": "Forbidden"})
                 return
@@ -9714,7 +9718,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         # ── Bot: due this week ───────────────────────────────────────────
-        if api_path == "/api/bot/due-this-week" and method == "GET":
+        if api_path == "/api/bot/due-this-week":
             if not bot_token or auth_header != f"Bearer {bot_token}":
                 _json_response(self, 403, {"error": "Forbidden"})
                 return
@@ -9751,7 +9755,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         # ── Bot: pipeline stats ──────────────────────────────────────────
-        if api_path == "/api/bot/pipeline" and method == "GET":
+        if api_path == "/api/bot/pipeline":
             if not bot_token or auth_header != f"Bearer {bot_token}":
                 _json_response(self, 403, {"error": "Forbidden"})
                 return
@@ -9773,7 +9777,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         # ── Bot: calendar events ─────────────────────────────────────────
-        if api_path == "/api/bot/calendar" and method == "GET":
+        if api_path == "/api/bot/calendar":
             if not bot_token or auth_header != f"Bearer {bot_token}":
                 _json_response(self, 403, {"error": "Forbidden"})
                 return
@@ -9805,7 +9809,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         # ── Bot: today summary ───────────────────────────────────────────
-        if api_path == "/api/bot/today" and method == "GET":
+        if api_path == "/api/bot/today":
             if not bot_token or auth_header != f"Bearer {bot_token}":
                 _json_response(self, 403, {"error": "Forbidden"})
                 return
@@ -9843,7 +9847,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         # ── Bot: team members ────────────────────────────────────────────
-        if api_path == "/api/bot/team" and method == "GET":
+        if api_path == "/api/bot/team":
             if not bot_token or auth_header != f"Bearer {bot_token}":
                 _json_response(self, 403, {"error": "Forbidden"})
                 return
@@ -9857,7 +9861,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         # ── Bot: recent activity ─────────────────────────────────────────
-        if api_path == "/api/bot/recent" and method == "GET":
+        if api_path == "/api/bot/recent":
             if not bot_token or auth_header != f"Bearer {bot_token}":
                 _json_response(self, 403, {"error": "Forbidden"})
                 return
@@ -9889,7 +9893,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         # ── Bot: stats overview ──────────────────────────────────────────
-        if api_path == "/api/bot/stats" and method == "GET":
+        if api_path == "/api/bot/stats":
             if not bot_token or auth_header != f"Bearer {bot_token}":
                 _json_response(self, 403, {"error": "Forbidden"})
                 return
@@ -10100,7 +10104,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 500, {"error": str(exc)})
             return
 
-        if api_path == "/api/bot/notification-by-message" and method == "GET":
+        if api_path == "/api/bot/notification-by-message":
             if not bot_token or auth_header != f"Bearer {bot_token}":
                 _json_response(self, 403, {"error": "Forbidden"})
                 return

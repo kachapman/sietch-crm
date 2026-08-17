@@ -12798,6 +12798,11 @@ body {
   color: var(--muted);
 }
 
+/* ── Document Picker (must appear above admin console) ─────────────── */
+#document-picker-modal {
+  z-index: 2100;
+}
+
 /* ── Admin Console Modal ─────────────────────────────────────────────────────── */
 #admin-console-modal .modal-card,
 .admin-modal-card {
