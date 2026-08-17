@@ -9185,12 +9185,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 where.append("action = 'file_uploaded'")
             elif action_filter == "user":
                 where.append("action IN ('search', 'note_added', 'file_uploaded', 'code_verified', 'command')")
-            if where:
-                where_sql = "WHERE " + " AND ".join(where)
             else:
-                where_sql = ""
+                # Direct action match (e.g. "note_added", "heartbeat", "start", etc.)
+                where.append("action = %s")
+                params.append(action_filter)
+            where_sql = "WHERE " + " AND ".join(where)
         else:
-            where_sql = ""
+            # Default: exclude heartbeats from the log (status bar shows last heartbeat)
+            where_sql = "WHERE action != 'heartbeat'"
         try:
             rows = db.query(
                 f"""SELECT chat_id, user_name, action, detail, project_id, is_error, created_at
