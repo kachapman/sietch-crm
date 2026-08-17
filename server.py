@@ -9511,10 +9511,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     deal["userFields"] = {}
                 # Enrich with contact phone/address for call+address commands
                 try:
-                    if r[14]:  # contact_id
+                    if r[13]:  # contact_id
                         c_row = db.query_one(
                             "SELECT phone, mobile_phone, address_street, address_city, address_state, address_zip FROM contacts WHERE id = %s",
-                            (r[14],),
+                            (r[13],),
                         )
                         if c_row:
                             deal["contactPhone"] = c_row[0] or ""

@@ -836,7 +836,7 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update
         from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
     except ImportError:
         logger.error("python-telegram-bot not installed: pip install python-telegram-bot")
@@ -876,6 +876,19 @@ def main() -> None:
                 rows.append(action_row)
         rows.append([InlineKeyboardButton("🔍 New Search", callback_data="act:home")])
         return InlineKeyboardMarkup(rows)
+
+    def _build_reply_keyboard(is_employee: bool) -> ReplyKeyboardMarkup:
+        """Persistent keyboard buttons below the chat input."""
+        if is_employee:
+            keyboard = [
+                [KeyboardButton("📋 My Tasks"), KeyboardButton("📅 Today")],
+                [KeyboardButton("🔍 Search"), KeyboardButton("ℹ️ Help")],
+            ]
+        else:
+            keyboard = [
+                [KeyboardButton("🔍 Search"), KeyboardButton("ℹ️ Help")],
+            ]
+        return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
     _PREFERRED_CATEGORY_PATTERNS: list[tuple[re.Pattern, str]] = [
         (re.compile(r"quick.?context", re.I), "Quick Context"),
@@ -951,6 +964,10 @@ def main() -> None:
                     "  /my_projects — your projects\n"
                     "  /help   — all commands",
                     reply_markup=_build_deal_detail_keyboard(0, is_employee=True),
+                )
+                await update.message.reply_text(
+                    "Use the buttons below for quick access:",
+                    reply_markup=_build_reply_keyboard(is_employee=True),
                 )
             else:
                 greeting = f"Welcome back, <b>{name}</b>!" if name else "Welcome back!"
@@ -1130,6 +1147,22 @@ def main() -> None:
             lower = text.lower()
 
             logger.info("Message from chat %d: %s", chat_id, text[:50])
+
+            # ── Reply keyboard button presses ──
+            mapping = await get_mapping(chat_id)
+            is_emp = mapping.get("employee", False) if mapping else False
+            if text == "📋 My Tasks" and is_emp:
+                update.message.text = "/tasks"
+                lower = "/tasks"
+            elif text == "📅 Today" and is_emp:
+                update.message.text = "/today"
+                lower = "/today"
+            elif text == "🔍 Search":
+                await _reply_html(update, "Send a project name to search.")
+                return
+            elif text == "ℹ️ Help":
+                update.message.text = "/help"
+                lower = "/help"
 
             # ── Pending note flow ──
             pending = _pending_note.get(chat_id)
