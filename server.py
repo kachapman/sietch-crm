@@ -9237,7 +9237,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 )
             except Exception:
                 pass
-            _json_response(self, 200, {"ok": True, "message": "Restart signal sent. Bot will restart on next heartbeat poll."})
+            # Try systemctl restart (works when server runs as same user with sudo, or as root)
+            restarted = False
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["systemctl", "restart", "crm-telegram-bot"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                restarted = result.returncode == 0
+            except Exception:
+                pass
+            msg = "Bot restarted via systemctl." if restarted else "Restart signal sent. Bot will restart on next config poll."
+            _json_response(self, 200, {"ok": True, "message": msg, "restarted": restarted})
         except Exception:
             logger.exception("Failed to signal bot restart")
             _json_response(self, 500, {"error": "Failed to signal restart"})
@@ -9266,12 +9278,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             notes_category_id = payload.get("notesCategoryId")
             nickname = str(payload.get("nickname") or "").strip()
             employee = payload.get("employee", False)
+            user_id = payload.get("userId")
             if not employee and not contact_id:
                 _json_response(self, 400, {"error": "contactId is required"})
                 return
             result = generate_code("sietch", int(contact_id) if contact_id else None,
                                    contact_name, int(notes_category_id) if notes_category_id else None,
-                                   nickname, employee=bool(employee))
+                                   nickname, employee=bool(employee),
+                                   user_id=int(user_id) if user_id else None)
             _json_response(self, 200, result)
             return
         if api_path == "/api/bot-customers/cancel-code" and method == "POST":

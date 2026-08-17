@@ -8,8 +8,12 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Added `python-telegram-bot` dependency** — required by `telegram_bot.py` but not in `requirements.txt` or installed in `.venv`.
 - **Added missing `.env` variables** — `DASHBOARD_URL=http://127.0.0.1:8766` (was defaulting to 8765, wrong port), `ONLYOFFICE_PORTAL_URL`, `TELEGRAM_BOT_TOKEN`. Updated `config.example.env` with documentation.
 - **Created systemd service file** — `docs/crm-telegram-bot.service` updated with correct paths (`/home/chapman-server/Projects/new-crm`), correct venv, removed stale `Requires=docker.service`, added `User=chapman-server`.
+- **Created `bot_config` + `bot_activity_log` tables** — migration 012 existed but was never run. Bot heartbeat now logs correctly; admin Bot tab shows "online" status.
+- **Added CRM user picker to Bot tab** — employee invite codes now link to a specific CRM user via `userId` field. New user search field appears when "Employee access" checkbox is checked. Notes and file uploads now have correct `created_by` attribution.
+- **Fixed restart button** — server now calls `systemctl restart crm-telegram-bot` (with fallback if systemctl unavailable). Bot config poll reduced from 5min to 60s; bot self-restarts via `os.execv()` when token changes.
+- **Fixed admin console mobile layout** — full viewport fill at 640px breakpoint, inline grids collapse to `1fr`, bot status bar wraps, admin content scrolls properly.
 - **Bot confirmed running and heartbeat working** — bot sends `POST /api/bot/heartbeat` every 60s, server returns 200 OK.
-- **Files:** `telegram_bot.py` (command names), `.env` (vars), `config.example.env` (docs), `docs/crm-telegram-bot.service` (systemd unit).
+- **Files:** `telegram_bot.py` (command names, config poll), `.env` (vars), `config.example.env` (docs), `docs/crm-telegram-bot.service` (systemd unit), `server.py` (restart endpoint, generate-code userId), `crm_bot_store.py` (userId propagation), `public/index.html` (user picker HTML), `public/app.js` (user picker JS), `public/styles.css` (mobile layout).
 
 ## Telegram Bot Overhaul — Phase 2K (2026-08-16)
 

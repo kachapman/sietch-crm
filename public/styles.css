@@ -12571,6 +12571,7 @@ body {
 .bot-status-bar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.6rem;
   padding: 0.6rem 1rem;
   background: var(--surface);
@@ -12915,6 +12916,24 @@ select.form-control {
   }
   #sync-log {
     max-height: 200px;
+  }
+  /* Collapse inline grids to single column on mobile */
+  .admin-tab-content [style*="grid-template-columns"] {
+    grid-template-columns: 1fr !important;
+  }
+  /* Bot tab status bar wraps */
+  .bot-status-bar {
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+  .bot-status-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  /* Ensure admin content scrolls on mobile */
+  #admin-console-modal .admin-main {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 }
 

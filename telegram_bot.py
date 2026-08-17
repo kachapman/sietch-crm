@@ -170,10 +170,10 @@ async def _heartbeat_loop() -> None:
 
 
 async def _config_poll_loop() -> None:
-    """Poll /api/bot/config-check every 5 min; reload settings on change."""
+    """Poll /api/bot/config-check every 60s; reload settings on change."""
     global _bg_config_version, _bg_bot_name, TOKEN
     while True:
-        await asyncio.sleep(300)
+        await asyncio.sleep(60)
         try:
             resp = await _post("/api/bot/config-check", {"configVersion": _bg_config_version})
             if resp and resp.get("changed"):
@@ -184,7 +184,9 @@ async def _config_poll_loop() -> None:
                 if cfg:
                     new_token = cfg.get("botToken", "")
                     if new_token and new_token != TOKEN:
-                        logger.info("Bot token changed — restart required to apply")
+                        logger.info("Bot token changed — restarting process to apply")
+                        import sys, os
+                        os.execv(sys.executable, [sys.executable] + sys.argv)
                     _bg_bot_name = cfg.get("botName", _bg_bot_name)
                     logger.info("Config reloaded: botName=%s", _bg_bot_name)
         except Exception as e:

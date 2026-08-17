@@ -31951,7 +31951,7 @@ async function openBotCustomersModal() {
   const modal = $("#bot-customers-modal");
   if (!modal) return;
 
-  _botCustomersDraft = { contactId: null, contactLabel: "", notesCategoryId: null, employee: false };
+  _botCustomersDraft = { contactId: null, contactLabel: "", notesCategoryId: null, employee: false, userId: null, userLabel: "" };
   $("#bot-employee-toggle") && ($("#bot-employee-toggle").checked = false);
   updateBotCustomersEmployeeSection();
 
@@ -32169,6 +32169,70 @@ function bindBotCustomersContactPicker() {
   });
 }
 
+function bindBotCustomersUserPicker() {
+  const input = $("#bot-customers-user-search");
+  const results = $("#bot-customers-user-results");
+  const selected = $("#bot-customers-user-selected");
+  if (!input || !results || input.dataset.bound) return;
+  input.dataset.bound = "1";
+  let debounce;
+
+  input.addEventListener("input", () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(async () => {
+      const q = input.value.trim();
+      results.innerHTML = "";
+      if (q.length < 2) {
+        results.classList.add("hidden");
+        return;
+      }
+      try {
+        const users = await api("/api/v2/users");
+        const filtered = (Array.isArray(users) ? users : []).filter(u => {
+          if (!u.isActive) return false;
+          const name = (u.displayName || "").toLowerCase();
+          const email = (u.email || "").toLowerCase();
+          return name.includes(q.toLowerCase()) || email.includes(q.toLowerCase());
+        });
+        results.classList.remove("hidden");
+        if (!filtered.length) {
+          results.innerHTML = '<button type="button" disabled>No matches</button>';
+          return;
+        }
+        for (const u of filtered.slice(0, 15)) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = u.displayName || u.email || `User #${u.id}`;
+          btn.addEventListener("click", () => {
+            _botCustomersDraft.userId = u.id;
+            _botCustomersDraft.userLabel = btn.textContent;
+            input.value = "";
+            results.classList.add("hidden");
+            if (selected) {
+              selected.innerHTML = `User: ${escapeHtml(btn.textContent)} <span class="contact-clear" role="button" tabindex="0" id="bot-user-clear">clear</span>`;
+              selected.classList.remove("hidden");
+              $("#bot-user-clear")?.addEventListener("click", () => {
+                _botCustomersDraft.userId = null;
+                _botCustomersDraft.userLabel = "";
+                selected.innerHTML = "";
+                selected.classList.add("hidden");
+              });
+            }
+          });
+          results.appendChild(btn);
+        }
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }, 350);
+  });
+
+  document.addEventListener("click", (e) => {
+    const wrap = $("#bot-customers-user-field");
+    if (wrap && !wrap.contains(e.target)) results.classList.add("hidden");
+  });
+}
+
 function updateBotGeneratedCodeBox() {
   const box = $("#bot-generated-code");
   const val = $("#bot-code-value");
@@ -32214,10 +32278,11 @@ async function handleGenerateCode() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contactId: draft.employee ? null : draft.contactId,
-        contactName: draft.employee ? "Employee" : draft.contactLabel,
+        contactName: draft.employee ? (draft.userLabel || "Employee") : draft.contactLabel,
         notesCategoryId: catId,
         nickname,
         employee: draft.employee,
+        userId: draft.employee ? draft.userId : null,
       }),
     });
     const data = await res.json();
@@ -32299,6 +32364,8 @@ function updateBotCustomersEmployeeSection() {
   const isEmployee = !!draft.employee;
   const contactField = document.getElementById("bot-customers-contact-field");
   if (contactField) contactField.style.display = isEmployee ? "none" : "";
+  const userField = document.getElementById("bot-customers-user-field");
+  if (userField) userField.classList.toggle("hidden", !isEmployee);
   const title = document.getElementById("bot-section-title");
   if (title) title.textContent = isEmployee ? "Invite Employee" : "Invite Customer";
 }
@@ -32318,6 +32385,7 @@ function bindBotCustomersModal() {
   });
 
   bindBotCustomersContactPicker();
+  bindBotCustomersUserPicker();
 
   const employeeToggle = document.getElementById("bot-employee-toggle");
   if (employeeToggle) {
@@ -32325,7 +32393,14 @@ function bindBotCustomersModal() {
       const draft = _botCustomersDraft;
       if (!draft) return;
       draft.employee = employeeToggle.checked;
-      if (draft.employee) draft.contactId = null;
+      if (draft.employee) {
+        draft.contactId = null;
+      } else {
+        draft.userId = null;
+        draft.userLabel = "";
+        const userSelected = $("#bot-customers-user-selected");
+        if (userSelected) { userSelected.innerHTML = ""; userSelected.classList.add("hidden"); }
+      }
       updateBotCustomersEmployeeSection();
     });
   }

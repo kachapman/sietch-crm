@@ -167,7 +167,7 @@ def get_pending_codes(portal: str) -> list[dict[str, Any]]:
 
 def generate_code(portal: str, contact_id: int | None, contact_name: str,
                   notes_category_id: int | None, nickname: str = "",
-                  employee: bool = False) -> dict[str, Any]:
+                  employee: bool = False, user_id: int | None = None) -> dict[str, Any]:
     path = _store_path(portal)
     store = _load_file(path)
     codes = store.get("pendingCodes", [])
@@ -183,6 +183,7 @@ def generate_code(portal: str, contact_id: int | None, contact_name: str,
         "notesCategoryId": notes_category_id,
         "nickname": nickname,
         "employee": employee,
+        "userId": user_id,
         "portal": portal,
         "createdAt": now.isoformat(),
         "expiresAt": expires.isoformat(),
@@ -197,6 +198,7 @@ def generate_code(portal: str, contact_id: int | None, contact_name: str,
         "notesCategoryId": notes_category_id,
         "nickname": nickname,
         "employee": employee,
+        "userId": user_id,
         "expiresAt": entry["expiresAt"],
     }
 
@@ -259,6 +261,7 @@ def verify_code(portal: str, code: str) -> dict[str, Any] | str:
                 "notesCategoryId": c.get("notesCategoryId"),
                 "nickname": c.get("nickname", ""),
                 "employee": is_employee,
+                "userId": c.get("userId"),
                 "createdAt": now_iso,
                 "updatedAt": now_iso,
             }
