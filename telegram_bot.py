@@ -905,8 +905,12 @@ def main() -> None:
                 rows.append(action_row)
         if deal_id:
             project_url = f"{DASHBOARD_URL}/project/{deal_id}"
-            rows.append([InlineKeyboardButton("🔗", url=project_url)])
-        rows.append([InlineKeyboardButton("🔍 New Search", callback_data="act:home")])
+            rows.append([
+                InlineKeyboardButton("🔗", url=project_url),
+                InlineKeyboardButton("🔍 New Search", callback_data="act:home"),
+            ])
+        else:
+            rows.append([InlineKeyboardButton("🔍 New Search", callback_data="act:home")])
         return InlineKeyboardMarkup(rows)
 
     def _build_reply_keyboard(is_employee: bool) -> ReplyKeyboardMarkup:
