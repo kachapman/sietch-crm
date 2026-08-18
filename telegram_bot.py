@@ -1451,7 +1451,7 @@ def main() -> None:
                         "opportunityId": opp_id,
                         "chatId": chat_id,
                         "content": content,
-                        "categoryId": 1,  # Note category
+                        "categoryId": 10,  # Note category (ID 10 in history_categories)
                     },
                 )
                 if resp.status_code == 200:
