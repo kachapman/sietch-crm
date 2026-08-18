@@ -42,9 +42,13 @@ if os.path.isfile(_env_path):
         if key and key not in os.environ:
             os.environ[key] = value
 
-DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://127.0.0.1:8765")
+_DASHBOARD_URL_DEFAULT = os.environ.get("DASHBOARD_URL", "http://127.0.0.1:8765")
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 PORTAL = os.environ.get("ONLYOFFICE_PORTAL_URL", "")
+
+def _get_dashboard_url() -> str:
+    """Read DASHBOARD_URL lazily to pick up .env changes."""
+    return os.getenv("DASHBOARD_URL", _DASHBOARD_URL_DEFAULT)
 
 # Last search results per chat, used to interpret "1", "2", ... replies.
 _last_search: dict[int, str] = {}
@@ -99,7 +103,7 @@ async def _get(path: str, params: dict | None = None) -> dict | None:
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.get(
-                f"{DASHBOARD_URL}{path}",
+                f"{_get_dashboard_url()}{path}",
                 params=params,
                 headers=_auth_headers(),
                 timeout=30,
@@ -117,7 +121,7 @@ async def _post(path: str, data: dict) -> dict | None:
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                f"{DASHBOARD_URL}{path}",
+                f"{_get_dashboard_url()}{path}",
                 json=data,
                 headers=_auth_headers(),
                 timeout=30,
@@ -716,7 +720,7 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
     d = deals[index]
     amt = _fmt_money(d.get("amount", 0), d.get("currency", ""))
     deal_id = d.get("id", "")
-    project_url = f"{DASHBOARD_URL}/project/{deal_id}" if deal_id else ""
+    project_url = f"{_get_dashboard_url()}/project/{deal_id}" if deal_id else ""
     lines = [
         _esc(d["title"]),
         "─" * 30,
@@ -822,7 +826,7 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
 def format_project_info(deal: dict) -> str:
     """Format all deal fields and user fields for employee Project Info view."""
     deal_id = deal.get("id", "")
-    project_url = f"{DASHBOARD_URL}/project/{deal_id}" if deal_id else ""
+    project_url = f"{_get_dashboard_url()}/project/{deal_id}" if deal_id else ""
     lines = [
         f"<b>{_esc(deal.get('title', 'Deal'))}</b> — Project Info",
         "─" * 30,
@@ -924,7 +928,7 @@ def main() -> None:
             if action_row:
                 rows.append(action_row)
         if deal_id:
-            project_url = f"{DASHBOARD_URL}/project/{deal_id}"
+            project_url = f"{_get_dashboard_url()}/project/{deal_id}"
             rows.append([
                 InlineKeyboardButton("🔗", url=project_url),
                 InlineKeyboardButton("🔍 New Search", callback_data="act:home"),
@@ -1072,7 +1076,7 @@ def main() -> None:
             return
         keyboard: list[list[InlineKeyboardButton]] = []
         for tag in tags:
-            name = tag.get("name") or tag.get("title") or ""
+            name = tag.get("tag") or tag.get("name") or tag.get("title") or ""
             if not name:
                 continue
             if len(name) > 40:
@@ -1418,12 +1422,13 @@ def main() -> None:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(
-                    f"{DASHBOARD_URL}/api/bot/notification-by-message",
+                    f"{_get_dashboard_url()}/api/bot/notification-by-message",
                     headers=_auth_headers(),
                     params={"chatId": chat_id, "messageId": parent_message_id},
                 )
                 if resp.status_code != 200:
-                    return  # Not a notification reply
+                    # Not a notification reply — treat as search
+                    return
                 data = resp.json()
         except Exception:
             logger.exception("Failed to look up notification for message %s", parent_message_id)
@@ -1440,7 +1445,7 @@ def main() -> None:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(
-                    f"{DASHBOARD_URL}/api/bot/note",
+                    f"{_get_dashboard_url()}/api/bot/note",
                     headers=_auth_headers(),
                     json={
                         "opportunityId": opp_id,
@@ -1455,10 +1460,11 @@ def main() -> None:
                         f"\u2705 <b>Note added</b>\nProject: {_esc(project_title)}",
                     )
                 else:
-                    await _reply_html(update, "Failed to add note. Please try again.")
+                    err = resp.json().get("error", "Failed") if resp.status_code < 500 else "Server error"
+                    await _reply_html(update, f"\u274c Failed to add note: {_esc(err)}")
         except Exception:
             logger.exception("Failed to post note for reply to notification %s", notification_id)
-            await _reply_html(update, "Something went wrong. Please try again.")
+            await _reply_html(update, "\u274c Something went wrong. Please try again.")
 
     async def handle_document(update: Update, _ctx) -> None:
         """Handle photo/document uploads from employees."""
@@ -1525,7 +1531,7 @@ def main() -> None:
                 files = {"file": (file_name, io.BytesIO(file_data), "application/octet-stream")}
                 form_data = {"oppId": str(project_id), "chatId": str(chat_id), "fileType": file_type}
                 resp = await client.post(
-                    f"{DASHBOARD_URL}/api/bot/upload",
+                    f"{_get_dashboard_url()}/api/bot/upload",
                     headers=_auth_headers(),
                     files=files,
                     data=form_data,
@@ -1801,8 +1807,8 @@ def main() -> None:
         for ev in resp[:10]:
             when = ev.get("createdAt", "")[:16].replace("T", " ") if ev.get("createdAt") else ""
             proj = f" [{_esc(ev['projectTitle'])}]" if ev.get("projectTitle") else ""
-            snippet = _esc((ev.get("content") or "")[:80])
-            snippet = re.sub(r'<[^>]+>', '', snippet)
+            snippet = re.sub(r'<[^>]+>', '', (ev.get("content") or "")[:80])
+            snippet = _esc(snippet)
             lines.append(f"\U0001f4dd {when}{proj}\n   {snippet}")
         await _reply_html(update, "\n".join(lines))
 

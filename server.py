@@ -4083,9 +4083,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     # ── Stages ──────────────────────────────────────────────────────────────
 
     def _handle_stages_get(self) -> None:
-        user = _require_auth(self)
-        if not user:
-            return
+        # Accept either session auth or bot token auth
+        bot_token = _get_bot_token()
+        auth_header = self.headers.get("Authorization", "").strip()
+        if bot_token and auth_header == f"Bearer {bot_token}":
+            pass  # Bot auth OK
+        else:
+            user = _require_auth(self)
+            if not user:
+                return
         rows = db.query(
             """SELECT s.id, s.title, s.color, s.sort_order, s.stage_type, s.probability, s.is_active,
                       COUNT(o.id) as project_count
@@ -9753,8 +9759,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 projects.append({
                     "id": r[0], "title": r[1], "amount": float(r[2] or 0),
                     "stage": r[3] or "",
-                    "dueDate": r[5].isoformat() if r[5] else None,
-                    "contact": r[7] or "",
+                    "dueDate": r[4].isoformat() if r[4] else None,
+                    "contact": r[6] or "",
                 })
             _json_response(self, 200, projects)
             return

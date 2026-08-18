@@ -24,6 +24,10 @@ logger = logging.getLogger("notification_dispatcher")
 # ── Config ──────────────────────────────────────────────────────────────────
 
 DASHBOARD_URL = os.getenv("DASHBOARD_URL", "http://127.0.0.1:8766")
+
+def _get_dashboard_url() -> str:
+    """Read DASHBOARD_URL lazily to pick up .env changes."""
+    return os.getenv("DASHBOARD_URL", DASHBOARD_URL)
 TELEGRAM_NOTIFY_ENABLED = os.getenv("TELEGRAM_NOTIFY_ENABLED", "true").lower() == "true"
 POLL_INTERVAL = int(os.getenv("TELEGRAM_NOTIFY_POLL_INTERVAL", "5"))
 BATCH_SIZE = int(os.getenv("TELEGRAM_NOTIFY_BATCH_SIZE", "10"))
@@ -73,11 +77,12 @@ def _escape_html(text: str) -> str:
 def _format_note_tagged(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
     payload = notification.get("payload") or {}
     snippet = _escape_html(payload.get("snippet") or "")
-    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
     return (
-        f"\U0001f4d8 <b>{_escape_html(actor_name)} tagged you on a note</b>\n\n"
-        f"Project: <b>{_escape_html(project_title)}</b>\n\n"
-        + (f"{_truncate(snippet)}\n\n" if snippet else "")
+        f"\U0001f4d8 <b>{_escape_html(actor_name)} tagged you on a note</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"\U0001f4c1 <b>Project:</b> {_escape_html(project_title)}\n\n"
+        + (f"{_truncate(snippet)}\n\n" if snippet else "\n")
         + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
         + f"\u21a9\ufe0f Reply to add a note"
     )
@@ -87,7 +92,7 @@ def _format_task_assigned(notification: dict, project_title: str, actor_name: st
     payload = notification.get("payload") or {}
     task_title = _escape_html(payload.get("task_title") or "")
     due_date = payload.get("due_date") or "No due date"
-    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
     return (
         f"\u2705 <b>Task assigned to you</b>\n\n"
         f"Project: <b>{_escape_html(project_title)}</b>\n"
@@ -101,7 +106,7 @@ def _format_task_assigned(notification: dict, project_title: str, actor_name: st
 def _format_task_reminder(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
     payload = notification.get("payload") or {}
     task_title = _escape_html(payload.get("taskTitle") or notification.get("message") or "Task reminder")
-    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
     return (
         f"\u23f0 <b>Task reminder</b>\n\n"
         f"{task_title}\n\n"
@@ -123,7 +128,7 @@ def _format_calendar_reminder(notification: dict) -> str:
 def _format_document_uploaded(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
     payload = notification.get("payload") or {}
     filename = _escape_html(payload.get("filename") or notification.get("message") or "a file")
-    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
     return (
         f"\U0001f4c4 <b>Document uploaded</b>\n\n"
         f"Project: <b>{_escape_html(project_title)}</b>\n"
@@ -136,7 +141,7 @@ def _format_document_uploaded(notification: dict, project_title: str, actor_name
 def _format_photo_uploaded(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
     payload = notification.get("payload") or {}
     filename = _escape_html(payload.get("filename") or notification.get("message") or "a photo")
-    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
     return (
         f"\U0001f4f7 <b>Photo uploaded</b>\n\n"
         f"Project: <b>{_escape_html(project_title)}</b>\n"
@@ -150,7 +155,7 @@ def _format_task_added(notification: dict, project_title: str, actor_name: str, 
     payload = notification.get("payload") or {}
     task_title = _escape_html(payload.get("task_title") or "")
     due_date = payload.get("due_date") or "No due date"
-    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
     return (
         f"\U0001f4cb <b>New task added</b>\n\n"
         f"Project: <b>{_escape_html(project_title)}</b>\n"
@@ -163,7 +168,7 @@ def _format_task_added(notification: dict, project_title: str, actor_name: str, 
 def _format_task_completed(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
     payload = notification.get("payload") or {}
     task_title = _escape_html(payload.get("task_title") or notification.get("message") or "Task")
-    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
     return (
         f"\u2705 <b>Task completed</b>\n\n"
         f"Project: <b>{_escape_html(project_title)}</b>\n"
@@ -176,7 +181,7 @@ def _format_task_completed(notification: dict, project_title: str, actor_name: s
 def _format_project_updated(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
     payload = notification.get("payload") or {}
     changes = _escape_html(payload.get("changes") or notification.get("message") or "details updated")
-    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
     return (
         f"\U0001f504 <b>Project updated</b>\n\n"
         f"Project: <b>{_escape_html(project_title)}</b>\n"
@@ -187,7 +192,7 @@ def _format_project_updated(notification: dict, project_title: str, actor_name: 
 
 
 def _format_project_created(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
-    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
     return (
         f"\U0001f195 <b>New project created</b>\n\n"
         f"Project: <b>{_escape_html(project_title)}</b>\n"
@@ -260,7 +265,7 @@ def _format_email_notification(notification: dict, project_title: str, actor_nam
     header_color = branding.get("email_header_color") or branding.get("primary_color") or "#3b82f6"
     company = branding.get("company_name") or "Sietch CRM"
     footer = branding.get("email_footer_text") or "Sietch CRM — Confidential"
-    link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
 
     ntype = notification.get("type")
     if ntype == "note_tagged":
