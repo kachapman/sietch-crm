@@ -9495,7 +9495,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 # Enrich with user fields (custom fields)
                 try:
                     cf_rows = db.query(
-                        """SELECT cfd.field_label, cfd.field_key, ocfv.field_value
+                        """SELECT cfd.label, cfd.field_key, ocfv.field_value
                            FROM opportunity_custom_field_values ocfv
                            JOIN custom_field_definitions cfd ON cfd.id = ocfv.field_id
                            WHERE ocfv.opportunity_id = %s""",

@@ -905,7 +905,7 @@ def main() -> None:
                 rows.append(action_row)
         if deal_id:
             project_url = f"{DASHBOARD_URL}/project/{deal_id}"
-            rows.append([InlineKeyboardButton("🔗 Open in CRM", url=project_url)])
+            rows.append([InlineKeyboardButton("🔗", url=project_url)])
         rows.append([InlineKeyboardButton("🔍 New Search", callback_data="act:home")])
         return InlineKeyboardMarkup(rows)
 
@@ -1184,20 +1184,20 @@ def main() -> None:
             mapping = await get_mapping(chat_id)
             is_emp = mapping.get("employee", False) if mapping else False
             if text == "Tasks" and is_emp:
-                update.message.text = "/tasks"
-                lower = "/tasks"
+                await tasks_command(update, _ctx)
+                return
             elif text == "Tag" and is_emp:
-                update.message.text = "/tag"
-                lower = "/tag"
+                await tag_command(update, _ctx)
+                return
             elif text == "Quick Note" and is_emp:
-                update.message.text = "/quicknote"
-                lower = "/quicknote"
+                await quicknote_command(update, _ctx)
+                return
             elif text == "Search":
                 await _reply_html(update, "Send a project name to search.")
                 return
             elif text == "Help":
-                update.message.text = "/help"
-                lower = "/help"
+                await help_command(update, _ctx)
+                return
 
             # ── Pending note flow ──
             pending = _pending_note.get(chat_id)
