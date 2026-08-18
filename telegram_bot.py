@@ -1189,7 +1189,7 @@ def main() -> None:
             _pending_note[chat_id] = {"dealId": deal_id, "step": "awaiting_text"}
             _last_viewed_project[chat_id] = deal_id  # Set for file upload context
             await query.message.reply_text(
-                "Send text or a file. Type /cancel to abort."
+                "Send text or photos (one or multiple). Type /cancel to abort."
             )
             return
 
