@@ -9581,6 +9581,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         if api_path == "/api/bot/categories":
+            # Accept either session auth or bot token auth
+            bot_token = _get_bot_token()
+            auth_header = self.headers.get("Authorization", "").strip()
+            if not (bot_token and auth_header == f"Bearer {bot_token}"):
+                user = _require_auth(self)
+                if not user:
+                    return
             rows = db.query("SELECT id, title FROM history_categories ORDER BY sort_order")
             _json_response(self, 200, [{"id": r[0], "title": r[1]} for r in rows])
             return
