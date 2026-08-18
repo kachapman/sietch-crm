@@ -570,6 +570,10 @@ function crmOpportunityUrl(id) {
   return "/project/" + id;
 }
 
+function crmProjectUrl(projectNumber) {
+  return "/project/" + projectNumber;
+}
+
 function groupFilterSummary(group) {
   const parts = [];
   if (group.tagTitles?.length) parts.push(`Tags: ${group.tagTitles.join(", ")}`);
@@ -12246,7 +12250,7 @@ function renderFeedHiddenModalList() {
     body.className = "feed-item-body";
     if (snap.id != null) {
       const a = document.createElement("a");
-      a.href = crmOpportunityUrl(snap.id);
+      a.href = crmProjectUrl(snap.project_number || snap.id);
       a.target = "_blank";
       a.rel = "noopener noreferrer";
       a.textContent = snap.title || `Project #${snap.id}`;
@@ -12828,6 +12832,7 @@ async function openDealEditModal(opp, group) {
   const oppTitle = opp.title || opp.Title || `Project #${id}`;
   state.dealEdit = {
     oppId: Number(id),
+    projectNumber: opp.project_number || opp.projectNumber,
     group,
     oppTitle,
     initialTitle: opp.title || opp.Title || "",
@@ -12866,7 +12871,7 @@ async function openDealEditModal(opp, group) {
   if (titleEl) titleEl.textContent = state.dealEdit.oppTitle;
 
   const crmLink = $("#deal-edit-crm-link");
-  if (crmLink) crmLink.href = crmOpportunityUrl(id);
+  if (crmLink) crmLink.href = crmProjectUrl(state.dealEdit.projectNumber || id);
 
   const dueInput = $("#deal-edit-due");
   if (dueInput) dueInput.value = state.dealEdit.initialDue;
@@ -13560,7 +13565,7 @@ function updateQuickNoteOpportunitySelectedUi() {
       renderQuickNoteTagChips();
     });
     if (crmLink) {
-      crmLink.href = crmOpportunityUrl(ctx.oppId);
+      crmLink.href = crmProjectUrl(ctx.projectNumber || ctx.oppId);
       crmLink.classList.remove("hidden");
     }
     if (search) search.value = "";
@@ -23057,9 +23062,9 @@ let searchPopupContactsQueryAbort = null;
 let searchPopupContactsStartIndex = 0;
 const SEARCH_POPUP_CONTACTS_PAGE_SIZE = 50;
 
-function createCrmOpenLink(oppId, { className = "crm-open-external", title = "Open Project" } = {}) {
+function createCrmOpenLink(oppId, projectNumber, { className = "crm-open-external", title = "Open Project" } = {}) {
   const a = document.createElement("a");
-  a.href = crmOpportunityUrl(oppId);
+  a.href = crmProjectUrl(projectNumber || oppId);
   a.target = "_blank";
   a.rel = "noopener noreferrer";
   a.className = className;
@@ -25246,11 +25251,11 @@ function renderOpportunityPreviewBody(data) {
   renderOpportunityPreviewContent(body, data);
 }
 
-function setOpportunityPreviewCrmLink(oppId) {
+function setOpportunityPreviewCrmLink(oppId, projectNumber) {
   const wrap = $("#opp-preview-open-crm-wrap");
   if (!wrap) return;
   wrap.innerHTML = "";
-  const link = createCrmOpenLink(oppId, { className: "opp-preview-open-crm" });
+  const link = createCrmOpenLink(oppId, projectNumber, { className: "opp-preview-open-crm" });
   wrap.appendChild(link);
 }
 
@@ -25540,7 +25545,7 @@ async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, 
   setOpportunityPreviewContext(id, null, group);
   titleEl.textContent = titleHint || "Project";
   body.innerHTML = '<p class="opp-preview-loading">Loading project…</p>';
-  setOpportunityPreviewCrmLink(id);
+  setOpportunityPreviewCrmLink(id, oppData?.project_number);
   modal.classList.remove("hidden");
   updatePreviewModalBookmarkButton(id);
 

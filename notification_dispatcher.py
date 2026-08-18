@@ -74,10 +74,10 @@ def _escape_html(text: str) -> str:
 
 # ── Notification formatting ─────────────────────────────────────────────────
 
-def _format_note_tagged(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
+def _format_note_tagged(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
     payload = notification.get("payload") or {}
     snippet = _escape_html(payload.get("snippet") or "")
-    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
     return (
         f"<b>{_escape_html(actor_name)} tagged you in a note</b>\n"
         f"<b>Project:</b> <a href=\"{link}\">{_escape_html(project_title)}</a>\n"
@@ -88,11 +88,11 @@ def _format_note_tagged(notification: dict, project_title: str, actor_name: str,
     )
 
 
-def _format_task_assigned(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
+def _format_task_assigned(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
     payload = notification.get("payload") or {}
     task_title = _escape_html(payload.get("task_title") or "")
     due_date = payload.get("due_date") or "No due date"
-    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
     return (
         f"\u2705 <b>Task assigned to you</b>\n\n"
         f"Project: <b>{_escape_html(project_title)}</b>\n"
@@ -103,10 +103,10 @@ def _format_task_assigned(notification: dict, project_title: str, actor_name: st
     )
 
 
-def _format_task_reminder(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
+def _format_task_reminder(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
     payload = notification.get("payload") or {}
     task_title = _escape_html(payload.get("taskTitle") or notification.get("message") or "Task reminder")
-    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
     return (
         f"\u23f0 <b>Task reminder</b>\n\n"
         f"{task_title}\n\n"
@@ -125,10 +125,10 @@ def _format_calendar_reminder(notification: dict) -> str:
     )
 
 
-def _format_document_uploaded(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
+def _format_document_uploaded(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
     payload = notification.get("payload") or {}
     filename = _escape_html(payload.get("filename") or notification.get("message") or "a file")
-    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
     return (
         f"\U0001f4c4 <b>Document uploaded</b>\n\n"
         f"Project: <b>{_escape_html(project_title)}</b>\n"
@@ -138,10 +138,10 @@ def _format_document_uploaded(notification: dict, project_title: str, actor_name
     )
 
 
-def _format_photo_uploaded(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
+def _format_photo_uploaded(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
     payload = notification.get("payload") or {}
     filename = _escape_html(payload.get("filename") or notification.get("message") or "a photo")
-    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
     return (
         f"\U0001f4f7 <b>Photo uploaded</b>\n\n"
         f"Project: <b>{_escape_html(project_title)}</b>\n"
@@ -151,11 +151,11 @@ def _format_photo_uploaded(notification: dict, project_title: str, actor_name: s
     )
 
 
-def _format_task_added(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
+def _format_task_added(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
     payload = notification.get("payload") or {}
     task_title = _escape_html(payload.get("task_title") or "")
     due_date = payload.get("due_date") or "No due date"
-    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
     return (
         f"\U0001f4cb <b>New task added</b>\n\n"
         f"Project: <b>{_escape_html(project_title)}</b>\n"
@@ -165,10 +165,10 @@ def _format_task_added(notification: dict, project_title: str, actor_name: str, 
     )
 
 
-def _format_task_completed(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
+def _format_task_completed(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
     payload = notification.get("payload") or {}
     task_title = _escape_html(payload.get("task_title") or notification.get("message") or "Task")
-    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
     return (
         f"\u2705 <b>Task completed</b>\n\n"
         f"Project: <b>{_escape_html(project_title)}</b>\n"
@@ -178,10 +178,10 @@ def _format_task_completed(notification: dict, project_title: str, actor_name: s
     )
 
 
-def _format_project_updated(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
+def _format_project_updated(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
     payload = notification.get("payload") or {}
     changes = _escape_html(payload.get("changes") or notification.get("message") or "details updated")
-    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
     return (
         f"\U0001f504 <b>Project updated</b>\n\n"
         f"Project: <b>{_escape_html(project_title)}</b>\n"
@@ -191,8 +191,8 @@ def _format_project_updated(notification: dict, project_title: str, actor_name: 
     )
 
 
-def _format_project_created(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
-    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
+def _format_project_created(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
+    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
     return (
         f"\U0001f195 <b>New project created</b>\n\n"
         f"Project: <b>{_escape_html(project_title)}</b>\n"
@@ -201,28 +201,28 @@ def _format_project_created(notification: dict, project_title: str, actor_name: 
     )
 
 
-def _format_notification(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str | None:
+def _format_notification(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str | None:
     ntype = notification.get("type")
     if ntype == "note_tagged":
-        return _format_note_tagged(notification, project_title, actor_name, project_id)
+        return _format_note_tagged(notification, project_title, actor_name, project_id, project_number)
     elif ntype == "task_assigned":
-        return _format_task_assigned(notification, project_title, actor_name, project_id)
+        return _format_task_assigned(notification, project_title, actor_name, project_id, project_number)
     elif ntype == "task_reminder":
-        return _format_task_reminder(notification, project_title, actor_name, project_id)
+        return _format_task_reminder(notification, project_title, actor_name, project_id, project_number)
     elif ntype == "calendar_reminder":
         return _format_calendar_reminder(notification)
     elif ntype in ("document_uploaded", "document.uploaded"):
-        return _format_document_uploaded(notification, project_title, actor_name, project_id)
+        return _format_document_uploaded(notification, project_title, actor_name, project_id, project_number)
     elif ntype in ("photo_uploaded", "photo.uploaded"):
-        return _format_photo_uploaded(notification, project_title, actor_name, project_id)
+        return _format_photo_uploaded(notification, project_title, actor_name, project_id, project_number)
     elif ntype in ("task_added", "task.added"):
-        return _format_task_added(notification, project_title, actor_name, project_id)
+        return _format_task_added(notification, project_title, actor_name, project_id, project_number)
     elif ntype in ("task_completed", "task.completed"):
-        return _format_task_completed(notification, project_title, actor_name, project_id)
+        return _format_task_completed(notification, project_title, actor_name, project_id, project_number)
     elif ntype in ("project_updated", "project.updated"):
-        return _format_project_updated(notification, project_title, actor_name, project_id)
+        return _format_project_updated(notification, project_title, actor_name, project_id, project_number)
     elif ntype in ("project_created", "project.created"):
-        return _format_project_created(notification, project_title, actor_name, project_id)
+        return _format_project_created(notification, project_title, actor_name, project_id, project_number)
     return None
 
 
@@ -435,7 +435,8 @@ def _process_pending_notifications() -> int:
                       n.opportunity_id, n.actor_user_id,
                       n.telegram_sent, n.email_sent,
                       u.display_name AS actor_name,
-                      o.title AS project_title
+                      o.title AS project_title,
+                      o.project_number
                FROM notifications n
                LEFT JOIN users u ON u.id = n.actor_user_id
                LEFT JOIN opportunities o ON o.id = n.opportunity_id
@@ -453,12 +454,13 @@ def _process_pending_notifications() -> int:
         notification_id = row["id"]
         user_id = row["user_id"]
         project_id = row.get("opportunity_id")
+        project_number = row.get("project_number")
         project_title = row.get("project_title") or "Unknown Project"
         actor_name = row.get("actor_name") or "Someone"
 
         # ── Telegram channel ──
         if not row.get("telegram_sent"):
-            _process_telegram(notification_id, user_id, row, project_title, actor_name, project_id)
+            _process_telegram(notification_id, user_id, row, project_title, actor_name, project_id, project_number)
             if row.get("telegram_sent"):
                 sent_count += 1
 
@@ -472,7 +474,8 @@ def _process_pending_notifications() -> int:
 
 
 def _process_telegram(notification_id: int, user_id: int, row: dict,
-                       project_title: str, actor_name: str, project_id: int | None) -> None:
+                       project_title: str, actor_name: str, project_id: int | None,
+                       project_number: int | None = None) -> None:
     """Handle Telegram delivery for a single notification."""
     ntype = row.get("type", "")
     if not _user_telegram_enabled(user_id, ntype):
@@ -488,7 +491,7 @@ def _process_telegram(notification_id: int, user_id: int, row: dict,
         _mark_telegram_sent(notification_id)
         return
 
-    text = _format_notification(row, project_title, actor_name, project_id)
+    text = _format_notification(row, project_title, actor_name, project_id, project_number)
     if not text:
         _mark_telegram_sent(notification_id)
         return

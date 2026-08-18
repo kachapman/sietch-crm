@@ -129,7 +129,7 @@
   <script>
   (function() {
     var params = new URLSearchParams(window.location.search);
-    var projectId = params.get("id");
+    var projectId = params.get("project_number") || params.get("id");
     var highlightEventId = params.get("event");
     var opp = null;
     var portalUsers = [];

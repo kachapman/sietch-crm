@@ -308,6 +308,25 @@ _bot_config_cache: dict | None = None
 _bot_config_cache_ts: float = 0
 _BOT_CONFIG_CACHE_TTL = 60  # seconds
 
+def _resolve_project_id(raw: str | int) -> int | None:
+    """Resolve a project identifier (id or project_number) to the internal opportunities.id.
+    
+    Accepts either:
+    - A database id (integer)
+    - A project_number (integer)
+    Returns the internal opportunities.id, or None if not found.
+    """
+    val = int(raw)
+    # First try as direct id
+    row = db.query_one("SELECT id FROM opportunities WHERE id = %s", (val,))
+    if row:
+        return val
+    # Try as project_number
+    row = db.query_one("SELECT id FROM opportunities WHERE project_number = %s", (val,))
+    if row:
+        return row["id"]
+    return None
+
 def _get_bot_token() -> str:
     """Return bot token from bot_config DB table (cached 60s), falling back to .env."""
     global _bot_token_cache, _bot_config_cache, _bot_config_cache_ts
@@ -2238,35 +2257,67 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         m = re.match(r"^/api/v2/projects/(\d+)$", api_path)
         if m:
-            self._handle_project_get(int(m.group(1)))
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_get(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/projects/(\d+)/tags$", api_path)
         if m:
-            self._handle_project_tags_get(int(m.group(1)))
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_tags_get(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/projects/(\d+)/custom-fields$", api_path)
         if m:
-            self._handle_project_custom_fields_get(int(m.group(1)))
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_custom_fields_get(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/projects/(\d+)/history$", api_path)
         if m:
-            self._handle_project_history_get(int(m.group(1)), qs)
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_history_get(opp_id, qs)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/projects/(\d+)/photos$", api_path)
         if m:
-            self._handle_project_photos_get(int(m.group(1)))
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_photos_get(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/projects/(\d+)/photo-folders$", api_path)
         if m:
-            self._handle_project_photo_folders_get(int(m.group(1)))
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_photo_folders_get(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/projects/(\d+)/history/(\d+)/replies$", api_path)
         if m:
-            self._handle_history_replies_get(int(m.group(1)), int(m.group(2)))
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_history_replies_get(opp_id, int(m.group(2)))
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/projects/(\d+)/documents$", api_path)
         if m:
-            self._handle_project_documents_get(int(m.group(1)))
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_documents_get(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
 
         # ── v2 API: Other resources ──
@@ -2943,43 +2994,83 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         m = re.match(r"^/api/v2/projects/(\d+)$", api_path)
         if m and method in ("PUT", "PATCH"):
-            self._handle_project_update(int(m.group(1)))
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_update(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/projects/(\d+)$", api_path)
         if m and method == "DELETE":
-            self._handle_project_delete(int(m.group(1)))
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_delete(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/projects/(\d+)/tags$", api_path)
         if m and method == "POST":
-            self._handle_project_tag_add(int(m.group(1)))
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_tag_add(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/projects/(\d+)/tags/(\d+)$", api_path)
         if m and method == "DELETE":
-            self._handle_project_tag_remove(int(m.group(1)), int(m.group(2)))
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_tag_remove(opp_id, int(m.group(2)))
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/projects/(\d+)/custom-fields$", api_path)
         if m and method == "PUT":
-            self._handle_project_custom_fields_update(int(m.group(1)))
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_custom_fields_update(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/projects/(\d+)/history$", api_path)
         if m and method == "POST":
-            self._handle_project_history_create(int(m.group(1)))
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_history_create(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/projects/(\d+)/photos$", api_path)
         if m and method == "POST":
-            self._handle_project_photo_upload(int(m.group(1)))
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_photo_upload(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/projects/(\d+)/photo-folders$", api_path)
         if m and method == "POST":
-            self._handle_project_photo_folder_add(int(m.group(1)))
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_photo_folder_add(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/projects/(\d+)/history/(\d+)/replies$", api_path)
         if m and method == "POST":
-            self._handle_history_reply_create(int(m.group(1)), int(m.group(2)))
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_history_reply_create(opp_id, int(m.group(2)))
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/projects/(\d+)/documents$", api_path)
         if m and method == "POST":
-            self._handle_project_document_upload(int(m.group(1)))
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_document_upload(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/documents/(\d+)/callback$", api_path)
         if m and method == "POST":
@@ -9460,12 +9551,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
             rows = db.query(
                 f"""SELECT o.id, o.title, o.bid_value, o.description, o.created_at,
-                           o.expected_close_date, o.is_private,
+                           o.expected_close_date, o.is_private, o.project_number,
                            s.title, c.first_name, c.last_name, c.company,
                            u.display_name, o.responsible_user_id, o.contact_id
                     FROM opportunities o
                     LEFT JOIN stages s ON o.stage_id = s.id
-                    LEFT JOIN contacts c ON o.contact_id = c.id
+                    LEFT JOIN contacts c ON c.id = o.contact_id
                     LEFT JOIN users u ON o.responsible_user_id = u.id
                     WHERE {' AND '.join(where)} ORDER BY o.created_at DESC LIMIT 100""",
                 (*params,),
@@ -9490,10 +9581,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     "created": r[4].isoformat() if r[4] else "",
                     "dueDate": r[5].isoformat() if r[5] else "",
                     "isPrivate": bool(r[6]),
-                    "stage": r[7] or "",
-                    "contact": f"{r[8] or ''} {r[9] or ''}".strip(),
-                    "contactCompany": r[10] or "",
-                    "responsible": r[11] or "",
+                    "project_number": r[7],
+                    "stage": r[8] or "",
+                    "contact": f"{r[9] or ''} {r[10] or ''}".strip(),
+                    "contactCompany": r[11] or "",
+                    "responsible": r[12] or "",
                 }
                 # Enrich with tags
                 try:

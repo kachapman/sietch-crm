@@ -761,7 +761,7 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
     d = deals[index]
     amt = _fmt_money(d.get("amount", 0), d.get("currency", ""))
     deal_id = d.get("id", "")
-    project_url = f"{_get_dashboard_url()}/project/{deal_id}" if deal_id else ""
+    project_url = f"{_get_dashboard_url()}/project/{d.get('project_number', deal_id)}" if deal_id else ""
     lines = [
         _esc(d["title"]),
         "─" * 30,
@@ -867,7 +867,7 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
 def format_project_info(deal: dict) -> str:
     """Format all deal fields and user fields for employee Project Info view."""
     deal_id = deal.get("id", "")
-    project_url = f"{_get_dashboard_url()}/project/{deal_id}" if deal_id else ""
+    project_url = f"{_get_dashboard_url()}/project/{deal.get('project_number', deal_id)}" if deal_id else ""
     lines = [
         f"<b>{_esc(deal.get('title', 'Deal'))}</b> — Project Info",
         "─" * 30,
@@ -951,7 +951,7 @@ def main() -> None:
             keyboard.append([InlineKeyboardButton(title, callback_data=f"sel:{deal_id}")])
         return InlineKeyboardMarkup(keyboard) if keyboard else None
 
-    def _build_deal_detail_keyboard(deal_id: int, is_employee: bool, phone: str = "", address: str = "") -> InlineKeyboardMarkup:
+    def _build_deal_detail_keyboard(deal_id: int, is_employee: bool, phone: str = "", address: str = "", project_number: int = 0) -> InlineKeyboardMarkup:
         rows: list[list[InlineKeyboardButton]] = []
         if is_employee:
             rows.append([
@@ -969,7 +969,7 @@ def main() -> None:
             if action_row:
                 rows.append(action_row)
         if deal_id:
-            project_url = f"{_get_dashboard_url()}/project/{deal_id}"
+            project_url = f"{_get_dashboard_url()}/project/{project_number or deal_id}"
             rows.append([
                 InlineKeyboardButton("🔗", url=project_url),
                 InlineKeyboardButton("🔍 New Search", callback_data="act:home"),
@@ -1199,7 +1199,7 @@ def main() -> None:
             phone = deal.get("contactPhone") or deal.get("contactMobile") or ""
             address = deal.get("address") or ""
             _last_viewed_project[chat_id] = deal_id
-            keyboard = _build_deal_detail_keyboard(deal_id, emp, phone=phone, address=address)
+            keyboard = _build_deal_detail_keyboard(deal_id, emp, phone=phone, address=address, project_number=deal.get("project_number", 0))
             await query.edit_message_text(msg, parse_mode="HTML", reply_markup=keyboard)
             return
 
@@ -1474,7 +1474,7 @@ def main() -> None:
                         deal_id = deals[idx].get("id") or deals[idx].get("ID")
                         phone = deals[idx].get("contactPhone") or deals[idx].get("contactMobile") or ""
                         address = deals[idx].get("address") or ""
-                        kb = _build_deal_detail_keyboard(deal_id, emp, phone=phone, address=address) if deal_id else None
+                        kb = _build_deal_detail_keyboard(deal_id, emp, phone=phone, address=address, project_number=deals[idx].get("project_number", 0)) if deal_id else None
                         await _reply_html(update, msg, reply_markup=kb)
                     else:
                         search = _last_search.get(chat_id, "")
@@ -1495,7 +1495,7 @@ def main() -> None:
                     deal_id = deals[0].get("id") or deals[0].get("ID")
                     phone = deals[0].get("contactPhone") or deals[0].get("contactMobile") or ""
                     address = deals[0].get("address") or ""
-                    kb = _build_deal_detail_keyboard(deal_id, is_employee, phone=phone, address=address) if deal_id else None
+                    kb = _build_deal_detail_keyboard(deal_id, is_employee, phone=phone, address=address, project_number=deals[0].get("project_number", 0)) if deal_id else None
                 else:
                     kb = _build_search_results_keyboard(deals)
                 await _reply_html(update, msg, reply_markup=kb)
