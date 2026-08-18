@@ -29028,6 +29028,7 @@ function switchAdminTab(tab) {
       loadBotCustomersFromServer().then(() => {
         if (typeof renderBotCustomerMappings === "function") renderBotCustomerMappings();
         if (typeof populateBotBroadcastDropdown === "function") populateBotBroadcastDropdown();
+        if (typeof initBotDocPush === "function") initBotDocPush();
       });
     }
     if (typeof loadBotSettings === "function") loadBotSettings();
@@ -29040,7 +29041,6 @@ function switchAdminTab(tab) {
         if (typeof populateBotCustomersCategorySelect === "function") populateBotCustomersCategorySelect();
       });
     }
-    if (typeof initBotDocPush === "function") initBotDocPush();
   }
   if (tab === "branding") {
     populateBrandingForm();
@@ -32592,8 +32592,8 @@ function initBotDocPush() {
   const selected = $("#bot-doc-selected");
   const recipient = $("#bot-doc-recipient");
   const sendBtn = $("#bot-doc-send-btn");
-  const docStatus = $("#bot-doc-status");
-  if (!pickBtn) return;
+  if (!pickBtn || pickBtn._docPushBound) return;
+  pickBtn._docPushBound = true;
 
   // Populate recipient dropdown from broadcast mappings
   if (recipient) {
