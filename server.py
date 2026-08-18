@@ -9916,6 +9916,34 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             })
             return
 
+        if api_path == "/api/bot/notification-by-message":
+            raw_chat = (qs.get("chatId") or [""])[0]
+            raw_msg = (qs.get("messageId") or [""])[0]
+            if not raw_chat or not raw_msg:
+                _json_response(self, 400, {"error": "chatId and messageId are required"})
+                return
+            try:
+                row = db.query_one(
+                    """SELECT n.id AS notification_id, n.opportunity_id, o.title AS project_title
+                       FROM telegram_notification_log tnl
+                       JOIN notifications n ON n.id = tnl.notification_id
+                       LEFT JOIN opportunities o ON o.id = n.opportunity_id
+                       WHERE tnl.chat_id = %s AND tnl.message_id = %s""",
+                    (int(raw_chat), int(raw_msg)),
+                )
+                if row:
+                    _json_response(self, 200, {
+                        "notificationId": row["notification_id"],
+                        "opportunityId": row["opportunity_id"],
+                        "projectTitle": row.get("project_title") or "Unknown Project",
+                    })
+                else:
+                    _json_response(self, 404, {"error": "Notification not found"})
+            except Exception:
+                logger.exception("Failed to look up notification by message")
+                _json_response(self, 500, {"error": "Internal error"})
+            return
+
         self.send_error(404)
 
     def _handle_bot_api_post(self, method: str) -> None:
@@ -10109,37 +10137,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 logger.exception("Failed to send Telegram document")
                 _json_response(self, 500, {"error": str(exc)})
-            return
-
-        if api_path == "/api/bot/notification-by-message":
-            if not bot_token or auth_header != f"Bearer {bot_token}":
-                _json_response(self, 403, {"error": "Forbidden"})
-                return
-            chat_id = _qp.get("chatId", [""])[0]
-            message_id = _qp.get("messageId", [""])[0]
-            if not chat_id or not message_id:
-                _json_response(self, 400, {"error": "chatId and messageId are required"})
-                return
-            try:
-                row = db.query_one(
-                    """SELECT n.id AS notification_id, n.opportunity_id, o.title AS project_title
-                       FROM telegram_notification_log tnl
-                       JOIN notifications n ON n.id = tnl.notification_id
-                       LEFT JOIN opportunities o ON o.id = n.opportunity_id
-                       WHERE tnl.chat_id = %s AND tnl.message_id = %s""",
-                    (int(chat_id), int(message_id)),
-                )
-                if row:
-                    _json_response(self, 200, {
-                        "notificationId": row["notification_id"],
-                        "opportunityId": row["opportunity_id"],
-                        "projectTitle": row.get("project_title") or "Unknown Project",
-                    })
-                else:
-                    _json_response(self, 404, {"error": "Notification not found"})
-            except Exception:
-                logger.exception("Failed to look up notification by message")
-                _json_response(self, 500, {"error": "Internal error"})
             return
 
         # ── Bot: task-done ───────────────────────────────────────────────

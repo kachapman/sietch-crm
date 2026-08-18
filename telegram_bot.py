@@ -1452,7 +1452,7 @@ def main() -> None:
                 if resp.status_code == 200:
                     await _reply_html(
                         update,
-                        f"\u2705 <b>Note added</b>\nProject: {_escape_html(project_title)}",
+                        f"\u2705 <b>Note added</b>\nProject: {_esc(project_title)}",
                     )
                 else:
                     await _reply_html(update, "Failed to add note. Please try again.")
