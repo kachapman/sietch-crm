@@ -316,7 +316,10 @@ def _resolve_project_id(raw: str | int) -> int | None:
     - A project_number (integer)
     Returns the internal opportunities.id, or None if not found.
     """
-    val = int(raw)
+    try:
+        val = int(raw)
+    except (ValueError, TypeError):
+        return None
     # First try as direct id
     row = db.query_one("SELECT id FROM opportunities WHERE id = %s", (val,))
     if row:

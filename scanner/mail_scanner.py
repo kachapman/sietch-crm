@@ -252,8 +252,18 @@ def _execute_custom_behavior(
                 result["dry_run_detail"] = f"Notify {len(user_ids)} users via {method}"
             else:
                 # Insert notifications for each user
+                # Fetch project_number for link construction
+                project_number = None
+                if deal_id:
+                    try:
+                        pn_row = db.query_one("SELECT project_number FROM opportunities WHERE id = %s", (deal_id,))
+                        if pn_row:
+                            project_number = pn_row.get("project_number") or pn_row[0] if isinstance(pn_row, dict) else pn_row[0]
+                    except Exception:
+                        pass
+                link_id = project_number or deal_id
                 for uid in user_ids:
-                    payload = {"title": title, "link": f"/project/{deal_id}" if deal_id else None}
+                    payload = {"title": title, "link": f"/project/{link_id}" if link_id else None}
                     db.execute(
                         """INSERT INTO notifications (user_id, message, type, payload, created_at)
                            VALUES (%s, %s, 'email_linked', %s::jsonb, NOW())""",
@@ -295,7 +305,8 @@ def _execute_custom_behavior(
                     # Notify user if configured
                     notify_uid = config.get("notify_user_id")
                     if notify_uid:
-                        payload = {"title": f"New deal created: {title}", "link": f"/project/{new_deal['id']}"}
+                        deal_pn = new_deal.get("project_number") or new_deal["id"]
+                        payload = {"title": f"New deal created: {title}", "link": f"/project/{deal_pn}"}
                         db.execute(
                             """INSERT INTO notifications (user_id, message, type, payload, created_at)
                                VALUES (%s, %s, 'deal_created', %s::jsonb, NOW())""",

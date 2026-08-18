@@ -566,10 +566,6 @@ const state = {
   eventLog: [],             // persistent event log (loaded from localStorage)
 };
 
-function crmOpportunityUrl(id) {
-  return "/project/" + id;
-}
-
 function crmProjectUrl(projectNumber) {
   return "/project/" + projectNumber;
 }

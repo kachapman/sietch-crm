@@ -259,13 +259,13 @@ def _get_branding() -> dict[str, Any]:
 
 
 def _format_email_notification(notification: dict, project_title: str, actor_name: str,
-                                project_id: int | None = None) -> tuple[str | None, str | None]:
+                                project_id: int | None = None, project_number: int | None = None) -> tuple[str | None, str | None]:
     """Build branded HTML email from notification. Returns (subject, html) or (None, None)."""
     branding = _get_branding()
     header_color = branding.get("email_header_color") or branding.get("primary_color") or "#3b82f6"
     company = branding.get("company_name") or "Sietch CRM"
     footer = branding.get("email_footer_text") or "Sietch CRM — Confidential"
-    link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
+    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
 
     ntype = notification.get("type")
     if ntype == "note_tagged":
@@ -466,7 +466,7 @@ def _process_pending_notifications() -> int:
 
         # ── Email channel ──
         if not row.get("email_sent"):
-            _process_email(notification_id, user_id, row, project_title, actor_name, project_id)
+            _process_email(notification_id, user_id, row, project_title, actor_name, project_id, project_number)
             if row.get("email_sent"):
                 sent_count += 1
 
@@ -505,7 +505,8 @@ def _process_telegram(notification_id: int, user_id: int, row: dict,
 
 
 def _process_email(notification_id: int, user_id: int, row: dict,
-                    project_title: str, actor_name: str, project_id: int | None) -> None:
+                    project_title: str, actor_name: str, project_id: int | None,
+                    project_number: int | None = None) -> None:
     """Handle email delivery for a single notification."""
     email_pref = _get_email_pref(user_id)
     if email_pref != "immediate":
@@ -517,7 +518,7 @@ def _process_email(notification_id: int, user_id: int, row: dict,
         _mark_email_sent(notification_id)
         return
 
-    subject, html = _format_email_notification(row, project_title, actor_name, project_id)
+    subject, html = _format_email_notification(row, project_title, actor_name, project_id, project_number)
     if not subject or not html:
         _mark_email_sent(notification_id)
         return
