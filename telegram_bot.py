@@ -1023,7 +1023,6 @@ def main() -> None:
                     "  /tasks  — open tasks\n"
                     "  /my_projects — your projects\n"
                     "  /help   — all commands",
-                    reply_markup=_build_deal_detail_keyboard(0, is_employee=True),
                 )
                 await update.message.reply_text(
                     "Use the buttons below for quick access:",
