@@ -95,6 +95,31 @@ def _fmt_money(amount: float, currency: str) -> str:
     return f"{sym}{amount:,.2f}"
 
 
+async def _get_project_label(project_id: int, chat_id: int = 0) -> str:
+    """Get project name from cache or server. Returns 'Name (#num)' or '#num' fallback."""
+    # Try cache first
+    for d in _last_deals.get(chat_id, []):
+        if (d.get("id") or d.get("ID")) == project_id:
+            name = d.get("title", "")
+            return f"<b>{_esc(name)}</b>" if name else f"#{project_id}"
+    # Fetch from server
+    try:
+        resp = await _get(f"/api/v2/projects/{project_id}")
+        if resp:
+            name = resp.get("title", "")
+            num = resp.get("projectNumber") or resp.get("project_number") or ""
+            if name:
+                label = f"<b>{_esc(name)}</b>"
+                if num:
+                    label += f" (#{num})"
+                return label
+            if num:
+                return f"#{num}"
+    except Exception:
+        pass
+    return f"#{project_id}"
+
+
 def _fmt_date(iso_str: str) -> str:
     if not iso_str:
         return ""
@@ -1568,7 +1593,10 @@ def main() -> None:
                 if (d.get("id") or d.get("ID")) == project_id:
                     proj_name = d.get("title", "")
                     break
-            proj_label = f"<b>{_esc(proj_name)}</b>" if proj_name else f"project #{project_id}"
+            if not proj_name:
+                proj_label = await _get_project_label(project_id, chat_id)
+            else:
+                proj_label = f"<b>{_esc(proj_name)}</b>"
             # Send confirmation to the chat
             # Note: we can't reply to the media group directly, so we send a new message
             try:
@@ -1758,7 +1786,10 @@ def main() -> None:
                         if (d.get("id") or d.get("ID")) == project_id:
                             proj_name = d.get("title", "")
                             break
-                    proj_label = f"<b>{_esc(proj_name)}</b>" if proj_name else f"project #{project_id}"
+                    if not proj_name:
+                        proj_label = await _get_project_label(project_id, chat_id)
+                    else:
+                        proj_label = f"<b>{_esc(proj_name)}</b>"
                     await _reply_html(
                         update,
                         f"\u2705 File uploaded to {proj_label}: <b>{_esc(file_name)}</b>",
