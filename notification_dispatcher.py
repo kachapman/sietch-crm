@@ -79,12 +79,12 @@ def _format_note_tagged(notification: dict, project_title: str, actor_name: str,
     snippet = _escape_html(payload.get("snippet") or "")
     link = f"{_get_dashboard_url()}/project/{project_id}" if project_id else ""
     return (
-        f"\U0001f4d8 <b>{_escape_html(actor_name)} tagged you on a note</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"\U0001f4c1 <b>Project:</b> {_escape_html(project_title)}\n\n"
-        + (f"{_truncate(snippet)}\n\n" if snippet else "\n")
-        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
-        + f"\u21a9\ufe0f Reply to add a note"
+        f"<b>{_escape_html(actor_name)} tagged you in a note</b>\n"
+        f"<b>Project:</b> <a href=\"{link}\">{_escape_html(project_title)}</a>\n"
+        f"───────────────────────\n"
+        + (f"<blockquote>{_truncate(snippet)}</blockquote>\n" if snippet else "\n")
+        + "───────────────────────\n"
+        f"<code>Reply to add a note.</code>"
     )
 
 
