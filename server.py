@@ -9670,7 +9670,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             rows = db.query(
                 """SELECT o.id, o.title, o.bid_value, s.title,
                           o.expected_close_date, o.created_at, o.contact_id,
-                          COALESCE(c.first_name || ' ' || c.last_name, c.company_name, '') as contact_name
+                          COALESCE(c.first_name || ' ' || c.last_name, c.company, '') as contact_name
                    FROM opportunities o
                    LEFT JOIN stages s ON o.stage_id = s.id
                    LEFT JOIN contacts c ON c.id = o.contact_id
@@ -9707,7 +9707,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             rows = db.query(
                 """SELECT o.id, o.title, o.bid_value, s.title,
                           o.expected_close_date, o.contact_id,
-                          COALESCE(c.first_name || ' ' || c.last_name, c.company_name, '') as contact_name
+                          COALESCE(c.first_name || ' ' || c.last_name, c.company, '') as contact_name
                    FROM opportunities o
                    LEFT JOIN stages s ON o.stage_id = s.id
                    LEFT JOIN contacts c ON c.id = o.contact_id
@@ -9744,7 +9744,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             rows = db.query(
                 """SELECT o.id, o.title, o.bid_value, s.title,
                           o.expected_close_date, o.contact_id,
-                          COALESCE(c.first_name || ' ' || c.last_name, c.company_name, '') as contact_name
+                          COALESCE(c.first_name || ' ' || c.last_name, c.company, '') as contact_name
                    FROM opportunities o
                    LEFT JOIN stages s ON o.stage_id = s.id
                    LEFT JOIN contacts c ON c.id = o.contact_id
