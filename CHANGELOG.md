@@ -2,7 +2,23 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
-## Telegram Bot Features + Fixes (2026-08-17)
+## Telegram Bot Major Fixes (2026-08-17)
+
+- **Document download fixed** — `query_one()` returns dict, not tuple. Fixed dict unpacking in `_handle_document_download`.
+- **SQL columns fixed** — 5 server endpoints (`/my_projects`, `/overdue`, `/due_this_week`, `/pipeline`, `/stats`) referenced nonexistent columns (`amount`, `currency`, `stage`, `due_date`). Changed to `bid_value`, JOIN stages for name, `expected_close_date`.
+- **`/today` command added** — Was advertised in help but handler never existed. Added `today_command` + `CommandHandler` registration.
+- **`/tag` fixed** — `get_tags()` expected `{"tags": [...]}` but server returns bare list. Added list type handling.
+- **`/quicknote` removed** — Broken (no `dealId` set, caused KeyError). Removed function, handler, help text, keyboard entry.
+- **`/stage` replaced with inline button** — Removed no-op `/stage` command. Added "📊 Stage" button to project detail keyboard. Stage selector shows available stages as inline buttons. Server endpoint updated to accept `stageId`.
+- **Task buttons under `/tasks`** — Each task gets "✅ Done" button + "➕ New Task" button at bottom. Task completion and creation via inline buttons.
+- **Reply keyboard fixed** — `update.message.text` is immutable in python-telegram-bot. Changed to dispatch commands directly. Updated layout: Employee = Tasks|Tag|Search|Help.
+- **File upload message** — Shows project name instead of raw DB ID number.
+- **Add note text** — Updated to mention file uploads: "Send the note text or file you want to add".
+- **Notification format** — Shows note content snippet + who tagged you (was generic "Note tagged you" without content).
+- **Reply to notification** — Added `chatId` to POST body so server can resolve note author.
+- **Bot settings pre-fill** — Bot auto-populates username/link from Telegram API on startup.
+- **Allow Customer Uploads** — Moved from Bot Settings to Push Document section.
+- **Files:** `server.py`, `telegram_bot.py`, `notification_dispatcher.py`, `public/index.html`, `public/app.js`.
 
 - **Bot settings pre-fill** — `_get_bot_config()` now fills empty token from env var fallback. Admin Bot tab shows saved settings.
 - **Portal mismatch fixed** — `verify_code` sends `portal: "sietch"` (not ONLYOFFICE_PORTAL_URL). Invite codes now work.

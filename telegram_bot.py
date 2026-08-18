@@ -202,6 +202,25 @@ async def _startup_init(application) -> None:
             _bg_config_version = cfg.get("configVersion", 0)
             _bg_bot_name = cfg.get("botName", "")
             logger.info("Initial config: version=%d botName=%s", _bg_config_version, _bg_bot_name)
+            # Auto-populate bot username and link if empty
+            if not cfg.get("botUsername") or not cfg.get("botLink"):
+                try:
+                    me = application.bot_data.get("me")
+                    if not me:
+                        import httpx as _httpx
+                        resp = await _httpx.AsyncClient(timeout=10).get(
+                            f"https://api.telegram.org/bot{TOKEN}/getMe"
+                        )
+                        me = resp.json().get("result", {})
+                    username = me.get("username", "")
+                    if username:
+                        await _post("/api/v2/admin/bot-settings", {
+                            "botUsername": f"@{username}",
+                            "botLink": f"https://t.me/{username}",
+                        })
+                        logger.info("Auto-populated bot username: @%s", username)
+                except Exception as e:
+                    logger.debug("Could not auto-populate bot username: %s", e)
     except Exception:
         pass
     asyncio.create_task(_heartbeat_loop(), name="bot-heartbeat")
@@ -242,6 +261,8 @@ async def get_categories() -> list[dict] | None:
 
 async def get_tags() -> list[dict] | None:
     result = await _get("/api/bot/tags")
+    if isinstance(result, list):
+        return [{"tag": t} for t in result]
     if isinstance(result, dict) and "tags" in result:
         return result["tags"]
     return None
@@ -656,8 +677,6 @@ HELP_TEXT_EMPLOYEE = (
     "  /recent    — recent activity (7 days)\n"
     "  /team      — team members\n"
     "  /tag       — list projects by tag\n"
-    "  /quicknote — add a quick note\n"
-    "  /stage     — change project stage\n"
     "  /search    — search projects\n"
     "  /reset_password — reset dashboard password\n"
     "  /help      — this message\n"
@@ -891,8 +910,9 @@ def main() -> None:
         rows: list[list[InlineKeyboardButton]] = []
         if is_employee:
             rows.append([
-                InlineKeyboardButton("📋 Project Info", callback_data=f"act:info:{deal_id}"),
-                InlineKeyboardButton("📝 Add Note", callback_data=f"act:note:{deal_id}"),
+                InlineKeyboardButton("📋 Info", callback_data=f"act:info:{deal_id}"),
+                InlineKeyboardButton("📊 Stage", callback_data=f"act:stage:{deal_id}"),
+                InlineKeyboardButton("📝 Note", callback_data=f"act:note:{deal_id}"),
             ])
             action_row: list[InlineKeyboardButton] = []
             if phone:
@@ -918,7 +938,7 @@ def main() -> None:
         if is_employee:
             keyboard = [
                 [KeyboardButton("Tasks"), KeyboardButton("Tag")],
-                [KeyboardButton("Quick Note"), KeyboardButton("Help")],
+                [KeyboardButton("Search"), KeyboardButton("Help")],
             ]
         else:
             keyboard = [
@@ -1074,6 +1094,24 @@ def main() -> None:
             await query.edit_message_text("Send a project name to search.")
             return
 
+        if data.startswith("tdone:"):
+            try:
+                task_id = int(data[6:])
+            except (ValueError, IndexError):
+                await query.edit_message_text("Invalid task.")
+                return
+            resp = await _post("/api/bot/task-done", {"chatId": chat_id, "taskId": task_id})
+            if resp and resp.get("ok"):
+                await query.edit_message_text(f"✅ Task completed: {_esc(resp.get('title', ''))}")
+            else:
+                await query.edit_message_text("Failed to complete task.")
+            return
+
+        if data == "newtask":
+            await _reply_html(update, "Send the task title. It will be assigned to you.")
+            _pending_note[chat_id] = {"step": "awaiting_new_task"}
+            return
+
         if data.startswith("sel:"):
             try:
                 deal_id = int(data[4:])
@@ -1125,7 +1163,7 @@ def main() -> None:
                 return
             _pending_note[chat_id] = {"dealId": deal_id, "step": "awaiting_text"}
             await query.message.reply_text(
-                "Send the note text you want to add for this project.\n"
+                "Send the note text or file you want to add for this project.\n"
                 "You can cancel by sending /cancel."
             )
             return
@@ -1148,6 +1186,41 @@ def main() -> None:
             msg = format_project_info(deal)
             _last_viewed_project[chat_id] = deal_id
             await query.message.reply_text(msg, parse_mode="HTML")
+            return
+
+        if data.startswith("act:stage:"):
+            try:
+                deal_id = int(data[10:])
+            except (ValueError, IndexError):
+                await query.edit_message_text("Invalid selection.")
+                return
+            resp = await _get("/api/v2/stages")
+            if not resp:
+                await query.edit_message_text("Could not load stages.")
+                return
+            stages = resp if isinstance(resp, list) else resp.get("stages", [])
+            if not stages:
+                await query.edit_message_text("No stages found.")
+                return
+            _last_viewed_project[chat_id] = deal_id
+            buttons = [[InlineKeyboardButton(s.get("title", ""), callback_data=f"setstage:{deal_id}:{s.get('id', '')}")] for s in stages]
+            await query.edit_message_text(
+                f"Select a new stage for this project:",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
+
+        if data.startswith("setstage:"):
+            parts = data.split(":")
+            if len(parts) != 3:
+                return
+            deal_id = int(parts[1])
+            stage_id = int(parts[2])
+            resp = await _post("/api/bot/stage", {"chatId": chat_id, "opportunityId": deal_id, "stageId": stage_id})
+            if resp and resp.get("ok"):
+                await query.edit_message_text(f"✅ Stage updated to: {resp.get('stage', 'Unknown')}")
+            else:
+                await query.edit_message_text("Failed to update stage.")
             return
 
         if data.startswith("cat:"):
@@ -1193,14 +1266,26 @@ def main() -> None:
             elif text == "Tag" and is_emp:
                 await tag_command(update, _ctx)
                 return
-            elif text == "Quick Note" and is_emp:
-                await quicknote_command(update, _ctx)
-                return
             elif text == "Search":
                 await _reply_html(update, "Send a project name to search.")
                 return
             elif text == "Help":
                 await help_command(update, _ctx)
+                return
+
+            # ── Pending new task flow ──
+            pending_task = _pending_note.get(chat_id)
+            if pending_task and pending_task.get("step") == "awaiting_new_task":
+                title = text.strip()
+                if title:
+                    resp = await _post("/api/bot/task-create", {"chatId": chat_id, "title": title})
+                    if resp and resp.get("ok"):
+                        await _reply_html(update, f"✅ Task created: <b>{_esc(title)}</b>")
+                    else:
+                        await _reply_html(update, "Failed to create task.")
+                else:
+                    await _reply_html(update, "Please provide a task title.")
+                del _pending_note[chat_id]
                 return
 
             # ── Pending note flow ──
@@ -1359,6 +1444,7 @@ def main() -> None:
                     headers=_auth_headers(),
                     json={
                         "opportunityId": opp_id,
+                        "chatId": chat_id,
                         "content": content,
                         "categoryId": 1,  # Note category
                     },
@@ -1445,9 +1531,15 @@ def main() -> None:
                     data=form_data,
                 )
                 if resp.status_code == 200 and resp.json().get("ok"):
+                    proj_name = ""
+                    for d in _last_deals.get(chat_id, []):
+                        if (d.get("id") or d.get("ID")) == project_id:
+                            proj_name = d.get("title", "")
+                            break
+                    proj_label = f"<b>{_esc(proj_name)}</b>" if proj_name else f"project #{project_id}"
                     await _reply_html(
                         update,
-                        f"\u2705 File uploaded to project {project_id}: <b>{_esc(file_name)}</b>",
+                        f"\u2705 File uploaded to {proj_label}: <b>{_esc(file_name)}</b>",
                     )
                     uname = (mapping.get("contactName") or "Employee")
                     asyncio.create_task(log_activity(chat_id, uname, "file_uploaded", file_name, project_id=project_id))
@@ -1471,6 +1563,38 @@ def main() -> None:
         else:
             await _reply_html(update, "Failed to generate a temporary password. Please try again later.")
 
+    async def today_command(update: Update, _ctx) -> None:
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if not mapping or not mapping.get("employee"):
+            await _reply_html(update, "Employee access required.")
+            return
+        resp = await _get("/api/bot/today", {"chatId": chat_id})
+        if resp is None:
+            await _reply_html(update, "Could not reach server.")
+            return
+        tasks = resp.get("tasks", [])
+        events = resp.get("events", [])
+        lines = ["<b>Today's Overview:</b>", ""]
+        if tasks:
+            lines.append("<b>Tasks:</b>")
+            for t in tasks:
+                lines.append(f"  \u2022 {_esc(t.get('title', 'Untitled'))}")
+            lines.append("")
+        if events:
+            lines.append("<b>Calendar:</b>")
+            for e in events:
+                title = e.get("title", "")
+                time_str = e.get("startTime", "")
+                lines.append(f"  \U0001f4c5 {_esc(title)}" + (f" at {_esc(time_str)}" if time_str else ""))
+            lines.append("")
+        if not tasks and not events:
+            lines.append("Nothing scheduled for today.")
+        msg = "\n".join(lines)
+        if len(msg) > 4000:
+            msg = _truncate_html(msg, 4000)
+        await _reply_html(update, msg)
+
     async def tasks_command(update: Update, _ctx) -> None:
         chat_id = update.effective_chat.id
         mapping = await get_mapping(chat_id)
@@ -1485,6 +1609,7 @@ def main() -> None:
             await _reply_html(update, "No open tasks assigned to you.")
             return
         lines = [f"<b>Your open tasks</b> ({len(resp)}):", ""]
+        buttons = []
         for i, t in enumerate(resp, 1):
             due = ""
             if t.get("dueDate"):
@@ -1493,7 +1618,11 @@ def main() -> None:
             lines.append(f"{i}. <b>{_esc(t['title'])}</b>{due}{proj}")
             if t.get("description"):
                 lines.append(f"   <i>{_esc(t['description'][:80])}</i>")
-        await _reply_html(update, "\n".join(lines))
+            tid = t.get("id", "")
+            if tid:
+                buttons.append([InlineKeyboardButton(f"✅ Done: {t['title'][:30]}", callback_data=f"tdone:{tid}")])
+        buttons.append([InlineKeyboardButton("➕ New Task", callback_data="newtask")])
+        await _reply_html(update, "\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
 
     async def task_done_command(update: Update, _ctx) -> None:
         chat_id = update.effective_chat.id
@@ -1692,35 +1821,13 @@ def main() -> None:
             lines.append(f"\U0001f464 <b>{_esc(m.get('displayName', ''))}</b> — {_esc(m.get('email', ''))}")
         await _reply_html(update, "\n".join(lines))
 
-    async def quicknote_command(update: Update, _ctx) -> None:
-        chat_id = update.effective_chat.id
-        mapping = await get_mapping(chat_id)
-        if not mapping or not mapping.get("employee"):
-            await _reply_html(update, "Employee access required.")
-            return
-        text = (update.message.text or "").strip()
-        parts = text.split(maxsplit=1)
-        if len(parts) < 2:
-            await _reply_html(update, "Usage: /quicknote &lt;note text&gt;")
-            return
-        _pending_note[chat_id] = {"step": "awaiting_text"}
-        update.message.text = parts[1]
-        await handle_message(update, _ctx)
-
-    async def stage_command(update: Update, _ctx) -> None:
-        chat_id = update.effective_chat.id
-        mapping = await get_mapping(chat_id)
-        if not mapping or not mapping.get("employee"):
-            await _reply_html(update, "Employee access required.")
-            return
-        await _reply_html(update, "Send a project name to change its stage, or reply to a project message with /stage &lt;new stage&gt;.")
-
     async def search_command(update: Update, _ctx) -> None:
         await _reply_html(update, "Send a project name to search across all projects.")
 
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("today", today_command))
     app.add_handler(CommandHandler("tag", tag_command))
     app.add_handler(CommandHandler("reset_password", reset_password_command))
     app.add_handler(CommandHandler("tasks", tasks_command))
@@ -1734,8 +1841,6 @@ def main() -> None:
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("recent", recent_command))
     app.add_handler(CommandHandler("team", team_command))
-    app.add_handler(CommandHandler("quicknote", quicknote_command))
-    app.add_handler(CommandHandler("stage", stage_command))
     app.add_handler(CommandHandler("search", search_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.REPLY & ~filters.COMMAND, handle_reply))

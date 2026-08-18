@@ -72,13 +72,12 @@ def _escape_html(text: str) -> str:
 
 def _format_note_tagged(notification: dict, project_title: str, actor_name: str, project_id: int | None = None) -> str:
     payload = notification.get("payload") or {}
-    msg = _escape_html(notification.get("message") or "")
+    snippet = _escape_html(payload.get("snippet") or "")
     link = f"{DASHBOARD_URL}/project/{project_id}" if project_id else ""
     return (
-        f"\U0001f4cb <b>Note tagged you</b>\n\n"
-        f"Project: <b>{_escape_html(project_title)}</b>\n"
-        f"By: {_escape_html(actor_name)}\n\n"
-        f"{_truncate(msg)}\n\n"
+        f"\U0001f4d8 <b>{_escape_html(actor_name)} tagged you on a note</b>\n\n"
+        f"Project: <b>{_escape_html(project_title)}</b>\n\n"
+        + (f"{_truncate(snippet)}\n\n" if snippet else "")
         + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
         + f"\u21a9\ufe0f Reply to add a note"
     )

@@ -7900,7 +7900,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not row:
             self.send_error(404)
             return
-        opp_id, title, file_path, file_size, mime_type = row
+        file_path = row["file_path"]
+        title = row.get("title", "document")
+        mime_type = row.get("mime_type")
         full_path = ROOT / file_path
         if not full_path.exists():
             self.send_error(404)
@@ -9660,23 +9662,24 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             user_id = mapping.get("userId")
             rows = db.query(
-                """SELECT o.id, o.title, o.amount, o.currency, o.stage,
-                          o.due_date, o.created, o.contact_id,
+                """SELECT o.id, o.title, o.bid_value, s.title,
+                          o.expected_close_date, o.created_at, o.contact_id,
                           COALESCE(c.first_name || ' ' || c.last_name, c.company_name, '') as contact_name
                    FROM opportunities o
+                   LEFT JOIN stages s ON o.stage_id = s.id
                    LEFT JOIN contacts c ON c.id = o.contact_id
                    WHERE o.stage_type = 0 AND o.responsible_user_id = %s
-                   ORDER BY o.created DESC""",
+                   ORDER BY o.created_at DESC""",
                 (user_id,),
             )
             projects = []
             for r in rows:
                 projects.append({
                     "id": r[0], "title": r[1], "amount": float(r[2] or 0),
-                    "currency": r[3] or "USD", "stage": r[4] or "",
-                    "dueDate": r[5].isoformat() if r[5] else None,
-                    "created": r[6].isoformat() if r[6] else None,
-                    "contact": r[8] or "",
+                    "stage": r[3] or "",
+                    "dueDate": r[4].isoformat() if r[4] else None,
+                    "created": r[5].isoformat() if r[5] else None,
+                    "contact": r[7] or "",
                 })
             _json_response(self, 200, projects)
             return
@@ -9696,23 +9699,24 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             user_id = mapping.get("userId")
             rows = db.query(
-                """SELECT o.id, o.title, o.amount, o.currency, o.stage,
-                          o.due_date, o.contact_id,
+                """SELECT o.id, o.title, o.bid_value, s.title,
+                          o.expected_close_date, o.contact_id,
                           COALESCE(c.first_name || ' ' || c.last_name, c.company_name, '') as contact_name
                    FROM opportunities o
+                   LEFT JOIN stages s ON o.stage_id = s.id
                    LEFT JOIN contacts c ON c.id = o.contact_id
                    WHERE o.stage_type = 0 AND o.responsible_user_id = %s
-                     AND o.due_date < NOW() AND o.due_date IS NOT NULL
-                   ORDER BY o.due_date ASC""",
+                     AND o.expected_close_date < NOW() AND o.expected_close_date IS NOT NULL
+                   ORDER BY o.expected_close_date ASC""",
                 (user_id,),
             )
             projects = []
             for r in rows:
                 projects.append({
                     "id": r[0], "title": r[1], "amount": float(r[2] or 0),
-                    "currency": r[3] or "USD", "stage": r[4] or "",
-                    "dueDate": r[5].isoformat() if r[5] else None,
-                    "contact": r[7] or "",
+                    "stage": r[3] or "",
+                    "dueDate": r[4].isoformat() if r[4] else None,
+                    "contact": r[6] or "",
                 })
             _json_response(self, 200, projects)
             return
@@ -9732,22 +9736,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             user_id = mapping.get("userId")
             rows = db.query(
-                """SELECT o.id, o.title, o.amount, o.currency, o.stage,
-                          o.due_date, o.contact_id,
+                """SELECT o.id, o.title, o.bid_value, s.title,
+                          o.expected_close_date, o.contact_id,
                           COALESCE(c.first_name || ' ' || c.last_name, c.company_name, '') as contact_name
                    FROM opportunities o
+                   LEFT JOIN stages s ON o.stage_id = s.id
                    LEFT JOIN contacts c ON c.id = o.contact_id
                    WHERE o.stage_type = 0 AND o.responsible_user_id = %s
-                     AND o.due_date >= NOW()
-                     AND o.due_date < NOW() + INTERVAL '7 days'
-                   ORDER BY o.due_date ASC""",
+                     AND o.expected_close_date >= NOW()
+                     AND o.expected_close_date < NOW() + INTERVAL '7 days'
+                   ORDER BY o.expected_close_date ASC""",
                 (user_id,),
             )
             projects = []
             for r in rows:
                 projects.append({
                     "id": r[0], "title": r[1], "amount": float(r[2] or 0),
-                    "currency": r[3] or "USD", "stage": r[4] or "",
+                    "stage": r[3] or "",
                     "dueDate": r[5].isoformat() if r[5] else None,
                     "contact": r[7] or "",
                 })
@@ -9768,9 +9773,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 403, {"error": "Employee access required"})
                 return
             rows = db.query(
-                """SELECT stage, COUNT(*) as cnt, COALESCE(SUM(amount), 0) as total
-                   FROM opportunities WHERE stage_type = 0
-                   GROUP BY stage ORDER BY total DESC"""
+                """SELECT s.title, COUNT(*) as cnt, COALESCE(SUM(o.bid_value), 0) as total
+                   FROM opportunities o
+                   LEFT JOIN stages s ON o.stage_id = s.id
+                   WHERE o.stage_type = 0
+                   GROUP BY s.title ORDER BY total DESC"""
             )
             stages = [{"stage": r[0] or "Unknown", "count": r[1], "total": float(r[2])} for r in rows]
             _json_response(self, 200, stages)
@@ -9898,8 +9905,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 403, {"error": "Forbidden"})
                 return
             total = db.query_one("SELECT COUNT(*) as cnt FROM opportunities WHERE stage_type = 0")
-            total_value = db.query_one("SELECT COALESCE(SUM(amount), 0) as total FROM opportunities WHERE stage_type = 0")
-            closed_won = db.query_one("SELECT COUNT(*) as cnt FROM opportunities WHERE stage_type = 0 AND stage ILIKE '%won%'")
+            total_value = db.query_one("SELECT COALESCE(SUM(bid_value), 0) as total FROM opportunities WHERE stage_type = 0")
+            closed_won = db.query_one("""SELECT COUNT(*) as cnt FROM opportunities o JOIN stages s ON o.stage_id = s.id WHERE o.stage_type = 0 AND s.title ILIKE '%won%'""")
             open_tasks = db.query_one("SELECT COUNT(*) as cnt FROM tasks WHERE is_closed = FALSE")
             _json_response(self, 200, {
                 "totalProjects": total["cnt"] if total else 0,
@@ -10207,20 +10214,29 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             chat_id = payload.get("chatId")
             opp_id = payload.get("opportunityId") or payload.get("dealId")
             new_stage = str(payload.get("stage") or "").strip()
-            if not chat_id or not opp_id or not new_stage:
-                _json_response(self, 400, {"error": "chatId, opportunityId, and stage are required"})
+            stage_id = payload.get("stageId")
+            if not chat_id or not opp_id:
+                _json_response(self, 400, {"error": "chatId and opportunityId are required"})
                 return
             mapping = get_mapping_by_chat("sietch", int(chat_id))
             if not mapping or not mapping.get("employee"):
                 _json_response(self, 403, {"error": "Employee access required"})
                 return
-            stage_row = db.query_one("SELECT id FROM stages WHERE title ILIKE %s", (new_stage,))
-            if not stage_row:
-                _json_response(self, 400, {"error": f"Stage '{new_stage}' not found"})
+            if stage_id:
+                stage_row = db.query_one("SELECT id, title FROM stages WHERE id = %s", (int(stage_id),))
+            elif new_stage:
+                stage_row = db.query_one("SELECT id, title FROM stages WHERE title ILIKE %s", (new_stage,))
+            else:
+                _json_response(self, 400, {"error": "stage or stageId is required"})
                 return
-            db.execute("UPDATE opportunities SET stage = %s, stage_id = %s WHERE id = %s",
-                       (new_stage, stage_row["id"], int(opp_id)))
-            _json_response(self, 200, {"ok": True, "stage": new_stage})
+            if not stage_row:
+                _json_response(self, 400, {"error": f"Stage not found"})
+                return
+            stage_title = stage_row["title"] if isinstance(stage_row, dict) else stage_row[1]
+            stage_id_val = stage_row["id"] if isinstance(stage_row, dict) else stage_row[0]
+            db.execute("UPDATE opportunities SET stage_id = %s WHERE id = %s",
+                       (stage_id_val, int(opp_id)))
+            _json_response(self, 200, {"ok": True, "stage": stage_title})
             return
 
         # ── Bot: heartbeat ────────────────────────────────────────────────
