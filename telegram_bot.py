@@ -57,6 +57,7 @@ _last_employee: dict[int, bool] = {}
 _pending_note: dict[int, dict] = {}
 _last_viewed_project: dict[int, int] = {}  # chat_id → project_id for file uploads
 _pending_upload: dict[int, dict] = {}  # chat_id → {projectId, step}
+_pending_media: dict[str, dict] = {}  # media_group_id → {chat_id, project_id, files: []}
 
 # ── Helpers ──
 
@@ -1493,6 +1494,80 @@ def main() -> None:
             except Exception:
                 pass
 
+    async def _process_media_group(media_group_id: str) -> None:
+        """Process collected media group files after a short delay."""
+        await asyncio.sleep(2)  # Wait for all photos in the group
+        group = _pending_media.pop(media_group_id, None)
+        if not group:
+            return
+        chat_id = group["chat_id"]
+        project_id = group["project_id"]
+        files = group["files"]
+        mapping = group["mapping"]
+        if not project_id:
+            return
+        uname = (mapping.get("contactName") or "Employee")
+        uploaded = 0
+        for f in files:
+            try:
+                tg_token = TOKEN
+                url = f"https://api.telegram.org/bot{tg_token}/getFile?file_id={f['file_id']}"
+                async with httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.get(url)
+                    if resp.status_code != 200 or not resp.json().get("ok"):
+                        continue
+                    file_path = resp.json()["result"]["file_path"]
+                    dl_url = f"https://api.telegram.org/file/bot{tg_token}/{file_path}"
+                    file_resp = await client.get(dl_url, timeout=60)
+                    if file_resp.status_code != 200:
+                        continue
+                    file_data = file_resp.content
+                import io
+                files_payload = {"file": (f["file_name"], io.BytesIO(file_data), "application/octet-stream")}
+                form_data = {"oppId": str(project_id), "chatId": str(chat_id), "fileType": f["file_type"]}
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(
+                        f"{_get_dashboard_url()}/api/bot/upload",
+                        headers=_auth_headers(),
+                        files=files_payload,
+                        data=form_data,
+                    )
+                    if resp.status_code == 200 and resp.json().get("ok"):
+                        uploaded += 1
+            except Exception:
+                logger.exception("Failed to upload file in media group")
+        if uploaded:
+            # Create a lightweight history event
+            in_note_flow = _pending_note.get(chat_id, {}).get("step") == "awaiting_text"
+            if in_note_flow:
+                try:
+                    await _post("/api/bot/note", {
+                        "chatId": chat_id,
+                        "dealId": project_id,
+                        "content": f"<p>{_esc(uname)} added {uploaded} file(s) via Telegram</p>",
+                        "categoryId": 12,  # "Files are uploaded"
+                    })
+                except Exception:
+                    pass
+            proj_name = ""
+            for d in _last_deals.get(chat_id, []):
+                if (d.get("id") or d.get("ID")) == project_id:
+                    proj_name = d.get("title", "")
+                    break
+            proj_label = f"<b>{_esc(proj_name)}</b>" if proj_name else f"project #{project_id}"
+            # Send confirmation to the chat
+            # Note: we can't reply to the media group directly, so we send a new message
+            try:
+                from telegram import Bot
+                bot = Bot(token=TOKEN)
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"\u2705 {uploaded} file(s) uploaded to {proj_label}",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+
     async def handle_reply(update: Update, _ctx) -> None:
         """Handle replies to notification messages — post note on project."""
         if not update.message or not update.message.reply_to_message:
@@ -1563,13 +1638,47 @@ def main() -> None:
         mapping = await get_mapping(chat_id)
         if not mapping or not mapping.get("employee"):
             return  # silently ignore non-employees
+
+        msg = update.message
+
+        # ── Media group handling (multiple photos at once) ──
+        media_group_id = getattr(msg, "media_group_id", None)
+        if media_group_id:
+            if media_group_id not in _pending_media:
+                _pending_media[media_group_id] = {
+                    "chat_id": chat_id,
+                    "project_id": _last_viewed_project.get(chat_id),
+                    "files": [],
+                    "mapping": mapping,
+                }
+            # Add this photo to the group
+            if msg.photo:
+                file_id = msg.photo[-1].file_id
+                _pending_media[media_group_id]["files"].append({
+                    "file_id": file_id,
+                    "file_name": f"photo_{chat_id}_{file_id[:8]}.jpg",
+                    "file_type": "photo",
+                })
+            elif msg.document:
+                file_id = msg.document.file_id
+                mime = msg.document.mime_type or ""
+                _pending_media[media_group_id]["files"].append({
+                    "file_id": file_id,
+                    "file_name": msg.document.file_name or f"doc_{chat_id}_{file_id[:8]}",
+                    "file_type": "photo" if mime.startswith("video/") else "document",
+                })
+            # Process group after a short delay (collect all photos)
+            if media_group_id not in _pending_media or len(_pending_media[media_group_id]["files"]) == 1:
+                asyncio.create_task(_process_media_group(media_group_id))
+            return
+
+        # ── Single file upload ──
         # Determine project ID
         project_id = _last_viewed_project.get(chat_id) or _pending_upload.get(chat_id, {}).get("projectId")
         if not project_id:
             await _reply_html(update, "Select a project first (search for it), then send the file.")
             return
         # Determine file info
-        msg = update.message
         if msg.photo:
             file_id = msg.photo[-1].file_id
             file_name = f"photo_{chat_id}_{file_id[:8]}.jpg"
@@ -1584,6 +1693,10 @@ def main() -> None:
                 file_type = "document"
         else:
             return
+
+        # Check if we're in note flow — upload to gallery AND create history event
+        in_note_flow = _pending_note.get(chat_id, {}).get("step") == "awaiting_text"
+
         # Check file size
         cfg_resp = await _get("/api/v2/admin/bot-settings")
         max_mb = 20
@@ -1638,6 +1751,17 @@ def main() -> None:
                     )
                     uname = (mapping.get("contactName") or "Employee")
                     asyncio.create_task(log_activity(chat_id, uname, "file_uploaded", file_name, project_id=project_id))
+                    # If in note flow, create a history event and continue
+                    if in_note_flow:
+                        try:
+                            await _post("/api/bot/note", {
+                                "chatId": chat_id,
+                                "dealId": project_id,
+                                "content": f"<p>{_esc(uname)} added a file via Telegram: {_esc(file_name)}</p>",
+                                "categoryId": 12,  # "Files are uploaded"
+                            })
+                        except Exception:
+                            pass
                 else:
                     err = resp.json().get("error", "Upload failed") if resp.status_code < 500 else "Server error"
                     await _reply_html(update, f"Upload failed: {_esc(err)}")

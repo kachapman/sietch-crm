@@ -5384,9 +5384,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     # ── Users ───────────────────────────────────────────────────────────────
 
     def _handle_users_get(self) -> None:
-        user = _require_auth(self)
-        if not user:
-            return
+        # Accept either session auth or bot token auth
+        bot_token = _get_bot_token()
+        auth_header = self.headers.get("Authorization", "").strip()
+        if not (bot_token and auth_header == f"Bearer {bot_token}"):
+            user = _require_auth(self)
+            if not user:
+                return
         rows = db.query(
             """SELECT id, email, display_name, first_name, last_name, is_admin, is_active,
                       avatar_url, role, twofa_method, created_at, last_login, must_change_password
