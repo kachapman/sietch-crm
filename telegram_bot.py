@@ -59,6 +59,21 @@ _last_viewed_project: dict[int, int] = {}  # chat_id → project_id for file upl
 _pending_upload: dict[int, dict] = {}  # chat_id → {projectId, step}
 _pending_media: dict[str, dict] = {}  # media_group_id → {chat_id, project_id, files: []}
 
+_MIME_MAP = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+    ".pdf": "application/pdf", ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".txt": "text/plain", ".csv": "text/csv",
+}
+
+def _guess_mime(filename: str) -> str:
+    import os as _os
+    ext = _os.path.splitext(filename)[1].lower()
+    return _MIME_MAP.get(ext, "application/octet-stream")
+
 # ── Helpers ──
 
 BOT_AUTH_HEADERS: dict[str, str] = {}
@@ -1522,7 +1537,7 @@ def main() -> None:
                         continue
                     file_data = file_resp.content
                 import io
-                files_payload = {"file": (f["file_name"], io.BytesIO(file_data), "application/octet-stream")}
+                files_payload = {"file": (f["file_name"], io.BytesIO(file_data), _guess_mime(f["file_name"]))}
                 form_data = {"oppId": str(project_id), "chatId": str(chat_id), "fileType": f["file_type"]}
                 async with httpx.AsyncClient(timeout=60) as client:
                     resp = await client.post(
@@ -1729,7 +1744,7 @@ def main() -> None:
         try:
             async with httpx.AsyncClient(timeout=60) as client:
                 import io
-                files = {"file": (file_name, io.BytesIO(file_data), "application/octet-stream")}
+                files = {"file": (file_name, io.BytesIO(file_data), _guess_mime(file_name))}
                 form_data = {"oppId": str(project_id), "chatId": str(chat_id), "fileType": file_type}
                 resp = await client.post(
                     f"{_get_dashboard_url()}/api/bot/upload",

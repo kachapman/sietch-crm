@@ -10365,11 +10365,44 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     save_path = storage_dir / save_name
                     with open(save_path, "wb") as f:
                         f.write(file_data)
+                    # Generate thumbnail and extract EXIF using Pillow
+                    thumb_path = None
+                    exif_data = None
+                    if Image:
+                        try:
+                            with Image.open(io.BytesIO(file_data)) as img:
+                                exif_data = _extract_exif(img)
+                                img.thumbnail((400, 400), Image.Resampling.LANCZOS)
+                                if img.mode in ("RGBA", "P"):
+                                    bg = Image.new("RGB", img.size, (255, 255, 255))
+                                    if img.mode == "P":
+                                        img = img.convert("RGBA")
+                                    bg.paste(img, mask=img.split()[3])
+                                    img = bg
+                                elif img.mode != "RGB":
+                                    img = img.convert("RGB")
+                                thumb_name = f"thumb_{save_name}"
+                                thumb_path = storage_dir / thumb_name
+                                img.save(thumb_path, "JPEG", quality=85)
+                        except Exception:
+                            logger.warning("Thumbnail/EXIF failed for %s", filename)
+                            thumb_path = None
+                    # Fix MIME type: detect from extension if generic
+                    if mime_type == "application/octet-stream":
+                        ext = os.path.splitext(filename)[1].lower()
+                        mime_type = {
+                            ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                            ".png": "image/png", ".gif": "image/gif",
+                            ".webp": "image/webp", ".bmp": "image/bmp",
+                        }.get(ext, "image/jpeg")
                     # Insert into project_photos
                     file_id = db.insert_returning(
-                        """INSERT INTO project_photos (opportunity_id, filename, file_path, file_size, mime_type, uploaded_by)
-                           VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
-                        (opp_id, filename, str(save_path.relative_to(DATA_DIR)), len(file_data), mime_type, mapping.get("userId")),
+                        """INSERT INTO project_photos (opportunity_id, filename, file_path, file_size, mime_type, exif_data, thumbnail_path, uploaded_by)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                        (opp_id, filename, str(save_path.relative_to(ROOT)), len(file_data), mime_type,
+                         json.dumps(exif_data) if exif_data else None,
+                         str(thumb_path.relative_to(ROOT)) if thumb_path else None,
+                         mapping.get("userId")),
                     )
                     _json_response(self, 200, {"ok": True, "fileId": file_id, "filename": filename, "type": "photo"})
                 else:
@@ -10385,7 +10418,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     file_id = db.insert_returning(
                         """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id)
                            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
-                        (filename, str(save_path.relative_to(DATA_DIR)), len(file_data), mime_type, mapping.get("userId"), opp_id),
+                        (filename, str(save_path.relative_to(ROOT)), len(file_data), mime_type, mapping.get("userId"), opp_id),
                     )
                     _json_response(self, 200, {"ok": True, "fileId": file_id, "filename": filename, "type": "document"})
                 # Log activity
