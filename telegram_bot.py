@@ -992,6 +992,27 @@ def main() -> None:
             keyboard.append(row)
         return InlineKeyboardMarkup(keyboard)
 
+    def _build_user_picker_keyboard(selected_users: list[int], all_users: list[dict]) -> InlineKeyboardMarkup:
+        """Build multi-select keyboard for notification user picker."""
+        keyboard: list[list[InlineKeyboardButton]] = []
+        row: list[InlineKeyboardButton] = []
+        for u in all_users:
+            uid = u.get("id", 0)
+            name = u.get("displayName") or u.get("email") or f"User {uid}"
+            if len(name) > 18:
+                name = name[:15] + "..."
+            prefix = "✅ " if uid in selected_users else ""
+            row.append(InlineKeyboardButton(f"{prefix}{name}", callback_data=f"notify_toggle:{uid}"))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+        # Done button
+        count = len(selected_users)
+        keyboard.append([InlineKeyboardButton(f"✅ Done ({count} selected)", callback_data="notify_done")])
+        return InlineKeyboardMarkup(keyboard)
+
     async def _reply_html(update: Update, text: str, reply_markup: InlineKeyboardMarkup | None = None) -> None:
         """Send a message in HTML mode, falling back to plain text if Telegram rejects it."""
         try:
@@ -1234,15 +1255,80 @@ def main() -> None:
             category_id = int(data[4:])
             deal_id = pending["dealId"]
             text = pending["text"]
+            # Store category and move to user selection step
+            pending["categoryId"] = category_id
+            pending["step"] = "awaiting_notify"
+            pending["notifyUsers"] = []
+            # Fetch all CRM users for the picker
+            all_users = await _get("/api/v2/users") or []
+            # Filter out the current user and customers
+            current_user_id = None
+            mapping = await get_mapping(chat_id)
+            if mapping and mapping.get("userId"):
+                current_user_id = int(mapping["userId"])
+            picker_users = [u for u in all_users if u.get("isActive") and u.get("id") != current_user_id]
+            if not picker_users:
+                # No users to notify — submit immediately
+                result = await _post("/api/bot/note", {
+                    "chatId": chat_id,
+                    "dealId": deal_id,
+                    "content": text,
+                    "categoryId": category_id,
+                })
+                del _pending_note[chat_id]
+                if result and result.get("ok"):
+                    await query.edit_message_text("✅ Note added!")
+                else:
+                    await query.edit_message_text("❌ Failed to add note.")
+                return
+            # Store users for the picker
+            pending["pickerUsers"] = picker_users
+            keyboard = _build_user_picker_keyboard([], picker_users)
+            await query.edit_message_text(
+                "Who should be notified?",
+                reply_markup=keyboard,
+            )
+            return
+
+        if data.startswith("notify_toggle:"):
+            pending = _pending_note.get(chat_id)
+            if not pending or pending.get("step") != "awaiting_notify":
+                return
+            try:
+                uid = int(data[13:])
+            except (ValueError, IndexError):
+                return
+            selected = pending.get("notifyUsers", [])
+            if uid in selected:
+                selected.remove(uid)
+            else:
+                selected.append(uid)
+            pending["notifyUsers"] = selected
+            picker_users = pending.get("pickerUsers", [])
+            keyboard = _build_user_picker_keyboard(selected, picker_users)
+            await query.edit_message_reply_markup(keyboard)
+            return
+
+        if data == "notify_done":
+            pending = _pending_note.get(chat_id)
+            if not pending or pending.get("step") != "awaiting_notify":
+                return
+            deal_id = pending["dealId"]
+            text = pending["text"]
+            category_id = pending["categoryId"]
+            notify_users = pending.get("notifyUsers", [])
             result = await _post("/api/bot/note", {
                 "chatId": chat_id,
                 "dealId": deal_id,
                 "content": text,
                 "categoryId": category_id,
+                "notifyUserList": notify_users,
             })
             del _pending_note[chat_id]
             if result and result.get("ok"):
-                await query.edit_message_text("✅ Note added!")
+                count = len(notify_users)
+                suffix = f" — {count} user(s) notified" if count else ""
+                await query.edit_message_text(f"✅ Note added!{suffix}")
                 mapping = await get_mapping(chat_id)
                 uname = (mapping.get("contactName") or mapping.get("nickname") or "User") if mapping else "User"
                 asyncio.create_task(log_activity(chat_id, uname, "note_added", f"deal={deal_id}", project_id=deal_id))
@@ -1436,11 +1522,13 @@ def main() -> None:
         notification_id = data.get("notificationId")
         opp_id = data.get("opportunityId")
         project_title = data.get("projectTitle", "Unknown Project")
+        actor_user_id = data.get("actorUserId")
         if not notification_id or not opp_id:
             return
 
-        # Post note to project
+        # Post note to project — notify the original tagger
         content = update.message.text
+        notify_list = [actor_user_id] if actor_user_id else []
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(
@@ -1451,6 +1539,7 @@ def main() -> None:
                         "chatId": chat_id,
                         "content": content,
                         "categoryId": 10,  # Note category (ID 10 in history_categories)
+                        "notifyUserList": notify_list,
                     },
                 )
                 if resp.status_code == 200:

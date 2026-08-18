@@ -9930,7 +9930,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             try:
                 row = db.query_one(
-                    """SELECT n.id AS notification_id, n.opportunity_id, o.title AS project_title
+                    """SELECT n.id AS notification_id, n.opportunity_id, n.actor_user_id,
+                              o.title AS project_title
                        FROM telegram_notification_log tnl
                        JOIN notifications n ON n.id = tnl.notification_id
                        LEFT JOIN opportunities o ON o.id = n.opportunity_id
@@ -9941,6 +9942,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     _json_response(self, 200, {
                         "notificationId": row["notification_id"],
                         "opportunityId": row["opportunity_id"],
+                        "actorUserId": row["actor_user_id"],
                         "projectTitle": row.get("project_title") or "Unknown Project",
                     })
                 else:
@@ -9985,6 +9987,32 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                    VALUES (%s, %s, %s, %s) RETURNING id""",
                 (int(opp_id), category_id, content, int(created_by) if created_by else None),
             )
+            # Process notifyUserList (same as web endpoint)
+            notify_list = payload.get("notifyUserList") or []
+            for uid in notify_list:
+                try:
+                    db.execute(
+                        "INSERT INTO history_notify_users (event_id, user_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                        (event_id, int(uid)),
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if notify_list and category_id in (1, 8, 10):
+                import re as _re
+                snippet = _re.sub(r'<[^>]+>', '', content)[:120].strip()
+                for uid in notify_list:
+                    try:
+                        db.execute(
+                            """INSERT INTO notifications (user_id, type, opportunity_id, actor_user_id, message, payload)
+                               SELECT %s, 'note_tagged', %s, %s,
+                                      u.display_name || ' tagged you on ' || p.title,
+                                      jsonb_build_object('event_id', %s, 'event_category', 'note', 'snippet', %s)
+                               FROM users u, opportunities p WHERE p.id = %s AND u.id = %s""",
+                            (int(uid), int(opp_id), int(created_by) if created_by else None,
+                             event_id, snippet, int(opp_id), int(created_by) if created_by else None),
+                        )
+                    except Exception:
+                        pass
             _json_response(self, 200, {"ok": True, "eventId": event_id})
             return
 
