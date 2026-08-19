@@ -32641,7 +32641,8 @@ function initBotDocPush() {
     sendBtn.addEventListener("click", async () => {
       if (!_botDocSelected || !recipient || !recipient.value) return;
       sendBtn.disabled = true;
-      if (docStatus) docStatus.textContent = "Sending…";
+      const statusEl = document.getElementById("bot-doc-status");
+      if (statusEl) statusEl.textContent = "Sending…";
       try {
         const resp = await fetch("/api/v2/admin/bot/send-document", {
           method: "POST",
@@ -32655,21 +32656,23 @@ function initBotDocPush() {
         });
         const data = await resp.json();
         if (data.ok) {
-          if (docStatus) docStatus.textContent = "✅ Sent!";
+          if (statusEl) statusEl.textContent = "✅ Sent!";
           _botDocSelected = null;
           if (selected) { selected.innerHTML = ""; selected.classList.add("hidden"); }
           if ($("#bot-doc-caption")) $("#bot-doc-caption").value = "";
           recipient.value = "";
           sendBtn.disabled = true;
         } else {
-          if (docStatus) docStatus.textContent = "❌ " + (data.error || "Failed");
+          if (statusEl) statusEl.textContent = "❌ " + (data.error || "Failed");
           sendBtn.disabled = false;
         }
       } catch (e) {
-        if (docStatus) docStatus.textContent = "❌ Network error";
+        const statusEl2 = document.getElementById("bot-doc-status");
+        if (statusEl2) statusEl2.textContent = "❌ Network error";
         sendBtn.disabled = false;
       }
-      setTimeout(() => { if (docStatus) docStatus.textContent = ""; }, 5000);
+      const statusEl3 = document.getElementById("bot-doc-status");
+      setTimeout(() => { if (statusEl3) statusEl3.textContent = ""; }, 5000);
     });
   }
 }
