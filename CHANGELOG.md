@@ -2,7 +2,46 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
-## Telegram Bot Major Fixes (2026-08-17)
+## Telegram Bot Revamp — Complete (2026-08-18)
+
+**Bot commands:**
+- `/today` added (was advertised but never implemented)
+- `/tag` fixed (server returns list, not dict)
+- `/quicknote` removed (broken — no dealId)
+- `/stage` removed, replaced with inline "📊 Stage" button on project detail
+- Task buttons under `/tasks` output (✅ Done + ➕ New Task)
+- Reply keyboard: Employee = Tasks|Tag|Search|Help
+
+**Notifications:**
+- Clean professional format (no emojis, bold headers, clickable project links)
+- User notification selection on note add (multi-select of all CRM users)
+- Reply to notification notifies original tagger
+
+**Document push to customer:**
+- Browser document picker (same as email attachments)
+- Sends via Telegram Bot API `sendDocument`
+- Fixed routing bug (endpoint was unreachable in wrong handler)
+
+**Project URLs:**
+- All URLs now use `project_number` (user-facing #1192) not database `id`
+- `_resolve_project_id()` accepts both id and project_number
+- 19 server routes updated, 3 bot URL sites, 10 notification formatters, 10 email formatters
+
+**Photo upload:**
+- Thumbnails generated (400x400 JPEG, same as web UI)
+- `file_path` base fixed (`relative_to(DATA_DIR)` → `relative_to(ROOT)`)
+- MIME type detection from file extension
+- Media group handling for multiple photos
+
+**Other fixes:**
+- SQL column fixes (amount→bid_value, stage→JOIN stages, due_date→expected_close_date, company_name→company)
+- Activity log filter fixed (direct action values)
+- Heartbeats excluded by default
+- Mobile layout: admin console full viewport, inline grids collapse
+- Bot settings auto-populate username/link from Telegram API
+- Reply keyboard buttons dispatch commands directly (Message.text immutable)
+
+**Files:** `server.py`, `telegram_bot.py`, `notification_dispatcher.py`, `public/app.js`, `public/index.html`, `public/styles.css`, `scanner/mail_scanner.py`.
 
 - **Document download fixed** — `query_one()` returns dict, not tuple. Fixed dict unpacking in `_handle_document_download`.
 - **SQL columns fixed** — 5 server endpoints (`/my_projects`, `/overdue`, `/due_this_week`, `/pipeline`, `/stats`) referenced nonexistent columns (`amount`, `currency`, `stage`, `due_date`). Changed to `bid_value`, JOIN stages for name, `expected_close_date`.
@@ -19,33 +58,6 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Bot settings pre-fill** — Bot auto-populates username/link from Telegram API on startup.
 - **Allow Customer Uploads** — Moved from Bot Settings to Push Document section.
 - **Files:** `server.py`, `telegram_bot.py`, `notification_dispatcher.py`, `public/index.html`, `public/app.js`.
-
-- **Bot settings pre-fill** — `_get_bot_config()` now fills empty token from env var fallback. Admin Bot tab shows saved settings.
-- **Portal mismatch fixed** — `verify_code` sends `portal: "sietch"` (not ONLYOFFICE_PORTAL_URL). Invite codes now work.
-- **Title switching** — Added `id="bot-section-title"` to HTML. Title now updates between "Invite Telegram User" / "Invite Employee".
-- **Category + broadcast dropdowns populated** — Were dead code (called only in unreachable `openBotCustomersModal`). Now populated on bot tab switch.
-- **Category default** — Resets to "All notes" when employee checkbox is checked.
-- **Text changes** — "Invite Customer" → "Invite Telegram User", "Employee access (view all deals)" → "Employee access (All Projects and Functions)".
-- **Broadcast "All linked users"** — New option in recipient dropdown sends to every linked user. Server handles `chatId: "all"` by iterating all mappings.
-- **Expanded rich text toolbar** — Bold, Italic, Underline, Strikethrough, Code, Link, Horizontal Rule (was 2 buttons, now 7).
-- **Document push to customer** — New admin UI section "Push Document" in bot tab. Search project documents, select recipient, optional caption, send via Telegram Bot API `sendDocument`. Server endpoint `POST /api/v2/admin/bot/send-document`.
-- **Project restriction for customer mappings** — New `allowedProjectIds` field on mapping. Admin can restrict a customer to specific project IDs via "Projects" button in Existing Mappings. Bot deals endpoint filters by allowed IDs. Empty = all projects (backward compatible).
-- **Activity log filter fixed** — Server now handles direct action values (was only hardcoded special cases). Heartbeats excluded by default.
-- **Bot status fixed** — `hb["created_at"]` dict access (was `hb[0]` KeyError). Naive datetime comparison fixed.
-- **Files:** `server.py`, `telegram_bot.py`, `crm_bot_store.py`, `public/app.js`, `public/index.html`, `public/styles.css`.
-
-## Telegram Bot Deployment Fixes (2026-08-17)
-
-- **Fixed 5 hyphenated bot command names** — Telegram rejects commands with hyphens. Renamed: `reset-password` → `reset_password`, `task-done` → `task_done`, `new-task` → `new_task`, `my-projects` → `my_projects`, `due-this-week` → `due_this_week`. Updated all CommandHandler registrations, help text, and inline usage strings.
-- **Added `python-telegram-bot` dependency** — required by `telegram_bot.py` but not in `requirements.txt` or installed in `.venv`.
-- **Added missing `.env` variables** — `DASHBOARD_URL=http://127.0.0.1:8766` (was defaulting to 8765, wrong port), `ONLYOFFICE_PORTAL_URL`, `TELEGRAM_BOT_TOKEN`. Updated `config.example.env` with documentation.
-- **Created systemd service file** — `docs/crm-telegram-bot.service` updated with correct paths (`/home/chapman-server/Projects/new-crm`), correct venv, removed stale `Requires=docker.service`, added `User=chapman-server`.
-- **Created `bot_config` + `bot_activity_log` tables** — migration 012 existed but was never run. Bot heartbeat now logs correctly; admin Bot tab shows "online" status.
-- **Added CRM user picker to Bot tab** — employee invite codes now link to a specific CRM user via `userId` field. New user search field appears when "Employee access" checkbox is checked. Notes and file uploads now have correct `created_by` attribution.
-- **Fixed restart button** — server now calls `systemctl restart crm-telegram-bot` (with fallback if systemctl unavailable). Bot config poll reduced from 5min to 60s; bot self-restarts via `os.execv()` when token changes.
-- **Fixed admin console mobile layout** — full viewport fill at 640px breakpoint, inline grids collapse to `1fr`, bot status bar wraps, admin content scrolls properly.
-- **Bot confirmed running and heartbeat working** — bot sends `POST /api/bot/heartbeat` every 60s, server returns 200 OK.
-- **Files:** `telegram_bot.py` (command names, config poll), `.env` (vars), `config.example.env` (docs), `docs/crm-telegram-bot.service` (systemd unit), `server.py` (restart endpoint, generate-code userId), `crm_bot_store.py` (userId propagation), `public/index.html` (user picker HTML), `public/app.js` (user picker JS), `public/styles.css` (mobile layout).
 
 ## Telegram Bot Overhaul — Phase 2K (2026-08-16)
 
