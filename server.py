@@ -2987,6 +2987,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/admin/bot-restart" and method == "POST":
             self._handle_admin_bot_restart()
             return
+        if api_path == "/api/v2/admin/bot/send-document" and method == "POST":
+            self._handle_bot_send_document()
+            return
         if api_path.startswith("/api/bot/"):
             self._handle_bot_api_post(method)
             return
@@ -9370,6 +9373,68 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             logger.exception("Failed to signal bot restart")
             _json_response(self, 500, {"error": "Failed to signal restart"})
 
+    def _handle_bot_send_document(self) -> None:
+        """POST /api/v2/admin/bot/send-document — send document to Telegram user."""
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        doc_id = payload.get("docId")
+        chat_id = payload.get("chatId")
+        caption = str(payload.get("caption") or "").strip()
+        if not doc_id or not chat_id:
+            _json_response(self, 400, {"error": "docId and chatId are required"})
+            return
+        try:
+            doc = db.query_one(
+                "SELECT id, title, file_path, mime_type, file_size, opportunity_id FROM project_documents WHERE id = %s AND is_deleted = FALSE",
+                (int(doc_id),),
+            )
+            if not doc:
+                _json_response(self, 404, {"error": "Document not found"})
+                return
+            file_path = doc.get("file_path", "")
+            if not file_path or not os.path.isfile(file_path):
+                _json_response(self, 404, {"error": "Document file not found on disk"})
+                return
+            file_size = os.path.getsize(file_path)
+            if file_size > 50 * 1024 * 1024:
+                _json_response(self, 400, {"error": "File exceeds 50 MB Telegram limit"})
+                return
+            import httpx as _httpx
+            bot_token = _get_bot_token()
+            if not bot_token:
+                _json_response(self, 500, {"error": "TELEGRAM_BOT_TOKEN not configured"})
+                return
+            url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+            file_title = doc.get("title", "document")
+            with open(file_path, "rb") as f:
+                resp = _httpx.post(
+                    url,
+                    data={"chat_id": chat_id, "caption": caption or file_title},
+                    files={"document": (file_title, f, doc.get("mime_type", "application/octet-stream"))},
+                    timeout=30,
+                )
+            data = resp.json()
+            if data.get("ok"):
+                try:
+                    db.execute(
+                        "INSERT INTO bot_activity_log (chat_id, user_name, action, detail, project_id) VALUES (%s, %s, 'document_sent', %s, %s)",
+                        (chat_id, user.get("display_name", ""), f"Sent {file_title}", doc.get("opportunity_id")),
+                    )
+                except Exception:
+                    pass
+                _json_response(self, 200, {"ok": True, "messageId": data["result"]["message_id"]})
+            else:
+                _json_response(self, 502, {"error": data.get("description", "Telegram API error")})
+        except Exception as exc:
+            logger.exception("Failed to send Telegram document")
+            _json_response(self, 500, {"error": str(exc)})
+
     def _handle_bot_customers_list(self) -> None:
         user = _require_admin(self)
         if not user:
@@ -10215,68 +10280,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
         # ── Bot: send document to Telegram user ───────────────────────
         if api_path == "/api/v2/admin/bot/send-document" and method == "POST":
-            user = _require_admin(self)
-            if not user:
-                return
-            try:
-                payload = json.loads(_read_body(self) or b"{}")
-            except json.JSONDecodeError:
-                _json_response(self, 400, {"error": "Invalid JSON body"})
-                return
-            doc_id = payload.get("docId")
-            chat_id = payload.get("chatId")
-            caption = str(payload.get("caption") or "").strip()
-            if not doc_id or not chat_id:
-                _json_response(self, 400, {"error": "docId and chatId are required"})
-                return
-            try:
-                # Look up document
-                doc = db.query_one(
-                    "SELECT id, title, file_path, mime_type, file_size FROM project_documents WHERE id = %s AND is_deleted = FALSE",
-                    (int(doc_id),),
-                )
-                if not doc:
-                    _json_response(self, 404, {"error": "Document not found"})
-                    return
-                file_path = doc.get("file_path", "")
-                if not file_path or not os.path.isfile(file_path):
-                    _json_response(self, 404, {"error": "Document file not found on disk"})
-                    return
-                file_size = os.path.getsize(file_path)
-                if file_size > 50 * 1024 * 1024:
-                    _json_response(self, 400, {"error": "File exceeds 50 MB Telegram limit"})
-                    return
-                # Send via Telegram Bot API
-                import httpx as _httpx
-                bot_token = _get_bot_token()
-                if not bot_token:
-                    _json_response(self, 500, {"error": "TELEGRAM_BOT_TOKEN not configured"})
-                    return
-                url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
-                file_title = doc.get("title", "document")
-                with open(file_path, "rb") as f:
-                    resp = _httpx.post(
-                        url,
-                        data={"chat_id": chat_id, "caption": caption or file_title},
-                        files={"document": (file_title, f, doc.get("mime_type", "application/octet-stream"))},
-                        timeout=30,
-                    )
-                data = resp.json()
-                if data.get("ok"):
-                    # Log activity
-                    try:
-                        db.execute(
-                            "INSERT INTO bot_activity_log (chat_id, user_name, action, detail, project_id) VALUES (%s, %s, 'document_sent', %s, %s)",
-                            (chat_id, user.get("display_name", ""), f"Sent {file_title}", doc.get("opportunity_id")),
-                        )
-                    except Exception:
-                        pass
-                    _json_response(self, 200, {"ok": True, "messageId": data["result"]["message_id"]})
-                else:
-                    _json_response(self, 502, {"error": data.get("description", "Telegram API error")})
-            except Exception as exc:
-                logger.exception("Failed to send Telegram document")
-                _json_response(self, 500, {"error": str(exc)})
+            self._handle_bot_send_document()
             return
 
         # ── Bot: task-done ───────────────────────────────────────────────
