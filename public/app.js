@@ -25541,7 +25541,6 @@ async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, 
   setOpportunityPreviewContext(id, null, group);
   titleEl.textContent = titleHint || "Project";
   body.innerHTML = '<p class="opp-preview-loading">Loading project…</p>';
-  setOpportunityPreviewCrmLink(id, oppData?.project_number);
   modal.classList.remove("hidden");
   updatePreviewModalBookmarkButton(id);
 
@@ -25550,6 +25549,7 @@ async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, 
     const resolvedGroup = group || findGroupForOpportunity(id);
     setOpportunityPreviewContext(id, data.opp, resolvedGroup);
     titleEl.textContent = data.opp.title || data.opp.Title || titleHint || `Project #${id}`;
+    setOpportunityPreviewCrmLink(id, data.opp.project_number);
 
     // Project number badge
     const existingBadge = titleEl.parentElement?.querySelector('.opp-project-number-badge');
