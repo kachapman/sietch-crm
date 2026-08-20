@@ -23139,15 +23139,49 @@ const HISTORY_ICON_DEFAULT = `<svg xmlns="http://www.w3.org/2000/svg" width="14"
 const HISTORY_ICON_CHAT = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" /><path d="M11.102 17.957c-3.204 -.307 -5.904 -2.294 -8.102 -5.957c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6a19.5 19.5 0 0 1 -.663 1.032" /><path d="M15 19l2 2l4 -4" /></svg>`;
 const HISTORY_ICON_PIN = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 4.5l-4 4l-4 1.5l-1.5 1.5l7 7l1.5 -1.5l1.5 -4l4 -4" /><path d="M9 15l-4.5 4.5" /><path d="M14.5 4l5.5 5.5" /></svg>`;
 
-function historyCategoryIconHtml(ev) {
-  const cat = historyEventCategoryLabel(ev).toLowerCase();
-  if (/\b(mail|email)\b/.test(cat)) return HISTORY_ICON_MAIL;
-  if (/\b(phone|call|voicemail)\b/.test(cat)) return HISTORY_ICON_PHONE;
-  if (/\b(text|sms)\b/.test(cat) || /\btext message\b/.test(cat)) return HISTORY_ICON_SMS;
-  if (/\b(meeting|appointment)\b/.test(cat)) return HISTORY_ICON_MEETING;
-  if (/\b(note|comment|event)\b/.test(cat)) return HISTORY_ICON_NOTE;
-  if (/\b(customer update)\b/.test(cat)) return HISTORY_ICON_CHAT;
-  if (/\bquick.?context\b/.test(cat)) return HISTORY_ICON_PIN;
+function historyCategoryIconHtml(catOrEv) {
+  let catObj = null;
+  let label = "";
+  if (catOrEv && typeof catOrEv === "object" && ("iconKey" in catOrEv || "icon_key" in catOrEv)) {
+    catObj = catOrEv;
+  } else if (catOrEv && typeof catOrEv === "object" && ("category" in catOrEv || "Category" in catOrEv)) {
+    const evCat = catOrEv.category ?? catOrEv.Category;
+    if (evCat && typeof evCat === "object" && ("iconKey" in evCat || "icon_key" in evCat)) {
+      catObj = evCat;
+    }
+    label = historyEventCategoryLabel(catOrEv).toLowerCase();
+  } else if (typeof catOrEv === "string") {
+    label = catOrEv.toLowerCase();
+  } else if (catOrEv) {
+    label = historyEventCategoryLabel(catOrEv).toLowerCase();
+  }
+
+  if (catObj) {
+    const iconKey = catObj.iconKey || catObj.icon_key || "note";
+    const iconStyle = catObj.iconStyle || catObj.icon_style || "stroke";
+    const color = catObj.color || "#6c757d";
+    const entry = HISTORY_CATEGORY_ICONS.find(i => i.key === iconKey);
+    if (entry) {
+      let svg = entry.svg;
+      if (iconStyle === "fill") {
+        svg = svg.replace(/stroke="currentColor"/g, `stroke="${escapeHtml(color)}"`)
+                 .replace(/fill="none"/g, `fill="${escapeHtml(color)}"`);
+      } else if (iconStyle === "accent") {
+        svg = svg.replace(/stroke="currentColor"/g, `stroke="${escapeHtml(color)}"`);
+      }
+      return svg;
+    }
+  }
+
+  if (label) {
+    if (/\b(mail|email)\b/.test(label)) return HISTORY_ICON_MAIL;
+    if (/\b(phone|call|voicemail)\b/.test(label)) return HISTORY_ICON_PHONE;
+    if (/\b(text|sms)\b/.test(label) || /\btext message\b/.test(label)) return HISTORY_ICON_SMS;
+    if (/\b(meeting|appointment)\b/.test(label)) return HISTORY_ICON_MEETING;
+    if (/\b(note|comment|event)\b/.test(label)) return HISTORY_ICON_NOTE;
+    if (/\b(customer update)\b/.test(label)) return HISTORY_ICON_CHAT;
+    if (/\bquick.?context\b/.test(label)) return HISTORY_ICON_PIN;
+  }
   return HISTORY_ICON_DEFAULT;
 }
 
@@ -24628,12 +24662,16 @@ function renderHistoryAttachmentsAside(parent, attachments) {
 function renderHistoryEventItem(ev) {
   const li = document.createElement("li");
   li.className = "opp-preview-history-item";
-  const itemCat = historyEventCategoryLabel(ev).toLowerCase();
-  if (itemCat.includes("customer update")) {
-    li.className += " opp-preview-history-item--customer-update";
+  const catId = historyEventCategoryId(ev);
+  const cat = (catId != null && state.historyCategories?.length)
+    ? state.historyCategories.find(c => Number(c.id ?? c.ID) === catId)
+    : null;
+  if (cat && cat.iconStyle === 'accent') {
+    li.classList.add('opp-preview-history-item--accent');
+    li.style.setProperty('--cat-accent-color', cat.color || '#2563eb');
   }
+  const itemCat = historyEventCategoryLabel(ev).toLowerCase();
   if (/\bquick.?context\b/.test(itemCat)) {
-    li.className += " opp-preview-history-item--quick-context";
     li.dataset.quickContext = "1";
   }
 
@@ -24649,7 +24687,7 @@ function renderHistoryEventItem(ev) {
 
   const icon = document.createElement("span");
   icon.className = "opp-preview-history-type-icon";
-  icon.innerHTML = historyCategoryIconHtml(ev);
+  icon.innerHTML = historyCategoryIconHtml(cat || ev);
   icon.setAttribute("aria-hidden", "true");
 
   const meta = document.createElement("div");
@@ -28492,6 +28530,8 @@ function openAdminConsoleModal() {
     bindAdminStages();
     bindAdminTags();
     bindAdminCustomFields();
+    bindAdminHistoryCats();
+    bindAdminTaskLabels();
     bindAlternateSmtp();
     bindAdminAutomation();
     // Sync buttons — real implementation
@@ -31572,8 +31612,7 @@ async function populateAdminStagesList(search = "") {
       const activeBadge = s.isActive === false ? '<span class="admin-customize-badge" style="color:var(--danger);">inactive</span>' : "";
       const countBadge = s.projectCount > 0 ? `<span class="admin-customize-badge">${s.projectCount} project${s.projectCount !== 1 ? 's' : ''}</span>` : "";
       return `<div class="admin-customize-row" data-stage-id="${s.id}">
-        <button class="admin-customize-reorder-btn" data-dir="up" data-stage-id="${s.id}" title="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
-        <button class="admin-customize-reorder-btn" data-dir="down" data-stage-id="${s.id}" title="Move down" ${i === stages.length - 1 ? 'disabled' : ''}>▼</button>
+        <span class="admin-customize-drag-handle" title="Drag to reorder">⠿</span>
         <span class="admin-customize-color-swatch" style="background:${escapeHtml(color)};"></span>
         <div class="admin-customize-row-info">
           <div class="admin-customize-row-label">${escapeHtml(s.title || "Stage")}</div>
@@ -31677,24 +31716,32 @@ function bindAdminStages() {
         } catch (e) { showToast("Failed to delete: " + (e.message || e), true); }
         return;
       }
-      const reorderBtn = e.target.closest(".admin-customize-reorder-btn");
-      if (reorderBtn) {
-        const id = parseInt(reorderBtn.dataset.stageId);
-        const dir = reorderBtn.dataset.dir;
+    });
+  }
+
+  const stagesList = document.getElementById("admin-stages-list");
+  if (stagesList && window.Sortable && !stagesList.dataset.sortableBound) {
+    stagesList.dataset.sortableBound = "1";
+    window.Sortable.create(stagesList, {
+      handle: ".admin-customize-drag-handle",
+      animation: 150,
+      ghostClass: "sortable-ghost",
+      chosenClass: "sortable-chosen",
+      onEnd: async (evt) => {
+        const ids = [...stagesList.querySelectorAll(".admin-customize-row")]
+          .map(row => parseInt(row.dataset.stageId)).filter(Boolean);
         try {
-          const data = await api("/api/v2/stages");
-          const stages = unwrap(data) || data || [];
-          const idx = stages.findIndex(s => s.id === id);
-          if (idx < 0) return;
-          const swapIdx = dir === "up" ? idx - 1 : idx + 1;
-          if (swapIdx < 0 || swapIdx >= stages.length) return;
-          const ids = stages.map(s => s.id);
-          [ids[idx], ids[swapIdx]] = [ids[swapIdx], ids[idx]];
-          await api("/api/v2/stages/reorder", { method: "POST", body: JSON.stringify({ ids }) });
-          await populateAdminStagesList($("#admin-stages-search")?.value.trim() || "");
+          await api("/api/v2/stages/reorder", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids }),
+          });
           if (typeof loadStages === "function") await loadStages();
-        } catch (e) { showToast("Failed to reorder: " + (e.message || e), true); }
-      }
+        } catch (e) {
+          showToast("Failed to reorder stages", true);
+          populateAdminStagesList(document.getElementById("admin-stages-search")?.value.trim() || "");
+        }
+      },
     });
   }
 }
@@ -31961,6 +32008,243 @@ function bindAdminCustomFields() {
       }
     });
   }
+}
+
+const HISTORY_CATEGORY_ICONS = [
+  { key: "note", label: "Note", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1 -2 -2V5a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z"/></svg>' },
+  { key: "comment", label: "Comment", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 20l1.3 -4.7a2 2 0 0 1 1.9 -1.3h5.4a2 2 0 0 1 1.9 1.3l1.3 4.7"/><path d="M21 11.5a3.5 3.5 0 0 0 -7 0v.5a3.5 3.5 0 0 0 7 0v-.5"/><path d="M3 11.5a3.5 3.5 0 0 0 7 0v.5a3.5 3.5 0 0 0 7 0v-.5"/><path d="M14 16l-2 2l2 2"/></svg>' },
+  { key: "call", label: "Call", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M5 4h4l2 5l-2.5 1.5a11 11 0 0 0 5 5l1.5 -2.5l5 2v4a2 2 0 0 1 -2 2a16 16 0 0 1 -15 -15a2 2 0 0 1 2 -2"/></svg>' },
+  { key: "meeting", label: "Meeting", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 0 -2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-10a2 2 0 0 0 -2 -2"/><path d="M16 21v-2a2 2 0 0 0 -2 -2h-8a2 2 0 0 0 -2 2v2"/><path d="M11 10a1 1 0 1 0 2 0a1 1 0 0 0 -2 0"/><path d="M16 7v4"/><path d="M8 7v4"/><path d="M16 11v4"/><path d="M8 11v4"/></svg>' },
+  { key: "email", label: "Email", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 7a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-10z"/><path d="M3 7l9 6l9 -6"/></svg>' },
+  { key: "sms", label: "Text Message", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M5 4h4l5 5v4.5a2.5 2.5 0 0 1 -2.5 2.5h-4.5a2.5 2.5 0 0 1 -2.5 -2.5v-6.5"/><path d="M15 14h4.5a2.5 2.5 0 0 1 2.5 2.5v6.5a2.5 2.5 0 0 1 -2.5 2.5h-10.5a2.5 2.5 0 0 1 -2.5 -2.5v-3.5"/></svg>' },
+  { key: "task", label: "Task", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 11l3 3l2 -2"/><path d="M9 5v-2a2 2 0 0 1 2 -2h6a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-6a2 2 0 0 1 -2 -2v-2"/></svg>' },
+  { key: "customer", label: "Customer Update", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M18 3a3 3 0 0 0 -3 3v12a3 3 0 0 0 3 3h1a3 3 0 0 0 3 -3v-12a3 3 0 0 0 -3 -3h-1"/><path d="M8 3a3 3 0 0 0 -3 3v12a3 3 0 0 0 3 3h1a3 3 0 0 0 3 -3v-12a3 3 0 0 0 -3 -3h-1"/></svg>' },
+  { key: "pin", label: "Pin", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 4.5l-4 4l-2 -0.5l-3 3l.5 2l3 -3l-0.5 -2l4 -4l-1 -1l3 -3l-2 -2z"/><path d="M9 15l-4.5 4.5"/><path d="M14.5 4l5.5 5.5"/></svg>' },
+  { key: "photo", label: "Photo", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 10l4.553 -2.276a1 1 0 0 1 1.447 .894v6.764a1 1 0 0 1 -1.447 .894l-4.553 -2.276v-4z"/><path d="M3 6a2 2 0 0 1 2 -2h8a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-8a2 2 0 0 1 -2 -2v-8z"/></svg>' },
+  { key: "document", label: "Document", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1 -2 -2V5a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z"/><path d="M9 9h1"/><path d="M9 13h6"/><path d="M9 17h3"/></svg>' },
+  { key: "upload", label: "Upload", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"/><path d="M7 9l5 -5l5 5"/><path d="M12 4l0 12"/></svg>' },
+  { key: "star", label: "Star", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 3l1.912 5.813a2 2 0 0 0 1.275 1.275l5.813 1.912l-5.813 1.912a2 2 0 0 0 -1.275 1.275l-1.912 5.812l-1.912 -5.812a2 2 0 0 0 -1.275 -1.275l-5.813 -1.912l5.813 -1.912a2 2 0 0 0 1.275 -1.275z"/></svg>' },
+  { key: "alert", label: "Alert", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M10.24 3.96a1 1 0 0 1 .724 -.956a10 10 0 1 1 -5.259 5.592"/><path d="M12 3l1.912 5.813a2 2 0 0 0 1.275 1.275l5.813 1.912l-5.813 1.912a2 2 0 0 0 -1.275 1.275l-1.912 5.812"/><path d="M12 9l.01 0"/><path d="M12 12l0 4"/></svg>' },
+  { key: "clock", label: "Clock", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"/><path d="M12 7v5l3 3"/></svg>' },
+  { key: "user", label: "User", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M8 7a4 4 0 1 0 8 0a4 4 0 0 0 -8 0"/><path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2"/></svg>' },
+  { key: "building", label: "Building", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 21v-14a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v14"/><path d="M9 21v-4a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v4"/><path d="M3 10h18"/><path d="M12 10v11"/></svg>' },
+  { key: "link", label: "Link", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 15l6 -6"/><path d="M11 9l-1.187 -1.187a2 2 0 0 1 2.828 0l2.828 2.829a2 2 0 0 1 0 2.828l-1.187 1.187"/><path d="M14.236 6.757a6 6 0 0 1 -8.486 8.485l-2.828 -2.829"/><path d="M21 15l-1.5 -1.5"/></svg>' },
+  { key: "tag", label: "Tag", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7.5 7.5a1 1 0 1 0 2 0a1 1 0 0 0 -2 0"/><path d="M12.002 21.485l-.702 -.701a12 12 0 0 1 -3.306 -8.157a12 12 0 0 1 3.306 -8.157l.701 -.7"/><path d="M21.79 12.002a12 12 0 0 1 -.288 8.157l-.702 .701a12 12 0 0 1 -3.306 -8.157a12 12 0 0 1 3.306 -8.157l.701 -.7"/><path d="M12.002 2.515l-.701 -.7a12 12 0 0 1 3.306 -8.157a12 12 0 0 1 3.306 8.157l-.702 .701"/><path d="M12.002 2.515l.701 .7a12 12 0 0 1 -3.306 8.157a12 12 0 0 1 3.306 8.157l.701 -.7"/></svg>' },
+  { key: "bookmark", label: "Bookmark", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M17 3l-10 0l0 16l5 -3.5l5 3.5l0 -16z"/></svg>' },
+];
+
+function renderIconGrid(containerId, selectedKey) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.innerHTML = HISTORY_CATEGORY_ICONS.map(icon => {
+    const selected = icon.key === selectedKey;
+    return `<button type="button" class="automation-icon-btn${selected ? " selected" : ""}" data-icon="${icon.key}" title="${icon.label}" style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:2px solid ${selected ? "var(--accent)" : "var(--border)"};border-radius:6px;background:${selected ? "rgba(59,130,246,0.1)" : "var(--surface)"};cursor:pointer;padding:4px;">${icon.svg}</button>`;
+  }).join("");
+  container.addEventListener("click", (e) => {
+    const btn = e.target.closest(".automation-icon-btn");
+    if (!btn) return;
+    container.querySelectorAll(".automation-icon-btn").forEach(b => {
+      b.style.borderColor = "var(--border)";
+      b.style.background = "var(--surface)";
+      b.classList.remove("selected");
+    });
+    btn.style.borderColor = "var(--accent)";
+    btn.style.background = "rgba(59,130,246,0.1)";
+    btn.classList.add("selected");
+  });
+}
+
+let _historyCatsCache = [];
+
+async function loadHistoryCats() {
+  try {
+    const data = await api("/api/v2/history-categories");
+    _historyCatsCache = Array.isArray(data) ? data : [];
+  } catch { _historyCatsCache = []; }
+  return _historyCatsCache;
+}
+
+function renderHistoryCatsList(filter) {
+  const list = document.getElementById("admin-history-cats-list");
+  if (!list) return;
+  const q = (filter || "").toLowerCase();
+  const items = _historyCatsCache.filter(c => !q || c.title.toLowerCase().includes(q));
+  if (!items.length) {
+    list.innerHTML = '<div style="padding:0.5rem;color:var(--muted);font-size:0.8rem;">No event note types found.</div>';
+    return;
+  }
+  list.innerHTML = items.map(cat => {
+    const color = cat.color || "#6c757d";
+    const sysBadge = cat.isSystem ? '<span class="admin-customize-badge">System</span>' : "";
+    return `<div class="admin-customize-row" data-cat-id="${cat.id}">
+      <span class="admin-customize-color-swatch" style="background:${escapeHtml(color)};"></span>
+      <div class="admin-customize-row-info">
+        <div class="admin-customize-row-label">${escapeHtml(cat.title)}</div>
+        <div class="admin-customize-row-meta">${cat.iconKey || "note"} · ${cat.iconStyle || "stroke"} ${sysBadge}</div>
+      </div>
+      <div class="admin-customize-row-actions">
+        <button class="btn btn-ghost" data-edit-cat="${cat.id}" title="Edit">✎</button>
+        ${cat.isSystem ? "" : `<button class="btn btn-ghost" data-delete-cat="${cat.id}" title="Delete">×</button>`}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function bindAdminHistoryCats() {
+  const search = document.getElementById("admin-history-cat-search");
+  if (search) {
+    let debounce;
+    search.addEventListener("input", () => { clearTimeout(debounce); debounce = setTimeout(() => renderHistoryCatsList(search.value), 250); });
+  }
+  const addBtn = document.getElementById("admin-add-history-cat");
+  if (addBtn) addBtn.addEventListener("click", () => {
+    document.getElementById("admin-history-cat-editing-id").value = "";
+    document.getElementById("admin-history-cat-title").value = "";
+    document.getElementById("admin-history-cat-color").value = "#6c757d";
+    renderIconGrid("admin-history-cat-icon-grid", "note");
+    document.querySelector('input[name="admin-history-cat-icon-style"][value="stroke"]').checked = true;
+    document.getElementById("admin-history-cat-form").classList.remove("hidden");
+    document.getElementById("admin-history-cat-title").focus();
+  });
+  document.getElementById("admin-history-cat-cancel")?.addEventListener("click", () => {
+    document.getElementById("admin-history-cat-form").classList.add("hidden");
+  });
+  document.getElementById("admin-history-cat-save")?.addEventListener("click", async () => {
+    const editingId = document.getElementById("admin-history-cat-editing-id").value;
+    const title = document.getElementById("admin-history-cat-title").value.trim();
+    if (!title) { showToast("Title is required", true); return; }
+    const color = document.getElementById("admin-history-cat-color").value;
+    const iconKey = document.querySelector("#admin-history-cat-icon-grid .automation-icon-btn.selected")?.dataset.icon || "note";
+    const iconStyle = document.querySelector('input[name="admin-history-cat-icon-style"]:checked')?.value || "stroke";
+    const body = { title, color, iconKey, iconStyle };
+    try {
+      if (editingId) {
+        await api(`/api/v2/history-categories/${editingId}`, { method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+      } else {
+        await api("/api/v2/history-categories", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+      }
+      document.getElementById("admin-history-cat-form").classList.add("hidden");
+      await loadHistoryCats();
+      renderHistoryCatsList(search?.value || "");
+      showToast(editingId ? "Category updated" : "Category created");
+    } catch (e) { showToast("Failed: " + (e.message || e), true); }
+  });
+  document.getElementById("admin-history-cats-list")?.addEventListener("click", async (e) => {
+    const editBtn = e.target.closest("[data-edit-cat]");
+    if (editBtn) {
+      const cat = _historyCatsCache.find(c => c.id === parseInt(editBtn.dataset.editCat));
+      if (!cat) return;
+      document.getElementById("admin-history-cat-editing-id").value = cat.id;
+      document.getElementById("admin-history-cat-title").value = cat.title;
+      document.getElementById("admin-history-cat-color").value = cat.color || "#6c757d";
+      renderIconGrid("admin-history-cat-icon-grid", cat.iconKey || "note");
+      const styleRadio = document.querySelector(`input[name="admin-history-cat-icon-style"][value="${cat.iconStyle || "stroke"}"]`);
+      if (styleRadio) styleRadio.checked = true;
+      document.getElementById("admin-history-cat-form").classList.remove("hidden");
+    }
+    const delBtn = e.target.closest("[data-delete-cat]");
+    if (delBtn) {
+      if (!confirm("Delete this event note type?")) return;
+      try {
+        await api(`/api/v2/history-categories/${delBtn.dataset.deleteCat}`, { method: "DELETE" });
+        await loadHistoryCats();
+        renderHistoryCatsList(search?.value || "");
+        showToast("Category deleted");
+      } catch (e) { showToast("Failed: " + (e.message || e), true); }
+    }
+  });
+}
+
+let _taskLabelsCache = [];
+
+async function loadTaskLabels() {
+  try {
+    const data = await api("/api/v2/task-labels");
+    _taskLabelsCache = Array.isArray(data) ? data : [];
+  } catch { _taskLabelsCache = []; }
+  return _taskLabelsCache;
+}
+
+function renderTaskLabelsList(filter) {
+  const list = document.getElementById("admin-task-labels-list");
+  if (!list) return;
+  const q = (filter || "").toLowerCase();
+  const items = _taskLabelsCache.filter(l => !q || l.title.toLowerCase().includes(q));
+  if (!items.length) {
+    list.innerHTML = '<div style="padding:0.5rem;color:var(--muted);font-size:0.8rem;">No task labels found.</div>';
+    return;
+  }
+  list.innerHTML = items.map(lbl => {
+    const color = lbl.color || "#6c757d";
+    return `<div class="admin-customize-row" data-label-id="${lbl.id}">
+      <span class="admin-customize-color-swatch" style="background:${escapeHtml(color)};"></span>
+      <div class="admin-customize-row-info">
+        <div class="admin-customize-row-label">${escapeHtml(lbl.title)}</div>
+      </div>
+      <div class="admin-customize-row-actions">
+        <button class="btn btn-ghost" data-edit-label="${lbl.id}" title="Edit">✎</button>
+        <button class="btn btn-ghost" data-delete-label="${lbl.id}" title="Delete">×</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function bindAdminTaskLabels() {
+  const search = document.getElementById("admin-task-label-search");
+  if (search) {
+    let debounce;
+    search.addEventListener("input", () => { clearTimeout(debounce); debounce = setTimeout(() => renderTaskLabelsList(search.value), 250); });
+  }
+  const addBtn = document.getElementById("admin-add-task-label");
+  if (addBtn) addBtn.addEventListener("click", () => {
+    document.getElementById("admin-task-label-editing-id").value = "";
+    document.getElementById("admin-task-label-title").value = "";
+    document.getElementById("admin-task-label-color").value = "#6c757d";
+    document.getElementById("admin-task-label-form").classList.remove("hidden");
+    document.getElementById("admin-task-label-title").focus();
+  });
+  document.getElementById("admin-task-label-cancel")?.addEventListener("click", () => {
+    document.getElementById("admin-task-label-form").classList.add("hidden");
+  });
+  document.getElementById("admin-task-label-save")?.addEventListener("click", async () => {
+    const editingId = document.getElementById("admin-task-label-editing-id").value;
+    const title = document.getElementById("admin-task-label-title").value.trim();
+    if (!title) { showToast("Title is required", true); return; }
+    const color = document.getElementById("admin-task-label-color").value;
+    const body = { title, color };
+    try {
+      if (editingId) {
+        await api(`/api/v2/task-labels/${editingId}`, { method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+      } else {
+        await api("/api/v2/task-labels", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+      }
+      document.getElementById("admin-task-label-form").classList.add("hidden");
+      await loadTaskLabels();
+      renderTaskLabelsList(search?.value || "");
+      showToast(editingId ? "Label updated" : "Label created");
+    } catch (e) { showToast("Failed: " + (e.message || e), true); }
+  });
+  document.getElementById("admin-task-labels-list")?.addEventListener("click", async (e) => {
+    const editBtn = e.target.closest("[data-edit-label]");
+    if (editBtn) {
+      const lbl = _taskLabelsCache.find(l => l.id === parseInt(editBtn.dataset.editLabel));
+      if (!lbl) return;
+      document.getElementById("admin-task-label-editing-id").value = lbl.id;
+      document.getElementById("admin-task-label-title").value = lbl.title;
+      document.getElementById("admin-task-label-color").value = lbl.color || "#6c757d";
+      document.getElementById("admin-task-label-form").classList.remove("hidden");
+    }
+    const delBtn = e.target.closest("[data-delete-label]");
+    if (delBtn) {
+      if (!confirm("Delete this task label?")) return;
+      try {
+        await api(`/api/v2/task-labels/${delBtn.dataset.deleteLabel}`, { method: "DELETE" });
+        await loadTaskLabels();
+        renderTaskLabelsList(search?.value || "");
+        showToast("Label deleted");
+      } catch (e) { showToast("Failed: " + (e.message || e), true); }
+    }
+  });
 }
 
 let _botCustomersDraft = null;
@@ -35542,10 +35826,7 @@ function openTaskPreviewModal(task, { isNew = false } = {}) {
         <label for="task-edit-repeat">Repeat</label>
         <select id="task-edit-repeat">${repeatOptions()}</select>
       </div>
-      <div class="field">
-        <label for="task-edit-labels">Labels (space-separated)</label>
-        <input type="text" id="task-edit-labels" value="${escapeHtml(task.labels || "")}" placeholder="urgent follow-up" />
-      </div>
+
       <div class="field">
         <label>Project</label>
         <div id="task-edit-project">
@@ -35555,6 +35836,17 @@ function openTaskPreviewModal(task, { isNew = false } = {}) {
           <input type="search" id="task-edit-project-search" placeholder="Search project to link…" autocomplete="off" />
           <div id="task-edit-project-results" class="contact-results hidden"></div>
         </div>
+      </div>
+      <div class="field">
+        <label for="task-edit-assignee">Assign To</label>
+        <select id="task-edit-assignee" class="task-edit-user-select">
+          <option value="">Unassigned</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="task-edit-labels">Labels</label>
+        <div class="task-edit-labels-grid" id="task-edit-labels-grid"></div>
+        <input type="text" id="task-edit-labels" value="${escapeHtml(task.labels || "")}" style="display:none;" />
       </div>
       <div class="field">
         <label>Checklist</label>
@@ -35580,6 +35872,55 @@ function openTaskPreviewModal(task, { isNew = false } = {}) {
     if ([...sel.options].some((o) => o.value === val)) sel.value = val;
   };
   setRepeatValue();
+
+  // Populate assignee dropdown and label checkboxes
+  (async () => {
+    try {
+      const [users, taskLabels] = await Promise.all([
+        api("/api/v2/users").catch(() => []),
+        api("/api/v2/task-labels").catch(() => []),
+      ]);
+      const sel = document.getElementById("task-edit-assignee");
+      if (sel && Array.isArray(users)) {
+        for (const u of users) {
+          const opt = document.createElement("option");
+          opt.value = u.id;
+          opt.textContent = u.name || u.email || `User ${u.id}`;
+          sel.appendChild(opt);
+        }
+        const current = task.responsibleUserId || task.responsible_user_id || "";
+        sel.value = current ? String(current) : "";
+      }
+      const grid = document.getElementById("task-edit-labels-grid");
+      if (grid && Array.isArray(taskLabels)) {
+        const currentLabels = (task.labels || "").split(/\s+/).filter(Boolean);
+        for (const lbl of taskLabels) {
+          const lblText = lbl.label || lbl.name || lbl;
+          const id = `lbl-${String(lbl.id || lblText).replace(/\s+/g, "-")}`;
+          const wrap = document.createElement("label");
+          wrap.className = "task-label-check";
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.value = lblText;
+          cb.id = id;
+          if (currentLabels.includes(lblText)) cb.checked = true;
+          cb.addEventListener("change", () => {
+            const checked = [...grid.querySelectorAll("input[type=checkbox]:checked")].map((c) => c.value);
+            const hidden = document.getElementById("task-edit-labels");
+            if (hidden) hidden.value = checked.join(" ");
+          });
+          wrap.appendChild(cb);
+          wrap.appendChild(document.createTextNode(" " + lblText));
+          grid.appendChild(wrap);
+        }
+        if (taskLabels.length === 0) {
+          grid.innerHTML = '<span class="task-label-none" style="color:var(--muted);font-size:0.8rem;">No labels defined</span>';
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to load users/labels for task editor", e);
+    }
+  })();
 
   const setError = (msg) => {
     const el = $("#task-edit-error");
@@ -35652,6 +35993,7 @@ function openTaskPreviewModal(task, { isNew = false } = {}) {
       remindAt,
       repeat: $("#task-edit-repeat")?.value || "none",
       labels: ($("#task-edit-labels")?.value || "").trim(),
+      responsibleUserId: parseInt(document.getElementById("task-edit-assignee")?.value) || null,
       opportunityId: _taskEditProjectId,
     };
   };

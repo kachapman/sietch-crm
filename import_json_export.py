@@ -3,7 +3,7 @@
 
 Imports: users (w/ external_user_id), stages, tags, custom field defs, contacts,
 opportunities (w/ stage/contact/responsible + tag attachments if present),
-tasks, history events (w/ category mapping).
+tasks, task_labels, history events (w/ category mapping).
 
 Usage:
     python import_json_export.py --source ./crm_export_json --db-host 127.0.0.1 ...
@@ -181,6 +181,32 @@ def _insert_users(conn, users: list[dict]) -> dict[str, int]:
     conn.commit()
     print(f"  users: {count}")
     return crm_to_v3
+
+
+def _insert_task_labels(conn, labels: list[dict]) -> int:
+    """Import task labels."""
+    if not labels:
+        return 0
+    cur = conn.cursor()
+    count = 0
+    for lb in labels:
+        if not isinstance(lb, dict):
+            continue
+        title = str(lb.get("title") or lb.get("name") or "").strip()
+        if not title:
+            continue
+        color = lb.get("color") or None
+        sort_order = int(lb.get("sort_order") or lb.get("sortOrder") or 0)
+        cur.execute(
+            """INSERT INTO task_labels (title, color, sort_order)
+               VALUES (%s, %s, %s)
+               ON CONFLICT (title) DO UPDATE SET color = EXCLUDED.color, sort_order = EXCLUDED.sort_order""",
+            (title, color, sort_order),
+        )
+        count += 1
+    conn.commit()
+    print(f"  task labels: {count}")
+    return count
 
 
 def _insert_contacts(conn, contacts: list[dict], user_map: dict) -> dict[str, int]:
@@ -380,7 +406,13 @@ def _insert_history_basic(conn, history: list[dict], opp_map: dict[str, int], us
             if row:
                 cat_id = row[0]
             else:
-                cur.execute("INSERT INTO history_categories (title, is_system) VALUES (%s, TRUE) RETURNING id", (cat_title,))
+                color = cat_data.get("display_color") or cat_data.get("color") if isinstance(cat_data, dict) else None
+                icon_key = (cat_data.get("icon_key", "note") if isinstance(cat_data, dict) else "note") or "note"
+                icon_style = (cat_data.get("icon_style", "stroke") if isinstance(cat_data, dict) else "stroke") or "stroke"
+                cur.execute(
+                    "INSERT INTO history_categories (title, display_color, icon_key, icon_style, is_system) VALUES (%s, %s, %s, %s, TRUE) RETURNING id",
+                    (cat_title, color, icon_key, icon_style),
+                )
                 cat_id = cur.fetchone()[0]
         except Exception:
             cat_id = 1  # fallback
@@ -432,9 +464,10 @@ def main():
     contacts = _load_json(src / "contacts.json") or []
     opps = _load_json(src / "opportunities.json") or []
     tasks = _load_json(src / "tasks.json") or []
+    task_labels = _load_json(src / "task_labels.json") or []
     history = _load_json(src / "history.json") or []
 
-    print(f"  users: {len(users)}, stages: {len(stages)}, tags: {len(tags)}, custom_fields: {len(custom_fields)}, contacts: {len(contacts)}, opps: {len(opps)}, tasks: {len(tasks)}, history: {len(history)}")
+    print(f"  users: {len(users)}, stages: {len(stages)}, tags: {len(tags)}, custom_fields: {len(custom_fields)}, contacts: {len(contacts)}, opps: {len(opps)}, tasks: {len(tasks)}, task_labels: {len(task_labels)}, history: {len(history)}")
 
     if args.dry_run:
         print("Dry run — not writing to DB.")
@@ -457,6 +490,9 @@ def main():
         print("Importing custom fields...")
         _insert_custom_fields(conn, custom_fields)
 
+        print("Importing task labels...")
+        _insert_task_labels(conn, task_labels)
+
         print("Importing contacts...")
         contact_map = _insert_contacts(conn, contacts, user_map)
         print(f"  contacts: {len(contact_map)}")
@@ -471,7 +507,7 @@ def main():
         _insert_history_basic(conn, history, opp_map, user_map)
 
         conn.commit()
-        print("\nImport complete for core entities (users, stages, tags, custom fields, contacts, opps, tasks, history).")
+        print("\nImport complete for core entities (users, stages, tags, custom fields, task_labels, contacts, opps, tasks, history).")
         print("Note: After import, run migrate_dashboard_data.py to remap local user-profiles/tiles/notes if applicable.")
         print("Opportunity custom field *values* and full per-opp tags may need additional export steps or manual association.")
     except Exception as exc:

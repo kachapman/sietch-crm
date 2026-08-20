@@ -2,6 +2,62 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Customize Projects Tab — Event Note Types, Task Labels, Icons, Drag Reorder (2026-08-20)
+
+**Event Note Types (History Categories):**
+- New CRUD admin UI column in Customize Projects tab
+- Icon grid picker with 20 SVG icons (note, comment, call, meeting, email, sms, task, customer, pin, photo, document, upload, star, alert, clock, user, building, link, tag, bookmark)
+- 3 icon style options: Stroke (currentColor), Fill (solid color), Accent (background wash + border)
+- Color picker for customizing icon/accent color
+- System categories (Note, Call, Meeting, etc.) protected from deletion
+- `historyCategoryIconHtml` refactored to use `icon_key` from DB instead of regex-based matching
+- `renderHistoryEventItem` uses dynamic CSS variable `--cat-accent-color` for accent-style categories
+- Backwards compatible: existing categories auto-migrated with correct icons
+
+**Task Labels:**
+- New normalized `task_labels` table (replaces freeform text labels)
+- CRUD admin UI column in Customize Projects tab
+- Task edit modal: predefined label picker (checkboxes from `task_labels`)
+- Existing freeform labels migrated to `task_labels` table
+- `tasks.labels` column preserved for backwards compatibility
+
+**Task Edit Modal — User Assignment:**
+- New "Assign To" dropdown in task edit modal
+- Populated from `/api/v2/users` when modal opens
+- Saves `responsibleUserId` to backend (already supported by API)
+- Users can now assign tasks to other users from the task detail view
+
+**Stage Reorder — SortableJS Drag-and-Drop:**
+- Replaced ▲/▼ arrow buttons with SortableJS drag handle (⠿)
+- Drag-and-drop reordering with animation, ghost/chosen classes
+- Same SortableJS pattern used by dashboard tiles, notes, and tasks board
+
+**Grid Layout:**
+- Customize Projects tab now has 5 columns (auto-wraps to 2 rows: 3+2)
+- Row 1: Stages, Tags, Custom Fields
+- Row 2: Event Note Types, Task Labels
+
+**Database — migration 015:**
+- `task_labels` table (id, title, color, sort_order)
+- `icon_key` and `icon_style` columns added to `history_categories`
+- Existing categories migrated with correct icons
+- Existing freeform task labels migrated to `task_labels`
+
+**Backwards compatibility:**
+- Export includes `task_labels` table and new `history_categories` columns
+- Import preserves `display_color`, `icon_key`, `icon_style` for history categories
+- `tasks.labels` column preserved — no schema change to tasks table
+
+**Files:** `migrations/015_add_task_labels_and_category_icons.sql` (new), `server.py`, `public/index.html`, `public/app.js`, `public/styles.css`, `import_json_export.py`
+
+---
+
+## Backup Export/Import — Task Labels + Category Icons (2026-08-19)
+
+- Added `task_labels` to backup export table list in `server.py` (placed after `tag_definitions` for correct FK ordering)
+- Updated `import_json_export.py` history category import to include `display_color`, `icon_key`, and `icon_style` when creating new categories
+- Added `task_labels` import to `import_json_export.py` — loads from `task_labels.json`, upserts by title with color/sort_order
+
 ## Automation Tab — Bug Fixes & Improvements (2026-08-19)
 
 **Bug fixes:**

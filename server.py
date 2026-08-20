@@ -2341,6 +2341,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/custom-fields":
             self._handle_custom_fields_get()
             return
+        if api_path == "/api/v2/task-labels":
+            self._handle_task_labels_get()
+            return
         if api_path == "/api/v2/contacts":
             self._handle_contacts_get(qs)
             return
@@ -3192,6 +3195,31 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if m and method == "DELETE":
             self._handle_custom_field_delete(int(m.group(1)))
             return
+
+        # ── History categories (admin) ──
+        if api_path == "/api/v2/history-categories" and method == "POST":
+            self._handle_history_category_create()
+            return
+        m = re.match(r"^/api/v2/history-categories/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_history_category_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_history_category_delete(int(m.group(1)))
+            return
+
+        # ── Task labels (admin) ──
+        if api_path == "/api/v2/task-labels" and method == "POST":
+            self._handle_task_label_create()
+            return
+        m = re.match(r"^/api/v2/task-labels/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_task_label_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_task_label_delete(int(m.group(1)))
+            return
+
         if api_path == "/api/v2/contacts" and method == "POST":
             self._handle_contact_create()
             return
@@ -4501,6 +4529,140 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 409, {"error": f"Cannot delete: {count} project(s) use this tag"})
             return
         db.execute("DELETE FROM tag_definitions WHERE id = %s", (tag_id,))
+        _json_response(self, 200, {"ok": True})
+
+    # ── History categories CRUD ──────────────────────────────────────────
+
+    def _handle_history_category_create(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        title = str(payload.get("title") or "").strip()
+        if not title:
+            _json_response(self, 400, {"error": "Title is required"})
+            return
+        color = payload.get("color") or "#6c757d"
+        icon_key = payload.get("iconKey") or "note"
+        icon_style = payload.get("iconStyle") or "stroke"
+        max_order = db.query_one("SELECT COALESCE(MAX(sort_order), 0) as m FROM history_categories")
+        sort_order = (max_order["m"] if max_order else 0) + 1
+        cid = db.insert_returning(
+            """INSERT INTO history_categories (title, display_color, icon_key, icon_style, is_system, sort_order)
+               VALUES (%s, %s, %s, %s, FALSE, %s) RETURNING id""",
+            (title, color, icon_key, icon_style, sort_order),
+        )
+        _json_response(self, 201, {"id": cid, "ok": True})
+
+    def _handle_history_category_update(self, cat_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        cat = db.query_one("SELECT is_system FROM history_categories WHERE id = %s", (cat_id,))
+        if not cat:
+            _json_response(self, 404, {"error": "Category not found"})
+            return
+        sets = ["updated_at = NOW()"] if "updated_at" in [c[0] for c in db.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'history_categories'")] else []
+        params: list = []
+        for field, col in [("title", "title"), ("color", "display_color"), ("iconKey", "icon_key"), ("iconStyle", "icon_style")]:
+            if field in payload:
+                sets.append(f"{col} = %s")
+                params.append(payload[field])
+        if not sets:
+            _json_response(self, 400, {"error": "No fields to update"})
+            return
+        params.append(cat_id)
+        db.execute(f"UPDATE history_categories SET {', '.join(sets)} WHERE id = %s", (*params,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_history_category_delete(self, cat_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        cat = db.query_one("SELECT is_system, title FROM history_categories WHERE id = %s", (cat_id,))
+        if not cat:
+            _json_response(self, 404, {"error": "Category not found"})
+            return
+        if cat.get("is_system"):
+            _json_response(self, 409, {"error": "System categories cannot be deleted"})
+            return
+        count = db.query_one("SELECT COUNT(*) as cnt FROM history_events WHERE category_id = %s", (cat_id,))
+        if count and count.get("cnt", 0) > 0:
+            _json_response(self, 409, {"error": f"Cannot delete: {count['cnt']} events use this category"})
+            return
+        db.execute("DELETE FROM history_categories WHERE id = %s", (cat_id,))
+        _json_response(self, 200, {"ok": True})
+
+    # ── Task labels CRUD ─────────────────────────────────────────────────
+
+    def _handle_task_labels_get(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query("SELECT id, title, color, sort_order FROM task_labels ORDER BY sort_order, title")
+        _json_response(self, 200, [{"id": r[0], "title": r[1], "color": r[2], "sortOrder": r[3]} for r in rows])
+
+    def _handle_task_label_create(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        title = str(payload.get("title") or "").strip().lower()
+        if not title:
+            _json_response(self, 400, {"error": "Title is required"})
+            return
+        color = payload.get("color")
+        max_order = db.query_one("SELECT COALESCE(MAX(sort_order), 0) as m FROM task_labels")
+        sort_order = (max_order["m"] if max_order else 0) + 1
+        lid = db.insert_returning(
+            """INSERT INTO task_labels (title, color, sort_order) VALUES (%s, %s, %s) RETURNING id""",
+            (title, color, sort_order),
+        )
+        _json_response(self, 201, {"id": lid, "ok": True})
+
+    def _handle_task_label_update(self, label_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        sets = []
+        params: list = []
+        for field, col in [("title", "title"), ("color", "color"), ("sortOrder", "sort_order")]:
+            if field in payload:
+                val = payload[field]
+                if field == "title":
+                    val = str(val).strip().lower()
+                sets.append(f"{col} = %s")
+                params.append(val)
+        if not sets:
+            _json_response(self, 400, {"error": "No fields to update"})
+            return
+        params.append(label_id)
+        db.execute(f"UPDATE task_labels SET {', '.join(sets)} WHERE id = %s", (*params,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_task_label_delete(self, label_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        db.execute("DELETE FROM task_labels WHERE id = %s", (label_id,))
         _json_response(self, 200, {"ok": True})
 
     # ── Branding image upload ──────────────────────────────────────────────
@@ -6246,8 +6408,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_auth(self)
         if not user:
             return
-        rows = db.query("SELECT id, title, display_color FROM history_categories ORDER BY sort_order")
-        _json_response(self, 200, [{"id": r[0], "title": r[1], "color": r[2]} for r in rows])
+        rows = db.query(
+            "SELECT id, title, display_color, icon_key, icon_style, is_system, sort_order FROM history_categories ORDER BY sort_order, id"
+        )
+        _json_response(self, 200, [
+            {"id": r[0], "title": r[1], "color": r[2], "iconKey": r[3], "iconStyle": r[4], "isSystem": r[5], "sortOrder": r[6]}
+            for r in rows
+        ])
 
     # ── Photos ──────────────────────────────────────────────────────────────
 
@@ -7708,6 +7875,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         ("users", "SELECT * FROM users ORDER BY id"),
         ("stages", "SELECT * FROM stages ORDER BY id"),
         ("tag_definitions", "SELECT * FROM tag_definitions ORDER BY id"),
+        ("task_labels", "SELECT * FROM task_labels ORDER BY id"),
         ("custom_field_definitions", "SELECT * FROM custom_field_definitions ORDER BY id"),
         ("custom_field_options", "SELECT * FROM custom_field_options ORDER BY id"),
         ("history_categories", "SELECT * FROM history_categories ORDER BY id"),

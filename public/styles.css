@@ -16152,6 +16152,116 @@ select.form-control {
 }
 .admin-customize-reorder-btn:hover { opacity: 1; color: var(--text); }
 
+/* ── Icon Grid (Event Note Types picker) ──────────────────────────────── */
+.automation-icon-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  max-height: 120px;
+  overflow-y: auto;
+}
+.automation-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  cursor: pointer;
+  padding: 4px;
+  color: var(--muted);
+  transition: border-color 0.15s, background 0.15s;
+}
+.automation-icon-btn:hover {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.05);
+}
+.automation-icon-btn.selected {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--accent);
+}
+.automation-icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ── Stage drag handle ─────────────────────────────────────────────────── */
+.admin-customize-drag-handle {
+  cursor: grab;
+  color: var(--muted);
+  font-size: 0.9rem;
+  padding: 0 0.2rem;
+  opacity: 0.4;
+  transition: opacity 0.12s;
+  user-select: none;
+  flex-shrink: 0;
+}
+.admin-customize-row:hover .admin-customize-drag-handle {
+  opacity: 1;
+}
+.admin-customize-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* ── History category accent style ────────────────────────────────────── */
+.opp-preview-history-item--accent {
+  border-left: 3px solid var(--cat-accent-color, #2563eb);
+  padding-left: calc(0.75rem - 3px);
+  background: color-mix(in srgb, var(--cat-accent-color, #2563eb) 8%, transparent);
+}
+.opp-preview-history-item--accent .opp-preview-history-type-icon svg {
+  filter: drop-shadow(0 1px 1px color-mix(in srgb, var(--cat-accent-color, #2563eb) 35%, transparent));
+}
+
+/* ── Task label picker in task edit modal ──────────────────────────────── */
+.task-edit-labels-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  max-height: 100px;
+  overflow-y: auto;
+  padding: 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.task-edit-labels-grid label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+}
+.task-edit-labels-grid label:hover {
+  background: var(--surface);
+}
+.task-edit-labels-grid input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* ── Task edit user picker ─────────────────────────────────────────────── */
+.task-edit-user-select {
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+}
+
 /* ── Branding image upload widgets ────────────────────────────────────────── */
 .branding-image-row {
   display: flex;

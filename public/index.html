@@ -2543,6 +2543,69 @@
                     </div>
                   </div>
                 </div>
+
+                <!-- Event Note Types Column -->
+                <div class="admin-customize-col">
+                  <div class="admin-customize-col-header">
+                    <span class="admin-customize-col-title">Event Note Types</span>
+                    <button type="button" class="btn btn-primary btn-small" id="admin-add-history-cat">+ Add</button>
+                  </div>
+                  <input type="search" class="admin-customize-search" id="admin-history-cat-search" placeholder="Search..." aria-label="Search event note types">
+                  <div class="admin-customize-list" id="admin-history-cats-list"></div>
+                  <div class="admin-customize-form hidden" id="admin-history-cat-form">
+                    <input type="hidden" id="admin-history-cat-editing-id" value="">
+                    <div class="admin-customize-form-field">
+                      <label for="admin-history-cat-title">Title</label>
+                      <input type="text" id="admin-history-cat-title" placeholder="e.g. Follow-up">
+                    </div>
+                    <div class="admin-customize-form-field">
+                      <label for="admin-history-cat-color">Color</label>
+                      <input type="color" id="admin-history-cat-color" value="#6c757d">
+                    </div>
+                    <div class="admin-customize-form-field">
+                      <label>Icon</label>
+                      <div class="automation-icon-grid" id="admin-history-cat-icon-grid"></div>
+                    </div>
+                    <div class="admin-customize-form-field">
+                      <label>Icon Style</label>
+                      <div style="display:flex; gap:1rem; font-size:0.82rem;">
+                        <label style="display:flex; align-items:center; gap:0.3rem; cursor:pointer;"><input type="radio" name="admin-history-cat-icon-style" value="stroke" checked> Stroke</label>
+                        <label style="display:flex; align-items:center; gap:0.3rem; cursor:pointer;"><input type="radio" name="admin-history-cat-icon-style" value="fill"> Fill</label>
+                        <label style="display:flex; align-items:center; gap:0.3rem; cursor:pointer;"><input type="radio" name="admin-history-cat-icon-style" value="accent"> Accent</label>
+                      </div>
+                      <div style="font-size:0.72rem; color:var(--muted); margin-top:0.2rem;">Stroke: icon color. Fill: solid icon. Accent: background wash + border.</div>
+                    </div>
+                    <div class="admin-customize-form-actions">
+                      <button type="button" class="btn btn-primary btn-small" id="admin-history-cat-save">Save</button>
+                      <button type="button" class="btn btn-ghost btn-small" id="admin-history-cat-cancel">Cancel</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Task Labels Column -->
+                <div class="admin-customize-col">
+                  <div class="admin-customize-col-header">
+                    <span class="admin-customize-col-title">Task Labels</span>
+                    <button type="button" class="btn btn-primary btn-small" id="admin-add-task-label">+ Add</button>
+                  </div>
+                  <input type="search" class="admin-customize-search" id="admin-task-label-search" placeholder="Search..." aria-label="Search task labels">
+                  <div class="admin-customize-list" id="admin-task-labels-list"></div>
+                  <div class="admin-customize-form hidden" id="admin-task-label-form">
+                    <input type="hidden" id="admin-task-label-editing-id" value="">
+                    <div class="admin-customize-form-field">
+                      <label for="admin-task-label-title">Title</label>
+                      <input type="text" id="admin-task-label-title" placeholder="e.g. urgent">
+                    </div>
+                    <div class="admin-customize-form-field">
+                      <label for="admin-task-label-color">Color</label>
+                      <input type="color" id="admin-task-label-color" value="#6c757d">
+                    </div>
+                    <div class="admin-customize-form-actions">
+                      <button type="button" class="btn btn-primary btn-small" id="admin-task-label-save">Save</button>
+                      <button type="button" class="btn btn-ghost btn-small" id="admin-task-label-cancel">Cancel</button>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
             <div id="admin-tab-contacts" class="admin-tab-content hidden">
