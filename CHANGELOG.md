@@ -2,6 +2,31 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Automation Engine — Hybrid SSE + Polling (2026-08-20)
+
+**Architecture change:**
+- Event-driven triggers (project_created, stage_changed, project_updated, tag_added) now fire via SSE events instead of polling
+- Time-based triggers (stage_duration, tag_duration) continue to poll every 60 seconds
+- Event-driven triggers fire within seconds of the event, instead of up to 60s delay
+
+**Implementation:**
+- Added `subscribe_system()` / `unsubscribe_system()` to EventBus for system-level event subscriptions
+- Automation engine subscribes to all events via `event_bus.subscribe_system()`
+- Dedicated listener thread processes SSE events and evaluates matching rules immediately
+- Polling loop only evaluates time-based triggers (stage_duration, tag_duration)
+- `_sweep_once()` retained for test endpoint compatibility
+- `_sweep_once_polling()` new function for time-based triggers only
+
+**Event publishing added to server.py:**
+- `project_created` event published after project creation
+- `stage_changed` event published after stage change (project update + bot /stage)
+- `tag_added` event published after tag add (user-facing endpoint)
+- `task:created`/`task:updated`/`task:deleted` events already published for task CRUD
+
+**Files:** `automation_engine.py`, `event_bus.py`, `server.py`
+
+---
+
 ## Customize Projects Tab — Event Note Types, Task Labels, Icons, Drag Reorder (2026-08-20)
 
 **Event Note Types (History Categories):**

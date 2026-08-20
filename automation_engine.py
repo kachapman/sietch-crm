@@ -1,10 +1,18 @@
-"""Automation engine — evaluates rules and executes actions on a background thread.
+"""Automation engine — hybrid SSE + polling for evaluating rules and executing actions.
+
+Architecture:
+    - Event-driven triggers (project_created, stage_changed, project_updated, tag_added)
+      are evaluated immediately when SSE events arrive via event_bus.
+    - Time-based triggers (stage_duration, tag_duration) are evaluated by periodic polling
+      every 60 seconds.
 
 Trigger types:
-    stage_duration  — project has been in a specific stage for N days
-    project_created — a new project was created
-    stage_changed   — a project moved to a different stage
-    project_updated — a project was updated
+    stage_duration  — project has been in a specific stage for N days (polled)
+    tag_duration    — tag has been on a project for N days (polled)
+    project_created — a new project was created (SSE event-driven)
+    stage_changed   — a project moved to a different stage (SSE event-driven)
+    project_updated — a project was updated (SSE event-driven)
+    tag_added       — a tag was added to a project (SSE event-driven)
 
 Action types:
     create_task    — insert a task assigned to specified users
@@ -18,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import smtplib
 import threading
 import time
@@ -634,14 +643,121 @@ def _evaluate_tag_added_rules() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Main sweep
+# SSE event-driven evaluation
+# ---------------------------------------------------------------------------
+
+# Map SSE event types to automation trigger types
+_EVENT_TRIGGER_MAP = {
+    "task:created": "project_created",
+    "task:updated": "project_updated",
+    "stage_changed": "stage_changed",
+    "tag_added": "tag_added",
+}
+
+
+def _handle_sse_event(event_data: dict) -> None:
+    """Handle an SSE event and evaluate matching automation rules immediately."""
+    try:
+        event_type = event_data.get("type", "")
+        trigger_type = _EVENT_TRIGGER_MAP.get(event_type)
+        if not trigger_type:
+            return
+
+        # Get the opportunity_id from the event data
+        data = event_data.get("data", {})
+        opp_id = data.get("opportunity_id") or data.get("id")
+        if not opp_id:
+            return
+
+        # Fetch the opportunity
+        opp = db.query_dicts(
+            """SELECT o.*, s.title as stage_title, u.display_name as responsible_name
+               FROM opportunities o
+               LEFT JOIN stages s ON s.id = o.stage_id
+               LEFT JOIN users u ON u.id = o.responsible_user_id
+               WHERE o.id = %s""",
+            (opp_id,),
+        )
+        if not opp:
+            return
+        opp = opp[0]
+
+        # Find matching rules for this trigger type
+        rules = db.query_dicts(
+            "SELECT * FROM automation_rules WHERE enabled = TRUE AND trigger_type = %s",
+            (trigger_type,),
+        )
+
+        for rule in rules:
+            rule_id = rule["id"]
+            cfg = rule.get("trigger_config") or {}
+
+            # Cooldown check
+            cooldown_mode = cfg.get("cooldown_mode", "recurring")
+            if cooldown_mode == "once" and _already_fired_once(rule_id, opp_id):
+                continue
+            if cooldown_mode == "recurring":
+                cooldown_hours = int(cfg.get("cooldown_hours") or 24)
+                if _should_skip(rule_id, opp_id, cooldown_hours):
+                    continue
+
+            # Additional filter checks for specific trigger types
+            if trigger_type == "tag_added":
+                tag_id = cfg.get("tag_id")
+                if tag_id and data.get("tag_id") and str(data.get("tag_id")) != str(tag_id):
+                    continue  # Wrong tag
+            elif trigger_type == "stage_changed":
+                to_stage_id = cfg.get("to_stage_id")
+                if to_stage_id and str(opp.get("stage_id")) != str(to_stage_id):
+                    continue  # Wrong stage
+
+            # Execute the action
+            days_in_stage = match.get("days_in_stage", 0) if "days_in_stage" in match else 0
+            ctx = _build_template_context(opp, opp.get("stage_title") or "", days_in_stage, 0)
+            trigger_context = {
+                "trigger_type": trigger_type,
+                "event_type": event_type,
+                "days_in_stage": days_in_stage,
+                "stage_title": opp.get("stage_title") or "",
+                "project_title": opp.get("title") or "",
+            }
+
+            try:
+                result = _execute_action(rule, opp, ctx, rule.get("dry_run", False))
+            except Exception as e:
+                logger.exception("SSE automation failed for rule %s, opp %s", rule_id, opp_id)
+                result = {"error": str(e)}
+
+            error = result.get("error")
+
+            # Log the execution
+            try:
+                db.execute(
+                    """INSERT INTO automation_logs (rule_id, opportunity_id, trigger_context, action_result, dry_run, error)
+                       VALUES (%s, %s, %s, %s, %s, %s)""",
+                    (rule_id, opp_id, json.dumps(trigger_context), json.dumps(result), rule.get("dry_run", False), error),
+                )
+                db.execute(
+                    "UPDATE automation_rules SET last_run_at = NOW(), run_count = run_count + 1 WHERE id = %s",
+                    (rule_id,),
+                )
+            except Exception:
+                logger.exception("Failed to log SSE automation execution")
+
+            if not error:
+                logger.info("SSE automation: rule %s fired for opp %s (event: %s)", rule_id, opp_id, event_type)
+
+    except Exception:
+        logger.exception("Error handling SSE event for automation")
+
+
+# ---------------------------------------------------------------------------
+# Main sweep (polling-based triggers only)
 # ---------------------------------------------------------------------------
 
 def _sweep_once() -> int:
-    """Evaluate all enabled rules and execute matching actions. Returns count of actions taken."""
+    """Evaluate ALL enabled rules (used by test endpoint). Returns count of actions taken."""
     total = 0
-
-    # Collect all matches from all trigger types
     matches = []
     matches.extend(_evaluate_stage_duration_rules())
     matches.extend(_evaluate_project_created_rules())
@@ -649,7 +765,23 @@ def _sweep_once() -> int:
     matches.extend(_evaluate_project_updated_rules())
     matches.extend(_evaluate_tag_duration_rules())
     matches.extend(_evaluate_tag_added_rules())
+    total += _execute_matches(matches)
+    return total
 
+
+def _sweep_once_polling() -> int:
+    """Evaluate only time-based triggers (polled periodically). Event-driven triggers use SSE."""
+    total = 0
+    matches = []
+    matches.extend(_evaluate_stage_duration_rules())
+    matches.extend(_evaluate_tag_duration_rules())
+    total += _execute_matches(matches)
+    return total
+
+
+def _execute_matches(matches: list) -> int:
+    """Execute a list of matched rules. Returns count of successful executions."""
+    total = 0
     for match in matches:
         rule = match["rule"]
         opp = match["opp"]
@@ -695,15 +827,41 @@ def _sweep_once() -> int:
 
 
 def _sweep_loop(stop_event: threading.Event) -> None:
-    logger.info("Automation engine started (interval=%ds)", POLL_INTERVAL)
+    logger.info("Automation engine started (interval=%ds, hybrid SSE+polling)", POLL_INTERVAL)
+
+    # Subscribe to SSE events for real-time trigger evaluation
+    from event_bus import event_bus
+    event_queue = event_bus.subscribe_system()
+
+    # Start a listener thread for SSE events
+    def _event_listener():
+        while not stop_event.is_set():
+            try:
+                msg = event_queue.get(timeout=1.0)
+                if msg is None:
+                    continue
+                event_data = json.loads(msg)
+                _handle_sse_event(event_data)
+            except queue.Empty:
+                continue
+            except Exception:
+                logger.exception("Error in automation event listener")
+
+    listener_thread = threading.Thread(target=_event_listener, daemon=True, name="automation-event-listener")
+    listener_thread.start()
+
+    # Polling loop for time-based triggers only
     while not stop_event.is_set():
         try:
-            fired = _sweep_once()
+            fired = _sweep_once_polling()
             if fired:
-                logger.info("Automation engine: %d rule(s) fired", fired)
+                logger.info("Automation engine (polling): %d rule(s) fired", fired)
         except Exception:
-            logger.exception("Automation sweep error")
+            logger.exception("Automation polling sweep error")
         stop_event.wait(POLL_INTERVAL)
+
+    # Cleanup
+    event_bus.unsubscribe_system(event_queue)
     logger.info("Automation engine stopped")
 
 

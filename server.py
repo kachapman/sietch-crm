@@ -3952,6 +3952,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             (title, description, stage_id, stage_type, bid_value, expected_close, contact_id, responsible_user_id, user["id"], is_private),
         )
         _json_response(self, 201, {"id": opp_id, "ok": True})
+        # Publish project_created event for automation engine
+        event_bus.publish("project_created", {"opportunity_id": opp_id, "title": title})
 
     def _handle_project_update(self, opp_id: int) -> None:
         user = _require_auth(self)
@@ -3980,6 +3982,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 sets.append("stage_entered_at = NOW()")
             params.append(opp_id)
             db.execute(f"UPDATE opportunities SET {', '.join(sets)} WHERE id = %s", (*params,))
+            # Publish stage_changed event for automation engine
+            if "stageId" in payload:
+                event_bus.publish("stage_changed", {"opportunity_id": opp_id, "stage_id": payload["stageId"]})
 
             # Handle customFieldList if present
             custom_field_list = payload.get("customFieldList")
@@ -4052,6 +4057,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "ON CONFLICT (opportunity_id, tag_id) DO UPDATE SET assigned_at = NOW()",
             (opp_id, tag_id),
         )
+        # Publish tag_added event for automation engine
+        event_bus.publish("tag_added", {"opportunity_id": opp_id, "tag_id": tag_id})
         _json_response(self, 200, {"ok": True})
 
     def _handle_project_tag_remove(self, opp_id: int, tag_id: int) -> None:
@@ -10744,6 +10751,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             stage_id_val = stage_row["id"] if isinstance(stage_row, dict) else stage_row[0]
             db.execute("UPDATE opportunities SET stage_id = %s, stage_entered_at = NOW() WHERE id = %s",
                        (stage_id_val, int(opp_id)))
+            event_bus.publish("stage_changed", {"opportunity_id": int(opp_id), "stage_id": stage_id_val})
             _json_response(self, 200, {"ok": True, "stage": stage_title})
             return
 

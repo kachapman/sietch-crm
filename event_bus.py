@@ -15,6 +15,7 @@ class EventBus:
 
     def __init__(self):
         self._subscribers: dict[str, queue.Queue] = {}
+        self._system_subscribers: list[queue.Queue] = []
         self._lock = threading.Lock()
 
     def subscribe(self, user_id: str) -> queue.Queue:
@@ -47,6 +48,28 @@ class EventBus:
                         q.put_nowait(msg)
                     except queue.Full:
                         pass  # drop event for slow consumers
+        # Also publish to system subscribers (for automation engine)
+        with self._lock:
+            for q in self._system_subscribers:
+                try:
+                    q.put_nowait(msg)
+                except queue.Full:
+                    pass
+
+    def subscribe_system(self) -> queue.Queue:
+        """Subscribe to all events (for system components like automation engine)."""
+        q = queue.Queue(maxsize=500)
+        with self._lock:
+            self._system_subscribers.append(q)
+        return q
+
+    def unsubscribe_system(self, q: queue.Queue):
+        """Remove a system subscription."""
+        with self._lock:
+            try:
+                self._system_subscribers.remove(q)
+            except ValueError:
+                pass
 
 
 event_bus = EventBus()  # singleton — safe to import from any module
