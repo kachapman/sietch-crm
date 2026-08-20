@@ -33218,6 +33218,7 @@ async function populateAdminAutomation() {
     renderAutomationRulesList();
     loadAutomationLogs(1);
     populateAutomationStats();
+    loadAutomationSettings();
   } catch (e) {
     console.error("Failed to load automation data:", e);
   }
@@ -33229,6 +33230,30 @@ function populateAutomationStats() {
   const total = _automationRulesCache.length;
   const enabled = _automationRulesCache.filter(r => r.enabled).length;
   el.textContent = `${total} rule${total !== 1 ? "s" : ""} (${enabled} enabled)`;
+}
+
+async function loadAutomationSettings() {
+  try {
+    const resp = await api("/api/v2/admin/automation/settings");
+    const input = $("#automation-poll-interval");
+    if (input) input.value = Math.round((resp.pollInterval || 3600) / 60);
+  } catch {}
+}
+
+async function saveAutomationSettings() {
+  const input = $("#automation-poll-interval");
+  const minutes = parseInt(input?.value) || 60;
+  const seconds = Math.max(60, minutes * 60);
+  try {
+    await api("/api/v2/admin/automation/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pollInterval: seconds }),
+    });
+    showToast("Settings saved");
+  } catch (e) {
+    showToast("Failed: " + (e.message || e), true);
+  }
 }
 
 function renderAutomationRulesList() {
@@ -33725,6 +33750,9 @@ function bindAdminAutomation() {
       }
     }
   });
+  // Poll interval save button
+  const pollSaveBtn = $("#automation-poll-interval-save");
+  if (pollSaveBtn) pollSaveBtn.addEventListener("click", saveAutomationSettings);
 }
 
 /* ================================================================================

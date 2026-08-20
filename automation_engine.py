@@ -39,7 +39,21 @@ from event_bus import event_bus
 
 logger = logging.getLogger("automation-engine")
 
-POLL_INTERVAL = 60  # seconds
+DEFAULT_POLL_INTERVAL = 3600  # 1 hour default for time-based triggers
+
+
+def _get_poll_interval() -> int:
+    """Get the polling interval from system_settings, default 3600s (1 hour)."""
+    try:
+        row = db.query_one("SELECT value FROM system_settings WHERE key = 'automation_poll_interval'")
+        if row and row.get("value"):
+            val = row["value"]
+            if isinstance(val, (int, float)):
+                return max(60, int(val))
+            return max(60, int(str(val)))
+    except Exception:
+        pass
+    return DEFAULT_POLL_INTERVAL
 TemplateVars = dict[str, str]
 
 
@@ -827,7 +841,7 @@ def _execute_matches(matches: list) -> int:
 
 
 def _sweep_loop(stop_event: threading.Event) -> None:
-    logger.info("Automation engine started (interval=%ds, hybrid SSE+polling)", POLL_INTERVAL)
+    logger.info("Automation engine started (hybrid SSE+polling)")
 
     # Subscribe to SSE events for real-time trigger evaluation
     from event_bus import event_bus
@@ -852,13 +866,14 @@ def _sweep_loop(stop_event: threading.Event) -> None:
 
     # Polling loop for time-based triggers only
     while not stop_event.is_set():
+        interval = _get_poll_interval()
         try:
             fired = _sweep_once_polling()
             if fired:
-                logger.info("Automation engine (polling): %d rule(s) fired", fired)
+                logger.info("Automation engine (polling, interval=%ds): %d rule(s) fired", interval, fired)
         except Exception:
             logger.exception("Automation polling sweep error")
-        stop_event.wait(POLL_INTERVAL)
+        stop_event.wait(interval)
 
     # Cleanup
     event_bus.unsubscribe_system(event_queue)

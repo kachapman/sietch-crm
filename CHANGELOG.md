@@ -2,6 +2,25 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Automation Engine — Configurable Poll Interval (2026-08-20)
+
+**Configuration:**
+- Poll interval for time-based triggers (stage_duration, tag_duration) is now configurable
+- Default changed from 60 seconds to 1 hour (3600 seconds)
+- Admin UI: "Check every [60] min" input in Automation tab header with Save button
+- Stored in `system_settings` as `automation_poll_interval` (seconds)
+- Clamped to 60s–24h range
+- Event-driven triggers (project_created, stage_changed, etc.) remain instant via SSE
+
+**Backend:**
+- `_get_poll_interval()` reads from `system_settings` with fallback to 3600s
+- GET/PUT endpoints at `/api/v2/admin/automation/settings`
+- Polling loop uses configurable interval instead of hardcoded POLL_INTERVAL
+
+**Files:** `automation_engine.py`, `server.py`, `public/app.js`, `public/index.html`
+
+---
+
 ## Automation Engine — Hybrid SSE + Polling (2026-08-20)
 
 **Architecture change:**

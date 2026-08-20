@@ -2250,6 +2250,12 @@
               <h3 style="margin:0; font-size:1rem;">Automation Rules</h3>
               <button id="automation-add-rule-btn" class="btn btn-primary btn-small">+ Add Rule</button>
               <span id="automation-stats" class="automation-stats"></span>
+              <div style="margin-left:auto; display:flex; align-items:center; gap:0.4rem; font-size:0.82rem; color:var(--muted);">
+                <span>Time-based check every</span>
+                <input type="number" id="automation-poll-interval" class="form-control" style="width:55px; padding:0.2rem 0.4rem; font-size:0.82rem;" min="1" max="1440" value="60">
+                <span>min</span>
+                <button type="button" id="automation-poll-interval-save" class="btn btn-ghost btn-small" style="padding:0.2rem 0.5rem;">Save</button>
+              </div>
             </div>
             <div class="automation-layout">
               <div class="automation-rules-panel">

@@ -2344,6 +2344,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/task-labels":
             self._handle_task_labels_get()
             return
+        if api_path == "/api/v2/admin/automation/settings":
+            self._handle_automation_settings_get()
+            return
         if api_path == "/api/v2/contacts":
             self._handle_contacts_get(qs)
             return
@@ -3218,6 +3221,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if m and method == "DELETE":
             self._handle_task_label_delete(int(m.group(1)))
+            return
+
+        # ── Automation settings (admin) ──
+        if api_path == "/api/v2/admin/automation/settings" and method in ("POST", "PUT"):
+            self._handle_automation_settings_put()
             return
 
         if api_path == "/api/v2/contacts" and method == "POST":
@@ -4671,6 +4679,40 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         db.execute("DELETE FROM task_labels WHERE id = %s", (label_id,))
         _json_response(self, 200, {"ok": True})
+
+    # ── Automation settings (admin) ────────────────────────────────────────
+
+    def _handle_automation_settings_get(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        interval = 3600
+        try:
+            row = db.query_one("SELECT value FROM system_settings WHERE key = 'automation_poll_interval'")
+            if row and row.get("value"):
+                val = row["value"]
+                interval = int(val) if isinstance(val, (int, float)) else int(str(val))
+        except Exception:
+            pass
+        _json_response(self, 200, {"pollInterval": interval})
+
+    def _handle_automation_settings_put(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        interval = int(payload.get("pollInterval", 3600))
+        interval = max(60, min(86400, interval))  # clamp: 60s to 24h
+        db.execute(
+            """INSERT INTO system_settings (key, value) VALUES ('automation_poll_interval', %s)
+               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+            (json.dumps(interval),),
+        )
+        _json_response(self, 200, {"pollInterval": interval, "ok": True})
 
     # ── Branding image upload ──────────────────────────────────────────────
 
