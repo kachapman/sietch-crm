@@ -32105,11 +32105,11 @@ function bindAdminHistoryCats() {
     document.getElementById("admin-history-cat-color").value = "#6c757d";
     renderIconGrid("admin-history-cat-icon-grid", "note");
     document.querySelector('input[name="admin-history-cat-icon-style"][value="stroke"]').checked = true;
-    document.getElementById("admin-history-cat-form").classList.remove("hidden");
+    document.getElementById("admin-history-cat-form").style.display = "flex";
     document.getElementById("admin-history-cat-title").focus();
   });
   document.getElementById("admin-history-cat-cancel")?.addEventListener("click", () => {
-    document.getElementById("admin-history-cat-form").classList.add("hidden");
+    document.getElementById("admin-history-cat-form").style.display = "none";
   });
   document.getElementById("admin-history-cat-save")?.addEventListener("click", async () => {
     const editingId = document.getElementById("admin-history-cat-editing-id").value;
@@ -32125,7 +32125,7 @@ function bindAdminHistoryCats() {
       } else {
         await api("/api/v2/history-categories", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
       }
-      document.getElementById("admin-history-cat-form").classList.add("hidden");
+      document.getElementById("admin-history-cat-form").style.display = "none";
       await loadHistoryCats();
       renderHistoryCatsList(search?.value || "");
       showToast(editingId ? "Category updated" : "Category created");
@@ -32142,7 +32142,7 @@ function bindAdminHistoryCats() {
       renderIconGrid("admin-history-cat-icon-grid", cat.iconKey || "note");
       const styleRadio = document.querySelector(`input[name="admin-history-cat-icon-style"][value="${cat.iconStyle || "stroke"}"]`);
       if (styleRadio) styleRadio.checked = true;
-      document.getElementById("admin-history-cat-form").classList.remove("hidden");
+      document.getElementById("admin-history-cat-form").style.display = "flex";
     }
     const delBtn = e.target.closest("[data-delete-cat]");
     if (delBtn) {
@@ -32202,11 +32202,11 @@ function bindAdminTaskLabels() {
     document.getElementById("admin-task-label-editing-id").value = "";
     document.getElementById("admin-task-label-title").value = "";
     document.getElementById("admin-task-label-color").value = "#6c757d";
-    document.getElementById("admin-task-label-form").classList.remove("hidden");
+    document.getElementById("admin-task-label-form").style.display = "flex";
     document.getElementById("admin-task-label-title").focus();
   });
   document.getElementById("admin-task-label-cancel")?.addEventListener("click", () => {
-    document.getElementById("admin-task-label-form").classList.add("hidden");
+    document.getElementById("admin-task-label-form").style.display = "none";
   });
   document.getElementById("admin-task-label-save")?.addEventListener("click", async () => {
     const editingId = document.getElementById("admin-task-label-editing-id").value;
@@ -32220,7 +32220,7 @@ function bindAdminTaskLabels() {
       } else {
         await api("/api/v2/task-labels", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
       }
-      document.getElementById("admin-task-label-form").classList.add("hidden");
+      document.getElementById("admin-task-label-form").style.display = "none";
       await loadTaskLabels();
       renderTaskLabelsList(search?.value || "");
       showToast(editingId ? "Label updated" : "Label created");
@@ -32234,7 +32234,7 @@ function bindAdminTaskLabels() {
       document.getElementById("admin-task-label-editing-id").value = lbl.id;
       document.getElementById("admin-task-label-title").value = lbl.title;
       document.getElementById("admin-task-label-color").value = lbl.color || "#6c757d";
-      document.getElementById("admin-task-label-form").classList.remove("hidden");
+      document.getElementById("admin-task-label-form").style.display = "flex";
     }
     const delBtn = e.target.closest("[data-delete-label]");
     if (delBtn) {
