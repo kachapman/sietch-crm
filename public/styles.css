@@ -16052,11 +16052,22 @@ select.form-control {
   transition: opacity 0.15s;
 }
 .admin-customize-row:hover .admin-customize-row-actions { opacity: 1; }
+@media (hover: none) {
+  .admin-customize-row-actions { opacity: 0.7; }
+  .admin-customize-row:active .admin-customize-row-actions { opacity: 1; }
+}
 .admin-customize-row-actions .btn {
   padding: 0.1rem 0.3rem;
   font-size: 0.75rem;
   min-width: 1.4rem;
   min-height: 1.4rem;
+}
+@media (hover: none) {
+  .admin-customize-row-actions .btn {
+    padding: 0.4rem 0.5rem;
+    min-width: 2rem;
+    min-height: 2rem;
+  }
 }
 .admin-customize-color-swatch {
   width: 14px;
