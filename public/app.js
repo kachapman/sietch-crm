@@ -29038,6 +29038,8 @@ function switchAdminTab(tab) {
     populateAdminStagesList(s);
     populateAdminCustomFieldsList($("#admin-cf-search")?.value.trim() || "");
     populateAdminTagsList($("#admin-tag-search")?.value.trim() || "");
+    loadHistoryCats().then(() => renderHistoryCatsList($("#admin-history-cat-search")?.value.trim() || ""));
+    loadTaskLabels().then(() => renderTaskLabelsList($("#admin-task-label-search")?.value.trim() || ""));
   }
   if (tab === "logs") {
     loadEventLogFromServer().then(async () => {
