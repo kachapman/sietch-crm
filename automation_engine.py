@@ -671,10 +671,11 @@ def _evaluate_tag_added_rules() -> list[dict]:
 
 # Map SSE event types to automation trigger types
 _EVENT_TRIGGER_MAP = {
-    "task:created": "project_created",
-    "task:updated": "project_updated",
+    "project_created": "project_created",
     "stage_changed": "stage_changed",
+    "project_updated": "project_updated",
     "tag_added": "tag_added",
+    "task:created": "project_created",
 }
 
 
@@ -735,7 +736,7 @@ def _handle_sse_event(event_data: dict) -> None:
                     continue  # Wrong stage
 
             # Execute the action
-            days_in_stage = match.get("days_in_stage", 0) if "days_in_stage" in match else 0
+            days_in_stage = 0  # SSE events don't carry duration; it's a polling concept
             ctx = _build_template_context(opp, opp.get("stage_title") or "", days_in_stage, 0)
             trigger_context = {
                 "trigger_type": trigger_type,
