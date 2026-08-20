@@ -339,12 +339,12 @@ def _execute_custom_behavior(
             elif deal_id:
                 for title in tag_titles:
                     # Ensure tag exists
-                    tag = db.query_one("SELECT id FROM tags WHERE title = %s", (title,))
+                    tag = db.query_one("SELECT id FROM tag_definitions WHERE title = %s", (title,))
                     if not tag:
-                        tag = db.query_one("INSERT INTO tags (title) VALUES (%s) RETURNING id", (title,))
+                        tag = db.query_one("INSERT INTO tag_definitions (title) VALUES (%s) RETURNING id", (title,))
                     if tag:
                         db.execute(
-                            "INSERT INTO opportunity_tags (opportunity_id, tag_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                            "INSERT INTO opportunity_tags (opportunity_id, tag_id, assigned_at) VALUES (%s, %s, NOW()) ON CONFLICT DO NOTHING",
                             (deal_id, tag["id"]),
                         )
                 result["project_tags_added"] = len(tag_titles)

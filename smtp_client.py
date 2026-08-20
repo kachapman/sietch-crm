@@ -79,7 +79,8 @@ def send_email_from_account(
 
     if text_body:
         msg.attach(MIMEText(text_body, "plain"))
-    msg.attach(MIMEText(html_body, "html"))
+    if html_body:
+        msg.attach(MIMEText(html_body, "html"))
 
     if attachments:
         # Switch to multipart/mixed so we can attach binary files alongside the alternative part

@@ -469,7 +469,7 @@ def _migrate_opportunities(conn, portal: str, token: str) -> tuple[int, int, int
                         tag_row = cur.fetchone()
                         if tag_row:
                             cur.execute(
-                                "INSERT INTO opportunity_tags (opportunity_id, tag_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                                "INSERT INTO opportunity_tags (opportunity_id, tag_id, assigned_at) VALUES (%s, %s, NOW()) ON CONFLICT DO NOTHING",
                                 (v3_opp_id, tag_row[0]),
                             )
             except Exception as exc:

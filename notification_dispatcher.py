@@ -74,131 +74,119 @@ def _escape_html(text: str) -> str:
 
 # ── Notification formatting ─────────────────────────────────────────────────
 
-def _format_note_tagged(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
-    payload = notification.get("payload") or {}
-    snippet = _escape_html(payload.get("snippet") or "")
+def _resolve_actor(notification: dict, actor_name: str) -> str:
+    """Get actor name — prefer payload.actor_override, fall back to DB actor."""
+    return (notification.get("payload") or {}).get("actor_override") or actor_name or "Someone"
+
+
+def _project_link(project_title: str, project_id: int | None, project_number: int | None) -> str:
+    """Build project link line."""
     link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
-    return (
-        f"<b>{_escape_html(actor_name)} tagged you in a note</b>\n"
-        f"<b>Project:</b> <a href=\"{link}\">{_escape_html(project_title)}</a>\n"
-        f"───────────────────────\n"
-        + (f"<blockquote>{_truncate(snippet)}</blockquote>\n" if snippet else "\n")
-        + "───────────────────────\n"
-        f"<code>Reply to add a note.</code>"
-    )
+    if project_title and link:
+        return f"<b>Project:</b> <a href=\"{link}\">{_escape_html(project_title)}</a>"
+    elif project_title:
+        return f"<b>Project:</b> {_escape_html(project_title)}"
+    return ""
+
+
+def _build_tg(header_emoji: str, header_text: str, project_title: str, project_id, project_number, content_lines: list[str], cta_reply: bool = False) -> str:
+    """Build a Telegram notification in the established format."""
+    lines = [f"{header_emoji} <b>{header_text}</b>", ""]
+    proj_line = _project_link(project_title, project_id, project_number)
+    if proj_line:
+        lines.append(proj_line)
+    lines.append("───────────────────────")
+    lines.extend(content_lines)
+    lines.append("───────────────────────")
+    if cta_reply:
+        lines.append("<code>Reply to add a note.</code>")
+    else:
+        link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
+        if link:
+            lines.append(f"\U0001f517 <a href=\"{link}\">View project</a>")
+    return "\n".join(lines)
+
+
+def _format_note_tagged(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
+    actor = _resolve_actor(notification, actor_name)
+    snippet = _escape_html((notification.get("payload") or {}).get("snippet") or "")
+    content = []
+    if snippet:
+        content.append(f"<blockquote>{_truncate(snippet)}</blockquote>")
+    return _build_tg("\U0001f4cb", f"{actor} tagged you in a note", project_title, project_id, project_number, content, cta_reply=True)
 
 
 def _format_task_assigned(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
     payload = notification.get("payload") or {}
     task_title = _escape_html(payload.get("task_title") or "")
     due_date = payload.get("due_date") or "No due date"
-    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
-    return (
-        f"\u2705 <b>Task assigned to you</b>\n\n"
-        f"Project: <b>{_escape_html(project_title)}</b>\n"
-        f"Task: {task_title}\n"
-        f"Due: {due_date}\n\n"
-        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
-        + f"\u21a9\ufe0f Reply to add a note"
-    )
+    return _build_tg("\u2705", "Task assigned to you", project_title, project_id, project_number, [
+        f"Task: {task_title}",
+        f"Due: {due_date}",
+    ])
 
 
 def _format_task_reminder(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
-    payload = notification.get("payload") or {}
-    task_title = _escape_html(payload.get("taskTitle") or notification.get("message") or "Task reminder")
-    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
-    return (
-        f"\u23f0 <b>Task reminder</b>\n\n"
-        f"{task_title}\n\n"
-        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
-        + f"\u21a9\ufe0f Reply to add a note"
-    )
+    task_title = _escape_html((notification.get("payload") or {}).get("taskTitle") or notification.get("message") or "Task reminder")
+    return _build_tg("\u23f0", "Task reminder", project_title, project_id, project_number, [task_title])
 
 
 def _format_calendar_reminder(notification: dict) -> str:
-    payload = notification.get("payload") or {}
-    summary = _escape_html(payload.get("summary") or notification.get("message") or "Calendar event")
-    return (
-        f"\U0001f4c5 <b>Calendar reminder</b>\n\n"
-        f"{summary}\n\n"
-        f"Check your calendar for details."
-    )
+    summary = _escape_html((notification.get("payload") or {}).get("summary") or notification.get("message") or "Calendar event")
+    return _build_tg("\U0001f4c5", "Calendar reminder", "", None, None, [summary, "", "Check your calendar for details."])
 
 
 def _format_document_uploaded(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
-    payload = notification.get("payload") or {}
-    filename = _escape_html(payload.get("filename") or notification.get("message") or "a file")
-    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
-    return (
-        f"\U0001f4c4 <b>Document uploaded</b>\n\n"
-        f"Project: <b>{_escape_html(project_title)}</b>\n"
-        f"By: {_escape_html(actor_name)}\n"
-        f"File: {filename}\n\n"
-        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
-    )
+    actor = _resolve_actor(notification, actor_name)
+    filename = _escape_html((notification.get("payload") or {}).get("filename") or notification.get("message") or "a file")
+    return _build_tg("\U0001f4c4", "Document uploaded", project_title, project_id, project_number, [
+        f"File: {filename}",
+        f"By: {actor}",
+    ])
 
 
 def _format_photo_uploaded(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
-    payload = notification.get("payload") or {}
-    filename = _escape_html(payload.get("filename") or notification.get("message") or "a photo")
-    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
-    return (
-        f"\U0001f4f7 <b>Photo uploaded</b>\n\n"
-        f"Project: <b>{_escape_html(project_title)}</b>\n"
-        f"By: {_escape_html(actor_name)}\n"
-        f"File: {filename}\n\n"
-        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
-    )
+    actor = _resolve_actor(notification, actor_name)
+    filename = _escape_html((notification.get("payload") or {}).get("filename") or notification.get("message") or "a photo")
+    return _build_tg("\U0001f4f7", "Photo uploaded", project_title, project_id, project_number, [
+        f"File: {filename}",
+        f"By: {actor}",
+    ])
 
 
 def _format_task_added(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
     payload = notification.get("payload") or {}
     task_title = _escape_html(payload.get("task_title") or "")
     due_date = payload.get("due_date") or "No due date"
-    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
-    return (
-        f"\U0001f4cb <b>New task added</b>\n\n"
-        f"Project: <b>{_escape_html(project_title)}</b>\n"
-        f"Task: {task_title}\n"
-        f"Due: {due_date}\n\n"
-        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
-    )
+    return _build_tg("\U0001f4cb", "New task added", project_title, project_id, project_number, [
+        f"Task: {task_title}",
+        f"Due: {due_date}",
+    ])
 
 
 def _format_task_completed(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
-    payload = notification.get("payload") or {}
-    task_title = _escape_html(payload.get("task_title") or notification.get("message") or "Task")
-    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
-    return (
-        f"\u2705 <b>Task completed</b>\n\n"
-        f"Project: <b>{_escape_html(project_title)}</b>\n"
-        f"Task: {task_title}\n"
-        f"By: {_escape_html(actor_name)}\n\n"
-        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
-    )
+    actor = _resolve_actor(notification, actor_name)
+    task_title = _escape_html((notification.get("payload") or {}).get("task_title") or notification.get("message") or "Task")
+    return _build_tg("\u2705", "Task completed", project_title, project_id, project_number, [
+        f"Task: {task_title}",
+        f"By: {actor}",
+    ])
 
 
 def _format_project_updated(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
-    payload = notification.get("payload") or {}
-    changes = _escape_html(payload.get("changes") or notification.get("message") or "details updated")
-    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
-    return (
-        f"\U0001f504 <b>Project updated</b>\n\n"
-        f"Project: <b>{_escape_html(project_title)}</b>\n"
-        f"By: {_escape_html(actor_name)}\n"
-        f"Changes: {changes}\n\n"
-        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
-    )
+    actor = _resolve_actor(notification, actor_name)
+    changes = _escape_html((notification.get("payload") or {}).get("changes") or notification.get("message") or "details updated")
+    return _build_tg("\U0001f504", "Project updated", project_title, project_id, project_number, [
+        f"Changes: {changes}",
+        f"By: {actor}",
+    ])
 
 
 def _format_project_created(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
-    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
-    return (
-        f"\U0001f195 <b>New project created</b>\n\n"
-        f"Project: <b>{_escape_html(project_title)}</b>\n"
-        f"By: {_escape_html(actor_name)}\n\n"
-        + (f"\U0001f517 <a href=\"{link}\">View project</a>\n" if link else "")
-    )
+    actor = _resolve_actor(notification, actor_name)
+    return _build_tg("\U0001f195", "New project created", project_title, project_id, project_number, [
+        f"By: {actor}",
+    ])
 
 
 def _format_notification(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str | None:
@@ -260,27 +248,28 @@ def _get_branding() -> dict[str, Any]:
 
 def _format_email_notification(notification: dict, project_title: str, actor_name: str,
                                 project_id: int | None = None, project_number: int | None = None) -> tuple[str | None, str | None]:
-    """Build branded HTML email from notification. Returns (subject, html) or (None, None)."""
-    branding = _get_branding()
-    header_color = branding.get("email_header_color") or branding.get("primary_color") or "#3b82f6"
-    company = branding.get("company_name") or "Sietch CRM"
-    footer = branding.get("email_footer_text") or "Sietch CRM — Confidential"
+    """Build plain text email from notification. Returns (subject, text) or (None, None)."""
+    actor = _resolve_actor(notification, actor_name)
+    payload = notification.get("payload") or {}
     link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
 
     ntype = notification.get("type")
     if ntype == "note_tagged":
-        subject = f"{actor_name} tagged you on {project_title}"
+        subject = f"{actor} tagged you on {project_title}"
         body = notification.get("message") or "You were tagged in a note."
     elif ntype == "task_assigned":
-        payload = notification.get("payload") or {}
-        subject = f"Task assigned: {payload.get('task_title', '')}"
-        body = f"You've been assigned a task on {project_title}."
+        task_title = payload.get("task_title", "")
+        subject = f"Task assigned: {task_title}"
+        body = f"{actor} assigned you a task on {project_title}."
         if payload.get("due_date"):
             body += f" Due: {payload['due_date']}."
     elif ntype == "task_reminder":
-        payload = notification.get("payload") or {}
-        subject = f"Reminder: {payload.get('taskTitle', 'Task')}"
-        body = payload.get("taskTitle") or notification.get("message") or "Task reminder."
+        task_name = payload.get("taskTitle", "Task")
+        subject = f"Reminder: {task_name}"
+        body = f"Reminder: {task_name}"
+        if project_title:
+            body += f" on {project_title}"
+        body += "."
     elif ntype == "email_linked":
         subject = f"New email linked to {project_title}"
         body = notification.get("message") or "A new email was linked to this project."
@@ -288,57 +277,39 @@ def _format_email_notification(notification: dict, project_title: str, actor_nam
         subject = notification.get("message") or "New project created"
         body = notification.get("message") or "A new project was auto-created from an email."
     elif ntype in ("document_uploaded", "document.uploaded"):
-        payload = notification.get("payload") or {}
+        filename = payload.get("filename", "document")
         subject = f"Document uploaded to {project_title}"
-        body = f"{actor_name} uploaded a file ({payload.get('filename', 'document')}) to {project_title}."
+        body = f"{actor} uploaded {filename} to {project_title}."
     elif ntype in ("photo_uploaded", "photo.uploaded"):
-        payload = notification.get("payload") or {}
+        filename = payload.get("filename", "image")
         subject = f"Photo uploaded to {project_title}"
-        body = f"{actor_name} uploaded a photo ({payload.get('filename', 'image')}) to {project_title}."
+        body = f"{actor} uploaded {filename} to {project_title}."
     elif ntype in ("task_added", "task.added"):
-        payload = notification.get("payload") or {}
+        task_title = payload.get("task_title", "")
         subject = f"New task on {project_title}"
-        body = f"A new task was added to {project_title}: {payload.get('task_title', '')}."
+        body = f"A new task was added to {project_title}: {task_title}."
         if payload.get("due_date"):
             body += f" Due: {payload['due_date']}."
     elif ntype in ("task_completed", "task.completed"):
+        task_title = payload.get("task_title", "Task")
         subject = f"Task completed on {project_title}"
-        body = f"{actor_name} completed a task on {project_title}."
+        body = f"{actor} completed a task on {project_title}: {task_title}."
     elif ntype in ("project_updated", "project.updated"):
+        changes = payload.get("changes") or "details updated"
         subject = f"Project updated: {project_title}"
-        body = f"{actor_name} updated {project_title}."
+        body = f"{actor} updated {project_title}. {changes}."
     elif ntype in ("project_created", "project.created"):
         subject = f"New project: {project_title}"
-        body = f"{actor_name} created a new project: {project_title}."
+        body = f"{actor} created a new project: {project_title}."
     else:
         return None, None
 
-    cta = ""
+    # Plain text — no HTML, no links to avoid spam filters
+    text = body
     if link:
-        cta = (f'<p style="text-align:center;margin:24px 0;">'
-               f'<a href="{link}" style="display:inline-block;padding:12px 24px;'
-               f'background:{header_color};color:#fff;text-decoration:none;'
-               f'border-radius:6px;font-weight:600;">View Project</a></p>')
+        text += f"\n\n{link}"
 
-    html = f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-<div style="background:{header_color};padding:24px;text-align:center;">
-  <h1 style="color:#fff;margin:0;font-size:20px;">{company}</h1>
-</div>
-<div style="padding:32px 24px;max-width:600px;margin:0 auto;">
-  <h2 style="color:#1a1a1a;margin:0 0 16px;">{subject}</h2>
-  <p style="color:#333;font-size:15px;line-height:1.6;">{body}</p>
-  {cta}
-</div>
-<div style="padding:16px 24px;text-align:center;color:#999;font-size:12px;border-top:1px solid #eee;">
-  {footer}
-</div>
-</body>
-</html>"""
-
-    return subject, html
+    return subject, text
 
 
 def _get_user_email(user_id: int) -> str | None:
@@ -510,16 +481,18 @@ def _process_email(notification_id: int, user_id: int, row: dict,
     """Handle email delivery for a single notification."""
     email_pref = _get_email_pref(user_id)
     if email_pref != "immediate":
+        logger.debug("Skipping email for user %s: preference=%s", user_id, email_pref)
         _mark_email_sent(notification_id)
         return
 
     user_email = _get_user_email(user_id)
     if not user_email:
+        logger.debug("Skipping email for user %s: no email address", user_id)
         _mark_email_sent(notification_id)
         return
 
-    subject, html = _format_email_notification(row, project_title, actor_name, project_id, project_number)
-    if not subject or not html:
+    subject, text_body = _format_email_notification(row, project_title, actor_name, project_id, project_number)
+    if not subject or not text_body:
         _mark_email_sent(notification_id)
         return
 
@@ -541,7 +514,8 @@ def _process_email(notification_id: int, user_id: int, row: dict,
             from_addr=smtp_acct.get("email", ""),
             to_addr=user_email,
             subject=subject,
-            html_body=html,
+            html_body="",
+            text_body=text_body,
             oauth_provider=smtp_acct["oauth_provider"] if use_oauth else None,
             oauth_access_token=smtp_acct["oauth_access_token"] if use_oauth else None,
         )
@@ -549,7 +523,7 @@ def _process_email(notification_id: int, user_id: int, row: dict,
             logger.warning("CRM SMTP error for notification %s to %s: %s", notification_id, user_email, err)
     else:
         from smtp_client import send_email as _send_email
-        success = _send_email(user_email, subject, html, from_name_override=from_name)
+        success = _send_email(user_email, subject, text_body, from_name_override=from_name)
 
     if success:
         _mark_email_sent(notification_id)
@@ -558,7 +532,29 @@ def _process_email(notification_id: int, user_id: int, row: dict,
 
 
 def _get_crm_smtp_account() -> dict | None:
-    """Find CRM mail account for system notification emails."""
+    """Find the best SMTP config for notification emails.
+    Priority: 1) Alternate SMTP if enabled, 2) CRM mail account.
+    Returns dict with SMTP settings or None if nothing configured."""
+    # Check alternate SMTP first (better deliverability)
+    try:
+        from db import query_one
+        alt_row = query_one("SELECT value FROM system_settings WHERE key = 'alternate_smtp'")
+        if alt_row and alt_row.get("value"):
+            import json as _json
+            alt = alt_row["value"] if isinstance(alt_row["value"], dict) else _json.loads(str(alt_row["value"]))
+            if alt.get("enabled") and alt.get("host"):
+                return {
+                    "email": alt.get("from_email", ""),
+                    "smtp_host": alt["host"],
+                    "smtp_port": int(alt.get("port", 587)),
+                    "smtp_user": alt.get("user", ""),
+                    "smtp_password_encrypted": alt.get("password", ""),
+                    "oauth_provider": None,
+                    "oauth_access_token": None,
+                }
+    except Exception:
+        logger.debug("Failed to load alternate SMTP for notifications", exc_info=True)
+    # Fall back to CRM mail account
     try:
         from db import query_one
         row = query_one(

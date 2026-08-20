@@ -299,7 +299,7 @@ def _insert_opportunities(conn, opps: list[dict], stage_map: dict[str, int], con
                         tr = cur.fetchone()
                         if tr:
                             cur.execute(
-                                "INSERT INTO opportunity_tags (opportunity_id, tag_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                                "INSERT INTO opportunity_tags (opportunity_id, tag_id, assigned_at) VALUES (%s, %s, NOW()) ON CONFLICT DO NOTHING",
                                 (vid, tr[0]),
                             )
         except Exception:

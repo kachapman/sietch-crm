@@ -143,8 +143,15 @@ function handleSSEEvent(type, data) {
       showToast(`Reminder: ${data.title || data.data?.title || "Task reminder"}`);
       loadTasks();
       break;
-    case "notification:new":
-      updateNotificationBadge();
+case "notification:new":
+    _updateNotificationBadge();
+    // Pulse animation on bell icon
+    const bellBtn = $("#notification-bell-btn");
+    if (bellBtn) {
+      bellBtn.classList.remove("notification-pulse");
+      void bellBtn.offsetWidth; // trigger reflow
+      bellBtn.classList.add("notification-pulse");
+    }
       if (state.feedModalOpen) loadNotificationFeed({ force: true });
       // Browser notification for calendar reminders
       if (data.type === "calendar_reminder" && document.hidden && Notification.permission === "granted") {
@@ -11075,8 +11082,13 @@ async function loadStages() {
 }
 
 async function loadAllTags() {
-  const data = await api("/api/v2/tags");
-  state.allTags = unwrap(data);
+  try {
+    const data = await api("/api/v2/tags");
+    state.allTags = unwrap(data);
+  } catch (e) {
+    console.error("loadAllTags failed:", e);
+    if (!state.allTags) state.allTags = [];
+  }
 }
 
 async function loadCurrentUser() {
@@ -27746,7 +27758,7 @@ async function activateBookmarkTab(oppId) {
   if (deal?._cachedData) {
     titleEl.textContent = deal.title;
     bodyEl.innerHTML = "";
-    renderOpportunityPreviewContent(bodyEl, deal._cachedData);
+    renderOpportunityPreviewContent(bodyEl, deal._cachedData, "bookmark");
     linkifyPhonesAndEmails(bodyEl);
     updateInferredStatus("preview", deal.title || `Project #${id}`);
   } else {
@@ -27763,7 +27775,7 @@ async function activateBookmarkTab(oppId) {
       if (deal) deal._cachedData = data;
       titleEl.textContent = data.opp?.title || data.opp?.Title || deal?.title || `Project #${id}`;
       bodyEl.innerHTML = "";
-      renderOpportunityPreviewContent(bodyEl, data);
+      renderOpportunityPreviewContent(bodyEl, data, "bookmark");
       linkifyPhonesAndEmails(bodyEl);
       updateInferredStatus("preview", data.opp?.title || data.opp?.Title || deal?.title || `Project #${id}`);
       // Update tab's stage/due info
@@ -27842,7 +27854,7 @@ async function refreshBookmarkTab(oppId, showLoading = true) {
     if (titleEl) titleEl.textContent = data.opp?.title || data.opp?.Title || deal.title;
     if (bodyEl) {
       bodyEl.innerHTML = "";
-      renderOpportunityPreviewContent(bodyEl, data);
+      renderOpportunityPreviewContent(bodyEl, data, "bookmark");
       linkifyPhonesAndEmails(bodyEl);
     }
     renderBookmarkTabs();
@@ -28481,6 +28493,7 @@ function openAdminConsoleModal() {
     bindAdminTags();
     bindAdminCustomFields();
     bindAlternateSmtp();
+    bindAdminAutomation();
     // Sync buttons — real implementation
     function getSyncPayload() {
       return {
@@ -29053,6 +29066,9 @@ function switchAdminTab(tab) {
   }
   if (tab === "sync") {
     loadBackupHistory();
+  }
+  if (tab === "automation") {
+    populateAdminAutomation();
   }
 }
 
@@ -32785,9 +32801,15 @@ async function saveBotSettings(e) {
       allowCustomerUploads: !!($("#bot-settings-customer-uploads") || {}).checked,
       enabled: !!($("#bot-enabled-toggle") || {}).checked,
     };
-    await api("/api/v2/admin/bot-settings", { method: "PUT", body: payload });
+    await api("/api/v2/admin/bot-settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
     if (status) { status.textContent = "Saved!"; status.className = "bot-settings-status success"; }
     setTimeout(() => { if (status) status.textContent = ""; }, 3000);
+    // Refresh bot status after save
+    setTimeout(() => loadBotStatus(), 2000);
   } catch (e) {
     if (status) { status.textContent = "Save failed"; status.className = "bot-settings-status error"; }
   }
@@ -32889,10 +32911,543 @@ function bindBotSettings() {
 }
 
 /* ================================================================================
+   Automation Tab — admin console
+   ================================================================================ */
+
+let _automationRulesCache = [];
+let _automationUsersCache = [];
+let _automationStagesCache = [];
+let _automationTagsCache = [];
+
+async function populateAdminAutomation() {
+  try {
+    const [rulesResp, usersResp, stagesResp, tagsResp] = await Promise.all([
+      api("/api/v2/admin/automation/rules").catch(() => ({ rules: [] })),
+      api("/api/v2/users").catch(() => []),
+      api("/api/v2/stages").catch(() => []),
+      api("/api/v2/tags").catch(() => []),
+    ]);
+    _automationRulesCache = rulesResp.rules || rulesResp || [];
+    _automationUsersCache = usersResp.users || usersResp || [];
+    _automationStagesCache = stagesResp.stages || stagesResp || [];
+    _automationTagsCache = tagsResp.tags || tagsResp || [];
+    renderAutomationRulesList();
+    loadAutomationLogs(1);
+    populateAutomationStats();
+  } catch (e) {
+    console.error("Failed to load automation data:", e);
+  }
+}
+
+function populateAutomationStats() {
+  const el = $("#automation-stats");
+  if (!el) return;
+  const total = _automationRulesCache.length;
+  const enabled = _automationRulesCache.filter(r => r.enabled).length;
+  el.textContent = `${total} rule${total !== 1 ? "s" : ""} (${enabled} enabled)`;
+}
+
+function renderAutomationRulesList() {
+  const container = $("#automation-rules-list");
+  if (!container) return;
+  if (!_automationRulesCache.length) {
+    container.innerHTML = '<p class="bot-usage-empty">No automation rules configured yet. Click "+ Add Rule" to create one.</p>';
+    return;
+  }
+  container.innerHTML = _automationRulesCache.map(rule => {
+    const triggerLabel = {
+      stage_duration: `Stage stuck > ${rule.trigger_config?.days || "?"}d`,
+      project_created: "New project",
+      stage_changed: "Stage changed",
+      project_updated: "Project updated",
+      tag_duration: `Tag > ${rule.trigger_config?.days || "?"}d`,
+      tag_added: "Tag added",
+    }[rule.trigger_type] || rule.trigger_type;
+    const actionLabel = {
+      create_task: "Create Task",
+      send_email: "Send Email",
+      change_stage: "Change Stage",
+      add_tag: "Add Tag",
+    }[rule.action_type] || rule.action_type;
+    const lastRun = rule.last_run_at ? new Date(rule.last_run_at).toLocaleDateString() : "Never";
+    return `
+      <div class="automation-rule-row" data-rule-id="${rule.id}">
+        <div class="automation-rule-info">
+          <div class="automation-rule-name">${escapeHtml(rule.name)}</div>
+          <div class="automation-rule-meta">
+            <span class="automation-rule-badge trigger">${escapeHtml(triggerLabel)}</span>
+            <span class="automation-rule-badge action">${escapeHtml(actionLabel)}</span>
+            ${rule.dry_run ? '<span class="automation-rule-badge dry-run">Dry Run</span>' : ""}
+            <span>Last: ${lastRun}</span>
+            <span>Runs: ${rule.run_count || 0}</span>
+          </div>
+        </div>
+        <div class="automation-rule-actions">
+          <label class="automation-rule-toggle" title="${rule.enabled ? "Enabled" : "Disabled"}">
+            <input type="checkbox" ${rule.enabled ? "checked" : ""} data-action="toggle">
+            <span class="toggle-track"></span>
+            <span class="toggle-thumb"></span>
+          </label>
+          <button class="btn btn-ghost btn-icon-only btn-sm" title="Test" data-action="test"><i class="ti ti-play"></i></button>
+          <button class="btn btn-ghost btn-icon-only btn-sm" title="Edit" data-action="edit"><i class="ti ti-pencil"></i></button>
+          <button class="btn btn-ghost btn-icon-only btn-sm" title="Delete" data-action="delete"><i class="ti ti-trash"></i></button>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+async function toggleAutomationRule(id, enabled) {
+  try {
+    await api(`/api/v2/admin/automation/rules/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    });
+    const rule = _automationRulesCache.find(r => r.id === id);
+    if (rule) rule.enabled = enabled;
+    populateAutomationStats();
+  } catch (e) {
+    console.error("Toggle failed:", e);
+  }
+}
+
+async function deleteAutomationRule(id) {
+  if (!confirm("Delete this automation rule? This cannot be undone.")) return;
+  try {
+    await api(`/api/v2/admin/automation/rules/${id}`, { method: "DELETE" });
+    _automationRulesCache = _automationRulesCache.filter(r => r.id !== id);
+    renderAutomationRulesList();
+    populateAutomationStats();
+  } catch (e) {
+    console.error("Delete failed:", e);
+  }
+}
+
+function openAutomationRuleForm(rule) {
+  const modal = $("#automation-rule-modal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+  const isNew = !rule;
+  const nameInput = $("#automation-rule-name");
+  if (nameInput) {
+    nameInput.value = rule ? (rule.name || "") : "";
+    nameInput.placeholder = isNew ? "New Automation Rule" : "";
+  }
+  const saveBtn = $("#automation-rule-save-btn");
+  if (saveBtn) saveBtn.disabled = isNew;
+  $("#automation-rule-id").value = rule ? rule.id : "";
+  // Populate stages
+  const stageSelects = [$("#automation-trigger-stage"), $("#automation-trigger-to-stage"), $("#automation-action-target-stage")];
+  stageSelects.forEach(sel => {
+    if (!sel) return;
+    const firstOpt = sel.options[0];
+    sel.innerHTML = "";
+    sel.appendChild(firstOpt);
+    _automationStagesCache.forEach(s => {
+      const opt = document.createElement("option");
+      opt.value = s.id;
+      opt.textContent = s.title;
+      sel.appendChild(opt);
+    });
+  });
+  // Populate tags
+  _populateTagSelect("automation-trigger-tag", rule?.trigger_config?.tag_id || "");
+  _populateTagSelect("automation-trigger-tag-added", rule?.trigger_config?.tag_id || "");
+  // Populate users
+  _renderUserPicker("automation-action-assignees", rule?.action_config?.assignee_user_ids || []);
+  // Populate tags
+  _renderTagPicker("automation-action-tags", rule?.action_config?.tag_ids || []);
+  // Fill form values
+  if (rule) {
+    $("#automation-trigger-type").value = rule.trigger_type || "stage_duration";
+    $("#automation-action-type").value = rule.action_type || "create_task";
+    const tc = rule.trigger_config || {};
+    const ac = rule.action_config || {};
+    $("#automation-trigger-stage").value = tc.stage_id || "";
+    $("#automation-trigger-days").value = tc.days || 2;
+    $("#automation-trigger-cooldown").value = tc.cooldown_hours || "";
+    const cooldownMode = tc.cooldown_mode || "recurring";
+    document.querySelectorAll('input[name="automation-cooldown-mode"]').forEach(r => {
+      r.checked = r.value === cooldownMode;
+    });
+    $("#automation-trigger-to-stage").value = tc.to_stage_id || "";
+    $("#automation-trigger-tag").value = tc.tag_id || "";
+    $("#automation-trigger-tag-days").value = tc.days || 7;
+    $("#automation-trigger-tag-added").value = tc.tag_id || "";
+    $("#automation-trigger-tag-cooldown").value = tc.cooldown_hours || "";
+    const tagCooldownMode = tc.cooldown_mode || "recurring";
+    document.querySelectorAll('input[name="automation-tag-cooldown-mode"]').forEach(r => {
+      r.checked = r.value === tagCooldownMode;
+    });
+    $("#automation-action-title").value = ac.title || "Follow up: {project}";
+    $("#automation-action-desc").value = ac.description || "";
+    $("#automation-action-due").value = ac.due_offset_days || 0;
+    $("#automation-action-from-type").value = ac.from_type || "crm_mail";
+    $("#automation-action-to-type").value = ac.to_type || "project_owner";
+    $("#automation-action-subject").value = ac.subject || "Update on {project}";
+    $("#automation-action-body").value = ac.body || "";
+    $("#automation-action-target-stage").value = ac.target_stage_id || "";
+    $("#automation-rule-enabled").checked = rule.enabled !== false;
+    $("#automation-rule-dry-run").checked = !!rule.dry_run;
+    // Custom SMTP fields
+    if (ac.smtp_host) $("#automation-action-smtp-host").value = ac.smtp_host;
+    if (ac.smtp_port) $("#automation-action-smtp-port").value = ac.smtp_port;
+    if (ac.smtp_user) $("#automation-action-smtp-user").value = ac.smtp_user;
+    if (ac.smtp_from_addr) $("#automation-action-smtp-from").value = ac.smtp_from_addr;
+    if (ac.custom_email) $("#automation-action-custom-email").value = ac.custom_email;
+  } else {
+    // Defaults for new rule
+    $("#automation-trigger-type").value = "stage_duration";
+    $("#automation-action-type").value = "create_task";
+    $("#automation-trigger-days").value = 2;
+    $("#automation-trigger-cooldown").value = "";
+    document.querySelector('input[name="automation-cooldown-mode"][value="recurring"]').checked = true;
+    $("#automation-action-title").value = "Follow up: {project}";
+    $("#automation-action-desc").value = "";
+    $("#automation-action-due").value = 0;
+    $("#automation-action-from-type").value = "crm_mail";
+    $("#automation-action-to-type").value = "project_owner";
+    $("#automation-action-subject").value = "Update on {project}";
+    $("#automation-action-body").value = "";
+    $("#automation-action-target-stage").value = "";
+    $("#automation-rule-enabled").checked = true;
+    $("#automation-rule-dry-run").checked = false;
+    $("#automation-trigger-tag").value = "";
+    $("#automation-trigger-tag-days").value = 7;
+    $("#automation-trigger-tag-added").value = "";
+    $("#automation-trigger-tag-cooldown").value = "";
+    document.querySelector('input[name="automation-tag-cooldown-mode"][value="recurring"]').checked = true;
+  }
+  // Show/hide trigger and action fields
+  _automationTriggerFieldsChanged();
+  _automationActionFieldsChanged();
+  // Hide test preview
+  const preview = $("#automation-test-preview");
+  if (preview) preview.style.display = "none";
+}
+
+function closeAutomationRuleForm() {
+  const modal = $("#automation-rule-modal");
+  if (modal) modal.classList.add("hidden");
+}
+
+function editAutomationRule(id) {
+  const rule = _automationRulesCache.find(r => r.id === id);
+  if (rule) openAutomationRuleForm(rule);
+}
+
+async function saveAutomationRule() {
+  const id = $("#automation-rule-id")?.value;
+  const name = ($("#automation-rule-name")?.value || "").trim();
+  if (!name) {
+    showToast("Please enter a rule name", true);
+    const nameInput = $("#automation-rule-name");
+    if (nameInput) nameInput.focus();
+    return;
+  }
+  const triggerType = $("#automation-trigger-type").value;
+  const actionType = $("#automation-action-type").value;
+  const triggerConfig = {
+    stage_id: $("#automation-trigger-stage").value ? parseInt($("#automation-trigger-stage").value) : null,
+    days: parseInt($("#automation-trigger-days").value) || 2,
+    cooldown_mode: document.querySelector('input[name="automation-cooldown-mode"]:checked')?.value || "recurring",
+    cooldown_hours: parseInt($("#automation-trigger-cooldown").value) || 0,
+    to_stage_id: $("#automation-trigger-to-stage").value ? parseInt($("#automation-trigger-to-stage").value) : null,
+    tag_id: $("#automation-trigger-tag").value ? parseInt($("#automation-trigger-tag").value) : null,
+    tag_days: parseInt($("#automation-trigger-tag-days").value) || 7,
+    tag_added_id: $("#automation-trigger-tag-added").value ? parseInt($("#automation-trigger-tag-added").value) : null,
+    tag_cooldown_mode: document.querySelector('input[name="automation-tag-cooldown-mode"]:checked')?.value || "recurring",
+    tag_cooldown_hours: parseInt($("#automation-trigger-tag-cooldown").value) || 0,
+  };
+  // Use tag-specific fields for tag triggers
+  if (triggerType === "tag_duration") {
+    triggerConfig.days = triggerConfig.tag_days;
+    triggerConfig.cooldown_mode = triggerConfig.tag_cooldown_mode;
+    triggerConfig.cooldown_hours = triggerConfig.tag_cooldown_hours;
+  }
+  if (triggerType === "tag_added") {
+    triggerConfig.tag_id = triggerConfig.tag_added_id;
+  }
+  if (!triggerConfig.cooldown_hours) {
+    triggerConfig.cooldown_hours = triggerConfig.days * 24;
+  }
+  const actionConfig = {
+    title: $("#automation-action-title").value,
+    description: $("#automation-action-desc").value,
+    assignee_user_ids: _getCheckedUsers("automation-action-assignees"),
+    due_offset_days: parseInt($("#automation-action-due").value) || 0,
+    from_type: $("#automation-action-from-type").value,
+    to_type: $("#automation-action-to-type").value,
+    subject: $("#automation-action-subject").value,
+    body: $("#automation-action-body").value,
+    target_stage_id: $("#automation-action-target-stage").value ? parseInt($("#automation-action-target-stage").value) : null,
+    tag_ids: _getCheckedTags("automation-action-tags"),
+    custom_email: $("#automation-action-custom-email")?.value || "",
+    smtp_host: $("#automation-action-smtp-host")?.value || "",
+    smtp_port: parseInt($("#automation-action-smtp-port")?.value) || 587,
+    smtp_user: $("#automation-action-smtp-user")?.value || "",
+    smtp_password: $("#automation-action-smtp-pass")?.value || "",
+    smtp_from_addr: $("#automation-action-smtp-from")?.value || "",
+  };
+  const body = {
+    name,
+    enabled: $("#automation-rule-enabled").checked,
+    dryRun: $("#automation-rule-dry-run").checked,
+    triggerType,
+    actionType,
+    triggerConfig,
+    actionConfig,
+  };
+  try {
+    if (id) {
+      await api(`/api/v2/admin/automation/rules/${id}`, { method: "PUT", body: JSON.stringify(body) });
+    } else {
+      await api("/api/v2/admin/automation/rules", { method: "POST", body: JSON.stringify(body) });
+    }
+    closeAutomationRuleForm();
+    await populateAdminAutomation();
+  } catch (e) {
+    alert("Failed to save rule: " + e.message);
+  }
+}
+
+async function testAutomationRule(id) {
+  try {
+    const resp = await api(`/api/v2/admin/automation/rules/${id}/test`, { method: "POST" });
+    const preview = $("#automation-test-preview");
+    const results = $("#automation-test-results");
+    if (!preview || !results) return;
+    preview.style.display = "block";
+    if (!resp.previews || !resp.previews.length) {
+      results.innerHTML = `<p style="color:var(--muted); margin:0;">No matching projects found (${resp.total_matches || 0} total matches).</p>`;
+      return;
+    }
+    results.innerHTML = resp.previews.map(p => `
+      <div class="automation-test-result">
+        <span class="project-name">#${p.opportunity_id} ${escapeHtml(p.title)}</span>
+        ${p.days_in_stage ? `<span style="color:var(--muted);"> (${p.days_in_stage}d in stage)</span>` : ""}
+        <div class="preview-detail">${escapeHtml(JSON.stringify(p.preview))}</div>
+      </div>
+    `).join("");
+  } catch (e) {
+    console.error("Test failed:", e);
+    alert("Test failed: " + e.message);
+  }
+}
+
+async function loadAutomationLogs(page) {
+  try {
+    const resp = await api(`/api/v2/admin/automation/logs?page=${page}&perPage=30`);
+    const container = $("#automation-logs-list");
+    if (!container) return;
+    const logs = resp.logs || [];
+    if (!logs.length) {
+      container.innerHTML = '<p class="bot-usage-empty">No executions yet.</p>';
+      return;
+    }
+    container.innerHTML = logs.map(log => {
+      const time = log.created_at ? new Date(log.created_at).toLocaleString() : "";
+      const projectName = log.project_number ? `#${log.project_number} ${log.project_title}` : log.project_title ? `${log.project_title}` : `Project #${log.opportunity_id || "?"}`;
+      const result = log.action_result || {};
+      let detail = "";
+      if (log.error) {
+        detail = `<span class="automation-log-error">Error: ${escapeHtml(log.error)}</span>`;
+      } else if (result.dry_run) {
+        detail = `[DRY RUN] ${escapeHtml(JSON.stringify(result))}`;
+      } else {
+        const parts = [];
+        if (result.task_ids) parts.push(`${result.count} task(s) created`);
+        if (result.notification_ids) parts.push(`${result.count} user(s) notified`);
+        if (result.email_sent_to) parts.push(`Email to ${result.email_sent_to}`);
+        if (result.moved_to_stage) parts.push(`Moved to stage ${result.stage_title || result.moved_to_stage}`);
+        if (result.tags_added) parts.push(`${result.count} tag(s) added`);
+        detail = parts.join(", ") || escapeHtml(JSON.stringify(result));
+      }
+      return `
+        <div class="automation-log-entry">
+          <span class="automation-log-time">${time}</span>
+          <span class="automation-log-rule">${escapeHtml(log.rule_name || "?")}</span>
+          <span class="automation-log-detail">${escapeHtml(projectName)} — ${detail}</span>
+        </div>`;
+    }).join("");
+  } catch (e) {
+    console.error("Failed to load automation logs:", e);
+  }
+}
+
+function _renderUserPicker(containerId, selectedIds) {
+  const container = $(`#${containerId}`);
+  if (!container) return;
+  if (!_automationUsersCache.length) {
+    container.innerHTML = '<span style="font-size:0.8rem; color:var(--muted); padding:0.3rem;">No users loaded</span>';
+    return;
+  }
+  container.innerHTML = _automationUsersCache.map(u => `
+    <label>
+      <input type="checkbox" value="${u.id}" ${selectedIds.includes(u.id) ? "checked" : ""}>
+      ${escapeHtml(u.displayName || u.display_name || u.email || `User ${u.id}`)}
+    </label>
+  `).join("");
+}
+
+function _getCheckedUsers(containerId) {
+  const container = $(`#${containerId}`);
+  if (!container) return [];
+  return Array.from(container.querySelectorAll("input[type=checkbox]:checked")).map(cb => parseInt(cb.value));
+}
+
+function _renderTagPicker(containerId, selectedIds) {
+  const container = $(`#${containerId}`);
+  if (!container) return;
+  if (!_automationTagsCache.length) {
+    container.innerHTML = '<span style="font-size:0.8rem; color:var(--muted); padding:0.3rem;">No tags defined</span>';
+    return;
+  }
+  container.innerHTML = _automationTagsCache.map(t => `
+    <label>
+      <input type="checkbox" value="${t.id}" ${selectedIds.includes(t.id) ? "checked" : ""}>
+      ${escapeHtml(t.title || t.name || `Tag ${t.id}`)}
+    </label>
+  `).join("");
+}
+
+function _getCheckedTags(containerId) {
+  const container = $(`#${containerId}`);
+  if (!container) return [];
+  return Array.from(container.querySelectorAll("input[type=checkbox]:checked")).map(cb => parseInt(cb.value));
+}
+
+function _automationTriggerFieldsChanged() {
+  const type = $("#automation-trigger-type")?.value;
+  document.querySelectorAll(".automation-trigger-fields").forEach(el => el.style.display = "none");
+  // Convert underscores to hyphens for id matching (tag_added → tag-added)
+  const idType = type ? type.replace(/_/g, "-") : "";
+  const target = $(`#automation-trigger-fields-${idType}`);
+  if (target) target.style.display = "";
+  // Re-render tag selects when their section becomes visible (preserves selections)
+  if (type === "tag_duration") {
+    const prev = $("#automation-trigger-tag")?.value || "";
+    _populateTagSelect("automation-trigger-tag", prev);
+  }
+  if (type === "tag_added") {
+    const prev = $("#automation-trigger-tag-added")?.value || "";
+    _populateTagSelect("automation-trigger-tag-added", prev);
+  }
+}
+
+function _populateTagSelect(selectId, selectedValue) {
+  const sel = $(`#${selectId}`);
+  if (!sel) return;
+  const firstOpt = sel.options[0];
+  sel.innerHTML = "";
+  sel.appendChild(firstOpt);
+  _automationTagsCache.forEach(t => {
+    const opt = document.createElement("option");
+    opt.value = t.id;
+    opt.textContent = t.title || t.name;
+    if (String(t.id) === String(selectedValue)) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+function _automationActionFieldsChanged() {
+  const type = $("#automation-action-type")?.value;
+  document.querySelectorAll(".automation-action-fields").forEach(el => el.style.display = "none");
+  const target = $(`#automation-action-fields-${type}`);
+  if (target) target.style.display = "";
+  // Show/hide custom SMTP fields
+  const fromType = $("#automation-action-from-type")?.value;
+  const smtpFields = $("#automation-custom-smtp-fields");
+  if (smtpFields) smtpFields.style.display = fromType === "custom" ? "" : "none";
+  // Show/hide custom email field
+  const toType = $("#automation-action-to-type")?.value;
+  const emailField = $("#automation-custom-email-field");
+  if (emailField) emailField.style.display = toType === "custom" ? "" : "none";
+  // Re-render pickers when their section becomes visible (preserves selections)
+  if (type === "create_task") {
+    const prev = _getCheckedUsers("automation-action-assignees");
+    _renderUserPicker("automation-action-assignees", prev);
+  }
+  if (type === "add_tag") {
+    const prev = _getCheckedTags("automation-action-tags");
+    _renderTagPicker("automation-action-tags", prev);
+  }
+}
+
+function bindAdminAutomation() {
+  // Add rule button
+  const addBtn = $("#automation-add-rule-btn");
+  if (addBtn) addBtn.addEventListener("click", () => openAutomationRuleForm(null));
+  // Dismiss handlers
+  document.querySelectorAll("[data-automation-dismiss]").forEach(el => {
+    el.addEventListener("click", closeAutomationRuleForm);
+  });
+  // Event delegation for rules list (handles edit, delete, test, toggle)
+  const rulesList = $("#automation-rules-list");
+  if (rulesList && !rulesList._automationBound) {
+    rulesList._automationBound = true;
+    rulesList.addEventListener("change", (e) => {
+      if (e.target.matches('[data-action="toggle"]')) {
+        const row = e.target.closest(".automation-rule-row");
+        if (row) toggleAutomationRule(parseInt(row.dataset.ruleId), e.target.checked);
+      }
+    });
+    rulesList.addEventListener("click", (e) => {
+      const row = e.target.closest(".automation-rule-row");
+      if (!row) return;
+      const id = parseInt(row.dataset.ruleId);
+      if (e.target.closest('[data-action="edit"]')) editAutomationRule(id);
+      if (e.target.closest('[data-action="test"]')) testAutomationRule(id);
+      if (e.target.closest('[data-action="delete"]')) deleteAutomationRule(id);
+    });
+  }
+  // Save button
+  const saveBtn = $("#automation-rule-save-btn");
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.addEventListener("click", saveAutomationRule);
+  }
+  // Disable save until name is filled
+  const nameInput = $("#automation-rule-name");
+  if (nameInput) {
+    nameInput.addEventListener("input", () => {
+      const btn = $("#automation-rule-save-btn");
+      if (btn) btn.disabled = !nameInput.value.trim();
+    });
+  }
+  // Test button
+  const testBtn = $("#automation-rule-test-btn");
+  if (testBtn) testBtn.addEventListener("click", () => {
+    const id = $("#automation-rule-id")?.value;
+    if (id) testAutomationRule(parseInt(id));
+  });
+  // Trigger type change
+  const triggerType = $("#automation-trigger-type");
+  if (triggerType) triggerType.addEventListener("change", _automationTriggerFieldsChanged);
+  // Action type change
+  const actionType = $("#automation-action-type");
+  if (actionType) actionType.addEventListener("change", _automationActionFieldsChanged);
+  // From type change
+  const fromType = $("#automation-action-from-type");
+  if (fromType) fromType.addEventListener("change", _automationActionFieldsChanged);
+  // To type change
+  const toType = $("#automation-action-to-type");
+  if (toType) toType.addEventListener("change", _automationActionFieldsChanged);
+  // Escape key closes modal
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      const modal = $("#automation-rule-modal");
+      if (modal && !modal.classList.contains("hidden")) {
+        closeAutomationRuleForm();
+      }
+    }
+  });
+}
+
+/* ================================================================================
    Render opportunity preview content into any container (reused by modal + tabs)
    ================================================================================ */
 
-function renderOpportunityPreviewContent(container, data) {
+function renderOpportunityPreviewContent(container, data, context = "modal") {
   if (!container) return;
   container.innerHTML = "";
 
@@ -33036,8 +33591,11 @@ function renderOpportunityPreviewContent(container, data) {
           body: JSON.stringify({ description: newDesc }),
         });
         addEventLogEntry("update", oppId, opp.title || opp.Title || "", "Description updated", true);
-        // Re-render preview to show saved state
-        openOpportunityPreviewModal(oppId, opp.title || opp.Title || "", oppPreviewContext?.group || null).catch(() => {});
+        if (context === "bookmark") {
+          if (typeof refreshBookmarkTab === "function") refreshBookmarkTab(oppId, false);
+        } else {
+          openOpportunityPreviewModal(oppId, opp.title || opp.Title || "", oppPreviewContext?.group || null).catch(() => {});
+        }
       } catch (err) {
         showToast("Failed to update description: " + (err.message || err), true);
         confirmBtn.disabled = false;
@@ -33088,7 +33646,11 @@ function renderOpportunityPreviewContent(container, data) {
           const stageName = state.stages.find((s) => String(s.id ?? s.ID) === newStageId)?.title || "";
           showToast(`Stage changed to ${stageName}`);
           addEventLogEntry("update", oppId, opp.title || opp.Title || "", `Stage changed to ${stageName}`, true);
-          openOpportunityPreviewModal(oppId, opp.title || opp.Title || "", oppPreviewContext?.group || null).catch(() => {});
+          if (context === "bookmark") {
+            if (typeof refreshBookmarkTab === "function") refreshBookmarkTab(oppId, false);
+          } else {
+            openOpportunityPreviewModal(oppId, opp.title || opp.Title || "", oppPreviewContext?.group || null).catch(() => {});
+          }
         } catch (err) {
           showToast("Failed to change stage: " + (err.message || err), true);
           const fallbackStage = state.stages.find((s) => String(s.id ?? s.ID) === currentStageId);
@@ -33126,6 +33688,8 @@ function renderOpportunityPreviewContent(container, data) {
             if (idx !== -1) currentTags.splice(idx, 1);
             renderTagChips();
             addEventLogEntry("update", oppId, opp.title || opp.Title || "", `Tag removed: ${t}`, true);
+            // Refresh card on board
+            _refreshOppCardTags(oppId, t, "remove");
           } catch (err) {
             showToast("Failed to remove tag: " + (err.message || err), true);
             rm.disabled = false;
@@ -33150,8 +33714,11 @@ function renderOpportunityPreviewContent(container, data) {
       addDropdown.className = "template-dropdown hidden";
       addDropdown.style.minWidth = "160px";
 
-      const renderAddTagDropdown = () => {
+      const renderAddTagDropdown = async () => {
         addDropdown.innerHTML = "";
+        if (!state.allTags || !state.allTags.length) {
+          try { await loadAllTags(); } catch {}
+        }
         const usedLower = new Set(currentTags.map((t) => normalizeTagTitle(t).toLowerCase()));
         const available = (state.allTags || []).filter((tag) => {
           const title = normalizeTagTitle(tag.title ?? tag);
@@ -33170,7 +33737,11 @@ function renderOpportunityPreviewContent(container, data) {
             item.type = "button";
             item.className = "template-dropdown-item";
             item.textContent = title;
-            if (tag.color) item.style.color = tag.color;
+            if (tag.color) {
+              const swatch = document.createElement("span");
+              swatch.style.cssText = `display:inline-block;width:8px;height:8px;border-radius:50%;background:${tag.color};flex-shrink:0;margin-right:0.3rem;`;
+              item.prepend(swatch);
+            }
             item.addEventListener("click", async (e) => {
               e.stopPropagation();
               addDropdown.classList.add("hidden");
@@ -33179,6 +33750,8 @@ function renderOpportunityPreviewContent(container, data) {
                 if (!currentTags.some((ct) => tagsEqual(ct, title))) currentTags.push(title);
                 renderTagChips();
                 addEventLogEntry("update", oppId, opp.title || opp.Title || "", `Tag added: ${title}`, true);
+                // Refresh card on board
+                _refreshOppCardTags(oppId, title, "add");
               } catch (err) {
                 showToast("Failed to add tag: " + (err.message || err), true);
               }
@@ -34946,6 +35519,7 @@ function openTaskPreviewModal(task, { isNew = false } = {}) {
 
   body.innerHTML = `
     <form id="task-edit-form" class="modal-form task-edit-form">
+      ${!isNew && task.created ? `<p style="font-size:0.8rem; color:var(--muted); margin:0 0 0.75rem;">Created: ${escapeHtml(new Date(task.created).toLocaleString())}</p>` : ""}
       <div class="field">
         <label for="task-edit-title">Title</label>
         <input type="text" id="task-edit-title" value="${escapeHtml(task.title || "")}" />
@@ -35774,6 +36348,22 @@ function updateOpportunityCardDom(opp, group) {
   card.replaceWith(next);
   const entry = groupCardObservers.get(group.id);
   if (board && entry?.observer) entry.observer.observe(next);
+}
+
+function _refreshOppCardTags(oppId, tagTitle, action) {
+  const oppGroup = state.groups.find(g => g.opportunities.some(o => o.id === oppId));
+  if (!oppGroup) return;
+  const opp = oppGroup.opportunities.find(o => o.id === oppId);
+  if (!opp) return;
+  if (!opp.tags) opp.tags = [];
+  if (action === "add") {
+    if (!opp.tags.some(t => (typeof t === "string" ? t : t.title) === tagTitle)) {
+      opp.tags.push(tagTitle);
+    }
+  } else {
+    opp.tags = opp.tags.filter(t => (typeof t === "string" ? t : t.title) !== tagTitle);
+  }
+  updateOpportunityCardDom(opp, oppGroup);
 }
 
 function moveCardToStageColumn(oppId, stageId, boardEl) {

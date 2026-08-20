@@ -2251,6 +2251,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_bot_api_get()
             return
 
+        # ── Automation (admin) ──
+        if api_path == "/api/v2/admin/automation/rules":
+            self._handle_automation_rules_get()
+            return
+        if api_path == "/api/v2/admin/automation/logs":
+            self._handle_automation_logs_get(qs)
+            return
+
         # ── v2 API: Projects ──
         if api_path == "/api/v2/projects/count":
             self._handle_projects_count(qs)
@@ -2994,6 +3002,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_bot_api_post(method)
             return
 
+        # ── Automation (admin) ──
+        if api_path == "/api/v2/admin/automation/rules" and method == "POST":
+            self._handle_automation_rule_create()
+            return
+        m = re.match(r"^/api/v2/admin/automation/rules/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_automation_rule_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_automation_rule_delete(int(m.group(1)))
+            return
+        m2 = re.match(r"^/api/v2/admin/automation/rules/(\d+)/test$", api_path)
+        if m2 and method == "POST":
+            self._handle_automation_rule_test(int(m2.group(1)))
+            return
+
         # ── v2 API: Projects ──
         if api_path == "/api/v2/projects" and method == "POST":
             self._handle_project_create()
@@ -3719,6 +3743,156 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "project_number": row[23],
         })
 
+    # ── Automation rules (admin) ──────────────────────────────────────────
+
+    def _handle_automation_rules_get(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        rows = db.query_dicts("SELECT * FROM automation_rules ORDER BY id")
+        for r in rows:
+            if r.get("created_at"):
+                r["created_at"] = str(r["created_at"])
+            if r.get("updated_at"):
+                r["updated_at"] = str(r["updated_at"])
+            if r.get("last_run_at"):
+                r["last_run_at"] = str(r["last_run_at"])
+        _json_response(self, 200, {"rules": rows})
+
+    def _handle_automation_rule_create(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        name = str(payload.get("name") or "").strip()
+        trigger_type = str(payload.get("triggerType") or "").strip()
+        action_type = str(payload.get("actionType") or "").strip()
+        if not name or not trigger_type or not action_type:
+            _json_response(self, 400, {"error": "name, triggerType, and actionType are required"})
+            return
+        rid = db.insert_returning(
+            """INSERT INTO automation_rules (name, enabled, dry_run, trigger_type, trigger_config, action_type, action_config)
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (
+                name,
+                payload.get("enabled", True),
+                payload.get("dryRun", False),
+                trigger_type,
+                json.dumps(payload.get("triggerConfig") or {}),
+                action_type,
+                json.dumps(payload.get("actionConfig") or {}),
+            ),
+        )
+        _json_response(self, 201, {"id": rid, "ok": True})
+
+    def _handle_automation_rule_update(self, rule_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        sets = ["updated_at = NOW()"]
+        params: list = []
+        for field, col in [("name", "name"), ("enabled", "enabled"), ("dryRun", "dry_run"),
+                           ("triggerType", "trigger_type"), ("actionType", "action_type")]:
+            if field in payload:
+                sets.append(f"{col} = %s")
+                params.append(payload[field])
+        for field, col in [("triggerConfig", "trigger_config"), ("actionConfig", "action_config")]:
+            if field in payload:
+                sets.append(f"{col} = %s")
+                params.append(json.dumps(payload[field]))
+        params.append(rule_id)
+        db.execute(f"UPDATE automation_rules SET {', '.join(sets)} WHERE id = %s", (*params,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_automation_rule_delete(self, rule_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        db.execute("DELETE FROM automation_rules WHERE id = %s", (rule_id,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_automation_rule_test(self, rule_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        rule = db.query_one("SELECT * FROM automation_rules WHERE id = %s", (rule_id,))
+        if not rule:
+            _json_response(self, 404, {"error": "Rule not found"})
+            return
+        from automation_engine import (
+            _evaluate_stage_duration_rules, _evaluate_project_created_rules,
+            _evaluate_stage_changed_rules, _evaluate_project_updated_rules,
+            _evaluate_tag_duration_rules, _evaluate_tag_added_rules,
+            _build_template_context, _execute_action,
+        )
+        trigger_type = rule.get("trigger_type", "")
+        matches = []
+        if trigger_type == "stage_duration":
+            matches = _evaluate_stage_duration_rules()
+        elif trigger_type == "project_created":
+            matches = _evaluate_project_created_rules()
+        elif trigger_type == "stage_changed":
+            matches = _evaluate_stage_changed_rules()
+        elif trigger_type == "project_updated":
+            matches = _evaluate_project_updated_rules()
+        elif trigger_type == "tag_duration":
+            matches = _evaluate_tag_duration_rules()
+        elif trigger_type == "tag_added":
+            matches = _evaluate_tag_added_rules()
+        # Filter to this rule only
+        matches = [m for m in matches if m["rule"]["id"] == rule_id]
+        previews = []
+        for m in matches[:10]:
+            opp = m["opp"]
+            ctx = _build_template_context(opp, opp.get("stage_title") or "", m.get("days_in_stage", 0), m.get("days_with_tag", 0))
+            result = _execute_action(rule, opp, ctx, dry_run=True)
+            previews.append({
+                "opportunity_id": opp["id"],
+                "title": opp.get("title", ""),
+                "days_in_stage": m.get("days_in_stage", 0),
+                "preview": result,
+            })
+        _json_response(self, 200, {"previews": previews, "total_matches": len(matches)})
+
+    def _handle_automation_logs_get(self, qs: dict) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        rule_id = (qs.get("ruleId") or [None])[0]
+        page = max(1, int((qs.get("page") or [1])[0]))
+        per_page = min(100, max(1, int((qs.get("perPage") or [50])[0])))
+        offset = (page - 1) * per_page
+        where = ""
+        params: list = []
+        if rule_id:
+            where = "WHERE l.rule_id = %s"
+            params.append(int(rule_id))
+        count_row = db.query_one(f"SELECT COUNT(*) as cnt FROM automation_logs l {where}", (*params,) if params else None)
+        total = count_row["cnt"] if count_row else 0
+        params.extend([per_page, offset])
+        rows = db.query_dicts(
+            f"""SELECT l.*, r.name as rule_name, o.title as project_title, o.project_number
+                FROM automation_logs l
+                LEFT JOIN automation_rules r ON r.id = l.rule_id
+                LEFT JOIN opportunities o ON o.id = l.opportunity_id
+                {where}
+                ORDER BY l.created_at DESC LIMIT %s OFFSET %s""",
+            (*params,),
+        )
+        for r in rows:
+            if r.get("created_at"):
+                r["created_at"] = str(r["created_at"])
+        _json_response(self, 200, {"logs": rows, "total": total, "page": page, "perPage": per_page})
+
     def _handle_project_create(self) -> None:
         user = _require_auth(self)
         if not user:
@@ -3743,8 +3917,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
         opp_id = db.insert_returning(
             """INSERT INTO opportunities (title, description, stage_id, stage_type, bid_value,
-                   expected_close_date, contact_id, responsible_user_id, created_by, is_private)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   expected_close_date, contact_id, responsible_user_id, created_by, is_private,
+                   stage_entered_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 RETURNING id""",
             (title, description, stage_id, stage_type, bid_value, expected_close, contact_id, responsible_user_id, user["id"], is_private),
         )
@@ -3773,6 +3948,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         val = None
                     sets.append(f"{col} = %s")
                     params.append(val)
+            if "stageId" in payload:
+                sets.append("stage_entered_at = NOW()")
             params.append(opp_id)
             db.execute(f"UPDATE opportunities SET {', '.join(sets)} WHERE id = %s", (*params,))
 
@@ -3843,7 +4020,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "tagId or title is required"})
             return
         db.execute(
-            "INSERT INTO opportunity_tags (opportunity_id, tag_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            "INSERT INTO opportunity_tags (opportunity_id, tag_id, assigned_at) VALUES (%s, %s, NOW()) "
+            "ON CONFLICT (opportunity_id, tag_id) DO UPDATE SET assigned_at = NOW()",
             (opp_id, tag_id),
         )
         _json_response(self, 200, {"ok": True})
@@ -5074,6 +5252,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
              payload.get("sortOrder", 0), payload.get("remindAt")),
         )
         _json_response(self, 201, {"id": tid, "ok": True})
+        # Publish task:created for dashboard auto-refresh
+        event_bus.publish("task:created", {
+            "task_id": tid, "title": title,
+            "opportunity_id": payload.get("opportunityId"),
+        })
 
     def _handle_task_update(self, task_id: int) -> None:
         user = _require_auth(self)
@@ -5124,20 +5307,27 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 (val, task_id),
             )
         _json_response(self, 200, {"ok": True})
+        # Publish task:updated for dashboard auto-refresh
+        event_bus.publish("task:updated", {"task_id": task_id})
 
     def _handle_task_delete(self, task_id: int) -> None:
         user = _require_auth(self)
         if not user:
             return
-        owned = db.query_one(
-            "SELECT id FROM tasks WHERE id = %s AND owner_user_id = %s",
+        task = db.query_one(
+            "SELECT id, title, opportunity_id FROM tasks WHERE id = %s AND owner_user_id = %s",
             (task_id, user["id"]),
         )
-        if not owned:
+        if not task:
             _json_response(self, 404, {"error": "Task not found"})
             return
         db.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
         _json_response(self, 200, {"ok": True})
+        # Publish task:deleted for dashboard auto-refresh
+        event_bus.publish("task:deleted", {
+            "task_id": task_id, "title": task.get("title", ""),
+            "opportunity_id": task.get("opportunity_id"),
+        })
 
     def _handle_tasks_reorder(self) -> None:
         user = _require_auth(self)
@@ -5771,6 +5961,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE, %s) RETURNING id""",
             (email, pw_hash, salt, payload.get("displayName"), payload.get("firstName"),
              payload.get("lastName"), is_admin, role),
+        )
+        # Set default notification preferences for new user
+        db.execute(
+            "INSERT INTO notification_preferences (user_id, notification_type, enabled) VALUES (%s, 'email_digest', TRUE)",
+            (uid,),
         )
         _json_response(self, 201, {"id": uid, "ok": True})
 
@@ -6871,7 +7066,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                     tag_id = db.query_one("SELECT id FROM tag_definitions WHERE title = %s", (tag_title,))["id"]
                                     tag_map[tag_title.lower()] = tag_id
                                 db.execute(
-                                    "INSERT INTO opportunity_tags (opportunity_id, tag_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                                    "INSERT INTO opportunity_tags (opportunity_id, tag_id, assigned_at) VALUES (%s, %s, NOW()) ON CONFLICT DO NOTHING",
                                     (v3_opp_id, tag_id),
                                 )
                                 tags_synced += 1
@@ -7020,8 +7215,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 if is_new:
                     # Insert new opportunity
                     db.execute(
-                        """INSERT INTO opportunities (title, description, stage_id, bid_value, created_at)
-                           VALUES (%s, %s, %s, %s, NOW())""",
+                        """INSERT INTO opportunities (title, description, stage_id, bid_value, created_at, stage_entered_at)
+                           VALUES (%s, %s, %s, %s, NOW(), NOW())""",
                         (title, description, v3_stage_id, bid_value),
                     )
                     v3_opp_id = db.query_one("SELECT id FROM opportunities WHERE title = %s", (title,))["id"]
@@ -7046,7 +7241,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                     tag_map[tag_title.lower()] = tag_id
                                     tag_count += 1
                                 db.execute(
-                                    "INSERT INTO opportunity_tags (opportunity_id, tag_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                                    "INSERT INTO opportunity_tags (opportunity_id, tag_id, assigned_at) VALUES (%s, %s, NOW()) ON CONFLICT DO NOTHING",
                                     (v3_opp_id, tag_id),
                                 )
                     except Exception:
@@ -10310,6 +10505,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             db.execute("UPDATE tasks SET is_closed = TRUE, closed_at = NOW(), closed_by = %s WHERE id = %s",
                        (user_id, int(task_id)))
             _json_response(self, 200, {"ok": True, "title": task["title"]})
+            event_bus.publish("task:updated", {"task_id": int(task_id), "title": task["title"]})
             return
 
         # ── Bot: task-create ─────────────────────────────────────────────
@@ -10341,6 +10537,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 (title, description, user_id, user_id, opp_id, due_date, user_id),
             )
             _json_response(self, 200, {"ok": True, "taskId": task_id, "title": title})
+            event_bus.publish("task:created", {
+                "task_id": task_id, "title": title, "opportunity_id": opp_id,
+            })
             return
 
         # ── Bot: stage update ────────────────────────────────────────────
@@ -10375,7 +10574,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             stage_title = stage_row["title"] if isinstance(stage_row, dict) else stage_row[1]
             stage_id_val = stage_row["id"] if isinstance(stage_row, dict) else stage_row[0]
-            db.execute("UPDATE opportunities SET stage_id = %s WHERE id = %s",
+            db.execute("UPDATE opportunities SET stage_id = %s, stage_entered_at = NOW() WHERE id = %s",
                        (stage_id_val, int(opp_id)))
             _json_response(self, 200, {"ok": True, "stage": stage_title})
             return
@@ -13831,6 +14030,13 @@ def main() -> None:
         print("Calendar sync service started")
     except Exception as e:
         print(f"Calendar sync not started: {e}")
+    automation_stop = None
+    try:
+        from automation_engine import start_automation_engine
+        automation_stop = start_automation_engine()
+        print("Automation engine started")
+    except Exception as e:
+        print(f"Automation engine not started: {e}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -13844,6 +14050,9 @@ def main() -> None:
             stop_reminder_sweep(reminders_stop)
         if calendar_sync_stop:
             stop_calendar_sync(calendar_sync_stop)
+        if automation_stop:
+            from automation_engine import stop_automation_engine
+            stop_automation_engine(automation_stop)
         server.shutdown()
 
 

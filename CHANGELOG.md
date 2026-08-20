@@ -2,6 +2,102 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Automation Tab — Bug Fixes & Improvements (2026-08-19)
+
+**Bug fixes:**
+- Fixed `editAutomationRule` / `saveAutomationRule` JavaScript error ("Cannot set properties of null") — removed dead `automation-action-message` references from Phase 2 notify_users removal
+- Fixed `updateNotificationBadge()` function name mismatch — renamed to `_updateNotificationBadge()` to match actual function definition
+- Fixed notification bell not updating in real-time — SSE handler now calls the correct function
+- Fixed timezone bugs in automation_engine.py — replaced `datetime.now()` (EDT) with `datetime.utcnow()` (UTC) in 4 locations: template date, due date calculation, days_in_stage, days_with_tag
+- Fixed default cooldown mode for tag_added trigger — changed from "once" to "recurring" so rules fire repeatedly
+- Fixed tag re-add not triggering automation — changed `ON CONFLICT DO NOTHING` to `ON CONFLICT DO UPDATE SET assigned_at = NOW()` in user-facing tag add endpoint
+- Fixed execution log showing DB id instead of project number — now uses `project_number` from API response
+- Fixed `parse_qs` list handling in `_handle_automation_logs_get` — query params are lists, not strings
+- Fixed bot settings save failure — `saveBotSettings()` was sending raw JS object instead of `JSON.stringify(payload)` with `Content-Type: application/json` header
+- Fixed bot "stopped" status — added `loadBotStatus()` call after successful settings save
+
+**Notification system:**
+- Added `task:created`/`task:updated`/`task:deleted` event publishing to task CRUD endpoints (automation_engine.py + server.py) — dashboard now auto-refreshes when tasks are created/updated/deleted
+- Added explicit `task_assigned` notification creation in automation engine with "CRM Automation" actor override — tasks created by automation now notify the assignee
+- Removed `notify_users` action type — task creation handles notifications via explicit notification insert
+- Unified Telegram notification format — all notification types use shared `_build_tg()` helper with consistent structure (emoji header, project link, separator, content, CTA)
+- Added `_resolve_actor()` helper — checks `payload.actor_override` before database-derived actor name (for "CRM Automation" label)
+- "Reply to add a note" CTA only appears on `note_tagged` notifications — removed from task, reminder, and other types
+- Simplified email format — plain text only (no HTML, no links) to avoid SpamAssassin filtering
+- Added `email_digest=TRUE` as default notification preference for new users
+- Added debug logging when emails are skipped due to preference
+
+**Email deliverability:**
+- Updated `_get_crm_smtp_account()` in notification_dispatcher.py to check Alternate SMTP (ProtonMail) first, falling back to CRM mail account (Bluehost)
+- Fixed `smtp_client.py` to only attach HTML part when `html_body` is non-empty — empty HTML part was triggering SpamAssassin
+- Reset stale `email_sent` status for notifications created before email preference was added
+- **Known issue:** Notification emails from `onlyoffice@vanguardadj.com` to `bot@vanguardadj.com` are still being rejected by `vanguardadj.com`'s rspamd filter (`550 5.7.0 Blocked by SpamAssassin`). Test emails work. Need to investigate email content/headers difference or configure SPF/DKIM for the sending domain.
+
+**UI improvements:**
+- Automation tab moved to after "Customize Projects" and before "Contacts" in admin console
+- Rule name field in modal title bar (editable input with placeholder) instead of browser `prompt()` dialog
+- Save button disabled until rule name is filled
+- Added CSS `@keyframes notification-pulse` animation (scale 1.0 → 1.2 → 1.0 over 300ms) on bell icon when new notifications arrive
+- Added `accent-color: var(--accent)` to automation checkboxes for dark mode visibility
+- Added `min-height: 2rem` on empty picker containers to prevent collapse
+
+**Localtonet tunnel:**
+- Restarted tunnel service to restore remote access
+
+## Automation Tab (2026-08-18)
+
+**Admin Console — Automation tab:**
+- New "Automation" tab in admin console with automatic-gearbox icon (next to Import/Export)
+- Rule builder with 2-column form layout (WHEN trigger / THEN action)
+- 6 trigger types: Stage Duration, Project Created, Stage Changed, Project Updated, Tag Duration, Tag Added
+- 5 action types: Create Task, Notify Users, Send Email, Change Stage, Add Tag
+- Stage Duration trigger: configurable stage, days threshold, cooldown mode (once/recurring), cooldown hours
+- Send Email action: configurable from (CRM Mail / Alternate SMTP / Custom SMTP), to (project owner / contact / custom)
+- User multi-picker for task assignment and notification recipients
+- Tag multi-picker for add-tag actions
+- Dry Run mode: evaluates triggers without executing actions, logs preview
+- Test Run button: shows matching projects and what would happen
+- Execution Log panel: paginated, shows rule name, project, action result, errors
+- Enable/disable toggle per rule
+- Info [?] tooltips on every field explaining trigger/action behavior and available template variables
+- Template variables: `{project}`, `{project_id}`, `{stage}`, `{days_in_stage}`, `{contact}`, `{value}`, `{date}`, `{tag}`, `{days_with_tag}`
+
+**Tag triggers:**
+- Tag Duration: fires after a tag has been on a project for N days (uses `assigned_at` timestamp)
+- Tag Added: fires when a tag is assigned to a project (polls `assigned_at > last_run_at`)
+- Both support specific tag selection or "any tag" mode
+- Cooldown modes: once-only or recurring (same as stage duration)
+
+**Database — migration 014:**
+- `assigned_at` column added to `opportunity_tags` table (backfilled from `tag_definitions.created_at`)
+- Enables accurate "days with tag" calculation for Tag Duration triggers
+
+**Bug fix:**
+- Scanner `add_project_tags` behavior queried non-existent `tags` table instead of `tag_definitions` — fixed
+
+**Backend — automation_engine.py:**
+- Background thread polls every 60s evaluating all enabled rules
+- Stage Duration: queries projects where `stage_entered_at` is older than threshold
+- Cooldown: checks `automation_logs` to prevent duplicate firings
+- Once-only mode: fires once per project ever
+- Recurring mode: fires on cooldown schedule
+- Action execution reuses existing patterns (task insert, notification insert, SMTP send)
+- All executions logged to `automation_logs` with trigger context and action result
+
+**Database — migration 013:**
+- `automation_rules` table (name, enabled, dry_run, trigger_type/config, action_type/config, run_count)
+- `automation_logs` table (rule_id, opportunity_id, trigger_context, action_result, error)
+- `stage_entered_at` column added to `opportunities` table (backfilled from `created_at`)
+- Indexes on automation_logs for rule_id and opportunity_id lookups
+
+**Stage tracking:**
+- `stage_entered_at` updated on project create, project update (stage change), bot /stage command, and OnlyOffice import
+- Enables accurate "days in stage" calculation for Stage Duration triggers
+
+**Files:** `automation_engine.py` (new), `migrations/013_add_automation_rules.sql` (new), `server.py`, `public/index.html`, `public/app.js`, `public/styles.css`
+
+---
+
 ## Telegram Bot Revamp — Complete (2026-08-18)
 
 **Bot commands:**
