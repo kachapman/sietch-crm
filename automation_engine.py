@@ -156,12 +156,21 @@ def _action_create_task(config: dict, opp: dict, ctx: TemplateVars, dry_run: boo
         return {"dry_run": True, "would_create_task": title, "assignees": assignee_ids, "due_date": due_date}
 
     task_ids = []
+    # Default category: "Follow-Up"
+    default_category_id = None
+    try:
+        cat_row = db.query_one("SELECT id FROM history_categories WHERE title = 'Follow-Up' LIMIT 1")
+        if cat_row:
+            default_category_id = cat_row["id"]
+    except Exception:
+        pass
+
     for uid in assignee_ids:
         tid = db.insert_returning(
             """INSERT INTO tasks (title, description, responsible_user_id, owner_user_id,
-                                  opportunity_id, due_date, created_by, is_closed)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, FALSE) RETURNING id""",
-            (title, description, uid, uid, opp_id, due_date, uid),
+                                  opportunity_id, due_date, created_by, is_closed, category_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, FALSE, %s) RETURNING id""",
+            (title, description, uid, uid, opp_id, due_date, uid, default_category_id),
         )
         task_ids.append(tid)
         # Explicitly create task_assigned notification with "CRM Automation" actor

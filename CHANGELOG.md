@@ -102,6 +102,34 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - Updated `import_json_export.py` history category import to include `display_color`, `icon_key`, and `icon_style` when creating new categories
 - Added `task_labels` import to `import_json_export.py` — loads from `task_labels.json`, upserts by title with color/sort_order
 
+## Task Category System + Missing OnlyOffice Categories (2026-08-20)
+
+**Task categories:**
+- New `category_id` column on `tasks` table (FK to `history_categories`)
+- Task edit modal: category dropdown populated from history_categories
+- Task row rendering: category chip shown alongside label chips
+- Default category: "Follow-Up" for new tasks and automation-created tasks
+- All 261 existing tasks backfilled with "Follow-Up" as default category
+
+**Missing history categories from OnlyOffice CRM:**
+- Added: Follow-Up, Estimate, Inspection, Expression of gratitude, Opportunity, Stage Estimate
+- All with stroke icon style, appropriate icons (clock, document, building, star, alert, document-fill)
+- Seeded in init.sql for new installations
+- Migration 016 adds them with ON CONFLICT DO NOTHING
+
+**Task labels:**
+- Populated with OnlyOffice task categories: follow-up, estimate, inspection, phone call, email, appointment, note, expression of gratitude, opportunity, stage estimate
+
+**Backend:**
+- Task GET: JOINs history_categories, returns categoryId + category object (title, color, iconKey)
+- Task create: accepts categoryId in payload
+- Task update: accepts categoryId in updatable fields
+- Automation engine: sets default category to "Follow-Up" for automation-created tasks
+
+**Files:** `migrations/016_add_task_categories.sql` (new), `init.sql`, `server.py`, `automation_engine.py`, `public/app.js`
+
+---
+
 ## Automation Tab — Bug Fixes & Improvements (2026-08-19)
 
 **Bug fixes:**

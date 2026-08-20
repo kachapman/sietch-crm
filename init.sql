@@ -292,6 +292,7 @@ CREATE TABLE tasks (
     is_closed BOOLEAN DEFAULT FALSE,
     closed_at TIMESTAMP,
     closed_by INTEGER REFERENCES users(id),
+    category_id INTEGER REFERENCES history_categories(id),
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
     created_by INTEGER REFERENCES users(id)
@@ -866,15 +867,28 @@ VALUES ('Sietch CRM', 'Sietch CRM', 'Sietch CRM', 'Workspace <em>dashboard</em>'
 -- ============================================================================
 
 -- Default history categories
-INSERT INTO history_categories (title, display_color, is_system, sort_order) VALUES
-    ('Note', '#4a90d9', TRUE, 1),
-    ('Call', '#27ae60', TRUE, 2),
-    ('Meeting', '#8e44ad', TRUE, 3),
-    ('Email', '#e67e22', TRUE, 4),
-    ('Customer Update', '#e74c3c', TRUE, 5),
-    ('Text Message', '#1abc9c', TRUE, 6),
-    ('Task', '#95a5a6', TRUE, 7),
-    ('Comment', '#34495e', TRUE, 8);
+INSERT INTO history_categories (title, display_color, is_system, sort_order, icon_key, icon_style) VALUES
+    ('Note', '#4a90d9', TRUE, 1, 'note', 'stroke'),
+    ('Call', '#27ae60', TRUE, 2, 'call', 'stroke'),
+    ('Meeting', '#8e44ad', TRUE, 3, 'meeting', 'stroke'),
+    ('Email', '#e67e22', TRUE, 4, 'email', 'stroke'),
+    ('Customer Update', '#e74c3c', TRUE, 5, 'customer', 'accent'),
+    ('Text Message', '#1abc9c', TRUE, 6, 'sms', 'stroke'),
+    ('Task', '#95a5a6', TRUE, 7, 'task', 'stroke'),
+    ('Comment', '#34495e', TRUE, 8, 'comment', 'stroke'),
+    ('Follow-Up', NULL, TRUE, 9, 'clock', 'stroke'),
+    ('Estimate', NULL, TRUE, 10, 'document', 'stroke'),
+    ('Inspection', NULL, TRUE, 11, 'building', 'stroke'),
+    ('Expression of gratitude', NULL, TRUE, 12, 'star', 'stroke'),
+    ('Opportunity', NULL, TRUE, 13, 'alert', 'stroke'),
+    ('Stage Estimate', NULL, TRUE, 14, 'document', 'fill');
+
+-- Default task labels
+INSERT INTO task_labels (title, sort_order) VALUES
+    ('follow-up', 1), ('estimate', 2), ('inspection', 3),
+    ('phone call', 4), ('email', 5), ('appointment', 6),
+    ('note', 7), ('expression of gratitude', 8),
+    ('opportunity', 9), ('stage estimate', 10);
 
 -- Default system settings
 INSERT INTO system_settings (key, value, description) VALUES

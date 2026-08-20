@@ -35874,6 +35874,12 @@ function openTaskPreviewModal(task, { isNew = false } = {}) {
         </select>
       </div>
       <div class="field">
+        <label for="task-edit-category">Category</label>
+        <select id="task-edit-category" class="task-edit-user-select">
+          <option value="">No category</option>
+        </select>
+      </div>
+      <div class="field">
         <label for="task-edit-labels">Labels</label>
         <div class="task-edit-labels-grid" id="task-edit-labels-grid"></div>
         <input type="text" id="task-edit-labels" value="${escapeHtml(task.labels || "")}" style="display:none;" />
@@ -35950,6 +35956,21 @@ function openTaskPreviewModal(task, { isNew = false } = {}) {
     } catch (e) {
       console.warn("Failed to load users/labels for task editor", e);
     }
+    // Populate category dropdown
+    try {
+      const cats = await api("/api/v2/history-categories");
+      const catSelect = document.getElementById("task-edit-category");
+      if (catSelect && Array.isArray(cats)) {
+        catSelect.innerHTML = '<option value="">No category</option>';
+        for (const cat of cats) {
+          const opt = document.createElement("option");
+          opt.value = String(cat.id);
+          opt.textContent = cat.title;
+          catSelect.appendChild(opt);
+        }
+        catSelect.value = String(task.categoryId || "");
+      }
+    } catch {}
   })();
 
   const setError = (msg) => {
@@ -36024,6 +36045,7 @@ function openTaskPreviewModal(task, { isNew = false } = {}) {
       repeat: $("#task-edit-repeat")?.value || "none",
       labels: ($("#task-edit-labels")?.value || "").trim(),
       responsibleUserId: parseInt(document.getElementById("task-edit-assignee")?.value) || null,
+      categoryId: parseInt(document.getElementById("task-edit-category")?.value) || null,
       opportunityId: _taskEditProjectId,
     };
   };
@@ -36367,6 +36389,13 @@ function createTaskRow(task) {
   const chips = document.createElement("div");
   chips.className = "task-row-chips";
   chips.innerHTML = dueChipHtml(task) + labelChipsHtml(task);
+  if (task.category) {
+    const catChip = document.createElement("span");
+    catChip.className = "task-chip task-chip-label";
+    catChip.style.borderColor = task.category.color || "var(--border)";
+    catChip.textContent = task.category.title;
+    chips.appendChild(catChip);
+  }
   row.appendChild(chips);
 
   if (task.opportunityId != null) {

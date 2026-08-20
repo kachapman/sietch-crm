@@ -438,6 +438,7 @@ for _col in [
     "updated_at TIMESTAMP DEFAULT NOW()",
     "remind_at TIMESTAMP",
     "reminder_fired_at TIMESTAMP",
+    "category_id INTEGER REFERENCES history_categories(id)",
 ]:
     try:
         db.execute(f"ALTER TABLE tasks ADD COLUMN IF NOT EXISTS {_col}")
@@ -5415,10 +5416,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             f"""SELECT t.id, t.title, t.description, t.opportunity_id, t.responsible_user_id,
                        t.due_date, t.priority, t.is_closed, t.closed_at, t.created_at,
                        u.display_name, o.title, t.items, t.labels, t.repeat, t.color, t.pinned,
-                       t.archived, t.sort_order, t.updated_at, t.owner_user_id, t.remind_at
+                       t.archived, t.sort_order, t.updated_at, t.owner_user_id, t.remind_at,
+                       t.category_id, hc.title, hc.display_color, hc.icon_key
                 FROM tasks t
                 LEFT JOIN users u ON t.responsible_user_id = u.id
                 LEFT JOIN opportunities o ON t.opportunity_id = o.id
+                LEFT JOIN history_categories hc ON t.category_id = hc.id
                 WHERE {' AND '.join(where)}
                 ORDER BY t.sort_order ASC, t.due_date ASC NULLS LAST, t.created_at DESC""",
             (*params,),
@@ -5434,7 +5437,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
              "items": r[12] or [], "labels": r[13] or "", "repeat": r[14] or "none",
              "color": r[15] or "", "pinned": bool(r[16]), "archived": bool(r[17]),
              "sortOrder": r[18] or 0, "updatedAt": r[19].isoformat() if r[19] else None,
-             "ownerUserId": r[20], "remindAt": r[21].isoformat() if r[21] else None}
+             "ownerUserId": r[20], "remindAt": r[21].isoformat() if r[21] else None,
+             "categoryId": r[22],
+             "category": {"id": r[22], "title": r[23], "color": r[24], "iconKey": r[25]} if r[22] else None}
             for r in rows
         ])
 
@@ -5453,14 +5458,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         tid = db.insert_returning(
             """INSERT INTO tasks (title, description, opportunity_id, responsible_user_id, due_date, priority, created_by,
-                                 owner_user_id, items, labels, repeat, color, sort_order, remind_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                                 owner_user_id, items, labels, repeat, color, sort_order, remind_at, category_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
             (title, payload.get("description"), payload.get("opportunityId"),
              payload.get("responsibleUserId", user["id"]),
              payload.get("dueDate"), payload.get("priority", 0), user["id"],
              user["id"], json.dumps(payload.get("items") or []), payload.get("labels") or "",
              payload.get("repeat") or "none", payload.get("color") or "",
-             payload.get("sortOrder", 0), payload.get("remindAt")),
+             payload.get("sortOrder", 0), payload.get("remindAt"),
+             payload.get("categoryId")),
         )
         _json_response(self, 201, {"id": tid, "ok": True})
         # Publish task:created for dashboard auto-refresh
@@ -5502,6 +5508,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             ("opportunityId", "opportunity_id"), ("labels", "labels"), ("repeat", "repeat"),
             ("color", "color"), ("pinned", "pinned"), ("archived", "archived"),
             ("sortOrder", "sort_order"), ("remindAt", "remind_at"), ("items", "items"),
+            ("categoryId", "category_id"),
         ]
         for field, col in fields:
             if field not in payload:
