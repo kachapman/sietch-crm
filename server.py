@@ -3865,6 +3865,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not rule:
             _json_response(self, 404, {"error": "Rule not found"})
             return
+        # Reset last_run_at so evaluator uses epoch — show all possible matches
+        rule["last_run_at"] = None
         from automation_engine import (
             _evaluate_stage_duration_rules, _evaluate_project_created_rules,
             _evaluate_stage_changed_rules, _evaluate_project_updated_rules,

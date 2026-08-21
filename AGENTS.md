@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** 2026-08-20: **Task Category System + Missing OnlyOffice Categories.** (A) Added `category_id` column to tasks table (FK to history_categories). Migration 016 adds missing OnlyOffice categories (Follow-Up, Estimate, Inspection, Expression of gratitude, Opportunity, Stage Estimate) and populates task_labels. (B) Task edit modal: category dropdown populated from history_categories. Task row: category chip shown. Default category: Follow-Up. (C) Server: task GET/create/update handle categoryId, JOIN history_categories for display. (D) Automation engine: sets default category to Follow-Up for automation-created tasks. (E) All 261 existing tasks backfilled. Also completed: Configurable poll interval for time-based triggers (default 1 hour), hybrid SSE+polling architecture. **Known issue:** Notification emails rejected by rspamd. **NEXT:** Commit all changes.
+**Last session summary (for next resume):** 2026-08-21: **Automation — Test Run + SSE Fixes.** (A) Test Run button: reset `last_run_at = None` in test handler so evaluator uses epoch and always shows all possible matches. (B) SSE handler: fixed `NameError: match` in `_handle_sse_event()` (copy-paste bug from `_execute_matches()`). Every SSE-triggered rule was silently crashing. Also fixed event type map to include `"project_created"`. **Known issue:** Notification emails from `onlyoffice@vanguardadj.com` rejected by rspamd. **NEXT:** Commit all changes.
 
 ### Remaining TODO (Future Sessions)
 

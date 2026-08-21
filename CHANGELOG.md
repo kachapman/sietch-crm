@@ -2,6 +2,21 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Automation — Test Run Fix + SSE Handler Crash Fix (2026-08-21)
+
+**Test Run fix:**
+- Test Run button now always shows all possible matches, not just those after last sweep
+- Root cause: test endpoint used evaluator with live `last_run_at`, which was set to NOW() after successful sweep — query `assigned_at > NOW()` returned nothing
+- Fix: reset `last_run_at = None` in test handler so evaluator uses epoch and finds all matches
+
+**SSE handler crash fix:**
+- Fixed `NameError: name 'match' is not defined` in `_handle_sse_event()` — every SSE-triggered rule silently crashed
+- Also fixed event type map: added `"project_created" -> "project_created"` for project creation events
+
+**Files:** `server.py`, `automation_engine.py`
+
+---
+
 ## Automation Engine — Configurable Poll Interval (2026-08-20)
 
 **Configuration:**
