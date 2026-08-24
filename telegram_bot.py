@@ -1641,35 +1641,46 @@ def main() -> None:
         opp_id = data.get("opportunityId")
         project_title = data.get("projectTitle", "Unknown Project")
         actor_user_id = data.get("actorUserId")
+        event_id = data.get("eventId")
         if not notification_id or not opp_id:
             return
 
-        # Post note to project — notify the original tagger
+        # Post reply to project — use threaded reply if event_id available
         content = update.message.text
         notify_list = [actor_user_id] if actor_user_id else []
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(
-                    f"{_get_dashboard_url()}/api/bot/note",
-                    headers=_auth_headers(),
-                    json={
-                        "opportunityId": opp_id,
-                        "chatId": chat_id,
-                        "content": content,
-                        "categoryId": 10,  # Note category (ID 10 in history_categories)
-                        "notifyUserList": notify_list,
-                    },
-                )
-                if resp.status_code == 200:
+                if event_id:
+                    # Threaded reply to the original event
+                    resp = await client.post(
+                        f"{_get_dashboard_url()}/api/v2/projects/{opp_id}/history/{event_id}/replies",
+                        headers=_auth_headers(),
+                        json={"content": content},
+                    )
+                else:
+                    # Fallback: standalone note (no parent event)
+                    resp = await client.post(
+                        f"{_get_dashboard_url()}/api/bot/note",
+                        headers=_auth_headers(),
+                        json={
+                            "opportunityId": opp_id,
+                            "chatId": chat_id,
+                            "content": content,
+                            "categoryId": 10,
+                            "notifyUserList": notify_list,
+                        },
+                    )
+                if resp.status_code in (200, 201):
+                    label = "Reply added" if event_id else "Note added"
                     await _reply_html(
                         update,
-                        f"\u2705 <b>Note added</b>\nProject: {_esc(project_title)}",
+                        f"\u2705 <b>{label}</b>\nProject: {_esc(project_title)}",
                     )
                 else:
                     err = resp.json().get("error", "Failed") if resp.status_code < 500 else "Server error"
-                    await _reply_html(update, f"\u274c Failed to add note: {_esc(err)}")
+                    await _reply_html(update, f"\u274c Failed to add reply: {_esc(err)}")
         except Exception:
-            logger.exception("Failed to post note for reply to notification %s", notification_id)
+            logger.exception("Failed to post reply for notification %s", notification_id)
             await _reply_html(update, "\u274c Something went wrong. Please try again.")
 
     async def handle_document(update: Update, _ctx) -> None:

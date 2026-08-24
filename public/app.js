@@ -103,12 +103,15 @@ const PRESENCE_AUTO_STATUS_TIMEOUT_MS = 300000; // 5 min — clear auto-status i
 // ── SSE (Server-Sent Events) ──────────────────────────────────────────────
 let _evtSource = null;
 let _sseReconnectTimer = null;
+let _sseReconnectDelay = 5000;
+const _SSE_MAX_DELAY = 30000;
 
 function connectSSE() {
   if (_evtSource) return;
   _evtSource = new EventSource("/api/events");
   _evtSource.addEventListener("connected", () => {
     console.log("[SSE] Connected");
+    _sseReconnectDelay = 5000; // Reset backoff on success
   });
   _evtSource.onmessage = (e) => {
     try {
@@ -119,10 +122,11 @@ function connectSSE() {
     }
   };
   _evtSource.onerror = () => {
-    console.log("[SSE] Connection lost, reconnecting in 5s...");
+    console.log(`[SSE] Connection lost, reconnecting in ${_sseReconnectDelay / 1000}s...`);
     _evtSource.close();
     _evtSource = null;
-    _sseReconnectTimer = setTimeout(connectSSE, 5000);
+    _sseReconnectTimer = setTimeout(connectSSE, _sseReconnectDelay);
+    _sseReconnectDelay = Math.min(_sseReconnectDelay * 2, _SSE_MAX_DELAY);
   };
 }
 
@@ -552,6 +556,7 @@ const state = {
   groupTemplates: [],
   customFieldDefs: [],
   customFieldById: new Map(),
+  fieldGroups: [],
   taskCategories: [],
   tasksTab: "todos",
   dealEdit: null,
@@ -2524,48 +2529,74 @@ function parseApiError(body, status) {
 
 async function api(path, options = {}) {
   const headers = { Accept: "application/json", ...options.headers };
+  const maxRetries = options._retryCount != null ? options._retryCount : 3;
+  const isMutation = options.method && options.method !== "GET" && options.method !== "HEAD";
 
-  let res;
-  try {
-    res = await fetch(path, {
-      ...options,
-      headers,
-      credentials: "same-origin",
-    });
-  } catch (e) {
-    _onServerFailure();
-    const err = new Error("Failed to reach server. Check your connection or try again.");
-    err.status = 0;
-    throw err;
-  }
-  const text = await res.text();
-  let body;
-  try {
-    body = text ? JSON.parse(text) : {};
-  } catch {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    let res;
+    try {
+      res = await fetch(path, {
+        ...options,
+        headers,
+        credentials: "same-origin",
+      });
+    } catch (e) {
+      // Network failure — retry if we have attempts left
+      if (attempt < maxRetries && !isMutation) {
+        _showReconnectBanner(`Reconnecting… (attempt ${attempt + 1}/${maxRetries})`);
+        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+        continue;
+      }
+      _onServerFailure();
+      _hideReconnectBanner();
+      const err = new Error("Failed to reach server. Check your connection or try again.");
+      err.status = 0;
+      throw err;
+    }
+    const text = await res.text();
+    let body;
+    try {
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      if (!res.ok) {
+        const isHtml = /<!DOCTYPE\s+html|<html[\s>]/i.test(text);
+        // HTML response (WAF challenge, proxy error page) — retry once after delay
+        if (isHtml && attempt < maxRetries && !isMutation) {
+          _showReconnectBanner("Verifying connection…");
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
+        const clean = isHtml
+          ? text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200)
+          : text.slice(0, 300);
+        const err = new Error(clean || res.statusText || `HTTP ${res.status}`);
+        err.status = res.status;
+        throw err;
+      } else {
+        body = {};
+      }
+    }
     if (!res.ok) {
-      const isHtml = /<!DOCTYPE\s+html|<html[\s>]/i.test(text);
-      const clean = isHtml
-        ? text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200)
-        : text.slice(0, 300);
-      const err = new Error(clean || res.statusText || `HTTP ${res.status}`);
+      // 502/503/504 — transient, retry
+      if ((res.status === 502 || res.status === 503 || res.status === 504) && attempt < maxRetries && !isMutation) {
+        _showReconnectBanner(`Reconnecting… (attempt ${attempt + 1}/${maxRetries})`);
+        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+        continue;
+      }
+      if (res.status === 502 || res.status === 503 || res.status === 504) _onServerFailure();
+      const msg = parseApiError(body, res.status);
+      const err = new Error(msg);
       err.status = res.status;
       throw err;
-    } else {
-      // Some endpoints (e.g. form-urlencoded history with attachments) may return non-JSON on success.
-      // Do not throw; return a minimal object so caller can proceed.
-      body = {};
     }
+    _onServerHealthy();
+    _hideReconnectBanner();
+    return body;
   }
-  if (!res.ok) {
-    if (res.status === 502 || res.status === 503 || res.status === 504) _onServerFailure();
-    const msg = parseApiError(body, res.status);
-    const err = new Error(msg);
-    err.status = res.status;
-    throw err;
-  }
-  _onServerHealthy();
-  return body;
+  // Should not reach here, but just in case
+  const err = new Error("Max retries exceeded");
+  err.status = 0;
+  throw err;
 }
 
 // ── Server Health Indicator ─────────────────────────────────────────────────
@@ -2610,6 +2641,26 @@ function _onServerHealthy() {
 function _onServerFailure() {
   _serverHealth.consecutiveSuccesses = 0;
   _showServerUnreachable();
+}
+
+// ── Reconnect Banner ──────────────────────────────────────────────────────
+// Shows a visible banner during API retry attempts. Auto-hides on success.
+let _reconnectBannerTimer = null;
+
+function _showReconnectBanner(msg) {
+  const el = $("#crm-crash-banner");
+  if (!el) return;
+  el.textContent = msg || "Connection lost. Reconnecting…";
+  el.classList.remove("hidden");
+  // Auto-hide after 15s max to avoid stuck state
+  clearTimeout(_reconnectBannerTimer);
+  _reconnectBannerTimer = setTimeout(() => _hideReconnectBanner(), 15000);
+}
+
+function _hideReconnectBanner() {
+  clearTimeout(_reconnectBannerTimer);
+  const el = $("#crm-crash-banner");
+  if (el) el.classList.add("hidden");
 }
 
 // 60s health poller — skips when tab is hidden to avoid throttle false positives
@@ -10099,6 +10150,7 @@ async function loadOpportunityCustomFieldDefs(force = false) {
 
   state.customFieldDefs = [];
   state.customFieldById = new Map();
+  state.fieldGroups = [];
   // Only opportunity definitions IDs are valid Keys for create/update (see CRMApi.Deals.cs).
   const paths = ["/api/v2/custom-fields"];
   for (const path of paths) {
@@ -10112,12 +10164,16 @@ async function loadOpportunityCustomFieldDefs(force = false) {
           const id = customFieldDefinitionId(f);
           if (id != null) state.customFieldById.set(String(id), f);
         }
-        return state.customFieldDefs;
+        break;
       }
     } catch {
       /* try next path */
     }
   }
+  try {
+    const groups = unwrap(await api("/api/v2/field-groups"));
+    if (groups.length) state.fieldGroups = groups;
+  } catch { /* optional */ }
   return state.customFieldDefs;
 }
 
@@ -17897,14 +17953,20 @@ function ensurePresenceOnLogin() {
   setupPresenceIdleAndAutoLogout();
   // Network disconnect detection
   window.addEventListener("online", () => {
+    _hideReconnectBanner();
+    _hideServerUnreachable();
+    showToast("Back online");
     startPresenceHeartbeats();
     fetchPresenceSnapshot();
     if ($("#presence-tile-timesheet-body")?.style.display !== "none") {
       renderTimesheetTab();
     }
+    // Retry SSE connection
+    if (!_evtSource) connectSSE();
   });
   window.addEventListener("offline", () => {
-    // Optional: show a subtle indicator
+    _showReconnectBanner("You're offline. Waiting for connection…");
+    _showServerUnreachable();
   });
 }
 
@@ -23048,6 +23110,7 @@ const OPP_PREVIEW_HISTORY_MAX = 500;
 const oppPreviewMailCache = new Map();
 /** @type {{ oppId: number | null, opp: object | null, group: object | null }} */
 let oppPreviewContext = { oppId: null, opp: null, group: null };
+let _previewDirty = false;
 
 /* Search popup state */
 const MAX_SEARCH_PREVIEW_TABS = 10;
@@ -23275,6 +23338,7 @@ function historyContentIsMailPlaceholder(raw, subject) {
 }
 
 function historyEventAuthor(ev) {
+  if (ev.author || ev.Author) return String(ev.author || ev.Author).trim();
   const createBy = ev.createBy || ev.CreateBy || ev.createdBy || ev.CreatedBy;
   return String(
     createBy?.displayName ||
@@ -24662,6 +24726,8 @@ function renderHistoryAttachmentsAside(parent, attachments) {
 function renderHistoryEventItem(ev) {
   const li = document.createElement("li");
   li.className = "opp-preview-history-item";
+  const evId = ev.id ?? ev.ID ?? ev.historyId ?? ev.Id;
+  if (evId) li.dataset.eventId = String(evId);
   const catId = historyEventCategoryId(ev);
   const cat = (catId != null && state.historyCategories?.length)
     ? state.historyCategories.find(c => Number(c.id ?? c.ID) === catId)
@@ -24669,6 +24735,11 @@ function renderHistoryEventItem(ev) {
   if (cat && cat.iconStyle === 'accent') {
     li.classList.add('opp-preview-history-item--accent');
     li.style.setProperty('--cat-accent-color', cat.color || '#2563eb');
+  }
+  // Detect action events by system category title
+  const isActionEvent = cat && cat.title === 'Action';
+  if (isActionEvent) {
+    li.classList.add('opp-preview-history-item--action');
   }
   const itemCat = historyEventCategoryLabel(ev).toLowerCase();
   if (/\bquick.?context\b/.test(itemCat)) {
@@ -24873,6 +24944,112 @@ function renderHistoryEventItem(ev) {
   if (mailPanel) {
     li.appendChild(mailPanel);
   }
+
+  // Reply button and thread container
+  const eventId = ev.id ?? ev.ID ?? ev.historyId ?? ev.Id;
+  if (eventId && !isActionEvent) {
+    const replyWrap = document.createElement("div");
+    replyWrap.className = "opp-preview-history-replies";
+    const replyBtn = document.createElement("button");
+    replyBtn.type = "button";
+    replyBtn.className = "opp-preview-history-reply-btn";
+    replyBtn.textContent = "Reply";
+    replyWrap.appendChild(replyBtn);
+    replyBtn.addEventListener("click", async () => {
+      const existing = replyWrap.querySelector(".opp-preview-history-reply-editor");
+      if (existing) { existing.remove(); return; }
+      // Load existing replies if not yet loaded
+      if (!replyWrap.dataset.loaded) {
+        try {
+          const replies = await api(`/api/v2/projects/${oppPreviewContext?.oppId}/history/${eventId}/replies`);
+          const list = unwrap(replies) || replies || [];
+          if (list.length) {
+            const threadEl = document.createElement("div");
+            threadEl.className = "opp-preview-history-thread";
+            for (const r of list) {
+              const rDiv = document.createElement("div");
+              rDiv.className = "opp-preview-history-reply-item";
+              if (r.isDeleted) {
+                rDiv.classList.add("deleted");
+              }
+              const rMeta = document.createElement("div");
+              rMeta.className = "opp-preview-history-reply-meta";
+              const author = r.author || "";
+              const when = r.created ? formatPreviewDateTime(r.created) : "";
+              rMeta.textContent = [author, when].filter(Boolean).join(" · ");
+              rDiv.appendChild(rMeta);
+              if (!r.isDeleted) {
+                const rBody = document.createElement("div");
+                rBody.className = "opp-preview-history-reply-body";
+                rBody.innerHTML = r.content || "";
+                rDiv.appendChild(rBody);
+              } else {
+                const rBody = document.createElement("div");
+                rBody.className = "opp-preview-history-reply-body deleted";
+                rBody.textContent = "This reply was deleted.";
+                rDiv.appendChild(rBody);
+              }
+              threadEl.appendChild(rDiv);
+            }
+            replyWrap.insertBefore(threadEl, replyBtn);
+            replyWrap.appendChild(replyBtn); // Move button to bottom after thread
+          }
+        } catch { /* ignore */ }
+        replyWrap.dataset.loaded = "1";
+      }
+      // Open reply editor
+      const editor = document.createElement("div");
+      editor.className = "opp-preview-history-reply-editor";
+      const textarea = document.createElement("textarea");
+      textarea.className = "opp-preview-history-reply-input";
+      textarea.placeholder = "Write a reply…";
+      textarea.rows = 2;
+      const actions = document.createElement("div");
+      actions.className = "opp-preview-history-reply-actions";
+      const submitBtn = document.createElement("button");
+      submitBtn.type = "button";
+      submitBtn.className = "btn btn-primary btn-sm";
+      submitBtn.textContent = "Post";
+      const cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "btn btn-ghost btn-sm";
+      cancelBtn.textContent = "Cancel";
+      actions.appendChild(cancelBtn);
+      actions.appendChild(submitBtn);
+      editor.appendChild(textarea);
+      editor.appendChild(actions);
+      replyWrap.appendChild(editor);
+      replyWrap.appendChild(replyBtn); // Keep button at bottom
+      textarea.focus();
+      cancelBtn.addEventListener("click", () => editor.remove());
+      submitBtn.addEventListener("click", async () => {
+        const content = textarea.value.trim();
+        if (!content) return;
+        submitBtn.disabled = true;
+        try {
+          await api(`/api/v2/projects/${oppPreviewContext?.oppId}/history/${eventId}/replies`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content }),
+          });
+          textarea.value = "";
+          editor.remove();
+          replyWrap.dataset.loaded = "";
+          // Re-render thread by clearing and reloading
+          const threadEl = replyWrap.querySelector(".opp-preview-history-thread");
+          if (threadEl) threadEl.remove();
+          replyBtn.click(); // Re-open to reload
+          showToast("Reply added");
+        } catch (err) {
+          showToast(err.message || "Failed to add reply", true);
+          submitBtn.disabled = false;
+        }
+      });
+    });
+    replyWrap.appendChild(replyBtn);
+    li.appendChild(replyWrap);
+  }
+
   return li;
 }
 
@@ -25358,6 +25535,25 @@ async function openDealEditFromOpportunityPreview() {
 }
 
 function closeOpportunityPreviewModal() {
+  if (_previewDirty) {
+    confirmDialog({
+      title: "Discard unsaved changes?",
+      message: "You have unsaved changes that will be lost.",
+      confirmLabel: "Discard",
+      danger: true,
+    }).then((ok) => {
+      if (ok) {
+        _previewDirty = false;
+        _doClosePreviewModal();
+      }
+    });
+    return;
+  }
+  _doClosePreviewModal();
+}
+
+function _doClosePreviewModal() {
+  _previewDirty = false;
   restoreSideBySideCards();
   oppPreviewMailCache.clear();
   setOpportunityPreviewContext(null);
@@ -28530,6 +28726,7 @@ function openAdminConsoleModal() {
     bindAdminStages();
     bindAdminTags();
     bindAdminCustomFields();
+    bindAdminFieldGroups();
     bindAdminHistoryCats();
     bindAdminTaskLabels();
     bindAlternateSmtp();
@@ -29037,6 +29234,7 @@ function switchAdminTab(tab) {
     const s = $("#admin-stages-search")?.value.trim() || "";
     populateAdminStagesList(s);
     populateAdminCustomFieldsList($("#admin-cf-search")?.value.trim() || "");
+    populateAdminFieldGroupsList();
     populateAdminTagsList($("#admin-tag-search")?.value.trim() || "");
     loadHistoryCats().then(() => renderHistoryCatsList($("#admin-history-cat-search")?.value.trim() || ""));
     loadTaskLabels().then(() => renderTaskLabelsList($("#admin-task-label-search")?.value.trim() || ""));
@@ -32012,6 +32210,203 @@ function bindAdminCustomFields() {
   }
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Admin: Field Groups
+// ════════════════════════════════════════════════════════════════════════════
+const STANDARD_FIELD_LABELS = [
+  { key: "contact", label: "Contact" },
+  { key: "responsible", label: "Responsible" },
+  { key: "value", label: "Value" },
+  { key: "dueDate", label: "Follow-up Due Date" },
+  { key: "private", label: "Private" },
+  { key: "bidType", label: "Bid Type" },
+];
+
+async function populateAdminFieldGroupsList() {
+  const listEl = $("#admin-field-groups-list");
+  if (!listEl) return;
+  try {
+    const data = await api("/api/v2/field-groups");
+    const groups = unwrap(data) || data || [];
+    if (!groups.length) {
+      listEl.innerHTML = '<div class="admin-customize-empty">No field groups. Groups let you organize project fields into collapsible sections.</div>';
+      return;
+    }
+    listEl.innerHTML = groups.map(g => {
+      const stdCount = (g.standardFields || []).length;
+      const stdLabel = stdCount ? `${stdCount} standard field${stdCount > 1 ? "s" : ""}` : "";
+      return `<div class="admin-customize-row" data-fg-id="${g.id}">
+        <span class="admin-customize-drag-handle" title="Drag to reorder">⠿</span>
+        <div class="admin-customize-row-info">
+          <div class="admin-customize-row-label">${escapeHtml(g.label)}</div>
+          <div class="admin-customize-row-meta">
+            <span class="admin-customize-badge">sort: ${g.sortOrder}</span>
+            ${stdLabel ? `<span class="admin-customize-badge">${escapeHtml(stdLabel)}</span>` : ""}
+            ${g.isCollapsedDefault ? '<span class="admin-customize-badge">collapsed default</span>' : ""}
+          </div>
+        </div>
+        <div class="admin-customize-row-actions">
+          <button class="btn btn-ghost" data-edit-fg="${g.id}" title="Edit">✎</button>
+          <button class="btn btn-ghost" data-delete-fg="${g.id}" title="Delete">×</button>
+        </div>
+      </div>`;
+    }).join("");
+  } catch (e) {
+    listEl.innerHTML = `<div class="admin-customize-empty" style="color:var(--danger);">Failed to load field groups.</div>`;
+  }
+  // Initialize SortableJS for drag reordering
+  if (listEl && window.Sortable && !listEl.dataset.sortableBound) {
+    listEl.dataset.sortableBound = "1";
+    window.Sortable.create(listEl, {
+      handle: ".admin-customize-drag-handle",
+      animation: 150,
+      ghostClass: "sortable-ghost",
+      chosenClass: "sortable-chosen",
+      onEnd: async () => {
+        const ids = [...listEl.querySelectorAll(".admin-customize-row")]
+          .map(row => parseInt(row.dataset.fgId)).filter(Boolean);
+        try {
+          await api("/api/v2/field-groups/reorder", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids }),
+          });
+          state.fieldGroups = [];
+        } catch (e) {
+          showToast("Failed to reorder groups", true);
+          state.fieldGroups = [];
+          await populateAdminFieldGroupsList();
+        }
+      },
+    });
+  }
+}
+
+function bindAdminFieldGroups() {
+  const addBtn = $("#admin-add-field-group");
+  const form = $("#admin-field-group-form");
+  if (addBtn) {
+    addBtn.addEventListener("click", () => {
+      $("#admin-fg-editing-id").value = "";
+      $("#admin-fg-label").value = "";
+      $("#admin-fg-collapsed").checked = false;
+      renderFieldGroupFormCheckboxes(null);
+      if (form) form.style.display = "flex";
+      $("#admin-fg-label")?.focus();
+    });
+  }
+  const cancelBtn = $("#admin-fg-cancel");
+  if (cancelBtn) cancelBtn.addEventListener("click", () => { if (form) form.style.display = "none"; });
+
+  const saveBtn = $("#admin-fg-save");
+  if (saveBtn) {
+    saveBtn.addEventListener("click", async () => {
+      const editingId = $("#admin-fg-editing-id")?.value;
+      const label = $("#admin-fg-label")?.value.trim();
+      if (!label) { showToast("Label required", true); return; }
+      const stdFields = [];
+      document.querySelectorAll("#admin-fg-standard-fields input[type=checkbox]:checked").forEach(cb => {
+        stdFields.push(cb.value);
+      });
+      const payload = {
+        label,
+        isCollapsedDefault: $("#admin-fg-collapsed")?.checked || false,
+        standardFields: stdFields,
+      };
+      try {
+        let groupId;
+        if (editingId) {
+          await api(`/api/v2/field-groups/${editingId}`, { method: "PUT", body: JSON.stringify(payload) });
+          groupId = editingId;
+          showToast("Group updated");
+        } else {
+          const res = await api("/api/v2/field-groups", { method: "POST", body: JSON.stringify(payload) });
+          groupId = res?.id;
+          showToast("Group added");
+        }
+        // Assign checked custom fields to this group (unchecked fields keep their existing groupId)
+        if (groupId) {
+          const cfWrap = $("#admin-fg-custom-fields");
+          if (cfWrap) {
+            let failCount = 0;
+            for (const cb of cfWrap.querySelectorAll("input[type=checkbox][data-cf-id]")) {
+              if (!cb.checked) continue;
+              const cfId = cb.dataset.cfId;
+              try {
+                await api(`/api/v2/custom-fields/${cfId}`, { method: "PUT", body: JSON.stringify({ groupId: groupId }) });
+              } catch (err) { failCount++; }
+            }
+            if (failCount) showToast(`Failed to assign ${failCount} field(s)`, true);
+          }
+        }
+        if (form) form.style.display = "none";
+        await populateAdminFieldGroupsList();
+        state.fieldGroups = [];
+      } catch (e) {
+        showToast("Failed to save group: " + (e.message || e), true);
+      }
+    });
+  }
+
+  const listEl = $("#admin-field-groups-list");
+  if (listEl) {
+    listEl.addEventListener("click", async (e) => {
+      const editBtn = e.target.closest("[data-edit-fg]");
+      if (editBtn) {
+        const id = editBtn.dataset.editFg;
+        try {
+          const data = await api("/api/v2/field-groups");
+          const groups = unwrap(data) || data || [];
+          const g = groups.find(x => String(x.id) === String(id));
+          if (!g) return;
+          $("#admin-fg-editing-id").value = g.id;
+          $("#admin-fg-label").value = g.label || "";
+          $("#admin-fg-collapsed").checked = !!g.isCollapsedDefault;
+          // Force refresh custom fields to get current groupId values
+          await loadOpportunityCustomFieldDefs(true);
+          renderFieldGroupFormCheckboxes(g);
+          if (form) form.style.display = "flex";
+          $("#admin-fg-label")?.focus();
+        } catch (err) { showToast("Failed to load group", true); }
+        return;
+      }
+      const delBtn = e.target.closest("[data-delete-fg]");
+      if (delBtn) {
+        const id = delBtn.dataset.deleteFg;
+        const ok = await confirmDialog({ title: "Delete field group?", message: "Fields in this group will become ungrouped.", confirmLabel: "Delete", danger: true });
+        if (!ok) return;
+        try {
+          await api(`/api/v2/field-groups/${id}`, { method: "DELETE" });
+          showToast("Group deleted");
+          await populateAdminFieldGroupsList();
+          state.fieldGroups = [];
+        } catch (err) { showToast("Failed to delete group: " + (err.message || err), true); }
+      }
+    });
+  }
+}
+
+function renderFieldGroupFormCheckboxes(group) {
+  const stdWrap = $("#admin-fg-standard-fields");
+  const cfWrap = $("#admin-fg-custom-fields");
+  if (!stdWrap || !cfWrap) return;
+  const stdFields = group?.standardFields || [];
+  stdWrap.innerHTML = STANDARD_FIELD_LABELS.map(sf => {
+    const checked = stdFields.includes(sf.key) ? "checked" : "";
+    return `<label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
+      <input type="checkbox" value="${sf.key}" ${checked}> ${escapeHtml(sf.label)}
+    </label>`;
+  }).join("");
+  cfWrap.innerHTML = (state.customFieldDefs || []).map(def => {
+    const id = customFieldDefinitionId(def);
+    if (id == null) return "";
+    const assigned = group && String(group.id) === String(def.groupId);
+    return `<label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
+      <input type="checkbox" data-cf-id="${id}" ${assigned ? "checked" : ""}> ${escapeHtml(customFieldLabel(def) || `Field ${id}`)}
+    </label>`;
+  }).filter(Boolean).join("");
+}
+
 const HISTORY_CATEGORY_ICONS = [
   { key: "note", label: "Note", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/></svg>' },
   { key: "comment", label: "Comment", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>' },
@@ -32085,7 +32480,7 @@ function renderHistoryCatsList(filter) {
         <div class="admin-customize-row-meta">${cat.iconKey || "note"} · ${cat.iconStyle || "stroke"} ${sysBadge}</div>
       </div>
       <div class="admin-customize-row-actions">
-        <button class="btn btn-ghost" data-edit-cat="${cat.id}" title="Edit">✎</button>
+        ${cat.isSystem ? "" : `<button class="btn btn-ghost" data-edit-cat="${cat.id}" title="Edit">✎</button>`}
         ${cat.isSystem ? "" : `<button class="btn btn-ghost" data-delete-cat="${cat.id}" title="Delete">×</button>`}
       </div>
     </div>`;
@@ -33768,8 +34163,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
   const { opp, customFieldValues, history, tags, documents, photos, openTasks, closedTasks } = data;
   const standardRows = buildOpportunityPreviewStandardFields(opp);
   const allUserRows = buildOpportunityPreviewUserFields(opp, customFieldValues);
-  const userRows = allUserRows.filter((r) => !r._isCheckbox);
-  const checklistRows = allUserRows.filter((r) => r._isCheckbox);
+  const userRows = allUserRows;
 
   // Extract Supplement Request to render as full-width field at top
   const supplementRequestRow = (() => {
@@ -33778,20 +34172,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     return userRows.splice(idx, 1)[0];
   })();
 
-  // Move checkbox-mapped fields into checklist section
-  const THREE_CHECKLIST_NAMES = ["Measurement Report", "Insurance Documents", "Inspection Photos"];
-  const extractedChecklist = [];
-  for (let i = userRows.length - 1; i >= 0; i--) {
-    if (fieldNameMatches(userRows[i].label, THREE_CHECKLIST_NAMES)) {
-      extractedChecklist.push(userRows[i]);
-      userRows.splice(i, 1);
-    }
-  }
-  extractedChecklist.reverse();
-  for (const row of extractedChecklist) {
-    row._isCheckbox = true;
-    checklistRows.push(row);
-  }
+  // Checkbox fields stay in userRows — rendered inline within their groups
   const description = String(opp.description ?? opp.Description ?? "").trim();
   const oppId = opp.id ?? opp.ID;
 
@@ -33872,6 +34253,9 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     textarea.className = "opp-preview-desc-edit";
     textarea.value = currentText;
     textarea.rows = 3;
+    textarea.addEventListener("input", () => {
+      if (textarea.value.trim() !== currentText) _previewDirty = true;
+    });
     const actions = document.createElement("div");
     actions.className = "opp-preview-desc-actions";
     const confirmBtn = document.createElement("button");
@@ -33905,6 +34289,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
           body: JSON.stringify({ description: newDesc }),
         });
         addEventLogEntry("update", oppId, opp.title || opp.Title || "", "Description updated", true);
+        _previewDirty = false;
         if (context === "bookmark") {
           if (typeof refreshBookmarkTab === "function") refreshBookmarkTab(oppId, false);
         } else {
@@ -34133,71 +34518,179 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       pfBody.appendChild(p);
       return;
     }
-    const dl = document.createElement("dl");
-    dl.className = "opp-preview-fields";
-    for (const row of allRows) {
-      const field = document.createElement("div");
-      field.className = "opp-preview-field";
-      if (row === supplementRequestRow) field.classList.add("opp-preview-field-full");
-      if (row._rawDate) {
-        const d = parseCrmDateOnly(row._rawDate);
-        if (d && !Number.isNaN(d.getTime()) && d < new Date(new Date().toDateString())) {
-          field.classList.add("opp-preview-field-overdue");
+
+    // Map standard field labels to group keys
+    const STANDARD_FIELD_KEY_MAP = {
+      "contact": "contact", "responsible": "responsible", "value": "value",
+      "follow-up due date": "dueDate", "due date": "dueDate",
+      "private": "private", "bid type": "bidType",
+    };
+    function rowGroupKey(row) {
+      const labelKey = (row.label || "").toLowerCase();
+      // Standard fields: find which group's standardFields array contains this key
+      if (STANDARD_FIELD_KEY_MAP[labelKey]) {
+        const fieldKey = STANDARD_FIELD_KEY_MAP[labelKey];
+        for (const g of state.fieldGroups) {
+          if ((g.standardFields || []).includes(fieldKey)) return String(g.id);
+        }
+        return null;
+      }
+      // Custom field: use groupId from field definition
+      const def = state.customFieldDefs.find(d => customFieldLabel(d) === row.label);
+      return def?.groupId ? String(def.groupId) : null;
+    }
+
+    // Tag each row with its group key
+    const taggedRows = allRows.map(r => ({ row: r, groupKey: rowGroupKey(r) }));
+
+    // If no groups defined, render flat (existing behavior)
+    if (!state.fieldGroups.length) {
+      renderFieldGrid(pfBody, taggedRows.map(t => t.row));
+    } else {
+      // Build group map: groupId -> { group, rows }
+      const groupMap = new Map();
+      for (const g of state.fieldGroups) {
+        groupMap.set(String(g.id), { group: g, rows: [] });
+      }
+      const ungrouped = [];
+      for (const { row, groupKey } of taggedRows) {
+        if (groupKey && groupMap.has(groupKey)) {
+          groupMap.get(groupKey).rows.push(row);
+        } else {
+          ungrouped.push(row);
         }
       }
-      const dt = document.createElement("dt");
-      dt.textContent = row.label;
-      const dd = document.createElement("dd");
+      // Render each group with collapsible header
+      const isMobile = window.innerWidth <= 600;
+      for (const [, { group, rows }] of groupMap) {
+        if (!rows.length) continue;
+        renderFieldGroupSection(pfBody, group, rows, isMobile);
+      }
+      // Render ungrouped fields in "Other" section
+      if (ungrouped.length) {
+        const otherGroup = { id: null, label: "Other", isCollapsedDefault: false };
+        renderFieldGroupSection(pfBody, otherGroup, ungrouped, isMobile);
+      }
+    }
 
-      if (row.value === "Yes" || row.value === "No") {
-        if (fieldNameMatches(row.label, ["PA CONTRACT"])) {
-          const ico = document.createElement("span");
-        const checked = row.value === "Yes";
-          ico.className = checked ? "opp-preview-chk-yes" : "opp-preview-chk-no";
-          ico.textContent = checked ? "\u2713" : "\u2717";
-          dd.appendChild(ico);
-        } else {
-          const tag = document.createElement("span");
-          tag.className = "field-value-tag";
-          tag.textContent = row.value;
-          dd.appendChild(tag);
-        }
-      } else if (fieldNameMatches(row.label, ["PA CONTRACT"])) {
+    // Linkify URLs in field values
+    pfBody.querySelectorAll("dd").forEach(dd => {
+      const txt = dd.textContent || "";
+      if (!txt || !/https?:\/\//i.test(txt)) return;
+      dd.innerHTML = txt.replace(/(https?:\/\/[^\s<]+[^\s<,.!?:;)\]}>])/gi, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+    });
+  }
+
+  function renderFieldGrid(parent, rows) {
+    const dl = document.createElement("dl");
+    dl.className = "opp-preview-fields";
+    const chkWrap = document.createElement("div");
+    chkWrap.className = "opp-preview-fields-chk-row";
+    for (const row of rows) {
+      const el = buildFieldElement(row);
+      if (row._isCheckbox) {
+        chkWrap.appendChild(el);
+      } else {
+        dl.appendChild(el);
+      }
+    }
+    if (dl.children.length) parent.appendChild(dl);
+    if (chkWrap.children.length) parent.appendChild(chkWrap);
+  }
+
+  function renderFieldGroupSection(parent, group, rows, isMobile) {
+    const section = document.createElement("div");
+    section.className = "opp-preview-field-group";
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "opp-preview-field-group-head";
+    const chevron = document.createElement("span");
+    chevron.className = "opp-preview-field-group-chevron";
+    chevron.textContent = "\u25B6";
+    const label = document.createElement("span");
+    label.className = "opp-preview-field-group-label";
+    label.textContent = group.label;
+    head.appendChild(chevron);
+    head.appendChild(label);
+    section.appendChild(head);
+    const body = document.createElement("div");
+    body.className = "opp-preview-field-group-body";
+    section.appendChild(body);
+    parent.appendChild(section);
+
+    const collapsed = isMobile && group.isCollapsedDefault;
+    if (collapsed) {
+      section.classList.add("collapsed");
+      body.style.display = "none";
+      chevron.style.transform = "rotate(0deg)";
+    } else {
+      chevron.style.transform = "rotate(90deg)";
+    }
+    head.addEventListener("click", () => {
+      const isHidden = body.style.display === "none";
+      body.style.display = isHidden ? "" : "none";
+      section.classList.toggle("collapsed", !isHidden);
+      chevron.style.transform = isHidden ? "rotate(90deg)" : "rotate(0deg)";
+    });
+    renderFieldGrid(body, rows);
+  }
+
+  function buildFieldElement(row) {
+    // Checkbox fields: simple icon + label, no card
+    if (row._isCheckbox) {
+      const field = document.createElement("div");
+      field.className = "opp-preview-field-chk-inline";
+      const checked = row.value === "Yes" || String(row.value).toLowerCase() === "true";
+      const ico = document.createElement("span");
+      ico.className = checked ? "opp-preview-chk-yes" : "opp-preview-chk-no";
+      ico.textContent = checked ? "\u2713" : "\u2717";
+      const lbl = document.createElement("span");
+      lbl.textContent = row.label;
+      field.appendChild(ico);
+      field.appendChild(lbl);
+      return field;
+    }
+
+    const field = document.createElement("div");
+    field.className = "opp-preview-field";
+    if (row === supplementRequestRow) field.classList.add("opp-preview-field-full");
+    if (row._rawDate) {
+      const d = parseCrmDateOnly(row._rawDate);
+      if (d && !Number.isNaN(d.getTime()) && d < new Date(new Date().toDateString())) {
+        field.classList.add("opp-preview-field-overdue");
+      }
+    }
+    const dt = document.createElement("dt");
+    dt.textContent = row.label;
+    const dd = document.createElement("dd");
+
+    if (row.value === "Yes" || row.value === "No") {
+      if (fieldNameMatches(row.label, ["PA CONTRACT"])) {
         const ico = document.createElement("span");
-        const lower = (row.value || "").toLowerCase();
-        const checked = lower === "true" || lower === "yes" || lower === "1";
+        const checked = row.value === "Yes";
         ico.className = checked ? "opp-preview-chk-yes" : "opp-preview-chk-no";
         ico.textContent = checked ? "\u2713" : "\u2717";
         dd.appendChild(ico);
       } else {
-        dd.textContent = row.value;
+        const tag = document.createElement("span");
+        tag.className = "field-value-tag";
+        tag.textContent = row.value;
+        dd.appendChild(tag);
       }
-
-      field.appendChild(dt);
-      field.appendChild(dd);
-      dl.appendChild(field);
+    } else if (fieldNameMatches(row.label, ["PA CONTRACT"])) {
+      const ico = document.createElement("span");
+      const lower = (row.value || "").toLowerCase();
+      const checked = lower === "true" || lower === "yes" || lower === "1";
+      ico.className = checked ? "opp-preview-chk-yes" : "opp-preview-chk-no";
+      ico.textContent = checked ? "\u2713" : "\u2717";
+      dd.appendChild(ico);
+    } else {
+      dd.textContent = row.value;
     }
-    pfBody.appendChild(dl);
 
-    if (checklistRows.length) {
-      const dl2 = document.createElement("dl");
-      dl2.className = "opp-preview-fields opp-preview-fields-3col";
-      dl2.style.marginTop = "0.5rem";
-      for (const row of checklistRows) {
-        const field = document.createElement("div");
-        field.className = "opp-preview-field opp-preview-field-chk";
-        const ico = document.createElement("span");
-        const checked = row.value === "Yes" || String(row.value).toLowerCase() === "true";
-        ico.className = checked ? "opp-preview-chk-yes" : "opp-preview-chk-no";
-        ico.textContent = checked ? "\u2713" : "\u2717";
-        const lbl = document.createElement("span");
-        lbl.textContent = row.label;
-        field.appendChild(ico);
-        field.appendChild(lbl);
-        dl2.appendChild(field);
-      }
-      pfBody.appendChild(dl2);
-    }
+    field.appendChild(dt);
+    field.appendChild(dd);
+    return field;
   }
 
   async function renderProjectFieldsEdit() {
@@ -34222,17 +34715,6 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       form.appendChild(row);
       return row;
     }
-
-    const stageSelect = document.createElement("select");
-    stageSelect.innerHTML = '<option value="">—</option>';
-    for (const s of state.stages || []) {
-      const opt = document.createElement("option");
-      opt.value = String(s.id ?? s.ID);
-      opt.textContent = s.title || s.Title || `Stage ${s.id ?? s.ID}`;
-      stageSelect.appendChild(opt);
-    }
-    stageSelect.value = String(resolveOppStageId(oppForUpdate) || "");
-    addRow("Stage", stageSelect);
 
     const contactPicker = createPreviewContactPicker(
       oppForUpdate.contactId,
@@ -34341,14 +34823,19 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     form.appendChild(actions);
     pfBody.appendChild(form);
 
-    cancelBtn.addEventListener("click", renderProjectFieldsDisplay);
+    form.addEventListener("input", () => { _previewDirty = true; });
+    form.addEventListener("change", () => { _previewDirty = true; });
+
+    cancelBtn.addEventListener("click", () => {
+      _previewDirty = false;
+      renderProjectFieldsDisplay();
+    });
 
     saveBtn.addEventListener("click", async () => {
       saveBtn.disabled = true;
       cancelBtn.disabled = true;
       try {
         await updateOpportunityBulk(oppId, {
-          stageId: stageSelect.value ? Number(stageSelect.value) : undefined,
           responsibleUserId: responsibleSelect.value || undefined,
           bidValue: valueInput.value !== "" ? Number(valueInput.value) : undefined,
           expectedCloseDate: dueInput.value || null,
@@ -34358,6 +34845,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
         });
         state.oppCustomFieldCache?.invalidate(oppId);
         showToast("Project fields updated");
+        _previewDirty = false;
         const newData = await fetchOpportunityPreviewData(oppId, true);
         renderOpportunityPreviewContent(container, newData);
       } catch (err) {
@@ -34436,9 +34924,19 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       '<button type="button" class="note-format-btn note-format-hilite-btn" title="Highlight color">🖍</button>' +
       '<button type="button" class="note-format-btn note-format-emoji-btn" title="Emoji">😀</button>' +
       '<button type="button" class="note-format-btn note-format-link-btn" title="Insert link">🔗</button>' +
-      '<span class="note-format-sep"></span>' +
-      '<button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear formatting">⌫</button>' +
-      '<button type="button" class="note-backdate-btn" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>' +
+      '<button type="button" class="note-format-btn note-format-color-btn" title="Text color">A<span class="note-format-color-bar"></span></button>' +
+      '<button type="button" class="note-format-btn note-format-overflow-btn" title="More formatting">···</button>' +
+      '<button type="button" class="note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="H2" title="Heading 2"><b>H2</b></button>' +
+      '<button type="button" class="note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="H3" title="Heading 3"><b>H3</b></button>' +
+      '<button type="button" class="note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="BLOCKQUOTE" title="Quote">❝</button>' +
+      '<button type="button" class="note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="PRE" title="Code block">&lt;/&gt;</button>' +
+      '<button type="button" class="note-format-btn" data-overflow="1" data-cmd="insertHorizontalRule" title="Horizontal rule">―</button>' +
+      '<span class="note-format-sep" data-overflow="1"></span>' +
+      '<button type="button" class="note-format-btn" data-overflow="1" data-cmd="indent" title="Indent">→</button>' +
+      '<button type="button" class="note-format-btn" data-overflow="1" data-cmd="outdent" title="Outdent">←</button>' +
+      '<span class="note-format-sep" data-overflow="1"></span>' +
+      '<button type="button" class="note-format-btn" data-overflow="1" data-cmd="removeFormat" title="Clear formatting">⌫</button>' +
+      '<button type="button" class="note-backdate-btn" data-overflow="1" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>' +
       '</div>' +
       '<div class="note-editor-wrap">' +
         '<div class="note-editor preview-note-editor" contenteditable="true" data-placeholder="Write a note\u2026"></div>' +
@@ -34446,8 +34944,8 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       '</div>' +
       '</div>' +
       '<div class="preview-note-actions">' +
-        '<button type="button" class="btn btn-primary btn-sm preview-note-submit">Add note</button>' +
         '<button type="button" class="btn btn-ghost btn-sm preview-note-cancel">Cancel</button>' +
+        '<button type="button" class="btn btn-primary btn-sm preview-note-submit">Post</button>' +
       '</div>';
     section.appendChild(editorWrap);
 
@@ -34481,6 +34979,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       if (ed) ed.innerHTML = "";
       const bdbtn = editorWrap.querySelector(".note-backdate-btn");
       if (bdbtn) delete bdbtn.dataset.backdateValue;
+      _previewDirty = false;
     });
 
     // Wire @-mention autocomplete
@@ -34489,6 +34988,14 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     if (previewEditor && previewDropdown) {
       setupMentionAutocomplete(previewEditor, previewDropdown);
     }
+    if (previewEditor) {
+      previewEditor.addEventListener("input", () => {
+        const txt = (previewEditor.innerHTML || "").trim();
+        if (txt && !/^(<br\s*\/?>|\s*|<div>\s*<br\s*\/?>\s*<\/div>)$/i.test(txt)) {
+          _previewDirty = true;
+        }
+      });
+    }
 
     // Wire highlighter dropdown
     const hiliteBtn = editorWrap.querySelector(".note-format-hilite-btn");
@@ -34496,6 +35003,15 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       hiliteBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         _toggleHighlighterDropdown(hiliteBtn, previewEditor);
+      });
+    }
+
+    // Wire text color dropdown
+    const colorBtn = editorWrap.querySelector(".note-format-color-btn");
+    if (colorBtn && previewEditor) {
+      colorBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        _toggleTextColorDropdown(colorBtn, previewEditor);
       });
     }
 
@@ -34543,6 +35059,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
           editorWrap.classList.remove("active");
           if (bdbtn) delete bdbtn.dataset.backdateValue;
           showToast("Note added");
+          _previewDirty = false;
           addEventLogEntry("note", opp.id ?? opp.ID, opp.title || opp.Title || "", "Note added", true);
           // Refresh preview
           const titleHint = opp.title || opp.Title || "";
@@ -34557,6 +35074,38 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     }
 
     detailsContent.appendChild(section);
+
+    // Auto-load threaded replies for all events
+    if (history.length && oppPreviewContext?.oppId) {
+      section.querySelectorAll(".opp-preview-history-item").forEach(li => {
+        const eventId = li.dataset.eventId;
+        if (!eventId) return;
+        const replyWrap = li.querySelector(".opp-preview-history-replies");
+        if (!replyWrap) return;
+        api(`/api/v2/projects/${oppPreviewContext.oppId}/history/${eventId}/replies`).then(replies => {
+          const list = unwrap(replies) || replies || [];
+          if (!list.length) return;
+          const threadEl = document.createElement("div");
+          threadEl.className = "opp-preview-history-thread";
+          for (const r of list) {
+            const rDiv = document.createElement("div");
+            rDiv.className = "opp-preview-history-reply-item";
+            if (r.isDeleted) rDiv.classList.add("deleted");
+            const rMeta = document.createElement("div");
+            rMeta.className = "opp-preview-history-reply-meta";
+            rMeta.textContent = [r.author || "", r.created ? formatPreviewDateTime(r.created) : ""].filter(Boolean).join(" · ");
+            rDiv.appendChild(rMeta);
+            const rBody = document.createElement("div");
+            rBody.className = "opp-preview-history-reply-body" + (r.isDeleted ? " deleted" : "");
+            rBody.innerHTML = r.isDeleted ? "This reply was deleted." : (r.content || "");
+            rDiv.appendChild(rBody);
+            threadEl.appendChild(rDiv);
+          }
+          replyWrap.insertBefore(threadEl, replyWrap.querySelector(".opp-preview-history-reply-btn"));
+          replyWrap.dataset.loaded = "1";
+        }).catch(() => {});
+      });
+    }
   })();
 
   container.appendChild(detailsContent);
@@ -38325,6 +38874,90 @@ document.addEventListener("click", function (e) {
   _showPreviewLinkInput(btn, editor);
 });
 
+// Delegated handler for text color picker button (all note editors)
+document.addEventListener("click", function (e) {
+  const btn = e.target.closest(".note-format-color-btn");
+  if (!btn) return;
+  const toolbar = btn.closest(".note-format-toolbar");
+  if (!toolbar) return;
+  const editor = toolbar.parentElement && toolbar.parentElement.querySelector(".note-editor");
+  if (!editor) return;
+  e.stopPropagation();
+  _toggleTextColorDropdown(btn, editor);
+});
+
+// Delegated handler for toolbar overflow menu button (all note editors)
+document.addEventListener("click", function (e) {
+  const btn = e.target.closest(".note-format-overflow-btn");
+  if (!btn) return;
+  const toolbar = btn.closest(".note-format-toolbar");
+  if (!toolbar) return;
+  e.stopPropagation();
+  // Close any existing dropdown and move buttons back
+  const existing = document.querySelector(".note-format-overflow-dropdown.open");
+  if (existing) {
+    existing.classList.remove("open");
+    const tb = document.querySelector(".preview-format-toolbar");
+    if (tb) {
+      const anchor = tb.querySelector(".note-format-overflow-btn");
+      existing.querySelectorAll("[data-overflow]").forEach(el => tb.insertBefore(el, anchor));
+    }
+    return;
+  }
+  // Create dropdown if not yet created
+  let dd = document.querySelector(".note-format-overflow-dropdown");
+  if (!dd) {
+    dd = document.createElement("div");
+    dd.className = "note-format-overflow-dropdown";
+    document.body.appendChild(dd);
+  }
+  // Move overflow buttons into dropdown
+  dd.innerHTML = "";
+  toolbar.querySelectorAll("[data-overflow]").forEach(el => {
+    dd.appendChild(el);
+  });
+  // Show dropdown
+  dd.classList.add("open");
+  // Position below the ··· button, aligned to its RIGHT edge (expands left+down)
+  const r = btn.getBoundingClientRect();
+  dd.style.position = "fixed";
+  dd.style.top = (r.bottom + 4) + "px";
+  // Measure after showing to get accurate width
+  const ddW = dd.offsetWidth || 50;
+  dd.style.left = Math.max(4, r.right - ddW) + "px";
+  // Move buttons back on any click inside dropdown
+  dd.onclick = function() {
+    setTimeout(() => {
+      dd.classList.remove("open");
+      const toolbar = document.querySelector(".preview-format-toolbar");
+      if (toolbar) {
+        const anchor = toolbar.querySelector(".note-format-overflow-btn");
+        dd.querySelectorAll("[data-overflow]").forEach(el => {
+          toolbar.insertBefore(el, anchor);
+        });
+      }
+    }, 50);
+  };
+});
+
+// Close overflow dropdown on outside click and move buttons back
+document.addEventListener("click", function (e) {
+  if (!e.target.closest(".note-format-overflow-btn") && !e.target.closest(".note-format-overflow-dropdown")) {
+    const dd = document.querySelector(".note-format-overflow-dropdown.open");
+    if (dd) {
+      dd.classList.remove("open");
+      // Move buttons back to their original toolbar
+      const toolbar = document.querySelector(".preview-format-toolbar");
+      if (toolbar) {
+        const lastBtn = toolbar.querySelector(".note-format-overflow-btn");
+        dd.querySelectorAll("[data-overflow]").forEach(el => {
+          toolbar.insertBefore(el, lastBtn);
+        });
+      }
+    }
+  }
+});
+
 // Backdate icon button: dynamically creates a temp date input, positions it
 // over the button, and opens the native picker. Works on mobile where
 // input.click() on a visually-hidden element does not open the picker.
@@ -38375,6 +39008,51 @@ const _HIGHLIGHT_COLORS = [
   { name: "Orange", css: "rgba(255,167,38,.20)" },
   { name: "Purple", css: "rgba(171,71,188,.20)" },
 ];
+
+const _TEXT_COLORS = [
+  { name: "Default", css: "" },
+  { name: "Red",     css: "#ef5350" },
+  { name: "Orange",  css: "#ff9800" },
+  { name: "Green",   css: "#66bb6a" },
+  { name: "Blue",    css: "#42a5f5" },
+  { name: "Purple",  css: "#ab47bc" },
+  { name: "Gray",    css: "#9e9e9e" },
+];
+
+function _toggleTextColorDropdown(btn, editor) {
+  const existing = document.querySelector(".preview-textcolor-dropdown");
+  if (existing) { existing.remove(); return; }
+  const dd = document.createElement("div");
+  dd.className = "preview-textcolor-dropdown preview-highlighter-dropdown";
+  dd.tabIndex = -1;
+  _TEXT_COLORS.forEach(c => {
+    const sw = document.createElement("button");
+    sw.type = "button";
+    sw.className = "preview-highlighter-swatch";
+    sw.style.background = c.css || "var(--text)";
+    sw.title = c.name;
+    sw.setAttribute("aria-label", c.name);
+    sw.addEventListener("click", (e) => {
+      e.stopPropagation();
+      editor.focus();
+      if (c.css) document.execCommand("foreColor", false, c.css);
+      else document.execCommand("removeFormat", false, null);
+      dd.remove();
+    });
+    dd.appendChild(sw);
+  });
+  document.body.appendChild(dd);
+  const r = btn.getBoundingClientRect();
+  dd.style.left = `${Math.min(r.left, window.innerWidth - 180)}px`;
+  dd.style.top = `${r.bottom + 4}px`;
+  const close = (e) => {
+    if (!dd.contains(e.target) && !btn.contains(e.target)) {
+      dd.remove();
+      document.removeEventListener("click", close, true);
+    }
+  };
+  requestAnimationFrame(() => document.addEventListener("click", close, true));
+}
 
 function _toggleHighlighterDropdown(btn, editor) {
   const existing = document.querySelector(".preview-highlighter-dropdown");

@@ -881,7 +881,8 @@ INSERT INTO history_categories (title, display_color, is_system, sort_order, ico
     ('Inspection', NULL, TRUE, 11, 'building', 'stroke'),
     ('Expression of gratitude', NULL, TRUE, 12, 'star', 'stroke'),
     ('Opportunity', NULL, TRUE, 13, 'alert', 'stroke'),
-    ('Stage Estimate', NULL, TRUE, 14, 'document', 'fill');
+    ('Stage Estimate', NULL, TRUE, 14, 'document', 'fill'),
+    ('Action', '#6c757d', TRUE, 15, 'pencil', 'accent');
 
 -- Default task labels
 INSERT INTO task_labels (title, sort_order) VALUES

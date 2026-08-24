@@ -2,6 +2,123 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Preview Modal Overhaul — Phase 1 Bug Fixes (2026-08-21)
+
+**Notes author fix:**
+- `historyEventAuthor()` now reads `ev.author` flat string from API response (was looking for nested `ev.createBy.displayName` which didn't exist)
+- Same fix applied to `project.html` standalone page
+- Notes now correctly show author names
+
+**Email rendering fix (project page only):**
+- `project.html` event body now sanitizes HTML before injection (strips scripts, styles, iframes, event handlers, position:absolute/fixed)
+- Added overflow containment: `.event-item` gets `overflow: hidden; position: relative`, `.event-body` gets `max-height: 280px; overflow: auto`
+- Added `img { max-width: 100% }` and `table { max-width: 100% }` constraints to prevent wide content from escaping card boundary
+
+**Checkbox field fix:**
+- Added `flex-wrap: nowrap` to `.opp-preview-field-chk` so checkbox icon and label stay inline on the same line
+- Added `min-width: 0` to prevent flex item expansion
+
+**Contact display fix:**
+- `project.html` now extracts `contact.displayName` from contact object instead of using `String(contact)` which showed `[object Object]`
+
+**Mobile field layout:**
+- On mobile (`@media max-width: 600px`), `.opp-preview-field` switches to `flex-direction: column` so label sits above value
+- Keeps 2-column grid but reduces padding and font size for more uniform card heights
+- Reduces grid gap slightly
+
+**Edit project fields — Stage duplication fix:**
+- Removed Stage dropdown from `renderProjectFieldsEdit()` — Stage already has its own standalone section
+- Removed `stageId` from the bulk save payload to prevent race conditions
+- Edit button now only shows fields that belong in the Project Fields section
+
+**Click-off protection:**
+- Added `_previewDirty` flag tracked across description editor, field edit form, and note editor
+- Setting: dirty flag set on input/change events in editors, reset on save or explicit cancel
+- Closing preview modal via backdrop click, X button, or Escape key now shows `confirmDialog("Discard unsaved changes?")` when dirty
+- Prevents accidental data loss from unsaved edits
+
+**More note formatting options:**
+- Preview modal and project page note editors now include:
+  - Text color picker (7 colors: Default, Red, Orange, Green, Blue, Purple, Gray)
+  - Heading 2 (H2) and Heading 3 (H3) via `formatBlock`
+  - Blockquote via `formatBlock`
+  - Code block via `formatBlock` (PRE)
+  - Horizontal rule via `insertHorizontalRule`
+  - Indent and Outdent buttons
+- All buttons use existing `document.execCommand` delegation pattern
+- Text color picker reuses highlighter dropdown UI pattern
+
+**Files:** `app.js`, `styles.css`, `project.html`
+
+---
+
+## Preview Modal Overhaul — Phase 2 Features (2026-08-21)
+
+**Project field grouping:**
+- New `custom_field_groups` table (migration 017) with `label`, `sort_order`, `is_collapsed_default`, `standard_fields` JSONB
+- `custom_field_definitions` gets `group_id` FK (nullable)
+- Admin UI: new "Field Groups" column in Admin > Customize tab — create/edit/delete groups, assign standard fields (Contact, Responsible, Value, etc.) and custom fields to groups
+- Preview rendering: grouped fields appear under collapsible section headers with chevron toggle
+- On mobile, groups with `isCollapsedDefault=true` start collapsed
+- Ungrouped fields render in an "Other" section at bottom
+- Stage, Tags, Description remain fixed at top — not affected by grouping
+
+**History actions (field change tracking):**
+- New system history category "Action" (`is_system = TRUE`) — not editable/deletable by admins
+- `_handle_project_update()` now tracks changes to Stage, Value, Contact, Responsible, Follow-up Due Date, and Private
+- Before UPDATE, fetches current values; after UPDATE, compares old vs new
+- Creates `history_events` row with Action category for each change
+- Content format: "Stage changed from Waiting to Active", "Value set to $4,507.10", "Contact cleared"
+- Client detects by `cat.title === "Action"` (category-based, not regex)
+- Rendered with `.opp-preview-history-item--action` class — compact, muted, 0.72rem font, no body block
+- Admin UI: system categories show "System" badge, no edit/delete buttons
+
+**Event note threading:**
+- Each history event gets a "Reply" button
+- Clicking Reply lazy-loads existing replies via `GET /api/v2/projects/{id}/history/{eventId}/replies`
+- Replies render as nested items with left accent border, indented
+- Inline reply editor (textarea + Submit/Cancel) opens under event
+- Reply creation via `POST /api/v2/projects/{id}/history/{eventId}/replies`
+- Telegram bot: replies to notification messages now create threaded `history_replies` instead of standalone `history_events` when `eventId` is available in notification payload
+- `notification-by-message` endpoint now returns `eventId` from notification payload
+- Bot token auth added to reply endpoint
+
+**Files:** `app.js`, `styles.css`, `server.py`, `telegram_bot.py`, `migrations/017_add_custom_field_groups.sql`, `index.html`
+
+---
+
+## Network Resilience Improvements (2026-08-21)
+
+**API retry with exponential backoff:**
+- `api()` wrapper now retries up to 3 times on network failure, 502/503/504, or HTML responses (WAF challenges)
+- Backoff: 1s → 2s → 4s between retries
+- Mutations (POST/PUT/DELETE) skip retry to prevent duplicate actions
+- HTML responses (WAF challenge pages, proxy error pages) get a 2s wait before retry, allowing browser to solve PoW in background
+- On successful retry: hides reconnect banner, continues normally
+- On retry exhaustion: shows original error
+
+**Reconnect banner UI:**
+- Uses existing `#crm-crash-banner` element (was dead HTML/CSS)
+- Shows "Reconnecting… (attempt N/3)" during retries
+- Shows "Verifying connection…" for WAF challenge retries
+- Shows "You're offline. Waiting for connection…" on browser offline event
+- Auto-hides after 15s max to prevent stuck state
+- Hides immediately on successful reconnect or server recovery
+
+**SSE reconnection with backoff:**
+- Exponential backoff: 5s → 10s → 20s → 30s max
+- Resets to 5s on successful reconnect
+- Prevents hammering the server during extended outages
+
+**Improved online/offline handling:**
+- `online` event: hides banners, shows "Back online" toast, restarts presence + SSE
+- `offline` event: shows "You're offline" banner, shows server unreachable indicator
+- Browser online/offline events are unreliable on some platforms but provide a useful signal when they fire
+
+**Files:** `app.js`
+
+---
+
 ## Automation — Test Run Fix + SSE Handler Crash Fix (2026-08-21)
 
 **Test Run fix:**

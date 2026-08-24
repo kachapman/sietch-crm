@@ -2342,6 +2342,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/custom-fields":
             self._handle_custom_fields_get()
             return
+        if api_path == "/api/v2/field-groups":
+            self._handle_field_groups_get()
+            return
         if api_path == "/api/v2/task-labels":
             self._handle_task_labels_get()
             return
@@ -3200,6 +3203,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_custom_field_delete(int(m.group(1)))
             return
 
+        # ── Field groups (admin) ──
+        if api_path == "/api/v2/field-groups" and method == "POST":
+            self._handle_field_group_create()
+            return
+        if api_path == "/api/v2/field-groups/reorder" and method == "POST":
+            self._handle_field_groups_reorder()
+            return
+        m = re.match(r"^/api/v2/field-groups/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_field_group_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_field_group_delete(int(m.group(1)))
+            return
+
         # ── History categories (admin) ──
         if api_path == "/api/v2/history-categories" and method == "POST":
             self._handle_history_category_create()
@@ -3776,7 +3794,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "createdBy": row[12], "updatedAt": row[13].isoformat() if row[13] else None,
             "stage": {"title": row[14], "color": row[15]} if row[14] else None,
             "responsible": {"displayName": row[17]} if row[17] else None,
-            "contact": {"displayName": f"{row[18] or ''} {row[19] or ''}".strip(), "company": row[20], "email": row[21], "phone": row[22]} if row[18] or row[19] else None,
+            "contact": {"displayName": (f"{row[18] or ''} {row[19] or ''}".strip() or row[20] or f"Contact {row[8]}"), "company": row[20], "email": row[21], "phone": row[22]} if row[8] else None,
             "project_number": row[23],
         })
 
@@ -3966,6 +3984,32 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # Publish project_created event for automation engine
         event_bus.publish("project_created", {"opportunity_id": opp_id, "title": title})
 
+    @staticmethod
+    def _resolve_change_display(field, val):
+        """Resolve a field value to a human-readable display string for history events."""
+        if val is None or val == "" or val == 0:
+            return "—"
+        if field == "stageId":
+            row = db.query_one("SELECT title FROM stages WHERE id = %s", (val,))
+            return row["title"] if row else str(val)
+        if field == "contactId":
+            row = db.query_one("SELECT first_name, last_name FROM contacts WHERE id = %s", (val,))
+            if row:
+                name = f"{row[0] or ''} {row[1] or ''}".strip()
+                return name if name else str(val)
+            return str(val)
+        if field == "responsibleUserId":
+            row = db.query_one("SELECT display_name FROM users WHERE id = %s", (val,))
+            return row["display_name"] if row else str(val)
+        if field == "bidValue":
+            try:
+                return f"${float(val):,.2f}"
+            except (TypeError, ValueError):
+                return str(val)
+        if field == "isPrivate":
+            return "Yes" if val else "No"
+        return str(val)
+
     def _handle_project_update(self, opp_id: int) -> None:
         user = _require_auth(self)
         if not user:
@@ -3976,6 +4020,31 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
         try:
+            # Fetch current values for change tracking
+            old_row = db.query_one(
+                """SELECT stage_id, bid_value, contact_id, responsible_user_id,
+                          expected_close_date, is_private, description
+                   FROM opportunities WHERE id = %s""", (opp_id,)
+            )
+            TRACKED_FIELDS = {
+                "stageId": ("stage_id", "Stage"),
+                "bidValue": ("bid_value", "Value"),
+                "contactId": ("contact_id", "Contact"),
+                "responsibleUserId": ("responsible_user_id", "Responsible"),
+                "expectedCloseDate": ("expected_close_date", "Follow-up Due Date"),
+                "isPrivate": ("is_private", "Private"),
+            }
+            OLD_VALUES = {}
+            if old_row:
+                OLD_VALUES = {
+                    "stageId": old_row[0],
+                    "bidValue": float(old_row[1]) if old_row[1] else None,
+                    "contactId": old_row[2],
+                    "responsibleUserId": old_row[3],
+                    "expectedCloseDate": str(old_row[4]) if old_row[4] else None,
+                    "isPrivate": old_row[5],
+                }
+
             sets = ["updated_at = NOW()", "updated_by = %s"]
             params: list = [user["id"]]
             for field, col in [("title", "title"), ("description", "description"), ("stageId", "stage_id"),
@@ -3996,6 +4065,45 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             # Publish stage_changed event for automation engine
             if "stageId" in payload:
                 event_bus.publish("stage_changed", {"opportunity_id": opp_id, "stage_id": payload["stageId"]})
+
+            # Create history events for field changes
+            for field, (col, label) in TRACKED_FIELDS.items():
+                if field not in payload:
+                    continue
+                new_val = payload[field]
+                old_val = OLD_VALUES.get(field)
+                if field in ("contactId", "responsibleUserId") and (new_val == 0 or new_val == "0" or new_val == ""):
+                    new_val = None
+                if field == "bidValue" and new_val is not None:
+                    try: new_val = float(new_val)
+                    except (TypeError, ValueError): pass
+                if field == "isPrivate":
+                    new_val = bool(new_val) if new_val is not None else None
+                    old_val = bool(old_val) if old_val is not None else None
+                if str(new_val) == str(old_val) or (new_val is None and old_val is None):
+                    continue
+                # Resolve display values
+                old_display = _resolve_change_display(field, old_val)
+                new_display = _resolve_change_display(field, new_val)
+                if new_val is None or new_val == "" or new_val == 0:
+                    content = f"{label} cleared"
+                elif old_val is None or old_val == "" or old_val == 0:
+                    content = f"{label} set to {new_display}"
+                else:
+                    content = f"{label} changed from {old_display} to {new_display}"
+                try:
+                    # Look up Action category ID (cached after first query)
+                    if not hasattr(_handle_project_update, '_action_cat_id'):
+                        row = db.query_one("SELECT id FROM history_categories WHERE title = 'Action'")
+                        _handle_project_update._action_cat_id = row["id"] if row else None
+                    cat_id = _handle_project_update._action_cat_id
+                    db.insert_returning(
+                        """INSERT INTO history_events (opportunity_id, category_id, content, created_by, created_at)
+                           VALUES (%s, %s, %s, %s, NOW()) RETURNING id""",
+                        (opp_id, cat_id, content, user["id"]),
+                    )
+                except Exception as hist_err:
+                    logger.warning("Failed to create change history for project %s: %s", opp_id, hist_err)
 
             # Handle customFieldList if present
             custom_field_list = payload.get("customFieldList")
@@ -4090,7 +4198,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         rows = db.query(
             """SELECT id, field_key, label, field_type, is_required, default_value,
-                      sort_order, show_on_create, show_on_edit
+                      sort_order, show_on_create, show_on_edit, group_id
                FROM custom_field_definitions WHERE is_active = TRUE ORDER BY sort_order"""
         )
         fields = []
@@ -4102,7 +4210,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             fields.append({
                 "id": r[0], "key": r[1], "label": r[2], "type": r[3],
                 "isRequired": r[4], "defaultValue": r[5], "sortOrder": r[6],
-                "showOnCreate": r[7], "showOnEdit": r[8],
+                "showOnCreate": r[7], "showOnEdit": r[8], "groupId": r[9],
                 "options": [{"value": o[0], "label": o[1]} for o in opts],
             })
         _json_response(self, 200, fields)
@@ -4155,7 +4263,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         sets, params = [], []
         for field, col in [("label", "label"), ("type", "field_type"), ("isRequired", "is_required"),
-                           ("defaultValue", "default_value"), ("sortOrder", "sort_order")]:
+                           ("defaultValue", "default_value"), ("sortOrder", "sort_order"),
+                           ("groupId", "group_id")]:
             if field in payload:
                 sets.append(f"{col} = %s")
                 params.append(payload[field])
@@ -4184,6 +4293,100 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         db.execute("DELETE FROM custom_field_options WHERE field_id = %s", (field_id,))
         db.execute("DELETE FROM custom_field_definitions WHERE id = %s", (field_id,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_field_groups_get(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query(
+            """SELECT id, label, sort_order, is_collapsed_default, standard_fields
+               FROM custom_field_groups ORDER BY sort_order, id"""
+        )
+        groups = []
+        for r in rows:
+            std_fields = r[4] if isinstance(r[4], list) else []
+            groups.append({
+                "id": r[0], "label": r[1], "sortOrder": r[2],
+                "isCollapsedDefault": r[3], "standardFields": std_fields,
+            })
+        _json_response(self, 200, groups)
+
+    def _handle_field_group_create(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        label = str(payload.get("label") or "").strip()
+        if not label:
+            _json_response(self, 400, {"error": "Label is required"})
+            return
+        max_sort = db.query_one("SELECT COALESCE(MAX(sort_order), 0) as mx FROM custom_field_groups")["mx"]
+        gid = db.insert_returning(
+            """INSERT INTO custom_field_groups (label, sort_order, is_collapsed_default, standard_fields)
+               VALUES (%s, %s, %s, %s::jsonb) RETURNING id""",
+            (label, max_sort + 1, bool(payload.get("isCollapsedDefault", False)),
+             json.dumps(payload.get("standardFields") or [])),
+        )
+        _json_response(self, 201, {"id": gid, "ok": True})
+
+    def _handle_field_group_update(self, group_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        sets = []
+        params = []
+        if "label" in payload:
+            sets.append("label = %s")
+            params.append(str(payload["label"]).strip())
+        if "sortOrder" in payload:
+            sets.append("sort_order = %s")
+            params.append(int(payload["sortOrder"]))
+        if "isCollapsedDefault" in payload:
+            sets.append("is_collapsed_default = %s")
+            params.append(bool(payload["isCollapsedDefault"]))
+        if "standardFields" in payload:
+            sets.append("standard_fields = %s::jsonb")
+            params.append(json.dumps(payload["standardFields"] or []))
+        if not sets:
+            _json_response(self, 400, {"error": "No fields to update"})
+            return
+        params.append(group_id)
+        db.execute(f"UPDATE custom_field_groups SET {', '.join(sets)} WHERE id = %s", (*params,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_field_group_delete(self, group_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        db.execute("UPDATE custom_field_definitions SET group_id = NULL WHERE group_id = %s", (group_id,))
+        db.execute("DELETE FROM custom_field_groups WHERE id = %s", (group_id,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_field_groups_reorder(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        ids = payload.get("ids")
+        if not isinstance(ids, list):
+            _json_response(self, 400, {"error": "ids array required"})
+            return
+        for i, gid in enumerate(ids):
+            db.execute("UPDATE custom_field_groups SET sort_order = %s WHERE id = %s", (i, int(gid)))
         _json_response(self, 200, {"ok": True})
 
     def _handle_project_custom_fields_get(self, opp_id: int) -> None:
@@ -4373,7 +4576,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     def _handle_history_reply_create(self, opp_id: int, event_id: int) -> None:
         user = _require_auth(self)
         if not user:
-            return
+            # Check for bot token auth
+            bot_token = _get_bot_token()
+            auth_header = self.headers.get("Authorization", "").strip()
+            if bot_token and auth_header == f"Bearer {bot_token}":
+                # Bot auth — use system user (id=1) or resolve from chatId
+                user = {"id": 1, "display_name": "Bot"}
+            else:
+                return
         try:
             payload = json.loads(_read_body(self) or b"{}")
         except json.JSONDecodeError:
@@ -10523,7 +10733,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             try:
                 row = db.query_one(
                     """SELECT n.id AS notification_id, n.opportunity_id, n.actor_user_id,
-                              o.title AS project_title
+                              o.title AS project_title, n.payload
                        FROM telegram_notification_log tnl
                        JOIN notifications n ON n.id = tnl.notification_id
                        LEFT JOIN opportunities o ON o.id = n.opportunity_id
@@ -10531,11 +10741,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     (int(raw_chat), int(raw_msg)),
                 )
                 if row:
+                    payload_data = row["payload"] if isinstance(row["payload"], dict) else {}
                     _json_response(self, 200, {
                         "notificationId": row["notification_id"],
                         "opportunityId": row["opportunity_id"],
                         "actorUserId": row["actor_user_id"],
                         "projectTitle": row.get("project_title") or "Unknown Project",
+                        "eventId": payload_data.get("event_id"),
                     })
                 else:
                     _json_response(self, 404, {"error": "Notification not found"})

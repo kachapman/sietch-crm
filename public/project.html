@@ -28,12 +28,29 @@
     .add-note-btn { display: inline-flex; align-items: center; gap: 0.3rem; background: none; border: 1px solid var(--border); border-radius: 6px; padding: 0.3rem 0.6rem; color: var(--muted); font-size: 0.8rem; cursor: pointer; transition: background 0.15s, color 0.15s; }
     .add-note-btn:hover { background: var(--surface); color: var(--text); }
     .event-list { list-style: none; padding: 0; margin: 0; }
-    .event-item { border-left: 3px solid var(--border); padding: 0.5rem 0.7rem; margin-bottom: 0.4rem; background: var(--surface); border-radius: 0 6px 6px 0; }
+    .event-item { border-left: 3px solid var(--border); padding: 0.5rem 0.7rem; margin-bottom: 0.4rem; background: var(--surface); border-radius: 0 6px 6px 0; overflow: hidden; position: relative; }
     .event-item.event-highlighted { border-left-color: #6366f1; background: rgba(99, 102, 241, 0.1); }
     .event-date { font-size: 0.75rem; color: var(--muted); }
     .event-cat { font-size: 0.75rem; color: var(--muted); font-weight: 500; }
     .event-author { font-size: 0.75rem; color: var(--muted); }
-    .event-body { font-size: 0.88rem; margin-top: 0.2rem; color: var(--text); }
+    .event-body { font-size: 0.88rem; margin-top: 0.2rem; color: var(--text); max-height: 280px; overflow: auto; position: relative; word-break: break-word; white-space: normal; }
+    .event-body img { max-width: 100%; height: auto; }
+    .event-body table { max-width: 100%; }
+    .event-email-summary { display: flex; flex-direction: column; gap: 0.15rem; }
+    .event-email-from, .event-email-date { font-size: 0.78rem; color: var(--muted); }
+    .event-email-snippet { font-size: 0.82rem; color: var(--text); opacity: 0.8; }
+    .event-email-expand { margin-top: 0.3rem; }
+    .event-email-expand-btn {
+      font: inherit; font-size: 0.75rem; padding: 0.2rem 0.5rem;
+      border: 1px solid var(--border); border-radius: 4px; background: transparent;
+      color: var(--accent); cursor: pointer;
+    }
+    .event-email-expand-btn:hover { background: var(--surface); }
+    .event-email-full {
+      margin-top: 0.3rem; padding: 0.4rem; font-size: 0.8rem;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+      white-space: pre-wrap; word-break: break-word; max-height: 400px; overflow-y: auto;
+    }
     .project-empty { color: var(--muted); font-style: italic; padding: 1rem 0; }
     .auth-error { max-width: 400px; margin: 4rem auto; text-align: center; color: var(--muted); }
     .auth-error a { color: var(--accent); }
@@ -105,6 +122,12 @@
           <span class="phtml-note-sep"></span>
           <button type="button" class="phtml-note-format-btn" data-cmd="insertUnorderedList" title="Bullet list">&bull;</button>
           <button type="button" class="phtml-note-format-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
+          <span class="phtml-note-sep"></span>
+          <button type="button" class="phtml-note-format-btn" data-cmd="formatBlock" data-val="H2" title="Heading 2"><b>H2</b></button>
+          <button type="button" class="phtml-note-format-btn" data-cmd="formatBlock" data-val="H3" title="Heading 3"><b>H3</b></button>
+          <button type="button" class="phtml-note-format-btn" data-cmd="formatBlock" data-val="BLOCKQUOTE" title="Quote">&#10077;</button>
+          <button type="button" class="phtml-note-format-btn" data-cmd="formatBlock" data-val="PRE" title="Code block">&lt;/&gt;</button>
+          <button type="button" class="phtml-note-format-btn" data-cmd="insertHorizontalRule" title="Horizontal rule">&#8213;</button>
           <span class="phtml-note-sep"></span>
           <button type="button" class="phtml-note-format-btn" data-cmd="removeFormat" title="Clear formatting">&#x232B;</button>
         </div>
@@ -189,7 +212,10 @@
 
       if (stageTitle) items.push("Stage: " + stageTitle);
       if (value) items.push("Value: " + String(value));
-      if (contact) items.push("Contact: " + String(contact));
+      if (contact) {
+        var cName = typeof contact === "object" ? (contact.displayName || contact.DisplayName || contact.name || contact.Name || "") : String(contact);
+        if (cName) items.push("Contact: " + cName);
+      }
       if (dueDate) items.push("Due: " + formatDate(dueDate));
       if (responsible) {
         var rName = typeof responsible === "object" ? (responsible.displayName || responsible.DisplayName || responsible.id || responsible.Id) : String(responsible);
@@ -236,6 +262,12 @@
         html += '<div class="project-field"><dt>' + esc(row.label) + '</dt><dd>' + esc(row.value) + '</dd></div>';
       }
       fieldsEl.innerHTML = html;
+      // Linkify URLs in field values
+      fieldsEl.querySelectorAll("dd").forEach(function(dd) {
+        var txt = dd.textContent || "";
+        if (!txt || !/https?:\/\//i.test(txt)) return;
+        dd.innerHTML = txt.replace(/(https?:\/\/[^\s<]+[^\s<,.!?:;)\]}>])/gi, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+      });
     }
 
     function renderEvents(events) {
@@ -261,12 +293,42 @@
           categoryLabel = String(category);
         }
         var body = ev.body || ev.Body || ev.content || ev.Content || "";
-        var author = ev.createdBy || ev.created_by || "";
-        var authorName = "";
-        if (typeof author === "object" && author) {
-          authorName = author.displayName || author.DisplayName || author.userName || author.UserName || "";
-        } else if (author) {
-          authorName = String(author);
+        var mailPayload = null;
+        try {
+          var parsed = typeof body === "string" && body.trim().charAt(0) === '{' ? JSON.parse(body) : null;
+          if (parsed && (
+            parsed.source === "onlyoffice_import" ||
+            parsed.type === "email_snapshot" ||
+            (parsed.from && parsed.subject && (parsed.message_id || parsed.messageId))
+          )) {
+            mailPayload = parsed;
+          }
+        } catch(e) {}
+        function sanitizeHtml(html) {
+          if (!html) return "";
+          var tmp = document.createElement("div");
+          tmp.innerHTML = html;
+          tmp.querySelectorAll("script,style,iframe,object,embed,form,input,textarea,select,button").forEach(function(el) { el.remove(); });
+          tmp.querySelectorAll("[onclick],[onload],[onerror],[onmouseover]").forEach(function(el) {
+            el.removeAttribute("onclick");
+            el.removeAttribute("onload");
+            el.removeAttribute("onerror");
+            el.removeAttribute("onmouseover");
+          });
+          tmp.querySelectorAll("[style]").forEach(function(el) {
+            var s = el.getAttribute("style") || "";
+            el.setAttribute("style", s.replace(/position\s*:\s*(absolute|fixed|sticky)/gi, "position:static"));
+          });
+          return tmp.innerHTML;
+        }
+        var authorName = ev.author || ev.Author || "";
+        if (!authorName) {
+          var author = ev.createdBy || ev.created_by || "";
+          if (typeof author === "object" && author) {
+            authorName = author.displayName || author.DisplayName || author.userName || author.UserName || "";
+          } else if (author) {
+            authorName = String(author);
+          }
         }
 
         var html = '<div class="event-date">' + esc(date ? formatDate(date) : "");
@@ -274,7 +336,26 @@
         if (authorName) html += ' &middot; <span class="event-author">' + esc(authorName) + '</span>';
         html += '</div>';
         if (title) html += '<div class="event-body"><strong>' + esc(title) + '</strong></div>';
-        if (body) html += '<div class="event-body">' + body + '</div>';
+        if (mailPayload) {
+          var mSubject = mailPayload.subject || mailPayload.Subject || "";
+          var mFrom = mailPayload.from || mailPayload.From || "";
+          var mDate = mailPayload.date_sent || mailPayload.dateSent || "";
+          var mFullText = (mailPayload.body_text || mailPayload.introduction || "").replace(/<[^>]+>/g, "").replace(/\t/g, " ").trim();
+          var mSnippet = mFullText.slice(0, 150);
+          html += '<div class="event-body event-email-summary">';
+          if (mSubject) html += '<div class="event-email-subject"><strong>' + esc(mSubject) + '</strong></div>';
+          if (mFrom) html += '<div class="event-email-from">From: ' + esc(mFrom) + '</div>';
+          if (mDate) html += '<div class="event-email-date">Sent: ' + esc(mDate) + '</div>';
+          if (mSnippet) html += '<div class="event-email-snippet">' + esc(mSnippet) + '…</div>';
+          if (mFullText.length > 150) {
+            var uid = 'eml-' + Math.random().toString(36).slice(2,8);
+            html += '<div class="event-email-expand"><button type="button" class="event-email-expand-btn" data-target="' + uid + '">Show full email</button></div>';
+            html += '<div class="event-email-full" id="' + uid + '" style="display:none;">' + esc(mFullText) + '</div>';
+          }
+          html += '</div>';
+        } else if (body) {
+          html += '<div class="event-body">' + sanitizeHtml(body) + '</div>';
+        }
 
         li.innerHTML = html;
         list.appendChild(li);
@@ -632,6 +713,18 @@
       }
     });
   })();
+
+  // Delegated handler for email expand/collapse buttons
+  document.addEventListener('click', function(e) {
+    var btn = e.target.closest('.event-email-expand-btn');
+    if (!btn) return;
+    var targetId = btn.getAttribute('data-target');
+    var full = document.getElementById(targetId);
+    if (!full) return;
+    var isHidden = full.style.display === 'none';
+    full.style.display = isHidden ? 'block' : 'none';
+    btn.textContent = isHidden ? 'Collapse' : 'Show full email';
+  });
   </script>
 </body>
 </html>

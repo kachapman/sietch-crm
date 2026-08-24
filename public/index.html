@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=3.4.20" />
+  <link rel="stylesheet" href="styles.css?v=3.5.0" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
 </head>
 <body>
@@ -2550,6 +2550,39 @@
                   </div>
                 </div>
 
+                <!-- Field Groups Column -->
+                <div class="admin-customize-col">
+                  <div class="admin-customize-col-header">
+                    <span class="admin-customize-col-title">Field Groups</span>
+                    <button type="button" class="btn btn-primary btn-small" id="admin-add-field-group">+ Add</button>
+                  </div>
+                  <div class="admin-customize-list" id="admin-field-groups-list"></div>
+                  <div class="admin-customize-form" id="admin-field-group-form">
+                    <input type="hidden" id="admin-fg-editing-id" value="">
+                    <div class="admin-customize-form-field">
+                      <label for="admin-fg-label">Group Label</label>
+                      <input type="text" id="admin-fg-label" placeholder="e.g. Insurance">
+                    </div>
+                    <div class="admin-customize-form-field">
+                      <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer; font-size:0.82rem;">
+                        <input type="checkbox" id="admin-fg-collapsed" /> Collapsed by default on mobile
+                      </label>
+                    </div>
+                    <div class="admin-customize-form-field">
+                      <label>Standard Fields</label>
+                      <div id="admin-fg-standard-fields" style="font-size:0.82rem; display:flex; flex-direction:column; gap:0.3rem;"></div>
+                    </div>
+                    <div class="admin-customize-form-field">
+                      <label>Custom Fields</label>
+                      <div id="admin-fg-custom-fields" style="font-size:0.82rem; display:flex; flex-direction:column; gap:0.3rem;"></div>
+                    </div>
+                    <div class="admin-customize-form-actions">
+                      <button type="button" class="btn btn-primary btn-small" id="admin-fg-save">Save</button>
+                      <button type="button" class="btn btn-ghost btn-small" id="admin-fg-cancel">Cancel</button>
+                    </div>
+                  </div>
+                </div>
+
                 <!-- Event Note Types Column -->
                 <div class="admin-customize-col">
                   <div class="admin-customize-col-header">
@@ -3268,6 +3301,6 @@
   </script>
 
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
-  <script src="app.js?v=3.4.20" type="module"></script>
+  <script src="app.js?v=3.5.0" type="module"></script>
 </body>
 </html>
