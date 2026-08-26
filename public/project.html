@@ -4,7 +4,43 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Project — Sietch CRM</title>
-  <link rel="stylesheet" href="styles.css?v=2.2.0" />
+  <link rel="stylesheet" href="styles.css?v=3.5.0" />
+  <script>
+    // Apply cached brand colors before content renders (matches index.html pattern)
+    (function() {
+      var root = document.documentElement;
+      try {
+        var cached = localStorage.getItem("sietch_branding_cache");
+        if (cached) {
+          var b = JSON.parse(cached);
+          if (b && b.primaryColor) {
+            root.style.setProperty("--accent", b.primaryColor);
+            root.style.setProperty("--accent-text", "#fff");
+            var rgb = b.primaryColor.replace(/^#/, "");
+            var r = parseInt(rgb.substring(0, 2), 16);
+            var g = parseInt(rgb.substring(2, 4), 16);
+            var bl = parseInt(rgb.substring(4, 6), 16);
+            root.style.setProperty("--accent-soft", "rgba(" + r + "," + g + "," + bl + ",0.15)");
+            root.style.setProperty("--accent-subtle", "rgba(" + r + "," + g + "," + bl + ",0.1)");
+          }
+        }
+      } catch(e) {}
+      // Refresh branding from server
+      fetch("/api/branding").then(function(r) { return r.json(); }).then(function(b) {
+        if (b && b.primaryColor) {
+          localStorage.setItem("sietch_branding_cache", JSON.stringify(b));
+          root.style.setProperty("--accent", b.primaryColor);
+          root.style.setProperty("--accent-text", "#fff");
+          var rgb = b.primaryColor.replace(/^#/, "");
+          var r = parseInt(rgb.substring(0, 2), 16);
+          var g = parseInt(rgb.substring(2, 4), 16);
+          var bl = parseInt(rgb.substring(4, 6), 16);
+          root.style.setProperty("--accent-soft", "rgba(" + r + "," + g + "," + bl + ",0.15)");
+          root.style.setProperty("--accent-subtle", "rgba(" + r + "," + g + "," + bl + ",0.1)");
+        }
+      }).catch(function() {});
+    })();
+  </script>
   <style>
     body { margin: 0; font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; }
     .project-page { max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
@@ -50,6 +86,39 @@
       margin-top: 0.3rem; padding: 0.4rem; font-size: 0.8rem;
       background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
       white-space: pre-wrap; word-break: break-word; max-height: 400px; overflow-y: auto;
+    }
+    .event-replies { margin-top: 0.3rem; display: flex; flex-direction: column; }
+    .event-reply-btn {
+      font: inherit; font-size: 0.7rem; padding: 0.15rem 0.4rem;
+      border: 1px solid var(--border); border-radius: 4px; background: transparent;
+      color: var(--muted); cursor: pointer; align-self: flex-end;
+    }
+    .event-reply-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .event-thread {
+      width: 100%; margin-top: 0.3rem; padding-left: 0.75rem;
+      border-left: 2px solid var(--accent);
+    }
+    .event-reply-item { padding: 0.3rem 0; font-size: 0.78rem; }
+    .event-reply-item + .event-reply-item { border-top: 1px solid var(--border); }
+    .event-reply-meta { font-size: 0.68rem; color: var(--muted); margin-bottom: 0.15rem; }
+    .event-reply-body { color: var(--text); line-height: 1.4; }
+    .event-reply-body.deleted { font-style: italic; color: var(--muted); }
+    .event-reply-editor { margin-top: 0.3rem; }
+    .event-reply-input {
+      width: 100%; padding: 0.3rem 0.5rem; border: 1px solid var(--border);
+      border-radius: var(--radius, 6px); background: var(--surface-2); color: var(--text);
+      font: inherit; font-size: 0.82rem; resize: vertical; min-height: 2.5rem;
+    }
+    .event-reply-input:focus { outline: none; border-color: var(--accent); }
+    .event-reply-actions { display: flex; justify-content: flex-end; gap: 0.4rem; margin-top: 0.25rem; }
+    .event-reply-cancel {
+      font: inherit; font-size: 0.75rem; padding: 0.2rem 0.5rem;
+      border: 1px solid var(--border); border-radius: 4px; background: transparent;
+      color: var(--muted); cursor: pointer;
+    }
+    .event-reply-post {
+      font: inherit; font-size: 0.75rem; padding: 0.2rem 0.5rem;
+      border: none; border-radius: 4px; background: var(--accent); color: #fff; cursor: pointer;
     }
     .project-empty { color: var(--muted); font-style: italic; padding: 1rem 0; }
     .auth-error { max-width: 400px; margin: 4rem auto; text-align: center; color: var(--muted); }
@@ -359,6 +428,99 @@
 
         li.innerHTML = html;
         list.appendChild(li);
+
+        // Auto-load and render replies for this event
+        if (ev.id && !mailPayload) {
+          let replyWrap = document.createElement("div");
+          replyWrap.className = "event-replies";
+          li.appendChild(replyWrap);
+
+          // Reply button
+          let replyBtn = document.createElement("button");
+          replyBtn.type = "button";
+          replyBtn.className = "event-reply-btn";
+          replyBtn.textContent = "Reply";
+          replyWrap.appendChild(replyBtn);
+
+          // Auto-load replies
+          fetch("/api/v2/projects/" + projectId + "/history/" + ev.id + "/replies", { credentials: "same-origin" })
+            .then(function(r) { return r.ok ? r.json() : []; })
+            .then(function(replies) {
+              let list = Array.isArray(replies) ? replies : [];
+              if (!list.length) return;
+              let threadEl = document.createElement("div");
+              threadEl.className = "event-thread";
+              for (let j = 0; j < list.length; j++) {
+                let r = list[j];
+                let rDiv = document.createElement("div");
+                rDiv.className = "event-reply-item";
+                if (r.isDeleted) rDiv.classList.add("deleted");
+                let rMeta = document.createElement("div");
+                rMeta.className = "event-reply-meta";
+                rMeta.textContent = [r.author || "", r.created ? formatDate(r.created) : ""].filter(Boolean).join(" \u00b7 ");
+                rDiv.appendChild(rMeta);
+                let rBody = document.createElement("div");
+                rBody.className = "event-reply-body";
+                rBody.innerHTML = r.isDeleted ? "This reply was deleted." : (r.content || "");
+                rDiv.appendChild(rBody);
+                threadEl.appendChild(rDiv);
+              }
+              replyWrap.insertBefore(threadEl, replyBtn);
+              replyWrap.dataset.loaded = "1";
+            }).catch(function() {});
+
+          // Reply button click handler
+          replyBtn.addEventListener("click", function() {
+            let existing = replyWrap.querySelector(".event-reply-editor");
+            if (existing) { existing.remove(); replyBtn.style.display = ""; return; }
+            replyBtn.style.display = "none";
+            let editor = document.createElement("div");
+            editor.className = "event-reply-editor";
+            let textarea = document.createElement("textarea");
+            textarea.className = "event-reply-input";
+            textarea.placeholder = "Write a reply\u2026";
+            textarea.rows = 2;
+            let actions = document.createElement("div");
+            actions.className = "event-reply-actions";
+            let cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "event-reply-cancel";
+            cancelBtn.textContent = "Cancel";
+            let postBtn = document.createElement("button");
+            postBtn.type = "button";
+            postBtn.className = "event-reply-post";
+            postBtn.textContent = "Post";
+            actions.appendChild(cancelBtn);
+            actions.appendChild(postBtn);
+            editor.appendChild(textarea);
+            editor.appendChild(actions);
+            replyWrap.appendChild(editor);
+            textarea.focus();
+
+            cancelBtn.addEventListener("click", function() { editor.remove(); replyBtn.style.display = ""; });
+            postBtn.addEventListener("click", function() {
+              var content = textarea.value.trim();
+              if (!content) return;
+              postBtn.disabled = true;
+              fetch("/api/v2/projects/" + projectId + "/history/" + ev.id + "/replies", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "same-origin",
+                body: JSON.stringify({ content: content })
+              }).then(function(r) {
+                if (!r.ok) throw new Error("Failed");
+                editor.remove();
+                replyBtn.style.display = "";
+                replyWrap.dataset.loaded = "";
+                var oldThread = replyWrap.querySelector(".event-thread");
+                if (oldThread) oldThread.remove();
+                replyBtn.click(); // Reload replies
+              }).catch(function() {
+                postBtn.disabled = false;
+              });
+            });
+          });
+        }
 
         if (isHighlighted) {
           (function(el) {

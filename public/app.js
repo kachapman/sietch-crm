@@ -9652,10 +9652,11 @@ async function updateOpportunityStage(oppId, stageId) {
   if (res && res.queued) return;
 }
 
-async function updateOpportunityBulk(oppId, { dueDate, stageId, customFieldValues, title, contactId, responsibleUserId, bidValue, isPrivate }) {
+async function updateOpportunityBulk(oppId, { dueDate, expectedCloseDate, stageId, customFieldValues, title, contactId, responsibleUserId, bidValue, isPrivate }) {
   const opp = await fetchOpportunityForUpdate(oppId);
   const overrides = {};
-  if (dueDate !== undefined) overrides.expectedCloseDate = dueDate || null;
+  const dueDateVal = expectedCloseDate !== undefined ? expectedCloseDate : dueDate;
+  if (dueDateVal !== undefined) overrides.expectedCloseDate = dueDateVal || null;
   if (stageId !== undefined) {
     const sid = Number(stageId);
     overrides.stageId = sid;
@@ -9745,6 +9746,10 @@ async function loadHistoryCategories() {
     state.historyCategories = unwrap(data);
   } catch {
     state.historyCategories = [];
+  }
+  // Ensure Action category is always present (may be added after initial load)
+  if (!state.historyCategories.find(c => c.title === 'Action')) {
+    state.historyCategories.push({ id: 25, title: 'Action', color: null, iconKey: 'pencil', iconStyle: 'stroke' });
   }
 
   if (!state.historyCategories.length) {
@@ -12605,17 +12610,12 @@ function setDealEditError(message) {
 function closeDealEditModal() {
   restoreSideBySideCards();
   const modal = $("#deal-edit-modal");
-  if (modal) modal.classList.add("hidden");
+  if (modal) {
+    modal.classList.add("hidden");
+    modal.classList.remove("deal-edit-fullscreen");
+  }
   state.dealEdit = null;
   setDealEditError("");
-  const ne = $("#deal-edit-note-body");
-  if (ne) ne.innerHTML = "";
-  const sel = $("#deal-edit-selected-attachments");
-  if (sel) sel.innerHTML = "";
-  const inp = $("#deal-edit-note-attachments");
-  if (inp) inp.value = "";
-  const dd = $("#deal-edit-mention-dropdown");
-  if (dd) dd.classList.add("hidden");
 }
 
 function tagIdForTitle(title, catalog = buildTagCatalog()) {
@@ -12877,17 +12877,7 @@ async function openDealEditModal(opp, group) {
   setDealEditError("");
   form.reset();
 
-  // Reset backdate value
-  const deBackdateBtn = $("#deal-edit-modal .note-backdate-btn");
-  if (deBackdateBtn) delete deBackdateBtn.dataset.backdateValue;
-
-  if (!state.stages.length) await loadStages();
-  if (!state.allTags.length) await loadAllTags();
   if (!state.portalUsers.length) await loadPortalUsers();
-  await loadHistoryCategories();
-  populateDealEditNoteCategorySelect();
-
-  const tags = await loadDealEditTags(opp);
   await loadOpportunityCustomFieldDefs();
   let dealEditCustomFieldValues = [];
   try {
@@ -12900,36 +12890,11 @@ async function openDealEditModal(opp, group) {
     group,
     oppTitle,
     initialTitle: opp.title || opp.Title || "",
-    initialTags: [...tags],
-    tags: [...tags],
-    initialStageId: String(resolveOppStageId(opp)),
-    initialDue: dueDateToInputValue(opportunityDueDateRaw(opp)),
-    selectedAttachments: [],
     customFieldValues: dealEditCustomFieldValues,
   };
 
   const titleInput = $("#deal-edit-title");
   if (titleInput) titleInput.value = state.dealEdit.initialTitle;
-
-  // Toggle user fields button
-  const toggleBtn = $("#deal-edit-toggle-fields");
-  const ufWrap = $("#deal-edit-user-fields");
-  if (toggleBtn && ufWrap) {
-    if (toggleBtn._listener) toggleBtn.removeEventListener("click", toggleBtn._listener);
-    ufWrap.classList.add("hidden");
-    delete ufWrap.dataset.rendered;
-    toggleBtn.textContent = "Show User Fields";
-    const handler = () => {
-      const hidden = ufWrap.classList.toggle("hidden");
-      toggleBtn.textContent = hidden ? "Show User Fields" : "Hide User Fields";
-      if (!hidden && !ufWrap.dataset.rendered) {
-        renderDealEditUserFields(opp, state.dealEdit.customFieldValues);
-        ufWrap.dataset.rendered = "1";
-      }
-    };
-    toggleBtn._listener = handler;
-    toggleBtn.addEventListener("click", handler);
-  }
 
   const titleEl = $("#deal-edit-modal-title");
   if (titleEl) titleEl.textContent = state.dealEdit.oppTitle;
@@ -12937,44 +12902,25 @@ async function openDealEditModal(opp, group) {
   const crmLink = $("#deal-edit-crm-link");
   if (crmLink) crmLink.href = crmProjectUrl(state.dealEdit.projectNumber || id);
 
-  const dueInput = $("#deal-edit-due");
-  if (dueInput) dueInput.value = state.dealEdit.initialDue;
-
-  populateDealEditStageSelect(opp);
-  populateDealEditNotifySelect();
-  renderDealEditTagChips();
-
-  // Phase 2G: setup @-mention autocomplete
-  const deEditor = $("#deal-edit-note-body");
-  const deDropdown = $("#deal-edit-mention-dropdown");
-  setupMentionAutocomplete(deEditor, deDropdown);
+  // Render user fields immediately (no toggle needed)
+  const ufWrap = $("#deal-edit-user-fields");
+  if (ufWrap) {
+    ufWrap.classList.remove("hidden");
+    renderDealEditUserFields(opp, state.dealEdit.customFieldValues);
+  }
 
   modal.classList.remove("hidden");
-  $("#deal-edit-due")?.focus();
+  titleInput?.focus();
 
-  attachNoteAttachmentsListeners();
-  // Clear any stale selected UI on open (ctx was just (re)created)
-  renderSelectedAttachments("dealEdit");
-
-  // When launched from opp preview (edit note / edit deal), position the editor popup LEFT (desktop) or TOP (mobile) of the preview modal.
-  // Both remain interactive (see layout fn for pe:none trick + mobile stacking).
-  // Also supports search-popup preview tabs.
+  // On mobile: full-screen foreground. On desktop: side-by-side with preview.
   setTimeout(() => {
     const p = $("#opp-preview-modal");
-    const s = $("#search-popup-modal");
     const isPreviewOpen = p && !p.classList.contains("hidden");
-    const isSearchOpen = s && !s.classList.contains("hidden");
-    if (state.dealEdit && oppPreviewContext && Number(oppPreviewContext.oppId) === Number(state.dealEdit.oppId)) {
-      if (isPreviewOpen) {
-        layoutSideBySideDealEditAndPreview();
-      } else if (isSearchOpen) {
-        layoutSideBySideDealEditAndSearchPopup();
-      }
-    }
-    // Bookmark sidebar edit: position edit modal left of the sidebar so user sees both preview + edit form
-    const bmSidebar = $("#bookmark-sidebar");
-    if (state.dealEdit && bmSidebar && !bmSidebar.classList.contains("sidebar-hidden") && state.activeBookmarkTab && Number(state.activeBookmarkTab) === Number(state.dealEdit.oppId)) {
-      layoutSideBySideDealEditAndBookmark();
+    if (window.innerWidth <= 700) {
+      // Mobile: edit modal fills screen
+      modal.classList.add("deal-edit-fullscreen");
+    } else if (isPreviewOpen && state.dealEdit && oppPreviewContext && Number(oppPreviewContext.oppId) === Number(state.dealEdit.oppId)) {
+      layoutSideBySideDealEditAndPreview();
     }
   }, 80);
 }
@@ -13208,9 +13154,41 @@ function initNoteEditorPasteHandlers() {
   document.addEventListener("paste", (e) => {
     const target = e.target;
     if (!target || !target.classList || !target.classList.contains("note-editor")) return;
-    // Only intercept if we can get clipboard data
     const clipboardData = e.clipboardData || window.clipboardData;
     if (!clipboardData) return;
+
+    // Check for image items first
+    const items = clipboardData.items;
+    if (items) {
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith("image/")) {
+          e.preventDefault();
+          const file = items[i].getAsFile();
+          if (!file) continue;
+          if (file.size > 20 * 1024 * 1024) { showToast("Image too large (max 20 MB)", true); return; }
+          // Store pending image on the editor element
+          if (!target._pendingImages) target._pendingImages = [];
+          target._pendingImages.push(file);
+          // Insert a placeholder thumbnail at cursor
+          const placeholder = document.createElement("img");
+          placeholder.className = "note-inline-img note-img-pending";
+          placeholder.src = URL.createObjectURL(file);
+          placeholder.title = file.name || "Pasted image (will be uploaded on save)";
+          const sel = window.getSelection();
+          if (sel && sel.rangeCount) {
+            const range = sel.getRangeAt(0);
+            range.deleteContents();
+            range.insertNode(placeholder);
+            range.setStartAfter(placeholder);
+            range.setEndAfter(placeholder);
+            sel.removeAllRanges();
+            sel.addRange(range);
+          }
+          showToast("Image attached — will upload when you save");
+          return;
+        }
+      }
+    }
 
     const html = clipboardData.getData("text/html");
     const text = clipboardData.getData("text/plain");
@@ -13272,6 +13250,34 @@ function initNoteEditorPasteHandlers() {
   });
 }
 
+// Lightbox for note inline images
+function openNoteImageLightbox(src, alt) {
+  const existing = document.querySelector(".note-image-lightbox");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "note-image-lightbox";
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "note-image-lightbox-close";
+  closeBtn.textContent = "\u00d7";
+  closeBtn.addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  const img = document.createElement("img");
+  img.src = src;
+  img.alt = alt || "";
+  overlay.appendChild(closeBtn);
+  overlay.appendChild(img);
+  document.body.appendChild(overlay);
+}
+
+// Delegated click handler for note inline images (preview modal + project page)
+document.addEventListener("click", (e) => {
+  const img = e.target.closest(".note-inline-img");
+  if (!img || img.classList.contains("note-img-pending")) return;
+  e.preventDefault();
+  e.stopPropagation();
+  openNoteImageLightbox(img.src, img.alt);
+});
+
 function noteContentToHtml(input) {
   let s = String(input || "").trim();
   if (!s) return "";
@@ -13290,6 +13296,8 @@ function noteContentToHtml(input) {
       .replace(/<\/div>\s*<div[^>]*>/gi, '<br/>')
       .replace(/<div[^>]*>/gi, '')
       .replace(/<\/div>/gi, '');
+    // Add note-inline-img class to all <img> tags for consistent thumbnail sizing
+    s = s.replace(/<img(?![^>]*class="note-inline-img")([^>]*)>/gi, '<img class="note-inline-img" $1>');
     // Collapse 3+ consecutive <br> into 2 max
     s = s.replace(/(\s*<br\s*\/?>\s*){3,}/gi, '<br/><br/>');
     // Trim leading/trailing <br>
@@ -13339,201 +13347,68 @@ async function submitDealEditForm(e) {
 
   const submitBtn = $("#deal-edit-submit");
   if (submitBtn) submitBtn.disabled = true;
-
-  // Small tooltip-like note below the button on press.
   const submittingNote = showSubmittingNote(submitBtn);
-
-  // Show progress immediately on button press
   setConnectionState('connected');
   showCRMSyncStatus('Connecting...');
 
-  const connectStart = Date.now();
-
   try {
     const oppId = ctx.oppId;
-    const dueVal = $("#deal-edit-due")?.value ?? "";
-    const stageId = $("#deal-edit-stage")?.value ?? "";
-    const noteEl = $("#deal-edit-note-body");
-    const noteBody = noteEl
-      ? (noteEl.tagName === "TEXTAREA" ? (noteEl.value || "").trim() : (noteEl.innerHTML || "").trim())
-      : "";
-    // Phase 2G: extract @-mentions from contenteditable chips
-    const notifyUserList = extractMentionsFromContent(noteEl).map(String);
-    const dueChanged = dueVal !== ctx.initialDue;
-    const stageChanged = stageId && stageId !== ctx.initialStageId;
     const titleVal = ($("#deal-edit-title")?.value ?? "").trim();
     if (!titleVal) {
-      setDealEditError("Deal name cannot be empty");
+      setDealEditError("Project name cannot be empty");
       if (submitBtn) submitBtn.disabled = false;
       if (submittingNote && submittingNote.parentNode) submittingNote.parentNode.removeChild(submittingNote);
       return;
     }
     const titleChanged = titleVal !== ctx.initialTitle;
 
-    const tagsChanged = dealTagsChanged(ctx.initialTags, ctx.tags);
-    if (tagsChanged) {
+    // Save title if changed
+    if (titleChanged) {
       try {
-        await applyDealTagChanges(oppId, ctx.initialTags, ctx.tags);
-        state.oppTagCache?.invalidate(oppId);
+        await updateOpportunityBulk(oppId, { title: titleVal });
       } catch (err) {
-        throw dealEditStepError("Tags", err);
+        throw dealEditStepError("Project title", err);
       }
     }
 
-    if (noteBody) {
-      try {
-        const categoryId = resolveHistoryCategoryId($("#deal-edit-note-category")?.value);
-
-        // Attachments: upload first (text priority — note is always sent)
-        if (!state.currentUserId) {
-          try { await loadCurrentUser(); } catch {}
-        }
-        const files = Array.isArray(ctx.selectedAttachments) ? ctx.selectedAttachments : [];
-        // Upload all files in parallel to avoid sequential blocking (each upload is a full HTTP round-trip)
-        const uploads = files.map(async (f) => {
-          try {
-            const up = await uploadAttachmentForNote(f, oppId);
-            return { file: f, up, error: null };
-          } catch (e) {
-            return { file: f, up: null, error: e };
-          }
-        });
-        const uploadResults = await Promise.all(uploads);
-        const successfulIds = [];
-        const successfulNames = [];
-        const failedNames = [];
-        for (const { file, up, error } of uploadResults) {
-          if (up) {
-            successfulIds.push(up.id);
-            successfulNames.push(up.title || file.name);
-            addEventLogEntry("attach", oppId, ctx.oppTitle || "", `Uploaded ${up.title || file.name}`, true);
-          } else {
-            failedNames.push(file.name);
-            const errMsg = error && error.message ? error.message : error || "Upload failed";
-            showToast(`Failed to upload ${file.name}: ${errMsg}`, true);
-            addEventLogEntry("attach", oppId, ctx.oppTitle || "", `Failed to upload ${file.name}: ${errMsg}`, false);
-          }
-        }
-
-        const createdDate = $("#deal-edit-modal .note-backdate-btn")?.dataset?.backdateValue || "";
-        const noteResult = await createOpportunityHistoryEvent(oppId, {
-          content: noteBody,
-          categoryId,
-          notifyUserList,
-          fileIds: successfulIds,
-          attachmentNames: successfulNames,
-          failedAttachmentNames: failedNames,
-          created: createdDate || null,
-        });
-        if (noteResult && noteResult.queued) {
-          showToast("Note queued for retry (CRM is temporarily down). Check the header indicator.");
-        }
-      } catch (err) {
-        throw dealEditStepError("Event note", err);
-      }
-    }
-
-    // Combined: due date + stage + title (single PUT — avoids multiple cycles)
-    if (dueChanged || stageChanged || titleChanged) {
-      try {
-        await updateOpportunityBulk(oppId, {
-          dueDate: dueChanged ? serializeCrmTimestamp(dueVal) : undefined,
-          stageId: stageChanged ? stageId : undefined,
-          title: titleChanged ? titleVal : undefined,
-        });
-      } catch (err) {
-        throw dealEditStepError("Project update", err);
-      }
-    }
-
-    // Custom user fields (best-effort, queue-aware via withCrmQueueOnTransient)
+    // Save custom user fields
     const dealEditFieldValues = collectDealEditCustomFieldValues();
     if (dealEditFieldValues.length) {
       try {
-        await updateOpportunityBulk(oppId, {
-          customFieldValues: dealEditFieldValues,
-        });
+        await updateOpportunityBulk(oppId, { customFieldValues: dealEditFieldValues });
         state.oppCustomFieldCache?.invalidate(oppId);
       } catch (err) {
         showToast("User fields not saved: " + (err.message || err).slice(0, 100), true);
-        addEventLogEntry("customField", oppId, ctx.oppTitle || "", "User fields not saved: " + (err.message || err), false);
       }
     }
 
-    const group = ctx.group;
-    if (titleChanged) {
-      ctx.oppTitle = titleVal;
-      const titleEl = $("#deal-edit-modal-title");
-      if (titleEl) titleEl.textContent = titleVal;
-    }
+    if (titleChanged) ctx.oppTitle = titleVal;
     hideCRMSyncStatus();
     clearConnectingTimer();
     setConnectionState('connected');
     closeDealEditModal();
     onCRMSuccess();
-    showCRMSyncStatus('Deal edit sent');
-    showToast("Deal updated");
-    updateInferredStatus("edit", ctx.oppTitle || "");
-    addEventLogEntry("edit", ctx.oppId, ctx.oppTitle || "", "Deal updated", true);
+    showCRMSyncStatus('Project updated');
+    showToast("Project updated");
 
-    // Deferred board + preview + bookmark refresh, all in parallel so no single slow
-    // API (like history pagination) blocks the rest.
+    // Refresh preview if open
     setTimeout(() => {
       showRefreshingStatus();
       const previewEl = $("#opp-preview-modal");
       const previewId = oppPreviewContext && oppPreviewContext.oppId;
       const needPreview = previewEl && !previewEl.classList.contains("hidden") && previewId != null && Number(previewId) === Number(ctx.oppId);
-      const needBoard = Boolean(group);
-      const promises = [];
       if (needPreview) {
-        promises.push(openOpportunityPreviewModal(previewId, ctx.oppTitle || "", group || ctx.group, true).catch(() => {}));
-      }
-      if (needBoard) {
-        promises.push((async () => {
-          try {
-            const updatedOpp = await fetchOpportunityForUpdate(oppId);
-            if (!updatedOpp) { await refreshGroup(group, { force: true }); return; }
-            await enrichOpportunitiesTags([updatedOpp], true);
-            indexOpportunity(updatedOpp);
-            const oppIdx = group.opportunities.findIndex(o => Number(o.id ?? o.ID) === oppId);
-            const oldStageId = oppIdx >= 0 ? Number(group.opportunities[oppIdx].stage?.id ?? group.opportunities[oppIdx].stage?.ID) : null;
-            if (oppIdx >= 0) group.opportunities[oppIdx] = updatedOpp;
-            else group.opportunities.push(updatedOpp);
-            if (stageChanged && group.groupBy === "stage") {
-              updateOpportunityCardDom(updatedOpp, group);
-              const boardEl = groupDomEl(group)?.querySelector('.board');
-              if (boardEl) moveCardToColumnSorted(updatedOpp, group, boardEl, oldStageId);
-            } else if (tagsChanged && group.groupBy === "tag") {
-              const boardEl = groupDomEl(group)?.querySelector('.board');
-              updateAllCardCopies(updatedOpp, group, boardEl);
-              if (boardEl) rebuildAffectedTagColumns(group, boardEl, ctx.initialTags, updatedOpp);
-            } else if (group.groupBy === "tag") {
-              const boardEl = groupDomEl(group)?.querySelector('.board');
-              if (boardEl) updateAllCardCopies(updatedOpp, group, boardEl);
-            } else {
-              updateOpportunityCardDom(updatedOpp, group);
-            }
-          } catch (e) {
-            await refreshGroup(group, { force: true });
-          }
-        })());
-      }
-      if (state.activeBookmarkTab && Number(state.activeBookmarkTab) === Number(ctx.oppId)) {
-        promises.push((async () => {
-          const deal = state.bookmarkedDeals.find(d => Number(d.oppId) === Number(ctx.oppId));
-          if (deal) deal._cachedData = null;
-          await refreshBookmarkTab(ctx.oppId, false).catch(() => {});
-        })());
-      }
-      Promise.all(promises).finally(() => {
+        openOpportunityPreviewModal(previewId, ctx.oppTitle || "", ctx.group, true)
+          .catch(() => {})
+          .finally(() => hideRefreshingStatus());
+      } else {
         hideRefreshingStatus();
-      });
-    }, 800);
+      }
+    }, 400);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    setDealEditError(msg || "Could not save deal");
+    setDealEditError(msg || "Could not save project");
     hideCRMSyncStatus();
-    addEventLogEntry("edit", ctx?.oppId, ctx?.oppTitle || "", msg || "Could not save deal", false);
   } finally {
     if (submitBtn) submitBtn.disabled = false;
     if (submittingNote && submittingNote.parentNode) submittingNote.parentNode.removeChild(submittingNote);
@@ -13560,16 +13435,6 @@ function bindDealEditModal() {
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !modal.classList.contains("hidden")) closeDealEditModal();
-  });
-
-  $("#deal-edit-tag-add")?.addEventListener("change", (e) => {
-    const title = e.target.value;
-    if (!title || !state.dealEdit) return;
-    if (!state.dealEdit.tags.some((t) => tagsEqual(t, title))) {
-      state.dealEdit.tags.push(title);
-      renderDealEditTagChips();
-    }
-    e.target.value = "";
   });
 }
 
@@ -14204,7 +14069,6 @@ function renderCreateOppCustomFields() {
   for (const def of state.customFieldDefs) {
     const fieldId = customFieldDefinitionId(def);
     if (fieldId == null) continue;
-    if (isCreateOppExcludedUserField(def)) continue;
 
     const label = customFieldLabel(def) || `Field ${fieldId}`;
     let kind = createOppCustomFieldInputKind(def);
@@ -14279,7 +14143,6 @@ function collectCreateOppCustomFieldValues() {
   for (const def of state.customFieldDefs) {
     const fieldId = customFieldDefinitionId(def);
     if (fieldId == null) continue;
-    if (isCreateOppExcludedUserField(def)) continue;
     if (createOppCustomFieldInputKind(def) === "heading") continue;
 
     const fieldEl = wrap.querySelector(`[data-custom-field-id="${String(fieldId)}"]`);
@@ -14454,7 +14317,6 @@ function renderDealEditUserFields(opp, customFieldValues) {
   for (const def of defs) {
     const fieldId = customFieldDefinitionId(def);
     if (fieldId == null) continue;
-    if (isCreateOppExcludedUserField(def)) continue;
 
     const label = customFieldLabel(def) || `Field ${fieldId}`;
     let kind = createOppCustomFieldInputKind(def);
@@ -14484,6 +14346,14 @@ function renderDealEditUserFields(opp, customFieldValues) {
       lbl.appendChild(input);
       lbl.appendChild(document.createTextNode(` ${label}`));
       field.appendChild(lbl);
+    } else if (kind === "date") {
+      // Convert date value to YYYY-MM-DD for <input type="date">
+      input.value = dueDateToInputValue(currentValue);
+      const lbl = document.createElement("label");
+      lbl.setAttribute("for", inputId);
+      lbl.textContent = label;
+      field.appendChild(lbl);
+      field.appendChild(input);
     } else {
       input.value = currentValue;
       const lbl = document.createElement("label");
@@ -14506,7 +14376,6 @@ function collectDealEditCustomFieldValues() {
   for (const def of state.customFieldDefs) {
     const fieldId = customFieldDefinitionId(def);
     if (fieldId == null) continue;
-    if (isCreateOppExcludedUserField(def)) continue;
     if (createOppCustomFieldInputKind(def) === "heading") continue;
 
     const fieldEl = wrap.querySelector(`[data-custom-field-id="${String(fieldId)}"]`);
@@ -23174,7 +23043,7 @@ function historyEventCategoryId(ev) {
   if (cat == null || cat === "") return null;
   if (typeof cat === "number" && Number.isFinite(cat)) return Math.floor(cat);
   if (typeof cat === "string" && /^\d+$/.test(cat.trim())) return Number(cat.trim());
-  const id = cat?.id ?? cat?.ID ?? cat?.categoryId ?? cat?.CategoryId;
+  const id = cat?.id ?? cat?.ID ?? cat?.categoryId ?? cat?.CategoryId ?? ev.categoryId ?? ev.CategoryId;
   return id != null && Number.isFinite(Number(id)) ? Number(id) : null;
 }
 
@@ -23340,13 +23209,14 @@ function historyContentIsMailPlaceholder(raw, subject) {
 function historyEventAuthor(ev) {
   if (ev.author || ev.Author) return String(ev.author || ev.Author).trim();
   const createBy = ev.createBy || ev.CreateBy || ev.createdBy || ev.CreatedBy;
-  return String(
+  const name = String(
     createBy?.displayName ||
       createBy?.DisplayName ||
       createBy?.userName ||
       createBy?.UserName ||
       ""
   ).trim();
+  return name || "System";
 }
 
 function historyEventPlainContent(ev) {
@@ -25019,9 +24889,9 @@ function renderHistoryEventItem(ev) {
       editor.appendChild(textarea);
       editor.appendChild(actions);
       replyWrap.appendChild(editor);
-      replyWrap.appendChild(replyBtn); // Keep button at bottom
+      replyBtn.style.display = "none"; // Hide while editor is open
       textarea.focus();
-      cancelBtn.addEventListener("click", () => editor.remove());
+      cancelBtn.addEventListener("click", () => { editor.remove(); replyBtn.style.display = ""; });
       submitBtn.addEventListener("click", async () => {
         const content = textarea.value.trim();
         if (!content) return;
@@ -25034,6 +24904,7 @@ function renderHistoryEventItem(ev) {
           });
           textarea.value = "";
           editor.remove();
+          replyBtn.style.display = "";
           replyWrap.dataset.loaded = "";
           // Re-render thread by clearing and reloading
           const threadEl = replyWrap.querySelector(".opp-preview-history-thread");
@@ -25283,7 +25154,6 @@ function collectPreviewCustomFieldValues(container) {
   for (const def of state.customFieldDefs) {
     const fieldId = customFieldDefinitionId(def);
     if (fieldId == null) continue;
-    if (isCreateOppExcludedUserField(def)) continue;
     if (createOppCustomFieldInputKind(def) === "heading") continue;
 
     const fieldEl = container.querySelector(`[data-custom-field-id="${String(fieldId)}"]`);
@@ -31962,14 +31832,15 @@ async function populateAdminTagsList(search = "") {
     }
     listEl.innerHTML = tags.map(t => {
       const color = t.color || "#888";
+      const sysBadge = t.isSystem ? '<span class="admin-customize-badge">System</span>' : "";
       return `<div class="admin-customize-row" data-tag-id="${t.id}">
         <span class="admin-customize-color-swatch" style="background:${escapeHtml(color)}; border-radius:50%;"></span>
         <div class="admin-customize-row-info">
-          <div class="admin-customize-row-label">${escapeHtml(t.title || "Tag")}</div>
+          <div class="admin-customize-row-label">${escapeHtml(t.title || "Tag")} ${sysBadge}</div>
         </div>
         <div class="admin-customize-row-actions">
-          <button class="btn btn-ghost" data-edit-tag="${t.id}" title="Edit">✎</button>
-          <button class="btn btn-ghost" data-delete-tag="${t.id}" title="Delete">×</button>
+          ${t.isSystem ? "" : `<button class="btn btn-ghost" data-edit-tag="${t.id}" title="Edit">✎</button>
+          <button class="btn btn-ghost" data-delete-tag="${t.id}" title="Delete">×</button>`}
         </div>
       </div>`;
     }).join("");
@@ -34321,20 +34192,31 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
   // 2. Stage — standalone dropdown section
   const stageRow = standardRows.find((r) => r._isStage);
   const nonStageStandardRows = standardRows.filter((r) => !r._isStage);
+
+  // Extract Follow-up Due Date for static section (not grouped)
+  const dueDateRow = nonStageStandardRows.find((r) => r.label === "Follow-up Due Date");
+  const filteredStandardRows = nonStageStandardRows.filter((r) => r !== dueDateRow);
   if (stageRow) {
-    appendPreviewSection(detailsContent, "Stage", (section) => {
-      const select = document.createElement("select");
-      select.className = "opp-preview-stage-select";
-      const currentStageId = String(stageRow._stageId || "");
-      for (const stage of state.stages) {
-        const sid = String(stage.id ?? stage.ID ?? "");
-        const opt = document.createElement("option");
-        opt.value = sid;
-        opt.textContent = stage.title || stage.Title || "";
-        if (sid === currentStageId) opt.selected = true;
-        select.appendChild(opt);
-      }
-      select.addEventListener("change", async () => {
+    const stageSection = document.createElement("section");
+    stageSection.className = "opp-preview-section";
+    const stageHead = document.createElement("div");
+    stageHead.className = "opp-preview-stage-head";
+    const stageTitle = document.createElement("h3");
+    stageTitle.className = "opp-preview-section-title";
+    stageTitle.textContent = "Stage";
+    stageHead.appendChild(stageTitle);
+    const select = document.createElement("select");
+    select.className = "opp-preview-stage-select";
+    const currentStageId = String(stageRow._stageId || "");
+    for (const stage of state.stages) {
+      const sid = String(stage.id ?? stage.ID ?? "");
+      const opt = document.createElement("option");
+      opt.value = sid;
+      opt.textContent = stage.title || stage.Title || "";
+      if (sid === currentStageId) opt.selected = true;
+      select.appendChild(opt);
+    }
+    select.addEventListener("change", async () => {
         const newStageId = select.value;
         try {
           await api(`/api/v2/projects/${oppId}`, {
@@ -34356,8 +34238,9 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
           if (fallbackStage) select.value = currentStageId;
         }
       });
-      section.appendChild(select);
-    });
+      stageHead.appendChild(select);
+      stageSection.appendChild(stageHead);
+      detailsContent.appendChild(stageSection);
   }
 
   // 3. Tags — between stage and project fields
@@ -34372,7 +34255,16 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       for (const t of currentTags) {
         const chip = document.createElement("span");
         chip.className = "field-value-tag";
-        if (tagsEqual(t, "High Priority")) chip.classList.add("tag-amber");
+        // Apply dynamic color from tag definition
+        const tagDef = (state.allTags || []).find(at => tagsEqual(at.title, t));
+        const color = tagDef?.color;
+        if (color) {
+          chip.style.background = color + "20";
+          chip.style.color = color;
+          chip.style.borderColor = color;
+        } else if (tagsEqual(t, "High Priority")) {
+          chip.classList.add("tag-amber");
+        }
         chip.textContent = t;
         const rm = document.createElement("button");
         rm.type = "button";
@@ -34484,6 +34376,61 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     section.appendChild(tagList);
   });
 
+  // 3.5. Follow-up Due Date — static section, click-editable, inline with title
+  if (dueDateRow) {
+    const dueSection = document.createElement("section");
+    dueSection.className = "opp-preview-section";
+    const dueHead = document.createElement("div");
+    dueHead.className = "opp-preview-due-date-head";
+    const dueTitle = document.createElement("h3");
+    dueTitle.className = "opp-preview-section-title";
+    dueTitle.textContent = "Follow-up Due";
+    dueHead.appendChild(dueTitle);
+    const dueDisplay = document.createElement("span");
+    dueDisplay.className = "opp-preview-due-date-display";
+    dueDisplay.textContent = dueDateRow.value || "Not set";
+    if (dueDateRow._rawDate) {
+      const d = parseCrmDateOnly(dueDateRow._rawDate);
+      if (d && !Number.isNaN(d.getTime()) && d < new Date(new Date().toDateString())) {
+        dueDisplay.classList.add("opp-preview-field-overdue");
+      }
+    }
+    dueHead.appendChild(dueDisplay);
+    dueSection.appendChild(dueHead);
+
+    dueDisplay.addEventListener("click", () => {
+      const input = document.createElement("input");
+      input.type = "date";
+      input.className = "opp-preview-due-date-input";
+      input.value = dueDateToInputValue(dueDateRow._rawDate || null);
+      dueHead.replaceChild(input, dueDisplay);
+      input.focus();
+
+      const save = async () => {
+        const newVal = input.value || null;
+        if (newVal === (dueDateRow._rawDate || null)) {
+          dueHead.replaceChild(dueDisplay, input);
+          return;
+        }
+        try {
+          await api(`/api/v2/projects/${oppId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ expectedCloseDate: newVal }),
+          });
+          showToast("Due date updated");
+          openOpportunityPreviewModal(oppId, opp.title || opp.Title || "", oppPreviewContext?.group || null);
+        } catch (err) { showToast(err.message, true); }
+      };
+
+      input.addEventListener("change", save);
+      input.addEventListener("blur", () => {
+        setTimeout(() => { if (dueHead.contains(input)) dueHead.replaceChild(dueDisplay, input); }, 150);
+      });
+    });
+    detailsContent.appendChild(dueSection);
+  }
+
   // 4. Project Fields — standard (non-stage) + user fields, 2-column grid
   const pfSection = document.createElement("section");
   pfSection.className = "opp-preview-section";
@@ -34493,12 +34440,6 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
   pfTitle.className = "opp-preview-section-title";
   pfTitle.textContent = "Project fields";
   pfHead.appendChild(pfTitle);
-  const pfEditBtn = document.createElement("button");
-  pfEditBtn.type = "button";
-  pfEditBtn.className = "opp-preview-section-edit";
-  pfEditBtn.setAttribute("aria-label", "Edit project fields");
-  pfEditBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10.5-10.5a2 2 0 0 0-2.83-2.83L6 16v4"/><path d="M13.5 6.5l4 4"/></svg>`;
-  pfHead.appendChild(pfEditBtn);
   pfSection.appendChild(pfHead);
 
   const pfBody = document.createElement("div");
@@ -34509,8 +34450,8 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
   function renderProjectFieldsDisplay() {
     pfBody.innerHTML = "";
     const allRows = supplementRequestRow
-      ? [supplementRequestRow, ...nonStageStandardRows, ...userRows]
-      : [...nonStageStandardRows, ...userRows];
+      ? [supplementRequestRow, ...filteredStandardRows, ...userRows]
+      : [...filteredStandardRows, ...userRows];
     if (!allRows.length) {
       const p = document.createElement("p");
       p.className = "opp-preview-empty";
@@ -34693,170 +34634,6 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     return field;
   }
 
-  async function renderProjectFieldsEdit() {
-    pfBody.innerHTML = '<p class="opp-preview-loading">Loading edit form…</p>';
-    const oppForUpdate = await fetchOpportunityForUpdate(oppId);
-    const currentCfValues = await fetchOpportunityCustomFieldValues(oppId).catch(() => []);
-    pfBody.innerHTML = "";
-
-    const form = document.createElement("div");
-    form.className = "opp-preview-fields-edit";
-
-    function addRow(label, control) {
-      const row = document.createElement("div");
-      row.className = "opp-preview-fields-edit-row";
-      const lbl = document.createElement("label");
-      lbl.textContent = label;
-      row.appendChild(lbl);
-      const wrap = document.createElement("div");
-      wrap.className = "opp-preview-fields-edit-control";
-      wrap.appendChild(control);
-      row.appendChild(wrap);
-      form.appendChild(row);
-      return row;
-    }
-
-    const contactPicker = createPreviewContactPicker(
-      oppForUpdate.contactId,
-      oppForUpdate.contact?.displayName || getOpportunityContactLabel(oppForUpdate)
-    );
-    addRow("Contact", contactPicker);
-
-    const responsibleSelect = document.createElement("select");
-    responsibleSelect.innerHTML = '<option value="">—</option>';
-    const users = new Map();
-    if (state.currentUserId != null) {
-      users.set(String(state.currentUserId), String(state.currentUserName || state.currentUserId));
-    }
-    for (const u of state.portalUsers || []) {
-      if (u.id != null) users.set(String(u.id), String(u.displayName || u.id));
-    }
-    for (const [uid, name] of [...users.entries()].sort((a, b) => String(a[1] || "").localeCompare(String(b[1] || "")))) {
-      const opt = document.createElement("option");
-      opt.value = uid;
-      opt.textContent = name;
-      responsibleSelect.appendChild(opt);
-    }
-    responsibleSelect.value = String(oppForUpdate.responsibleUserId || oppForUpdate.responsible?.id || oppForUpdate.responsible?.ID || "");
-    addRow("Responsible", responsibleSelect);
-
-    const valueInput = document.createElement("input");
-    valueInput.type = "number";
-    valueInput.step = "0.01";
-    valueInput.value = oppForUpdate.bidValue ?? oppForUpdate.BidValue ?? "";
-    addRow("Value", valueInput);
-
-    const dueInput = document.createElement("input");
-    dueInput.type = "date";
-    dueInput.value = dueDateToInputValue(opportunityDueDateRaw(oppForUpdate));
-    addRow("Follow-up Due Date", dueInput);
-
-    const privateSelect = document.createElement("select");
-    privateSelect.innerHTML = '<option value="false">No</option><option value="true">Yes</option>';
-    privateSelect.value = String(!!(oppForUpdate.isPrivate ?? oppForUpdate.IsPrivate));
-    addRow("Private", privateSelect);
-
-    const cfWrap = document.createElement("div");
-    cfWrap.className = "opp-preview-fields-edit-custom";
-    for (const def of state.customFieldDefs || []) {
-      const fieldId = customFieldDefinitionId(def);
-      if (fieldId == null) continue;
-      if (isCreateOppExcludedUserField(def)) continue;
-      const kind = createOppCustomFieldInputKind(def);
-      if (kind === "heading") continue;
-
-      const savedItem = currentCfValues.find((item) => Number(item.id ?? item.ID ?? item.fieldId ?? item.FieldId) === Number(fieldId));
-      const savedRaw = savedItem ? readSavedCustomFieldValue(savedItem) : "";
-      const label = customFieldLabel(def) || `Field ${fieldId}`;
-      let overriddenKind = kind;
-      if (fieldNameMatches(label, ["Date of Loss"])) overriddenKind = "date";
-      if (fieldNameMatches(label, ["Measurement Report", "Insurance Documents", "Inspection Photos", "PA CONTRACT"])) overriddenKind = "checkbox";
-
-      const field = document.createElement("div");
-      field.className = "field";
-      field.dataset.customFieldId = String(fieldId);
-
-      const input = buildCreateOppCustomFieldInput(def, fieldId, overriddenKind);
-      const inputId = `preview-edit-cf-${fieldId}`;
-      input.id = inputId;
-      if (input.dataset) input.dataset.customFieldId = String(fieldId);
-
-      if (overriddenKind === "checkbox") {
-        if (savedRaw === "true" || savedRaw === "1" || savedRaw.toLowerCase() === "yes") input.checked = true;
-        const lbl = document.createElement("label");
-        lbl.className = "checkbox-filter";
-        lbl.appendChild(input);
-        lbl.appendChild(document.createTextNode(` ${label}`));
-        field.appendChild(lbl);
-      } else {
-        input.value = savedRaw;
-        const lbl = document.createElement("label");
-        lbl.setAttribute("for", inputId);
-        lbl.textContent = label;
-        field.appendChild(lbl);
-        field.appendChild(input);
-      }
-      cfWrap.appendChild(field);
-    }
-    if (cfWrap.children.length) {
-      const cfLegend = document.createElement("div");
-      cfLegend.className = "opp-preview-fields-edit-legend";
-      cfLegend.textContent = "Custom fields";
-      form.appendChild(cfLegend);
-      form.appendChild(cfWrap);
-    }
-
-    const actions = document.createElement("div");
-    actions.className = "opp-preview-fields-edit-actions";
-    const saveBtn = document.createElement("button");
-    saveBtn.type = "button";
-    saveBtn.className = "btn btn-primary btn-small";
-    saveBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
-    saveBtn.setAttribute("aria-label", "Save project fields");
-    const cancelBtn = document.createElement("button");
-    cancelBtn.type = "button";
-    cancelBtn.className = "btn btn-ghost btn-small";
-    cancelBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
-    cancelBtn.setAttribute("aria-label", "Cancel");
-    actions.appendChild(saveBtn);
-    actions.appendChild(cancelBtn);
-    form.appendChild(actions);
-    pfBody.appendChild(form);
-
-    form.addEventListener("input", () => { _previewDirty = true; });
-    form.addEventListener("change", () => { _previewDirty = true; });
-
-    cancelBtn.addEventListener("click", () => {
-      _previewDirty = false;
-      renderProjectFieldsDisplay();
-    });
-
-    saveBtn.addEventListener("click", async () => {
-      saveBtn.disabled = true;
-      cancelBtn.disabled = true;
-      try {
-        await updateOpportunityBulk(oppId, {
-          responsibleUserId: responsibleSelect.value || undefined,
-          bidValue: valueInput.value !== "" ? Number(valueInput.value) : undefined,
-          expectedCloseDate: dueInput.value || null,
-          isPrivate: privateSelect.value === "true",
-          contactId: contactPicker.getContactId() || undefined,
-          customFieldValues: collectPreviewCustomFieldValues(cfWrap) || undefined,
-        });
-        state.oppCustomFieldCache?.invalidate(oppId);
-        showToast("Project fields updated");
-        _previewDirty = false;
-        const newData = await fetchOpportunityPreviewData(oppId, true);
-        renderOpportunityPreviewContent(container, newData);
-      } catch (err) {
-        showToast(err.message, true);
-        saveBtn.disabled = false;
-        cancelBtn.disabled = false;
-      }
-    });
-  }
-
-  pfEditBtn.addEventListener("click", renderProjectFieldsEdit);
   renderProjectFieldsDisplay();
 
   // ── History & notes section with Add Note button ──────────────────────
@@ -34944,6 +34721,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       '</div>' +
       '</div>' +
       '<div class="preview-note-actions">' +
+        '<select class="preview-note-type-select"></select>' +
         '<button type="button" class="btn btn-ghost btn-sm preview-note-cancel">Cancel</button>' +
         '<button type="button" class="btn btn-primary btn-sm preview-note-submit">Post</button>' +
       '</div>';
@@ -34981,6 +34759,22 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       if (bdbtn) delete bdbtn.dataset.backdateValue;
       _previewDirty = false;
     });
+
+    // Populate note type dropdown (exclude system-only types)
+    const noteTypeSelect = editorWrap.querySelector(".preview-note-type-select");
+    if (noteTypeSelect && state.historyCategories?.length) {
+      const excludedIds = new Set([9, 11, 12, 18, 23, 24, 25]); // Task closed, Mail Message, Files uploaded, Quick Context, Opportunity, Stage Estimate, Action
+      for (const cat of state.historyCategories) {
+        if (excludedIds.has(cat.id)) continue;
+        const opt = document.createElement("option");
+        opt.value = cat.id;
+        opt.textContent = cat.title || `Category ${cat.id}`;
+        noteTypeSelect.appendChild(opt);
+      }
+      // Default to "Note" category (id 10)
+      const noteCat = state.historyCategories.find(c => c.title === "Note");
+      if (noteCat) noteTypeSelect.value = noteCat.id;
+    }
 
     // Wire @-mention autocomplete
     const previewEditor = editorWrap.querySelector(".preview-note-editor");
@@ -35048,10 +34842,52 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
         const bdbtn = editorWrap.querySelector(".note-backdate-btn");
         const created = bdbtn?.dataset?.backdateValue || null;
         submitBtn.disabled = true;
+        const origBtnText = submitBtn.textContent;
+
+        // Upload pending images
+        const oppId = opp.id ?? opp.ID;
+        const uploadedIds = [];
+        if (ed._pendingImages && ed._pendingImages.length) {
+          submitBtn.textContent = "Uploading…";
+          showToast("Uploading image…");
+          for (const file of ed._pendingImages) {
+            try {
+              const formData = new FormData();
+              formData.append("file", file);
+              const upRes = await fetch(`/api/v2/projects/${oppId}/documents`, {
+                method: "POST",
+                credentials: "same-origin",
+                body: formData,
+              });
+              if (upRes.ok) {
+                const upData = await upRes.json();
+                const docId = upData?.id ?? upData?.Id;
+                if (docId) {
+                  uploadedIds.push(String(docId));
+                  // Replace placeholder with real URL
+                  const placeholders = ed.querySelectorAll("img.note-img-pending");
+                  placeholders.forEach(img => {
+                    img.src = `/api/v2/documents/${docId}`;
+                    img.className = "note-inline-img";
+                    img.removeAttribute("data-pending");
+                    img.dataset.docId = String(docId);
+                    img.title = file.name || "Attached image";
+                  });
+                }
+              }
+            } catch (err) {
+              showToast("Failed to upload image: " + (err.message || err), true);
+            }
+          }
+          ed._pendingImages = [];
+          submitBtn.textContent = "Uploading note…";
+        }
+
         try {
-          await createOpportunityHistoryEvent(opp.id ?? opp.ID, {
-            content,
-            categoryId: 10,
+          const selectedCategoryId = noteTypeSelect ? Number(noteTypeSelect.value) || 10 : 10;
+          await createOpportunityHistoryEvent(oppId, {
+            content: ed.innerHTML,
+            categoryId: selectedCategoryId,
             notifyUserList,
             created,
           });

@@ -1490,6 +1490,34 @@ def _parse_multipart(body: bytes, content_type: str) -> dict:
 # ── Request Handler ────────────────────────────────────────────────────────────
 
 
+_action_cat_id_cache = None
+
+def _resolve_change_display(field, val):
+    """Resolve a field value to a human-readable display string for history events."""
+    if val is None or val == "" or val == 0:
+        return "\u2014"
+    if field == "stageId":
+        row = db.query_one("SELECT title FROM stages WHERE id = %s", (val,))
+        return row["title"] if row else str(val)
+    if field == "contactId":
+        row = db.query_one("SELECT first_name, last_name FROM contacts WHERE id = %s", (val,))
+        if row:
+            name = f"{row[0] or ''} {row[1] or ''}".strip()
+            return name if name else str(val)
+        return str(val)
+    if field == "responsibleUserId":
+        row = db.query_one("SELECT display_name FROM users WHERE id = %s", (val,))
+        return row["display_name"] if row else str(val)
+    if field == "bidValue":
+        try:
+            return f"${float(val):,.2f}"
+        except (TypeError, ValueError):
+            return str(val)
+    if field == "isPrivate":
+        return "Yes" if val else "No"
+    return str(val)
+
+
 class KanbanHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(PUBLIC), **kwargs)
@@ -3984,32 +4012,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # Publish project_created event for automation engine
         event_bus.publish("project_created", {"opportunity_id": opp_id, "title": title})
 
-    @staticmethod
-    def _resolve_change_display(field, val):
-        """Resolve a field value to a human-readable display string for history events."""
-        if val is None or val == "" or val == 0:
-            return "—"
-        if field == "stageId":
-            row = db.query_one("SELECT title FROM stages WHERE id = %s", (val,))
-            return row["title"] if row else str(val)
-        if field == "contactId":
-            row = db.query_one("SELECT first_name, last_name FROM contacts WHERE id = %s", (val,))
-            if row:
-                name = f"{row[0] or ''} {row[1] or ''}".strip()
-                return name if name else str(val)
-            return str(val)
-        if field == "responsibleUserId":
-            row = db.query_one("SELECT display_name FROM users WHERE id = %s", (val,))
-            return row["display_name"] if row else str(val)
-        if field == "bidValue":
-            try:
-                return f"${float(val):,.2f}"
-            except (TypeError, ValueError):
-                return str(val)
-        if field == "isPrivate":
-            return "Yes" if val else "No"
-        return str(val)
-
     def _handle_project_update(self, opp_id: int) -> None:
         user = _require_auth(self)
         if not user:
@@ -4037,12 +4039,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             OLD_VALUES = {}
             if old_row:
                 OLD_VALUES = {
-                    "stageId": old_row[0],
-                    "bidValue": float(old_row[1]) if old_row[1] else None,
-                    "contactId": old_row[2],
-                    "responsibleUserId": old_row[3],
-                    "expectedCloseDate": str(old_row[4]) if old_row[4] else None,
-                    "isPrivate": old_row[5],
+                    "stageId": old_row["stage_id"],
+                    "bidValue": float(old_row["bid_value"]) if old_row["bid_value"] else None,
+                    "contactId": old_row["contact_id"],
+                    "responsibleUserId": old_row["responsible_user_id"],
+                    "expectedCloseDate": str(old_row["expected_close_date"]) if old_row["expected_close_date"] else None,
+                    "isPrivate": old_row["is_private"],
                 }
 
             sets = ["updated_at = NOW()", "updated_by = %s"]
@@ -4067,6 +4069,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 event_bus.publish("stage_changed", {"opportunity_id": opp_id, "stage_id": payload["stageId"]})
 
             # Create history events for field changes
+            logger.info("Change tracking: payload=%s, OLD_VALUES=%s", list(payload.keys()), OLD_VALUES)
             for field, (col, label) in TRACKED_FIELDS.items():
                 if field not in payload:
                     continue
@@ -4082,28 +4085,30 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     old_val = bool(old_val) if old_val is not None else None
                 if str(new_val) == str(old_val) or (new_val is None and old_val is None):
                     continue
-                # Resolve display values
-                old_display = _resolve_change_display(field, old_val)
-                new_display = _resolve_change_display(field, new_val)
-                if new_val is None or new_val == "" or new_val == 0:
-                    content = f"{label} cleared"
-                elif old_val is None or old_val == "" or old_val == 0:
-                    content = f"{label} set to {new_display}"
-                else:
-                    content = f"{label} changed from {old_display} to {new_display}"
                 try:
-                    # Look up Action category ID (cached after first query)
-                    if not hasattr(_handle_project_update, '_action_cat_id'):
+                    # Resolve display values
+                    old_display = _resolve_change_display(field, old_val)
+                    new_display = _resolve_change_display(field, new_val)
+                    if new_val is None or new_val == "" or new_val == 0:
+                        content = f"{label} cleared"
+                    elif old_val is None or old_val == "" or old_val == 0:
+                        content = f"{label} set to {new_display}"
+                    else:
+                        content = f"{label} changed from {old_display} to {new_display}"
+                    # Look up Action category ID (cached at module level)
+                    global _action_cat_id_cache
+                    if _action_cat_id_cache is None:
                         row = db.query_one("SELECT id FROM history_categories WHERE title = 'Action'")
-                        _handle_project_update._action_cat_id = row["id"] if row else None
-                    cat_id = _handle_project_update._action_cat_id
+                        _action_cat_id_cache = row["id"] if row else None
+                    cat_id = _action_cat_id_cache
                     db.insert_returning(
                         """INSERT INTO history_events (opportunity_id, category_id, content, created_by, created_at)
                            VALUES (%s, %s, %s, %s, NOW()) RETURNING id""",
                         (opp_id, cat_id, content, user["id"]),
                     )
+                    logger.info("Created action event for project %s: %s", opp_id, content)
                 except Exception as hist_err:
-                    logger.warning("Failed to create change history for project %s: %s", opp_id, hist_err)
+                    logger.warning("Failed to create change history for project %s field %s: %s", opp_id, field, hist_err)
 
             # Handle customFieldList if present
             custom_field_list = payload.get("customFieldList")
@@ -4142,12 +4147,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not user:
             return
         rows = db.query(
-            """SELECT t.id, t.title, t.color FROM tag_definitions t
+            """SELECT t.id, t.title, t.color, t.is_system FROM tag_definitions t
                JOIN opportunity_tags ot ON t.id = ot.tag_id
                WHERE ot.opportunity_id = %s""",
             (opp_id,),
         )
-        _json_response(self, 200, [{"id": r[0], "title": r[1], "color": r[2]} for r in rows])
+        _json_response(self, 200, [{"id": r[0], "title": r[1], "color": r[2], "isSystem": r[3]} for r in rows])
 
     def _handle_project_tag_add(self, opp_id: int) -> None:
         user = _require_auth(self)
@@ -4463,7 +4468,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         events = []
         for r in rows:
             events.append({
-                "id": r[0], "categoryId": r[1], "category": {"title": r[2]},
+                "id": r[0], "categoryId": r[1],                 "category": {"id": r[1], "title": r[2]},
                 "title": r[3], "content": r[4], "createdBy": r[5],
                 "created": r[6].isoformat() if r[6] else None,
                 "backdatedCreated": r[7].isoformat() if r[7] else None,
@@ -4711,8 +4716,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_auth(self)
         if not user:
             return
-        rows = db.query("SELECT id, title, color FROM tag_definitions ORDER BY title")
-        _json_response(self, 200, [{"id": r[0], "title": r[1], "color": r[2]} for r in rows])
+        rows = db.query("SELECT id, title, color, is_system FROM tag_definitions ORDER BY title")
+        _json_response(self, 200, [{"id": r[0], "title": r[1], "color": r[2], "isSystem": r[3]} for r in rows])
 
     def _handle_tag_create(self) -> None:
         user = _require_admin(self)
@@ -4751,6 +4756,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     def _handle_tag_delete(self, tag_id: int) -> None:
         user = _require_admin(self)
         if not user:
+            return
+        tag = db.query_one("SELECT is_system FROM tag_definitions WHERE id = %s", (tag_id,))
+        if not tag:
+            _json_response(self, 404, {"error": "Tag not found"})
+            return
+        if tag.get("is_system"):
+            _json_response(self, 409, {"error": "System tags cannot be deleted"})
             return
         count = db.query_one("SELECT COUNT(*) FROM opportunity_tags WHERE tag_id = %s", (tag_id,))["count"]
         if count:
@@ -9670,11 +9682,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         result = {}
         for opp_id in ids:
             rows = db.query(
-                """SELECT t.id, t.title, t.color FROM tag_definitions t
+                """SELECT t.id, t.title, t.color, t.is_system FROM tag_definitions t
                    JOIN opportunity_tags ot ON t.id = ot.tag_id WHERE ot.opportunity_id = %s""",
                 (opp_id,),
             )
-            result[str(opp_id)] = [{"id": r[0], "title": r[1], "color": r[2]} for r in rows]
+            result[str(opp_id)] = [{"id": r[0], "title": r[1], "color": r[2], "isSystem": r[3]} for r in rows]
         _json_response(self, 200, result)
 
     # ── Admin check ─────────────────────────────────────────────────────────

@@ -87,7 +87,53 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ---
 
-## Network Resilience Improvements (2026-08-21)
+## Preview Modal Overhaul — Phase 3 Final Fixes (2026-08-25)
+
+**Action events (system notes):**
+- Fixed `historyEventCategoryId()` — added `ev.categoryId ?? ev.CategoryId` fallback (was always returning null)
+- Server now includes `id` in category sub-object (`"category": {"id": r[1], "title": r[2]}`)
+- Action events render as compact single-line entries with muted styling
+- No Reply button on action events
+- Action category changed from `icon_style: 'accent'` to `'stroke'` — no accent color
+
+**Edit deal modal revamp:**
+- Removed Stage, Due Date, Tags, Event Note sections from edit deal modal
+- User Fields now visible by default with proper input types (date pickers, checkboxes)
+- Removed inline project fields edit (pfEditBtn + renderProjectFieldsEdit)
+- Mobile edit modal fills screen instead of sharing vertical space
+- After save, edit modal closes and preview refreshes
+
+**Author display fix:**
+- Reverted wrong COALESCE that replaced real user names with "System"
+- Client-side fallback to "System" only for truly empty authors
+- Added debug logging to change tracking for troubleshooting
+
+**Action event styling:**
+- Compact single-line layout (0.68rem font, minimal padding)
+- Body text flows inline with meta row
+- No accent color (changed from `'accent'` to `'stroke'`)
+- No Reply button
+
+**Inline image pasting:**
+- Paste captures images as File objects via clipboard API
+- Uploads via documents endpoint on note save
+- Displays as thumbnails (200x150px) with click-to-expand lightbox
+- Images stored in `history_events.content` as `<img>` tags (not as separate attachments)
+- `noteContentToHtml` adds `note-inline-img` class to all `<img>` tags for consistent styling
+
+**Note type dropdown:**
+- Added to add note section (left side of Cancel/Post row)
+- Populated from history categories, excluding system-only types
+- Default to "Note" category
+
+**Project page improvements:**
+- Brand colors from localStorage + `/api/branding`
+- Threaded reply functionality (auto-load, inline editor)
+- Version bump to match current styles
+
+**Files:** `app.js`, `styles.css`, `server.py`, `project.html`, `index.html`, `init.sql`
+
+---
 
 **API retry with exponential backoff:**
 - `api()` wrapper now retries up to 3 times on network failure, 502/503/504, or HTML responses (WAF challenges)

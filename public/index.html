@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=3.5.0" />
+  <link rel="stylesheet" href="styles.css?v=3.5.1" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
 </head>
 <body>
@@ -1604,7 +1604,7 @@
         <h2 id="opp-preview-title" class="modal-title">Project</h2>
          <div class="opp-preview-head-actions">
              <button type="button" id="opp-preview-bookmark" class="opp-preview-bookmark-btn" title="Bookmark deal" aria-label="Bookmark deal"></button>
-             <button type="button" id="opp-preview-edit" class="opp-preview-edit-btn" title="Edit deal" aria-label="Edit deal">✎</button>
+             <button type="button" id="opp-preview-edit" class="opp-preview-edit-btn" title="Edit project" aria-label="Edit project">✎</button>
              <span id="opp-preview-open-crm-wrap"></span>
              <button type="button" class="btn btn-icon-only modal-header-control" title="Close" data-opp-preview-dismiss aria-label="Close preview"><i class="ti ti-x"></i></button>
          </div>
@@ -1672,70 +1672,16 @@
     <div class="modal-backdrop" data-deal-edit-dismiss></div>
     <div class="modal-card modal-card-form modal-card-deal-edit">
       <div class="deal-edit-modal-head">
-        <h2 id="deal-edit-modal-title" class="modal-title">Edit deal</h2>
+        <h2 id="deal-edit-modal-title" class="modal-title">Edit project</h2>
         <a id="deal-edit-crm-link" class="deal-edit-crm-link" href="#" target="_blank" rel="noopener noreferrer">Open Project</a>
       </div>
-      <form id="deal-edit-form" class="modal-form">
+      <form id="deal-edit-form" class="modal-form deal-edit-form">
         <div class="field deal-edit-title-field">
+          <label for="deal-edit-title">Project Name</label>
           <input type="text" id="deal-edit-title" name="title" class="deal-edit-title-input"
-                 placeholder="Deal name" autocomplete="off" />
+                 placeholder="Project name" autocomplete="off" />
         </div>
-        <div class="field">
-          <label for="deal-edit-due">Change Deal Due Date</label>
-          <input type="date" id="deal-edit-due" name="expectedCloseDate" />
-        </div>
-        <div class="field">
-          <label for="deal-edit-stage">Stage</label>
-          <select id="deal-edit-stage" name="stageId" required></select>
-        </div>
-        <div class="field">
-          <label>Tags</label>
-          <div id="deal-edit-tags" class="deal-edit-tags" aria-live="polite"></div>
-          <div class="deal-edit-tag-add">
-            <select id="deal-edit-tag-add" aria-label="Add tag">
-              <option value="">Add tag…</option>
-            </select>
-          </div>
-        </div>
-        <fieldset class="deal-edit-note-fieldset">
-          <legend class="deal-edit-note-legend">Event note <span class="field-optional">(optional)</span></legend>
-          <div id="deal-edit-note-category-field" class="field hidden">
-            <label for="deal-edit-note-category">Note type</label>
-            <select id="deal-edit-note-category" name="noteCategoryId"></select>
-          </div>
-           <div class="field">
-             <label for="deal-edit-note-body">Note</label>
-             <div class="note-format-toolbar" aria-label="Formatting">
-               <button type="button" class="note-format-btn" data-cmd="bold" title="Bold"><b>B</b></button>
-               <button type="button" class="note-format-btn" data-cmd="italic" title="Italic"><i>I</i></button>
-               <button type="button" class="note-format-btn" data-cmd="underline" title="Underline"><u>U</u></button>
-               <button type="button" class="note-format-btn" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
-               <span class="note-format-sep"></span>
-               <button type="button" class="note-format-btn" data-cmd="insertUnorderedList" title="Bullet list">•</button>
-               <button type="button" class="note-format-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
-               <span class="note-format-sep"></span>
-               <button type="button" class="note-format-btn note-format-hilite-btn" title="Highlight color">🖍</button>
-               <button type="button" class="note-format-btn note-format-emoji-btn" title="Emoji">😀</button>
-               <button type="button" class="note-format-btn note-format-link-btn" title="Insert link">🔗</button>
-               <span class="note-format-sep"></span>
-               <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear formatting">⌫</button>
-               <button type="button" class="note-backdate-btn" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>
-             </div>
-                     <div class="note-editor-wrap">
-                     <div id="deal-edit-note-body" class="note-editor" contenteditable="true" data-placeholder="Well go on, write the note already"></div>
-                     <div id="deal-edit-mention-dropdown" class="mention-dropdown hidden"></div>
-                    </div>
-                 <div class="field note-attachments-field">
-                <label>Attachments <span class="field-hint-inline">(max 25 MB each)</span></label>
-                <input type="file" id="deal-edit-note-attachments" multiple class="note-attachments-input" />
-                <div id="deal-edit-selected-attachments" class="selected-attachments"></div>
-              </div>
-            </div>
-        </fieldset>
-        <div class="deal-edit-user-fields-bar">
-          <button type="button" id="deal-edit-toggle-fields" class="btn btn-ghost btn-small">Show User Fields</button>
-        </div>
-        <div id="deal-edit-user-fields" class="deal-edit-user-fields hidden"></div>
+        <div id="deal-edit-user-fields" class="deal-edit-user-fields"></div>
         <p id="deal-edit-error" class="modal-error hidden" role="alert"></p>
       </form>
       <div class="modal-actions">

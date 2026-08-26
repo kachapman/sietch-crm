@@ -3328,6 +3328,7 @@ body {
 
 .deal-edit-user-fields-bar {
   margin: 0.5rem 0 0.25rem;
+  display: none;
 }
 
 .deal-edit-user-fields {
@@ -3336,8 +3337,58 @@ body {
   padding: 0.5rem 0.75rem;
   margin-bottom: 0.5rem;
   background: var(--surface-2);
-  max-height: 30vh;
   overflow-y: auto;
+}
+.deal-edit-user-fields .field {
+  margin-bottom: 0.5rem;
+}
+.deal-edit-user-fields .field label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 0.2rem;
+}
+.deal-edit-user-fields .field input,
+.deal-edit-user-fields .field select,
+.deal-edit-user-fields .field textarea {
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-family: var(--font);
+}
+.deal-edit-user-fields .checkbox-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.deal-edit-user-fields .checkbox-filter input[type="checkbox"] {
+  width: auto;
+  flex-shrink: 0;
+}
+
+/* Deal edit modal mobile: full screen */
+.deal-edit-fullscreen {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 10000 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  border-radius: 0 !important;
+  resize: none !important;
+}
+.deal-edit-fullscreen .deal-edit-user-fields {
+  max-height: none;
 }
 
 .modal-card-deal-edit .modal-actions {
@@ -6614,8 +6665,8 @@ body {
 }
 
 .opp-preview-field-overdue {
-  border-color: rgba(220, 38, 38, 0.45);
-  background: rgba(220, 38, 38, 0.06);
+  border-color: rgba(220, 38, 38, 0.8);
+  background: rgba(220, 38, 38, 0.15);
 }
 
 /* Collapsible field groups in preview modal */
@@ -6855,16 +6906,103 @@ body {
 
 /* Compact action events (field changes) */
 .opp-preview-history-item--action {
-  padding: 0.3rem 0.7rem;
-  font-size: 0.72rem;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.68rem;
   background: transparent;
   border-left: 2px solid var(--border);
+  line-height: 1.2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem;
 }
 .opp-preview-history-item--action .opp-preview-history-meta-row {
   margin-bottom: 0;
+  gap: 0.2rem;
+  flex-shrink: 0;
 }
 .opp-preview-history-item--action .opp-preview-history-body {
-  display: none;
+  display: inline;
+  margin: 0;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: normal;
+}
+.opp-preview-history-item--action .opp-preview-history-row {
+  display: inline;
+  border: none;
+  padding: 0;
+}
+.opp-preview-history-item--action .opp-preview-history-main {
+  display: inline;
+}
+.opp-preview-history-item--action .opp-preview-history-type-icon {
+  margin-top: 0;
+}
+
+/* Inline images in note history + editor */
+.note-editor img,
+.preview-note-editor img {
+  max-width: 200px;
+  max-height: 150px;
+  display: block;
+  border-radius: 4px;
+  cursor: default;
+}
+.note-inline-img {
+  max-width: 200px;
+  max-height: 150px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: transform 0.2s;
+  border: 1px solid var(--border);
+  display: block;
+}
+.note-inline-img:hover {
+  transform: scale(1.02);
+}
+.note-img-pending {
+  max-width: 200px;
+  max-height: 150px;
+  border-radius: 4px;
+  border: 1px dashed var(--muted);
+  opacity: 0.7;
+  display: block;
+}
+
+/* Note image lightbox */
+.note-image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 1rem;
+}
+.note-image-lightbox img {
+  max-width: 90vw;
+  max-height: 90vh;
+  border-radius: 4px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+.note-image-lightbox-close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: #fff;
+  font-size: 1.5rem;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* Event note threading */
@@ -15144,7 +15282,7 @@ select.form-control {
 .preview-note-editor-wrap {
   display: none;
   margin: 0;
-  padding: 0.75rem;
+  padding: 0.4rem 0.5rem;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-2, var(--surface));
@@ -15154,7 +15292,7 @@ select.form-control {
 
 /* Fix toolbar alignment and spacing */
 .preview-note-editor-wrap .preview-format-toolbar {
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.25rem;
   justify-content: flex-start;
   gap: 0.2rem;
   flex-wrap: wrap;
@@ -15239,6 +15377,21 @@ select.form-control {
   justify-content: flex-end;
   gap: 0.4rem;
   margin-top: 0.5rem;
+}
+.preview-note-type-select {
+  margin-right: auto;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 6px);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.82rem;
+  max-width: 160px;
+}
+.preview-note-type-select:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 /* ── Highlighter dropdown ────────────────────────────────────────────── */
@@ -16597,6 +16750,63 @@ select.form-control {
 @media (max-width: 600px) {
   .preview-format-toolbar [data-overflow] { display: none !important; }
   .preview-format-toolbar .note-format-overflow-btn { display: inline-flex !important; }
+}
+
+/* Follow-up Due Date + Stage inline with title */
+.opp-preview-due-date-head,
+.opp-preview-stage-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+@media (max-width: 600px) {
+  .opp-preview-stage-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.3rem;
+  }
+  .opp-preview-stage-select {
+    width: 100%;
+  }
+}
+.opp-preview-due-date-wrap {
+  display: flex;
+  align-items: center;
+}
+.opp-preview-due-date-display {
+  cursor: pointer;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 6px);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.9rem;
+  transition: border-color 0.15s;
+}
+.opp-preview-due-date-display.opp-preview-field-overdue {
+  border-color: rgba(220, 38, 38, 0.8);
+  background: rgba(220, 38, 38, 0.15);
+  color: #ef4444;
+}
+.opp-preview-due-date-display:hover {
+  border-color: var(--accent);
+}
+.opp-preview-due-date-input {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius, 6px);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+}
+.opp-preview-due-date-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+@media (prefers-color-scheme: dark) {
+  .opp-preview-due-date-input { color-scheme: dark; }
 }
 
 
