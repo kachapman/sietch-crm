@@ -6753,6 +6753,27 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         safe_name = re.sub(r'[^\w.\-]', '_', filename)
         if not safe_name:
             safe_name = "image.jpg"
+
+        # Deduplication: compute hash and check for existing photo
+        import hashlib
+        content_hash = hashlib.md5(data).hexdigest()
+        existing = db.query_one(
+            "SELECT id FROM project_photos WHERE opportunity_id = %s AND content_hash = %s AND is_deleted = FALSE",
+            (opp_id, content_hash),
+        )
+        if existing:
+            photo_id = existing["id"]
+            row = db.query_one("SELECT id, filename, mime_type FROM project_photos WHERE id = %s", (photo_id,))
+            _json_response(self, 200, {
+                "id": photo_id, "filename": row["filename"], "fileSize": len(data),
+                "mimeType": row["mime_type"],
+                "url": f"/api/v2/photos/{photo_id}",
+                "thumbnailUrl": f"/api/v2/photos/{photo_id}?thumbnail=1",
+                "uploadedBy": user["id"],
+                "duplicate": True,
+            })
+            return
+
         opp_dir = PHOTO_STORAGE_PATH / str(opp_id)
         opp_dir.mkdir(parents=True, exist_ok=True)
         unique_name = f"{int(time.time())}_{safe_name}"
@@ -6785,12 +6806,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             thumb_path = None
         try:
             photo_id = db.insert_returning(
-                """INSERT INTO project_photos (opportunity_id, filename, file_path, file_size, mime_type, exif_data, thumbnail_path, uploaded_by)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                """INSERT INTO project_photos (opportunity_id, filename, file_path, file_size, mime_type, exif_data, thumbnail_path, uploaded_by, content_hash)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
                 (opp_id, filename, str(file_path.relative_to(ROOT)), file_size, mime_type,
                  json.dumps(exif_data) if exif_data else None,
                  str(thumb_path.relative_to(ROOT)) if thumb_path else None,
-                 user["id"]),
+                 user["id"], content_hash),
             )
         except Exception as exc:
             # DB trigger may reject quota; clean up saved files

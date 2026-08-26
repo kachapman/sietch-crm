@@ -16721,17 +16721,18 @@ select.form-control {
   letter-spacing: 2px;
 }
 .note-format-overflow-dropdown {
-  position: fixed;
+  position: absolute;
   z-index: 99999;
   display: none;
-  flex-direction: column;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--surface);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
-  min-width: 44px;
+  min-width: 140px;
+  max-width: 200px;
 }
 .note-format-overflow-dropdown.open {
   display: flex;

@@ -20,3 +20,7 @@ CREATE INDEX IF NOT EXISTS idx_custom_field_definitions_group ON custom_field_de
 INSERT INTO history_categories (title, display_color, is_system, sort_order, icon_key, icon_style)
 VALUES ('Action', '#6c757d', TRUE, 15, 'pencil', 'accent')
 ON CONFLICT (title) DO NOTHING;
+
+-- Add content_hash to project_photos for deduplication
+ALTER TABLE project_photos ADD COLUMN IF NOT EXISTS content_hash TEXT;
+CREATE INDEX IF NOT EXISTS idx_project_photos_hash ON project_photos(content_hash);

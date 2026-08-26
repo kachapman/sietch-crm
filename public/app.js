@@ -34713,6 +34713,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       '<button type="button" class="note-format-btn" data-overflow="1" data-cmd="outdent" title="Outdent">←</button>' +
       '<span class="note-format-sep" data-overflow="1"></span>' +
       '<button type="button" class="note-format-btn" data-overflow="1" data-cmd="removeFormat" title="Clear formatting">⌫</button>' +
+      '<button type="button" class="note-format-btn note-format-img-upload-btn" data-overflow="1" title="Upload image">📷</button>' +
       '<button type="button" class="note-backdate-btn" data-overflow="1" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>' +
       '</div>' +
       '<div class="note-editor-wrap">' +
@@ -34854,23 +34855,23 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
             try {
               const formData = new FormData();
               formData.append("file", file);
-              const upRes = await fetch(`/api/v2/projects/${oppId}/documents`, {
+              const upRes = await fetch(`/api/v2/projects/${oppId}/photos`, {
                 method: "POST",
                 credentials: "same-origin",
                 body: formData,
               });
               if (upRes.ok) {
                 const upData = await upRes.json();
-                const docId = upData?.id ?? upData?.Id;
-                if (docId) {
-                  uploadedIds.push(String(docId));
+                const photoId = upData?.id ?? upData?.Id;
+                if (photoId) {
+                  uploadedIds.push(String(photoId));
                   // Replace placeholder with real URL
                   const placeholders = ed.querySelectorAll("img.note-img-pending");
                   placeholders.forEach(img => {
-                    img.src = `/api/v2/documents/${docId}`;
+                    img.src = `/api/v2/photos/${photoId}`;
                     img.className = "note-inline-img";
                     img.removeAttribute("data-pending");
-                    img.dataset.docId = String(docId);
+                    img.dataset.photoId = String(photoId);
                     img.title = file.name || "Attached image";
                   });
                 }
@@ -38745,8 +38746,9 @@ document.addEventListener("click", function (e) {
   if (!dd) {
     dd = document.createElement("div");
     dd.className = "note-format-overflow-dropdown";
-    document.body.appendChild(dd);
   }
+  // Move dropdown into the toolbar so it's in the correct positioning context
+  toolbar.appendChild(dd);
   // Move overflow buttons into dropdown
   dd.innerHTML = "";
   toolbar.querySelectorAll("[data-overflow]").forEach(el => {
@@ -38754,13 +38756,11 @@ document.addEventListener("click", function (e) {
   });
   // Show dropdown
   dd.classList.add("open");
-  // Position below the ··· button, aligned to its RIGHT edge (expands left+down)
-  const r = btn.getBoundingClientRect();
-  dd.style.position = "fixed";
-  dd.style.top = (r.bottom + 4) + "px";
-  // Measure after showing to get accurate width
-  const ddW = dd.offsetWidth || 50;
-  dd.style.left = Math.max(4, r.right - ddW) + "px";
+  // Position below and to the left of the ··· button
+  dd.style.position = "absolute";
+  dd.style.top = (btn.offsetTop + btn.offsetHeight + 4) + "px";
+  dd.style.left = "auto";
+  dd.style.right = "0";
   // Move buttons back on any click inside dropdown
   dd.onclick = function() {
     setTimeout(() => {
@@ -38792,6 +38792,51 @@ document.addEventListener("click", function (e) {
       }
     }
   }
+});
+
+// Image upload button in note editor overflow menu
+document.addEventListener("click", function (e) {
+  const btn = e.target.closest(".note-format-img-upload-btn");
+  if (!btn) return;
+  e.stopPropagation();
+  const toolbar = btn.closest(".note-format-toolbar");
+  if (!toolbar) return;
+  const editor = toolbar.parentElement?.querySelector(".note-editor");
+  if (!editor) return;
+  // Create a temporary file input
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = "image/*";
+  fileInput.style.display = "none";
+  document.body.appendChild(fileInput);
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files?.[0];
+    if (!file) { fileInput.remove(); return; }
+    if (!file.type.startsWith("image/")) { showToast("Please select an image file", true); fileInput.remove(); return; }
+    if (file.size > 20 * 1024 * 1024) { showToast("Image too large (max 20 MB)", true); fileInput.remove(); return; }
+    // Store pending image on the editor element
+    if (!editor._pendingImages) editor._pendingImages = [];
+    editor._pendingImages.push(file);
+    // Insert placeholder thumbnail at cursor
+    editor.focus();
+    const placeholder = document.createElement("img");
+    placeholder.className = "note-inline-img note-img-pending";
+    placeholder.src = URL.createObjectURL(file);
+    placeholder.title = file.name || "Attached image";
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount) {
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(placeholder);
+      range.setStartAfter(placeholder);
+      range.setEndAfter(placeholder);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+    showToast("Image attached — will upload when you save");
+    fileInput.remove();
+  });
+  fileInput.click();
 });
 
 // Backdate icon button: dynamically creates a temp date input, positions it

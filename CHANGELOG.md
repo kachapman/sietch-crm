@@ -87,9 +87,47 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ---
 
-## Preview Modal Overhaul — Phase 3 Final Fixes (2026-08-25)
+## Preview Modal Overhaul — Phase 4 Final Polish (2026-08-26)
 
-**Action events (system notes):**
+**Overflow menu fixes:**
+- Fixed positioning — dropdown now uses `position: absolute` relative to toolbar (not `position: fixed` which detached it)
+- Opens to the left of "···" button via `right: 0`
+- 3 columns wide with `flex-wrap: wrap`
+
+**Photo deduplication:**
+- Added `content_hash` column to `project_photos` table (MD5 of file content)
+- Photo upload handler checks for existing photo with same hash + same project
+- If duplicate found, returns existing photo URL instead of uploading again
+- Prevents email signatures, company logos, and duplicate images from filling photo gallery
+
+**Inline image upload button:**
+- Added 📷 photo upload button to overflow menu
+- Triggers native file input (`<input type="file" accept="image/*">`)
+- Works on Android/iOS where clipboard image paste is limited
+
+**Inline image storage change:**
+- Switched from documents endpoint to photos endpoint for inline images
+- Images now appear in Photo tab (with thumbnails and lightbox) instead of Documents tab
+- Removed `fileIds` from note submission — images stored purely in content as `<img>` tags
+
+**Note type dropdown:**
+- Added to add note section (left side of Cancel/Post row)
+- Excludes system-only types: Task closed, Mail Message, Files uploaded, Quick Context, Opportunity, Stage Estimate, Action
+- Default to "Note" category
+
+**Action events:**
+- Fixed `historyEventCategoryId()` to check `ev.categoryId` fallback
+- Server includes `id` in category sub-object
+- Compact single-line layout, no accent color, no Reply button
+- Action category changed to `stroke` style
+
+**Author display:**
+- Reverted wrong COALESCE that replaced real user names with "System"
+- Client-side fallback to "System" only for empty authors
+
+**Files:** `app.js`, `styles.css`, `server.py`, `project.html`, `index.html`, `init.sql`, `migrations/017_add_custom_field_groups.sql`
+
+---
 - Fixed `historyEventCategoryId()` — added `ev.categoryId ?? ev.CategoryId` fallback (was always returning null)
 - Server now includes `id` in category sub-object (`"category": {"id": r[1], "title": r[2]}`)
 - Action events render as compact single-line entries with muted styling
