@@ -2190,6 +2190,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             self._handle_alternate_smtp_get()
             return
+        if api_path == "/api/v2/admin/daily-quote":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_daily_quote_get()
+            return
+        if api_path == "/api/v2/daily-quote/live":
+            self._handle_daily_quote_live()
+            return
         if api_path == "/api/v2/admin/backup/history":
             user = _require_admin(self)
             if not user:
@@ -3003,6 +3012,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not user:
                 return
             self._handle_alternate_smtp_post()
+            return
+        if api_path == "/api/v2/admin/daily-quote" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_daily_quote_post()
             return
         if api_path == "/api/v2/admin/alternate-smtp/test" and method == "POST":
             user = _require_admin(self)
@@ -8583,6 +8598,152 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 500, {"error": f"SMTP send failed: {err}"})
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
+
+    def _handle_daily_quote_get(self) -> None:
+        """GET daily quote config."""
+        try:
+            row = db.query_one("SELECT value FROM system_settings WHERE key = 'daily_quote_config'")
+            config = json.loads(row["value"]) if row and row["value"] else {}
+            _json_response(self, 200, config)
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_daily_quote_post(self) -> None:
+        """POST save daily quote config."""
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            config = {
+                "enabled": bool(payload.get("enabled", True)),
+                "source": str(payload.get("source") or "preset"),
+                "active_presets": payload.get("active_presets") or [],
+                "custom_quotes": payload.get("custom_quotes") or [],
+                "imported_quotes": payload.get("imported_quotes") or [],
+                "feed_url": str(payload.get("feed_url") or "").strip(),
+                "bible_version": str(payload.get("bible_version") or "KJV").strip(),
+            }
+            db.execute(
+                """INSERT INTO system_settings (key, value, description)
+                   VALUES ('daily_quote_config', %s, 'Daily quote display configuration')
+                   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()""",
+                (json.dumps(config),),
+            )
+            _json_response(self, 200, {"ok": True})
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_daily_quote_live(self) -> None:
+        """GET live quote for external sources (API/RSS/Bible). Returns cached quote, refreshes daily."""
+        try:
+            row = db.query_one("SELECT value FROM system_settings WHERE key = 'daily_quote_config'")
+            config = json.loads(row["value"]) if row and row["value"] else {}
+            source = config.get("source", "preset")
+
+            # Check cache freshness
+            cache_row = db.query_one("SELECT value FROM system_settings WHERE key = 'daily_quote_cache'")
+            cache = json.loads(cache_row["value"]) if cache_row and cache_row["value"] else {}
+            cached_source = cache.get("source")
+            cached_ts = cache.get("timestamp", 0)
+            cache_age_hours = (time.time() - cached_ts) / 3600 if cached_ts else 999
+
+            # Return cache if fresh (<24h) and same source
+            if cache_age_hours < 24 and cached_source == source and cache.get("quote"):
+                _json_response(self, 200, cache["quote"])
+                return
+
+            # Fetch fresh quote
+            quote = None
+            if source == "api":
+                quote = self._fetch_zenquotes_quote()
+            elif source == "rss":
+                quote = self._fetch_rss_quote(config.get("feed_url", ""))
+            elif source == "bible":
+                quote = self._fetch_bible_quote(config.get("bible_version", "KJV"))
+
+            if quote:
+                # Update cache
+                new_cache = {"source": source, "quote": quote, "timestamp": time.time()}
+                db.execute(
+                    """INSERT INTO system_settings (key, value, description)
+                       VALUES ('daily_quote_cache', %s, 'Daily quote external fetch cache')
+                       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()""",
+                    (json.dumps(new_cache),),
+                )
+                _json_response(self, 200, quote)
+            else:
+                _json_response(self, 200, {"text": "The best time to plant a tree was twenty years ago. The second best time is now.", "author": "Chinese Proverb"})
+        except Exception as e:
+            _json_response(self, 200, {"text": "The journey of a thousand miles begins with a single step.", "author": "Lao Tzu"})
+
+    def _fetch_zenquotes_quote(self) -> dict | None:
+        """Fetch a random quote from zenquotes.io."""
+        try:
+            req = urllib.request.Request("https://zenquotes.io/api/random", headers={"User-Agent": "SietchCRM/3.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+                if data and isinstance(data, list) and len(data) > 0:
+                    return {"text": data[0].get("q", ""), "author": data[0].get("a", "Unknown")}
+        except Exception:
+            pass
+        return None
+
+    def _fetch_rss_quote(self, feed_url: str) -> dict | None:
+        """Fetch a quote from an RSS/Atom feed URL."""
+        if not feed_url:
+            return None
+        try:
+            import xml.etree.ElementTree as ET
+            req = urllib.request.Request(feed_url, headers={"User-Agent": "SietchCRM/3.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                xml_data = resp.read().decode("utf-8", errors="replace")
+            root = ET.fromstring(xml_data)
+            # Try RSS 2.0 first
+            items = root.findall(".//item")
+            if not items:
+                # Try Atom
+                ns = {"atom": "http://www.w3.org/2005/Atom"}
+                items = root.findall(".//atom:entry", ns)
+            if items:
+                import random
+                item = random.choice(items)
+                title = item.findtext("title") or ""
+                desc = item.findtext("description") or ""
+                # Strip HTML tags from description
+                desc = re.sub(r"<[^>]+>", "", desc).strip()
+                # Try to split "Quote — Author"
+                if " — " in desc:
+                    parts = desc.split(" — ", 1)
+                    return {"text": parts[0].strip(), "author": parts[1].strip()}
+                elif " - " in desc:
+                    parts = desc.split(" - ", 1)
+                    return {"text": parts[0].strip(), "author": parts[1].strip()}
+                return {"text": desc or title, "author": "Unknown"}
+        except Exception:
+            pass
+        return None
+
+    def _fetch_bible_quote(self, version: str = "KJV") -> dict | None:
+        """Fetch a random Bible verse (Proverbs or Philippians) from bible-api.com."""
+        try:
+            books = ["Proverbs", "Philippians", "Psalms"]
+            import random
+            book = random.choice(books)
+            # Pick a reasonable chapter range
+            max_ch = {"Proverbs": 31, "Philippians": 4, "Psalms": 150}
+            chapter = random.randint(1, max_ch.get(book, 31))
+            # Get chapter, then pick a random verse
+            url = f"https://bible-api.com/{book}+{chapter}?translation={version}"
+            req = urllib.request.Request(url, headers={"User-Agent": "SietchCRM/3.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            verses = data.get("verses", [])
+            if verses:
+                v = random.choice(verses)
+                text = v.get("text", "").strip()
+                ref = f"{v.get('book_name', book)} {v.get('chapter', chapter)}:{v.get('verse', '')}"
+                return {"text": text, "author": ref}
+        except Exception:
+            pass
+        return None
 
     def _handle_backup_run(self) -> None:
         """POST trigger immediate backup."""

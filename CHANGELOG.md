@@ -2,6 +2,60 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Task Tile Fixes + Mobile Modals (2026-08-27)
+
+**Bug fixes:**
+- Fixed `[object Object]` displayed in task modal Labels section — server returns `{id, title, color, sortOrder}` but code checked for `lbl.label`/`lbl.name` instead of `lbl.title`
+- Label color dots now shown next to checkbox labels in the task editor (matching admin style)
+- Removed task category chip from task tile rows — was too cramped alongside due date and label chips
+
+**Mobile/narrow screen:**
+- Task add/edit modal (`#task-preview-modal`) and All Tasks list modal (`#tasks-list-modal`) now go full-screen on mobile (≤600px), matching the project preview modal and admin console pattern
+- Create Project modal (`#create-opportunity-modal`) now goes full-screen on mobile (≤600px)
+- Project Note modal (`#quick-note-modal`) now goes full-screen on mobile (≤600px)
+- Both modals have proper flex layout with scrollable body areas; 2-column field grids collapse to single column on narrow screens
+
+**Project Note modal overhaul:**
+- Formatting toolbar upgraded to match preview modal — added text color picker, overflow menu (···) with H2, H3, blockquote, code block, horizontal rule, indent/outdent, image upload; backdate moved to overflow
+- Overflow menu now visible on all screen sizes (not just mobile) to keep toolbar to one row
+- Tag section replaced `<select>` dropdown with compact button+floating dropdown pattern matching preview modal (with color swatches)
+- Note editor restructured: fieldset moved outside scrollable form so it fills remaining viewport space; editor flex-fills the fieldset, resizing dynamically with the modal
+- Default modal size increased (550px min-height, 700px/85vh default) so note editor is large on open
+- Modal padding reduced from 1.25rem/1.5rem to 0.75rem/1rem
+- Modal now dynamically resizable (CSS `resize: both`) like project preview modal
+
+**Create Project modal:**
+- Modal padding reduced; header title bar padding trimmed
+- Modal now dynamically resizable (CSS `resize: both`) like project preview modal
+
+**Overflow menu fix:**
+- Toolbar overflow dropdown handler no longer hardcoded to `.preview-format-toolbar` — works with any note editor toolbar
+
+## Configurable Daily Quote (2026-08-26)
+
+**Admin Console — General tab:**
+- New "Daily Quote" section with enable/disable toggle and source selector
+- Sources: Preset Author Collections, Custom Quotes, Random API (zenquotes.io), RSS/Atom Feed, Bible/Proverbs, Imported Quotes
+- Preset authors expanded from 5 to 12: Frank Herbert, Tolkien, Chesterton, C.S. Lewis, Pratchett, Marcus Aurelius, Sun Tzu, Oscar Wilde, Mark Twain, Einstein, Maya Angelou, Churchill
+- Custom quotes: add/delete individual quotes with text + author inputs
+- Import: paste JSON (`[{"text":"...","author":"..."}]`) or CSV (`"quote","author"` per line)
+- RSS feed: enter URL, preview fetched quote before saving
+- Bible: choose translation (KJV, NIV, ESV, NLT)
+- Server-side caching for external sources (API/RSS/Bible) — fetched once daily, stored in `system_settings`
+
+**Backend:**
+- `GET /api/v2/admin/daily-quote` — returns config from `system_settings`
+- `POST /api/v2/admin/daily-quote` — upserts config
+- `GET /api/v2/daily-quote/live` — returns cached quote from external source (API/RSS/Bible), refreshes every 24h
+- Handlers for zenquotes.io, RSS/Atom parsing, and bible-api.com
+
+**Frontend:**
+- `DAILY_QUOTES` refactored into `DAILY_QUOTE_PRESETS` (keyed by author slug) with backward-compatible flat array
+- `getDailyQuote()` respects config: filters by source, shows null when disabled
+- `renderDailyFocus()` hides header quote when disabled
+- Config loaded on app start via `loadDailyQuoteConfig()`, pool rebuilt on config change
+- Refresh button handles external sources by calling `/api/v2/daily-quote/live`
+
 ## Preview Modal Overhaul — Phase 1 Bug Fixes (2026-08-21)
 
 **Notes author fix:**

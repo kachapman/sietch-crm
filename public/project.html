@@ -127,7 +127,7 @@
     .phtml-note-editor-wrap { display: none; margin-bottom: 1rem; }
     .phtml-note-editor-wrap.active { display: block; }
     .phtml-note-format-toolbar { display: flex; flex-wrap: wrap; gap: 0; margin-bottom: 0; border: 1px solid var(--border); border-bottom: none; border-radius: 6px 6px 0 0; background: var(--surface); padding: 0.25rem 0.3rem; }
-    .phtml-note-format-btn { background: none; border: none; color: var(--muted); font-size: 0.85rem; padding: 0.25rem 0.4rem; cursor: pointer; border-radius: 3px; min-width: 1.5rem; text-align: center; }
+    .phtml-note-format-btn { background: none; border: none; color: var(--muted); font-size: 0.85rem; padding: 0.25rem 0.4rem; cursor: pointer; border-radius: 3px; min-width: 1.5rem; text-align: center; display: inline-flex; align-items: center; justify-content: center; }
     .phtml-note-format-btn:hover { background: var(--surface-2); color: var(--text); }
     .phtml-note-sep { width: 1px; height: 18px; background: var(--border); margin: 0 0.2rem; align-self: center; }
     .phtml-note-editor { min-height: 80px; max-height: 300px; overflow-y: auto; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-top: none; border-radius: 0 0 6px 6px; background: var(--surface-2, #1f2430); color: var(--text); font-family: var(--font); font-size: 0.9rem; outline: none; line-height: 1.5; }
@@ -183,22 +183,31 @@
       </div>
 
       <div id="phtml-note-editor-wrap" class="phtml-note-editor-wrap">
-        <div class="phtml-note-format-toolbar" aria-label="Formatting">
-          <button type="button" class="phtml-note-format-btn" data-cmd="bold" title="Bold"><b>B</b></button>
-          <button type="button" class="phtml-note-format-btn" data-cmd="italic" title="Italic"><i>I</i></button>
-          <button type="button" class="phtml-note-format-btn" data-cmd="underline" title="Underline"><u>U</u></button>
-          <button type="button" class="phtml-note-format-btn" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
-          <span class="phtml-note-sep"></span>
-          <button type="button" class="phtml-note-format-btn" data-cmd="insertUnorderedList" title="Bullet list">&bull;</button>
-          <button type="button" class="phtml-note-format-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
-          <span class="phtml-note-sep"></span>
-          <button type="button" class="phtml-note-format-btn" data-cmd="formatBlock" data-val="H2" title="Heading 2"><b>H2</b></button>
-          <button type="button" class="phtml-note-format-btn" data-cmd="formatBlock" data-val="H3" title="Heading 3"><b>H3</b></button>
-          <button type="button" class="phtml-note-format-btn" data-cmd="formatBlock" data-val="BLOCKQUOTE" title="Quote">&#10077;</button>
-          <button type="button" class="phtml-note-format-btn" data-cmd="formatBlock" data-val="PRE" title="Code block">&lt;/&gt;</button>
-          <button type="button" class="phtml-note-format-btn" data-cmd="insertHorizontalRule" title="Horizontal rule">&#8213;</button>
-          <span class="phtml-note-sep"></span>
-          <button type="button" class="phtml-note-format-btn" data-cmd="removeFormat" title="Clear formatting">&#x232B;</button>
+        <div class="phtml-note-format-toolbar note-format-toolbar" aria-label="Formatting">
+          <button type="button" class="phtml-note-format-btn note-format-btn" data-cmd="bold" title="Bold"><b>B</b></button>
+          <button type="button" class="phtml-note-format-btn note-format-btn" data-cmd="italic" title="Italic"><i>I</i></button>
+          <button type="button" class="phtml-note-format-btn note-format-btn" data-cmd="underline" title="Underline"><u>U</u></button>
+          <button type="button" class="phtml-note-format-btn note-format-btn" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+          <span class="phtml-note-sep note-format-sep"></span>
+          <button type="button" class="phtml-note-format-btn note-format-btn" data-cmd="insertUnorderedList" title="Bullet list">&bull;</button>
+          <button type="button" class="phtml-note-format-btn note-format-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
+          <span class="phtml-note-sep note-format-sep"></span>
+          <button type="button" class="phtml-note-format-btn note-format-btn note-format-hilite-btn" title="Highlight color">&#x1F58D;</button>
+          <button type="button" class="phtml-note-format-btn note-format-btn note-format-emoji-btn" title="Emoji">&#x1F600;</button>
+          <button type="button" class="phtml-note-format-btn note-format-btn note-format-link-btn" title="Insert link">&#x1F517;</button>
+          <button type="button" class="phtml-note-format-btn note-format-btn note-format-color-btn" title="Text color">A<span class="note-format-color-bar"></span></button>
+          <button type="button" class="phtml-note-format-btn note-format-btn note-format-overflow-btn" title="More formatting">&middot;&middot;&middot;</button>
+          <button type="button" class="phtml-note-format-btn note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="H2" title="Heading 2"><b>H2</b></button>
+          <button type="button" class="phtml-note-format-btn note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="H3" title="Heading 3"><b>H3</b></button>
+          <button type="button" class="phtml-note-format-btn note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="BLOCKQUOTE" title="Quote">&#10077;</button>
+          <button type="button" class="phtml-note-format-btn note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="PRE" title="Code block">&lt;/&gt;</button>
+          <button type="button" class="phtml-note-format-btn note-format-btn" data-overflow="1" data-cmd="insertHorizontalRule" title="Horizontal rule">&#8213;</button>
+          <span class="phtml-note-sep note-format-sep" data-overflow="1"></span>
+          <button type="button" class="phtml-note-format-btn note-format-btn" data-overflow="1" data-cmd="indent" title="Indent">&rarr;</button>
+          <button type="button" class="phtml-note-format-btn note-format-btn" data-overflow="1" data-cmd="outdent" title="Outdent">&larr;</button>
+          <span class="phtml-note-sep note-format-sep" data-overflow="1"></span>
+          <button type="button" class="phtml-note-format-btn note-format-btn" data-overflow="1" data-cmd="removeFormat" title="Clear formatting">&#x232B;</button>
+          <button type="button" class="phtml-note-format-btn note-format-btn note-format-img-upload-btn" data-overflow="1" title="Upload image">&#x1F4F7;</button>
         </div>
         <div class="phtml-mention-wrap">
           <div class="phtml-note-editor" contenteditable="true" data-placeholder="Write a note... Type @ to mention someone." id="phtml-note-editor"></div>
@@ -821,12 +830,235 @@
       document.getElementById("phtml-note-editor").innerHTML = "";
     });
 
+    // Format button handler — passes data-val for formatBlock commands
     document.querySelectorAll(".phtml-note-format-btn").forEach(function(btn) {
-      btn.addEventListener("click", function() {
+      btn.addEventListener("click", function(e) {
+        // Skip overflow/highlight/emoji/link/color/img-upload buttons — handled separately
+        if (btn.classList.contains("note-format-overflow-btn") ||
+            btn.classList.contains("note-format-hilite-btn") ||
+            btn.classList.contains("note-format-emoji-btn") ||
+            btn.classList.contains("note-format-link-btn") ||
+            btn.classList.contains("note-format-color-btn") ||
+            btn.classList.contains("note-format-img-upload-btn")) return;
         var cmd = btn.getAttribute("data-cmd");
-        if (cmd) document.execCommand(cmd, false, null);
+        if (!cmd) return;
+        e.preventDefault();
+        var editor = document.getElementById("phtml-note-editor");
+        if (editor) editor.focus();
+        var val = btn.getAttribute("data-val") || null;
+        if (cmd === "hiliteColor" || cmd === "backColor") {
+          document.execCommand("hiliteColor", false, "#c8e6c9");
+        } else {
+          document.execCommand(cmd, false, val);
+        }
       });
     });
+
+    // Overflow menu (··· button)
+    (function() {
+      var overflowBtn = document.querySelector(".phtml-note-format-toolbar .note-format-overflow-btn");
+      var toolbar = overflowBtn && overflowBtn.closest(".phtml-note-format-toolbar");
+      if (!overflowBtn || !toolbar) return;
+      var dd = null;
+      function closeOverflow() {
+        if (!dd) return;
+        dd.classList.remove("open");
+        var anchor = toolbar.querySelector(".note-format-overflow-btn");
+        dd.querySelectorAll("[data-overflow]").forEach(function(el) { toolbar.insertBefore(el, anchor); });
+      }
+      overflowBtn.addEventListener("click", function(e) {
+        e.stopPropagation();
+        if (dd && dd.classList.contains("open")) { closeOverflow(); return; }
+        if (!dd) {
+          dd = document.createElement("div");
+          dd.className = "note-format-overflow-dropdown";
+        }
+        dd.innerHTML = "";
+        toolbar.querySelectorAll("[data-overflow]").forEach(function(el) { dd.appendChild(el); });
+        document.body.appendChild(dd);
+        dd.classList.add("open");
+        var rect = overflowBtn.getBoundingClientRect();
+        dd.style.position = "fixed";
+        dd.style.top = (rect.bottom + 4) + "px";
+        dd.style.right = (window.innerWidth - rect.right) + "px";
+        dd.style.left = "auto";
+        dd.onclick = function() { setTimeout(closeOverflow, 50); };
+      });
+      document.addEventListener("click", function(e) {
+        if (!e.target.closest(".note-format-overflow-btn") && !e.target.closest(".note-format-overflow-dropdown")) closeOverflow();
+      });
+    })();
+
+    // Highlight color picker
+    (function() {
+      var btn = document.querySelector(".phtml-note-format-toolbar .note-format-hilite-btn");
+      if (!btn) return;
+      var colors = [
+        { name: "Green", css: "rgba(200,230,201,0.45)" },
+        { name: "Yellow", css: "rgba(255,249,196,0.55)" },
+        { name: "Blue", css: "rgba(187,222,251,0.45)" },
+        { name: "Pink", css: "rgba(248,187,208,0.40)" },
+        { name: "Orange", css: "rgba(255,224,178,0.50)" },
+        { name: "Purple", css: "rgba(206,147,216,0.35)" }
+      ];
+      btn.addEventListener("click", function(e) {
+        e.stopPropagation();
+        var existing = document.querySelector(".phtml-hilite-dropdown");
+        if (existing) { existing.remove(); return; }
+        var dd = document.createElement("div");
+        dd.className = "phtml-hilite-dropdown note-format-overflow-dropdown";
+        colors.forEach(function(c) {
+          var swatch = document.createElement("button");
+          swatch.type = "button";
+          swatch.className = "note-format-overflow-dropdown note-format-btn";
+          swatch.style.cssText = "width:28px;height:28px;border-radius:50%;border:2px solid transparent;cursor:pointer;background:" + c.css + ";display:inline-flex;align-items:center;justify-content:center;padding:0;";
+          swatch.title = c.name;
+          swatch.addEventListener("click", function(ev) {
+            ev.stopPropagation();
+            dd.remove();
+            var editor = document.getElementById("phtml-note-editor");
+            if (editor) { editor.focus(); document.execCommand("hiliteColor", false, c.css); }
+          });
+          dd.appendChild(swatch);
+        });
+        document.body.appendChild(dd);
+        var rect = btn.getBoundingClientRect();
+        dd.style.position = "fixed";
+        dd.style.top = (rect.bottom + 4) + "px";
+        dd.style.left = rect.left + "px";
+        dd.style.right = "auto";
+        dd.style.display = "flex";
+        dd.style.zIndex = "99999";
+        setTimeout(function() {
+          document.addEventListener("click", function handler() { dd.remove(); document.removeEventListener("click", handler); }, { once: true });
+        }, 0);
+      });
+    })();
+
+    // Text color picker
+    (function() {
+      var btn = document.querySelector(".phtml-note-format-toolbar .note-format-color-btn");
+      if (!btn) return;
+      var colors = [
+        { name: "Default", css: "" },
+        { name: "Red", css: "#ef5350" },
+        { name: "Orange", css: "#ff9800" },
+        { name: "Green", css: "#66bb6a" },
+        { name: "Blue", css: "#42a5f5" },
+        { name: "Purple", css: "#ab47bc" },
+        { name: "Gray", css: "#9e9e9e" }
+      ];
+      btn.addEventListener("click", function(e) {
+        e.stopPropagation();
+        var existing = document.querySelector(".phtml-color-dropdown");
+        if (existing) { existing.remove(); return; }
+        var dd = document.createElement("div");
+        dd.className = "phtml-color-dropdown note-format-overflow-dropdown";
+        colors.forEach(function(c) {
+          var swatch = document.createElement("button");
+          swatch.type = "button";
+          swatch.className = "note-format-overflow-dropdown note-format-btn";
+          swatch.style.cssText = "width:28px;height:28px;border-radius:50%;border:2px solid " + (c.css || "var(--border)") + ";cursor:pointer;background:" + (c.css || "var(--text)") + ";display:inline-flex;align-items:center;justify-content:center;padding:0;";
+          swatch.title = c.name;
+          swatch.addEventListener("click", function(ev) {
+            ev.stopPropagation();
+            dd.remove();
+            var editor = document.getElementById("phtml-note-editor");
+            if (editor) { editor.focus(); document.execCommand("foreColor", false, c.css || "#e0e0e0"); }
+          });
+          dd.appendChild(swatch);
+        });
+        document.body.appendChild(dd);
+        var rect = btn.getBoundingClientRect();
+        dd.style.position = "fixed";
+        dd.style.top = (rect.bottom + 4) + "px";
+        dd.style.left = rect.left + "px";
+        dd.style.right = "auto";
+        dd.style.display = "flex";
+        dd.style.zIndex = "99999";
+        setTimeout(function() {
+          document.addEventListener("click", function handler() { dd.remove(); document.removeEventListener("click", handler); }, { once: true });
+        }, 0);
+      });
+    })();
+
+    // Emoji picker
+    (function() {
+      var btn = document.querySelector(".phtml-note-format-toolbar .note-format-emoji-btn");
+      if (!btn) return;
+      var emojis = ["😀","😂","😍","🤔","👍","👎","❤️","🔥","✅","⭐","📌","📝","🎯","💬","📎","🔗","📊","🗓️","✨","🙏"];
+      btn.addEventListener("click", function(e) {
+        e.stopPropagation();
+        var existing = document.querySelector(".phtml-emoji-dropdown");
+        if (existing) { existing.remove(); return; }
+        var dd = document.createElement("div");
+        dd.className = "phtml-emoji-dropdown note-format-overflow-dropdown";
+        dd.style.cssText = "display:flex;flex-wrap:wrap;gap:2px;padding:6px 8px;min-width:180px;";
+        emojis.forEach(function(em) {
+          var item = document.createElement("button");
+          item.type = "button";
+          item.textContent = em;
+          item.style.cssText = "background:none;border:none;font-size:1.2rem;padding:4px 6px;cursor:pointer;border-radius:4px;";
+          item.addEventListener("click", function(ev) {
+            ev.stopPropagation();
+            dd.remove();
+            var editor = document.getElementById("phtml-note-editor");
+            if (editor) { editor.focus(); document.execCommand("insertText", false, em); }
+          });
+          dd.appendChild(item);
+        });
+        document.body.appendChild(dd);
+        var rect = btn.getBoundingClientRect();
+        dd.style.position = "fixed";
+        dd.style.top = (rect.bottom + 4) + "px";
+        dd.style.left = rect.left + "px";
+        dd.style.right = "auto";
+        dd.style.zIndex = "99999";
+        setTimeout(function() {
+          document.addEventListener("click", function handler() { dd.remove(); document.removeEventListener("click", handler); }, { once: true });
+        }, 0);
+      });
+    })();
+
+    // Link insertion
+    (function() {
+      var btn = document.querySelector(".phtml-note-format-toolbar .note-format-link-btn");
+      if (!btn) return;
+      btn.addEventListener("click", function(e) {
+        e.stopPropagation();
+        var url = prompt("Enter URL:");
+        if (url) {
+          var editor = document.getElementById("phtml-note-editor");
+          if (editor) { editor.focus(); document.execCommand("createLink", false, url); }
+        }
+      });
+    })();
+
+    // Image upload
+    (function() {
+      var btn = document.querySelector(".phtml-note-format-toolbar .note-format-img-upload-btn");
+      if (!btn) return;
+      btn.addEventListener("click", function(e) {
+        e.stopPropagation();
+        var input = document.createElement("input");
+        input.type = "file";
+        input.accept = "image/*";
+        input.addEventListener("change", function() {
+          var file = input.files[0];
+          if (!file) return;
+          var reader = new FileReader();
+          reader.onload = function(ev) {
+            var editor = document.getElementById("phtml-note-editor");
+            if (editor) {
+              editor.focus();
+              document.execCommand("insertHTML", false, '<img src="' + ev.target.result + '" style="max-width:200px;max-height:150px;border-radius:4px;" />');
+            }
+          };
+          reader.readAsDataURL(file);
+        });
+        input.click();
+      });
+    })();
 
     // Wire @-mention autocomplete
     setupMentionAutocomplete(

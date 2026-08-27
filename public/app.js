@@ -235,161 +235,217 @@ function newId() {
 /** Daily Focus quote — rotating daily inspiration banner */
 const DAILY_FOCUS_KEY = "oo_daily_focus_author";
 const DAILY_FOCUS_RANDOM_KEY = "oo_daily_focus_random";
-const DAILY_QUOTES = [
-  // Dune (30)
-  { text: "Fear is the mind-killer.", author: "Frank Herbert" },
-  { text: "I must not fear. I will face my fear and let it pass through me.", author: "Frank Herbert" },
-  { text: "The mystery of life isn't a problem to solve, but a reality to experience.", author: "Frank Herbert" },
-  { text: "A process cannot be understood by stopping it.", author: "Frank Herbert" },
-  { text: "He who controls the spice controls the universe.", author: "Frank Herbert" },
-  { text: "Without change, something sleeps inside us, and seldom awakens.", author: "Frank Herbert" },
-  { text: "There is no escape—we pay for the violence of our ancestors.", author: "Frank Herbert" },
-  { text: "The mind can make a heaven of hell, or a hell of heaven.", author: "Frank Herbert" },
-  { text: "Survival is the ability to swim in strange water.", author: "Frank Herbert" },
-  { text: "What do you despise? By this you are truly known.", author: "Frank Herbert" },
-  { text: "Wealth is a tool of freedom, but the pursuit of wealth is the road to slavery.", author: "Frank Herbert" },
-  { text: "The beginning of knowledge is the discovery of something we do not understand.", author: "Frank Herbert" },
-  { text: "The people who can destroy a thing, they control it.", author: "Frank Herbert" },
-  { text: "Deep in the human unconscious is a pervasive need for a logical universe.", author: "Frank Herbert" },
-  { text: "Do not be deceived by the fact that you are used to something.", author: "Frank Herbert" },
-  { text: "Humans are born with a desire to control their environment.", author: "Frank Herbert" },
-  { text: "The highest function of ecology is understanding consequences.", author: "Frank Herbert" },
-  { text: "The power to destroy a thing is the absolute control over it.", author: "Frank Herbert" },
-  { text: "Hope clouds observation.", author: "Frank Herbert" },
-  { text: "The thing we call technology is the art of arranging life so you don't have to work.", author: "Frank Herbert" },
-  { text: "There is no real ending. It's just the place where you stop the story.", author: "Frank Herbert" },
-  { text: "The gift of words is the gift of deception.", author: "Frank Herbert" },
-  { text: "You cannot back into the future.", author: "Frank Herbert" },
-  { text: "A man is a fool not to put everything he has into whatever he is doing.", author: "Frank Herbert" },
-  { text: "The most persistent principles of the universe are accident and error.", author: "Frank Herbert" },
-  { text: "To attempt an understanding of the Creator is to attempt the impossible.", author: "Frank Herbert" },
-  { text: "I must not fear. Fear is the little-death.", author: "Frank Herbert" },
-  { text: "The people who are the most dangerous are those who think they are doing right.", author: "Frank Herbert" },
-  { text: "The only lasting truth is Change.", author: "Frank Herbert" },
-  { text: "God is not separate from the universe; He is the universe.", author: "Frank Herbert" },
-  // Tolkien (30)
-  { text: "Not all those who wander are lost.", author: "J.R.R. Tolkien" },
-  { text: "Even the smallest person can change the course of the future.", author: "J.R.R. Tolkien" },
-  { text: "There is some good in this world, and it's worth fighting for.", author: "J.R.R. Tolkien" },
-  { text: "All we have to decide is what to do with the time that is given us.", author: "J.R.R. Tolkien" },
-  { text: "The road goes ever on and on.", author: "J.R.R. Tolkien" },
-  { text: "A single dream is more powerful than a thousand realities.", author: "J.R.R. Tolkien" },
-  { text: "Courage is found in unlikely places.", author: "J.R.R. Tolkien" },
-  { text: "If more of us valued food and cheer above hoarded gold, it would be a merrier world.", author: "J.R.R. Tolkien" },
-  { text: "I will not say: do not weep; for not all tears are an evil.", author: "J.R.R. Tolkien" },
-  { text: "It's a dangerous business going out your door.", author: "J.R.R. Tolkien" },
-  { text: "Faithless is he that says farewell when the road darkens.", author: "J.R.R. Tolkien" },
-  { text: "The world is indeed full of peril, but still there is much that is fair.", author: "J.R.R. Tolkien" },
-  { text: "A man that flies from his fear may find that he has only taken a shortcut to meet it.", author: "J.R.R. Tolkien" },
-  { text: "I would rather spend one lifetime with you than face all the ages of this world alone.", author: "J.R.R. Tolkien" },
-  { text: "The leaves were long, the grass was green, the hemlock-umbels tall and fair.", author: "J.R.R. Tolkien" },
-  { text: "I have claimed that Escape is one of the main functions of fairy-stories.", author: "J.R.R. Tolkien" },
-  { text: "It is not the strength of the body, but the will of the heart that matters.", author: "J.R.R. Tolkien" },
-  { text: "Short cuts make long delays.", author: "J.R.R. Tolkien" },
-  { text: "There is nothing like looking, if you want to find something.", author: "J.R.R. Tolkien" },
-  { text: "Do not meddle in the affairs of wizards, for they are subtle and quick to anger.", author: "J.R.R. Tolkien" },
-  { text: "The wise speak only of what they know.", author: "J.R.R. Tolkien" },
-  { text: "Many that live deserve death. And some that die deserve life.", author: "J.R.R. Tolkien" },
-  { text: "Oft hope is born when all is forlorn.", author: "J.R.R. Tolkien" },
-  { text: "The darkness is passing, but the light has not yet come.", author: "J.R.R. Tolkien" },
-  { text: "It is a strange thing to be so spoken of by a dragon.", author: "J.R.R. Tolkien" },
-  { text: "The greatest adventure is what lies ahead.", author: "J.R.R. Tolkien" },
-  { text: "May the wind under your wings bear you where the sun sails and the moon walks.", author: "J.R.R. Tolkien" },
-  { text: "Laughter is the music of the heart, the voice of the soul.", author: "J.R.R. Tolkien" },
-  { text: "The old that is strong does not wither, deep roots are not reached by the frost.", author: "J.R.R. Tolkien" },
-  // Chesterton (30)
-  { text: "Fairy tales are more than true: not because they tell us dragons exist, but because they tell us dragons can be beaten.", author: "G.K. Chesterton" },
-  { text: "An adventure is only an inconvenience rightly considered.", author: "G.K. Chesterton" },
-  { text: "The true soldier fights because he loves what is behind him.", author: "G.K. Chesterton" },
-  { text: "There are no uninteresting things, only uninterested people.", author: "G.K. Chesterton" },
-  { text: "The Christian ideal has not been tried and found wanting. It has been found difficult; and left untried.", author: "G.K. Chesterton" },
-  { text: "A good novel tells us the truth about its hero; but a bad novel tells us the truth about its author.", author: "G.K. Chesterton" },
-  { text: "The traveller sees what he sees. The tourist sees what he has come to see.", author: "G.K. Chesterton" },
-  { text: "When men choose not to believe in God, they become capable of believing in anything.", author: "G.K. Chesterton" },
-  { text: "Art, like morality, consists of drawing the line somewhere.", author: "G.K. Chesterton" },
-  { text: "Courage is a strong desire to live taking the form of a readiness to die.", author: "G.K. Chesterton" },
-  { text: "The most extraordinary thing is an ordinary man and an ordinary woman and their ordinary children.", author: "G.K. Chesterton" },
-  { text: "Fallacies do not cease to be fallacies because they become fashions.", author: "G.K. Chesterton" },
-  { text: "The way to love anything is to realize that it may be lost.", author: "G.K. Chesterton" },
-  { text: "A dead thing can go with the stream, but only a living thing can go against it.", author: "G.K. Chesterton" },
-  { text: "The whole object of travel is not to set foot on foreign land; it is to set foot on one's own country.", author: "G.K. Chesterton" },
-  { text: "There are two ways to get enough: one is to continue to accumulate more and more. The other is to desire less.", author: "G.K. Chesterton" },
-  { text: "Education is simply the soul of a society as it passes from one generation to another.", author: "G.K. Chesterton" },
-  { text: "The poet only asks to get his head into the heavens. The logician seeks to get the heavens into his head.", author: "G.K. Chesterton" },
-  { text: "Angels can fly because they can take themselves lightly.", author: "G.K. Chesterton" },
-  { text: "The man who never alters his opinion is like standing water, and breeds reptiles of the mind.", author: "G.K. Chesterton" },
-  { text: "To have a right to do a thing is not at all the same as to be right in doing it.", author: "G.K. Chesterton" },
-  { text: "The purpose of an open mind is to close it on something solid.", author: "G.K. Chesterton" },
-  { text: "I owe my success to having listened respectfully to the very best advice.", author: "G.K. Chesterton" },
-  { text: "The Bible tells us to love our neighbors, and also to love our enemies.", author: "G.K. Chesterton" },
-  { text: "The truth is, of course, that the rich are the only people who can afford to be poor.", author: "G.K. Chesterton" },
-  { text: "A yawn is a silent shout.", author: "G.K. Chesterton" },
-  { text: "The first effect of not believing in God is to believe in anything.", author: "G.K. Chesterton" },
-  { text: "The shortest way to do many things is to do only one thing at a time.", author: "G.K. Chesterton" },
-  { text: "Impartiality is a pompous name for indifference, which is an elegant name for ignorance.", author: "G.K. Chesterton" },
-  // C.S. Lewis (30)
-  { text: "Courage, dear heart.", author: "C.S. Lewis" },
-  { text: "Hardships often prepare ordinary people for an extraordinary destiny.", author: "C.S. Lewis" },
-  { text: "You are never too old to set another goal or to dream a new dream.", author: "C.S. Lewis" },
-  { text: "Friendship is born at the moment when one person says to another: 'What! You too?'", author: "C.S. Lewis" },
-  { text: "We meet no ordinary people in our lives.", author: "C.S. Lewis" },
-  { text: "The future is something which everyone reaches at the rate of sixty minutes an hour.", author: "C.S. Lewis" },
-  { text: "No one ever told me that grief felt so like fear.", author: "C.S. Lewis" },
-  { text: "Humility is not thinking less of yourself, but thinking of yourself less.", author: "C.S. Lewis" },
-  { text: "I believe in Christianity as I believe the sun has risen: not only because I see it, but because by it I see everything else.", author: "C.S. Lewis" },
-  { text: "To love is to be vulnerable.", author: "C.S. Lewis" },
-  { text: "There are far, far better things ahead than any we leave behind.", author: "C.S. Lewis" },
-  { text: "The pain now is part of the happiness then. That's the deal.", author: "C.S. Lewis" },
-  { text: "Children have one kind of silliness, and grown-ups have another kind.", author: "C.S. Lewis" },
-  { text: "We are what we believe we are.", author: "C.S. Lewis" },
-  { text: "You can't go back and change the beginning, but you can start where you are and change the ending.", author: "C.S. Lewis" },
-  { text: "Miracles are a retelling in small letters of the very same story which is written across the whole world.", author: "C.S. Lewis" },
-  { text: "The task of the modern educator is not to cut down jungles, but to irrigate deserts.", author: "C.S. Lewis" },
-  { text: "What draws people to be friends is that they see the same truth.", author: "C.S. Lewis" },
-  { text: "If I find in myself desires which nothing in this world can satisfy, the only logical explanation is that I was made for another world.", author: "C.S. Lewis" },
-  { text: "I have been trying to make the best of a bad job. It is not the best that is the best; it is the trying that is the best.", author: "C.S. Lewis" },
-  { text: "A children's story that can only be enjoyed by children is not a good children's story.", author: "C.S. Lewis" },
-  { text: "The safest road to hell is the gradual one—the gentle slope, soft underfoot, without sudden turnings.", author: "C.S. Lewis" },
-  { text: "Though our feelings come and go, His love for us does not.", author: "C.S. Lewis" },
-  { text: "It is not your business to succeed, but to do right.", author: "C.S. Lewis" },
-  { text: "The great thing is to be found at one's post as a child of God.", author: "C.S. Lewis" },
-  { text: "We are not necessarily doubting that God will do the best for us; we are wondering how painful the best will turn out to be.", author: "C.S. Lewis" },
-  { text: "Isn't it funny how day by day nothing changes, but when you look back, everything is different.", author: "C.S. Lewis" },
-  { text: "Love is not affectionate feeling, but a steady wish for the loved person's ultimate good.", author: "C.S. Lewis" },
-  { text: "He died not for men, but for each man.", author: "C.S. Lewis" },
-  { text: "You can make anything by writing.", author: "C.S. Lewis" },
-  // Terry Pratchett (30)
-  { text: "It's still magic even if you know how it's done.", author: "Terry Pratchett" },
-  { text: "The presence of those seeking the truth is infinitely to be preferred to the presence of those who think they've found it.", author: "Terry Pratchett" },
-  { text: "Give a man a fire and he's warm for a day, but set fire to him and he's warm for the rest of his life.", author: "Terry Pratchett" },
-  { text: "In ancient times cats were worshipped as gods; they have not forgotten this.", author: "Terry Pratchett" },
-  { text: "Wisdom comes from experience. Experience is often a result of lack of wisdom.", author: "Terry Pratchett" },
-  { text: "The truth may be out there, but the lies are inside your head.", author: "Terry Pratchett" },
-  { text: "Real stupidity beats artificial intelligence every time.", author: "Terry Pratchett" },
-  { text: "Build a man a fire, and he'll be warm for a day. Set a man on fire, and he'll be warm for the rest of his life.", author: "Terry Pratchett" },
-  { text: "If you trust in yourself and believe in your dreams and follow your star, you'll still get beaten by people who spent their time working hard and learning things.", author: "Terry Pratchett" },
-  { text: "The pen is mightier than the sword if the sword is very short, and the pen is very sharp.", author: "Terry Pratchett" },
-  { text: "Time is a drug. Too much of it kills you.", author: "Terry Pratchett" },
-  { text: "Light thinks it travels faster than anything but it is wrong. No matter how fast light travels, it finds the darkness has always got there first.", author: "Terry Pratchett" },
-  { text: "Coming back to where you started is not the same as never leaving.", author: "Terry Pratchett" },
-  { text: "It's not worth doing something unless someone, somewhere, would much rather you weren't doing it.", author: "Terry Pratchett" },
-  { text: "Evil begins when you begin to treat people as things.", author: "Terry Pratchett" },
-  { text: "The trouble with having an open mind, of course, is that people will insist on coming along and trying to put things in it.", author: "Terry Pratchett" },
-  { text: "Freedom is having the right to be wrong, not the right to do wrong.", author: "Terry Pratchett" },
-  { text: "Inside every old person is a young person wondering what happened.", author: "Terry Pratchett" },
-  { text: "Stories of imagination tend to upset those without one.", author: "Terry Pratchett" },
-  { text: "I'd rather be a rising ape than a falling angel.", author: "Terry Pratchett" },
-  { text: "The whole of life is just like watching a film. Only it's as though you always get in ten minutes after the big picture has started.", author: "Terry Pratchett" },
-  { text: "Sometimes the only way to deal with a madman is to take him seriously.", author: "Terry Pratchett" },
-  { text: "The world is made up of stories, not atoms.", author: "Terry Pratchett" },
-  { text: "There is a rumour going around that I have found God. I think this is unlikely because I have enough difficulty finding my keys.", author: "Terry Pratchett" },
-  { text: "Five exclamation marks, the sure sign of an insane mind.", author: "Terry Pratchett" },
-  { text: "Granny Weatherwax was not lost. She wasn't the kind of person who ever became lost.", author: "Terry Pratchett" },
-  { text: "The presence of a seeker may be preferred, but not at the expense of the sought.", author: "Terry Pratchett" },
-  { text: "People don't like change. But make the change fast enough and you go from one type of normal to another.", author: "Terry Pratchett" },
-  { text: "What kind of man would put a known criminal in charge of a major branch of government?", author: "Terry Pratchett" },
-  { text: "The best you can do is the best you can do.", author: "Terry Pratchett" },
-];
+
+/** Preset author collections keyed by author slug */
+const DAILY_QUOTE_PRESETS = {
+  herbert: { name: "Frank Herbert", quotes: [
+    { text: "Fear is the mind-killer.", author: "Frank Herbert" },
+    { text: "I must not fear. I will face my fear and let it pass through me.", author: "Frank Herbert" },
+    { text: "The mystery of life isn't a problem to solve, but a reality to experience.", author: "Frank Herbert" },
+    { text: "A process cannot be understood by stopping it.", author: "Frank Herbert" },
+    { text: "He who controls the spice controls the universe.", author: "Frank Herbert" },
+    { text: "Without change, something sleeps inside us, and seldom awakens.", author: "Frank Herbert" },
+    { text: "There is no escape—we pay for the violence of our ancestors.", author: "Frank Herbert" },
+    { text: "The mind can make a heaven of hell, or a hell of heaven.", author: "Frank Herbert" },
+    { text: "Survival is the ability to swim in strange water.", author: "Frank Herbert" },
+    { text: "What do you despise? By this you are truly known.", author: "Frank Herbert" },
+    { text: "Wealth is a tool of freedom, but the pursuit of wealth is the road to slavery.", author: "Frank Herbert" },
+    { text: "The beginning of knowledge is the discovery of something we do not understand.", author: "Frank Herbert" },
+    { text: "The people who can destroy a thing, they control it.", author: "Frank Herbert" },
+    { text: "Hope clouds observation.", author: "Frank Herbert" },
+    { text: "The only lasting truth is Change.", author: "Frank Herbert" },
+  ]},
+  tolkien: { name: "J.R.R. Tolkien", quotes: [
+    { text: "Not all those who wander are lost.", author: "J.R.R. Tolkien" },
+    { text: "Even the smallest person can change the course of the future.", author: "J.R.R. Tolkien" },
+    { text: "There is some good in this world, and it's worth fighting for.", author: "J.R.R. Tolkien" },
+    { text: "All we have to decide is what to do with the time that is given us.", author: "J.R.R. Tolkien" },
+    { text: "The road goes ever on and on.", author: "J.R.R. Tolkien" },
+    { text: "A single dream is more powerful than a thousand realities.", author: "J.R.R. Tolkien" },
+    { text: "Courage is found in unlikely places.", author: "J.R.R. Tolkien" },
+    { text: "If more of us valued food and cheer above hoarded gold, it would be a merrier world.", author: "J.R.R. Tolkien" },
+    { text: "I will not say: do not weep; for not all tears are an evil.", author: "J.R.R. Tolkien" },
+    { text: "It's a dangerous business going out your door.", author: "J.R.R. Tolkien" },
+    { text: "Faithless is he that says farewell when the road darkens.", author: "J.R.R. Tolkien" },
+    { text: "The world is indeed full of peril, but still there is much that is fair.", author: "J.R.R. Tolkien" },
+    { text: "It is not the strength of the body, but the will of the heart that matters.", author: "J.R.R. Tolkien" },
+    { text: "There is nothing like looking, if you want to find something.", author: "J.R.R. Tolkien" },
+    { text: "The old that is strong does not wither, deep roots are not reached by the frost.", author: "J.R.R. Tolkien" },
+  ]},
+  chesterton: { name: "G.K. Chesterton", quotes: [
+    { text: "Fairy tales are more than true: not because they tell us dragons exist, but because they tell us dragons can be beaten.", author: "G.K. Chesterton" },
+    { text: "An adventure is only an inconvenience rightly considered.", author: "G.K. Chesterton" },
+    { text: "The true soldier fights because he loves what is behind him.", author: "G.K. Chesterton" },
+    { text: "There are no uninteresting things, only uninterested people.", author: "G.K. Chesterton" },
+    { text: "The Christian ideal has not been tried and found wanting. It has been found difficult; and left untried.", author: "G.K. Chesterton" },
+    { text: "A good novel tells us the truth about its hero; but a bad novel tells us the truth about its author.", author: "G.K. Chesterton" },
+    { text: "The traveller sees what he sees. The tourist sees what he has come to see.", author: "G.K. Chesterton" },
+    { text: "Art, like morality, consists of drawing the line somewhere.", author: "G.K. Chesterton" },
+    { text: "Courage is a strong desire to live taking the form of a readiness to die.", author: "G.K. Chesterton" },
+    { text: "The way to love anything is to realize that it may be lost.", author: "G.K. Chesterton" },
+    { text: "There are two ways to get enough: one is to continue to accumulate more and more. The other is to desire less.", author: "G.K. Chesterton" },
+    { text: "Education is simply the soul of a society as it passes from one generation to another.", author: "G.K. Chesterton" },
+    { text: "Angels can fly because they can take themselves lightly.", author: "G.K. Chesterton" },
+    { text: "The purpose of an open mind is to close it on something solid.", author: "G.K. Chesterton" },
+    { text: "A yawn is a silent shout.", author: "G.K. Chesterton" },
+  ]},
+  lewis: { name: "C.S. Lewis", quotes: [
+    { text: "Courage, dear heart.", author: "C.S. Lewis" },
+    { text: "Hardships often prepare ordinary people for an extraordinary destiny.", author: "C.S. Lewis" },
+    { text: "You are never too old to set another goal or to dream a new dream.", author: "C.S. Lewis" },
+    { text: "Friendship is born at the moment when one person says to another: 'What! You too?'", author: "C.S. Lewis" },
+    { text: "We meet no ordinary people in our lives.", author: "C.S. Lewis" },
+    { text: "The future is something which everyone reaches at the rate of sixty minutes an hour.", author: "C.S. Lewis" },
+    { text: "Humility is not thinking less of yourself, but thinking of yourself less.", author: "C.S. Lewis" },
+    { text: "To love is to be vulnerable.", author: "C.S. Lewis" },
+    { text: "There are far, far better things ahead than any we leave behind.", author: "C.S. Lewis" },
+    { text: "You can't go back and change the beginning, but you can start where you are and change the ending.", author: "C.S. Lewis" },
+    { text: "If I find in myself desires which nothing in this world can satisfy, the only logical explanation is that I was made for another world.", author: "C.S. Lewis" },
+    { text: "The safest road to hell is the gradual one—the gentle slope, soft underfoot, without sudden turnings.", author: "C.S. Lewis" },
+    { text: "It is not your business to succeed, but to do right.", author: "C.S. Lewis" },
+    { text: "Isn't it funny how day by day nothing changes, but when you look back, everything is different.", author: "C.S. Lewis" },
+    { text: "Love is not affectionate feeling, but a steady wish for the loved person's ultimate good.", author: "C.S. Lewis" },
+  ]},
+  pratchett: { name: "Terry Pratchett", quotes: [
+    { text: "It's still magic even if you know how it's done.", author: "Terry Pratchett" },
+    { text: "The presence of those seeking the truth is infinitely to be preferred to the presence of those who think they've found it.", author: "Terry Pratchett" },
+    { text: "Give a man a fire and he's warm for a day, but set fire to him and he's warm for the rest of his life.", author: "Terry Pratchett" },
+    { text: "In ancient times cats were worshipped as gods; they have not forgotten this.", author: "Terry Pratchett" },
+    { text: "Wisdom comes from experience. Experience is often a result of lack of wisdom.", author: "Terry Pratchett" },
+    { text: "The truth may be out there, but the lies are inside your head.", author: "Terry Pratchett" },
+    { text: "Real stupidity beats artificial intelligence every time.", author: "Terry Pratchett" },
+    { text: "If you trust in yourself and believe in your dreams and follow your star, you'll still get beaten by people who spent their time working hard and learning things.", author: "Terry Pratchett" },
+    { text: "Light thinks it travels faster than anything but it is wrong.", author: "Terry Pratchett" },
+    { text: "Evil begins when you begin to treat people as things.", author: "Terry Pratchett" },
+    { text: "Freedom is having the right to be wrong, not the right to do wrong.", author: "Terry Pratchett" },
+    { text: "Stories of imagination tend to upset those without one.", author: "Terry Pratchett" },
+    { text: "The world is made up of stories, not atoms.", author: "Terry Pratchett" },
+    { text: "Five exclamation marks, the sure sign of an insane mind.", author: "Terry Pratchett" },
+    { text: "The best you can do is the best you can do.", author: "Terry Pratchett" },
+  ]},
+  aurelius: { name: "Marcus Aurelius", quotes: [
+    { text: "You have power over your mind — not outside events. Realize this, and you will find strength.", author: "Marcus Aurelius" },
+    { text: "The happiness of your life depends upon the quality of your thoughts.", author: "Marcus Aurelius" },
+    { text: "Waste no more time arguing about what a good man should be. Be one.", author: "Marcus Aurelius" },
+    { text: "It is not death that a man should fear, but he should fear never beginning to live.", author: "Marcus Aurelius" },
+    { text: "The best revenge is not to be like your enemy.", author: "Marcus Aurelius" },
+    { text: "When you arise in the morning think of what a precious privilege it is to be alive.", author: "Marcus Aurelius" },
+    { text: "Everything we hear is an opinion, not a fact. Everything we see is a perspective, not the truth.", author: "Marcus Aurelius" },
+    { text: "Very little is needed to make a happy life; it is all within yourself, in your way of thinking.", author: "Marcus Aurelius" },
+    { text: "The object of life is not to be on the side of the majority, but to escape finding oneself in the ranks of the insane.", author: "Marcus Aurelius" },
+    { text: "Reject your sense of injury and the injury itself disappears.", author: "Marcus Aurelius" },
+    { text: "How much more grievous are the consequences of anger than the causes of it.", author: "Marcus Aurelius" },
+    { text: "Dwell on the beauty of life. Watch the stars, and see yourself running with them.", author: "Marcus Aurelius" },
+    { text: "The mind adapts and returns to its proper state, like the nose when flattened or raised by a hand.", author: "Marcus Aurelius" },
+    { text: "Accept the things to which fate binds you, and love the people with whom fate brings you together.", author: "Marcus Aurelius" },
+    { text: "Never esteem anything as of advantage to you that will make you break your word or lose your self-respect.", author: "Marcus Aurelius" },
+  ]},
+  suntzu: { name: "Sun Tzu", quotes: [
+    { text: "Every battle is won before it is ever fought.", author: "Sun Tzu" },
+    { text: "The supreme art of war is to subdue the enemy without fighting.", author: "Sun Tzu" },
+    { text: "Appear weak when you are strong, and strong when you are weak.", author: "Sun Tzu" },
+    { text: "Know thy enemy and know yourself; in a hundred battles you will never be in peril.", author: "Sun Tzu" },
+    { text: "Let your plans be dark and impenetrable as night, and when you move, fall like a thunderbolt.", author: "Sun Tzu" },
+    { text: "In the midst of chaos, there is also opportunity.", author: "Sun Tzu" },
+    { text: "Victorious warriors win first and then go to war, while defeated warriors go to war first and then seek to win.", author: "Sun Tzu" },
+    { text: "The greatest victory is that which requires no battle.", author: "Sun Tzu" },
+    { text: "Attack where he is unprepared, appear where you are not expected.", author: "Sun Tzu" },
+    { text: "Strategy without tactics is the slowest route to victory. Tactics without strategy is the noise before defeat.", author: "Sun Tzu" },
+    { text: "Opportunities multiply as they are seized.", author: "Sun Tzu" },
+    { text: "He who is prudent and lies in wait for an enemy who is not, will be victorious.", author: "Sun Tzu" },
+    { text: "The wise warrior avoids the battle.", author: "Sun Tzu" },
+    { text: "Move swift as the Wind, and closely-formed as the Wood. Attack like Fire, and be still as the Mountain.", author: "Sun Tzu" },
+    { text: "Water shapes its course according to the nature of the ground over which it flows.", author: "Sun Tzu" },
+  ]},
+  wilde: { name: "Oscar Wilde", quotes: [
+    { text: "Be yourself; everyone else is already taken.", author: "Oscar Wilde" },
+    { text: "To live is the rarest thing in the world. Most people just exist.", author: "Oscar Wilde" },
+    { text: "We are all in the gutter, but some of us are looking at the stars.", author: "Oscar Wilde" },
+    { text: "Experience is simply the name we give our mistakes.", author: "Oscar Wilde" },
+    { text: "I can resist everything except temptation.", author: "Oscar Wilde" },
+    { text: "The only way to get rid of a temptation is to yield to it.", author: "Oscar Wilde" },
+    { text: "A man can be happy with any woman, as long as he does not love her.", author: "Oscar Wilde" },
+    { text: "Always forgive your enemies; nothing annoys them so much.", author: "Oscar Wilde" },
+    { text: "I have the simplest tastes. I am always satisfied with the best.", author: "Oscar Wilde" },
+    { text: "I am not young enough to know everything.", author: "Oscar Wilde" },
+    { text: "The truth is rarely pure and never simple.", author: "Oscar Wilde" },
+    { text: "To define is to limit.", author: "Oscar Wilde" },
+    { text: "Women are meant to be loved, not to be understood.", author: "Oscar Wilde" },
+    { text: "Art is the only serious thing in the world. And the artist is the only person who is never serious.", author: "Oscar Wilde" },
+    { text: "Consistency is the last refuge of the unimaginative.", author: "Oscar Wilde" },
+  ]},
+  twain: { name: "Mark Twain", quotes: [
+    { text: "The secret of getting ahead is getting started.", author: "Mark Twain" },
+    { text: "Kindness is a language which the deaf can hear and the blind can see.", author: "Mark Twain" },
+    { text: "Whenever you find yourself on the side of the majority, it is time to pause and reflect.", author: "Mark Twain" },
+    { text: "The two most important days in your life are the day you are born and the day you find out why.", author: "Mark Twain" },
+    { text: "It is better to keep your mouth closed and let people think you are a fool than to open it and remove all doubt.", author: "Mark Twain" },
+    { text: "The truth must be told or the joke will die.", author: "Mark Twain" },
+    { text: "I have never let my schooling interfere with my education.", author: "Mark Twain" },
+    { text: "Buy land, they're not making it anymore.", author: "Mark Twain" },
+    { text: "In a good bookroom you feel in some mysterious way that you are absorbing the wisdom contained in all the books through your skin, without even opening them.", author: "Mark Twain" },
+    { text: "Don't go around saying the world owes you a living. The world owes you nothing. It was here first.", author: "Mark Twain" },
+    { text: "Twenty years from now you will be more disappointed by the things that you didn't do than by the ones you did do.", author: "Mark Twain" },
+    { text: "The man who does not read has no advantage over the man who cannot read.", author: "Mark Twain" },
+    { text: "Courage is resistance to fear, mastery of fear — not absence of fear.", author: "Mark Twain" },
+    { text: "Anger is an acid that can do more harm to the vessel in which it is stored than to anything on which it is poured.", author: "Mark Twain" },
+    { text: "A person who knows how to use money is a free man.", author: "Mark Twain" },
+  ]},
+  einstein: { name: "Albert Einstein", quotes: [
+    { text: "Imagination is more important than knowledge. Knowledge is limited. Imagination encircles the world.", author: "Albert Einstein" },
+    { text: "Life is like riding a bicycle. To keep your balance, you must keep moving.", author: "Albert Einstein" },
+    { text: "Strive not to be a success, but rather to be of value.", author: "Albert Einstein" },
+    { text: "The measure of intelligence is the ability to change.", author: "Albert Einstein" },
+    { text: "In the middle of difficulty lies opportunity.", author: "Albert Einstein" },
+    { text: "I think and think for months and years. Ninety-nine times, the conclusion is false. The hundredth time I am right.", author: "Albert Einstein" },
+    { text: "It is not that I'm so smart, it's just that I stay with problems longer.", author: "Albert Einstein" },
+    { text: "The true sign of intelligence is not knowledge but imagination.", author: "Albert Einstein" },
+    { text: "Weak people revenge. Strong people forgive. Intelligent people ignore.", author: "Albert Einstein" },
+    { text: "A person who never made a mistake never tried anything new.", author: "Albert Einstein" },
+    { text: "The world is a dangerous place to live; not because of the people who are evil, but because of the people who don't do anything about it.", author: "Albert Einstein" },
+    { text: "If you can't explain it simply, you don't understand it well enough.", author: "Albert Einstein" },
+    { text: "Never give up on what you really want to do. The person with big dreams is more powerful than one with all the facts.", author: "Albert Einstein" },
+    { text: "Logic will get you from A to B. Imagination will take you everywhere.", author: "Albert Einstein" },
+    { text: "Out of clutter, find simplicity.", author: "Albert Einstein" },
+  ]},
+  angelou: { name: "Maya Angelou", quotes: [
+    { text: "We delight in the beauty of the butterfly, but rarely admit the changes it has gone through to achieve that beauty.", author: "Maya Angelou" },
+    { text: "There is no greater agony than bearing an untold story inside you.", author: "Maya Angelou" },
+    { text: "I've learned that people will forget what you said, people will forget what you did, but people will never forget how you made them feel.", author: "Maya Angelou" },
+    { text: "You may not control all the events that happen to you, but you can decide not to be reduced by them.", author: "Maya Angelou" },
+    { text: "If you don't like something, change it. If you can't change it, change your attitude.", author: "Maya Angelou" },
+    { text: "My mission in life is not merely to survive, but to thrive.", author: "Maya Angelou" },
+    { text: "There is no heavy burden like an ungrateful heart.", author: "Maya Angelou" },
+    { text: "Try to be a rainbow in someone's cloud.", author: "Maya Angelou" },
+    { text: "We may encounter many defeats but we must not be defeated.", author: "Maya Angelou" },
+    { text: "I can be changed by what happens to me. But I refuse to be reduced by it.", author: "Maya Angelou" },
+    { text: "The ache for home lives in all of us, the safe place where we can go as we are and not be questioned.", author: "Maya Angelou" },
+    { text: "Nothing will work unless you do.", author: "Maya Angelou" },
+    { text: "I've learned that whenever I decide something with an open heart, I usually make the right decision.", author: "Maya Angelou" },
+    { text: "Determine your course of action, then stick to it no matter what.", author: "Maya Angelou" },
+    { text: "When someone shows you who they are, believe them the first time.", author: "Maya Angelou" },
+  ]},
+  churchill: { name: "Winston Churchill", quotes: [
+    { text: "Success is not final, failure is not fatal: it is the courage to continue that counts.", author: "Winston Churchill" },
+    { text: "If you're going through hell, keep going.", author: "Winston Churchill" },
+    { text: "We make a living by what we get, but we make a life by what we give.", author: "Winston Churchill" },
+    { text: "The pessimist sees difficulty in every opportunity. The optimist sees opportunity in every difficulty.", author: "Winston Churchill" },
+    { text: "You have enemies? Good. That means you've stood up for something, sometime in your life.", author: "Winston Churchill" },
+    { text: "History will be kind to me for I intend to write it.", author: "Winston Churchill" },
+    { text: "Kites rise highest against the wind, not with it.", author: "Winston Churchill" },
+    { text: "Never, never, never give up.", author: "Winston Churchill" },
+    { text: "To improve is to change; to be perfect is to change often.", author: "Winston Churchill" },
+    { text: "Attitude is a little thing that makes a big difference.", author: "Winston Churchill" },
+    { text: "The greatest lesson in life is to know that even right can be wrong and wrong can be right.", author: "Winston Churchill" },
+    { text: "Courage is what it takes to stand up and speak; courage is also what it takes to sit down and listen.", author: "Winston Churchill" },
+    { text: "You must put your head into the lion's mouth if the performance is to be a success.", author: "Winston Churchill" },
+    { text: "We are all worms, but I do believe I am a glow-worm.", author: "Winston Churchill" },
+    { text: "It is a mistake to look too far ahead. Only one link of the chain of destiny can be handled at a time.", author: "Winston Churchill" },
+  ]},
+};
+
+/** Flattened preset quotes for backward compatibility */
+const DAILY_QUOTES = Object.values(DAILY_QUOTE_PRESETS).flatMap(p => p.quotes);
 
 /** Create a TTL-backed cache map for filter results. Keyed by string, entries expire after `ttl` ms. */
 function createTtlCache(ttl) {
@@ -12627,7 +12683,6 @@ function renderOpportunityTagChips(mode) {
   const isQuickNote = mode === "quickNote";
   const edit = isQuickNote ? state.quickNote : state.dealEdit;
   const wrap = $(isQuickNote ? "#quick-note-tags" : "#deal-edit-tags");
-  const addSel = $(isQuickNote ? "#quick-note-tag-add" : "#deal-edit-tag-add");
   if (!wrap || !edit) return;
 
   wrap.innerHTML = "";
@@ -12638,12 +12693,20 @@ function renderOpportunityTagChips(mode) {
     const chip = document.createElement("span");
     chip.className = "deal-edit-tag";
     chip.dataset.tagTitle = title;
+    // Apply dynamic color from tag definition
+    const tagDef = (state.allTags || []).find(at => tagsEqual(at.title, title));
+    const color = tagDef?.color;
+    if (color) {
+      chip.style.background = color + "20";
+      chip.style.color = color;
+      chip.style.borderColor = color;
+    }
     chip.appendChild(document.createTextNode(title));
     const rm = document.createElement("button");
     rm.type = "button";
     rm.className = "deal-edit-tag-remove";
     rm.setAttribute("aria-label", `Remove tag ${title}`);
-    rm.textContent = "×";
+    rm.textContent = "\u00d7";
     rm.addEventListener("click", () => {
       edit.tags = edit.tags.filter((t) => !tagsEqual(t, title, catalog));
       renderOpportunityTagChips(mode);
@@ -12652,6 +12715,51 @@ function renderOpportunityTagChips(mode) {
     wrap.appendChild(chip);
   }
 
+  // Quick note: populate floating dropdown instead of <select>
+  if (isQuickNote) {
+    const dd = $("#quick-note-tag-dropdown");
+    if (dd) {
+      dd.innerHTML = "";
+      const usedLower = new Set([...current].map(t => t.toLowerCase()));
+      const available = (state.allTags || []).filter(tag => {
+        const t = normalizeTagTitle(tag.title ?? tag);
+        return t && !usedLower.has(t.toLowerCase());
+      });
+      if (!available.length) {
+        const empty = document.createElement("div");
+        empty.className = "template-dropdown-item";
+        empty.style.color = "var(--muted)";
+        empty.textContent = "No tags available";
+        dd.appendChild(empty);
+      } else {
+        for (const tag of available) {
+          const title = normalizeTagTitle(tag.title ?? tag);
+          const item = document.createElement("button");
+          item.type = "button";
+          item.className = "template-dropdown-item";
+          item.textContent = title;
+          if (tag.color) {
+            const swatch = document.createElement("span");
+            swatch.style.cssText = `display:inline-block;width:8px;height:8px;border-radius:50%;background:${tag.color};flex-shrink:0;margin-right:0.3rem;`;
+            item.prepend(swatch);
+          }
+          item.addEventListener("click", (e) => {
+            e.stopPropagation();
+            dd.classList.add("hidden");
+            if (!edit.tags.some(t => tagsEqual(t, title))) {
+              edit.tags.push(title);
+              renderOpportunityTagChips(mode);
+            }
+          });
+          dd.appendChild(item);
+        }
+      }
+    }
+    return;
+  }
+
+  // Deal edit: populate <select> (legacy)
+  const addSel = $("#deal-edit-tag-add");
   if (addSel) {
     const prev = addSel.value;
     addSel.innerHTML = '<option value="">Add tag…</option>';
@@ -13823,15 +13931,29 @@ function bindQuickNoteModal() {
     if (e.key === "Escape" && !modal.classList.contains("hidden")) closeQuickNoteModal();
   });
 
-  $("#quick-note-tag-add")?.addEventListener("change", (e) => {
-    const title = e.target.value;
-    if (!title || !state.quickNote) return;
-    if (!state.quickNote.tags.some((t) => tagsEqual(t, title))) {
-      state.quickNote.tags.push(title);
+  // Tag add button + dropdown (quick note)
+  const tagAddBtn = $("#quick-note-tag-add-btn");
+  const tagDd = $("#quick-note-tag-dropdown");
+  if (tagAddBtn && tagDd) {
+    tagAddBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
       renderQuickNoteTagChips();
-    }
-    e.target.value = "";
-  });
+      tagDd.classList.toggle("hidden");
+      if (!tagDd.classList.contains("hidden")) {
+        const rect = tagAddBtn.getBoundingClientRect();
+        tagDd.style.position = "fixed";
+        tagDd.style.top = (rect.bottom + 4) + "px";
+        tagDd.style.left = rect.left + "px";
+        const close = (ev) => {
+          if (!tagDd.contains(ev.target) && ev.target !== tagAddBtn) {
+            tagDd.classList.add("hidden");
+            document.removeEventListener("click", close);
+          }
+        };
+        setTimeout(() => document.addEventListener("click", close), 0);
+      }
+    });
+  }
 
   bindQuickNoteOpportunityPicker();
 }
@@ -28600,6 +28722,7 @@ function openAdminConsoleModal() {
     bindAdminHistoryCats();
     bindAdminTaskLabels();
     bindAlternateSmtp();
+    bindDailyQuoteConfig();
     bindAdminAutomation();
     // Sync buttons — real implementation
     function getSyncPayload() {
@@ -29199,6 +29322,7 @@ async function populateAdminGeneral() {
   } catch (e) {
     // Config may not exist yet, that's fine
   }
+  populateDailyQuoteConfig();
 }
 
 function bindAlternateSmtp() {
@@ -29253,6 +29377,238 @@ function bindAlternateSmtp() {
         if (status) status.innerHTML = '<span style="color:var(--accent);">Test email sent successfully</span>';
       } catch (err) {
         showToast(err.message || "Failed to send test email", true);
+        if (status) status.innerHTML = `<span style="color:var(--danger);">${escapeHtml(err.message)}</span>`;
+      }
+    });
+  }
+}
+
+async function populateDailyQuoteConfig() {
+  try {
+    const config = await api("/api/v2/admin/daily-quote");
+    const enabled = $("#dq-enabled");
+    const source = $("#dq-source");
+    if (enabled) enabled.checked = config.enabled !== false;
+    if (source) source.value = config.source || "preset";
+    if (config.source) showDqPanel(config.source);
+    if (config.active_presets) {
+      document.querySelectorAll("#dq-preset-checkboxes input[type=checkbox]").forEach(cb => {
+        cb.checked = config.active_presets.includes(cb.dataset.key);
+      });
+    }
+    if (config.custom_quotes) renderDqCustomList(config.custom_quotes);
+    if (config.feed_url) { const el = $("#dq-feed-url"); if (el) el.value = config.feed_url; }
+    if (config.bible_version) { const el = $("#dq-bible-version"); if (el) el.value = config.bible_version; }
+    if (config.imported_quotes) renderDqImportedList(config.imported_quotes);
+  } catch {}
+}
+
+function renderDqPresetCheckboxes() {
+  const container = $("#dq-preset-checkboxes");
+  if (!container) return;
+  container.innerHTML = "";
+  for (const [key, preset] of Object.entries(DAILY_QUOTE_PRESETS)) {
+    const label = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.dataset.key = key;
+    cb.checked = true;
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(" " + preset.name));
+    container.appendChild(label);
+  }
+}
+
+function renderDqCustomList(quotes) {
+  const container = $("#dq-custom-list");
+  if (!container) return;
+  container.innerHTML = "";
+  quotes.forEach((q, i) => {
+    const row = document.createElement("div");
+    row.className = "dq-quote-item";
+    row.innerHTML = `<span class="dq-quote-item-text">"${escapeHtml(q.text)}"</span><span class="dq-quote-item-author">— ${escapeHtml(q.author)}</span><button class="dq-quote-item-del" data-idx="${i}" title="Remove">&times;</button>`;
+    container.appendChild(row);
+  });
+  container.querySelectorAll(".dq-quote-item-del").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const idx = parseInt(btn.dataset.idx);
+      const panel = $("#dq-panel-custom");
+      const src = $("#dq-source")?.value;
+      if (src === "custom") {
+        const cfg = { custom_quotes: [] };
+        populateDqCustomFromList(cfg);
+        cfg.custom_quotes.splice(idx, 1);
+        renderDqCustomList(cfg.custom_quotes);
+      } else if (src === "imported") {
+        const cfg = { imported_quotes: [] };
+        populateDqImportedFromList(cfg);
+        cfg.imported_quotes.splice(idx, 1);
+        renderDqImportedList(cfg.imported_quotes);
+      }
+    });
+  });
+}
+
+function renderDqImportedList(quotes) {
+  const container = $("#dq-imported-list");
+  if (!container) return;
+  container.innerHTML = "";
+  quotes.forEach((q, i) => {
+    const row = document.createElement("div");
+    row.className = "dq-quote-item";
+    row.innerHTML = `<span class="dq-quote-item-text">"${escapeHtml(q.text)}"</span><span class="dq-quote-item-author">— ${escapeHtml(q.author)}</span><button class="dq-quote-item-del" data-idx="${i}" title="Remove">&times;</button>`;
+    container.appendChild(row);
+  });
+  container.querySelectorAll(".dq-quote-item-del").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const idx = parseInt(btn.dataset.idx);
+      const cfg = { imported_quotes: [] };
+      populateDqImportedFromList(cfg);
+      cfg.imported_quotes.splice(idx, 1);
+      renderDqImportedList(cfg.imported_quotes);
+    });
+  });
+}
+
+function populateDqCustomFromList(cfg) {
+  cfg.custom_quotes = [];
+  const list = $("#dq-custom-list");
+  if (!list) return;
+  list.querySelectorAll(".dq-quote-item").forEach(row => {
+    const text = row.querySelector(".dq-quote-item-text")?.textContent?.replace(/^"|"$/g, "") || "";
+    const author = row.querySelector(".dq-quote-item-author")?.textContent?.replace(/^— /, "") || "";
+    if (text) cfg.custom_quotes.push({ text, author });
+  });
+}
+
+function populateDqImportedFromList(cfg) {
+  cfg.imported_quotes = [];
+  const list = $("#dq-imported-list");
+  if (!list) return;
+  list.querySelectorAll(".dq-quote-item").forEach(row => {
+    const text = row.querySelector(".dq-quote-item-text")?.textContent?.replace(/^"|"$/g, "") || "";
+    const author = row.querySelector(".dq-quote-item-author")?.textContent?.replace(/^— /, "") || "";
+    if (text) cfg.imported_quotes.push({ text, author });
+  });
+}
+
+function showDqPanel(source) {
+  document.querySelectorAll(".dq-panel").forEach(p => p.style.display = "none");
+  const panel = $(`#dq-panel-${source}`);
+  if (panel) panel.style.display = "";
+}
+
+function bindDailyQuoteConfig() {
+  renderDqPresetCheckboxes();
+  const sourceSelect = $("#dq-source");
+  if (sourceSelect) {
+    sourceSelect.addEventListener("change", () => showDqPanel(sourceSelect.value));
+  }
+  const addBtn = $("#dq-custom-add");
+  if (addBtn) {
+    addBtn.addEventListener("click", () => {
+      const text = $("#dq-custom-text")?.value.trim();
+      const author = $("#dq-custom-author")?.value.trim() || "Unknown";
+      if (!text) return;
+      const list = $("#dq-custom-list");
+      const quotes = [];
+      list.querySelectorAll(".dq-quote-item").forEach(row => {
+        quotes.push({
+          text: row.querySelector(".dq-quote-item-text")?.textContent?.replace(/^"|"$/g, "") || "",
+          author: row.querySelector(".dq-quote-item-author")?.textContent?.replace(/^— /, "") || "",
+        });
+      });
+      quotes.push({ text, author });
+      renderDqCustomList(quotes);
+      $("#dq-custom-text").value = "";
+      $("#dq-custom-author").value = "";
+    });
+  }
+  const importBtn = $("#dq-import-btn");
+  if (importBtn) {
+    importBtn.addEventListener("click", () => {
+      const raw = $("#dq-import-text")?.value.trim();
+      const status = $("#dq-import-status");
+      if (!raw) { if (status) status.textContent = "Paste quotes first"; return; }
+      let parsed = [];
+      try {
+        parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) throw new Error("Expected array");
+      } catch {
+        const lines = raw.split("\n").filter(l => l.trim());
+        parsed = lines.map(line => {
+          const parts = line.split(",").map(s => s.trim().replace(/^"|"$/g, ""));
+          return { text: parts[0] || "", author: parts[1] || "Unknown" };
+        }).filter(q => q.text);
+      }
+      if (!parsed.length) { if (status) status.textContent = "No valid quotes found"; return; }
+      const existing = [];
+      $("#dq-imported-list")?.querySelectorAll(".dq-quote-item").forEach(row => {
+        existing.push({
+          text: row.querySelector(".dq-quote-item-text")?.textContent?.replace(/^"|"$/g, "") || "",
+          author: row.querySelector(".dq-quote-item-author")?.textContent?.replace(/^— /, "") || "",
+        });
+      });
+      const merged = [...existing, ...parsed];
+      renderDqImportedList(merged);
+      if (status) status.textContent = `Imported ${parsed.length} quote${parsed.length > 1 ? "s" : ""}`;
+      $("#dq-import-text").value = "";
+    });
+  }
+  const rssPreviewBtn = $("#dq-rss-preview");
+  if (rssPreviewBtn) {
+    rssPreviewBtn.addEventListener("click", async () => {
+      const box = $("#dq-rss-preview-box");
+      const url = $("#dq-feed-url")?.value.trim();
+      if (!url) { if (box) box.textContent = "Enter a feed URL first"; return; }
+      if (box) box.textContent = "Fetching preview...";
+      try {
+        const q = await api("/api/v2/daily-quote/live");
+        if (box) box.textContent = `"${q.text}" — ${q.author}`;
+      } catch {
+        if (box) box.textContent = "Failed to fetch from feed. Check the URL.";
+      }
+    });
+  }
+  const saveBtn = $("#dq-save");
+  if (saveBtn) {
+    saveBtn.addEventListener("click", async () => {
+      const status = $("#dq-status");
+      const src = $("#dq-source")?.value || "preset";
+      const payload = {
+        enabled: $("#dq-enabled")?.checked ?? true,
+        source: src,
+        active_presets: [],
+        custom_quotes: [],
+        imported_quotes: [],
+        feed_url: "",
+        bible_version: "KJV",
+      };
+      if (src === "preset") {
+        document.querySelectorAll("#dq-preset-checkboxes input[type=checkbox]:checked").forEach(cb => {
+          payload.active_presets.push(cb.dataset.key);
+        });
+      } else if (src === "custom") {
+        populateDqCustomFromList(payload);
+      } else if (src === "imported") {
+        populateDqImportedFromList(payload);
+      } else if (src === "rss") {
+        payload.feed_url = $("#dq-feed-url")?.value.trim() || "";
+      } else if (src === "bible") {
+        payload.bible_version = $("#dq-bible-version")?.value || "KJV";
+      }
+      try {
+        await api("/api/v2/admin/daily-quote", { method: "POST", body: JSON.stringify(payload) });
+        dailyQuoteConfig = payload;
+        rebuildDailyQuotePool();
+        if (src === "api" || src === "rss" || src === "bible") {
+          await fetchLiveQuote();
+        }
+        renderDailyFocus();
+        showToast("Daily quote configuration saved");
+        if (status) status.innerHTML = '<span style="color:var(--accent);">Saved</span>';
+      } catch (err) {
+        showToast(err.message || "Failed to save", true);
         if (status) status.innerHTML = `<span style="color:var(--danger);">${escapeHtml(err.message)}</span>`;
       }
     });
@@ -36317,7 +36673,7 @@ function openTaskPreviewModal(task, { isNew = false } = {}) {
       if (grid && Array.isArray(taskLabels)) {
         const currentLabels = (task.labels || "").split(/\s+/).filter(Boolean);
         for (const lbl of taskLabels) {
-          const lblText = lbl.label || lbl.name || lbl;
+          const lblText = lbl.title || lbl.label || lbl.name || String(lbl);
           const id = `lbl-${String(lbl.id || lblText).replace(/\s+/g, "-")}`;
           const wrap = document.createElement("label");
           wrap.className = "task-label-check";
@@ -36332,6 +36688,11 @@ function openTaskPreviewModal(task, { isNew = false } = {}) {
             if (hidden) hidden.value = checked.join(" ");
           });
           wrap.appendChild(cb);
+          if (lbl.color) {
+            const dot = document.createElement("span");
+            dot.style.cssText = `width:8px;height:8px;border-radius:50%;background:${escapeHtml(lbl.color)};flex-shrink:0;`;
+            wrap.appendChild(dot);
+          }
           wrap.appendChild(document.createTextNode(" " + lblText));
           grid.appendChild(wrap);
         }
@@ -36775,13 +37136,6 @@ function createTaskRow(task) {
   const chips = document.createElement("div");
   chips.className = "task-row-chips";
   chips.innerHTML = dueChipHtml(task) + labelChipsHtml(task);
-  if (task.category) {
-    const catChip = document.createElement("span");
-    catChip.className = "task-chip task-chip-label";
-    catChip.style.borderColor = task.category.color || "var(--border)";
-    catChip.textContent = task.category.title;
-    chips.appendChild(catChip);
-  }
   row.appendChild(chips);
 
   if (task.opportunityId != null) {
@@ -37531,6 +37885,7 @@ function showApp() {
     app.style.opacity = "1";
   }
   renderDailyFocus();
+  loadDailyQuoteConfig().then(() => renderDailyFocus());
   noteDashboardActivity();
   startPanelTileAutoRefresh();
   // Load mail dashboard read IDs from localStorage for session survival
@@ -37559,29 +37914,85 @@ function showLogin() {
   }
 }
 
+let dailyQuoteConfig = null;
+let dailyQuotePool = DAILY_QUOTES;
+
+async function loadDailyQuoteConfig() {
+  try {
+    dailyQuoteConfig = await api("/api/v2/admin/daily-quote");
+    rebuildDailyQuotePool();
+  } catch {
+    dailyQuoteConfig = { enabled: true, source: "preset", active_presets: Object.keys(DAILY_QUOTE_PRESETS) };
+    dailyQuotePool = DAILY_QUOTES;
+  }
+}
+
+function rebuildDailyQuotePool() {
+  if (!dailyQuoteConfig || !dailyQuoteConfig.enabled) { dailyQuotePool = []; return; }
+  const src = dailyQuoteConfig.source || "preset";
+  if (src === "preset") {
+    const keys = dailyQuoteConfig.active_presets?.length ? dailyQuoteConfig.active_presets : Object.keys(DAILY_QUOTE_PRESETS);
+    dailyQuotePool = keys.flatMap(k => DAILY_QUOTE_PRESETS[k]?.quotes || []);
+    if (!dailyQuotePool.length) dailyQuotePool = DAILY_QUOTES;
+  } else if (src === "custom") {
+    dailyQuotePool = dailyQuoteConfig.custom_quotes?.length ? dailyQuoteConfig.custom_quotes : [{ text: "Add custom quotes in the admin console.", author: "Sietch CRM" }];
+  } else if (src === "imported") {
+    dailyQuotePool = dailyQuoteConfig.imported_quotes?.length ? dailyQuoteConfig.imported_quotes : [{ text: "Import quotes in the admin console.", author: "Sietch CRM" }];
+  } else {
+    dailyQuotePool = null;
+  }
+}
+
 function getDailyQuote() {
+  const src = dailyQuoteConfig?.source || "preset";
+  if (dailyQuoteConfig && !dailyQuoteConfig.enabled) return null;
+  if (src === "api" || src === "rss" || src === "bible") {
+    return dailyQuoteConfig?._liveQuote || null;
+  }
+  const pool = dailyQuotePool || DAILY_QUOTES;
+  if (!pool.length) return null;
   const day = Math.floor(Date.now() / 86400000);
   try {
     const saved = localStorage.getItem(DAILY_FOCUS_RANDOM_KEY);
     if (saved) {
       const { day: savedDay, index } = JSON.parse(saved);
-      if (savedDay === day) return DAILY_QUOTES[index % DAILY_QUOTES.length];
+      if (savedDay === day) return pool[index % pool.length];
     }
   } catch {}
-  return DAILY_QUOTES[day % DAILY_QUOTES.length];
+  return pool[day % pool.length];
 }
 
 function refreshDailyQuote() {
+  const src = dailyQuoteConfig?.source || "preset";
+  if (src === "api" || src === "rss" || src === "bible") {
+    fetchLiveQuote().then(() => renderDailyFocus());
+    return;
+  }
+  const pool = dailyQuotePool || DAILY_QUOTES;
+  if (!pool.length) return;
   const day = Math.floor(Date.now() / 86400000);
-  const index = Math.floor(Math.random() * DAILY_QUOTES.length);
+  const index = Math.floor(Math.random() * pool.length);
   try { localStorage.setItem(DAILY_FOCUS_RANDOM_KEY, JSON.stringify({ day, index })); } catch {}
   renderDailyFocus();
+}
+
+async function fetchLiveQuote() {
+  try {
+    const q = await api("/api/v2/daily-quote/live");
+    if (dailyQuoteConfig) dailyQuoteConfig._liveQuote = q;
+  } catch {}
 }
 
 function renderDailyFocus() {
   const container = $("#daily-focus");
   if (!container) return;
+  if (dailyQuoteConfig && !dailyQuoteConfig.enabled) {
+    container.style.display = "none";
+    return;
+  }
+  container.style.display = "";
   const q = getDailyQuote();
+  if (!q) { container.style.display = "none"; return; }
   container.innerHTML = "";
   const quote = document.createElement("span");
   quote.className = "daily-focus-quote";
@@ -38659,7 +39070,7 @@ document.addEventListener("click", function (e) {
   if (!btn) return;
   const toolbar = btn.closest(".note-format-toolbar");
   if (!toolbar) return;
-  const editor = toolbar.parentElement && toolbar.parentElement.querySelector(".note-editor");
+  const editor = toolbar.parentElement && (toolbar.parentElement.querySelector(".note-editor") || toolbar.parentElement.querySelector(".phtml-note-editor"));
   if (!editor) return;
   e.preventDefault();
   editor.focus();
@@ -38681,7 +39092,7 @@ document.addEventListener("click", function (e) {
   if (!btn) return;
   const toolbar = btn.closest(".note-format-toolbar");
   if (!toolbar) return;
-  const editor = toolbar.parentElement && toolbar.parentElement.querySelector(".note-editor");
+  const editor = toolbar.parentElement && (toolbar.parentElement.querySelector(".note-editor") || toolbar.parentElement.querySelector(".phtml-note-editor"));
   if (!editor) return;
   e.stopPropagation();
   _toggleHighlighterDropdown(btn, editor);
@@ -38693,7 +39104,7 @@ document.addEventListener("click", function (e) {
   if (!btn) return;
   const toolbar = btn.closest(".note-format-toolbar");
   if (!toolbar) return;
-  const editor = toolbar.parentElement && toolbar.parentElement.querySelector(".note-editor");
+  const editor = toolbar.parentElement && (toolbar.parentElement.querySelector(".note-editor") || toolbar.parentElement.querySelector(".phtml-note-editor"));
   if (!editor) return;
   e.stopPropagation();
   _showPreviewEmojiPicker(btn, editor);
@@ -38705,7 +39116,7 @@ document.addEventListener("click", function (e) {
   if (!btn) return;
   const toolbar = btn.closest(".note-format-toolbar");
   if (!toolbar) return;
-  const editor = toolbar.parentElement && toolbar.parentElement.querySelector(".note-editor");
+  const editor = toolbar.parentElement && (toolbar.parentElement.querySelector(".note-editor") || toolbar.parentElement.querySelector(".phtml-note-editor"));
   if (!editor) return;
   e.stopPropagation();
   _showPreviewLinkInput(btn, editor);
@@ -38717,7 +39128,7 @@ document.addEventListener("click", function (e) {
   if (!btn) return;
   const toolbar = btn.closest(".note-format-toolbar");
   if (!toolbar) return;
-  const editor = toolbar.parentElement && toolbar.parentElement.querySelector(".note-editor");
+  const editor = toolbar.parentElement && (toolbar.parentElement.querySelector(".note-editor") || toolbar.parentElement.querySelector(".phtml-note-editor"));
   if (!editor) return;
   e.stopPropagation();
   _toggleTextColorDropdown(btn, editor);
@@ -38733,47 +39144,47 @@ document.addEventListener("click", function (e) {
   // Close any existing dropdown and move buttons back
   const existing = document.querySelector(".note-format-overflow-dropdown.open");
   if (existing) {
+    const prevToolbar = existing._ownerToolbar;
     existing.classList.remove("open");
-    const tb = document.querySelector(".preview-format-toolbar");
-    if (tb) {
-      const anchor = tb.querySelector(".note-format-overflow-btn");
-      existing.querySelectorAll("[data-overflow]").forEach(el => tb.insertBefore(el, anchor));
+    if (prevToolbar) {
+      const anchor = prevToolbar.querySelector(".note-format-overflow-btn");
+      existing.querySelectorAll("[data-overflow]").forEach(el => prevToolbar.insertBefore(el, anchor));
     }
+    existing.remove();
     return;
   }
   // Create dropdown if not yet created
-  let dd = document.querySelector(".note-format-overflow-dropdown");
-  if (!dd) {
-    dd = document.createElement("div");
-    dd.className = "note-format-overflow-dropdown";
-  }
-  // Move dropdown into the toolbar so it's in the correct positioning context
-  toolbar.appendChild(dd);
+  let dd = document.createElement("div");
+  dd.className = "note-format-overflow-dropdown";
   // Move overflow buttons into dropdown
-  dd.innerHTML = "";
   toolbar.querySelectorAll("[data-overflow]").forEach(el => {
     dd.appendChild(el);
   });
+  // Append to body so CSS .note-format-toolbar [data-overflow] rules don't hide the items
+  document.body.appendChild(dd);
+  dd._ownerToolbar = toolbar;
   // Show dropdown
   dd.classList.add("open");
-  // Position below and to the left of the ··· button
-  dd.style.position = "absolute";
-  dd.style.top = (btn.offsetTop + btn.offsetHeight + 4) + "px";
+  // Position fixed below the ··· button
+  dd.style.position = "fixed";
+  const btnRect = btn.getBoundingClientRect();
+  dd.style.top = (btnRect.bottom + 4) + "px";
+  dd.style.right = (window.innerWidth - btnRect.right) + "px";
   dd.style.left = "auto";
-  dd.style.right = "0";
   // Move buttons back on any click inside dropdown
-  dd.onclick = function() {
+  dd.addEventListener("click", function() {
     setTimeout(() => {
       dd.classList.remove("open");
-      const toolbar = document.querySelector(".preview-format-toolbar");
-      if (toolbar) {
-        const anchor = toolbar.querySelector(".note-format-overflow-btn");
+      const ownerToolbar = dd._ownerToolbar;
+      if (ownerToolbar) {
+        const anchor = ownerToolbar.querySelector(".note-format-overflow-btn");
         dd.querySelectorAll("[data-overflow]").forEach(el => {
-          toolbar.insertBefore(el, anchor);
+          ownerToolbar.insertBefore(el, anchor);
         });
       }
+      dd.remove();
     }, 50);
-  };
+  });
 });
 
 // Close overflow dropdown on outside click and move buttons back
@@ -38783,13 +39194,14 @@ document.addEventListener("click", function (e) {
     if (dd) {
       dd.classList.remove("open");
       // Move buttons back to their original toolbar
-      const toolbar = document.querySelector(".preview-format-toolbar");
-      if (toolbar) {
-        const lastBtn = toolbar.querySelector(".note-format-overflow-btn");
+      const ownerToolbar = dd._ownerToolbar;
+      if (ownerToolbar) {
+        const lastBtn = ownerToolbar.querySelector(".note-format-overflow-btn");
         dd.querySelectorAll("[data-overflow]").forEach(el => {
-          toolbar.insertBefore(el, lastBtn);
+          ownerToolbar.insertBefore(el, lastBtn);
         });
       }
+      dd.remove();
     }
   }
 });
@@ -38801,7 +39213,7 @@ document.addEventListener("click", function (e) {
   e.stopPropagation();
   const toolbar = btn.closest(".note-format-toolbar");
   if (!toolbar) return;
-  const editor = toolbar.parentElement?.querySelector(".note-editor");
+  const editor = toolbar.parentElement?.querySelector(".note-editor") || toolbar.parentElement?.querySelector(".phtml-note-editor");
   if (!editor) return;
   // Create a temporary file input
   const fileInput = document.createElement("input");

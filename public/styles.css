@@ -3059,6 +3059,10 @@ body {
   margin-bottom: 0.85rem;
 }
 
+#quick-note-form .field {
+  margin-bottom: 0.5rem;
+}
+
 .modal-form .field label {
   display: block;
   font-size: 0.7rem;
@@ -3299,6 +3303,14 @@ body {
 
 .modal-card-deal-edit {
   max-width: 28rem;
+  padding: 0.75rem 1rem;
+  resize: both;
+  overflow: hidden;
+  min-width: 400px;
+  max-width: 96vw;
+  min-height: 550px;
+  height: min(700px, 85vh);
+  max-height: 92vh;
 }
 
 .modal-card-deal-edit.modal-card-form {
@@ -3308,21 +3320,19 @@ body {
 }
 
 .modal-card-deal-edit .modal-form {
-  flex: 1;
-  overflow-y: auto;
-  min-height: 0;
+  flex: none;
+  overflow-y: visible;
 }
 
 .modal-card-deal-edit .modal-actions {
   flex-shrink: 0;
   background: var(--surface);
-  padding-top: 0.5rem;
+  padding-top: 0.4rem;
   border-top: 1px solid var(--border);
-  margin-top: 0.5rem;
+  margin-top: 0.3rem;
 }
 
 .modal-card-deal-edit .note-editor {
-  max-height: 6rem;
   resize: none;
 }
 
@@ -3401,12 +3411,17 @@ body {
   display: flex;
   flex-direction: column;
   overflow-y: hidden;
+  padding: 0.6rem 0.85rem;
+  resize: both;
+  min-width: 400px;
+  max-width: 96vw;
+  min-height: 400px;
 }
 .create-opp-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.8rem 1rem 0.4rem;
+  padding: 0.3rem 0.5rem 0.2rem;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -3414,13 +3429,14 @@ body {
   margin: 0;
   padding: 0;
   white-space: nowrap;
+  font-size: 1.1rem;
 }
 
 .modal-card-create-opp .modal-form {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  padding-bottom: 1rem;
+  padding-bottom: 0.5rem;
 }
 
 .create-opp-legend {
@@ -7413,8 +7429,12 @@ body {
   display: inline-flex;
 }
 .opp-preview-tag-add-wrap .template-dropdown {
-  left: 0;
+  position: fixed;
+  top: auto;
+  left: auto;
   right: auto;
+  bottom: auto;
+  z-index: 99999;
 }
 .opp-preview-tag-add {
   font: inherit;
@@ -7938,7 +7958,23 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 0.35rem;
-  min-height: 1.5rem;
+  min-height: 0;
+  width: fit-content;
+}
+
+.deal-edit-tags-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.deal-edit-tags-row .opp-preview-tag-add-wrap {
+  flex-shrink: 0;
+}
+
+#quick-note-modal .field:has(.deal-edit-tags-row) {
+  margin-bottom: 0.3rem;
 }
 
 .deal-edit-tag {
@@ -7987,6 +8023,38 @@ body {
   font-size: 0.8rem;
   font-weight: 600;
   padding: 0 0.25rem;
+}
+
+/* Quick note modal: note editor fills available space */
+#quick-note-modal .deal-edit-note-fieldset {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 250px;
+  margin: 0;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  padding: 0.5rem 0 0;
+  overflow: hidden;
+}
+.qn-note-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin-bottom: 0;
+}
+.qn-editor-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.qn-editor-wrap .note-editor {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
 }
 
 .field-optional {
@@ -14870,6 +14938,76 @@ select.form-control {
 #admin-tab-infra .infra-status-indicator.ok   { color: #4ade80; }
 #admin-tab-infra .infra-status-indicator.fail { color: #f87171; }
 
+/* ── Admin: Daily Quote config ──────────────────────────────────────────────── */
+.dq-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.25rem 0.75rem;
+}
+.dq-preset-grid label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  color: #d0d0d0;
+  cursor: pointer;
+  padding: 0.15rem 0;
+}
+.dq-preset-grid input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: auto;
+}
+.dq-quote-list {
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 0.3rem;
+  background: #111;
+}
+.dq-quote-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 0.25rem 0.3rem;
+  border-bottom: 1px solid #222;
+  font-size: 0.8rem;
+  color: #ccc;
+}
+.dq-quote-item:last-child { border-bottom: none; }
+.dq-quote-item-text {
+  flex: 1;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dq-quote-item-author {
+  color: #888;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.dq-quote-item-del {
+  background: none;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0 0.2rem;
+  flex-shrink: 0;
+}
+.dq-quote-item-del:hover { color: var(--danger, #f87171); }
+.dq-import-textarea {
+  width: 100%;
+  font-family: monospace;
+  font-size: 0.78rem;
+  resize: vertical;
+  background: #111;
+  border: 1px solid #333;
+  color: #d0d0d0;
+}
+.dq-panel { margin-top: 0.5rem; }
+
 /* ── Phase 2D: SortableJS Drag Classes ─────────────────────────────────────── */
 .dashboard-tile.sortable-ghost {
   opacity: 0.35;
@@ -16589,6 +16727,103 @@ select.form-control {
   accent-color: var(--accent);
 }
 
+/* ── Task preview/edit modal sizing ────────────────────────────────────── */
+#task-preview-modal .modal-card {
+  width: min(520px, 96vw);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  resize: both;
+  overflow: hidden;
+}
+#task-preview-modal .modal-body {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  flex: 1;
+  min-height: 0;
+}
+#tasks-list-modal .modal-card {
+  width: min(520px, 96vw);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  resize: both;
+  overflow: hidden;
+}
+.tasks-list-body {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Task modals: full-screen on mobile */
+@media (max-width: 600px) {
+  #task-preview-modal,
+  #tasks-list-modal {
+    padding: 0;
+  }
+  #task-preview-modal .modal-card,
+  #tasks-list-modal .modal-card {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    max-height: 100dvh !important;
+    border-radius: 0;
+    resize: none;
+    min-width: 0;
+  }
+  .task-edit-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Create Project modal mobile: full-screen ─────────────────────────── */
+@media (max-width: 600px) {
+  #create-opportunity-modal {
+    padding: 0;
+  }
+  #create-opportunity-modal .modal-card {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    max-height: 100dvh !important;
+    border-radius: 0;
+    resize: none;
+    min-width: 0;
+  }
+  .field-row-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Project Note (quick note) modal mobile: full-screen ──────────────── */
+@media (max-width: 600px) {
+  #quick-note-modal {
+    padding: 0;
+  }
+  #quick-note-modal .modal-card {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    max-height: 100dvh !important;
+    border-radius: 0;
+    resize: none;
+    min-width: 0;
+  }
+  #quick-note-modal .deal-edit-note-fieldset {
+    flex: 1;
+    min-height: 0;
+    border-top: 1px solid var(--border);
+  }
+  #quick-note-modal .note-editor {
+    min-height: 100px;
+  }
+}
+
 /* ── Task edit user picker ─────────────────────────────────────────────── */
 .task-edit-user-select {
   width: 100%;
@@ -16713,15 +16948,14 @@ select.form-control {
   flex-shrink: 0;
 }
 
-/* Note toolbar overflow menu (mobile) */
+/* Note toolbar overflow menu */
 .note-format-overflow-btn {
-  display: none !important;
   font-size: 1rem;
   font-weight: 700;
   letter-spacing: 2px;
 }
 .note-format-overflow-dropdown {
-  position: absolute;
+  position: fixed;
   z-index: 99999;
   display: none;
   flex-wrap: wrap;
@@ -16748,10 +16982,8 @@ select.form-control {
   padding: 0.3rem;
   flex-shrink: 0;
 }
-@media (max-width: 600px) {
-  .preview-format-toolbar [data-overflow] { display: none !important; }
-  .preview-format-toolbar .note-format-overflow-btn { display: inline-flex !important; }
-}
+/* Overflow items hidden globally — only visible inside the overflow dropdown */
+.note-format-toolbar [data-overflow] { display: none !important; }
 
 /* Follow-up Due Date + Stage inline with title */
 .opp-preview-due-date-head,

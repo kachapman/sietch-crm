@@ -1711,20 +1711,23 @@
         </div>
         <div class="field">
           <label>Tags</label>
-          <div id="quick-note-tags" class="deal-edit-tags" aria-live="polite"></div>
-          <div class="deal-edit-tag-add">
-            <select id="quick-note-tag-add" aria-label="Add tag">
-              <option value="">Add tag…</option>
-            </select>
+          <div class="deal-edit-tags-row">
+            <div id="quick-note-tags" class="deal-edit-tags" aria-live="polite"></div>
+            <span class="opp-preview-tag-add-wrap" style="position:relative;">
+              <button type="button" id="quick-note-tag-add-btn" class="btn btn-ghost tile-btn tile-btn-icon btn-tag-add" title="Add tag" aria-label="Add tag"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M6.5 7.5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"/><path d="M21.002 13c0 -.617 -.235 -1.233 -.706 -1.704l-7.71 -7.71c-.375 -.375 -.884 -.586 -1.414 -.586h-5.172c-1.657 0 -3 1.343 -3 3v5.172c0 .53 .211 1.039 .586 1.414l7.71 7.71c.471 .47 1.087 .706 1.704 .706"/><path d="M16 19h6"/><path d="M19 16v6"/></svg></button>
+              <div id="quick-note-tag-dropdown" class="template-dropdown hidden" style="min-width:160px;"></div>
+            </span>
           </div>
         </div>
+        <p id="quick-note-error" class="modal-error hidden" role="alert"></p>
+      </form>
         <fieldset class="deal-edit-note-fieldset">
           <legend class="deal-edit-note-legend">Event note <span class="field-required">(required)</span></legend>
           <div id="quick-note-note-category-field" class="field hidden">
             <label for="quick-note-note-category">Note type</label>
             <select id="quick-note-note-category" name="noteCategoryId"></select>
           </div>
-           <div class="field">
+           <div class="field qn-note-field">
              <label for="quick-note-note-body">Note</label>
              <div class="note-format-toolbar" aria-label="Formatting">
                <button type="button" class="note-format-btn" data-cmd="bold" title="Bold"><b>B</b></button>
@@ -1738,11 +1741,22 @@
                <button type="button" class="note-format-btn note-format-hilite-btn" title="Highlight color">🖍</button>
                <button type="button" class="note-format-btn note-format-emoji-btn" title="Emoji">😀</button>
                <button type="button" class="note-format-btn note-format-link-btn" title="Insert link">🔗</button>
-               <span class="note-format-sep"></span>
-               <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear formatting">⌫</button>
-               <button type="button" class="note-backdate-btn" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>
+               <button type="button" class="note-format-btn note-format-color-btn" title="Text color">A<span class="note-format-color-bar"></span></button>
+               <button type="button" class="note-format-btn note-format-overflow-btn" title="More formatting">···</button>
+               <button type="button" class="note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="H2" title="Heading 2"><b>H2</b></button>
+               <button type="button" class="note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="H3" title="Heading 3"><b>H3</b></button>
+               <button type="button" class="note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="BLOCKQUOTE" title="Quote">❝</button>
+               <button type="button" class="note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="PRE" title="Code block">&lt;/&gt;</button>
+               <button type="button" class="note-format-btn" data-overflow="1" data-cmd="insertHorizontalRule" title="Horizontal rule">―</button>
+               <span class="note-format-sep" data-overflow="1"></span>
+               <button type="button" class="note-format-btn" data-overflow="1" data-cmd="indent" title="Indent">→</button>
+               <button type="button" class="note-format-btn" data-overflow="1" data-cmd="outdent" title="Outdent">←</button>
+               <span class="note-format-sep" data-overflow="1"></span>
+                <button type="button" class="note-format-btn" data-overflow="1" data-cmd="removeFormat" title="Clear formatting">&#x232B;</button>
+               <button type="button" class="note-format-btn note-format-img-upload-btn" data-overflow="1" title="Upload image">📷</button>
+               <button type="button" class="note-backdate-btn" data-overflow="1" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>
              </div>
-                   <div class="note-editor-wrap">
+                   <div class="note-editor-wrap qn-editor-wrap">
                       <div id="quick-note-note-body" class="note-editor" contenteditable="true" data-placeholder="Enter activity note…"></div>
                        <div id="quick-note-mention-dropdown" class="mention-dropdown hidden"></div>
                     </div>
@@ -1753,8 +1767,6 @@
               </div>
             </div>
         </fieldset>
-        <p id="quick-note-error" class="modal-error hidden" role="alert"></p>
-      </form>
       <div class="modal-actions">
         <button type="button" id="quick-note-cancel" class="btn btn-secondary">Cancel</button>
         <button type="submit" id="quick-note-submit" class="btn btn-primary" form="quick-note-form">Save note</button>
@@ -2073,6 +2085,89 @@
               <button type="button" id="alt-smtp-test" class="btn btn-secondary btn-sm">Send Test Email</button>
             </div>
             <div id="alt-smtp-status" style="margin-top:0.5rem; font-size:0.8rem;"></div>
+
+            <!-- ── Daily Quote ── -->
+            <div style="margin-top:1.5rem; border-top:1px solid var(--border); padding-top:1rem;">
+              <h4 style="margin:0 0 0.5rem; font-size:0.85rem;">Daily Quote</h4>
+              <p style="font-size:0.8rem; color:var(--muted); margin-bottom:0.75rem;">
+                Show an inspirational quote in the header bar. Choose from preset author collections, enter your own quotes, or pull from external sources.
+              </p>
+              <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem;">
+                <label class="toggle-row" style="margin:0;">
+                  <input type="checkbox" id="dq-enabled" checked /> Show daily quote
+                </label>
+              </div>
+              <div id="dq-settings" style="margin-top:0.5rem;">
+                <div style="margin-bottom:0.6rem;">
+                  <label style="font-size:0.82rem; color:var(--muted); display:block; margin-bottom:0.25rem;">Source</label>
+                  <select id="dq-source" class="form-control" style="max-width:300px;">
+                    <option value="preset">Preset Author Collections</option>
+                    <option value="custom">Custom Quotes</option>
+                    <option value="api">Random from API (zenquotes.io)</option>
+                    <option value="rss">RSS / Atom Feed</option>
+                    <option value="bible">Bible / Proverbs</option>
+                    <option value="imported">Imported Quotes</option>
+                  </select>
+                </div>
+
+                <!-- Preset authors panel -->
+                <div id="dq-panel-preset" class="dq-panel">
+                  <label style="font-size:0.82rem; color:var(--muted); display:block; margin-bottom:0.3rem;">Select authors to include:</label>
+                  <div id="dq-preset-checkboxes" class="dq-preset-grid"></div>
+                </div>
+
+                <!-- Custom quotes panel -->
+                <div id="dq-panel-custom" class="dq-panel" style="display:none;">
+                  <label style="font-size:0.82rem; color:var(--muted); display:block; margin-bottom:0.3rem;">Your quotes:</label>
+                  <div id="dq-custom-list" class="dq-quote-list"></div>
+                  <div style="display:flex; gap:0.3rem; margin-top:0.4rem;">
+                    <input type="text" id="dq-custom-text" class="form-control" placeholder="Quote text" style="flex:1;" />
+                    <input type="text" id="dq-custom-author" class="form-control" placeholder="Author" style="width:150px;" />
+                    <button type="button" id="dq-custom-add" class="btn btn-secondary btn-sm">Add</button>
+                  </div>
+                </div>
+
+                <!-- RSS feed panel -->
+                <div id="dq-panel-rss" class="dq-panel" style="display:none;">
+                  <label style="font-size:0.82rem; color:var(--muted); display:block; margin-bottom:0.3rem;">Feed URL:</label>
+                  <div style="display:flex; gap:0.3rem; align-items:center;">
+                    <input type="url" id="dq-feed-url" class="form-control" placeholder="https://example.com/feed.xml" style="flex:1;" />
+                    <button type="button" id="dq-rss-preview" class="btn btn-secondary btn-sm">Preview</button>
+                  </div>
+                  <div id="dq-rss-preview-box" style="margin-top:0.4rem; font-size:0.82rem; color:var(--muted); font-style:italic;"></div>
+                </div>
+
+                <!-- Bible panel -->
+                <div id="dq-panel-bible" class="dq-panel" style="display:none;">
+                  <label style="font-size:0.82rem; color:var(--muted); display:block; margin-bottom:0.3rem;">Translation:</label>
+                  <select id="dq-bible-version" class="form-control" style="max-width:200px;">
+                    <option value="KJV">King James (KJV)</option>
+                    <option value="NIV">New International (NIV)</option>
+                    <option value="ESV">English Standard (ESV)</option>
+                    <option value="NLT">New Living Translation (NLT)</option>
+                  </select>
+                </div>
+
+                <!-- Imported quotes panel -->
+                <div id="dq-panel-imported" class="dq-panel" style="display:none;">
+                  <label style="font-size:0.82rem; color:var(--muted); display:block; margin-bottom:0.3rem;">
+                    Paste quotes as JSON or CSV (one per line):
+                  </label>
+                  <textarea id="dq-import-text" class="form-control dq-import-textarea" rows="5"
+                    placeholder='JSON: [{"text":"...","author":"..."}]  or  CSV: "quote text","author"'></textarea>
+                  <div style="display:flex; gap:0.3rem; margin-top:0.3rem;">
+                    <button type="button" id="dq-import-btn" class="btn btn-secondary btn-sm">Import</button>
+                    <span id="dq-import-status" style="font-size:0.8rem; align-self:center;"></span>
+                  </div>
+                  <div id="dq-imported-list" class="dq-quote-list" style="margin-top:0.4rem;"></div>
+                </div>
+
+                <div style="margin-top:0.75rem; display:flex; gap:0.3rem; align-items:center;">
+                  <button type="button" id="dq-save" class="btn btn-primary btn-sm">Save</button>
+                  <div id="dq-status" style="margin-left:0.5rem; font-size:0.8rem;"></div>
+                </div>
+              </div>
+            </div>
           </div>
           <div id="admin-tab-sync" class="admin-tab-content hidden">
             <p class="modal-message">Import data from OnlyOffice, export Sietch data for backup or migration, and configure scheduled backups with remote destinations.</p>
