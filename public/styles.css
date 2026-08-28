@@ -17300,17 +17300,19 @@ select.form-control {
 .photo-markup-text-input {
   position: absolute;
   z-index: 10;
-  background: transparent;
-  border: 2px dashed var(--accent);
-  border-radius: 4px;
-  color: #fff;
+  background: rgba(255,255,255,0.92);
+  border: none;
+  border-radius: 999px;
+  color: #000;
   font-size: 18px;
   font-family: sans-serif;
+  font-weight: bold;
   text-align: center;
-  padding: 4px 8px;
+  padding: 4px 12px;
   outline: none;
-  min-width: 60px;
+  min-width: 40px;
   pointer-events: auto;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.15);
 }
 .photo-markup-loading {
   position: absolute;

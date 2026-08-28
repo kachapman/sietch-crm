@@ -36267,6 +36267,7 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
     render();
     updateToolbar();
   }
+  container._markupRefresh = refresh;
 }
 
 function renderOpportunityPreviewTasksTab(container, oppId, opp, openTasks, closedTasks) {
@@ -40543,7 +40544,8 @@ function _markupShowTextInput(pos, canvas, wrap) {
   input.style.left = (pos.x * scale + offX - 30) + "px";
   input.style.top = (pos.y * scale + offY - 12) + "px";
   input.style.color = s.color;
-  input.style.fontSize = Math.max(s.size * 2.5, 14) + "px";
+  const canvasFontSize = Math.max(s.size * 2.5, 18);
+  input.style.fontSize = (canvasFontSize * scale) + "px";
   input.placeholder = "Type text...";
   wrap.appendChild(input);
   requestAnimationFrame(() => input.focus());
@@ -40665,11 +40667,7 @@ function _markupRefreshPhotosGrid(oppId) {
   if (!photosContainer) return;
   const oppPreviewModal = $("#opp-preview-modal");
   if (oppPreviewModal && oppPreviewModal.classList.contains("hidden")) return;
-  (async () => {
-    try {
-      const data = await api(`/api/v2/projects/${oppId}/photos`);
-      const photos = data.photos || data || [];
-      renderOpportunityPreviewPhotosTab(photosContainer, oppId, photos);
-    } catch (_) {}
-  })();
+  if (typeof photosContainer._markupRefresh === "function") {
+    photosContainer._markupRefresh();
+  }
 }
