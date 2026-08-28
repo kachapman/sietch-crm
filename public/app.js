@@ -9861,16 +9861,24 @@ function populateHistoryCategorySelect(selectEl, fieldWrapEl) {
     return;
   }
 
-  if (fieldWrapEl) fieldWrapEl.classList.toggle("hidden", cats.length <= 1);
+  // Filter out system-only types not suitable for manual note creation
+  const excludedIds = new Set([9, 11, 12, 18, 23, 24, 25]);
+  const filtered = cats.filter(c => !excludedIds.has(c.id));
 
-  for (const cat of cats) {
+  if (filtered.length <= 1) {
+    if (fieldWrapEl) fieldWrapEl.classList.add("hidden");
+    return;
+  }
+  if (fieldWrapEl) fieldWrapEl.classList.remove("hidden");
+
+  for (const cat of filtered) {
     const opt = document.createElement("option");
     opt.value = String(cat.id ?? cat.ID ?? "");
     opt.textContent = cat.title || cat.Title || opt.value;
     selectEl.appendChild(opt);
   }
 
-  const preferred = cats.findIndex((c) => /note|event|comment/i.test(String(c.title || c.Title || "")));
+  const preferred = filtered.findIndex((c) => /note|event|comment/i.test(String(c.title || c.Title || "")));
   selectEl.selectedIndex = preferred >= 0 ? preferred : 0;
 }
 
@@ -13658,6 +13666,8 @@ async function openQuickNoteModal() {
   // Reset backdate value
   const qnBackdateBtn = $("#quick-note-modal .note-backdate-btn");
   if (qnBackdateBtn) delete qnBackdateBtn.dataset.backdateValue;
+  const qnBackdateDisplay = $("#quick-note-modal .backdate-display");
+  if (qnBackdateDisplay) { qnBackdateDisplay.textContent = ""; qnBackdateDisplay.classList.add("hidden"); }
 
   await loadHistoryCategories();
   populateQuickNoteCategorySelect();
@@ -27616,7 +27626,7 @@ function activateSearchPopupTab(tabId) {
   const previewContainers = $("#search-popup-preview-containers");
   if (previewContainers) {
     const isPreviewTab = !["projects", "contacts", "search"].includes(tabId);
-    previewContainers.style.display = isPreviewTab || (tabId === "contacts" && searchPopupPreviewTabs.size > 0) ? "" : "none";
+    previewContainers.style.display = isPreviewTab ? "" : "none";
   }
 
   // Load data for projects tab
@@ -35070,7 +35080,6 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       '<span class="note-format-sep" data-overflow="1"></span>' +
       '<button type="button" class="note-format-btn" data-overflow="1" data-cmd="removeFormat" title="Clear formatting">⌫</button>' +
       '<button type="button" class="note-format-btn note-format-img-upload-btn" data-overflow="1" title="Upload image">📷</button>' +
-      '<button type="button" class="note-backdate-btn" data-overflow="1" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>' +
       '</div>' +
       '<div class="note-editor-wrap">' +
         '<div class="note-editor preview-note-editor" contenteditable="true" data-placeholder="Write a note\u2026"></div>' +
@@ -35079,6 +35088,8 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       '</div>' +
       '<div class="preview-note-actions">' +
         '<select class="preview-note-type-select"></select>' +
+        '<button type="button" class="btn btn-ghost btn-sm preview-note-backdate-btn" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>' +
+        '<span class="backdate-display hidden"></span>' +
         '<button type="button" class="btn btn-ghost btn-sm preview-note-cancel">Cancel</button>' +
         '<button type="button" class="btn btn-primary btn-sm preview-note-submit">Post</button>' +
       '</div>';
@@ -35112,8 +35123,10 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       editorWrap.classList.remove("active");
       const ed = editorWrap.querySelector(".note-editor");
       if (ed) ed.innerHTML = "";
-      const bdbtn = editorWrap.querySelector(".note-backdate-btn");
+      const bdbtn = editorWrap.querySelector(".preview-note-backdate-btn");
       if (bdbtn) delete bdbtn.dataset.backdateValue;
+      const bddisplay = editorWrap.querySelector(".backdate-display");
+      if (bddisplay) { bddisplay.textContent = ""; bddisplay.classList.add("hidden"); }
       _previewDirty = false;
     });
 
@@ -35196,7 +35209,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
           return;
         }
         const notifyUserList = extractMentionsFromContent(ed).map(String);
-        const bdbtn = editorWrap.querySelector(".note-backdate-btn");
+      const bdbtn = editorWrap.querySelector(".preview-note-backdate-btn");
         const created = bdbtn?.dataset?.backdateValue || null;
         submitBtn.disabled = true;
         const origBtnText = submitBtn.textContent;
@@ -35251,6 +35264,8 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
           ed.innerHTML = "";
           editorWrap.classList.remove("active");
           if (bdbtn) delete bdbtn.dataset.backdateValue;
+          const bddisplay = editorWrap.querySelector(".backdate-display");
+          if (bddisplay) { bddisplay.textContent = ""; bddisplay.classList.add("hidden"); }
           showToast("Note added");
           _previewDirty = false;
           addEventLogEntry("note", opp.id ?? opp.ID, opp.title || opp.Title || "", "Note added", true);
@@ -35309,7 +35324,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
   docsContent.dataset.tabContent = "documents";
   docsContent.style.display = "none";
 
-  const previewDocsState = { selected: new Set(), documents: documents || [] };
+  const previewDocsState = { selected: new Set(), documents: documents || [], sort: "recent" };
 
   // Toolbar: upload + select-all + Actions dropdown
   const docsToolbar = document.createElement("div");
@@ -35376,6 +35391,53 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
   docsToolbar.appendChild(uploadBtn);
   docsToolbar.appendChild(selectAllLabel);
   docsToolbar.appendChild(actionsSelect);
+
+  // Sort button + dropdown (matches documents modal)
+  const sortWrap = document.createElement("div");
+  sortWrap.className = "documents-sort-wrap";
+  const sortBtnEl = document.createElement("button");
+  sortBtnEl.type = "button";
+  sortBtnEl.className = "btn btn-secondary btn-icon-only btn-sm";
+  sortBtnEl.title = "Sort";
+  sortBtnEl.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l9 0"/><path d="M4 12l7 0"/><path d="M4 18l7 0"/><path d="M15 15l3 3l3 -3"/><path d="M18 6l0 12"/></svg>';
+  const sortMenu = document.createElement("div");
+  sortMenu.className = "documents-sort-menu hidden";
+  const sortOptions = [
+    { sort: "recent", label: "Most recent" },
+    { sort: "oldest", label: "Oldest" },
+    { sort: "largest", label: "Largest" },
+    { sort: "smallest", label: "Smallest" },
+    { sort: "name-asc", label: "Name A-Z" },
+    { sort: "name-desc", label: "Name Z-A" },
+  ];
+  for (const opt of sortOptions) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "documents-sort-option";
+    btn.dataset.sort = opt.sort;
+    btn.textContent = opt.label;
+    btn.addEventListener("click", () => {
+      previewDocsState.sort = opt.sort;
+      renderPreviewDocsList();
+      updatePreviewSortMenu();
+      sortMenu.classList.add("hidden");
+    });
+    sortMenu.appendChild(btn);
+  }
+  function updatePreviewSortMenu() {
+    sortMenu.querySelectorAll(".documents-sort-option").forEach(b => {
+      b.classList.toggle("selected", b.dataset.sort === previewDocsState.sort);
+    });
+  }
+  updatePreviewSortMenu();
+  sortBtnEl.addEventListener("click", (e) => { e.stopPropagation(); sortMenu.classList.toggle("hidden"); });
+  document.addEventListener("click", (e) => {
+    if (!sortMenu.classList.contains("hidden") && !sortWrap.contains(e.target)) sortMenu.classList.add("hidden");
+  });
+  sortWrap.appendChild(sortBtnEl);
+  sortWrap.appendChild(sortMenu);
+  docsToolbar.appendChild(sortWrap);
+
   docsToolbar.appendChild(docsCount);
   docsContent.appendChild(docsToolbar);
 
@@ -35446,7 +35508,19 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
   function renderPreviewDocsList() {
     const list = docsContent.querySelector(".opp-preview-docs-list");
     if (!list) return;
-    const { documents: ds, selected } = previewDocsState;
+    const { selected } = previewDocsState;
+    // Sort documents based on current sort mode
+    const ds = [...previewDocsState.documents].sort((a, b) => {
+      switch (previewDocsState.sort) {
+        case "recent": return new Date(b.uploadedAt || 0) - new Date(a.uploadedAt || 0);
+        case "oldest": return new Date(a.uploadedAt || 0) - new Date(b.uploadedAt || 0);
+        case "largest": return (b.fileSize || 0) - (a.fileSize || 0);
+        case "smallest": return (a.fileSize || 0) - (b.fileSize || 0);
+        case "name-asc": return String(a.title || "").localeCompare(String(b.title || ""), undefined, { sensitivity: "base" });
+        case "name-desc": return String(b.title || "").localeCompare(String(a.title || ""), undefined, { sensitivity: "base" });
+        default: return 0;
+      }
+    });
     list.innerHTML = ds.length ? "" : `<p class="opp-preview-empty">No documents in this project. Use Upload to add files.</p>`;
     if (!ds.length) return;
     ds.forEach(d => {
@@ -35736,6 +35810,58 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
   toolbar.appendChild(uploadBtn);
   toolbar.appendChild(selectAllLabel);
   toolbar.appendChild(actionsSelect);
+
+  let state = { photos: [...photos], totalSize: 0, quota: 157286400, sort: "recent" };
+  let selected = new Set();
+  let destMode = null;
+  let destProjectId = null;
+
+  // Sort button + dropdown (matches documents modal)
+  const sortWrap = document.createElement("div");
+  sortWrap.className = "documents-sort-wrap";
+  const sortBtnEl = document.createElement("button");
+  sortBtnEl.type = "button";
+  sortBtnEl.className = "btn btn-secondary btn-icon-only btn-sm";
+  sortBtnEl.title = "Sort";
+  sortBtnEl.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l9 0"/><path d="M4 12l7 0"/><path d="M4 18l7 0"/><path d="M15 15l3 3l3 -3"/><path d="M18 6l0 12"/></svg>';
+  const sortMenu = document.createElement("div");
+  sortMenu.className = "documents-sort-menu hidden";
+  const photoSortOptions = [
+    { sort: "recent", label: "Most recent" },
+    { sort: "oldest", label: "Oldest" },
+    { sort: "largest", label: "Largest" },
+    { sort: "smallest", label: "Smallest" },
+    { sort: "name-asc", label: "Name A-Z" },
+    { sort: "name-desc", label: "Name Z-A" },
+  ];
+  for (const opt of photoSortOptions) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "documents-sort-option";
+    btn.dataset.sort = opt.sort;
+    btn.textContent = opt.label;
+    btn.addEventListener("click", () => {
+      state.sort = opt.sort;
+      render();
+      updatePhotoSortMenu();
+      sortMenu.classList.add("hidden");
+    });
+    sortMenu.appendChild(btn);
+  }
+  function updatePhotoSortMenu() {
+    sortMenu.querySelectorAll(".documents-sort-option").forEach(b => {
+      b.classList.toggle("selected", b.dataset.sort === state.sort);
+    });
+  }
+  updatePhotoSortMenu();
+  sortBtnEl.addEventListener("click", (e) => { e.stopPropagation(); sortMenu.classList.toggle("hidden"); });
+  document.addEventListener("click", (e) => {
+    if (!sortMenu.classList.contains("hidden") && !sortWrap.contains(e.target)) sortMenu.classList.add("hidden");
+  });
+  sortWrap.appendChild(sortBtnEl);
+  sortWrap.appendChild(sortMenu);
+  toolbar.appendChild(sortWrap);
+
   toolbar.appendChild(quotaEl);
   container.appendChild(toolbar);
 
@@ -35777,11 +35903,6 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
   grid.className = "opp-photos-grid";
   container.appendChild(grid);
 
-  let state = { photos: [...photos], totalSize: 0, quota: 157286400 };
-  let selected = new Set();
-  let destMode = null; // 'move' | 'copy'
-  let destProjectId = null;
-
   function updateToolbar() {
     const has = selected.size > 0;
     actionsSelect.disabled = !has;
@@ -35814,7 +35935,19 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
       grid.appendChild(empty);
       return;
     }
-    state.photos.forEach((photo) => {
+    // Sort photos based on current sort mode
+    const sortedPhotos = [...state.photos].sort((a, b) => {
+      switch (state.sort) {
+        case "recent": return new Date(b.uploadedAt || b.createdAt || 0) - new Date(a.uploadedAt || a.createdAt || 0);
+        case "oldest": return new Date(a.uploadedAt || a.createdAt || 0) - new Date(b.uploadedAt || b.createdAt || 0);
+        case "largest": return (b.fileSize || b.size || 0) - (a.fileSize || a.size || 0);
+        case "smallest": return (a.fileSize || a.size || 0) - (b.fileSize || b.size || 0);
+        case "name-asc": return String(a.filename || "").localeCompare(String(b.filename || ""), undefined, { sensitivity: "base" });
+        case "name-desc": return String(b.filename || "").localeCompare(String(a.filename || ""), undefined, { sensitivity: "base" });
+        default: return 0;
+      }
+    });
+    sortedPhotos.forEach((photo) => {
       const photoId = photo.id ?? photo.ID;
       const thumbUrl = photo.thumbnailUrl || `/api/v2/photos/${photoId}?thumbnail=1`;
       const filename = photo.filename || photo.Filename || "Photo";
@@ -39068,7 +39201,11 @@ init();
 document.addEventListener("click", function (e) {
   const btn = e.target.closest(".note-format-btn");
   if (!btn) return;
-  const toolbar = btn.closest(".note-format-toolbar");
+  let toolbar = btn.closest(".note-format-toolbar");
+  if (!toolbar) {
+    const dd = btn.closest(".note-format-overflow-dropdown");
+    if (dd) toolbar = dd._ownerToolbar;
+  }
   if (!toolbar) return;
   const editor = toolbar.parentElement && (toolbar.parentElement.querySelector(".note-editor") || toolbar.parentElement.querySelector(".phtml-note-editor"));
   if (!editor) return;
@@ -39255,12 +39392,14 @@ document.addEventListener("click", function (e) {
 // over the button, and opens the native picker. Works on mobile where
 // input.click() on a visually-hidden element does not open the picker.
 document.addEventListener("click", function (e) {
-  const btn = e.target.closest(".note-backdate-btn");
+  const btn = e.target.closest(".note-backdate-btn, .preview-note-backdate-btn");
   if (!btn) return;
   e.stopPropagation();
   e.preventDefault();
   const temp = document.createElement("input");
   temp.type = "date";
+  // Pre-set to previously selected date so picker opens on that date
+  if (btn.dataset.backdateValue) temp.value = btn.dataset.backdateValue;
   const r = btn.getBoundingClientRect();
   Object.assign(temp.style, {
     position: "fixed",
@@ -39284,10 +39423,23 @@ document.addEventListener("click", function (e) {
   });
   temp.addEventListener("change", () => {
     btn.dataset.backdateValue = temp.value || "";
+    // Update the display label next to the button
+    const label = btn.parentElement?.querySelector(".backdate-display");
+    if (label) {
+      if (temp.value) {
+        const parts = temp.value.split("-");
+        label.textContent = `${parts[1]}/${parts[2]}/${parts[0]}`;
+        label.classList.remove("hidden");
+      } else {
+        label.textContent = "";
+        label.classList.add("hidden");
+      }
+    }
     cleanup();
   });
-  temp.addEventListener("blur", () => { setTimeout(cleanup, 200); });
-  setTimeout(cleanup, 5000);
+  // Safety cleanup only — do NOT clean on blur (opening the native date picker
+  // fires blur which would remove the temp input before the user can pick a date)
+  setTimeout(cleanup, 15000);
 });
 
 // ════════════════════════════════════════════════════════════════════════════

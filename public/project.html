@@ -133,7 +133,8 @@
     .phtml-note-editor { min-height: 80px; max-height: 300px; overflow-y: auto; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-top: none; border-radius: 0 0 6px 6px; background: var(--surface-2, #1f2430); color: var(--text); font-family: var(--font); font-size: 0.9rem; outline: none; line-height: 1.5; }
     .phtml-note-editor:focus { border-color: var(--accent); }
     .phtml-note-editor:empty::before { content: attr(data-placeholder); color: var(--muted); pointer-events: none; }
-    .phtml-note-actions { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+    .phtml-note-actions { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
+    .phtml-note-cancel { margin-left: auto; }
     .phtml-note-submit { background: var(--accent); color: var(--accent-text, #fff); border: none; padding: 0.4rem 0.8rem; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 0.85rem; }
     .phtml-note-submit:hover { opacity: 0.9; }
     .phtml-note-submit:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -214,8 +215,10 @@
           <div class="phtml-mention-dropdown" id="phtml-mention-dropdown"></div>
         </div>
         <div class="phtml-note-actions">
-          <button type="button" id="phtml-note-submit" class="phtml-note-submit">Add note</button>
+          <button type="button" class="btn btn-ghost btn-sm note-backdate-btn" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>
+          <span class="backdate-display hidden"></span>
           <button type="button" id="phtml-note-cancel" class="phtml-note-cancel">Cancel</button>
+          <button type="button" id="phtml-note-submit" class="phtml-note-submit">Add note</button>
         </div>
       </div>
 
@@ -828,6 +831,10 @@
     document.getElementById("phtml-note-cancel").addEventListener("click", function() {
       document.getElementById("phtml-note-editor-wrap").classList.remove("active");
       document.getElementById("phtml-note-editor").innerHTML = "";
+      var bdbtn = document.querySelector(".phtml-note-actions .note-backdate-btn");
+      if (bdbtn) delete bdbtn.dataset.backdateValue;
+      var bddisplay = document.querySelector(".phtml-note-actions .backdate-display");
+      if (bddisplay) { bddisplay.textContent = ""; bddisplay.classList.add("hidden"); }
     });
 
     // Format button handler — passes data-val for formatBlock commands
@@ -1066,6 +1073,42 @@
       document.getElementById("phtml-mention-dropdown")
     );
 
+    // Backdate picker
+    document.addEventListener("click", function(e) {
+      var btn = e.target.closest(".note-backdate-btn");
+      if (!btn) return;
+      e.stopPropagation();
+      e.preventDefault();
+      var temp = document.createElement("input");
+      temp.type = "date";
+      if (btn.dataset.backdateValue) temp.value = btn.dataset.backdateValue;
+      var r = btn.getBoundingClientRect();
+      temp.style.cssText = "position:fixed;left:"+r.left+"px;top:"+r.top+"px;width:"+r.width+"px;height:"+r.height+"px;opacity:0;z-index:99999;pointer-events:auto;";
+      document.body.appendChild(temp);
+      var cleanup = function() { if (temp.parentNode) temp.remove(); };
+      var openPicker = function() {
+        try { if (temp.showPicker) { temp.showPicker(); return; } } catch(_) {}
+        temp.click();
+      };
+      requestAnimationFrame(function() { openPicker(); setTimeout(openPicker, 50); });
+      temp.addEventListener("change", function() {
+        btn.dataset.backdateValue = temp.value || "";
+        var label = btn.parentElement ? btn.parentElement.querySelector(".backdate-display") : null;
+        if (label) {
+          if (temp.value) {
+            var parts = temp.value.split("-");
+            label.textContent = parts[1] + "/" + parts[2] + "/" + parts[0];
+            label.classList.remove("hidden");
+          } else {
+            label.textContent = "";
+            label.classList.add("hidden");
+          }
+        }
+        cleanup();
+      });
+      setTimeout(cleanup, 15000);
+    });
+
     document.getElementById("phtml-note-submit").addEventListener("click", async function() {
       var ed = document.getElementById("phtml-note-editor");
       var content = (ed.innerHTML || "").trim();
@@ -1073,12 +1116,22 @@
         showToast("Please write a note first.", true);
         return;
       }
+      // Add note-inline-img class to images so they get lightbox in preview modals
+      content = content.replace(/<img(?![^>]*class="note-inline-img")([^>]*)>/gi, '<img class="note-inline-img" $1>');
       var submitBtn = document.getElementById("phtml-note-submit");
       submitBtn.disabled = true;
       try {
         var notifyUserList = extractMentions(ed).map(String);
+        var bdbtn = document.querySelector(".phtml-note-actions .note-backdate-btn");
+        var backdateVal = bdbtn ? bdbtn.dataset.backdateValue || "" : "";
+        var createdIso = "";
+        if (backdateVal) {
+          var parts = backdateVal.split("-");
+          createdIso = new Date(backdateVal + "T12:00:00").toISOString();
+        }
         var body = { content: content, categoryId: "10" };
         if (notifyUserList.length) body.notifyUserList = notifyUserList;
+        if (createdIso) body.created = createdIso;
         var resp = await fetch("/api/v2/projects/" + projectId + "/history", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1092,6 +1145,9 @@
         }
         ed.innerHTML = "";
         document.getElementById("phtml-note-editor-wrap").classList.remove("active");
+        if (bdbtn) delete bdbtn.dataset.backdateValue;
+        var bddisplay = document.querySelector(".phtml-note-actions .backdate-display");
+        if (bddisplay) { bddisplay.textContent = ""; bddisplay.classList.add("hidden"); }
         showToast("Note added");
 
         var histResp = await fetch("/api/v2/projects/" + projectId + "/history?startIndex=0&count=50", { credentials: "same-origin" });

@@ -4502,13 +4502,25 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
         content = str(payload.get("content") or "").strip()
-        category_id = payload.get("categoryId") or 1
+        if not content:
+            _json_response(self, 400, {"error": "Note content is required"})
+            return
+        try:
+            category_id = int(payload.get("categoryId") or 1)
+        except (TypeError, ValueError):
+            category_id = 1
         backdated = str(payload.get("created") or "").strip() or None
-        event_id = db.insert_returning(
-            """INSERT INTO history_events (opportunity_id, category_id, content, created_by, backdated_created_at)
-               VALUES (%s, %s, %s, %s, %s) RETURNING id""",
-            (opp_id, category_id, content, user["id"], backdated),
-        )
+        try:
+            event_id = db.insert_returning(
+                """INSERT INTO history_events (opportunity_id, category_id, content, created_by, backdated_created_at)
+                   VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+                (opp_id, category_id, content, user["id"], backdated),
+            )
+        except Exception as e:
+            print(f"[ERROR] Failed to insert history event for opp {opp_id}: {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            _json_response(self, 500, {"error": f"Failed to save note: {e}"})
+            return
         # Insert notify users
         notify_list = payload.get("notifyUserList") or []
         for uid in notify_list:

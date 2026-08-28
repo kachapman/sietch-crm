@@ -1725,7 +1725,11 @@
           <legend class="deal-edit-note-legend">Event note <span class="field-required">(required)</span></legend>
           <div id="quick-note-note-category-field" class="field hidden">
             <label for="quick-note-note-category">Note type</label>
-            <select id="quick-note-note-category" name="noteCategoryId"></select>
+            <div class="qn-note-type-row">
+              <select id="quick-note-note-category" name="noteCategoryId"></select>
+              <button type="button" class="btn btn-ghost btn-sm note-backdate-btn" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>
+              <span class="backdate-display hidden"></span>
+            </div>
           </div>
            <div class="field qn-note-field">
              <label for="quick-note-note-body">Note</label>
@@ -1754,7 +1758,6 @@
                <span class="note-format-sep" data-overflow="1"></span>
                 <button type="button" class="note-format-btn" data-overflow="1" data-cmd="removeFormat" title="Clear formatting">&#x232B;</button>
                <button type="button" class="note-format-btn note-format-img-upload-btn" data-overflow="1" title="Upload image">📷</button>
-               <button type="button" class="note-backdate-btn" data-overflow="1" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>
              </div>
                    <div class="note-editor-wrap qn-editor-wrap">
                       <div id="quick-note-note-body" class="note-editor" contenteditable="true" data-placeholder="Enter activity note…"></div>

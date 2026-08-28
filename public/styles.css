@@ -15512,12 +15512,33 @@ select.form-control {
 .preview-note-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 0.4rem;
   margin-top: 0.5rem;
 }
+.preview-note-backdate-btn {
+  flex-shrink: 0;
+}
+.backdate-display {
+  font-size: 0.78rem;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.backdate-display.hidden {
+  display: none;
+}
+.preview-note-cancel {
+  margin-left: auto;
+}
+.qn-note-type-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.qn-note-type-row select {
+  width: auto;
+  max-width: 200px;
+}
 .preview-note-type-select {
-  margin-right: auto;
   padding: 0.3rem 0.5rem;
   border: 1px solid var(--border);
   border-radius: var(--radius, 6px);
@@ -16950,6 +16971,7 @@ select.form-control {
 
 /* Note toolbar overflow menu */
 .note-format-overflow-btn {
+  display: none;
   font-size: 1rem;
   font-weight: 700;
   letter-spacing: 2px;
@@ -16982,8 +17004,11 @@ select.form-control {
   padding: 0.3rem;
   flex-shrink: 0;
 }
-/* Overflow items hidden globally — only visible inside the overflow dropdown */
-.note-format-toolbar [data-overflow] { display: none !important; }
+/* Mobile: show overflow button, hide overflow items from toolbar */
+@media (max-width: 600px) {
+  .note-format-overflow-btn { display: inline-flex; }
+  .note-format-toolbar [data-overflow] { display: none !important; }
+}
 
 /* Follow-up Due Date + Stage inline with title */
 .opp-preview-due-date-head,
