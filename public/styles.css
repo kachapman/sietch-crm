@@ -7726,33 +7726,6 @@ body {
   background: rgba(220, 38, 38, 0.85);
 }
 
-.opp-photo-edit {
-  position: absolute;
-  top: 0.35rem;
-  left: 0.35rem;
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
-  border: none;
-  border-radius: 50%;
-  color: #fff;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s;
-  z-index: 2;
-}
-
-.opp-photo-item:hover .opp-photo-edit {
-  opacity: 1;
-}
-
-.opp-photo-edit:hover {
-  background: rgba(99, 102, 241, 0.85);
-}
-
 .opp-photo-item.selected .opp-photo-thumb {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent);

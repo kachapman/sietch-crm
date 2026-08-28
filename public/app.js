@@ -35429,6 +35429,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     <option value="move">Move to…</option>
     <option value="copy">Copy to…</option>
     <option value="delete">Delete</option>
+    <option value="markup">Edit Photo</option>
   `;
 
   const docsCount = document.createElement("span");
@@ -35848,6 +35849,7 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
     <option value="move">Move to…</option>
     <option value="copy">Copy to…</option>
     <option value="delete">Delete</option>
+    <option value="markup">Edit Photo</option>
   `;
 
   const quotaEl = document.createElement("span");
@@ -36055,17 +36057,6 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
       });
       item.appendChild(delBtn);
 
-      const editBtn = document.createElement("button");
-      editBtn.type = "button";
-      editBtn.className = "opp-photo-edit";
-      editBtn.title = "Markup photo";
-      editBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>`;
-      editBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        openPhotoMarkupModal(photoId, oppId);
-      });
-      item.appendChild(editBtn);
-
       grid.appendChild(item);
     });
   }
@@ -36101,6 +36092,9 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
       showDestPanel("copy");
     } else if (action === "delete") {
       deleteSelectedPhotos(ids);
+    } else if (action === "markup") {
+      if (ids.length === 1) openPhotoMarkupModal(ids[0], oppId);
+      else showToast("Select exactly one photo to edit", true);
     }
   });
 
@@ -40414,6 +40408,7 @@ function openPhotoMarkupModal(photoId, oppId) {
   img.crossOrigin = "anonymous";
   img.onload = () => {
     loadEl.remove();
+    if (!_markupState) return;
     _markupState.img = img;
     _markupState.natW = img.naturalWidth;
     _markupState.natH = img.naturalHeight;
