@@ -17139,6 +17139,164 @@ select.form-control {
 }
 
 /* ── Photo Markup Editor Modal ──────────────────────────────────────────── */
+/* ── Photo Report Modal ─────────────────────────────────────────────────── */
+.modal-card-photo-report {
+  resize: both;
+  min-width: 560px;
+  min-height: 450px;
+  max-width: 96vw;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+.photo-report-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem 1rem;
+}
+.photo-report-section {
+  margin-bottom: 0.75rem;
+}
+.photo-report-section-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 0.4rem;
+}
+.photo-report-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+.photo-report-field label {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text);
+}
+.photo-report-field input,
+.photo-report-field select,
+.photo-report-field textarea {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-family: inherit;
+}
+.photo-report-field textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+.photo-report-field input:focus,
+.photo-report-field select:focus,
+.photo-report-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+.photo-report-row {
+  display: flex;
+  gap: 0.5rem;
+}
+.photo-report-row .photo-report-field {
+  flex: 1;
+}
+.photo-report-photos {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.photo-report-photo-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+.photo-report-photo-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 4px;
+  background-size: cover;
+  background-position: center;
+  flex-shrink: 0;
+}
+.photo-report-photo-info {
+  flex: 1;
+  min-width: 0;
+}
+.photo-report-photo-name {
+  font-size: 0.78rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.photo-report-photo-caption {
+  width: 100%;
+  margin-top: 0.2rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-family: inherit;
+}
+.photo-report-photo-caption:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.photo-report-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.photo-report-generate-btn {
+  padding: 0.4rem 1rem;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.photo-report-generate-btn:hover {
+  background: color-mix(in srgb, var(--accent) 85%, #000);
+}
+.photo-report-generate-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+@media (max-width: 600px) {
+  #photo-report-modal { padding: 0; }
+  #photo-report-modal .modal-card {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    max-height: 100dvh !important;
+    border-radius: 0;
+    resize: none;
+    min-width: 0;
+  }
+  .photo-report-row { flex-direction: column; gap: 0; }
+}
+
 .modal-card-photo-markup {
   resize: both;
   min-width: 560px;

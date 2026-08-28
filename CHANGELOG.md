@@ -2,6 +2,24 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Photo Report Generator (2026-08-28)
+
+**New feature — FEAT-028:**
+- Generate PDF photo reports from selected project photos via Photos tab Actions dropdown → "Photo Report"
+- Configurable company templates (admin console → Reports tab) with logo, company info, colors, text fallback logo
+- Auto-populated job fields: report title, file name, customer name, claim #, project #, address (from contact)
+- All fields editable before generation
+- Optional summary/opening statement page
+- Configurable layout: 1-4 photos per page
+- Photo order: selection order or upload date
+- Per-photo caption inputs
+- PDF quality loop (starts at 85, decrements by 10) to fit under configurable size limit (default 20MB)
+- Images capped at 1800px longest edge with LANCZOS resampling
+- One photo per page (default) preserves full image quality and readability
+- Reports saved to project Documents tab as PDF
+- Server endpoints: template CRUD (`/api/v2/admin/photo-report-templates`), report generation (`POST /api/v2/projects/{id}/photo-report`)
+- Resizable modal with mobile full-screen support
+
 ## Photo Markup Editor (2026-08-27)
 
 **New feature — FEAT-027:**

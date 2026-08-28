@@ -28780,6 +28780,7 @@ function openAdminConsoleModal() {
     bindAlternateSmtp();
     bindDailyQuoteConfig();
     bindAdminAutomation();
+    bindAdminPhotoReports();
     // Sync buttons — real implementation
     function getSyncPayload() {
       return {
@@ -29358,6 +29359,9 @@ function switchAdminTab(tab) {
   }
   if (tab === "automation") {
     populateAdminAutomation();
+  }
+  if (tab === "photo-reports") {
+    populateAdminPhotoReportTemplates();
   }
 }
 
@@ -35430,6 +35434,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     <option value="copy">Copy to…</option>
     <option value="delete">Delete</option>
     <option value="markup">Edit Photo</option>
+    <option value="photo-report">Photo Report</option>
   `;
 
   const docsCount = document.createElement("span");
@@ -35850,6 +35855,7 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
     <option value="copy">Copy to…</option>
     <option value="delete">Delete</option>
     <option value="markup">Edit Photo</option>
+    <option value="photo-report">Photo Report</option>
   `;
 
   const quotaEl = document.createElement("span");
@@ -36095,6 +36101,9 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
     } else if (action === "markup") {
       if (ids.length === 1) openPhotoMarkupModal(ids[0], oppId);
       else showToast("Select exactly one photo to edit", true);
+    } else if (action === "photo-report") {
+      if (ids.length >= 1) openPhotoReportModal(ids, oppId);
+      else showToast("Select at least one photo", true);
     }
   });
 
@@ -40671,4 +40680,395 @@ function _markupRefreshPhotosGrid(oppId) {
     const photos = (data && data.photos) ? data.photos : [];
     renderOpportunityPreviewPhotosTab(photosContainer, oppId, photos);
   }).catch(() => {});
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FEAT-028 — Photo Report Generator
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function openPhotoReportModal(photoIds, oppId) {
+  const modal = $("#photo-report-modal");
+  const body = $("#photo-report-body");
+  if (!modal || !body) return;
+  body.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--muted)">Loading...</div>';
+  modal.classList.remove("hidden");
+  modal.querySelectorAll("[data-photo-report-dismiss]").forEach(el => {
+    el.addEventListener("click", () => modal.classList.add("hidden"));
+  });
+  let projectData = null;
+  let templates = [];
+  let photos = [];
+  let selectedPhotos = [];
+  Promise.all([
+    api(`/api/v2/projects/${oppId}`),
+    api("/api/v2/admin/photo-report-templates").catch(() => []),
+    api(`/api/v2/projects/${oppId}/photos`),
+  ]).then(([proj, tmpl, photoData]) => {
+    projectData = proj;
+    templates = tmpl || [];
+    photos = (photoData && photoData.photos) ? photoData.photos : [];
+    selectedPhotos = photos.filter(p => photoIds.includes(p.id ?? p.ID));
+    renderPhotoReportForm(body, projectData, templates, selectedPhotos, oppId);
+  }).catch(err => {
+    body.innerHTML = `<div style="padding:2rem;color:var(--danger)">Failed to load: ${escapeHtml(err.message)}</div>`;
+  });
+}
+
+function renderPhotoReportForm(body, project, templates, selPhotos, oppId) {
+  const contact = project.contact || {};
+  const addressParts = [contact.addressStreet, contact.addressCity, contact.addressState, contact.addressZip].filter(Boolean);
+  const fullAddress = addressParts.join(", ");
+  const customFields = project.customFields || [];
+  let claimNumber = "";
+  for (const cf of customFields) {
+    if ((cf.key === "field_11") || (cf.label && cf.label.toLowerCase().includes("claim"))) {
+      claimNumber = cf.value || "";
+      break;
+    }
+  }
+  const projectTitle = project.title || "Project";
+  const defaultTitle = `Photo Report - ${projectTitle}`;
+  const customerName = contact.displayName || "";
+  const defaultFileName = `${defaultTitle} - ${customerName}`;
+  const defaultDate = new Date().toISOString().split("T")[0];
+  const reportTitle = defaultTitle;
+  const fileName = defaultFileName;
+  body.innerHTML = "";
+  const form = document.createElement("div");
+  form.className = "photo-report-form";
+  function _field(label, id, value, placeholder, type) {
+    const wrap = document.createElement("div");
+    wrap.className = "photo-report-field";
+    const lbl = document.createElement("label");
+    lbl.textContent = label;
+    lbl.htmlFor = id;
+    wrap.appendChild(lbl);
+    const inp = document.createElement("input");
+    inp.type = type || "text";
+    inp.id = id;
+    inp.value = value || "";
+    if (placeholder) inp.placeholder = placeholder;
+    wrap.appendChild(inp);
+    return wrap;
+  }
+  function _select(label, id, options, selectedVal) {
+    const wrap = document.createElement("div");
+    wrap.className = "photo-report-field";
+    const lbl = document.createElement("label");
+    lbl.textContent = label;
+    lbl.htmlFor = id;
+    wrap.appendChild(lbl);
+    const sel = document.createElement("select");
+    sel.id = id;
+    options.forEach(opt => {
+      const o = document.createElement("option");
+      o.value = opt.value;
+      o.textContent = opt.label;
+      if (opt.value == selectedVal) o.selected = true;
+      sel.appendChild(o);
+    });
+    wrap.appendChild(sel);
+    return wrap;
+  }
+  function _checkbox(label, id, checked) {
+    const wrap = document.createElement("div");
+    wrap.className = "photo-report-field";
+    const lbl = document.createElement("label");
+    lbl.style.display = "flex";
+    lbl.style.alignItems = "center";
+    lbl.style.gap = "0.4rem";
+    lbl.style.cursor = "pointer";
+    const inp = document.createElement("input");
+    inp.type = "checkbox";
+    inp.id = id;
+    inp.checked = checked;
+    lbl.appendChild(inp);
+    lbl.appendChild(document.createTextNode(label));
+    wrap.appendChild(lbl);
+    return wrap;
+  }
+  const templateSection = document.createElement("div");
+  templateSection.className = "photo-report-section";
+  templateSection.innerHTML = '<div class="photo-report-section-title">Template</div>';
+  const tmplRow = document.createElement("div");
+  tmplRow.className = "photo-report-field";
+  const tmplLabel = document.createElement("label");
+  tmplLabel.textContent = "Company Template";
+  tmplLabel.htmlFor = "pr-template";
+  tmplRow.appendChild(tmplLabel);
+  const tmplSel = document.createElement("select");
+  tmplSel.id = "pr-template";
+  tmplSel.innerHTML = '<option value="">None (Custom)</option>';
+  templates.forEach(t => {
+    const o = document.createElement("option");
+    o.value = t.id;
+    o.textContent = t.name + (t.is_default ? " (Default)" : "");
+    tmplSel.appendChild(o);
+  });
+  tmplRow.appendChild(tmplSel);
+  templateSection.appendChild(tmplRow);
+  form.appendChild(templateSection);
+  const jobSection = document.createElement("div");
+  jobSection.className = "photo-report-section";
+  jobSection.innerHTML = '<div class="photo-report-section-title">Job Information</div>';
+  const row1 = document.createElement("div");
+  row1.className = "photo-report-row";
+  row1.appendChild(_field("Report Title", "pr-title", reportTitle, "Photo Report"));
+  row1.appendChild(_field("File Name", "pr-filename", fileName, "Report filename"));
+  jobSection.appendChild(row1);
+  const row2 = document.createElement("div");
+  row2.className = "photo-report-row";
+  row2.appendChild(_field("Customer Name", "pr-customer", customerName, "Customer name"));
+  row2.appendChild(_field("Claim Number", "pr-claim", claimNumber, "Claim #"));
+  jobSection.appendChild(row2);
+  const row3 = document.createElement("div");
+  row3.className = "photo-report-row";
+  row3.appendChild(_field("Project #", "pr-project-num", project.project_number || "", "Project number"));
+  row3.appendChild(_field("Date", "pr-date", defaultDate, "Report date"));
+  jobSection.appendChild(row3);
+  jobSection.appendChild(_field("Address", "pr-address", fullAddress, "Job location address"));
+  form.appendChild(jobSection);
+  const summarySection = document.createElement("div");
+  summarySection.className = "photo-report-section";
+  summarySection.innerHTML = '<div class="photo-report-section-title">Summary</div>';
+  summarySection.appendChild(_checkbox("Include summary page", "pr-include-summary", false));
+  const summaryField = document.createElement("div");
+  summaryField.className = "photo-report-field";
+  const summaryLabel = document.createElement("label");
+  summaryLabel.textContent = "Opening Statement / Summary";
+  summaryLabel.htmlFor = "pr-summary";
+  summaryField.appendChild(summaryLabel);
+  const summaryTA = document.createElement("textarea");
+  summaryTA.id = "pr-summary";
+  summaryTA.placeholder = "Optional opening statement for the report...";
+  summaryTA.rows = 4;
+  summaryField.appendChild(summaryTA);
+  summarySection.appendChild(summaryField);
+  form.appendChild(summarySection);
+  const layoutSection = document.createElement("div");
+  layoutSection.className = "photo-report-section";
+  layoutSection.innerHTML = '<div class="photo-report-section-title">Layout</div>';
+  const layoutRow = document.createElement("div");
+  layoutRow.className = "photo-report-row";
+  layoutRow.appendChild(_select("Photos per page", "pr-photos-per-page", [
+    { value: "1", label: "1 per page (full)" },
+    { value: "2", label: "2 per page" },
+    { value: "3", label: "3 per page" },
+    { value: "4", label: "4 per page (grid)" },
+  ], "1"));
+  layoutRow.appendChild(_select("Photo order", "pr-photo-order", [
+    { value: "selection", label: "Selection order" },
+    { value: "date", label: "Upload date" },
+  ], "selection"));
+  layoutRow.appendChild(_field("Max PDF size (MB)", "pr-max-size", "20", "20"));
+  layoutSection.appendChild(layoutRow);
+  form.appendChild(layoutSection);
+  const photosSection = document.createElement("div");
+  photosSection.className = "photo-report-section";
+  photosSection.innerHTML = '<div class="photo-report-section-title">Photos & Captions</div>';
+  const photoList = document.createElement("div");
+  photoList.className = "photo-report-photos";
+  selPhotos.forEach(p => {
+    const photoId = p.id ?? p.ID;
+    const row = document.createElement("div");
+    row.className = "photo-report-photo-row";
+    const thumb = document.createElement("div");
+    thumb.className = "photo-report-photo-thumb";
+    thumb.style.backgroundImage = `url("${p.thumbnailUrl || `/api/v2/photos/${photoId}?thumbnail=1`}")`;
+    row.appendChild(thumb);
+    const info = document.createElement("div");
+    info.className = "photo-report-photo-info";
+    const name = document.createElement("div");
+    name.className = "photo-report-photo-name";
+    name.textContent = p.filename || "Photo";
+    info.appendChild(name);
+    const caption = document.createElement("input");
+    caption.type = "text";
+    caption.className = "photo-report-photo-caption";
+    caption.placeholder = "Caption (optional)";
+    caption.dataset.photoId = photoId;
+    info.appendChild(caption);
+    row.appendChild(info);
+    photoList.appendChild(row);
+  });
+  photosSection.appendChild(photoList);
+  form.appendChild(photosSection);
+  body.appendChild(form);
+  const actions = document.createElement("div");
+  actions.className = "photo-report-actions";
+  const generateBtn = document.createElement("button");
+  generateBtn.type = "button";
+  generateBtn.className = "photo-report-generate-btn";
+  generateBtn.textContent = "Generate Report";
+  generateBtn.addEventListener("click", () => {
+    generateBtn.disabled = true;
+    generateBtn.textContent = "Generating...";
+    const captions = {};
+    body.querySelectorAll(".photo-report-photo-caption").forEach(inp => {
+      captions[inp.dataset.photoId] = inp.value.trim();
+    });
+    const payload = {
+      template_id: tmplSel.value ? parseInt(tmplSel.value) : null,
+      photo_ids: selPhotos.map(p => p.id ?? p.ID),
+      report_title: ($("#pr-title") || {}).value || "Photo Report",
+      file_name: ($("#pr-filename") || {}).value || "Photo Report",
+      customer_name: ($("#pr-customer") || {}).value || "",
+      claim_number: ($("#pr-claim") || {}).value || "",
+      project_number: ($("#pr-project-num") || {}).value || "",
+      address: ($("#pr-address") || {}).value || "",
+      summary: ($("#pr-include-summary") || {}).checked ? ($("#pr-summary") || {}).value : "",
+      photos_per_page: parseInt((($("#pr-photos-per-page") || {}).value) || "1"),
+      photo_order: ($("#pr-photo-order") || {}).value || "selection",
+      max_size_mb: parseFloat((($("#pr-max-size") || {}).value) || "20"),
+      captions,
+    };
+    api(`/api/v2/projects/${oppId}/photo-report`, { method: "POST", body: JSON.stringify(payload) })
+      .then(result => {
+        showToast("Photo report saved to Documents tab");
+        $("#photo-report-modal").classList.add("hidden");
+        _markupRefreshPhotosGrid(oppId);
+        if (typeof refreshDocs === "function") refreshDocs();
+      })
+      .catch(err => {
+        showToast("Failed: " + err.message, true);
+        generateBtn.disabled = false;
+        generateBtn.textContent = "Generate Report";
+      });
+  });
+  actions.appendChild(generateBtn);
+  body.appendChild(actions);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Admin — Photo Report Templates
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+let _adminPRTemplates = [];
+let _adminPREditingId = null;
+
+function bindAdminPhotoReports() {
+  const addBtn = $("#admin-pr-add-btn");
+  if (addBtn) addBtn.addEventListener("click", () => openAdminPREditor(null));
+  const cancelBtn = $("#pr-admin-cancel");
+  if (cancelBtn) cancelBtn.addEventListener("click", () => closeAdminPREditor());
+  const saveBtn = $("#pr-admin-save");
+  if (saveBtn) saveBtn.addEventListener("click", saveAdminPRTemplate);
+}
+
+function populateAdminPhotoReportTemplates() {
+  const list = $("#admin-pr-template-list");
+  if (!list) return;
+  api("/api/v2/admin/photo-report-templates").then(templates => {
+    _adminPRTemplates = templates || [];
+    if (!_adminPRTemplates.length) {
+      list.innerHTML = '<p style="color:var(--muted);font-size:0.85rem;">No templates yet. Click "Add Template" to create one.</p>';
+      return;
+    }
+    list.innerHTML = "";
+    _adminPRTemplates.forEach(t => {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:0.75rem;padding:0.6rem 0.75rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-2);margin-bottom:0.4rem;";
+      const info = document.createElement("div");
+      info.style.cssText = "flex:1;min-width:0;";
+      info.innerHTML = `<strong>${escapeHtml(t.name)}</strong>${t.is_default ? ' <span style="font-size:0.7rem;color:var(--accent);">(Default)</span>' : ''}<br><span style="font-size:0.75rem;color:var(--muted);">${escapeHtml(t.company_name || "No company set")}</span>`;
+      row.appendChild(info);
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "btn btn-ghost btn-sm";
+      editBtn.textContent = "Edit";
+      editBtn.addEventListener("click", () => openAdminPREditor(t));
+      row.appendChild(editBtn);
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "btn btn-ghost btn-sm";
+      delBtn.style.color = "var(--danger)";
+      delBtn.textContent = "Delete";
+      delBtn.addEventListener("click", () => deleteAdminPRTemplate(t));
+      row.appendChild(delBtn);
+      list.appendChild(row);
+    });
+  }).catch(err => {
+    list.innerHTML = `<p style="color:var(--danger);">Failed to load templates: ${escapeHtml(err.message)}</p>`;
+  });
+}
+
+function openAdminPREditor(template) {
+  const editor = $("#admin-pr-template-editor");
+  const title = $("#admin-pr-editor-title");
+  if (!editor) return;
+  _adminPREditingId = template ? template.id : null;
+  title.textContent = template ? "Edit Template" : "New Template";
+  $("#pr-admin-name").value = template ? template.name : "";
+  $("#pr-admin-company").value = template ? (template.company_name || "") : "";
+  $("#pr-admin-address").value = template ? (template.address || "") : "";
+  $("#pr-admin-city").value = template ? (template.city_state_zip || "") : "";
+  $("#pr-admin-phone").value = template ? (template.phone || "") : "";
+  $("#pr-admin-color").value = template ? (template.primary_color || "#1a1a1a") : "#1a1a1a";
+  $("#pr-admin-maxwidth").value = template ? (template.max_image_width_inches || 5.5) : 5.5;
+  $("#pr-admin-align").value = template ? (template.image_alignment || "center") : "center";
+  const lines = template && template.text_logo_lines ? (typeof template.text_logo_lines === "string" ? JSON.parse(template.text_logo_lines) : template.text_logo_lines) : ["Company"];
+  $("#pr-admin-text1").value = lines[0] || "";
+  $("#pr-admin-text2").value = lines[1] || "";
+  $("#pr-admin-showdate").checked = template ? !!template.show_photo_date : true;
+  $("#pr-admin-showclaim").checked = template ? !!template.title_includes_claim : true;
+  $("#pr-admin-showcaptions").checked = template ? !!template.show_captions : true;
+  $("#pr-admin-default").checked = template ? !!template.is_default : false;
+  $("#pr-admin-logo").value = "";
+  editor.classList.remove("hidden");
+}
+
+function closeAdminPREditor() {
+  const editor = $("#admin-pr-template-editor");
+  if (editor) editor.classList.add("hidden");
+  _adminPREditingId = null;
+}
+
+function saveAdminPRTemplate() {
+  const name = ($("#pr-admin-name") || {}).value.trim();
+  if (!name) { showToast("Template name is required", true); return; }
+  const payload = {
+    name,
+    company_name: ($("#pr-admin-company") || {}).value.trim(),
+    address: ($("#pr-admin-address") || {}).value.trim(),
+    city_state_zip: ($("#pr-admin-city") || {}).value.trim(),
+    phone: ($("#pr-admin-phone") || {}).value.trim(),
+    primary_color: ($("#pr-admin-color") || {}).value,
+    max_image_width_inches: parseFloat((($("#pr-admin-maxwidth") || {}).value) || "5.5"),
+    image_alignment: ($("#pr-admin-align") || {}).value,
+    text_logo_lines: [($("#pr-admin-text1") || {}).value.trim() || "Company", ($("#pr-admin-text2") || {}).value.trim()],
+    show_photo_date: ($("#pr-admin-showdate") || {}).checked,
+    title_includes_claim: ($("#pr-admin-showclaim") || {}).checked,
+    show_captions: ($("#pr-admin-showcaptions") || {}).checked,
+    is_default: ($("#pr-admin-default") || {}).checked,
+  };
+  const logoInput = $("#pr-admin-logo");
+  const promise = _adminPREditingId
+    ? api(`/api/v2/admin/photo-report-templates/${_adminPREditingId}`, { method: "PUT", body: JSON.stringify(payload) })
+    : api("/api/v2/admin/photo-report-templates", { method: "POST", body: JSON.stringify(payload) });
+  promise.then(result => {
+    const templateId = _adminPREditingId || result.id;
+    if (logoInput && logoInput.files && logoInput.files[0]) {
+      const fd = new FormData();
+      fd.append("file", logoInput.files[0]);
+      return fetch(`/api/v2/admin/photo-report-templates/${templateId}/logo`, {
+        method: "POST", credentials: "same-origin", body: fd,
+      });
+    }
+  }).then(() => {
+    showToast("Template saved");
+    closeAdminPREditor();
+    populateAdminPhotoReportTemplates();
+  }).catch(err => {
+    showToast("Failed: " + err.message, true);
+  });
+}
+
+function deleteAdminPRTemplate(template) {
+  if (!confirm(`Delete template "${template.name}"?`)) return;
+  api(`/api/v2/admin/photo-report-templates/${template.id}`, { method: "DELETE" })
+    .then(() => {
+      showToast("Template deleted");
+      populateAdminPhotoReportTemplates();
+    })
+    .catch(err => showToast("Failed: " + err.message, true));
 }

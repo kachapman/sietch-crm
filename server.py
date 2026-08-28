@@ -2296,6 +2296,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/admin/automation/logs":
             self._handle_automation_logs_get(qs)
             return
+        if api_path == "/api/v2/admin/photo-report-templates":
+            self._handle_photo_report_templates_get()
+            return
 
         # ── v2 API: Projects ──
         if api_path == "/api/v2/projects/count":
@@ -3070,6 +3073,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if m2 and method == "POST":
             self._handle_automation_rule_test(int(m2.group(1)))
             return
+        m = re.match(r"^/api/v2/admin/photo-report-templates/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_photo_report_template_update(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_photo_report_template_delete(int(m.group(1)))
+            return
 
         # ── v2 API: Projects ──
         if api_path == "/api/v2/projects" and method == "POST":
@@ -3146,6 +3156,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 self._handle_project_photo_folder_add(opp_id)
             else:
                 _json_response(self, 404, {"error": "Project not found"})
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/photo-report$", api_path)
+        if m and method == "POST":
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_photo_report(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
+            return
+        m = re.match(r"^/api/v2/admin/photo-report-templates/(\d+)/logo$", api_path)
+        if m and method == "POST":
+            self._handle_photo_report_template_logo_upload(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/admin/photo-report-templates$", api_path)
+        if m and method == "POST":
+            self._handle_photo_report_template_create()
             return
         m = re.match(r"^/api/v2/projects/(\d+)/history/(\d+)/replies$", api_path)
         if m and method == "POST":
@@ -3817,7 +3843,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                       s.title, s.color,
                       u1.display_name, u2.display_name,
                       c.first_name, c.last_name, c.company, c.email, c.phone,
-                      o.project_number
+                      o.project_number,
+                      c.address_street, c.address_city, c.address_state, c.address_zip
                FROM opportunities o
                LEFT JOIN stages s ON o.stage_id = s.id
                LEFT JOIN users u1 ON o.created_by = u1.id
@@ -3845,7 +3872,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "createdBy": row[12], "updatedAt": row[13].isoformat() if row[13] else None,
             "stage": {"title": row[14], "color": row[15]} if row[14] else None,
             "responsible": {"displayName": row[17]} if row[17] else None,
-            "contact": {"displayName": (f"{row[18] or ''} {row[19] or ''}".strip() or row[20] or f"Contact {row[8]}"), "company": row[20], "email": row[21], "phone": row[22]} if row[8] else None,
+            "contact": {"displayName": (f"{row[18] or ''} {row[19] or ''}".strip() or row[20] or f"Contact {row[8]}"), "company": row[20], "email": row[21], "phone": row[22], "addressStreet": row[24], "addressCity": row[25], "addressState": row[26], "addressZip": row[27]} if row[8] else None,
             "project_number": row[23],
         })
 
@@ -6952,6 +6979,458 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "thumbnailUrl": f"/api/v2/photos/{photo_id}?thumbnail=1",
             "uploadedBy": user["id"], "uploadedAt": datetime.now(timezone.utc).isoformat(),
         })
+
+    # ── Photo Report Templates (admin) ───────────────────────────────────
+
+    def _handle_photo_report_templates_get(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        rows = db.query_dicts("SELECT * FROM photo_report_templates ORDER BY is_default DESC, name")
+        for r in rows:
+            for k in ("created_at", "updated_at"):
+                if r.get(k):
+                    r[k] = r[k].isoformat() if hasattr(r[k], "isoformat") else str(r[k])
+        _json_response(self, 200, rows)
+
+    def _handle_photo_report_template_create(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        data = _read_json_body(self)
+        if not data or not data.get("name"):
+            _json_response(self, 400, {"error": "name is required"})
+            return
+        if data.get("is_default"):
+            db.execute("UPDATE photo_report_templates SET is_default = FALSE")
+        row = db.query_one(
+            """INSERT INTO photo_report_templates
+               (name, company_name, address, city_state_zip, phone, primary_color,
+                text_logo_lines, text_logo_font_size, text_logo_tagline_size,
+                max_image_width_inches, image_alignment, show_photo_date,
+                title_includes_claim, show_captions, is_default)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               RETURNING id""",
+            (data["name"], data.get("company_name", ""), data.get("address", ""),
+             data.get("city_state_zip", ""), data.get("phone", ""),
+             data.get("primary_color", "#1a1a1a"),
+             json.dumps(data.get("text_logo_lines", ["Company"])),
+             data.get("text_logo_font_size", 16), data.get("text_logo_tagline_size", 8),
+             data.get("max_image_width_inches", 5.5), data.get("image_alignment", "center"),
+             data.get("show_photo_date", True), data.get("title_includes_claim", True),
+             data.get("show_captions", True), data.get("is_default", False)),
+        )
+        _json_response(self, 201, {"id": row["id"]})
+
+    def _handle_photo_report_template_update(self, template_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        data = _read_json_body(self)
+        if not data:
+            _json_response(self, 400, {"error": "No data"})
+            return
+        existing = db.query_one("SELECT id, is_default FROM photo_report_templates WHERE id = %s", (template_id,))
+        if not existing:
+            _json_response(self, 404, {"error": "Template not found"})
+            return
+        if data.get("is_default") and not existing["is_default"]:
+            db.execute("UPDATE photo_report_templates SET is_default = FALSE")
+        fields = []
+        params = []
+        for key in ("name", "company_name", "address", "city_state_zip", "phone", "primary_color",
+                     "text_logo_font_size", "text_logo_tagline_size", "max_image_width_inches",
+                     "image_alignment", "show_photo_date", "title_includes_claim", "show_captions", "is_default"):
+            if key in data:
+                fields.append(f"{key} = %s")
+                params.append(data[key])
+        if "text_logo_lines" in data:
+            fields.append("text_logo_lines = %s")
+            params.append(json.dumps(data["text_logo_lines"]))
+        if fields:
+            fields.append("updated_at = NOW()")
+            params.append(template_id)
+            db.execute(f"UPDATE photo_report_templates SET {', '.join(fields)} WHERE id = %s", tuple(params))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_photo_report_template_delete(self, template_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        existing = db.query_one("SELECT id, is_default FROM photo_report_templates WHERE id = %s", (template_id,))
+        if not existing:
+            _json_response(self, 404, {"error": "Template not found"})
+            return
+        if existing["is_default"]:
+            _json_response(self, 400, {"error": "Cannot delete the default template"})
+            return
+        db.execute("DELETE FROM photo_report_templates WHERE id = %s", (template_id,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_photo_report_template_logo_upload(self, template_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.startswith("multipart/form-data"):
+            _json_response(self, 400, {"error": "Expected multipart/form-data"})
+            return
+        try:
+            parsed = _parse_multipart(_read_body(self), content_type)
+        except Exception as exc:
+            _json_response(self, 400, {"error": f"Invalid multipart body: {exc}"})
+            return
+        file_info = parsed.get("file")
+        if not file_info:
+            _json_response(self, 400, {"error": "file field required"})
+            return
+        data = file_info["data"]
+        filename = file_info["filename"]
+        safe_name = re.sub(r'[^\w.\-]', '_', filename)
+        logos_dir = ROOT / "data" / "logos"
+        logos_dir.mkdir(parents=True, exist_ok=True)
+        file_path = logos_dir / f"template_{template_id}_{safe_name}"
+        file_path.write_bytes(data)
+        db.execute("UPDATE photo_report_templates SET logo_path = %s, updated_at = NOW() WHERE id = %s",
+                   (str(file_path.relative_to(ROOT)), template_id))
+        _json_response(self, 200, {"ok": True, "logoPath": str(file_path.relative_to(ROOT))})
+
+    # ── Photo Report Generation ──────────────────────────────────────────
+
+    def _handle_project_photo_report(self, opp_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            from fpdf import FPDF
+        except ImportError:
+            _json_response(self, 500, {"error": "fpdf2 not installed"})
+            return
+        data = _read_json_body(self)
+        if not data:
+            _json_response(self, 400, {"error": "No data"})
+            return
+        photo_ids = data.get("photo_ids", [])
+        if not photo_ids:
+            _json_response(self, 400, {"error": "photo_ids required"})
+            return
+        template_id = data.get("template_id")
+        template = None
+        if template_id:
+            template = db.query_one("SELECT * FROM photo_report_templates WHERE id = %s", (template_id,))
+        if not template:
+            template = db.query_one("SELECT * FROM photo_report_templates WHERE is_default = TRUE")
+        if not template:
+            template = {"company_name": "Company", "address": "", "city_state_zip": "", "phone": "",
+                        "primary_color": "#1a1a1a", "text_logo_lines": '["Company"]',
+                        "text_logo_font_size": 16, "text_logo_tagline_size": 8,
+                        "logo_path": None, "max_image_width_inches": 5.5, "image_alignment": "center",
+                        "show_photo_date": True, "title_includes_claim": True, "show_captions": True}
+        report_title = data.get("report_title", "Photo Report")
+        file_name = data.get("file_name", report_title)
+        customer_name = data.get("customer_name", "")
+        claim_number = data.get("claim_number", "")
+        project_number = data.get("project_number", "")
+        address = data.get("address", "")
+        summary = data.get("summary", "")
+        photos_per_page = max(1, min(4, int(data.get("photos_per_page", 1))))
+        max_size_mb = max(1, min(50, float(data.get("max_size_mb", 20))))
+        captions = data.get("captions", {})
+        photo_order = data.get("photo_order", "selection")
+        placeholders = ",".join(["%s"] * len(photo_ids))
+        if photo_order == "date":
+            order_clause = "ORDER BY p.uploaded_at ASC"
+        else:
+            order_clause = "ORDER BY array_position(ARRAY[" + placeholders + "]::int[], p.id)"
+        photo_rows = db.query(
+            f"""SELECT p.id, p.filename, p.file_path, p.file_size, p.mime_type, p.exif_data, p.uploaded_at
+                FROM project_photos p
+                WHERE p.id IN ({placeholders}) AND p.is_deleted = FALSE {order_clause}""",
+            (*photo_ids, *photo_ids) if photo_order != "date" else tuple(photo_ids),
+        )
+        if not photo_rows:
+            _json_response(self, 404, {"error": "No photos found"})
+            return
+        logo_path = None
+        if template.get("logo_path"):
+            lp = ROOT / template["logo_path"]
+            if lp.exists():
+                logo_path = str(lp)
+        text_logo_lines = template.get("text_logo_lines", '["Company"]')
+        if isinstance(text_logo_lines, str):
+            try:
+                text_logo_lines = json.loads(text_logo_lines)
+            except Exception:
+                text_logo_lines = ["Company"]
+        max_img_w = float(template.get("max_image_width_inches", 5.5))
+        img_align = template.get("image_alignment", "center")
+        show_date = template.get("show_photo_date", True)
+        show_claim = template.get("title_includes_claim", True)
+        show_captions = template.get("show_captions", True)
+        primary_color = template.get("primary_color", "#1a1a1a")
+        company_name = template.get("company_name", "Company")
+        comp_address = template.get("address", "")
+        comp_city = template.get("city_state_zip", "")
+        comp_phone = template.get("phone", "")
+        title_font_size = int(template.get("text_logo_font_size", 16))
+        tagline_font_size = int(template.get("text_logo_tagline_size", 8))
+        try:
+            import colorsys
+            r_c = int(primary_color[1:3], 16)
+            g_c = int(primary_color[3:5], 16)
+            b_c = int(primary_color[5:7], 16)
+        except Exception:
+            r_c, g_c, b_c = 26, 26, 26
+        output_dir = ROOT / "data" / "documents" / str(opp_id)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        safe_filename = re.sub(r'[^\w.\-]', '_', file_name)[:100]
+        output_path = str(output_dir / f"{int(time.time())}_{safe_filename}.pdf")
+        quality = 85
+        success = False
+        while quality >= 30:
+            tmp_dir = tempfile.mkdtemp()
+            try:
+                processed = []
+                for idx, pr in enumerate(photo_rows):
+                    fp = ROOT / pr["file_path"]
+                    if not fp.exists():
+                        continue
+                    try:
+                        with Image.open(fp) as img:
+                            if img.mode in ("RGBA", "P"):
+                                img = img.convert("RGB")
+                            max_dim = 1800
+                            if img.width > max_dim or img.height > max_dim:
+                                ratio = min(max_dim / img.width, max_dim / img.height)
+                                new_size = (int(img.width * ratio), int(img.height * ratio))
+                                img = img.resize(new_size, Image.LANCZOS)
+                            out = os.path.join(tmp_dir, f"img_{idx:04d}.jpg")
+                            img.save(out, "JPEG", quality=quality, optimize=True)
+                            processed.append((out, pr["filename"], str(fp), pr["uploaded_at"], captions.get(str(pr["id"]), "")))
+                    except Exception:
+                        continue
+                if not processed:
+                    _json_response(self, 500, {"error": "No valid photos found"})
+                    return
+                self._create_photo_report_pdf(
+                    output_path, processed, report_title, customer_name, claim_number,
+                    project_number, address, summary, company_name, comp_address, comp_city,
+                    comp_phone, logo_path, text_logo_lines, title_font_size, tagline_font_size,
+                    r_c, g_c, b_c, max_img_w, img_align, show_date, show_claim, show_captions,
+                    photos_per_page,
+                )
+                file_size = os.path.getsize(output_path)
+                if file_size <= max_size_mb * 1024 * 1024:
+                    success = True
+                    break
+                quality -= 10
+            finally:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+        if not success:
+            _json_response(self, 500, {"error": "Could not generate PDF within size limit"})
+            return
+        file_size = os.path.getsize(output_path)
+        rel_path = os.path.relpath(output_path, ROOT)
+        pdf_title = f"{safe_filename}.pdf"
+        photo_id_result = db.insert_returning(
+            """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by)
+               VALUES (%s, %s, %s, %s, 'application/pdf', %s) RETURNING id""",
+            (opp_id, pdf_title, rel_path, file_size, user["id"]),
+        )
+        _json_response(self, 201, {
+            "id": photo_id_result, "title": pdf_title, "fileSize": file_size,
+            "mimeType": "application/pdf",
+        })
+
+    def _create_photo_report_pdf(self, output_path, photos, report_title, customer_name,
+                                  claim_number, project_number, address, summary,
+                                  company_name, comp_address, comp_city, comp_phone,
+                                  logo_path, text_logo_lines, title_font_size, tagline_font_size,
+                                  r_c, g_c, b_c, max_img_w, img_align, show_date, show_claim,
+                                  show_captions, photos_per_page):
+        from fpdf import FPDF
+        class PhotoReportPDF(FPDF):
+            pass
+        pdf = PhotoReportPDF(orientation="P", unit="in", format="Letter")
+        pdf.set_auto_page_break(auto=False)
+        pdf.set_margins(0.75, 0.5, 0.75)
+        page_w = 8.5
+        page_h = 11.0
+        margin_l = 0.75
+        margin_r = 0.75
+        margin_t = 0.5
+        margin_b = 0.5
+        usable_w = page_w - margin_l - margin_r
+        def _pdf_safe(text):
+            if not text:
+                return ""
+            return text.encode("latin-1", errors="replace").decode("latin-1")
+        def _draw_header(pdf_obj):
+            y = margin_t
+            if logo_path:
+                try:
+                    with Image.open(logo_path) as logo_img:
+                        lw, lh = logo_img.size
+                        aspect = lh / lw
+                        logo_w = min(1.5, usable_w * 0.3)
+                        logo_h = logo_w * aspect
+                        pdf_obj.image(logo_path, x=margin_l, y=y, w=logo_w, h=logo_h)
+                except Exception:
+                    pass
+            else:
+                pdf_obj.set_text_color(r_c, g_c, b_c)
+                pdf_obj.set_font("Helvetica", "B", title_font_size)
+                pdf_obj.set_xy(margin_l, y)
+                pdf_obj.cell(usable_w * 0.5, title_font_size / 72 + 0.1, _pdf_safe(text_logo_lines[0] if text_logo_lines else "Company"), align="L")
+                if len(text_logo_lines) > 1:
+                    pdf_obj.set_font("Helvetica", "", tagline_font_size)
+                    pdf_obj.set_xy(margin_l, y + title_font_size / 72 + 0.05)
+                    pdf_obj.cell(usable_w * 0.5, tagline_font_size / 72 + 0.05, _pdf_safe(text_logo_lines[1]), align="L")
+                pdf_obj.set_text_color(0, 0, 0)
+            info_x = margin_l + usable_w * 0.5
+            info_w = usable_w * 0.5
+            info_y = y + 0.05
+            pdf_obj.set_font("Helvetica", "B", 9)
+            pdf_obj.set_xy(info_x, info_y)
+            pdf_obj.cell(info_w, 0.18, _pdf_safe(company_name), align="R")
+            pdf_obj.set_font("Helvetica", "", 8)
+            if comp_address:
+                info_y += 0.18
+                pdf_obj.set_xy(info_x, info_y)
+                pdf_obj.cell(info_w, 0.15, _pdf_safe(comp_address), align="R")
+            if comp_city:
+                info_y += 0.15
+                pdf_obj.set_xy(info_x, info_y)
+                pdf_obj.cell(info_w, 0.15, _pdf_safe(comp_city), align="R")
+            if comp_phone:
+                info_y += 0.15
+                pdf_obj.set_xy(info_x, info_y)
+                pdf_obj.cell(info_w, 0.15, _pdf_safe(comp_phone), align="R")
+            header_bottom = max(y + 0.6, info_y + 0.2)
+            pdf_obj.set_draw_color(180, 180, 180)
+            pdf_obj.line(margin_l, header_bottom, page_w - margin_r, header_bottom)
+            return header_bottom
+        def _draw_footer(pdf_obj, page_num):
+            y = page_h - margin_b - 0.2
+            pdf_obj.set_draw_color(180, 180, 180)
+            pdf_obj.line(margin_l, y - 0.05, page_w - margin_r, y - 0.05)
+            pdf_obj.set_font("Helvetica", "", 8)
+            left_txt = f"Project #{project_number}" if project_number else customer_name
+            pdf_obj.set_xy(margin_l, y)
+            pdf_obj.cell(usable_w * 0.5, 0.15, _pdf_safe(str(left_txt)), align="L")
+            right_txt = f"Location: {address}" if address else ""
+            pdf_obj.set_xy(margin_l + usable_w * 0.5, y)
+            pdf_obj.cell(usable_w * 0.5, 0.15, _pdf_safe(right_txt), align="R")
+        def _format_photo_date(uploaded_at):
+            if not uploaded_at:
+                return ""
+            try:
+                if isinstance(uploaded_at, str):
+                    dt = datetime.fromisoformat(uploaded_at.replace("Z", "+00:00"))
+                else:
+                    dt = uploaded_at
+                return dt.strftime("%B %d, %Y %I:%M %p")
+            except Exception:
+                return str(uploaded_at)
+        has_summary = bool(summary and summary.strip())
+        total_photos = len(photos)
+        if photos_per_page == 1:
+            pages_needed = total_photos
+        else:
+            pages_needed = (total_photos + photos_per_page - 1) // photos_per_page
+        if has_summary:
+            pages_needed += 1
+        photo_idx = 0
+        for page_num in range(pages_needed):
+            pdf.add_page()
+            header_bottom = _draw_header(pdf)
+            _draw_footer(pdf, page_num + 1)
+            content_top = header_bottom + 0.15
+            content_bottom = page_h - margin_b - 0.35
+            content_h = content_bottom - content_top
+            if page_num == 0 and has_summary:
+                title_y = content_top
+                full_title = report_title
+                if show_claim and claim_number:
+                    full_title += f" - Claim #{claim_number}"
+                pdf.set_font("Helvetica", "B", 14)
+                pdf.set_xy(margin_l, title_y)
+                pdf.cell(usable_w, 0.3, _pdf_safe(full_title), align="L")
+                summary_y = title_y + 0.4
+                pdf.set_font("Helvetica", "", 10)
+                pdf.set_xy(margin_l, summary_y)
+                pdf.multi_cell(usable_w, 0.18, _pdf_safe(summary), align="L")
+                summary_bottom = pdf.get_y() + 0.1
+                photos_start = summary_bottom + 0.2
+                remaining_h = content_bottom - photos_start
+                if remaining_h < 1.0:
+                    continue
+                batch = photos[0:min(photos_per_page, total_photos)]
+                _draw_photo_batch(pdf, batch, photos_start, remaining_h)
+                photo_idx = len(batch)
+            else:
+                if page_num == 0 and not has_summary:
+                    title_y = content_top
+                    full_title = report_title
+                    if show_claim and claim_number:
+                        full_title += f" - Claim #{claim_number}"
+                    pdf.set_font("Helvetica", "B", 14)
+                    pdf.set_xy(margin_l, title_y)
+                    pdf.cell(usable_w, 0.3, _pdf_safe(full_title), align="L")
+                    content_top += 0.4
+                    content_h = content_bottom - content_top
+                actual_page = page_num if not has_summary else page_num - 1
+                start_idx = actual_page * photos_per_page
+                batch = photos[start_idx:start_idx + photos_per_page]
+                if batch:
+                    _draw_photo_batch(pdf, batch, content_top, content_h)
+        def _draw_photo_batch(pdf_obj, batch, y_start, available_h):
+            n = len(batch)
+            if n == 0:
+                return
+            gap = 0.15
+            total_gap = gap * (n - 1)
+            photo_h = (available_h - total_gap) / n
+            for i, (img_path, orig_name, orig_path, uploaded_at, caption) in enumerate(batch):
+                py = y_start + i * (photo_h + gap)
+                info_h = 0.35 if show_captions else 0.2
+                img_h = photo_h - info_h
+                if img_h < 0.3:
+                    img_h = photo_h
+                    info_h = 0
+                if img_h <= 0:
+                    continue
+                try:
+                    with Image.open(img_path) as img:
+                        iw, ih = img.size
+                        max_w = max_img_w * 72
+                        max_h_px = img_h * 72
+                        scale = min(max_w / iw, max_h_px / ih, 1.0)
+                        draw_w = iw * scale / 72
+                        draw_h = ih * scale / 72
+                        if img_align == "center":
+                            x_off = margin_l + (usable_w - draw_w) / 2
+                        else:
+                            x_off = margin_l
+                        pdf_obj.image(img_path, x=x_off, y=py, w=draw_w, h=draw_h)
+                except Exception:
+                    pass
+                if info_h > 0:
+                    info_y = py + img_h + 0.05
+                    pdf_obj.set_font("Helvetica", "B", 9)
+                    pdf_obj.set_xy(margin_l, info_y)
+                    pdf_obj.cell(usable_w, 0.15, _pdf_safe(orig_name), align="L")
+                    if show_captions and caption:
+                        pdf_obj.set_font("Helvetica", "", 9)
+                        pdf_obj.set_xy(margin_l, info_y + 0.15)
+                        pdf_obj.cell(usable_w, 0.15, _pdf_safe(caption), align="L")
+                    if show_date:
+                        date_str = _format_photo_date(uploaded_at)
+                        if date_str:
+                            pdf_obj.set_font("Helvetica", "", 8)
+                            pdf_obj.set_xy(margin_l, info_y + (0.3 if caption and show_captions else 0.15))
+                            pdf_obj.cell(usable_w, 0.12, f"Photo Date: {_pdf_safe(date_str)}", align="L")
+        pdf.output(output_path)
 
     def _handle_project_photo_folders_get(self, opp_id: int) -> None:
         user = _require_auth(self)
