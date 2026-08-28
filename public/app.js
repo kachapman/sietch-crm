@@ -40653,8 +40653,8 @@ async function _markupSave() {
       throw new Error(err.error || `HTTP ${resp.status}`);
     }
     showToast("Markup saved as new photo");
-    closePhotoMarkupModal();
     _markupRefreshPhotosGrid(s.oppId);
+    closePhotoMarkupModal();
   } catch (err) {
     showToast("Save failed: " + err.message, true);
   } finally {
@@ -40667,7 +40667,8 @@ function _markupRefreshPhotosGrid(oppId) {
   if (!photosContainer) return;
   const oppPreviewModal = $("#opp-preview-modal");
   if (oppPreviewModal && oppPreviewModal.classList.contains("hidden")) return;
-  if (typeof photosContainer._markupRefresh === "function") {
-    photosContainer._markupRefresh();
-  }
+  api(`/api/v2/projects/${oppId}/photos`).then(data => {
+    const photos = (data && data.photos) ? data.photos : [];
+    renderOpportunityPreviewPhotosTab(photosContainer, oppId, photos);
+  }).catch(() => {});
 }
