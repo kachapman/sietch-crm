@@ -40169,7 +40169,7 @@ function _markupDrawAction(ctx, a, s) {
     }
     case "text": {
       if (!a.text || !a.position) break;
-      const fontSize = Math.max(sz * 3, 14);
+      const fontSize = Math.max(sz * 2.5, 18);
       ctx.font = `bold ${fontSize}px sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
@@ -40177,16 +40177,23 @@ function _markupDrawAction(ctx, a, s) {
       const lineHeight = fontSize * 1.25;
       const totalH = lines.length * lineHeight;
       const maxW = Math.max(...lines.map(l => ctx.measureText(l).width));
-      const bgY = a.position.y - totalH / 2 - 4;
-      const bgH = totalH + 8;
-      ctx.fillStyle = "rgba(0,0,0,0.65)";
-      const bgR = 4;
-      const bgX = a.position.x - maxW / 2 - 6;
-      const bgW = maxW + 12;
+      const padH = 5, padV = 3;
+      const bgX = a.position.x - maxW / 2 - padH;
+      const bgY = a.position.y - totalH / 2 - padV;
+      const bgW = maxW + padH * 2;
+      const bgH = totalH + padV * 2;
+      const bgR = Math.max(fontSize * 0.35, 4);
+      ctx.fillStyle = "rgba(255,255,255,0.92)";
       ctx.beginPath();
       ctx.roundRect(bgX, bgY, bgW, bgH, bgR);
       ctx.fill();
-      ctx.fillStyle = col;
+      ctx.strokeStyle = "rgba(255,255,255,0.6)";
+      ctx.lineWidth = 1.5;
+      lines.forEach((line, i) => {
+        const ly = a.position.y - totalH / 2 + lineHeight * i + lineHeight / 2;
+        ctx.strokeText(line, a.position.x, ly);
+      });
+      ctx.fillStyle = "#000";
       lines.forEach((line, i) => {
         ctx.fillText(line, a.position.x, a.position.y - totalH / 2 + lineHeight * i + lineHeight / 2);
       });
@@ -40230,7 +40237,7 @@ function _markupDrawAction(ctx, a, s) {
     }
     case "number": {
       if (!a.position) break;
-      const r = Math.max(sz * 2.5, 10);
+      const r = Math.max(sz * 3, 12);
       ctx.fillStyle = col;
       ctx.beginPath();
       ctx.arc(a.position.x, a.position.y, r, 0, Math.PI * 2);
@@ -40333,7 +40340,7 @@ function openPhotoMarkupModal(photoId, oppId) {
   sizeSlider.type = "range";
   sizeSlider.className = "photo-markup-size-slider";
   sizeSlider.min = "1";
-  sizeSlider.max = "20";
+  sizeSlider.max = "40";
   sizeSlider.value = "4";
   sizeSlider.addEventListener("input", () => {
     _markupState.size = parseInt(sizeSlider.value);
@@ -40471,6 +40478,20 @@ function _markupBindCanvasEvents() {
     const pos = getPos(e);
     if (s.tool === "pen" || s.tool === "highlighter") {
       s.currentAction.points.push(pos);
+      if (e.shiftKey && s.currentAction.points.length >= 2) {
+        const pts = s.currentAction.points;
+        const first = pts[0];
+        const last = pts[pts.length - 1];
+        const dx = last.x - first.x;
+        const dy = last.y - first.y;
+        const dist = Math.hypot(dx, dy);
+        const angle = Math.atan2(dy, dx);
+        const snapped = Math.round(angle / (Math.PI / 4)) * (Math.PI / 4);
+        pts[pts.length - 1] = {
+          x: first.x + dist * Math.cos(snapped),
+          y: first.y + dist * Math.sin(snapped),
+        };
+      }
     } else {
       s.currentAction.end = pos;
     }
@@ -40522,6 +40543,7 @@ function _markupShowTextInput(pos, canvas, wrap) {
   input.style.left = (pos.x * scale + offX - 30) + "px";
   input.style.top = (pos.y * scale + offY - 12) + "px";
   input.style.color = s.color;
+  input.style.fontSize = Math.max(s.size * 2.5, 14) + "px";
   input.placeholder = "Type text...";
   wrap.appendChild(input);
   requestAnimationFrame(() => input.focus());
