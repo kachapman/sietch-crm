@@ -40524,9 +40524,12 @@ function _markupShowTextInput(pos, canvas, wrap) {
   input.style.color = s.color;
   input.placeholder = "Type text...";
   wrap.appendChild(input);
-  input.focus();
+  requestAnimationFrame(() => input.focus());
 
+  let committed = false;
   function commit() {
+    if (committed) return;
+    committed = true;
     const text = input.value.trim();
     input.remove();
     if (text) {
@@ -40538,10 +40541,10 @@ function _markupShowTextInput(pos, canvas, wrap) {
   }
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") { commit(); e.preventDefault(); }
-    if (e.key === "Escape") { input.remove(); }
+    if (e.key === "Escape") { committed = true; input.remove(); }
     e.stopPropagation();
   });
-  input.addEventListener("blur", commit);
+  input.addEventListener("blur", () => { setTimeout(commit, 150); });
 }
 
 function _markupRotate() {
