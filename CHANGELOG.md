@@ -2,6 +2,20 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Photo Markup Editor (2026-08-27)
+
+**New feature — FEAT-027:**
+- Canvas-based photo annotation editor (inspired by Gradia) — edit button appears on photo thumbnails in project preview
+- Drawing tools: Pen (freehand), Line, Arrow, Rectangle, Circle/Oval, Text labels, Highlighter (semi-transparent), Censor (pixelate), Number stamps (auto-increment)
+- Color picker for stroke and fill, adjustable stroke size slider
+- Undo/redo support, rotate image 90°
+- Full-resolution canvas (annotations drawn at image natural dimensions, display-scaled)
+- Resizable modal (CSS `resize: both`) matching existing CRM modal patterns
+- Full-screen on mobile (≤600px) with tight padding, close button top-right
+- Save creates a copy (non-destructive) — annotated photo uploaded as new entry in same project gallery
+- Server endpoint: `POST /api/v2/projects/{id}/photos/markup`
+- Touch support for mobile drawing
+
 ## Task Tile Fixes + Mobile Modals (2026-08-27)
 
 **Bug fixes:**

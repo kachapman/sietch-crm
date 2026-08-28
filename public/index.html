@@ -997,13 +997,23 @@
             <span class="note-format-sep"></span>
             <button type="button" class="note-format-btn" data-cmd="insertUnorderedList" title="Bullet list">•</button>
             <button type="button" class="note-format-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
-            <button type="button" class="note-format-btn" data-cmd="formatBlock" data-val="blockquote" title="Quote" style="font-family:serif; font-style:italic;">"</button>
             <span class="note-format-sep"></span>
             <button type="button" class="note-format-btn note-format-hilite-btn" title="Highlight color">🖍</button>
             <button type="button" class="note-format-btn note-format-emoji-btn" title="Emoji">😀</button>
             <button type="button" class="note-format-btn note-format-link-btn" title="Insert link">🔗</button>
-            <span class="note-format-sep"></span>
-            <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear formatting">⌫</button>
+            <button type="button" class="note-format-btn note-format-color-btn" title="Text color">A<span class="note-format-color-bar"></span></button>
+            <button type="button" class="note-format-btn note-format-overflow-btn" title="More formatting">···</button>
+            <button type="button" class="note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="H2" title="Heading 2"><b>H2</b></button>
+            <button type="button" class="note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="H3" title="Heading 3"><b>H3</b></button>
+            <button type="button" class="note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="BLOCKQUOTE" title="Quote">❝</button>
+            <button type="button" class="note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="PRE" title="Code block">&lt;/&gt;</button>
+            <button type="button" class="note-format-btn" data-overflow="1" data-cmd="insertHorizontalRule" title="Horizontal rule">―</button>
+            <span class="note-format-sep" data-overflow="1"></span>
+            <button type="button" class="note-format-btn" data-overflow="1" data-cmd="indent" title="Indent">→</button>
+            <button type="button" class="note-format-btn" data-overflow="1" data-cmd="outdent" title="Outdent">←</button>
+            <span class="note-format-sep" data-overflow="1"></span>
+            <button type="button" class="note-format-btn" data-overflow="1" data-cmd="removeFormat" title="Clear formatting">&#x232B;</button>
+            <button type="button" class="note-format-btn note-format-img-upload-btn" data-overflow="1" title="Upload image">📷</button>
           </div>
           <div id="compose-body" class="note-editor" contenteditable="true" data-placeholder="Write your email..." style="flex:1; overflow-y:auto; min-height:280px; border:1px solid var(--border); border-radius:0 0 4px 4px; padding:0.5rem; background:var(--bg); color:var(--text);"></div>
         </div>
@@ -1369,12 +1379,14 @@
                 </button>
               </div>
             </div>
-            <select id="documents-actions-select" class="btn btn-secondary btn-sm" disabled>
-              <option value="">Actions…</option>
-              <option value="delete">Delete</option>
-              <option value="move">Move to…</option>
-              <option value="copy">Copy to…</option>
-            </select>
+            <div class="documents-actions-wrap">
+              <button type="button" id="documents-actions-btn" class="btn btn-secondary btn-sm" disabled>Actions…</button>
+              <div id="documents-actions-menu" class="documents-actions-menu hidden">
+                <button type="button" class="documents-actions-option" data-action="delete">Delete</button>
+                <button type="button" class="documents-actions-option" data-action="move">Move to…</button>
+                <button type="button" class="documents-actions-option" data-action="copy">Copy to…</button>
+              </div>
+            </div>
             <div class="documents-sort-wrap">
               <button type="button" id="documents-sort-btn" class="btn btn-secondary btn-icon-only btn-sm" title="Sort">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-sort-descending">
@@ -3345,6 +3357,27 @@
   </script>
 
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
+
+  <!-- Photo Markup Editor Modal -->
+  <div id="photo-markup-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="photo-markup-title">
+    <div class="modal-backdrop" data-photo-markup-dismiss></div>
+    <div class="modal-card modal-card-photo-markup">
+      <div class="modal-card-head">
+        <h2 id="photo-markup-title" class="modal-title">Photo Markup</h2>
+        <div class="photo-markup-header-actions">
+          <button class="btn btn-icon-only modal-header-control" data-photo-markup-dismiss aria-label="Close">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="photo-markup-toolbar" id="photo-markup-toolbar"></div>
+      <div class="photo-markup-canvas-wrap" id="photo-markup-canvas-wrap">
+        <canvas id="photo-markup-canvas"></canvas>
+      </div>
+      <div class="photo-markup-footer" id="photo-markup-footer"></div>
+    </div>
+  </div>
+
   <script src="app.js?v=3.5.0" type="module"></script>
 </body>
 </html>

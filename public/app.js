@@ -4334,14 +4334,14 @@ function toggleDocSelect(id) {
 function updateDocsToolbar() {
   const n = docsState.selected.size;
   const countEl = $("#documents-selected-count");
-  const actionsSelect = $("#documents-actions-select");
+  const actionsBtn = $("#documents-actions-btn");
   const clearBtn = $("#documents-clear-selection-btn");
   const renameBtn = $("#documents-rename-btn");
   if (countEl) {
     countEl.textContent = n ? `${n} selected` : "0 selected";
     countEl.classList.toggle("hidden", !n);
   }
-  if (actionsSelect) actionsSelect.disabled = !n;
+  if (actionsBtn) actionsBtn.disabled = !n;
   if (clearBtn) clearBtn.classList.toggle("hidden", !n);
   if (renameBtn) renameBtn.classList.toggle("hidden", n !== 1);
 }
@@ -4685,15 +4685,36 @@ function bindDocumentsModal() {
     });
   }
 
-  // Toolbar actions — dropdown
-  const actionsSelect = $("#documents-actions-select");
-  if (actionsSelect) {
-    actionsSelect.addEventListener("change", () => {
-      const val = actionsSelect.value;
-      if (val === "delete") deleteSelectedDocs();
-      else if (val === "move") moveSelectedDocs();
-      else if (val === "copy") copySelectedDocs();
-      actionsSelect.value = "";
+  // Toolbar actions — custom dropdown
+  const actionsBtn = $("#documents-actions-btn");
+  const actionsMenu = $("#documents-actions-menu");
+  if (actionsBtn && actionsMenu) {
+    actionsBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (actionsBtn.disabled) return;
+      actionsMenu.classList.toggle("hidden");
+      // Position fixed on mobile
+      if (!actionsMenu.classList.contains("hidden") && window.innerWidth <= 600) {
+        const r = actionsBtn.getBoundingClientRect();
+        actionsMenu.style.position = "fixed";
+        actionsMenu.style.top = (r.bottom + 4) + "px";
+        actionsMenu.style.left = r.left + "px";
+        actionsMenu.style.right = "auto";
+      }
+    });
+    actionsMenu.querySelectorAll(".documents-actions-option").forEach(opt => {
+      opt.addEventListener("click", () => {
+        const val = opt.dataset.action;
+        if (val === "delete") deleteSelectedDocs();
+        else if (val === "move") moveSelectedDocs();
+        else if (val === "copy") copySelectedDocs();
+        actionsMenu.classList.add("hidden");
+      });
+    });
+    document.addEventListener("click", (e) => {
+      if (!actionsMenu.classList.contains("hidden") && !actionsBtn.contains(e.target) && !actionsMenu.contains(e.target)) {
+        actionsMenu.classList.add("hidden");
+      }
     });
   }
 
@@ -4715,6 +4736,13 @@ function bindDocumentsModal() {
     } else {
       sortMenu.classList.toggle("hidden");
     }
+    // Reset inline positioning styles when closing
+    if (sortMenu.classList.contains("hidden")) {
+      sortMenu.style.position = "";
+      sortMenu.style.top = "";
+      sortMenu.style.left = "";
+      sortMenu.style.right = "";
+    }
     updateSortMenu();
   }
   if (sortBtn && sortMenu) {
@@ -4722,6 +4750,14 @@ function bindDocumentsModal() {
     sortBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       toggleSortMenu();
+      // On mobile, position the menu fixed below the button
+      if (!sortMenu.classList.contains("hidden") && window.innerWidth <= 600) {
+        const r = sortBtn.getBoundingClientRect();
+        sortMenu.style.position = "fixed";
+        sortMenu.style.top = (r.bottom + 4) + "px";
+        sortMenu.style.left = r.left + "px";
+        sortMenu.style.right = "auto";
+      }
     });
     sortMenu.querySelectorAll(".documents-sort-option").forEach(btn => {
       btn.addEventListener("click", () => {
@@ -20046,13 +20082,23 @@ function renderComposeTabContent(container, tabId, opts = {}) {
         <span class="note-format-sep"></span>
         <button type="button" class="note-format-btn" data-cmd="insertUnorderedList" title="Bullet list">•</button>
         <button type="button" class="note-format-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
-        <button type="button" class="note-format-btn" data-cmd="formatBlock" data-val="blockquote" title="Quote" style="font-family:serif; font-style:italic;">"</button>
         <span class="note-format-sep"></span>
         <button type="button" class="note-format-btn note-format-hilite-btn" title="Highlight color">🖍</button>
         <button type="button" class="note-format-btn note-format-emoji-btn" title="Emoji">😀</button>
         <button type="button" class="note-format-btn note-format-link-btn" title="Insert link">🔗</button>
-        <span class="note-format-sep"></span>
-        <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear formatting">⌫</button>
+        <button type="button" class="note-format-btn note-format-color-btn" title="Text color">A<span class="note-format-color-bar"></span></button>
+        <button type="button" class="note-format-btn note-format-overflow-btn" title="More formatting">···</button>
+        <button type="button" class="note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="H2" title="Heading 2"><b>H2</b></button>
+        <button type="button" class="note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="H3" title="Heading 3"><b>H3</b></button>
+        <button type="button" class="note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="BLOCKQUOTE" title="Quote">❝</button>
+        <button type="button" class="note-format-btn" data-overflow="1" data-cmd="formatBlock" data-val="PRE" title="Code block">&lt;/&gt;</button>
+        <button type="button" class="note-format-btn" data-overflow="1" data-cmd="insertHorizontalRule" title="Horizontal rule">―</button>
+        <span class="note-format-sep" data-overflow="1"></span>
+        <button type="button" class="note-format-btn" data-overflow="1" data-cmd="indent" title="Indent">→</button>
+        <button type="button" class="note-format-btn" data-overflow="1" data-cmd="outdent" title="Outdent">←</button>
+        <span class="note-format-sep" data-overflow="1"></span>
+        <button type="button" class="note-format-btn" data-overflow="1" data-cmd="removeFormat" title="Clear formatting">&#x232B;</button>
+        <button type="button" class="note-format-btn note-format-img-upload-btn" data-overflow="1" title="Upload image">📷</button>
       </div>
       <div class="compose-tab-body note-editor" contenteditable="true" data-placeholder="Write your email..." style="flex:1; overflow-y:auto; min-height:200px; border:1px solid var(--border); border-radius:0 0 4px 4px; padding:0.5rem; background:var(--bg); color:var(--text);"></div>
     </div>
@@ -36009,6 +36055,17 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
       });
       item.appendChild(delBtn);
 
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "opp-photo-edit";
+      editBtn.title = "Markup photo";
+      editBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>`;
+      editBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openPhotoMarkupModal(photoId, oppId);
+      });
+      item.appendChild(editBtn);
+
       grid.appendChild(item);
     });
   }
@@ -39302,12 +39359,28 @@ document.addEventListener("click", function (e) {
   dd._ownerToolbar = toolbar;
   // Show dropdown
   dd.classList.add("open");
-  // Position fixed below the ··· button
+  // Position fixed below the ··· button, clamped to viewport
   dd.style.position = "fixed";
   const btnRect = btn.getBoundingClientRect();
-  dd.style.top = (btnRect.bottom + 4) + "px";
-  dd.style.right = (window.innerWidth - btnRect.right) + "px";
-  dd.style.left = "auto";
+  let top = btnRect.bottom + 4;
+  let left = btnRect.left;
+  // Clamp to viewport: if dropdown would go below screen, show above button
+  requestAnimationFrame(() => {
+    const ddRect = dd.getBoundingClientRect();
+    if (top + ddRect.height > window.innerHeight - 8) {
+      top = btnRect.top - ddRect.height - 4;
+    }
+    if (left + ddRect.width > window.innerWidth - 8) {
+      left = window.innerWidth - ddRect.width - 8;
+    }
+    if (left < 8) left = 8;
+    dd.style.top = top + "px";
+    dd.style.left = left + "px";
+    dd.style.right = "auto";
+  });
+  dd.style.top = top + "px";
+  dd.style.left = left + "px";
+  dd.style.right = "auto";
   // Move buttons back on any click inside dropdown
   dd.addEventListener("click", function() {
     setTimeout(() => {
@@ -39950,3 +40023,633 @@ setTimeout(() => {
     } catch(_) {}
   }
 }, 4000);
+
+/* roundRect polyfill for older browsers */
+if (typeof CanvasRenderingContext2D !== "undefined" && !CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+    if (typeof r === "number") r = [r, r, r, r];
+    else if (!Array.isArray(r)) r = [0, 0, 0, 0];
+    const [tl, tr, br, bl] = r;
+    this.moveTo(x + tl, y);
+    this.lineTo(x + w - tr, y);
+    this.quadraticCurveTo(x + w, y, x + w, y + tr);
+    this.lineTo(x + w, y + h - br);
+    this.quadraticCurveTo(x + w, y + h, x + w - br, y + h);
+    this.lineTo(x + bl, y + h);
+    this.quadraticCurveTo(x, y + h, x, y + h - bl);
+    this.lineTo(x, y + tl);
+    this.quadraticCurveTo(x, y, x + tl, y);
+    this.closePath();
+  };
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FEAT-027 — Photo Markup Editor (Gradia-inspired canvas annotation)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const _markupTools = [
+  { id: "pen",         label: "Pen",         icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>' },
+  { id: "line",        label: "Line",         icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="19" x2="19" y2="5"/></svg>' },
+  { id: "arrow",       label: "Arrow",        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>' },
+  { id: "rect",        label: "Rectangle",    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>' },
+  { id: "circle",      label: "Circle",       icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>' },
+  { id: "text",        label: "Text",         icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9.5" y1="20" x2="14.5" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>' },
+  { id: "highlighter", label: "Highlighter",  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>' },
+  { id: "censor",      label: "Censor",       icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>' },
+  { id: "number",      label: "Number Stamp", icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><text x="12" y="16" text-anchor="middle" font-size="12" font-weight="bold" fill="currentColor" stroke="none">1</text></svg>' },
+];
+
+let _markupState = null;
+
+function _markupScreenToImage(sx, sy) {
+  const s = _markupState;
+  if (!s || !s.canvas) return { x: 0, y: 0 };
+  const rect = s.canvas.getBoundingClientRect();
+  const displayW = rect.width;
+  const displayH = rect.height;
+  const scale = Math.min(displayW / s.natW, displayH / s.natH);
+  const drawW = s.natW * scale;
+  const drawH = s.natH * scale;
+  const offX = (displayW - drawW) / 2;
+  const offY = (displayH - drawH) / 2;
+  return {
+    x: (sx - rect.left - offX) / scale,
+    y: (sy - rect.top - offY) / scale,
+  };
+}
+
+function _markupRender() {
+  const s = _markupState;
+  if (!s || !s.ctx) return;
+  const { ctx, canvas, natW, natH, img, actions, currentAction } = s;
+  canvas.width = natW;
+  canvas.height = natH;
+  ctx.clearRect(0, 0, natW, natH);
+  if (img) ctx.drawImage(img, 0, 0, natW, natH);
+  for (const a of actions) _markupDrawAction(ctx, a, s);
+  if (currentAction) _markupDrawAction(ctx, currentAction, s);
+}
+
+function _markupDrawAction(ctx, a, s) {
+  ctx.save();
+  const col = a.color || "#ff0000";
+  const sz = a.size || 4;
+  switch (a.type) {
+    case "pen": {
+      if (!a.points || a.points.length < 2) break;
+      ctx.strokeStyle = col;
+      ctx.lineWidth = sz;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(a.points[0].x, a.points[0].y);
+      for (let i = 1; i < a.points.length - 1; i++) {
+        const mx = (a.points[i].x + a.points[i + 1].x) / 2;
+        const my = (a.points[i].y + a.points[i + 1].y) / 2;
+        ctx.quadraticCurveTo(a.points[i].x, a.points[i].y, mx, my);
+      }
+      const last = a.points[a.points.length - 1];
+      ctx.lineTo(last.x, last.y);
+      ctx.stroke();
+      break;
+    }
+    case "line": {
+      if (!a.start || !a.end) break;
+      ctx.strokeStyle = col;
+      ctx.lineWidth = sz;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(a.start.x, a.start.y);
+      ctx.lineTo(a.end.x, a.end.y);
+      ctx.stroke();
+      break;
+    }
+    case "arrow": {
+      if (!a.start || !a.end) break;
+      const dx = a.end.x - a.start.x;
+      const dy = a.end.y - a.start.y;
+      const angle = Math.atan2(dy, dx);
+      const headLen = Math.max(sz * 3, 12);
+      ctx.strokeStyle = col;
+      ctx.fillStyle = col;
+      ctx.lineWidth = sz;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(a.start.x, a.start.y);
+      ctx.lineTo(a.end.x, a.end.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(a.end.x, a.end.y);
+      ctx.lineTo(a.end.x - headLen * Math.cos(angle - Math.PI / 6), a.end.y - headLen * Math.sin(angle - Math.PI / 6));
+      ctx.lineTo(a.end.x - headLen * Math.cos(angle + Math.PI / 6), a.end.y - headLen * Math.sin(angle + Math.PI / 6));
+      ctx.closePath();
+      ctx.fill();
+      break;
+    }
+    case "rect": {
+      if (!a.start || !a.end) break;
+      const x = Math.min(a.start.x, a.end.x);
+      const y = Math.min(a.start.y, a.end.y);
+      const w = Math.abs(a.end.x - a.start.x);
+      const h = Math.abs(a.end.y - a.start.y);
+      if (a.fillColor) { ctx.fillStyle = a.fillColor; ctx.fillRect(x, y, w, h); }
+      ctx.strokeStyle = col;
+      ctx.lineWidth = sz;
+      ctx.strokeRect(x, y, w, h);
+      break;
+    }
+    case "circle": {
+      if (!a.start || !a.end) break;
+      const cx = (a.start.x + a.end.x) / 2;
+      const cy = (a.start.y + a.end.y) / 2;
+      const rx = Math.abs(a.end.x - a.start.x) / 2;
+      const ry = Math.abs(a.end.y - a.start.y) / 2;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      if (a.fillColor) { ctx.fillStyle = a.fillColor; ctx.fill(); }
+      ctx.strokeStyle = col;
+      ctx.lineWidth = sz;
+      ctx.stroke();
+      break;
+    }
+    case "text": {
+      if (!a.text || !a.position) break;
+      const fontSize = Math.max(sz * 3, 14);
+      ctx.font = `bold ${fontSize}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const lines = a.text.split("\n");
+      const lineHeight = fontSize * 1.25;
+      const totalH = lines.length * lineHeight;
+      const maxW = Math.max(...lines.map(l => ctx.measureText(l).width));
+      const bgY = a.position.y - totalH / 2 - 4;
+      const bgH = totalH + 8;
+      ctx.fillStyle = "rgba(0,0,0,0.65)";
+      const bgR = 4;
+      const bgX = a.position.x - maxW / 2 - 6;
+      const bgW = maxW + 12;
+      ctx.beginPath();
+      ctx.roundRect(bgX, bgY, bgW, bgH, bgR);
+      ctx.fill();
+      ctx.fillStyle = col;
+      lines.forEach((line, i) => {
+        ctx.fillText(line, a.position.x, a.position.y - totalH / 2 + lineHeight * i + lineHeight / 2);
+      });
+      break;
+    }
+    case "highlighter": {
+      if (!a.points || a.points.length < 2) break;
+      ctx.globalCompositeOperation = "multiply";
+      ctx.strokeStyle = col;
+      ctx.lineWidth = sz * 3;
+      ctx.lineCap = "butt";
+      ctx.lineJoin = "round";
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath();
+      ctx.moveTo(a.points[0].x, a.points[0].y);
+      for (let i = 1; i < a.points.length; i++) {
+        ctx.lineTo(a.points[i].x, a.points[i].y);
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
+      break;
+    }
+    case "censor": {
+      if (!a.start || !a.end) break;
+      const cx1 = Math.min(a.start.x, a.end.x);
+      const cy1 = Math.min(a.start.y, a.end.y);
+      const cw = Math.abs(a.end.x - a.start.x);
+      const ch = Math.abs(a.end.y - a.start.y);
+      if (cw < 2 || ch < 2) break;
+      const blockSz = Math.max(6, sz * 2);
+      const tmpC = document.createElement("canvas");
+      tmpC.width = Math.max(1, Math.ceil(cw / blockSz));
+      tmpC.height = Math.max(1, Math.ceil(ch / blockSz));
+      const tCtx = tmpC.getContext("2d");
+      tCtx.drawImage(s.canvas, cx1, cy1, cw, ch, 0, 0, tmpC.width, tmpC.height);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(tmpC, 0, 0, tmpC.width, tmpC.height, cx1, cy1, cw, ch);
+      ctx.imageSmoothingEnabled = true;
+      break;
+    }
+    case "number": {
+      if (!a.position) break;
+      const r = Math.max(sz * 2.5, 10);
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(a.position.x, a.position.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.font = `bold ${r * 1.1}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(String(a.number), a.position.x, a.position.y + 1);
+      break;
+    }
+  }
+  ctx.restore();
+}
+
+function openPhotoMarkupModal(photoId, oppId) {
+  const modal = $("#photo-markup-modal");
+  if (!modal) return;
+  const canvas = $("#photo-markup-canvas");
+  const wrap = $("#photo-markup-canvas-wrap");
+  const toolbar = $("#photo-markup-toolbar");
+  const footer = $("#photo-markup-footer");
+  if (!canvas || !wrap || !toolbar || !footer) return;
+
+  _markupState = {
+    canvas, wrap, toolbar, footer,
+    ctx: canvas.getContext("2d"),
+    img: null, natW: 0, natH: 0,
+    tool: "pen", color: "#ff0000", fillColor: null, size: 4,
+    actions: [], redoStack: [], currentAction: null,
+    drawing: false, numberCounter: 1, oppId, photoId,
+    _keyHandler: null, _resizeHandler: null,
+  };
+
+  toolbar.innerHTML = "";
+  footer.innerHTML = "";
+
+  _markupTools.forEach(t => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "photo-markup-tool-btn" + (t.id === "pen" ? " active" : "");
+    btn.title = t.label;
+    btn.innerHTML = t.icon;
+    btn.dataset.tool = t.id;
+    btn.addEventListener("click", () => {
+      _markupState.tool = t.id;
+      toolbar.querySelectorAll(".photo-markup-tool-btn").forEach(b => b.classList.toggle("active", b.dataset.tool === t.id));
+      wrap.className = "photo-markup-canvas-wrap tool-" + t.id;
+    });
+    toolbar.appendChild(btn);
+  });
+
+  const sep1 = document.createElement("span");
+  sep1.className = "markup-sep";
+  toolbar.appendChild(sep1);
+
+  const colorInput = document.createElement("input");
+  colorInput.type = "color";
+  colorInput.className = "photo-markup-color-input";
+  colorInput.value = "#ff0000";
+  colorInput.title = "Stroke color";
+  colorInput.addEventListener("input", () => { _markupState.color = colorInput.value; });
+  toolbar.appendChild(colorInput);
+
+  const fillColorBtn = document.createElement("button");
+  fillColorBtn.type = "button";
+  fillColorBtn.className = "photo-markup-tool-btn";
+  fillColorBtn.title = "Toggle fill color (for shapes)";
+  fillColorBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1"><rect x="4" y="4" width="16" height="16" rx="2" opacity="0.3"/></svg>';
+  let fillEnabled = false;
+  const fillInput = document.createElement("input");
+  fillInput.type = "color";
+  fillInput.value = "#ff000044";
+  fillInput.className = "photo-markup-color-input";
+  fillInput.style.display = "none";
+  fillInput.title = "Fill color";
+  fillColorBtn.addEventListener("click", () => {
+    fillEnabled = !fillEnabled;
+    fillColorBtn.classList.toggle("active", fillEnabled);
+    fillInput.style.display = fillEnabled ? "" : "none";
+    _markupState.fillColor = fillEnabled ? fillInput.value + "88" : null;
+  });
+  fillInput.addEventListener("input", () => {
+    if (fillEnabled) _markupState.fillColor = fillInput.value + "88";
+  });
+  toolbar.appendChild(fillColorBtn);
+  toolbar.appendChild(fillInput);
+
+  const sep2 = document.createElement("span");
+  sep2.className = "markup-sep";
+  toolbar.appendChild(sep2);
+
+  const sizeLabel = document.createElement("span");
+  sizeLabel.className = "photo-markup-size-label";
+  sizeLabel.textContent = "4";
+  const sizeSlider = document.createElement("input");
+  sizeSlider.type = "range";
+  sizeSlider.className = "photo-markup-size-slider";
+  sizeSlider.min = "1";
+  sizeSlider.max = "20";
+  sizeSlider.value = "4";
+  sizeSlider.addEventListener("input", () => {
+    _markupState.size = parseInt(sizeSlider.value);
+    sizeLabel.textContent = sizeSlider.value;
+  });
+  toolbar.appendChild(sizeLabel);
+  toolbar.appendChild(sizeSlider);
+
+  function _footerBtn(html, title, cls, disabled, onClick) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "photo-markup-action-btn" + (cls ? " " + cls : "");
+    b.title = title;
+    b.innerHTML = html;
+    if (disabled) b.disabled = true;
+    b.addEventListener("click", onClick);
+    return b;
+  }
+
+  const undoBtn = _footerBtn('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>', "Undo (Ctrl+Z)", "", true, () => {
+    if (!_markupState.actions.length) return;
+    _markupState.redoStack.push(_markupState.actions.pop());
+    _markupRender();
+    _markupUpdateUndoRedo();
+  });
+  const redoBtn = _footerBtn('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10"/></svg>', "Redo (Ctrl+Y)", "", true, () => {
+    if (!_markupState.redoStack.length) return;
+    _markupState.actions.push(_markupState.redoStack.pop());
+    _markupRender();
+    _markupUpdateUndoRedo();
+  });
+
+  function _markupUpdateUndoRedo() {
+    undoBtn.disabled = !_markupState.actions.length;
+    redoBtn.disabled = !_markupState.redoStack.length;
+  }
+  _markupState._updateUndoRedo = _markupUpdateUndoRedo;
+
+  const rotateBtn = _footerBtn('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10"/></svg>', "Rotate 90°", "", false, () => _markupRotate());
+
+  const spacer = document.createElement("span");
+  spacer.className = "photo-markup-footer-spacer";
+
+  const saveBtn = _footerBtn('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>', "Save Copy", "photo-markup-save-btn", false, () => _markupSave());
+
+  footer.appendChild(undoBtn);
+  footer.appendChild(redoBtn);
+  footer.appendChild(rotateBtn);
+  footer.appendChild(spacer);
+  footer.appendChild(saveBtn);
+
+  _markupState._undoBtn = undoBtn;
+  _markupState._redoBtn = redoBtn;
+
+  wrap.className = "photo-markup-canvas-wrap tool-pen";
+
+  _markupBindCanvasEvents();
+  _markupBindKeyboard();
+
+  modal.querySelectorAll("[data-photo-markup-dismiss]").forEach(el => {
+    el.addEventListener("click", () => closePhotoMarkupModal());
+  });
+
+  modal.classList.remove("hidden");
+
+  const loadEl = document.createElement("div");
+  loadEl.className = "photo-markup-loading";
+  loadEl.textContent = "Loading image...";
+  wrap.appendChild(loadEl);
+
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => {
+    loadEl.remove();
+    _markupState.img = img;
+    _markupState.natW = img.naturalWidth;
+    _markupState.natH = img.naturalHeight;
+    _markupRender();
+  };
+  img.onerror = () => {
+    loadEl.textContent = "Failed to load image";
+  };
+  img.src = `/api/v2/photos/${photoId}`;
+}
+
+function closePhotoMarkupModal() {
+  const modal = $("#photo-markup-modal");
+  if (modal) modal.classList.add("hidden");
+  if (_markupState) {
+    if (_markupState._keyHandler) document.removeEventListener("keydown", _markupState._keyHandler);
+    if (_markupState._resizeHandler) window.removeEventListener("resize", _markupState._resizeHandler);
+    _markupState = null;
+  }
+}
+
+function _markupBindCanvasEvents() {
+  const s = _markupState;
+  if (!s) return;
+  const { canvas, wrap } = s;
+  let isDown = false;
+
+  function getPos(e) {
+    const pt = e.touches ? e.touches[0] : e;
+    return _markupScreenToImage(pt.clientX, pt.clientY);
+  }
+
+  function onDown(e) {
+    if (s.tool === "select") return;
+    isDown = true;
+    const pos = getPos(e);
+    if (s.tool === "text") {
+      _markupShowTextInput(pos, canvas, wrap);
+      isDown = false;
+      return;
+    }
+    if (s.tool === "number") {
+      s.actions.push({ type: "number", position: pos, number: s.numberCounter++, color: s.color, size: s.size });
+      s.redoStack = [];
+      _markupRender();
+      _markupUpdateUndoRedo();
+      isDown = false;
+      return;
+    }
+    if (s.tool === "pen" || s.tool === "highlighter") {
+      s.currentAction = { type: s.tool, points: [pos], color: s.color, size: s.size };
+    } else {
+      s.currentAction = { type: s.tool, start: pos, end: pos, color: s.color, size: s.size, fillColor: s.fillColor };
+    }
+    if (e.cancelable) e.preventDefault();
+  }
+
+  function onMove(e) {
+    if (!isDown || !s.currentAction) return;
+    const pos = getPos(e);
+    if (s.tool === "pen" || s.tool === "highlighter") {
+      s.currentAction.points.push(pos);
+    } else {
+      s.currentAction.end = pos;
+    }
+    _markupRender();
+    if (e.cancelable) e.preventDefault();
+  }
+
+  function onUp() {
+    if (!isDown) return;
+    isDown = false;
+    if (s.currentAction) {
+      s.actions.push(s.currentAction);
+      s.currentAction = null;
+      s.redoStack = [];
+      _markupRender();
+      _markupUpdateUndoRedo();
+    }
+  }
+
+  canvas.addEventListener("mousedown", onDown);
+  canvas.addEventListener("mousemove", onMove);
+  canvas.addEventListener("mouseup", onUp);
+  canvas.addEventListener("mouseleave", onUp);
+  canvas.addEventListener("touchstart", onDown, { passive: false });
+  canvas.addEventListener("touchmove", onMove, { passive: false });
+  canvas.addEventListener("touchend", onUp);
+}
+
+function _markupShowTextInput(pos, canvas, wrap) {
+  const s = _markupState;
+  if (!s) return;
+  const rect = canvas.getBoundingClientRect();
+  const displayW = rect.width;
+  const displayH = rect.height;
+  const scale = Math.min(displayW / s.natW, displayH / s.natH);
+  const drawW = s.natW * scale;
+  const drawH = s.natH * scale;
+  const offX = (displayW - drawW) / 2;
+  const offY = (displayH - drawH) / 2;
+  const screenX = pos.x * scale + offX + rect.left;
+  const screenY = pos.y * scale + offY + rect.top;
+
+  const existing = wrap.querySelector(".photo-markup-text-input");
+  if (existing) existing.remove();
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "photo-markup-text-input";
+  input.style.left = (pos.x * scale + offX - 30) + "px";
+  input.style.top = (pos.y * scale + offY - 12) + "px";
+  input.style.color = s.color;
+  input.placeholder = "Type text...";
+  wrap.appendChild(input);
+  input.focus();
+
+  function commit() {
+    const text = input.value.trim();
+    input.remove();
+    if (text) {
+      s.actions.push({ type: "text", position: pos, text, color: s.color, size: s.size });
+      s.redoStack = [];
+      _markupRender();
+      _markupUpdateUndoRedo();
+    }
+  }
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { commit(); e.preventDefault(); }
+    if (e.key === "Escape") { input.remove(); }
+    e.stopPropagation();
+  });
+  input.addEventListener("blur", commit);
+}
+
+function _markupRotate() {
+  const s = _markupState;
+  if (!s || !s.img) return;
+  const tmpC = document.createElement("canvas");
+  tmpC.width = s.natW;
+  tmpC.height = s.natH;
+  const tCtx = tmpC.getContext("2d");
+  tCtx.drawImage(s.canvas, 0, 0);
+  const newW = s.natH;
+  const newH = s.natW;
+  s.natW = newW;
+  s.natH = newH;
+  s.canvas.width = newW;
+  s.canvas.height = newH;
+  s.ctx.clearRect(0, 0, newW, newH);
+  s.ctx.save();
+  s.ctx.translate(newW, 0);
+  s.ctx.rotate(Math.PI / 2);
+  s.ctx.drawImage(tmpC, 0, 0);
+  s.ctx.restore();
+  const newImg = new Image();
+  newImg.src = s.canvas.toDataURL();
+  newImg.onload = () => { s.img = newImg; _markupRender(); };
+}
+
+function _markupBindKeyboard() {
+  const handler = (e) => {
+    if (!_markupState) return;
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+    if ((e.ctrlKey || e.metaKey) && e.key === "z") {
+      e.preventDefault();
+      if (e.shiftKey) {
+        if (_markupState.redoStack.length) {
+          _markupState.actions.push(_markupState.redoStack.pop());
+          _markupRender();
+          _markupUpdateUndoRedo();
+        }
+      } else {
+        if (_markupState.actions.length) {
+          _markupState.redoStack.push(_markupState.actions.pop());
+          _markupRender();
+          _markupUpdateUndoRedo();
+        }
+      }
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === "y") {
+      e.preventDefault();
+      if (_markupState.redoStack.length) {
+        _markupState.actions.push(_markupState.redoStack.pop());
+        _markupRender();
+        _markupUpdateUndoRedo();
+      }
+    }
+    if (e.key === "Escape") closePhotoMarkupModal();
+  };
+  document.addEventListener("keydown", handler);
+  _markupState._keyHandler = handler;
+}
+
+function _markupUpdateUndoRedo() {
+  if (_markupState && _markupState._updateUndoRedo) _markupState._updateUndoRedo();
+}
+
+async function _markupSave() {
+  const s = _markupState;
+  if (!s) return;
+  const saveBtn = s.footer.querySelector(".photo-markup-save-btn");
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving..."; }
+  try {
+    const blob = await new Promise(resolve => s.canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("Failed to create image");
+    const formData = new FormData();
+    formData.append("file", blob, "markup.png");
+    formData.append("source_photo_id", String(s.photoId));
+    const resp = await fetch(`/api/v2/projects/${s.oppId}/photos/markup`, {
+      method: "POST", credentials: "same-origin", body: formData,
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${resp.status}`);
+    }
+    showToast("Markup saved as new photo");
+    closePhotoMarkupModal();
+    _markupRefreshPhotosGrid(s.oppId);
+  } catch (err) {
+    showToast("Save failed: " + err.message, true);
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Save Copy'; }
+  }
+}
+
+function _markupRefreshPhotosGrid(oppId) {
+  const photosContainer = document.querySelector('.opp-preview-tab-content[data-tab-content="photos"]');
+  if (!photosContainer) return;
+  const oppPreviewModal = $("#opp-preview-modal");
+  if (oppPreviewModal && oppPreviewModal.classList.contains("hidden")) return;
+  (async () => {
+    try {
+      const data = await api(`/api/v2/projects/${oppId}/photos`);
+      const photos = data.photos || data || [];
+      renderOpportunityPreviewPhotosTab(photosContainer, oppId, photos);
+    } catch (_) {}
+  })();
+}

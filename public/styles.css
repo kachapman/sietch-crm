@@ -7726,6 +7726,33 @@ body {
   background: rgba(220, 38, 38, 0.85);
 }
 
+.opp-photo-edit {
+  position: absolute;
+  top: 0.35rem;
+  left: 0.35rem;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  border: none;
+  border-radius: 50%;
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 2;
+}
+
+.opp-photo-item:hover .opp-photo-edit {
+  opacity: 1;
+}
+
+.opp-photo-edit:hover {
+  background: rgba(99, 102, 241, 0.85);
+}
+
 .opp-photo-item.selected .opp-photo-thumb {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent);
@@ -13887,6 +13914,51 @@ select.form-control {
   font-size: 0.85rem;
 }
 
+/* Actions button + custom dropdown */
+.documents-actions-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.documents-actions-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 130px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  padding: 0.35rem;
+}
+
+.documents-actions-menu.hidden {
+  display: none;
+}
+
+.documents-actions-option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.documents-actions-option:hover {
+  background: var(--surface-2);
+  outline: none;
+}
+
 /* Documents sidebar toggle */
 .documents-sidebar-toggle {
   flex: 0 0 auto;
@@ -15037,11 +15109,18 @@ select.form-control {
   #compose-send-btn {
     padding: 0.35rem 0.8rem;
   }
+  #documents-modal {
+    padding: 0;
+  }
   .documents-modal-card {
-    width: 100%;
-    height: 100%;
-    max-height: 100%;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    max-height: 100dvh !important;
     border-radius: 0;
+    resize: none;
+    min-width: 0;
   }
   .documents-main {
     min-width: 0;
@@ -15056,6 +15135,25 @@ select.form-control {
     min-height: 1.9rem;
     padding: 0.3rem;
   }
+  /* Sort dropdown: fixed on mobile to escape overflow */
+  .documents-sort-menu {
+    position: fixed;
+    z-index: 99999;
+  }
+  /* Actions dropdown: fixed on mobile */
+  .documents-actions-menu {
+    position: fixed;
+    z-index: 99999;
+  }
+}
+
+/* Compose body images: auto-resize to standard width (not thumbnail) */
+#compose-body img,
+.compose-tab-body img {
+  max-width: 600px;
+  height: auto;
+  display: block;
+  border-radius: 4px;
 }
 
 /* Compose modal: fill viewport on mobile, sticky footer */
@@ -17067,4 +17165,215 @@ select.form-control {
   .opp-preview-due-date-input { color-scheme: dark; }
 }
 
+/* ── Photo Markup Editor Modal ──────────────────────────────────────────── */
+.modal-card-photo-markup {
+  resize: both;
+  min-width: 560px;
+  min-height: 420px;
+  max-width: 96vw;
+  max-height: 96vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+.photo-markup-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.photo-markup-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.4rem 0.65rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-wrap: wrap;
+  min-height: 38px;
+}
+.photo-markup-toolbar .markup-sep {
+  width: 1px;
+  height: 1.4rem;
+  background: var(--border);
+  margin: 0 0.2rem;
+  flex-shrink: 0;
+}
+.photo-markup-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  flex-shrink: 0;
+}
+.photo-markup-tool-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.photo-markup-tool-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.photo-markup-tool-btn svg {
+  width: 16px;
+  height: 16px;
+}
+.photo-markup-color-input {
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  background: none;
+  flex-shrink: 0;
+}
+.photo-markup-color-input::-webkit-color-swatch-wrapper { padding: 1px; }
+.photo-markup-color-input::-webkit-color-swatch { border: none; border-radius: 2px; }
+.photo-markup-size-slider {
+  width: 60px;
+  height: 4px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+.photo-markup-size-label {
+  font-size: 0.7rem;
+  color: var(--muted);
+  min-width: 1.2rem;
+  text-align: center;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.photo-markup-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.65rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  min-height: 38px;
+}
+.photo-markup-footer-spacer {
+  flex: 1;
+}
+.photo-markup-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+.photo-markup-action-btn:hover {
+  background: var(--surface);
+  border-color: var(--muted);
+}
+.photo-markup-action-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.photo-markup-action-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.photo-markup-save-btn {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.photo-markup-save-btn:hover {
+  background: color-mix(in srgb, var(--accent) 85%, #000);
+  border-color: color-mix(in srgb, var(--accent) 85%, #000);
+}
+.photo-markup-canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  background: #1a1a1a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: crosshair;
+}
+.photo-markup-canvas-wrap canvas {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.photo-markup-canvas-wrap.tool-select { cursor: default; }
+.photo-markup-canvas-wrap.tool-pen,
+.photo-markup-canvas-wrap.tool-highlighter { cursor: crosshair; }
+.photo-markup-canvas-wrap.tool-text { cursor: text; }
+.photo-markup-canvas-wrap.tool-move { cursor: grab; }
+.photo-markup-canvas-wrap.tool-move:active { cursor: grabbing; }
+
+.photo-markup-text-input {
+  position: absolute;
+  z-index: 10;
+  background: transparent;
+  border: 2px dashed var(--accent);
+  border-radius: 4px;
+  color: #fff;
+  font-size: 18px;
+  font-family: sans-serif;
+  text-align: center;
+  padding: 4px 8px;
+  outline: none;
+  min-width: 60px;
+  pointer-events: auto;
+}
+.photo-markup-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #999;
+  font-size: 0.9rem;
+}
+
+/* Mobile full-screen */
+@media (max-width: 600px) {
+  #photo-markup-modal {
+    padding: 0;
+  }
+  #photo-markup-modal .modal-card {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    max-height: 100dvh !important;
+    border-radius: 0;
+    resize: none;
+    min-width: 0;
+  }
+  .photo-markup-toolbar {
+    gap: 0.15rem;
+    padding: 0.3rem 0.4rem;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+  .photo-markup-tool-btn {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+  .photo-markup-size-slider { width: 45px; }
+}
 

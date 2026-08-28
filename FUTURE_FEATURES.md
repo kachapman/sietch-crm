@@ -608,3 +608,44 @@ The `notification_dispatcher.py` background thread already polls `notifications`
 7. **FEAT-024** — Native CRM iframe embed (investigated, not implemented — see above).
 8. **FEAT-026** — Full dashboard light mode (deferred — final cosmetic phase).
 9. Pick items from **Toaster_Features** by priority.
+
+---
+
+## FEAT-027 — Photo Markup Editor (IMPLEMENTING)
+
+**Status:** In progress. Canvas-based photo annotation editor for project photos.
+
+### Feature
+
+Edit button on photo thumbnails opens a modal with a full-resolution canvas editor. Users can mark up photos with annotation tools (pen, arrow, rectangle, circle, text, highlighter, censor/pixelate, number stamps) and save the annotated version as a new photo in the same project gallery.
+
+### Tools (mirroring Gradia)
+
+| Tool | Description |
+|------|-------------|
+| Pen | Freehand drawing with smooth bezier curves |
+| Line | Straight lines |
+| Arrow | Lines with arrowheads |
+| Rectangle | Outlined/filled rectangles |
+| Circle | Outlined/filled ovals |
+| Text | Text labels with background pill |
+| Highlighter | Semi-transparent strokes (multiply blend) |
+| Censor | Pixelate rectangular regions |
+| Number | Auto-incrementing numbered circle stamps |
+
+### Architecture
+
+- **All client-side:** Canvas 2D API, no server-side image processing
+- **Action-based:** Each tool creates an action object with `draw(ctx, scale)` — supports undo/redo naturally
+- **Full resolution:** Canvas internal = image natural dimensions; CSS scales display
+- **Save as copy:** `canvas.toBlob()` → POST to `/api/v2/projects/{id}/photos/markup` → new photo row
+- **No external libraries:** Pure vanilla JS matching project conventions
+
+### Files
+
+| File | Changes |
+|------|---------|
+| `public/index.html` | Modal HTML (~30 lines) |
+| `public/styles.css` | Modal + toolbar + canvas styles (~200 lines) |
+| `public/app.js` | Editor logic, tools, events, save flow (~900 lines) |
+| `server.py` | `POST /api/v2/projects/{id}/photos/markup` endpoint (~45 lines) |

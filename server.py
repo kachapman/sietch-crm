@@ -3131,6 +3131,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             else:
                 _json_response(self, 404, {"error": "Project not found"})
             return
+        m = re.match(r"^/api/v2/projects/(\d+)/photos/markup$", api_path)
+        if m and method == "POST":
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_photo_markup(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
+            return
         m = re.match(r"^/api/v2/projects/(\d+)/photo-folders$", api_path)
         if m and method == "POST":
             opp_id = _resolve_project_id(m.group(1))
@@ -6854,6 +6862,92 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         _json_response(self, 201, {
             "id": photo_id, "filename": filename, "fileSize": file_size,
             "mimeType": mime_type, "exifData": exif_data,
+            "url": f"/api/v2/photos/{photo_id}",
+            "thumbnailUrl": f"/api/v2/photos/{photo_id}?thumbnail=1",
+            "uploadedBy": user["id"], "uploadedAt": datetime.now(timezone.utc).isoformat(),
+        })
+
+    def _handle_project_photo_markup(self, opp_id: int) -> None:
+        """Accept an annotated (marked-up) photo from the canvas editor and save as a new photo."""
+        user = _require_auth(self)
+        if not user:
+            return
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.startswith("multipart/form-data"):
+            _json_response(self, 400, {"error": "Expected multipart/form-data"})
+            return
+        try:
+            parsed = _parse_multipart(_read_body(self), content_type)
+        except Exception as exc:
+            _json_response(self, 400, {"error": f"Invalid multipart body: {exc}"})
+            return
+        file_info = parsed.get("file")
+        if not file_info:
+            _json_response(self, 400, {"error": "file field required"})
+            return
+        data = file_info["data"]
+        mime_type = file_info.get("content-type") or "image/png"
+        if not mime_type.startswith("image/"):
+            _json_response(self, 400, {"error": "Only image files are supported"})
+            return
+        source_id = (parsed.get("source_photo_id") or {}).get("data", b"").decode("utf-8", errors="ignore").strip()
+        source_name = "markup"
+        if source_id:
+            try:
+                src_row = db.query_one("SELECT filename FROM project_photos WHERE id = %s", (int(source_id),))
+                if src_row:
+                    base = src_row["filename"]
+                    source_name = base.rsplit(".", 1)[0] if "." in base else base
+            except Exception:
+                pass
+        safe_name = re.sub(r'[^\w.\-]', '_', source_name)
+        ts = int(time.time())
+        filename = f"{safe_name}_markup_{ts}.png"
+        opp_dir = PHOTO_STORAGE_PATH / str(opp_id)
+        opp_dir.mkdir(parents=True, exist_ok=True)
+        unique_name = f"{ts}_markup_{safe_name}.png"
+        file_path = opp_dir / unique_name
+        thumb_name = f"thumb_{unique_name}"
+        thumb_path = opp_dir / thumb_name
+        file_path.write_bytes(data)
+        file_size = len(data)
+        thumb_path_out = None
+        if Image:
+            try:
+                with Image.open(io.BytesIO(data)) as img:
+                    img.thumbnail((400, 400), Image.Resampling.LANCZOS)
+                    if img.mode in ("RGBA", "P"):
+                        bg = Image.new("RGB", img.size, (255, 255, 255))
+                        if img.mode == "P":
+                            img = img.convert("RGBA")
+                        bg.paste(img, mask=img.split()[3])
+                        img = bg
+                    elif img.mode != "RGB":
+                        img = img.convert("RGB")
+                    img.save(thumb_path, "JPEG", quality=85)
+                    thumb_path_out = thumb_path
+            except Exception as exc:
+                logger.warning("Markup photo thumbnail failed: %s", exc)
+        try:
+            photo_id = db.insert_returning(
+                """INSERT INTO project_photos (opportunity_id, filename, file_path, file_size, mime_type, thumbnail_path, uploaded_by)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                (opp_id, filename, str(file_path.relative_to(ROOT)), file_size, "image/png",
+                 str(thumb_path_out.relative_to(ROOT)) if thumb_path_out else None, user["id"]),
+            )
+        except Exception as exc:
+            try:
+                file_path.unlink(missing_ok=True)
+                if thumb_path_out:
+                    thumb_path_out.unlink(missing_ok=True)
+            except Exception:
+                pass
+            log_infra_event("error", f"Markup photo DB insert failed: {exc}", source="documents", method=self.command, path=api_path)
+            _json_response(self, 500, {"error": f"Upload failed: {exc}"})
+            return
+        _json_response(self, 201, {
+            "id": photo_id, "filename": filename, "fileSize": file_size,
+            "mimeType": "image/png",
             "url": f"/api/v2/photos/{photo_id}",
             "thumbnailUrl": f"/api/v2/photos/{photo_id}?thumbnail=1",
             "uploadedBy": user["id"], "uploadedAt": datetime.now(timezone.utc).isoformat(),
