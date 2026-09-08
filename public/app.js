@@ -35776,6 +35776,12 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
   renderPreviewDocsList();
   updateDocsToolbar();
 
+  document.addEventListener("photo-report-saved", function onPhotoReportSaved(e) {
+    if (e.detail && e.detail.oppId === oppId) {
+      refreshDocs();
+    }
+  });
+
   container.appendChild(docsContent);
 
   // Photos tab
@@ -40955,7 +40961,7 @@ function renderPhotoReportForm(body, project, templates, selPhotos, oppId) {
         showToast("Photo report saved to Documents tab");
         $("#photo-report-modal").classList.add("hidden");
         _markupRefreshPhotosGrid(oppId);
-        if (typeof refreshDocs === "function") refreshDocs();
+        document.dispatchEvent(new CustomEvent("photo-report-saved", { detail: { oppId } }));
       })
       .catch(err => {
         showToast("Failed: " + err.message, true);

@@ -7173,7 +7173,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         comp_address = template.get("address", "")
         comp_city = template.get("city_state_zip", "")
         comp_phone = template.get("phone", "")
-        title_font_size = int(template.get("text_logo_font_size", 16))
+        title_font_size = int(template.get("text_logo_font_size", 10))
         tagline_font_size = int(template.get("text_logo_tagline_size", 8))
         try:
             import colorsys
