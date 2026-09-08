@@ -7143,7 +7143,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             order_clause = "ORDER BY p.uploaded_at ASC"
         else:
             order_clause = "ORDER BY array_position(ARRAY[" + placeholders + "]::int[], p.id)"
-        photo_rows = db.query(
+        photo_rows = db.query_dicts(
             f"""SELECT p.id, p.filename, p.file_path, p.file_size, p.mime_type, p.exif_data, p.uploaded_at
                 FROM project_photos p
                 WHERE p.id IN ({placeholders}) AND p.is_deleted = FALSE {order_clause}""",
