@@ -6997,7 +6997,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_admin(self)
         if not user:
             return
-        data = _read_json_body(self)
+        data = json.loads(_read_body(self) or b"{}")
         if not data or not data.get("name"):
             _json_response(self, 400, {"error": "name is required"})
             return
@@ -7026,7 +7026,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_admin(self)
         if not user:
             return
-        data = _read_json_body(self)
+        data = json.loads(_read_body(self) or b"{}")
         if not data:
             _json_response(self, 400, {"error": "No data"})
             return
@@ -7106,7 +7106,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except ImportError:
             _json_response(self, 500, {"error": "fpdf2 not installed"})
             return
-        data = _read_json_body(self)
+        data = json.loads(_read_body(self) or b"{}")
         if not data:
             _json_response(self, 400, {"error": "No data"})
             return

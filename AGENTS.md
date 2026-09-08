@@ -1,5 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
+> **Server-wide reference:** `/home/chapman-server/Projects/CHAPMANSERVER_WIREDOOR.md` — how services on this machine are exposed to the internet (Wiredoor tunnel, public hostnames/ports, credentials, troubleshooting). Read it before touching networking, tunnels, or public ports.
+
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
 **Last session summary (for next resume):** 2026-08-28: **Photo Report Generator (FEAT-028).** PDF photo reports from project photos via Photos tab -> Actions -> Photo Report. Configurable company templates (logo, colors, text fallback) managed in Admin console -> Reports tab. Auto-populated fields: title, file name, customer, claim #, project #, address. Optional summary page, 1-4 photos per page, per-photo captions, configurable size limit (default 20MB). Quality loop (85->30) with 1800px max image edge. Saved to Documents tab. **Previous:** Photo Markup Editor (FEAT-027) completed. Canvas-based photo annotation editor. **NEXT:** Browser test all changes, commit.
 
