@@ -7268,6 +7268,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return text.encode("latin-1", errors="replace").decode("latin-1")
         def _draw_header(pdf_obj):
             y = margin_t
+            logo_w = 0
+            logo_h = 0
+            max_logo_h = 0.5
             if logo_path:
                 try:
                     with Image.open(logo_path) as logo_img:
@@ -7275,18 +7278,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         aspect = lh / lw
                         logo_w = min(1.5, usable_w * 0.3)
                         logo_h = logo_w * aspect
+                        if logo_h > max_logo_h:
+                            logo_h = max_logo_h
+                            logo_w = logo_h / aspect
                         pdf_obj.image(logo_path, x=margin_l, y=y, w=logo_w, h=logo_h)
                 except Exception:
                     pass
-            else:
+            text_x = margin_l + logo_w + (0.15 if logo_w > 0 else 0)
+            text_w = usable_w * 0.45 if logo_w > 0 else usable_w * 0.5
+            if text_logo_lines and text_logo_lines[0]:
                 pdf_obj.set_text_color(r_c, g_c, b_c)
                 pdf_obj.set_font("Helvetica", "B", title_font_size)
-                pdf_obj.set_xy(margin_l, y)
-                pdf_obj.cell(usable_w * 0.5, title_font_size / 72 + 0.1, _pdf_safe(text_logo_lines[0] if text_logo_lines else "Company"), align="L")
-                if len(text_logo_lines) > 1:
+                pdf_obj.set_xy(text_x, y)
+                pdf_obj.cell(text_w, title_font_size / 72 + 0.1, _pdf_safe(text_logo_lines[0]), align="L")
+                if len(text_logo_lines) > 1 and text_logo_lines[1]:
                     pdf_obj.set_font("Helvetica", "", tagline_font_size)
-                    pdf_obj.set_xy(margin_l, y + title_font_size / 72 + 0.05)
-                    pdf_obj.cell(usable_w * 0.5, tagline_font_size / 72 + 0.05, _pdf_safe(text_logo_lines[1]), align="L")
+                    pdf_obj.set_xy(text_x, y + title_font_size / 72 + 0.05)
+                    pdf_obj.cell(text_w, tagline_font_size / 72 + 0.05, _pdf_safe(text_logo_lines[1]), align="L")
                 pdf_obj.set_text_color(0, 0, 0)
             info_x = margin_l + usable_w * 0.5
             info_w = usable_w * 0.5
@@ -7427,10 +7435,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     content_top += 0.4
                     content_h = content_bottom - content_top
                 actual_page = page_num if not has_summary else page_num - 1
-                start_idx = actual_page * photos_per_page
-                batch = photos[start_idx:start_idx + photos_per_page]
+                batch = photos[photo_idx:photo_idx + photos_per_page]
                 if batch:
                     _draw_photo_batch(pdf, batch, content_top, content_h)
+                    photo_idx += len(batch)
         pdf.output(output_path)
 
     def _handle_project_photo_folders_get(self, opp_id: int) -> None:

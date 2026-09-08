@@ -17255,6 +17255,60 @@ select.form-control {
   outline: none;
   border-color: var(--accent);
 }
+.photo-report-section-toggle {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.photo-report-collapse-icon {
+  font-size: 0.7rem;
+  transition: transform 0.15s;
+}
+.photo-report-summary-editor-wrap {
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2, var(--surface));
+  box-sizing: border-box;
+}
+.photo-report-summary-editor-wrap .note-format-toolbar {
+  margin-bottom: 0.25rem;
+  justify-content: flex-start;
+  gap: 0.2rem;
+  flex-wrap: wrap;
+}
+.photo-report-summary-editor-wrap .note-format-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 0.15rem 0.2rem;
+}
+.photo-report-summary-editor-wrap .note-editor {
+  min-height: 80px;
+  max-height: 250px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text);
+  margin-bottom: 0.25rem;
+  resize: both;
+}
+.photo-report-summary-editor-wrap .note-editor:focus {
+  outline: none;
+  border-color: var(--accent, #66bb6a);
+}
+.photo-report-summary-editor-wrap .note-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+  pointer-events: none;
+}
 .photo-report-actions {
   display: flex;
   align-items: center;

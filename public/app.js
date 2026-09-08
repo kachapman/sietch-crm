@@ -40830,20 +40830,48 @@ function renderPhotoReportForm(body, project, templates, selPhotos, oppId) {
   form.appendChild(jobSection);
   const summarySection = document.createElement("div");
   summarySection.className = "photo-report-section";
-  summarySection.innerHTML = '<div class="photo-report-section-title">Summary</div>';
-  summarySection.appendChild(_checkbox("Include summary page", "pr-include-summary", false));
+  const summaryToggle = document.createElement("div");
+  summaryToggle.className = "photo-report-section-title photo-report-section-toggle";
+  summaryToggle.innerHTML = 'Summary <span class="photo-report-collapse-icon">▾</span>';
+  summaryToggle.style.cursor = "pointer";
+  summaryToggle.style.userSelect = "none";
+  const summaryContent = document.createElement("div");
+  summaryContent.className = "photo-report-section-content";
+  summaryContent.style.display = "none";
+  summaryToggle.addEventListener("click", () => {
+    const isOpen = summaryContent.style.display !== "none";
+    summaryContent.style.display = isOpen ? "none" : "block";
+    summaryToggle.querySelector(".photo-report-collapse-icon").textContent = isOpen ? "▸" : "▾";
+  });
+  summarySection.appendChild(summaryToggle);
+  summaryContent.appendChild(_checkbox("Include summary page", "pr-include-summary", false));
   const summaryField = document.createElement("div");
   summaryField.className = "photo-report-field";
   const summaryLabel = document.createElement("label");
   summaryLabel.textContent = "Opening Statement / Summary";
   summaryLabel.htmlFor = "pr-summary";
   summaryField.appendChild(summaryLabel);
-  const summaryTA = document.createElement("textarea");
-  summaryTA.id = "pr-summary";
-  summaryTA.placeholder = "Optional opening statement for the report...";
-  summaryTA.rows = 4;
-  summaryField.appendChild(summaryTA);
-  summarySection.appendChild(summaryField);
+  const editorWrap = document.createElement("div");
+  editorWrap.className = "photo-report-summary-editor-wrap";
+  editorWrap.innerHTML = '<div class="note-format-toolbar" aria-label="Formatting">' +
+    '<button type="button" class="note-format-btn" data-cmd="bold" title="Bold"><b>B</b></button>' +
+    '<button type="button" class="note-format-btn" data-cmd="italic" title="Italic"><i>I</i></button>' +
+    '<button type="button" class="note-format-btn" data-cmd="underline" title="Underline"><u>U</u></button>' +
+    '<button type="button" class="note-format-btn" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>' +
+    '<span class="note-format-sep"></span>' +
+    '<button type="button" class="note-format-btn" data-cmd="insertUnorderedList" title="Bullet list">&bull;</button>' +
+    '<button type="button" class="note-format-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>' +
+    '<span class="note-format-sep"></span>' +
+    '<button type="button" class="note-format-btn note-format-hilite-btn" title="Highlight color">🖍</button>' +
+    '<button type="button" class="note-format-btn" data-cmd="insertHorizontalRule" title="Horizontal rule">―</button>' +
+    '<button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear formatting">⌫</button>' +
+    '</div>' +
+    '<div class="note-editor-wrap">' +
+      '<div class="note-editor photo-report-note-editor" contenteditable="true" data-placeholder="Optional opening statement for the report..."></div>' +
+    '</div>';
+  summaryField.appendChild(editorWrap);
+  summaryContent.appendChild(summaryField);
+  summarySection.appendChild(summaryContent);
   form.appendChild(summarySection);
   const layoutSection = document.createElement("div");
   layoutSection.className = "photo-report-section";
@@ -40916,7 +40944,7 @@ function renderPhotoReportForm(body, project, templates, selPhotos, oppId) {
       claim_number: ($("#pr-claim") || {}).value || "",
       project_number: ($("#pr-project-num") || {}).value || "",
       address: ($("#pr-address") || {}).value || "",
-      summary: ($("#pr-include-summary") || {}).checked ? ($("#pr-summary") || {}).value : "",
+      summary: ($("#pr-include-summary") || {}).checked ? (($("#pr-summary-editor") || {}).innerText || ($("#pr-summary-editor") || {}).textContent || "") : "",
       photos_per_page: parseInt((($("#pr-photos-per-page") || {}).value) || "1"),
       photo_order: ($("#pr-photo-order") || {}).value || "selection",
       max_size_mb: parseFloat((($("#pr-max-size") || {}).value) || "20"),
