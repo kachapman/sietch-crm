@@ -11,6 +11,7 @@ import collections
 import base64
 import gzip
 import shutil
+import tempfile
 import subprocess
 import sys
 import threading
