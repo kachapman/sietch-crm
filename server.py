@@ -7342,49 +7342,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if has_summary:
             pages_needed += 1
         photo_idx = 0
-        for page_num in range(pages_needed):
-            pdf.add_page()
-            header_bottom = _draw_header(pdf)
-            _draw_footer(pdf, page_num + 1)
-            content_top = header_bottom + 0.15
-            content_bottom = page_h - margin_b - 0.35
-            content_h = content_bottom - content_top
-            if page_num == 0 and has_summary:
-                title_y = content_top
-                full_title = report_title
-                if show_claim and claim_number:
-                    full_title += f" - Claim #{claim_number}"
-                pdf.set_font("Helvetica", "B", 14)
-                pdf.set_xy(margin_l, title_y)
-                pdf.cell(usable_w, 0.3, _pdf_safe(full_title), align="L")
-                summary_y = title_y + 0.4
-                pdf.set_font("Helvetica", "", 10)
-                pdf.set_xy(margin_l, summary_y)
-                pdf.multi_cell(usable_w, 0.18, _pdf_safe(summary), align="L")
-                summary_bottom = pdf.get_y() + 0.1
-                photos_start = summary_bottom + 0.2
-                remaining_h = content_bottom - photos_start
-                if remaining_h < 1.0:
-                    continue
-                batch = photos[0:min(photos_per_page, total_photos)]
-                _draw_photo_batch(pdf, batch, photos_start, remaining_h)
-                photo_idx = len(batch)
-            else:
-                if page_num == 0 and not has_summary:
-                    title_y = content_top
-                    full_title = report_title
-                    if show_claim and claim_number:
-                        full_title += f" - Claim #{claim_number}"
-                    pdf.set_font("Helvetica", "B", 14)
-                    pdf.set_xy(margin_l, title_y)
-                    pdf.cell(usable_w, 0.3, _pdf_safe(full_title), align="L")
-                    content_top += 0.4
-                    content_h = content_bottom - content_top
-                actual_page = page_num if not has_summary else page_num - 1
-                start_idx = actual_page * photos_per_page
-                batch = photos[start_idx:start_idx + photos_per_page]
-                if batch:
-                    _draw_photo_batch(pdf, batch, content_top, content_h)
         def _draw_photo_batch(pdf_obj, batch, y_start, available_h):
             n = len(batch)
             if n == 0:
@@ -7431,6 +7388,49 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             pdf_obj.set_font("Helvetica", "", 8)
                             pdf_obj.set_xy(margin_l, info_y + (0.3 if caption and show_captions else 0.15))
                             pdf_obj.cell(usable_w, 0.12, f"Photo Date: {_pdf_safe(date_str)}", align="L")
+        for page_num in range(pages_needed):
+            pdf.add_page()
+            header_bottom = _draw_header(pdf)
+            _draw_footer(pdf, page_num + 1)
+            content_top = header_bottom + 0.15
+            content_bottom = page_h - margin_b - 0.35
+            content_h = content_bottom - content_top
+            if page_num == 0 and has_summary:
+                title_y = content_top
+                full_title = report_title
+                if show_claim and claim_number:
+                    full_title += f" - Claim #{claim_number}"
+                pdf.set_font("Helvetica", "B", 14)
+                pdf.set_xy(margin_l, title_y)
+                pdf.cell(usable_w, 0.3, _pdf_safe(full_title), align="L")
+                summary_y = title_y + 0.4
+                pdf.set_font("Helvetica", "", 10)
+                pdf.set_xy(margin_l, summary_y)
+                pdf.multi_cell(usable_w, 0.18, _pdf_safe(summary), align="L")
+                summary_bottom = pdf.get_y() + 0.1
+                photos_start = summary_bottom + 0.2
+                remaining_h = content_bottom - photos_start
+                if remaining_h < 1.0:
+                    continue
+                batch = photos[0:min(photos_per_page, total_photos)]
+                _draw_photo_batch(pdf, batch, photos_start, remaining_h)
+                photo_idx = len(batch)
+            else:
+                if page_num == 0 and not has_summary:
+                    title_y = content_top
+                    full_title = report_title
+                    if show_claim and claim_number:
+                        full_title += f" - Claim #{claim_number}"
+                    pdf.set_font("Helvetica", "B", 14)
+                    pdf.set_xy(margin_l, title_y)
+                    pdf.cell(usable_w, 0.3, _pdf_safe(full_title), align="L")
+                    content_top += 0.4
+                    content_h = content_bottom - content_top
+                actual_page = page_num if not has_summary else page_num - 1
+                start_idx = actual_page * photos_per_page
+                batch = photos[start_idx:start_idx + photos_per_page]
+                if batch:
+                    _draw_photo_batch(pdf, batch, content_top, content_h)
         pdf.output(output_path)
 
     def _handle_project_photo_folders_get(self, opp_id: int) -> None:
