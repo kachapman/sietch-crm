@@ -40873,7 +40873,7 @@ function renderPhotoReportForm(body, project, templates, selPhotos, oppId) {
     '<button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear formatting">⌫</button>' +
     '</div>' +
     '<div class="note-editor-wrap">' +
-      '<div class="note-editor photo-report-note-editor" contenteditable="true" data-placeholder="Optional opening statement for the report..."></div>' +
+      '<div class="note-editor photo-report-note-editor" id="pr-summary-editor" contenteditable="true" data-placeholder="Optional opening statement for the report..."></div>' +
     '</div>';
   summaryField.appendChild(editorWrap);
   summaryContent.appendChild(summaryField);
@@ -41038,7 +41038,7 @@ function openAdminPREditor(template) {
   $("#pr-admin-city").value = template ? (template.city_state_zip || "") : "";
   $("#pr-admin-phone").value = template ? (template.phone || "") : "";
   $("#pr-admin-color").value = template ? (template.primary_color || "#1a1a1a") : "#1a1a1a";
-  $("#pr-admin-maxwidth").value = template ? (template.max_image_width_inches || 5.5) : 5.5;
+  $("#pr-admin-maxwidth").value = template ? (template.max_image_width_inches || 6.5) : 6.5;
   $("#pr-admin-align").value = template ? (template.image_alignment || "center") : "center";
   const lines = template && template.text_logo_lines ? (typeof template.text_logo_lines === "string" ? JSON.parse(template.text_logo_lines) : template.text_logo_lines) : ["Company"];
   $("#pr-admin-text1").value = lines[0] || "";
@@ -41067,7 +41067,7 @@ function saveAdminPRTemplate() {
     city_state_zip: ($("#pr-admin-city") || {}).value.trim(),
     phone: ($("#pr-admin-phone") || {}).value.trim(),
     primary_color: ($("#pr-admin-color") || {}).value,
-    max_image_width_inches: parseFloat((($("#pr-admin-maxwidth") || {}).value) || "5.5"),
+    max_image_width_inches: parseFloat((($("#pr-admin-maxwidth") || {}).value) || "6.5"),
     image_alignment: ($("#pr-admin-align") || {}).value,
     text_logo_lines: [($("#pr-admin-text1") || {}).value.trim() || "Company", ($("#pr-admin-text2") || {}).value.trim()],
     show_photo_date: ($("#pr-admin-showdate") || {}).checked,

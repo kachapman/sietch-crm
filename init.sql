@@ -529,7 +529,7 @@ CREATE TABLE IF NOT EXISTS photo_report_templates (
     text_logo_lines JSONB DEFAULT '["Company"]',
     text_logo_font_size INTEGER DEFAULT 16,
     text_logo_tagline_size INTEGER DEFAULT 8,
-    max_image_width_inches NUMERIC(3,1) DEFAULT 5.5,
+    max_image_width_inches NUMERIC(3,1) DEFAULT 6.5,
     image_alignment TEXT NOT NULL DEFAULT 'center',
     show_photo_date BOOLEAN DEFAULT TRUE,
     title_includes_claim BOOLEAN DEFAULT TRUE,

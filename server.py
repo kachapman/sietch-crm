@@ -7017,7 +7017,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
              data.get("primary_color", "#1a1a1a"),
              json.dumps(data.get("text_logo_lines", ["Company"])),
              data.get("text_logo_font_size", 16), data.get("text_logo_tagline_size", 8),
-             data.get("max_image_width_inches", 5.5), data.get("image_alignment", "center"),
+             data.get("max_image_width_inches", 6.5), data.get("image_alignment", "center"),
              data.get("show_photo_date", True), data.get("title_includes_claim", True),
              data.get("show_captions", True), data.get("is_default", False)),
         )
@@ -7125,7 +7125,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             template = {"company_name": "Company", "address": "", "city_state_zip": "", "phone": "",
                         "primary_color": "#1a1a1a", "text_logo_lines": '["Company"]',
                         "text_logo_font_size": 16, "text_logo_tagline_size": 8,
-                        "logo_path": None, "max_image_width_inches": 5.5, "image_alignment": "center",
+                        "logo_path": None, "max_image_width_inches": 6.5, "image_alignment": "center",
                         "show_photo_date": True, "title_includes_claim": True, "show_captions": True}
         report_title = data.get("report_title", "Photo Report")
         file_name = data.get("file_name", report_title)
@@ -7163,7 +7163,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 text_logo_lines = json.loads(text_logo_lines)
             except Exception:
                 text_logo_lines = ["Company"]
-        max_img_w = float(template.get("max_image_width_inches", 5.5))
+        max_img_w = float(template.get("max_image_width_inches", 6.5))
         img_align = template.get("image_alignment", "center")
         show_date = template.get("show_photo_date", True)
         show_claim = template.get("title_includes_claim", True)
@@ -7319,7 +7319,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             pdf_obj.set_draw_color(180, 180, 180)
             pdf_obj.line(margin_l, header_bottom, page_w - margin_r, header_bottom)
             return header_bottom
-        def _draw_footer(pdf_obj, page_num):
+        def _draw_footer(pdf_obj, page_num, total_pages):
             y = page_h - margin_b - 0.2
             pdf_obj.set_draw_color(180, 180, 180)
             pdf_obj.line(margin_l, y - 0.05, page_w - margin_r, y - 0.05)
@@ -7327,6 +7327,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             left_txt = f"Project #{project_number}" if project_number else customer_name
             pdf_obj.set_xy(margin_l, y)
             pdf_obj.cell(usable_w * 0.5, 0.15, _pdf_safe(str(left_txt)), align="L")
+            center_txt = f"Page {page_num} of {total_pages}"
+            pdf_obj.set_xy(margin_l, y)
+            pdf_obj.cell(usable_w, 0.15, _pdf_safe(center_txt), align="C")
             right_txt = f"Location: {address}" if address else ""
             pdf_obj.set_xy(margin_l + usable_w * 0.5, y)
             pdf_obj.cell(usable_w * 0.5, 0.15, _pdf_safe(right_txt), align="R")
@@ -7355,51 +7358,102 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if n == 0:
                 return
             gap = 0.15
-            total_gap = gap * (n - 1)
-            photo_h = (available_h - total_gap) / n
-            for i, (img_path, orig_name, orig_path, uploaded_at, caption) in enumerate(batch):
-                py = y_start + i * (photo_h + gap)
-                info_h = 0.35 if show_captions else 0.2
-                img_h = photo_h - info_h
-                if img_h < 0.3:
-                    img_h = photo_h
-                    info_h = 0
-                if img_h <= 0:
-                    continue
-                try:
-                    with Image.open(img_path) as img:
-                        iw, ih = img.size
-                        max_w = max_img_w * 72
-                        max_h_px = img_h * 72
-                        scale = min(max_w / iw, max_h_px / ih, 1.0)
-                        draw_w = iw * scale / 72
-                        draw_h = ih * scale / 72
-                        if img_align == "center":
-                            x_off = margin_l + (usable_w - draw_w) / 2
-                        else:
-                            x_off = margin_l
-                        pdf_obj.image(img_path, x=x_off, y=py, w=draw_w, h=draw_h)
-                except Exception:
-                    pass
-                if info_h > 0:
-                    info_y = py + img_h + 0.05
-                    pdf_obj.set_font("Helvetica", "B", 9)
-                    pdf_obj.set_xy(margin_l, info_y)
-                    pdf_obj.cell(usable_w, 0.15, _pdf_safe(orig_name), align="L")
-                    if show_captions and caption:
-                        pdf_obj.set_font("Helvetica", "", 9)
-                        pdf_obj.set_xy(margin_l, info_y + 0.15)
-                        pdf_obj.cell(usable_w, 0.15, _pdf_safe(caption), align="L")
-                    if show_date:
-                        date_str = _format_photo_date(uploaded_at)
-                        if date_str:
-                            pdf_obj.set_font("Helvetica", "", 8)
-                            pdf_obj.set_xy(margin_l, info_y + (0.3 if caption and show_captions else 0.15))
-                            pdf_obj.cell(usable_w, 0.12, f"Photo Date: {_pdf_safe(date_str)}", align="L")
+            info_h = 0.35 if show_captions else 0.2
+            if n == 4:
+                cols, rows = 2, 2
+                total_gap_w = gap * (cols - 1)
+                total_gap_h = gap * (rows - 1)
+                cell_w = (usable_w - total_gap_w) / cols
+                cell_h = (available_h - total_gap_h) / rows
+                for i, (img_path, orig_name, orig_path, uploaded_at, caption) in enumerate(batch):
+                    col = i % cols
+                    row = i // cols
+                    cx = margin_l + col * (cell_w + gap)
+                    cy = y_start + row * (cell_h + gap)
+                    img_h = cell_h - info_h
+                    if img_h < 0.3:
+                        img_h = cell_h
+                        info_h_cell = 0
+                    else:
+                        info_h_cell = info_h
+                    if img_h <= 0:
+                        continue
+                    try:
+                        with Image.open(img_path) as img:
+                            iw, ih = img.size
+                            max_w = max_img_w * 72
+                            max_h_px = img_h * 72
+                            scale = min(max_w / iw, max_h_px / ih, 1.0)
+                            draw_w = iw * scale / 72
+                            draw_h = ih * scale / 72
+                            x_off = cx + (cell_w - draw_w) / 2
+                            pdf_obj.image(img_path, x=x_off, y=cy, w=draw_w, h=draw_h)
+                    except Exception:
+                        pass
+                    pdf_obj.set_draw_color(200, 200, 200)
+                    pdf_obj.rect(cx, cy, cell_w, cell_h)
+                    if info_h_cell > 0:
+                        info_y = cy + img_h + 0.05
+                        pdf_obj.set_font("Helvetica", "B", 9)
+                        pdf_obj.set_xy(cx, info_y)
+                        pdf_obj.multi_cell(cell_w, 0.15, _pdf_safe(orig_name), align="L")
+                        if show_captions and caption:
+                            pdf_obj.set_font("Helvetica", "", 9)
+                            pdf_obj.set_xy(cx, pdf_obj.get_y())
+                            pdf_obj.multi_cell(cell_w, 0.15, _pdf_safe(caption), align="L")
+                        if show_date:
+                            date_str = _format_photo_date(uploaded_at)
+                            if date_str:
+                                pdf_obj.set_font("Helvetica", "", 8)
+                                pdf_obj.set_xy(cx, pdf_obj.get_y())
+                                pdf_obj.cell(cell_w, 0.12, f"Photo Date: {_pdf_safe(date_str)}", align="L")
+            else:
+                total_gap = gap * (n - 1)
+                photo_h = (available_h - total_gap) / n
+                for i, (img_path, orig_name, orig_path, uploaded_at, caption) in enumerate(batch):
+                    py = y_start + i * (photo_h + gap)
+                    img_h = photo_h - info_h
+                    if img_h < 0.3:
+                        img_h = photo_h
+                        info_h_single = 0
+                    else:
+                        info_h_single = info_h
+                    if img_h <= 0:
+                        continue
+                    try:
+                        with Image.open(img_path) as img:
+                            iw, ih = img.size
+                            max_w = max_img_w * 72
+                            max_h_px = img_h * 72
+                            scale = min(max_w / iw, max_h_px / ih, 1.0)
+                            draw_w = iw * scale / 72
+                            draw_h = ih * scale / 72
+                            if img_align == "center":
+                                x_off = margin_l + (usable_w - draw_w) / 2
+                            else:
+                                x_off = margin_l
+                            pdf_obj.image(img_path, x=x_off, y=py, w=draw_w, h=draw_h)
+                    except Exception:
+                        pass
+                    if info_h_single > 0:
+                        info_y = py + img_h + 0.05
+                        pdf_obj.set_font("Helvetica", "B", 9)
+                        pdf_obj.set_xy(margin_l, info_y)
+                        pdf_obj.multi_cell(usable_w, 0.15, _pdf_safe(orig_name), align="L")
+                        if show_captions and caption:
+                            pdf_obj.set_font("Helvetica", "", 9)
+                            pdf_obj.set_xy(margin_l, pdf_obj.get_y())
+                            pdf_obj.multi_cell(usable_w, 0.15, _pdf_safe(caption), align="L")
+                        if show_date:
+                            date_str = _format_photo_date(uploaded_at)
+                            if date_str:
+                                pdf_obj.set_font("Helvetica", "", 8)
+                                pdf_obj.set_xy(margin_l, info_y + (0.3 if caption and show_captions else 0.15))
+                                pdf_obj.cell(usable_w, 0.12, f"Photo Date: {_pdf_safe(date_str)}", align="L")
         for page_num in range(pages_needed):
             pdf.add_page()
             header_bottom = _draw_header(pdf)
-            _draw_footer(pdf, page_num + 1)
+            _draw_footer(pdf, page_num + 1, pages_needed)
             content_top = header_bottom + 0.15
             content_bottom = page_h - margin_b - 0.35
             content_h = content_bottom - content_top
@@ -7415,14 +7469,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 pdf.set_font("Helvetica", "", 10)
                 pdf.set_xy(margin_l, summary_y)
                 pdf.multi_cell(usable_w, 0.18, _pdf_safe(summary), align="L")
-                summary_bottom = pdf.get_y() + 0.1
-                photos_start = summary_bottom + 0.2
-                remaining_h = content_bottom - photos_start
-                if remaining_h < 1.0:
-                    continue
-                batch = photos[0:min(photos_per_page, total_photos)]
-                _draw_photo_batch(pdf, batch, photos_start, remaining_h)
-                photo_idx = len(batch)
             else:
                 if page_num == 0 and not has_summary:
                     title_y = content_top
