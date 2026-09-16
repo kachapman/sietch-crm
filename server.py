@@ -7390,13 +7390,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     try:
                         with Image.open(img_path) as img:
                             iw, ih = img.size
-                            max_w = max_img_w * 72
+                            max_w = min(max_img_w, cell_w) * 72
                             max_h_px = img_h * 72
                             scale = min(max_w / iw, max_h_px / ih, 1.0)
                             draw_w = iw * scale / 72
                             draw_h = ih * scale / 72
                             x_off = cx + (cell_w - draw_w) / 2
                             pdf_obj.image(img_path, x=x_off, y=cy, w=draw_w, h=draw_h)
+                            pdf_obj.set_draw_color(180, 180, 180)
+                            pdf_obj.set_line_width(0.5 / 72)
+                            pdf_obj.rect(x_off, cy, draw_w, draw_h)
+                            pdf_obj.set_line_width(0.2 / 72)
                     except Exception:
                         pass
                     if info_h_cell > 0:
@@ -7430,7 +7434,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     try:
                         with Image.open(img_path) as img:
                             iw, ih = img.size
-                            max_w = max_img_w * 72
+                            max_w = min(max_img_w, usable_w) * 72
                             max_h_px = img_h * 72
                             scale = min(max_w / iw, max_h_px / ih, 1.0)
                             draw_w = iw * scale / 72
@@ -7440,6 +7444,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             else:
                                 x_off = margin_l
                             pdf_obj.image(img_path, x=x_off, y=py, w=draw_w, h=draw_h)
+                            pdf_obj.set_draw_color(180, 180, 180)
+                            pdf_obj.set_line_width(0.5 / 72)
+                            pdf_obj.rect(x_off, py, draw_w, draw_h)
+                            pdf_obj.set_line_width(0.2 / 72)
                     except Exception:
                         pass
                     if info_h_single > 0:
