@@ -2,6 +2,14 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Photo Report PDF Fixes (2026-09-16)
+
+**Bug fixes — FEAT-028 follow-up:**
+- Summary/opening-statement page now renders rich text. Frontend sends sanitized `summary_html` alongside the plain `summary`; backend renders via `fpdf2.write_html`. Supports bold, italic, underline, strikethrough, headings, bullet lists, numbered lists, horizontal rules, line breaks, paragraphs, links.
+- Toolbar `<mark>` highlights render as `<b>` (bold) in the PDF — fpdf2 does not support `<mark>` natively.
+- Photo grid borders removed from the 2×2 layout (`rect()` call deleted). Photos are now separated only by the 0.15in gap — no more visible cell outlines.
+- Per-photo captions now hug the bottom of the *drawn* image (not the bottom of the cell area), so captions sit right below the photo instead of floating with empty space above them.
+
 ## Photo Report Generator (2026-08-28)
 
 **New feature — FEAT-028:**

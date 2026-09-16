@@ -40692,6 +40692,33 @@ function _markupRefreshPhotosGrid(oppId) {
    FEAT-028 — Photo Report Generator
    ═══════════════════════════════════════════════════════════════════════════ */
 
+// Sanitize the photo-report summary editor HTML before sending to the server.
+// Keeps the subset of tags that fpdf2.write_html renders cleanly, drops
+// scripts/styles/iframes/objects/embeds/links/meta/base, strips all attributes
+// (style/class/id/on*/srcdoc) so no inline scripts or styling leak through,
+// normalizes <mark> -> <b> so highlights still render as visual emphasis in
+// the PDF, and converts <div> wrappers to <p>.
+function _sanitizePhotoReportSummaryHtml(rawHtml) {
+  if (!rawHtml) return "";
+  const wrap = document.createElement("div");
+  wrap.innerHTML = String(rawHtml);
+  wrap.querySelectorAll("script, style, iframe, object, embed, link, meta, base").forEach((el) => el.remove());
+  wrap.querySelectorAll("*").forEach((el) => {
+    for (const attr of [...el.attributes]) {
+      el.removeAttribute(attr.name);
+    }
+    if (el.tagName === "DIV") {
+      const p = document.createElement("p");
+      while (el.firstChild) p.appendChild(el.firstChild);
+      el.replaceWith(p);
+    }
+  });
+  return wrap.innerHTML
+    .replace(/<mark\b[^>]*>/gi, "<b>")
+    .replace(/<\/mark>/gi, "</b>")
+    .replace(/\s+data-[a-z0-9-]+="[^"]*"/gi, "");
+}
+
 function openPhotoReportModal(photoIds, oppId) {
   const modal = $("#photo-report-modal");
   const body = $("#photo-report-body");
@@ -40934,13 +40961,17 @@ function renderPhotoReportForm(body, project, templates, selPhotos, oppId) {
   generateBtn.type = "button";
   generateBtn.className = "photo-report-generate-btn";
   generateBtn.textContent = "Generate Report";
-  generateBtn.addEventListener("click", () => {
+generateBtn.addEventListener("click", () => {
     generateBtn.disabled = true;
     generateBtn.textContent = "Generating...";
     const captions = {};
     body.querySelectorAll(".photo-report-photo-caption").forEach(inp => {
       captions[inp.dataset.photoId] = inp.value.trim();
     });
+    const includeSummary = ($("#pr-include-summary") || {}).checked;
+    const summaryEditor = $("#pr-summary-editor");
+    const rawSummaryHtml = includeSummary && summaryEditor ? (summaryEditor.innerHTML || "") : "";
+    const summaryPlain = includeSummary && summaryEditor ? (summaryEditor.innerText || summaryEditor.textContent || "") : "";
     const payload = {
       template_id: tmplSel.value ? parseInt(tmplSel.value) : null,
       photo_ids: selPhotos.map(p => p.id ?? p.ID),
@@ -40950,7 +40981,8 @@ function renderPhotoReportForm(body, project, templates, selPhotos, oppId) {
       claim_number: ($("#pr-claim") || {}).value || "",
       project_number: ($("#pr-project-num") || {}).value || "",
       address: ($("#pr-address") || {}).value || "",
-      summary: ($("#pr-include-summary") || {}).checked ? (($("#pr-summary-editor") || {}).innerText || ($("#pr-summary-editor") || {}).textContent || "") : "",
+      summary: summaryPlain,
+      summary_html: _sanitizePhotoReportSummaryHtml(rawSummaryHtml),
       photos_per_page: parseInt((($("#pr-photos-per-page") || {}).value) || "1"),
       photo_order: ($("#pr-photo-order") || {}).value || "selection",
       max_size_mb: parseFloat((($("#pr-max-size") || {}).value) || "20"),

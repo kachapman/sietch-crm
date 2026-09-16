@@ -7134,6 +7134,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         project_number = data.get("project_number", "")
         address = data.get("address", "")
         summary = data.get("summary", "")
+        summary_html = data.get("summary_html", "") or ""
         photos_per_page = max(1, min(4, int(data.get("photos_per_page", 1))))
         max_size_mb = max(1, min(50, float(data.get("max_size_mb", 20))))
         captions = data.get("captions", {})
@@ -7215,7 +7216,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     return
                 self._create_photo_report_pdf(
                     output_path, processed, report_title, customer_name, claim_number,
-                    project_number, address, summary, company_name, comp_address, comp_city,
+                    project_number, address, summary, summary_html, company_name, comp_address, comp_city,
                     comp_phone, logo_path, text_logo_lines, title_font_size, tagline_font_size,
                     r_c, g_c, b_c, max_img_w, img_align, show_date, show_claim, show_captions,
                     photos_per_page,
@@ -7244,7 +7245,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         })
 
     def _create_photo_report_pdf(self, output_path, photos, report_title, customer_name,
-                                  claim_number, project_number, address, summary,
+                                  claim_number, project_number, address, summary, summary_html,
                                   company_name, comp_address, comp_city, comp_phone,
                                   logo_path, text_logo_lines, title_font_size, tagline_font_size,
                                   r_c, g_c, b_c, max_img_w, img_align, show_date, show_claim,
@@ -7266,6 +7267,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not text:
                 return ""
             return text.encode("latin-1", errors="replace").decode("latin-1")
+        def _pdf_safe_html(html_text):
+            if not html_text:
+                return ""
+            safe = html_text.encode("latin-1", errors="replace").decode("latin-1")
+            stripped = re.sub(r"<(script|style|iframe|object|embed|link|meta|base)\b[^>]*>.*?</\1>", "", safe, flags=re.DOTALL | re.IGNORECASE)
+            stripped = re.sub(r"<(script|style|iframe|object|embed|link|meta|base)\b[^>]*/?>", "", stripped, flags=re.IGNORECASE)
+            stripped = re.sub(r"\son[a-z]+\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", "", stripped, flags=re.IGNORECASE)
+            return stripped
         def _draw_header(pdf_obj):
             y = margin_t
             logo_w = 0
@@ -7390,10 +7399,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             pdf_obj.image(img_path, x=x_off, y=cy, w=draw_w, h=draw_h)
                     except Exception:
                         pass
-                    pdf_obj.set_draw_color(200, 200, 200)
-                    pdf_obj.rect(cx, cy, cell_w, cell_h)
                     if info_h_cell > 0:
-                        info_y = cy + img_h + 0.05
+                        info_y = cy + draw_h + 0.05
                         pdf_obj.set_font("Helvetica", "B", 9)
                         pdf_obj.set_xy(cx, info_y)
                         pdf_obj.multi_cell(cell_w, 0.15, _pdf_safe(orig_name), align="L")
@@ -7436,7 +7443,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     except Exception:
                         pass
                     if info_h_single > 0:
-                        info_y = py + img_h + 0.05
+                        info_y = py + draw_h + 0.05
                         pdf_obj.set_font("Helvetica", "B", 9)
                         pdf_obj.set_xy(margin_l, info_y)
                         pdf_obj.multi_cell(usable_w, 0.15, _pdf_safe(orig_name), align="L")
@@ -7466,9 +7473,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 pdf.set_xy(margin_l, title_y)
                 pdf.cell(usable_w, 0.3, _pdf_safe(full_title), align="L")
                 summary_y = title_y + 0.4
-                pdf.set_font("Helvetica", "", 10)
                 pdf.set_xy(margin_l, summary_y)
-                pdf.multi_cell(usable_w, 0.18, _pdf_safe(summary), align="L")
+                pdf.set_font("Helvetica", "", 10)
+                if summary_html and summary_html.strip():
+                    safe_html = _pdf_safe_html(summary_html)
+                    pdf.write_html(safe_html)
+                else:
+                    pdf.multi_cell(usable_w, 0.18, _pdf_safe(summary), align="L")
             else:
                 if page_num == 0 and not has_summary:
                     title_y = content_top
