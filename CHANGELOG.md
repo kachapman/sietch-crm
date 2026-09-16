@@ -12,6 +12,7 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - Photo border round 2: actually add thin (0.5pt) light-gray borders around each rendered photo in both 2×2 grid and 1-per-page layouts. Previous "grid artifacts" were a separate random cell grid behind the photos; the user wants proper per-photo frames. Borders drawn at the actual photo bounding box, not the cell.
 - Fixed pre-existing 2×2 overflow bug: `max_w` was capped at `max_img_w` (template default 5.5") which is wider than `cell_w` (3.425"), causing photos to overflow horizontally and touch neighboring photos. Now `max_w = min(max_img_w, cell_w)` in the 2×2 branch and `min(max_img_w, usable_w)` in the single-column branch.
 - Fixed line-width unit bug: `set_line_width(0.5)` was being interpreted as 0.5 inches (fpdf2 user unit) rather than 0.5 points, causing borders to fill the entire cell interior with gray. Divided by 72 to get the correct point-based width.
+- Removed the highlight (🖍) button from the photo-report summary editor toolbar. fpdf2.write_html does not render `<mark>` or `<span style="background-color">`, so highlighting in the editor never carried through to the PDF. Removed the now-unused `<mark>` → `<b>` workaround from the sanitizer.
 
 ## Photo Report Generator (2026-08-28)
 

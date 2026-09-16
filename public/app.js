@@ -40696,8 +40696,9 @@ function _markupRefreshPhotosGrid(oppId) {
 // Keeps the subset of tags that fpdf2.write_html renders cleanly, drops
 // scripts/styles/iframes/objects/embeds/links/meta/base, strips all attributes
 // (style/class/id/on*/srcdoc) so no inline scripts or styling leak through,
-// normalizes <mark> -> <b> so highlights still render as visual emphasis in
-// the PDF, and converts <div> wrappers to <p>.
+// and converts <div> wrappers to <p>. Note: the highlight button was removed
+// from this toolbar because fpdf2 doesn't render background-color or <mark>;
+// there is no longer a need for the <mark> -> <b> workaround here.
 function _sanitizePhotoReportSummaryHtml(rawHtml) {
   if (!rawHtml) return "";
   const wrap = document.createElement("div");
@@ -40713,10 +40714,7 @@ function _sanitizePhotoReportSummaryHtml(rawHtml) {
       el.replaceWith(p);
     }
   });
-  return wrap.innerHTML
-    .replace(/<mark\b[^>]*>/gi, "<b>")
-    .replace(/<\/mark>/gi, "</b>")
-    .replace(/\s+data-[a-z0-9-]+="[^"]*"/gi, "");
+  return wrap.innerHTML.replace(/\s+data-[a-z0-9-]+="[^"]*"/gi, "");
 }
 
 function openPhotoReportModal(photoIds, oppId) {
@@ -40895,7 +40893,6 @@ function renderPhotoReportForm(body, project, templates, selPhotos, oppId) {
     '<button type="button" class="note-format-btn" data-cmd="insertUnorderedList" title="Bullet list">&bull;</button>' +
     '<button type="button" class="note-format-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>' +
     '<span class="note-format-sep"></span>' +
-    '<button type="button" class="note-format-btn note-format-hilite-btn" title="Highlight color">🖍</button>' +
     '<button type="button" class="note-format-btn" data-cmd="insertHorizontalRule" title="Horizontal rule">―</button>' +
     '<button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear formatting">⌫</button>' +
     '</div>' +
