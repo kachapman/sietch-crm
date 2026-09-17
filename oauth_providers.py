@@ -80,6 +80,14 @@ class MicrosoftProvider(OAuthProvider):
     _TOKEN = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
     _SCOPE = "offline_access openid email https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send"
 
+    # Separate scope flow for Microsoft Graph sendMail. The v2.0 endpoint mints
+    # ONE access token with ONE audience, so we cannot mix Exchange and Graph
+    # scopes in a single authorization request. The Graph token is stored
+    # alongside the Exchange token (oauth_graph_*) and used only when the SMTP
+    # AUTH path is unavailable (e.g. Microsoft disabled SMTP AUTH on the
+    # mailbox: 5.7.139 "SmtpClientAuthentication is disabled").
+    _GRAPH_SCOPE = "offline_access https://graph.microsoft.com/Mail.Send"
+
     @classmethod
     def _tenant(cls) -> str:
         # Always use the 'common' authority. A hardcoded tenant mints host-tenant
@@ -179,6 +187,51 @@ class MicrosoftProvider(OAuthProvider):
         if domain in personal_domains:
             return {"host": "smtp-mail.outlook.com", "port": 587}
         return {"host": "smtp.office365.com", "port": 587}
+
+    @classmethod
+    def graph_authorize_url(cls, state: str) -> str:
+        params = urllib.parse.urlencode({
+            "client_id": MICROSOFT_CLIENT_ID,
+            "response_type": "code",
+            "redirect_uri": OAUTH_REDIRECT_URI,
+            "scope": cls._GRAPH_SCOPE,
+            "state": state,
+            "response_mode": "query",
+        })
+        url = cls._AUTHORIZE.format(tenant=cls._tenant())
+        return f"{url}?{params}"
+
+    @classmethod
+    def graph_exchange_code(cls, code: str) -> dict[str, Any]:
+        data = {
+            "client_id": MICROSOFT_CLIENT_ID,
+            "client_secret": MICROSOFT_CLIENT_SECRET,
+            "code": code,
+            "redirect_uri": OAUTH_REDIRECT_URI,
+            "grant_type": "authorization_code",
+        }
+        result = _post_json(cls._TOKEN.format(tenant=cls._tenant()), data)
+        return {
+            "access_token": result.get("access_token", ""),
+            "refresh_token": result.get("refresh_token", ""),
+            "expires_in": result.get("expires_in", 3600),
+        }
+
+    @classmethod
+    def graph_refresh_token(cls, refresh_token: str) -> dict[str, Any]:
+        data = {
+            "client_id": MICROSOFT_CLIENT_ID,
+            "client_secret": MICROSOFT_CLIENT_SECRET,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+            "scope": cls._GRAPH_SCOPE,
+        }
+        result = _post_json(cls._TOKEN.format(tenant=cls._tenant()), data)
+        return {
+            "access_token": result.get("access_token", ""),
+            "expires_in": result.get("expires_in", 3600),
+            "refresh_token": result.get("refresh_token", refresh_token),
+        }
 
 
 class GoogleProvider(OAuthProvider):

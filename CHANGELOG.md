@@ -2,6 +2,42 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Microsoft Graph `sendMail` for Outlook SMTP-locked accounts (2026-09-17)
+
+**Workaround for the `5.7.139 SmtpClientAuthentication is disabled` error** that Microsoft applies to consumer Outlook accounts and refuses to re-enable via support. The v2.0 token endpoint mints one access token per audience, so Graph sendMail needs a separate OAuth flow from the existing Exchange OAuth. Two-token model: keep the Exchange-audience token for IMAP/SMTP, add a Graph-audience token for Graph sendMail.
+
+**New files**
+- `migrations/019_add_mail_graph_token_columns.sql` — `oauth_graph_*` columns on `mail_accounts`.
+- `mail_graph_client.py` — stdlib-only `send_email_via_graph()` posting to `https://graph.microsoft.com/v1.0/me/sendMail`. Maps 401/403/429/5xx to actionable error messages.
+- `mail_send.py` — shared `try_send_for_account()` helper used by server.py (manual compose) and scanner/mail_scanner.py (Reply to Email behavior). Single routing rule: Graph-first if Microsoft OAuth + Graph token, SMTP fallback, retry Graph on 5.7.139.
+
+**Routing logic** (in `server.py:_handle_mail_send` and `scanner/mail_scanner.py`):
+1. If `oauth_provider == "microsoft"` and Graph token present → **Graph first**.
+2. On any Graph failure → fall back to SMTP (existing path).
+3. If SMTP returns `5.7.139` and a Graph token is available → **retry Graph**.
+4. Google OAuth / app-password / manual SMTP accounts unchanged (SMTP only).
+
+**New server endpoints**
+- `GET /api/v2/mail/oauth/microsoft/graph/authorize?account_id=N` — returns the Graph authorize URL.
+- `GET /api/v2/mail/oauth/microsoft/graph/callback` — exchanges code, stores Graph token with `oauth_graph_scope` set.
+- `GET /api/v2/mail/oauth/microsoft/graph/disconnect/N` — clears Graph token.
+- `Graph sendMail` status returned by `GET /api/v2/mail/accounts` as `graphStatus` field (`null` / `connected` / `expired`). Mirror of existing `oauthStatus`.
+
+**UI** (`public/index.html`, `public/app.js`, `public/styles.css`)
+- Account Settings modal: new "Microsoft Graph Send" status block with Connect/Disconnect button. Hidden for non-MS accounts.
+- Compose Email modal: amber banner at top when active from-account is MS OAuth without a Graph token. Click "Reconnect for Graph" → opens OAuth popup → on success, banner disappears and sends switch to Graph.
+- OAuth callback param `?mailOAuth=graph_success` handled in the same redirect handler.
+
+**Token refresh**: handled in `_refresh_graph_token_if_needed` (server.py) and `_build_graph_token_refresher` (scanner/mail_scanner.py). Both refresh via `MicrosoftProvider.graph_refresh_token()` and persist the new token to the DB.
+
+**Re-consent UX**: every Microsoft OAuth account needs to reconnect via the new "Connect Graph" button to grant the `Mail.Send` scope. The existing Exchange OAuth (IMAP/SMTP) flow is unchanged. Existing accounts that hit `5.7.139` on send can be fixed by clicking Reconnect; healthy accounts are unaffected.
+
+**Docs**: `docs/OAUTH_SETUP.md` updated with the two-consent flow (Exchange + Graph).
+
+**Files**: `server.py`, `scanner/mail_scanner.py`, `public/index.html`, `public/app.js`, `public/styles.css`, `oauth_providers.py`, `init.sql`, `migrations/019_add_mail_graph_token_columns.sql`, `mail_graph_client.py` (new), `mail_send.py` (new), `docs/OAUTH_SETUP.md`.
+
+---
+
 ## Bookmark Sidebar — Open in Project Page (2026-09-16)
 
 **Feature:**

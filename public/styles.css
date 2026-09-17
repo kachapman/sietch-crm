@@ -15618,6 +15618,12 @@ select.form-control {
 .backdate-display.hidden {
   display: none;
 }
+.compose-graph-banner.hidden {
+  display: none !important;
+}
+.compose-graph-banner #compose-graph-banner-btn {
+  white-space: nowrap;
+}
 .preview-note-cancel {
   margin-left: auto;
 }

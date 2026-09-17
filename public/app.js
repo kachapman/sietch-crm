@@ -19576,6 +19576,10 @@ async function openComposeModal(opts = {}) {
     ).join('');
   }
 
+  // Show the Graph sendMail banner if the active from-account is a
+  // Microsoft OAuth account without a connected Graph token.
+  updateComposeGraphBanner();
+
   // Apply opts (pre-fill for reply/forward/draft)
   if (opts.to && toInput) toInput.value = opts.to;
   if (opts.cc && ccInput) ccInput.value = opts.cc;
@@ -20934,6 +20938,9 @@ function openAccountSettingsModal(editAccountId, opts) {
         if (authType !== 'password' && oauthStatusEl) {
           oauthStatusEl.textContent = acct.oauthStatus === 'expired' ? 'Token expired — reconnect' : `Connected as ${acct.email}`;
         }
+        // Graph sendMail status (Microsoft only). Drives the connect/disconnect UI
+        // and the compose-window banner.
+        updateGraphStatusBlock(acct, editAccountId);
         // Sharing section
         if (sharingSection) {
           if (acct.is_crm_mail === true) {
@@ -21180,6 +21187,121 @@ function openAccountSettingsModal(editAccountId, opts) {
   }
 }
 
+function updateGraphStatusBlock(acct, accountId) {
+  const section = $('#account-settings-graph-section');
+  if (!section) return;
+  // Only Microsoft OAuth accounts can use Graph sendMail.
+  const isMicrosoft = (acct.authType || '').toLowerCase() === 'microsoft';
+  if (!isMicrosoft) {
+    section.classList.add('hidden');
+    return;
+  }
+  section.classList.remove('hidden');
+  const statusEl = $('#account-settings-graph-status');
+  const connectBtn = $('#account-settings-graph-connect');
+  const disconnectBtn = $('#account-settings-graph-disconnect');
+  if (!statusEl || !connectBtn || !disconnectBtn) return;
+  const graphStatus = acct.graphStatus;
+  if (graphStatus === 'connected') {
+    statusEl.textContent = '<span style="color:#22c55e;">●</span> Connected via Microsoft Graph';
+    statusEl.style.color = 'var(--text)';
+    connectBtn.classList.add('hidden');
+    disconnectBtn.classList.remove('hidden');
+  } else if (graphStatus === 'expired') {
+    statusEl.textContent = '<span style="color:#ff9800;">●</span> Token expired — reconnect';
+    statusEl.style.color = 'var(--text)';
+    connectBtn.classList.remove('hidden');
+    connectBtn.textContent = 'Reconnect Graph';
+    disconnectBtn.classList.remove('hidden');
+  } else {
+    statusEl.textContent = '<span style="color:var(--muted);">●</span> Not connected';
+    statusEl.style.color = 'var(--text)';
+    connectBtn.classList.remove('hidden');
+    connectBtn.textContent = 'Connect Graph';
+    disconnectBtn.classList.add('hidden');
+  }
+  // Wire click handlers (idempotent — safe to re-call on each modal open).
+  if (!connectBtn.dataset.bound) {
+    connectBtn.dataset.bound = '1';
+    connectBtn.addEventListener('click', () => connectGraphSend(accountId));
+  }
+  if (!disconnectBtn.dataset.bound) {
+    disconnectBtn.dataset.bound = '1';
+    disconnectBtn.addEventListener('click', () => disconnectGraphSend(accountId));
+  }
+}
+
+async function connectGraphSend(accountId) {
+  try {
+    const data = await api(`/api/v2/mail/oauth/microsoft/graph/authorize?account_id=${accountId}`);
+    if (!data.authUrl) {
+      showToast('Failed to get Graph authorize URL', true);
+      return;
+    }
+    const popup = window.open(data.authUrl, 'graph_oauth', 'width=600,height=700');
+    const tick = setInterval(async () => {
+      if (popup && popup.closed) {
+        clearInterval(tick);
+        // Re-fetch account list and refresh the Graph status block.
+        try {
+          const data = await api(`/api/v2/mail/accounts`);
+          const acct = (data.accounts || []).find(a => a.id == accountId);
+          if (acct) {
+            updateGraphStatusBlock(acct, accountId);
+            updateComposeGraphBanner();
+          }
+        } catch (e) { /* ignore */ }
+      }
+    }, 500);
+  } catch (e) {
+    showToast('Graph connect failed: ' + (e.message || ''), true);
+  }
+}
+
+async function disconnectGraphSend(accountId) {
+  if (!confirm('Disconnect Microsoft Graph sendMail? Mail will fall back to SMTP for this account.')) return;
+  try {
+    await api(`/api/v2/mail/oauth/microsoft/graph/disconnect/${accountId}`, { method: 'GET' });
+    showToast('Graph sendMail disconnected');
+    try {
+      const data = await api(`/api/v2/mail/accounts`);
+      const acct = (data.accounts || []).find(a => a.id == accountId);
+      if (acct) {
+        updateGraphStatusBlock(acct, accountId);
+        updateComposeGraphBanner();
+      }
+    } catch (e) { /* ignore */ }
+  } catch (e) {
+    showToast('Graph disconnect failed: ' + (e.message || ''), true);
+  }
+}
+
+// Show the amber banner at the top of the compose modal when the active
+// from-account is a Microsoft OAuth account without a connected Graph token.
+// Re-run on every send failure + every modal open.
+function updateComposeGraphBanner() {
+  const banner = $('#compose-graph-banner');
+  if (!banner) return;
+  const select = $('#compose-from-account');
+  const accountId = select ? parseInt(select.value) : null;
+  if (!accountId) {
+    banner.classList.add('hidden');
+    return;
+  }
+  api(`/api/v2/mail/accounts`).then(data => {
+    const acct = (data.accounts || []).find(a => a.id == accountId);
+    if (!acct || (acct.authType || '').toLowerCase() !== 'microsoft') {
+      banner.classList.add('hidden');
+      return;
+    }
+    if (acct.graphStatus === 'connected') {
+      banner.classList.add('hidden');
+    } else {
+      banner.classList.remove('hidden');
+    }
+  }).catch(() => banner.classList.add('hidden'));
+}
+
 function loadAccountShares(accountId) {
   const sharedList = $('#account-settings-shared-with');
   const userSel = $('#account-settings-share-user');
@@ -21240,6 +21362,29 @@ function bindComposeEmailModal() {
   const moveToTabBtn = $('#compose-move-to-tab');
   if (moveToTabBtn) {
     moveToTabBtn.addEventListener('click', () => moveComposeToTab());
+  }
+
+  // Graph sendMail banner (shown when active from-account is MS OAuth
+  // without a connected Graph token).
+  const graphBannerBtn = $('#compose-graph-banner-btn');
+  const graphBannerDismiss = $('#compose-graph-banner-dismiss');
+  if (graphBannerBtn && !graphBannerBtn.dataset.bound) {
+    graphBannerBtn.dataset.bound = '1';
+    graphBannerBtn.addEventListener('click', async () => {
+      const select = $('#compose-from-account');
+      const accountId = select ? parseInt(select.value) : null;
+      if (accountId) await connectGraphSend(accountId);
+    });
+  }
+  if (graphBannerDismiss && !graphBannerDismiss.dataset.bound) {
+    graphBannerDismiss.dataset.bound = '1';
+    graphBannerDismiss.addEventListener('click', () => {
+      $('#compose-graph-banner').classList.add('hidden');
+    });
+  }
+  if (fromSelect && !fromSelect.dataset.graphBannerBound) {
+    fromSelect.dataset.graphBannerBound = '1';
+    fromSelect.addEventListener('change', () => updateComposeGraphBanner());
   }
 
   // Reload signature when the From account changes
@@ -39186,6 +39331,12 @@ async function init() {
         // Close any open modals
         document.querySelectorAll('.modal:not(.hidden)').forEach(m => m.classList.add('hidden'));
         renderMailTabs().catch(() => {});
+      } else if (oauthStatus === 'graph_success') {
+        showToast('Graph sendMail connected');
+        // Refresh mail tabs + account list so the banner disappears.
+        renderMailTabs().catch(() => {});
+        api(`/api/v2/mail/accounts`).catch(() => {});
+        updateComposeGraphBanner();
       } else {
         showToast(`OAuth failed: ${msg}`, true);
       }

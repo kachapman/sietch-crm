@@ -302,6 +302,10 @@ OAUTH_REDIRECT_URI = os.environ.get("OAUTH_REDIRECT_URI", "")
 
 # In-memory OAuth state store: state -> (user_id, provider, expires_at)
 _oauth_states: dict[str, tuple[int, str, float, bool]] = {}
+# Separate state store for the Graph sendMail OAuth flow: (user_id, account_id, expiry).
+# Distinct from _oauth_states because the Graph flow is bound to an existing
+# account (not a brand-new one being created).
+_oauth_graph_states: dict[str, tuple[int, int, float]] = {}
 
 # ── Bot token helper (DB-first with env fallback, 60s cache) ─────────────────
 _bot_token_cache: str = ""
@@ -604,6 +608,26 @@ except Exception:
     pass
 try:
     db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS retention_days INTEGER DEFAULT 90")
+except Exception:
+    pass
+# Graph sendMail OAuth token columns (migration 019). Separate audience from
+# the existing Exchange-audience oauth_* columns; used to bypass SMTP AUTH
+# disable (5.7.139 "SmtpClientAuthentication is disabled") on consumer
+# Outlook accounts that Microsoft support refuses to re-enable.
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS oauth_graph_access_token TEXT")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS oauth_graph_refresh_token TEXT")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS oauth_graph_token_expires TIMESTAMP")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS oauth_graph_scope TEXT")
 except Exception:
     pass
 try:
@@ -2494,6 +2518,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         m = re.match(r"^/api/v2/mail/oauth/refresh/(\d+)$", api_path)
         if m:
             self._handle_oauth_refresh(int(m.group(1)))
+            return
+        # Graph sendMail OAuth (separate audience from Exchange OAuth)
+        if api_path == "/api/v2/mail/oauth/microsoft/graph/authorize":
+            qs = parse_qs(urlparse(self.path).query)
+            try:
+                acct_id = int((qs.get("account_id") or [""])[0])
+            except (TypeError, ValueError):
+                _json_response(self, 400, {"error": "account_id required"})
+                return
+            self._handle_oauth_graph_authorize(acct_id)
+            return
+        if api_path == "/api/v2/mail/oauth/microsoft/graph/callback":
+            self._handle_oauth_graph_callback()
+            return
+        m = re.match(r"^/api/v2/mail/oauth/microsoft/graph/disconnect/(\d+)$", api_path)
+        if m:
+            self._handle_oauth_graph_disconnect(int(m.group(1)))
             return
 
         # ── Mail Scanner ──
@@ -13120,6 +13161,169 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 
+    # ── Graph sendMail OAuth (Microsoft-only) ────────────────────────
+    #
+    # Separate OAuth flow that mints a Graph-audience token. Stored in
+    # oauth_graph_* columns and used to bypass SMTP AUTH when Microsoft
+    # has disabled it on the mailbox (5.7.139).
+
+    def _handle_oauth_graph_authorize(self, account_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        acct = db.query_one(
+            "SELECT id, oauth_provider FROM mail_accounts WHERE id = %s AND owner_user_id = %s",
+            (account_id, user["id"]),
+        )
+        if not acct:
+            _json_response(self, 404, {"error": "Account not found"})
+            return
+        if acct.get("oauth_provider") != "microsoft":
+            _json_response(self, 400, {"error": "Graph sendMail only applies to Microsoft OAuth accounts"})
+            return
+        state = oauth_providers.generate_state()
+        _oauth_graph_states[state] = (user["id"], account_id, time.time() + 600)
+        _json_response(self, 200, {"authUrl": oauth_providers.MicrosoftProvider.graph_authorize_url(state)})
+
+    def _handle_oauth_graph_callback(self) -> None:
+        qs = parse_qs(urlparse(self.path).query)
+        code = (qs.get("code") or [""])[0]
+        state_val = (qs.get("state") or [""])[0]
+        error = (qs.get("error") or [""])[0]
+
+        if error:
+            self._oauth_redirect_with_status("error", f"Graph OAuth error: {error}")
+            return
+        if not code or not state_val:
+            _json_response(self, 400, {"error": "Missing code or state"})
+            return
+
+        state_data = _oauth_graph_states.pop(state_val, None)
+        if not state_data:
+            self._oauth_redirect_with_status("error", "Graph OAuth state expired — reconnect from mail account settings")
+            return
+        user_id, account_id, _ = state_data
+
+        # Re-check ownership before writing tokens. The state only encoded
+        # user_id/account_id; checking ownership here prevents CSRF where a
+        # leaked callback URL is replayed to a different authenticated session.
+        acct = db.query_one(
+            "SELECT id FROM mail_accounts WHERE id = %s AND owner_user_id = %s",
+            (account_id, user_id),
+        )
+        if not acct:
+            self._oauth_redirect_with_status("error", "Account no longer accessible")
+            return
+
+        try:
+            token_data = oauth_providers.MicrosoftProvider.graph_exchange_code(code)
+        except Exception as e:
+            logger.exception("Graph OAuth code exchange failed")
+            self._oauth_redirect_with_status("error", f"Graph token exchange failed: {e}")
+            return
+
+        access_token = token_data.get("access_token", "")
+        refresh_token = token_data.get("refresh_token", "")
+        if not access_token:
+            self._oauth_redirect_with_status("error", "Graph OAuth returned no access token")
+            return
+
+        expires_ts = datetime.now(timezone.utc).timestamp() + token_data.get("expires_in", 3600)
+        db.execute(
+            """UPDATE mail_accounts SET
+               oauth_graph_access_token = %s,
+               oauth_graph_refresh_token = %s,
+               oauth_graph_token_expires = to_timestamp(%s),
+               oauth_graph_scope = %s
+               WHERE id = %s""",
+            (access_token, refresh_token, expires_ts,
+             oauth_providers.MicrosoftProvider._GRAPH_SCOPE, account_id),
+        )
+        self._oauth_redirect_with_status("graph_success", "")
+
+    def _handle_oauth_graph_disconnect(self, account_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        acct = db.query_one(
+            "SELECT id FROM mail_accounts WHERE id = %s AND owner_user_id = %s",
+            (account_id, user["id"]),
+        )
+        if not acct:
+            _json_response(self, 404, {"error": "Account not found"})
+            return
+        db.execute(
+            """UPDATE mail_accounts SET
+               oauth_graph_access_token = NULL,
+               oauth_graph_refresh_token = NULL,
+               oauth_graph_token_expires = NULL,
+               oauth_graph_scope = NULL
+               WHERE id = %s""",
+            (account_id,),
+        )
+        _json_response(self, 200, {"ok": True})
+
+    def _refresh_graph_token_if_needed(self, account_id: int) -> tuple[str | None, str | None]:
+        """Returns (graph_access_token, error_message). Refreshes and persists
+        the Graph access token if expired. None token means no Graph token
+        configured (not an error)."""
+        row = db.query_one(
+            "SELECT oauth_graph_access_token, oauth_graph_refresh_token, oauth_graph_token_expires FROM mail_accounts WHERE id = %s",
+            (account_id,),
+        )
+        if not row or not row.get("oauth_graph_access_token"):
+            return None, None
+        expires = row.get("oauth_graph_token_expires")
+        token = row.get("oauth_graph_access_token", "")
+        if expires and isinstance(expires, datetime) and expires.timestamp() > datetime.now(timezone.utc).timestamp():
+            return token, None
+        if not row.get("oauth_graph_refresh_token"):
+            return None, "Graph token expired and no refresh token stored — reconnect from mail account settings"
+        try:
+            tok = oauth_providers.MicrosoftProvider.graph_refresh_token(row["oauth_graph_refresh_token"])
+            new_token = tok.get("access_token", "")
+            new_refresh = tok.get("refresh_token", row["oauth_graph_refresh_token"])
+            new_expires_ts = datetime.now(timezone.utc).timestamp() + tok.get("expires_in", 3600)
+            if not new_token:
+                return None, "Graph token refresh returned no access token"
+            db.execute(
+                "UPDATE mail_accounts SET oauth_graph_access_token = %s, oauth_graph_refresh_token = %s, oauth_graph_token_expires = to_timestamp(%s) WHERE id = %s",
+                (new_token, new_refresh, new_expires_ts, account_id),
+            )
+            return new_token, None
+        except Exception as e:
+            logger.exception("Graph token refresh failed for account %d", account_id)
+            return None, f"Graph token refresh failed: {e}"
+
+    def _try_send_for_account(
+        self,
+        acct: dict,
+        *,
+        to_addr: str,
+        cc_addr: str | None,
+        bcc_addr: str | None,
+        subject: str,
+        html_body: str,
+        text_body: str | None,
+        attachments: list[dict] | None = None,
+    ) -> tuple[bool, str | None, str]:
+        """Server-side wrapper that injects the DB-aware Graph token refresher
+        into the shared `mail_send.try_send_for_account` helper. All send
+        routing decisions (Graph-first / SMTP fallback / 5.7.139 retry) live
+        in the shared helper."""
+        from mail_send import try_send_for_account
+        return try_send_for_account(
+            acct,
+            to_addr=to_addr,
+            subject=subject,
+            html_body=html_body,
+            text_body=text_body,
+            cc_addr=cc_addr,
+            bcc_addr=bcc_addr,
+            attachments=attachments,
+            refresh_graph_token=self._refresh_graph_token_if_needed,
+        )
+
     # ── Mail Scanner Handlers ──────────────────────────────────────
 
     def _link_email_to_deal(self, message_id: int, opp_id: int, linked_by: int | None = None) -> bool:
@@ -13813,6 +14017,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         r["oauthStatus"] = "connected"
                 else:
                     r["oauthStatus"] = None
+                # Graph sendMail status (Microsoft-only). Used by the
+                # connect/disconnect UI and the compose-window banner.
+                if r.get("oauth_provider") == "microsoft":
+                    g_expires = r.get("oauth_graph_token_expires")
+                    if r.get("oauth_graph_access_token"):
+                        if g_expires and isinstance(g_expires, datetime):
+                            r["graphStatus"] = "connected" if g_expires.timestamp() > now_ts else "expired"
+                        else:
+                            r["graphStatus"] = "connected"
+                    else:
+                        r["graphStatus"] = None
+                else:
+                    r["graphStatus"] = None
             # Attach shared-with users for each visible account
             acct_ids = [r["id"] for r in rows]
             shares: dict[int, list[dict]] = {}
@@ -14270,49 +14487,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 if merged:
                     bcc_addr = ", ".join(merged)
 
-            # Determine SMTP auth method: app password takes precedence over OAuth
-            # (personal Outlook.com accounts don't support OAuth SMTP)
-            oauth_provider = acct.get("oauth_provider")
-            oauth_access_token = acct.get("oauth_access_token")
-            smtp_password = acct.get("smtp_password_encrypted") or ""
-            use_oauth_smtp = bool(oauth_provider and oauth_access_token and not smtp_password)
-            if use_oauth_smtp:
-                expires = acct.get("oauth_token_expires")
-                if expires and isinstance(expires, datetime) and expires.timestamp() < datetime.now(timezone.utc).timestamp():
-                    try:
-                        import oauth_providers as op_mod
-                        prov = op_mod.get_provider(oauth_provider)
-                        if prov and acct.get("oauth_refresh_token"):
-                            tok = prov.refresh_token(acct["oauth_refresh_token"])
-                            oauth_access_token = tok.get("access_token", oauth_access_token)
-                            new_expires = time.time() + tok.get("expires_in", 3600)
-                            new_refresh = tok.get("refresh_token", acct["oauth_refresh_token"])
-                            db.execute(
-                                "UPDATE mail_accounts SET oauth_access_token = %s, oauth_refresh_token = %s, oauth_token_expires = to_timestamp(%s) WHERE id = %s",
-                                (oauth_access_token, new_refresh, new_expires, account_id),
-                            )
-                    except Exception:
-                        logger.exception("Failed to refresh OAuth token for send")
-
-            from smtp_client import send_email_from_account
-            ok, err = send_email_from_account(
-                smtp_host=acct["smtp_host"] or "",
-                smtp_port=int(acct["smtp_port"] or 587),
-                smtp_user=acct["smtp_user"] or acct["email"],
-                smtp_password=smtp_password,
-                from_name=acct["smtp_from_name"],
-                from_addr=acct["email"],
+            # All send routing — Graph-first / SMTP fallback / 5.7.139 retry — lives in
+            # _try_send_for_account. _handle_mail_send only needs to call it
+            # and persist the outgoing row + sent-message copy + deal link.
+            ok, err, send_method = self._try_send_for_account(
+                acct,
                 to_addr=to_addr,
+                cc_addr=cc_addr,
+                bcc_addr=bcc_addr,
                 subject=subject,
                 html_body=body_html,
                 text_body=body_text,
-                cc_addr=cc_addr,
-                bcc_addr=bcc_addr,
-                use_tls=bool(acct["smtp_use_tls"]),
                 attachments=decoded_attachments if decoded_attachments else None,
-                oauth_provider=oauth_provider if use_oauth_smtp else None,
-                oauth_access_token=oauth_access_token if use_oauth_smtp else None,
             )
+            _ = send_method  # reserved for future analytics (per-account send method)
 
             attachments_json = json.dumps([{"filename": a.get("filename"), "mime_type": a.get("mime_type"), "size": len(a.get("content", ""))} for a in (payload.get("attachments") or [])]) if payload.get("attachments") else None
 

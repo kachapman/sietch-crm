@@ -603,7 +603,7 @@ The `notification_dispatcher.py` background thread already polls `notifications`
 2. **FEAT-002** — Custom fields on create ✅ Done.
 3. **FEAT-003** — Note attachments ✅ Done.
 4. **FEAT-025** — Project number + email auto-linking ✅ Done.
-5. **OAuth2 for Outlook.com** — Next priority. DB columns exist but zero functional code. Full stack needed: Azure app registration, OAuth redirect/callback, token exchange/refresh, XOAUTH2 IMAP auth, OAuth2 SMTP auth, "Sign in with Microsoft" UI.
+5. **OAuth2 for Outlook.com** — ✅ Done (Exchange OAuth: IMAP + SMTP, Sept 2026). Followed by **Microsoft Graph `sendMail`** ✅ Done (Sept 2026) as the workaround for `5.7.139 SmtpClientAuthentication is disabled` that Microsoft refuses to re-enable on consumer accounts. See `ISSUES.md` ISSUE-015.
 6. **FEAT-022** — In-modal document editor tab (deferred — after Document Server features stable).
 7. **FEAT-024** — Native CRM iframe embed (investigated, not implemented — see above).
 8. **FEAT-026** — Full dashboard light mode (deferred — final cosmetic phase).

@@ -963,6 +963,14 @@
         </div>
       </div>
       <div style="display:flex; flex-direction:column; flex:1; min-height:0; overflow:hidden;">
+        <div id="compose-graph-banner" class="compose-graph-banner hidden" style="flex-shrink:0; padding:0.5rem 0.75rem; background:rgba(255,183,77,0.12); border-bottom:1px solid rgba(255,183,77,0.3); display:flex; align-items:center; gap:0.5rem; font-size:0.8rem; color:var(--text);">
+          <i class="ti ti-alert-triangle" style="color:#ff9800;"></i>
+          <span style="flex:1;">
+            <span id="compose-graph-banner-text">Outlook SMTP may be disabled by Microsoft (5.7.139).</span>
+          </span>
+          <button type="button" id="compose-graph-banner-btn" class="btn btn-primary btn-small" style="font-size:0.75rem;">Reconnect for Graph</button>
+          <button type="button" id="compose-graph-banner-dismiss" class="btn btn-ghost btn-small" title="Dismiss" aria-label="Dismiss"><i class="ti ti-x"></i></button>
+        </div>
         <div style="flex-shrink:0; padding:0.3rem 0.75rem; overflow-y:auto; max-height:25%;">
           <div style="display:flex; gap:0.5rem; margin-bottom:0.4rem;">
             <div style="flex:1;">
@@ -1217,6 +1225,16 @@
           <button type="button" id="account-settings-oauth-connect" class="btn btn-primary"><i class="ti ti-brand-microsoft"></i> Connect with <span id="account-settings-oauth-provider-label">Microsoft 365</span></button>
           <p id="account-settings-oauth-status" style="font-size:0.8rem; margin-top:0.5rem;"></p>
           <p style="font-size:0.75rem; color:var(--muted); margin-top:0.3rem;">You will be redirected to sign in and grant permission.</p>
+        </div>
+
+        <div id="account-settings-graph-section" class="hidden" style="border-top:1px solid var(--border); margin-top:0.75rem; padding-top:0.75rem;">
+          <h4 style="margin:0 0 0.3rem; font-size:0.85rem; color:var(--text);"><i class="ti ti-send" style="margin-right:0.25rem;"></i>Microsoft Graph Send</h4>
+          <p style="font-size:0.8rem; color:var(--muted); margin:0 0 0.5rem;">Microsoft sometimes disables SMTP AUTH on Outlook mailboxes (error "5.7.139 SmtpClientAuthentication is disabled") and refuses to re-enable it via support. Connect a Microsoft Graph token to send via the Microsoft Graph API instead — bypasses the SMTP AUTH disable entirely.</p>
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+            <span id="account-settings-graph-status" style="font-size:0.8rem;"></span>
+            <button type="button" id="account-settings-graph-connect" class="btn btn-primary" style="margin-left:auto;"><i class="ti ti-brand-microsoft"></i> Connect Graph</button>
+            <button type="button" id="account-settings-graph-disconnect" class="btn btn-ghost btn-small hidden"><i class="ti ti-unlink"></i> Disconnect</button>
+          </div>
         </div>
 
         <div id="account-settings-sharing-section" class="hidden" style="border-top:1px solid var(--border); margin-top:0.75rem; padding-top:0.75rem;">

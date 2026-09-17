@@ -594,3 +594,59 @@ This works because `setsid` creates a new session for the process, so it is not 
 - **Development only**: Production uses `docker compose up -d` which handles process lifecycle properly.
 - Server appears to start (PID exists, port opens) but dies within seconds, causing "connection refused" from LAN clients.
 - No crash log — the process simply vanishes.
+---
+
+## ISSUE-015 — Outlook SMTP send disabled by Microsoft (`5.7.139`)
+
+**Status:** ✅ Workaround shipped 2026-09-17 (Microsoft Graph sendMail).  
+**Priority:** High (blocks sending from any affected Outlook account).  
+**Area:** `smtp_client.py`, `oauth_providers.py`, `server.py`, `scanner/mail_scanner.py`.
+
+### Summary
+
+When Microsoft disables SMTP AUTH on a mailbox, `smtp_client.send_email_from_account()` returns the explicit SMTP server response `535 5.7.139 SmtpClientAuthentication is disabled` (or `SMTPAuthenticationError` with the same message). This is a per-mailbox capability disable, not a credential issue — a fresh OAuth token does not help, and Microsoft support refuses to re-enable SMTP AUTH on consumer (outlook.com / hotmail.com / live.com / msn.com) accounts because the disable is intentional and irreversible via support channels.
+
+Affected symptoms:
+- Send from Outlook OAuth account returns the `5.7.139` error every time, regardless of token freshness.
+- Microsoft support's standard response is "use Outlook web" or "contact your tenant admin" — neither helps personal accounts.
+- Previously the only workaround was to switch the account to app-password authentication, which Microsoft also disabled on many consumer accounts.
+
+### Fix (2026-09-17): Microsoft Graph `sendMail`
+
+Use the Microsoft Graph API's `POST /me/sendMail` endpoint with delegated `Mail.Send` scope instead of SMTP AUTH. Graph sendMail is a separate code path from SMTP AUTH; the `5.7.139` disable does not affect it.
+
+Because the v2.0 token endpoint mints one access token with one audience, Graph sendMail needs a separate OAuth flow from the existing Exchange OAuth (IMAP/SMTP). Two-token model:
+
+- **Exchange token** (existing, in `oauth_*` columns): scope `offline_access openid email https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send`. Used for IMAP sync and SMTP send (XOAUTH2).
+- **Graph token** (new, in `oauth_graph_*` columns): scope `offline_access https://graph.microsoft.com/Mail.Send`. Used for `POST /me/sendMail`.
+
+**Routing** (in `mail_send.py:try_send_for_account`):
+1. Microsoft OAuth + Graph token → Graph first.
+2. Graph failure → fall back to SMTP.
+3. SMTP `5.7.139` + Graph token available → retry Graph.
+4. Google OAuth / app-password / manual SMTP → SMTP only (unchanged).
+
+**Re-consent**: every existing Microsoft OAuth account must reconnect via "Connect Graph" in the account settings modal to grant the `Mail.Send` scope. The Compose Email modal shows an amber banner at the top when the active from-account is MS OAuth without a Graph token.
+
+### Files changed
+
+| File | Role |
+|---|---|
+| `migrations/019_add_mail_graph_token_columns.sql` (new) | Adds `oauth_graph_*` columns |
+| `init.sql` | Mirrors the new columns for fresh installs |
+| `mail_graph_client.py` (new) | Stdlib-only `send_email_via_graph()` posting to Graph |
+| `mail_send.py` (new) | Shared routing helper used by server + scanner |
+| `oauth_providers.py` | Adds `MicrosoftProvider._GRAPH_SCOPE`, `graph_authorize_url`, `graph_exchange_code`, `graph_refresh_token` |
+| `server.py` | New Graph OAuth routes (`authorize` / `callback` / `disconnect`), `_refresh_graph_token_if_needed`, `_try_send_for_account`, `graphStatus` field in `_handle_mail_accounts` response |
+| `scanner/mail_scanner.py` | Reply to Email custom behavior uses the shared helper; new `_build_graph_token_refresher()` closure |
+| `public/index.html`, `public/app.js`, `public/styles.css` | Account Settings "Microsoft Graph Send" block + amber banner in Compose |
+| `docs/OAUTH_SETUP.md` | Documents the two-consent flow |
+
+### Trade-offs
+
+| Concern | Impact |
+|---|---|
+| Attachments >25MB total | Graph send fails; falls back to SMTP if possible |
+| Rate limit (20 req/min/user) | Matters only for high-volume senders; falls back to SMTP |
+| Tenant admin consent | Required for `Mail.Send` on managed tenants; rare |
+| Refresh token revocation | If the Graph token is revoked, falls back to SMTP and surfaces the error |

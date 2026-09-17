@@ -27,6 +27,22 @@ You need to register an app with each provider to get `client_id` and `client_se
    - Add: `offline_access` (refresh tokens — this should be auto-granted)
    - Click **Grant admin consent** (if you're the tenant admin). If not, each user accepts on first login.
 
+### Two-consent flow (Exchange + Graph)
+
+The CRM uses TWO separate OAuth consents for Microsoft accounts:
+
+1. **Exchange OAuth** (IMAP + SMTP send): requests scopes `offline_access openid email https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send`. Mints an Exchange-audience token used for IMAP sync and SMTP send (XOAUTH2). Connected via **Email → Account → Connect with Microsoft 365**.
+
+2. **Graph OAuth** (Graph sendMail): requests scope `offline_access https://graph.microsoft.com/Mail.Send`. Mints a Graph-audience token used to POST `/me/sendMail`. **Bypasses the `5.7.139 SmtpClientAuthentication is disabled` SMTP AUTH block** that Microsoft sometimes applies to consumer accounts and refuses to re-enable via support. Connected via **Email → Account → Microsoft Graph Send → Connect Graph**.
+
+The v2.0 token endpoint mints ONE access token with ONE audience; you cannot ask for both Exchange and Graph scopes in a single consent. The second consent is a one-time setup per account, after which the Graph token is auto-refreshed on each send.
+
+The Compose Email window shows an amber banner at the top when the active from-account is a Microsoft OAuth account without a Graph token connected:
+
+> ⚠ Outlook SMTP may be disabled by Microsoft. **Reconnect for Graph**
+
+Clicking the button opens the Graph consent flow; on success the banner disappears and future sends use Graph by default. If Graph itself fails (rare), the helper falls back to SMTP and surfaces the 5.7.139 error so the user knows to reconnect.
+
 ### Changing the supported account types on an EXISTING app (this is what the CRM mailbox needs)
 
 The app `Sietch CRM` already exists (client id `e285c2a5-...`). You only need to widen its supported account types:

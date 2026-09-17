@@ -207,6 +207,48 @@ def _build_template_context(msg: dict[str, Any], deal: dict[str, Any] | None = N
     }
 
 
+def _build_graph_token_refresher():
+    """Returns a closure (account_id) -> (graph_token, error) used by
+    `mail_send.try_send_for_account` to obtain a fresh Graph access token
+    when the scanner sends via Graph. The closure refreshes and persists
+    the token via `db.execute`, mirroring server.py's
+    `_refresh_graph_token_if_needed`."""
+    from datetime import datetime, timezone
+    import time
+
+    def _refresh(account_id: int) -> tuple[str | None, str | None]:
+        row = db.query_one(
+            "SELECT oauth_graph_access_token, oauth_graph_refresh_token, oauth_graph_token_expires FROM mail_accounts WHERE id = %s",
+            (account_id,),
+        )
+        if not row or not row.get("oauth_graph_access_token"):
+            return None, None
+        expires = row.get("oauth_graph_token_expires")
+        token = row.get("oauth_graph_access_token", "")
+        if expires and isinstance(expires, datetime) and expires.timestamp() > datetime.now(timezone.utc).timestamp():
+            return token, None
+        if not row.get("oauth_graph_refresh_token"):
+            return None, "Graph token expired and no refresh token stored — reconnect from mail account settings"
+        try:
+            import oauth_providers
+            tok = oauth_providers.MicrosoftProvider.graph_refresh_token(row["oauth_graph_refresh_token"])
+            new_token = tok.get("access_token", "")
+            new_refresh = tok.get("refresh_token", row["oauth_graph_refresh_token"])
+            new_expires_ts = time.time() + tok.get("expires_in", 3600)
+            if not new_token:
+                return None, "Graph token refresh returned no access token"
+            db.execute(
+                "UPDATE mail_accounts SET oauth_graph_access_token = %s, oauth_graph_refresh_token = %s, oauth_graph_token_expires = to_timestamp(%s) WHERE id = %s",
+                (new_token, new_refresh, new_expires_ts, account_id),
+            )
+            return new_token, None
+        except Exception as e:
+            logger.exception("Graph token refresh failed for account %d", account_id)
+            return None, f"Graph token refresh failed: {e}"
+
+    return _refresh
+
+
 def _execute_custom_behavior(
     behavior: dict[str, Any],
     msg: dict[str, Any],
@@ -388,23 +430,21 @@ def _execute_custom_behavior(
                     )
                     result["draft_created"] = True
                 elif action == "send_reply":
-                    # Send via SMTP (using account settings)
+                    # Send via Graph (preferred for MS OAuth accounts when a
+                    # Graph token is configured) or SMTP fallback. The
+                    # Graph path bypasses the 5.7.139 SMTP AUTH disable.
                     try:
                         acct = db.query_one("SELECT * FROM mail_accounts WHERE id = %s", (account_id,))
                         if acct:
-                            from smtp_client import send_email_from_account
-                            ok, err = send_email_from_account(
-                                smtp_host=acct["smtp_host"] or "",
-                                smtp_port=int(acct["smtp_port"] or 587),
-                                smtp_user=acct["smtp_user"] or acct["email"],
-                                smtp_password=acct.get("smtp_password_encrypted") or "",
-                                from_name=acct.get("smtp_from_name"),
-                                from_addr=acct["email"],
+                            from mail_send import try_send_for_account
+                            refresh_graph = _build_graph_token_refresher()
+                            ok, err, _send_method = try_send_for_account(
+                                acct,
                                 to_addr=ctx["from"],
                                 subject=f"Re: {ctx['subject']}",
                                 html_body=reply_body,
                                 text_body=reply_body,
-                                use_tls=bool(acct["smtp_use_tls"]),
+                                refresh_graph_token=refresh_graph,
                             )
                             result["reply_sent"] = ok
                             if not ok:
