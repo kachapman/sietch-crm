@@ -2,6 +2,15 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Bookmark Sidebar — Open in Project Page (2026-09-16)
+
+**Feature:**
+- Added an "Open in project page" external-link button to the top-right of the bookmark sidebar preview head, mirroring the exact implementation of the opp preview modal's "Open Project" link.
+- Uses the existing `createCrmOpenLink` helper → `crmProjectUrl` → opens `/project/{projectNumber}` (project.html) in a new tab.
+- Button sized to match the surrounding bookmark action buttons (1.85rem / 6px radius) for visual harmony.
+- Wired into `activateBookmarkTab` (both cached and fresh-fetch branches) and `refreshBookmarkTab`, so the link always reflects the active bookmarked deal.
+- New HTML wrap: `#bookmark-preview-open-crm-wrap`. New CSS: `.bookmark-preview-open-crm`. New JS helper: `setBookmarkPreviewCrmLink`.
+
 ## Photo Report PDF Fixes (2026-09-16)
 
 **Bug fixes — FEAT-028 follow-up:**

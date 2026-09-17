@@ -25530,6 +25530,14 @@ function setOpportunityPreviewCrmLink(oppId, projectNumber) {
   wrap.appendChild(link);
 }
 
+function setBookmarkPreviewCrmLink(oppId, projectNumber) {
+  const wrap = $("#bookmark-preview-open-crm-wrap");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  const link = createCrmOpenLink(oppId, projectNumber, { className: "bookmark-preview-open-crm" });
+  wrap.appendChild(link);
+}
+
 function findGroupForOpportunity(oppId) {
   const id = Number(oppId);
   if (!Number.isFinite(id)) return null;
@@ -28042,6 +28050,7 @@ async function activateBookmarkTab(oppId) {
     bodyEl.innerHTML = "";
     renderOpportunityPreviewContent(bodyEl, deal._cachedData, "bookmark");
     linkifyPhonesAndEmails(bodyEl);
+    setBookmarkPreviewCrmLink(id, deal._cachedData.opp?.project_number);
     updateInferredStatus("preview", deal.title || `Project #${id}`);
   } else {
     titleEl.textContent = deal?.title || `Project #${id}`;
@@ -28059,6 +28068,7 @@ async function activateBookmarkTab(oppId) {
       bodyEl.innerHTML = "";
       renderOpportunityPreviewContent(bodyEl, data, "bookmark");
       linkifyPhonesAndEmails(bodyEl);
+      setBookmarkPreviewCrmLink(id, data.opp?.project_number);
       updateInferredStatus("preview", data.opp?.title || data.opp?.Title || deal?.title || `Project #${id}`);
       // Update tab's stage/due info
       renderBookmarkTabs();
@@ -28139,6 +28149,7 @@ async function refreshBookmarkTab(oppId, showLoading = true) {
       renderOpportunityPreviewContent(bodyEl, data, "bookmark");
       linkifyPhonesAndEmails(bodyEl);
     }
+    setBookmarkPreviewCrmLink(id, data.opp?.project_number);
     renderBookmarkTabs();
   } catch (err) {
     if (bodyEl) {

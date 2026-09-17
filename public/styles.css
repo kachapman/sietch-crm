@@ -11982,6 +11982,27 @@ body {
   outline: none;
 }
 
+.bookmark-preview-open-crm {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.bookmark-preview-open-crm:hover,
+.bookmark-preview-open-crm:focus {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+
 #bookmark-preview-unbookmark {
   color: var(--accent);
 }
