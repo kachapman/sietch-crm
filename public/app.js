@@ -21028,14 +21028,15 @@ function openAccountSettingsModal(editAccountId, opts) {
         const crmFlag = modal.dataset.crmMail === '1' ? '&is_crm_mail=1' : '';
         const res = await api(`/api/v2/mail/oauth/authorize?provider=${provider}${crmFlag}`);
         if (res.authUrl) {
-          // Store pending state in sessionStorage so we can restore after redirect
-          const pendingId = $('#account-settings-id')?.value;
-          sessionStorage.setItem('mailOAuthPending', JSON.stringify({
-            provider,
-            editAccountId: pendingId || null,
-            displayName: $('#account-settings-name')?.value.trim(),
-          }));
-          window.location.href = res.authUrl;
+          // Open the OAuth flow in a popup so the user keeps their place in
+          // the modal. The popup loads Microsoft's consent screen, redirects
+          // back to the dashboard URL with ?mailOAuth=..., and the dashboard's
+          // callback handler notifies this window via postMessage then closes.
+          const popup = window.open(res.authUrl, 'mail_oauth', 'width=600,height=700');
+          if (!popup) {
+            showToast('Popup blocked — allow popups for this site and try again', true);
+            return;
+          }
         }
       } catch (e) {
         showToast('Failed to start OAuth: ' + e.message, true);
@@ -21239,6 +21240,10 @@ async function connectGraphSend(accountId) {
       return;
     }
     const popup = window.open(data.authUrl, 'graph_oauth', 'width=600,height=700');
+    if (!popup) {
+      showToast('Popup blocked — allow popups for this site and try again', true);
+      return;
+    }
     const tick = setInterval(async () => {
       if (popup && popup.closed) {
         clearInterval(tick);
@@ -39319,13 +39324,19 @@ async function init() {
     console.warn("Failed to load branding:", e);
   }
 
-  // Handle OAuth redirect callback
+  // Handle OAuth redirect callback (popup flow + legacy full-page redirect).
+  // When the OAuth popup redirects back to the dashboard URL with ?mailOAuth=...,
+  // the dashboard detects it, notifies the opener window via postMessage, and
+  // closes itself. The opener (which still has the original state) receives
+  // the postMessage and runs the same callback logic below.
   (function handleMailOAuthCallback() {
     const params = new URLSearchParams(window.location.search);
     const oauthStatus = params.get('mailOAuth');
-    if (oauthStatus) {
-      const msg = params.get('msg') || '';
-      history.replaceState({}, '', window.location.pathname + window.location.hash);
+    if (!oauthStatus) return;
+    const msg = params.get('msg') || '';
+    history.replaceState({}, '', window.location.pathname + window.location.hash);
+
+    function _runCallback() {
       if (oauthStatus === 'success') {
         showToast(`Mail account connected: ${msg}`);
         // Close any open modals
@@ -39341,7 +39352,40 @@ async function init() {
         showToast(`OAuth failed: ${msg}`, true);
       }
     }
+
+    if (window.opener && !window.opener.closed) {
+      // Running inside an OAuth popup — notify opener and close.
+      try {
+        window.opener.postMessage({ type: 'mailOAuth', status: oauthStatus, msg }, window.location.origin);
+      } catch (e) { /* opener on a different origin */ }
+      _runCallback();
+      setTimeout(() => window.close(), 50);
+      return;
+    }
+
+    // Legacy full-page redirect (no opener) — run normally.
+    _runCallback();
   })();
+
+  // Receive OAuth callbacks from popup windows. The popup runs the same
+  // handleMailOAuthCallback above and posts the result back before closing.
+  window.addEventListener('message', (ev) => {
+    if (ev.origin !== window.location.origin) return;
+    const data = ev.data;
+    if (!data || data.type !== 'mailOAuth') return;
+    if (data.status === 'success') {
+      showToast(`Mail account connected: ${data.msg || ''}`);
+      document.querySelectorAll('.modal:not(.hidden)').forEach(m => m.classList.add('hidden'));
+      renderMailTabs().catch(() => {});
+    } else if (data.status === 'graph_success') {
+      showToast('Graph sendMail connected');
+      renderMailTabs().catch(() => {});
+      api(`/api/v2/mail/accounts`).catch(() => {});
+      updateComposeGraphBanner();
+    } else {
+      showToast(`OAuth failed: ${data.msg || ''}`, true);
+    }
+  });
 
   state.groups = [];
   state.calendarTiles = [];
