@@ -13037,6 +13037,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
         state_data = _oauth_states.pop(state_val, None)
         if not state_data:
+            # Graph flow shares the single registered redirect_uri (Microsoft
+            # only calls back to OAUTH_REDIRECT_URI) but keeps a separate
+            # state store — delegate instead of erroring.
+            if state_val in _oauth_graph_states:
+                return self._handle_oauth_graph_callback()
             _json_response(self, 400, {"error": "Invalid or expired state"})
             return
         if len(state_data) >= 4:

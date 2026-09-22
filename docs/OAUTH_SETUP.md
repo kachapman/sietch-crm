@@ -59,13 +59,21 @@ The app `Sietch CRM` already exists (client id `e285c2a5-...`). You only need to
 
 > If "Supported account types" is greyed out, the registration may be a legacy/permission issue — in that case register a new app and update the env vars in `.env`.
 
-7. Set env vars:
+ 7. Set env vars:
    ```
    OAUTH_MICROSOFT_CLIENT_ID=your-client-id
    OAUTH_MICROSOFT_CLIENT_SECRET=your-client-secret
    OAUTH_MICROSOFT_TENANT=common
    OAUTH_REDIRECT_URI=https://g2vpdgb498.localto.net
    ```
+
+> **Single redirect URI for all flows (important).** Both the Exchange OAuth
+> flow (IMAP/SMTP token) and the Graph sendMail flow (`Mail.Send` token) send
+> the SAME `redirect_uri` (`OAUTH_REDIRECT_URI` → `/api/v2/mail/oauth/callback`).
+> The server dispatches by OAuth `state` (Exchange states vs Graph states) inside
+> that one callback. Do NOT register a second redirect URI for
+> `/api/v2/mail/oauth/microsoft/graph/callback` — Microsoft will never call it,
+> and Graph connects would fail with "Invalid or expired state".
 
 ---
 

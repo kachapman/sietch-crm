@@ -2,6 +2,18 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Graph connect: "Invalid or expired state" — shared-redirect dispatch (2026-09-22)
+
+**Symptom:** clicking "Reconnect for Graph" → Microsoft consent → popup landed on `/api/v2/mail/oauth/callback?code=…` showing raw `{"error": "Invalid or expired state"}`. Every Graph connect failed deterministically (first-run bug; flow built Sep 17, first exercised today).
+
+**Root cause:** both OAuth flows send the same fixed `redirect_uri` (`OAUTH_REDIRECT_URI` → the Exchange callback), but Graph states live in a separate store (`_oauth_graph_states`) that the Exchange callback never checked. Graph state + Exchange callback = guaranteed miss. The dedicated Graph callback route was unreachable because Microsoft was never told its URL.
+
+**Fix** (`server.py`, 5 lines): `_handle_oauth_callback` now delegates to `_handle_oauth_graph_callback()` when the state is found in the Graph store; only errors when absent from both. No `oauth_providers.py` change (authorize↔exchange `redirect_uri` consistency already holds), no Azure re-registration needed. `docs/OAUTH_SETUP.md` now documents the single-redirect-URI rule.
+
+**Requires server restart** (Python change). Verify: Reconnect for Graph → `?mailOAuth=graph_success` + toast + banner disappears; DB `oauth_graph_access_token` populated; test send routes via Graph.
+
+---
+
 ## OAuth Add-flow: cross-origin handshake + field reconcile (2026-09-22)
 
 **Symptom:** OAuth popup completed (Microsoft consent → `?mailOAuth=success` → auto-close) but the main window never reacted; Add modal kept manual values and Save/Test said `Use the "Connect" button above…`.
