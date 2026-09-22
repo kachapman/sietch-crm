@@ -20971,7 +20971,11 @@ function openAccountSettingsModal(editAccountId, opts) {
       const el = $(`#${id}`);
       if (el) el.value = '';
     });
-    $('#account-settings-auto-delete-days').value = 0;
+    // NOTE: the field id was renamed to account-settings-retention-days in
+    // 478eb6e; the stale id below threw on null and aborted every binding
+    // after it (X/Cancel/Test/Save/Connect). Always null-guard here.
+    const retentionNew = $('#account-settings-retention-days');
+    if (retentionNew) retentionNew.value = 90;
     const iconBox = $('#account-settings-tab-icons');
     const colorBox = $('#account-settings-tab-colors');
     if (iconBox) iconBox.dataset.value = 'user';
@@ -20980,10 +20984,12 @@ function openAccountSettingsModal(editAccountId, opts) {
     // Hide tab appearance for CRM mail (shared company inbox)
     const tabAppearance = $('#account-settings-tab-appearance');
     if (tabAppearance) tabAppearance.style.display = isCrmMail ? 'none' : '';
-    $('#account-settings-imap-port').value = 993;
+    const imapPortNew = $('#account-settings-imap-port');
+    if (imapPortNew) imapPortNew.value = 993;
     const imapSecNew = $('#account-settings-imap-security');
     if (imapSecNew) imapSecNew.value = 'ssl';
-    $('#account-settings-smtp-port').value = 587;
+    const smtpPortNew = $('#account-settings-smtp-port');
+    if (smtpPortNew) smtpPortNew.value = 587;
     const folderContainer = $('#account-settings-folders');
     if (folderContainer) {
       folderContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => {
@@ -21020,25 +21026,29 @@ function openAccountSettingsModal(editAccountId, opts) {
       const selectedRadio = modal.querySelector('input[name="account-auth-method"]:checked');
       const provider = selectedRadio?.value;
       if (!provider || provider === 'password') return;
-      const email = $('#account-settings-email')?.value.trim();
-      if (!email && provider === 'google') {
-        // Microsoft can extract email from token, Google too but better to have it
+      // Open the popup SYNCHRONOUSLY from the click gesture. Awaiting the
+      // API first breaks the user-gesture stack and browsers silently block
+      // the popup (window.open returns null). Navigate it once we have the URL.
+      const popup = window.open('about:blank', 'mail_oauth', 'width=600,height=700');
+      if (!popup) {
+        showToast('Popup blocked — allow popups for this site and try again', true);
+        return;
       }
+      try { popup.document.title = 'Connecting…'; } catch (e) { /* cross-browser */ }
       try {
         const crmFlag = modal.dataset.crmMail === '1' ? '&is_crm_mail=1' : '';
         const res = await api(`/api/v2/mail/oauth/authorize?provider=${provider}${crmFlag}`);
         if (res.authUrl) {
-          // Open the OAuth flow in a popup so the user keeps their place in
-          // the modal. The popup loads Microsoft's consent screen, redirects
-          // back to the dashboard URL with ?mailOAuth=..., and the dashboard's
+          // The popup loads the provider consent screen, redirects back to
+          // the dashboard URL with ?mailOAuth=..., and the dashboard's
           // callback handler notifies this window via postMessage then closes.
-          const popup = window.open(res.authUrl, 'mail_oauth', 'width=600,height=700');
-          if (!popup) {
-            showToast('Popup blocked — allow popups for this site and try again', true);
-            return;
-          }
+          popup.location = res.authUrl;
+        } else {
+          try { popup.close(); } catch (_e) { /* ignore */ }
+          showToast('Failed to get OAuth URL', true);
         }
       } catch (e) {
+        try { popup.close(); } catch (_e) { /* ignore */ }
         showToast('Failed to start OAuth: ' + e.message, true);
       }
     });
@@ -21233,17 +21243,22 @@ function updateGraphStatusBlock(acct, accountId) {
 }
 
 async function connectGraphSend(accountId) {
+  // Open the popup SYNCHRONOUSLY from the click gesture (same reason as
+  // oauthConnectBtn above): awaiting the API first gets the popup blocked.
+  const popup = window.open('about:blank', 'graph_oauth', 'width=600,height=700');
+  if (!popup) {
+    showToast('Popup blocked — allow popups for this site and try again', true);
+    return;
+  }
+  try { popup.document.title = 'Connecting…'; } catch (e) { /* cross-browser */ }
   try {
     const data = await api(`/api/v2/mail/oauth/microsoft/graph/authorize?account_id=${accountId}`);
     if (!data.authUrl) {
+      try { popup.close(); } catch (_e) { /* ignore */ }
       showToast('Failed to get Graph authorize URL', true);
       return;
     }
-    const popup = window.open(data.authUrl, 'graph_oauth', 'width=600,height=700');
-    if (!popup) {
-      showToast('Popup blocked — allow popups for this site and try again', true);
-      return;
-    }
+    popup.location = data.authUrl;
     const tick = setInterval(async () => {
       if (popup && popup.closed) {
         clearInterval(tick);
@@ -21259,6 +21274,7 @@ async function connectGraphSend(accountId) {
       }
     }, 500);
   } catch (e) {
+    try { popup.close(); } catch (_e) { /* ignore */ }
     showToast('Graph connect failed: ' + (e.message || ''), true);
   }
 }

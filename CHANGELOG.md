@@ -2,6 +2,18 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Add Mail Account modal dead + OAuth popup blocked (2026-09-22)
+
+**Root cause 1 — stale element ID killed every button in the Add flow.** `openAccountSettingsModal()` (public/app.js) reset `$('#account-settings-auto-delete-days').value = 0`, but that field was renamed to `account-settings-retention-days` in `478eb6e` (retention feature), which updated the Edit branch and save handler but missed the Add branch. The unguarded null dereference threw a TypeError mid-setup, aborting all bindings after it: X/close, Cancel, Test, Save, and Connect. Modal rendered (unhidden before the throw) and native radios still toggled, but no JS-bound button worked. Edit flow was unaffected (correct ID there). Fix: reset the renamed field with a null guard (default 90, matching HTML default + save fallback `|| 90`); also null-guarded the other two unguarded Add-branch lookups (`imap-port`, `smtp-port`) against the same failure class.
+
+**Root cause 2 — async popup block on OAuth Connect.** Both `oauthConnectBtn` and `connectGraphSend()` awaited the API before calling `window.open()`, which breaks the user-gesture stack — browsers silently block the popup and return null. Fix: `window.open('about:blank', …)` runs synchronously in the click handler (with "Connecting…" title + popup-blocked toast), then `popup.location = authUrl` after the API responds; popup is closed explicitly on API failure.
+
+**Files**: `public/app.js`, `public/index.html` (cache-bust `app.js?v=3.5.0` → `v=3.5.1`).
+
+**Verify**: open Add Mail Account → X closes, Cancel closes, Test runs, Save validates/saves, Password→Microsoft 365 swaps sections, Connect opens popup immediately → Microsoft consent → popup closes via postMessage → toast + tab refresh. Edit flow regression-check. Zero console errors.
+
+---
+
 ## Microsoft Graph `sendMail` for Outlook SMTP-locked accounts (2026-09-17)
 
 **Workaround for the `5.7.139 SmtpClientAuthentication is disabled` error** that Microsoft applies to consumer Outlook accounts and refuses to re-enable via support. The v2.0 token endpoint mints one access token per audience, so Graph sendMail needs a separate OAuth flow from the existing Exchange OAuth. Two-token model: keep the Exchange-audience token for IMAP/SMTP, add a Graph-audience token for Graph sendMail.
