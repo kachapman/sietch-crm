@@ -20799,6 +20799,55 @@ function renderAccountTabPickers() {
   });
 }
 
+// Reconcile an OAuth connect that finished in a popup window. The server
+// creates/updates the mail_accounts row during the OAuth callback; this finds
+// that row by email, persists any values the user typed into the Add modal
+// onto it (the OAuth INSERT only stores provider defaults), then closes the
+// modal and refreshes the tabs. Called from the postMessage listener AND from
+// the closed-popup poll fallback, because the message can be lost when the
+// popup lives on a different host than this window (tunnel URL vs LAN URL).
+async function reconcileOAuthConnect(email) {
+  const modal = $('#account-settings-modal');
+  const modalOpen = !!(modal && !modal.classList.contains('hidden'));
+  try {
+    const data = await api('/api/v2/mail/accounts');
+    const needle = (email || '').trim().toLowerCase();
+    const acct = (data.accounts || []).find(a => ((a.email || '').toLowerCase() === needle));
+    if (!acct) {
+      showToast('OAuth completed but the account was not found — check the server log', true);
+      return;
+    }
+    // Add modal still open for this email (no id yet): push the user's typed
+    // values onto the server-created row. Only user-intent fields — never
+    // hosts/ports/passwords/tokens, which the OAuth callback set from the provider.
+    const modalEmail = modalOpen ? ($('#account-settings-email')?.value || '').trim().toLowerCase() : '';
+    const modalId = modalOpen ? ($('#account-settings-id')?.value || '') : '';
+    if (modalOpen && modalId === '' && modalEmail && modalEmail === (acct.email || '').toLowerCase()) {
+      try {
+        const folderCbs = $('#account-settings-folders')?.querySelectorAll('input[type="checkbox"]:checked');
+        await api(`/api/v2/mail/accounts/${acct.id}`, { method: 'PUT', body: JSON.stringify({
+          display_name: ($('#account-settings-name')?.value || '').trim() || acct.email,
+          smtp_from_name: ($('#account-settings-from-name')?.value || '').trim(),
+          monitored_folders: folderCbs ? Array.from(folderCbs).map(cb => cb.value) : ['INBOX'],
+          auto_bcc_addr: ($('#account-settings-auto-bcc')?.value || '').trim(),
+          retention_days: parseInt($('#account-settings-retention-days')?.value) || 90,
+          signature_html: $('#account-settings-signature')?.value || '',
+          tab_icon: $('#account-settings-tab-icons')?.dataset.value || 'user',
+          tab_color: $('#account-settings-tab-colors')?.dataset.value || 'var(--accent)',
+        }) });
+      } catch (e) { /* keep the connected account even if the field sync fails */ }
+    }
+    if (modal) {
+      modal.dataset.oauthDone = '1';
+      modal.classList.add('hidden');
+    }
+    showToast(`Mail account connected: ${acct.email || email}`);
+    await renderMailTabs();
+  } catch (e) {
+    showToast('OAuth connected, but refresh failed: ' + (e.message || e), true);
+  }
+}
+
 function openAccountSettingsModal(editAccountId, opts) {
   const modal = $('#account-settings-modal');
   if (!modal) return;
@@ -20806,6 +20855,7 @@ function openAccountSettingsModal(editAccountId, opts) {
   opts = opts || {};
   const isCrmMail = !!opts.isCrmMail;
   modal.dataset.crmMail = isCrmMail ? '1' : '0';
+  delete modal.dataset.oauthDone;
 
   const titleEl = $('#account-settings-title');
   const deleteBtn = $('#account-settings-delete');
@@ -21043,6 +21093,26 @@ function openAccountSettingsModal(editAccountId, opts) {
           // the dashboard URL with ?mailOAuth=..., and the dashboard's
           // callback handler notifies this window via postMessage then closes.
           popup.location = res.authUrl;
+          // Fallback: the postMessage can be lost when the popup ends up on a
+          // different host than this window (tunnel URL vs LAN URL). When the
+          // popup closes, reconcile by email — a no-op if the message path
+          // already completed (modal hidden / oauthDone set).
+          const fallbackEmail = ($('#account-settings-email')?.value || '').trim();
+          const tick = setInterval(() => {
+            let closed = true;
+            try { closed = !popup || popup.closed; } catch (_e) { /* treat as closed */ }
+            if (!closed) return;
+            clearInterval(tick);
+            if (modal.dataset.oauthDone !== '1' && !modal.classList.contains('hidden')) {
+              modal.dataset.oauthDone = '1';
+              const currentEmail = ($('#account-settings-email')?.value || '').trim() || fallbackEmail;
+              if (currentEmail) {
+                reconcileOAuthConnect(currentEmail).catch(() => {});
+              } else {
+                showToast('OAuth window closed — click Connect to try again');
+              }
+            }
+          }, 500);
         } else {
           try { popup.close(); } catch (_e) { /* ignore */ }
           showToast('Failed to get OAuth URL', true);
@@ -21124,6 +21194,15 @@ function openAccountSettingsModal(editAccountId, opts) {
   if (testBtn && !testBtn.dataset.bound) {
     testBtn.dataset.bound = '1';
     testBtn.addEventListener('click', async () => {
+      // OAuth accounts have no password to test with until connected via the
+      // Connect button (same guard as Save below).
+      const selRadio = modal.querySelector('input[name="account-auth-method"]:checked');
+      const am = selRadio?.value || 'password';
+      const tid = $('#account-settings-id').value;
+      if (!tid && (am === 'microsoft' || am === 'google')) {
+        showToast('Use the "Connect" button above to authenticate via OAuth');
+        return;
+      }
       const host = $('#account-settings-imap-host').value.trim();
       const port = parseInt($('#account-settings-imap-port').value) || 993;
       const email = $('#account-settings-email').value.trim();
@@ -39371,9 +39450,15 @@ async function init() {
 
     if (window.opener && !window.opener.closed) {
       // Running inside an OAuth popup — notify opener and close.
+      // The opener may be on a different host (tunnel URL vs LAN URL), in
+      // which case the exact-origin post throws; fall back to '*'. The payload
+      // carries only connect status + email (no tokens/secrets).
+      const payload = { type: 'mailOAuth', status: oauthStatus, msg };
       try {
-        window.opener.postMessage({ type: 'mailOAuth', status: oauthStatus, msg }, window.location.origin);
-      } catch (e) { /* opener on a different origin */ }
+        window.opener.postMessage(payload, window.location.origin);
+      } catch (e) {
+        try { window.opener.postMessage(payload, '*'); } catch (_e) { /* opener gone */ }
+      }
       _runCallback();
       setTimeout(() => window.close(), 50);
       return;
@@ -39386,13 +39471,13 @@ async function init() {
   // Receive OAuth callbacks from popup windows. The popup runs the same
   // handleMailOAuthCallback above and posts the result back before closing.
   window.addEventListener('message', (ev) => {
-    if (ev.origin !== window.location.origin) return;
     const data = ev.data;
-    if (!data || data.type !== 'mailOAuth') return;
+    // NOTE: no strict origin check — the OAuth popup may live on a different
+    // host than this window (public tunnel URL vs LAN URL). The payload only
+    // carries connect status + email (no tokens/secrets); validated by shape.
+    if (!data || data.type !== 'mailOAuth' || typeof data.status !== 'string') return;
     if (data.status === 'success') {
-      showToast(`Mail account connected: ${data.msg || ''}`);
-      document.querySelectorAll('.modal:not(.hidden)').forEach(m => m.classList.add('hidden'));
-      renderMailTabs().catch(() => {});
+      reconcileOAuthConnect(data.msg || '');
     } else if (data.status === 'graph_success') {
       showToast('Graph sendMail connected');
       renderMailTabs().catch(() => {});

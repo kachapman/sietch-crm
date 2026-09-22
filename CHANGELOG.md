@@ -2,6 +2,20 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## OAuth Add-flow: cross-origin handshake + field reconcile (2026-09-22)
+
+**Symptom:** OAuth popup completed (Microsoft consent → `?mailOAuth=success` → auto-close) but the main window never reacted; Add modal kept manual values and Save/Test said `Use the "Connect" button above…`.
+
+**Root causes (all traced):** (1) Server callback had already created the account — the last mile failed. (2) Popup lands on fixed `CRM_PUBLIC_URL` (tunnel) while the main window was on LAN → no session cookie in popup (login page inside popup) + cross-origin opener. (3) Popup-side `postMessage(…, window.location.origin)` threw on origin mismatch (swallowed by `catch`), and the opener listener dropped anything not strictly same-origin — doubly silent. (4) Design gap: server INSERT uses provider defaults, discarding everything typed in the Add modal (name, display name, signature, BCC, retention, icon/color).
+
+**Fixes** (`public/app.js`): new `reconcileOAuthConnect(email)` — finds the server-created row by email, PUTs the modal's typed values onto it (user-intent fields only: display_name, from-name, folders, BCC, retention, signature, icon/color; never hosts/tokens), closes modal, refreshes tabs. Wired to both the postMessage listener (strict origin check replaced with payload shape validation — payload carries no secrets) and a new 500 ms closed-popup poll fallback in the Connect handler (no-op if the message path already completed, via `oauthDone` flag). Popup-side post falls back to `'*'` target. Test button in unconnected OAuth Add mode now shows the same "Use the Connect button" guidance as Save instead of attempting a password test with hidden fields.
+
+**Files**: `public/app.js`, `public/index.html` (cache-bust `app.js?v=3.5.1` → `v=3.5.2`).
+
+**Verify**: Add a second Outlook account → Connect → consent → popup closes → Add modal auto-closes, new tab appears, toast shows; DB `display_name` equals typed Account Name (not email-derived default). Zero console errors.
+
+---
+
 ## Add Mail Account modal dead + OAuth popup blocked (2026-09-22)
 
 **Root cause 1 — stale element ID killed every button in the Add flow.** `openAccountSettingsModal()` (public/app.js) reset `$('#account-settings-auto-delete-days').value = 0`, but that field was renamed to `account-settings-retention-days` in `478eb6e` (retention feature), which updated the Edit branch and save handler but missed the Add branch. The unguarded null dereference threw a TypeError mid-setup, aborting all bindings after it: X/close, Cancel, Test, Save, and Connect. Modal rendered (unhidden before the throw) and native radios still toggled, but no JS-bound button worked. Edit flow was unaffected (correct ID there). Fix: reset the renamed field with a null guard (default 90, matching HTML default + save fallback `|| 90`); also null-guarded the other two unguarded Add-branch lookups (`imap-port`, `smtp-port`) against the same failure class.
