@@ -10,7 +10,7 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 **Fix** (`server.py`, 5 lines): `_handle_oauth_callback` now delegates to `_handle_oauth_graph_callback()` when the state is found in the Graph store; only errors when absent from both. No `oauth_providers.py` change (authorize↔exchange `redirect_uri` consistency already holds), no Azure re-registration needed. `docs/OAUTH_SETUP.md` now documents the single-redirect-URI rule.
 
-**Requires server restart** (Python change). Verify: Reconnect for Graph → `?mailOAuth=graph_success` + toast + banner disappears; DB `oauth_graph_access_token` populated; test send routes via Graph.
+**Requires server restart** (Python change). **VERIFIED 2026-09-22 by user in browser:** Reconnect for Graph completes (`?mailOAuth=graph_success` + toast, banner disappears) and sending via the Outlook account works — Graph-routed, no more 5.7.139.
 
 ---
 
