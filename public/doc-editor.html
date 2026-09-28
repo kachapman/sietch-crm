@@ -33,6 +33,13 @@
     }
     #error { display: none; }
     #editor { height: 100%; }
+    /* Embedded mode (preview pane iframe): hide own background, let parent look through. */
+    body[data-embedded="true"] {
+      background: transparent;
+    }
+    body[data-embedded="true"] #editor {
+      height: 100vh;
+    }
     .spinner {
       width: 40px;
       height: 40px;
@@ -65,6 +72,12 @@
       const docId = params.get("id");
       const mailMsg = params.get("mail_msg");
       const mailAtt = params.get("mail_att");
+      // mode=view forces view-only editor (used by the documents-modal preview pane).
+      const forceViewMode = params.get("mode") === "view";
+      // embedded=1 hides the page chrome — used when this page is loaded inside
+      // the modal preview iframe so it doesn't waste pixels on its own header.
+      const embedded = params.get("embedded") === "1";
+      if (embedded) document.body.setAttribute("data-embedded", "true");
       const loadingEl = document.getElementById("loading");
       const errorEl = document.getElementById("error");
       const errorMsgEl = document.getElementById("error-message");
@@ -82,7 +95,8 @@
         configUrl = `/api/v2/mail/messages/${mailMsg}/attachments/${mailAtt}/editor-config`;
         isMailAttachment = true;
       } else if (docId && /^\d+$/.test(docId)) {
-        configUrl = `/api/v2/documents/${docId}/editor-config`;
+        configUrl = `/api/v2/documents/${docId}/editor-config` + (forceViewMode ? "?mode=view" : "");
+        if (forceViewMode) isMailAttachment = false; // still editable docs, just forced view
       } else {
         showError("Invalid document or attachment ID.");
         return;

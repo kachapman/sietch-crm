@@ -6178,8 +6178,8 @@ body {
 
 .modal-card-opp-preview {
   width: min(720px, 96vw);
-  height: min(800px, 92vh);
-  max-height: 92vh;
+  height: min(80vh, 800px);
+  max-height: 90vh;
   display: flex;
   flex-direction: column;
   resize: both;
@@ -6407,6 +6407,8 @@ body {
 }
 
 .opp-preview-body {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -7610,6 +7612,232 @@ body {
 
 .opp-preview-doc-item:hover .opp-doc-download {
   opacity: 1;
+}
+
+/* ── Doc preview pane (right side of Documents tab in opp-preview modal) ── */
+.opp-preview-doc-container {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: stretch;
+  overflow: hidden;
+  gap: 0;
+}
+
+.opp-preview-doc-container .opp-preview-docs-list {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 0.5rem 0.5rem 1rem;
+  margin: 0;
+  list-style: none;
+}
+
+.opp-preview-doc-eye {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.opp-preview-doc-item:hover .opp-preview-doc-eye,
+.opp-preview-doc-eye:focus-visible {
+  opacity: 1;
+}
+
+.opp-preview-doc-eye:hover {
+  background: var(--surface-2, rgba(255,255,255,0.06));
+  color: var(--accent, #4f8cff);
+}
+
+.opp-preview-doc-pane {
+  flex: 0 0 auto;
+  width: 0;
+  min-width: 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface-2, #1f2330);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: width 200ms ease, min-width 200ms ease, border-left-width 200ms ease;
+}
+
+.opp-preview-doc-pane-collapsed {
+  width: 0;
+  min-width: 0;
+  border-left-width: 0;
+}
+
+.opp-preview-doc-container.preview-open .opp-preview-doc-pane {
+  width: min(640px, 55%);
+  min-width: 280px;
+}
+
+.opp-preview-doc-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.opp-preview-doc-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.opp-preview-doc-title-row i {
+  color: var(--muted);
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+#opp-preview-doc-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.opp-preview-doc-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.opp-preview-doc-actions .btn-icon-only {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 120ms;
+}
+
+.opp-preview-doc-actions .btn-icon-only:hover:not(:disabled) {
+  background: var(--surface-2, rgba(255,255,255,0.06));
+}
+
+.opp-preview-doc-actions .btn-icon-only:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.opp-preview-doc-activity {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  min-height: 1.4rem;
+  flex-shrink: 0;
+  line-height: 1.4;
+}
+
+.opp-preview-doc-activity-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.opp-preview-doc-activity-avatar {
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 50%;
+  background: var(--accent, #4f8cff);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.opp-preview-doc-activity-meta {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.opp-preview-doc-frame-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.opp-preview-doc-iframe {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
+.opp-preview-doc-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1.5rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.opp-preview-doc-empty i {
+  font-size: 2rem;
+  opacity: 0.6;
+}
+
+.opp-preview-doc-empty p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.opp-preview-doc-empty-hint {
+  font-size: 0.75rem !important;
+  color: var(--muted) !important;
+}
+
+@media (max-width: 720px) {
+  /* On narrow screens the preview pane becomes a full-width overlay so it
+     doesn't compress the list. The show/hide toggle still works. Mirrors the
+     documents-modal mobile pattern. */
+  .opp-preview-doc-pane:not(.opp-preview-doc-pane-collapsed) {
+    position: absolute;
+    inset: 0;
+    width: 100% !important;
+    min-width: 0 !important;
+    z-index: 5;
+    background: var(--surface-2, #1f2330);
+  }
 }
 
 .opp-doc-download:hover {
@@ -11326,6 +11554,8 @@ body {
 }
 
 .search-popup-preview-body {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -12013,6 +12243,8 @@ body {
 }
 
 .bookmark-preview-body {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -14606,6 +14838,217 @@ select.form-control {
     resize: none;
     min-width: 0;
     max-width: 100%;
+  }
+}
+
+/* ── Documents Modal: Preview Pane ───────────────────────────────────────── */
+.documents-preview-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: 0;
+  min-width: 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface-2, #1a1d27);
+  overflow: hidden;
+  transition: width 200ms ease, min-width 200ms ease;
+  /* Sit between main and right edge; takes precedence over hidden toggle state */
+}
+
+.documents-preview-pane-collapsed {
+  width: 0;
+  min-width: 0;
+  border-left-width: 0;
+}
+
+.documents-preview-pane:not(.documents-preview-pane-collapsed) {
+  width: min(640px, 50%);
+  min-width: 280px;
+}
+
+.documents-preview-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  flex-shrink: 0;
+  background: var(--surface);
+}
+
+.documents-preview-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.documents-preview-title i {
+  color: var(--muted);
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+#documents-preview-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.documents-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.documents-preview-actions .btn-icon-only {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 150ms;
+}
+
+.documents-preview-actions .btn-icon-only:hover:not(:disabled) {
+  background: var(--surface-2, rgba(255,255,255,0.06));
+}
+
+.documents-preview-actions .btn-icon-only:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.documents-preview-activity {
+  padding: 0.5rem 1rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  min-height: 1.5rem;
+  flex-shrink: 0;
+  line-height: 1.4;
+}
+
+.documents-preview-activity-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.documents-preview-activity-avatar {
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  background: var(--accent, #4f8cff);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.documents-preview-activity-meta {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.documents-preview-frame-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.documents-preview-iframe {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
+.documents-preview-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.documents-preview-empty i {
+  font-size: 2.5rem;
+  opacity: 0.6;
+}
+
+.documents-preview-empty p {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.documents-preview-empty-hint {
+  font-size: 0.78rem !important;
+  color: var(--muted) !important;
+}
+
+/* Per-row "eye" preview button — appears on hover for clearly-desktop users */
+.doc-preview-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+  flex-shrink: 0;
+}
+
+.documents-list-row:hover .doc-preview-btn,
+.doc-preview-btn:focus-visible {
+  opacity: 1;
+}
+
+.doc-preview-btn:hover {
+  background: var(--surface-2, rgba(255,255,255,0.06));
+  color: var(--accent, #4f8cff);
+}
+
+@media (max-width: 720px) {
+  /* On narrow screens the preview pane becomes a full-width overlay so it
+     doesn't compress the list. The show/hide toggle still works. */
+  .documents-preview-pane:not(.documents-preview-pane-collapsed) {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 100% !important;
+    min-width: 0 !important;
+    z-index: 5;
+    background: var(--surface-2, #1a1d27);
   }
 }
 

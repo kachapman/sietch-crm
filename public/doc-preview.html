@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Document Preview — Sietch CRM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #181b24;
+      --surface-2: #1f2330;
+      --text: #e8ecf4;
+      --muted: #8b95a8;
+      --accent: #4f8cff;
+      --border: #2a2f3d;
+    }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--surface-2);
+      color: var(--text);
+      font-family: "DM Sans", system-ui, sans-serif;
+      overflow: hidden;
+    }
+    body[data-embedded="true"] {
+      background: var(--surface-2);
+    }
+    .layout {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+    .toolbar {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.45rem 0.6rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      font-size: 0.82rem;
+      min-width: 0;
+    }
+    .toolbar .icon-btn {
+      flex: 0 0 auto;
+      background: transparent;
+      color: var(--text);
+      border: 1px solid transparent;
+      border-radius: 6px;
+      padding: 0.3rem 0.45rem;
+      cursor: pointer;
+      font: inherit;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 0;
+      transition: background 120ms, border-color 120ms;
+    }
+    .toolbar .icon-btn:hover:not(:disabled) {
+      background: var(--surface-2);
+      border-color: var(--border);
+    }
+    .toolbar .icon-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+    .toolbar .icon-btn svg {
+      width: 16px;
+      height: 16px;
+      stroke-width: 2;
+    }
+    .toolbar select {
+      flex: 0 0 auto;
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.3rem 0.5rem;
+      font: inherit;
+      font-size: 0.78rem;
+      cursor: pointer;
+      max-width: 7.5rem;
+    }
+    .toolbar select:hover, .toolbar select:focus-visible {
+      border-color: var(--accent);
+      outline: none;
+    }
+    .toolbar .page-info {
+      color: var(--muted);
+      min-width: 3.5rem;
+      padding: 0.3rem 0.5rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-variant-numeric: tabular-nums;
+      font-size: 0.78rem;
+    }
+    .toolbar .sep {
+      width: 1px;
+      height: 1.4rem;
+      background: var(--border);
+      margin: 0 0.15rem;
+      flex: 0 0 auto;
+    }
+    .content {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 1rem;
+    }
+    .content.pdf-pane {
+      background: #2c2f3a;
+      align-items: flex-start;
+      padding: 1rem 0.5rem;
+    }
+    #pdf-canvas-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+      width: 100%;
+    }
+    #pdf-canvas-wrap canvas {
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      /* No max-width: PDF.js renders the canvas at the requested pixel size;
+         at zoom > 100% the canvas overflows the wrap and the .content's
+         overflow:auto adds a horizontal scrollbar. */
+      height: auto !important;
+    }
+    /* mammoth-rendered Word content — reset to readable document defaults */
+    .content.doc-pane {
+      background: #f7f7fa;
+      color: #1a1a1a;
+      align-items: flex-start;
+      justify-content: flex-start;
+    }
+    .doc-render {
+      background: #fff;
+      max-width: 780px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 2.5rem 3rem;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+      font-family: "Calibri", "Segoe UI", system-ui, sans-serif;
+      font-size: 0.95rem;
+      line-height: 1.55;
+      color: #1a1a1a;
+    }
+    .doc-render h1, .doc-render h2, .doc-render h3,
+    .doc-render h4, .doc-render h5, .doc-render h6 {
+      margin: 1.4em 0 0.5em;
+      font-weight: 600;
+    }
+    .doc-render p { margin: 0.7em 0; }
+    .doc-render table { border-collapse: collapse; margin: 1em 0; }
+    .doc-render table td, .doc-render table th {
+      border: 1px solid #ccc; padding: 0.4em 0.7em; vertical-align: top;
+    }
+    .doc-render img { max-width: 100%; height: auto; }
+    /* SheetJS-rendered spreadsheet */
+    .content.sheet-pane {
+      background: var(--surface);
+      align-items: flex-start;
+      justify-content: flex-start;
+    }
+    .sheet-render {
+      font-family: "Calibri", "Segoe UI", system-ui, sans-serif;
+      font-size: 0.85rem;
+      color: var(--text);
+    }
+    .sheet-render table {
+      border-collapse: collapse;
+      width: max-content;
+      min-width: 100%;
+    }
+    .sheet-render td {
+      border: 1px solid var(--border);
+      padding: 0.3rem 0.5rem;
+      white-space: pre;
+      background: var(--surface);
+      min-width: 3rem;
+    }
+    .sheet-render tr:nth-child(odd) td {
+      background: var(--surface-2);
+    }
+    .sheet-tabs {
+      display: flex;
+      gap: 0.25rem;
+      padding: 0.5rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      flex-wrap: wrap;
+    }
+    .sheet-tab {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 0.3rem 0.7rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.78rem;
+    }
+    .sheet-tab.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .sheet-tab:hover:not(.active) {
+      background: var(--surface-2);
+      color: var(--text);
+    }
+    /* image preview */
+    .content.img-pane {
+      background: #2c2f3a;
+      align-items: center;
+      justify-content: center;
+    }
+    .content.img-pane img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+    /* plain text */
+    .content.txt-pane {
+      background: var(--surface);
+      align-items: flex-start;
+      justify-content: flex-start;
+    }
+    .txt-render {
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.85rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--text);
+      max-width: 100%;
+      margin: 0;
+    }
+    /* states */
+    .status {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      height: 100%;
+      width: 100%;
+      padding: 2rem;
+      text-align: center;
+      color: var(--muted);
+    }
+    .status .icon {
+      font-size: 2rem;
+      opacity: 0.7;
+    }
+    .status .msg {
+      max-width: 360px;
+      line-height: 1.5;
+    }
+    .status button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 0.5rem 1rem;
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.85rem;
+    }
+    .status button:hover {
+      filter: brightness(1.1);
+    }
+    .spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid rgba(255,255,255,0.1);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    /* hide toolbar groups until they're relevant to the loaded doc type */
+    .toolbar .pdf-only.hidden,
+    .toolbar .pdf-only.hidden + .sep { display: none; }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <div class="toolbar">
+    <span class="pdf-only" id="pdf-page-group" hidden>
+      <button class="icon-btn" id="prev-page" title="Previous page" aria-label="Previous page">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
+      <span class="page-info" id="page-info">— / —</span>
+      <button class="icon-btn" id="next-page" title="Next page" aria-label="Next page">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+    </span>
+    <span class="pdf-only sep" id="pdf-zoom-sep" hidden></span>
+    <span class="pdf-only" id="pdf-zoom-group" hidden>
+      <select id="zoom-select" aria-label="Zoom">
+        <option value="0.5">50%</option>
+        <option value="0.75">75%</option>
+        <option value="1">100%</option>
+        <option value="1.25">125%</option>
+        <option value="1.5">150%</option>
+        <option value="2">200%</option>
+        <option value="fit-width" selected>Fit width</option>
+      </select>
+    </span>
+    <span class="sep"></span>
+    <button class="icon-btn" id="download-btn" title="Download" aria-label="Download">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+    </button>
+  </div>
+  <div class="content" id="content">
+    <div class="status" id="status">
+      <div class="spinner"></div>
+      <div class="msg">Loading document…</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(async function () {
+  const params = new URLSearchParams(window.location.search);
+  const docId = params.get("id");
+  const titleHint = params.get("title") || "Document";
+  const embedded = params.get("embedded") === "1";
+  if (embedded) document.body.setAttribute("data-embedded", "true");
+
+  const MAX_BYTES = 15 * 1024 * 1024;
+  const CDN = {
+    pdfjs: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs",
+    pdfjsWorker: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs",
+    mammoth: "https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js",
+    xlsx: "https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js",
+  };
+  const ZOOM_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+  const ZOOM_FIT_WIDTH = "fit-width";
+
+  const $ = (id) => document.getElementById(id);
+  const content = $("content");
+  const pdfPageGroup = $("pdf-page-group");
+  const pdfZoomGroup = $("pdf-zoom-group");
+  const pdfZoomSep = $("pdf-zoom-sep");
+  const pageInfo = $("page-info");
+  const zoomSelect = $("zoom-select");
+  const downloadBtn = $("download-btn");
+
+  downloadBtn.addEventListener("click", () => {
+    if (!docId) return;
+    const a = document.createElement("a");
+    a.href = `/api/v2/documents/${docId}`;
+    a.download = titleHint;
+    a.click();
+  });
+
+  function showStatus(icon, msg, actionLabel, actionFn) {
+    content.className = "content";
+    content.innerHTML = `<div class="status">
+      <div class="icon">${icon}</div>
+      <div class="msg">${escapeHtml(msg)}</div>
+      ${actionLabel ? `<button>${escapeHtml(actionLabel)}</button>` : ""}
+    </div>`;
+    const btn = content.querySelector("button");
+    if (actionLabel && actionFn && btn) btn.addEventListener("click", actionFn);
+  }
+
+  function showFallbackNotice(msg, reason) {
+    // Errors do NOT auto-swap to OnlyOffice anymore — only files > 15 MB do.
+    // For any other failure, show a status with a manual "Open in full editor" button.
+    showStatus(
+      msg.includes("render") ? "📄" : "⚠",
+      msg,
+      "Open in full editor",
+      () => {
+        if (!docId) return;
+        window.open(`/doc-editor.html?id=${docId}`, "_blank");
+      }
+    );
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function requestAutoFallback(reason) {
+    // Only called for files > 15 MB. Tells parent to swap iframe to OnlyOffice.
+    try {
+      window.parent.postMessage(
+        { type: "docs-preview-fallback", docId: docId, reason: reason },
+        window.location.origin
+      );
+    } catch (e) { /* ignore */ }
+  }
+
+  function loadScript(url, globalCheck) {
+    return new Promise((resolve, reject) => {
+      if (globalCheck && globalCheck()) return resolve();
+      const s = document.createElement("script");
+      s.src = url;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("Failed to load " + url));
+      document.head.appendChild(s);
+    });
+  }
+
+  if (!docId) {
+    showStatus("⚠", "Invalid document ID.", null, null);
+    return;
+  }
+
+  // Fetch the file
+  let blob, contentType, byteLength;
+  try {
+    const res = await fetch(`/api/v2/documents/${docId}`, { credentials: "same-origin" });
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 403) {
+        showStatus("🔒", "You're not signed in or don't have access to this file.", "Sign in", () => { window.location.href = "/"; });
+        return;
+      }
+      throw new Error(`HTTP ${res.status}`);
+    }
+    contentType = res.headers.get("Content-Type") || "";
+    const cl = res.headers.get("Content-Length");
+    byteLength = cl ? parseInt(cl, 10) : 0;
+    blob = await res.blob();
+    if (!byteLength) byteLength = blob.size;
+  } catch (err) {
+    showFallbackNotice(`Couldn't load the file: ${err.message}`, "fetch-error");
+    return;
+  }
+
+  // Auto-fallback ONLY for files > 15 MB — these are hopeless for browser-side rendering.
+  if (byteLength > MAX_BYTES) {
+    requestAutoFallback("too-large");
+    showStatus(
+      "📄",
+      `This file is ${(byteLength / 1024 / 1024).toFixed(1)} MB — opening in the full editor.`,
+      "Open anyway in browser (may be slow)",
+      () => showStatus("", "Loading…", null, null)
+    );
+    // Tiny delay so the swap actually happens before we'd try to render.
+    setTimeout(() => {}, 200);
+    return;
+  }
+
+  // Detect type
+  const ext = (titleHint.split(".").pop() || "").toLowerCase();
+  const isPdf = contentType.includes("pdf") || ext === "pdf";
+  const isDocx = contentType.includes("wordprocessingml") || ext === "docx";
+  const isXlsx = contentType.includes("spreadsheetml") || ext === "xlsx";
+  const isXls = contentType.includes("ms-excel") || ext === "xls";
+  const isCsv = contentType.includes("csv") || ext === "csv";
+  const isImage = contentType.startsWith("image/");
+  const isText = contentType.startsWith("text/") && !isCsv;
+
+  try {
+    if (isPdf) {
+      pdfPageGroup.hidden = false;
+      pdfZoomGroup.hidden = false;
+      pdfZoomSep.hidden = false;
+      await renderPdf(blob);
+    } else if (isDocx) {
+      await renderDocx(blob);
+    } else if (isXlsx || isXls || isCsv) {
+      await renderSheet(blob);
+    } else if (isImage) {
+      renderImage(blob);
+    } else if (isText) {
+      await renderText(blob);
+    } else {
+      // Unsupported type — explicit fallback (this IS auto — legacy formats we can't render).
+      showStatus("📄", `No lightweight viewer for .${escapeHtml(ext || "?")} files.`, "Open in full editor", () => {
+        if (docId) window.open(`/doc-editor.html?id=${docId}`, "_blank");
+      });
+      requestAutoFallback("unsupported");
+    }
+  } catch (err) {
+    // Render errors: manual fallback, no silent swap.
+    showFallbackNotice(`Couldn't render in browser: ${err.message}`, "render-error");
+  }
+
+  // ── Renderers ──────────────────────────────────────────────────────
+
+  async function renderPdf(blob) {
+    // PDF.js v4 ships only ES modules (no UMD/global). Dynamic import() returns
+    // the module's exports as a namespace object — no window.pdfjsLib involved.
+    // Classic <script src=".mjs"> loads the file but never executes the body.
+    const pdfjsLib = await import(CDN.pdfjs);
+    pdfjsLib.GlobalWorkerOptions.workerSrc = CDN.pdfjsWorker;
+
+    const buf = await blob.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+
+    let pageNum = 1;
+    let zoomMode = "fit-width"; // numeric (e.g. "1.25") or ZOOM_FIT_WIDTH
+    let currentScale = 1; // numeric, updated every render — used by wheel zoom
+    const canvas = document.createElement("canvas");
+    content.className = "content pdf-pane";
+    content.innerHTML = "";
+    const wrap = document.createElement("div");
+    wrap.id = "pdf-canvas-wrap";
+    wrap.appendChild(canvas);
+    content.appendChild(wrap);
+
+    function computeFitWidthZoom(page) {
+      const baseVp = page.getViewport({ scale: 1 });
+      // Use content's inner width minus a small margin so PDF doesn't overflow.
+      const available = Math.max(200, content.clientWidth - 16);
+      return Math.max(0.25, Math.min(3, available / baseVp.width));
+    }
+
+    async function renderPage() {
+      const page = await pdf.getPage(pageNum);
+      let scale;
+      if (zoomMode === "fit-width") {
+        scale = computeFitWidthZoom(page);
+      } else {
+        scale = parseFloat(zoomMode);
+      }
+      currentScale = scale;
+      const viewport = page.getViewport({ scale });
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(viewport.width * dpr);
+      canvas.height = Math.floor(viewport.height * dpr);
+      canvas.style.width = viewport.width + "px";
+      canvas.style.height = viewport.height + "px";
+      const ctx = canvas.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      pageInfo.textContent = `${pageNum} / ${pdf.numPages}`;
+      $("prev-page").disabled = pageNum <= 1;
+      $("next-page").disabled = pageNum >= pdf.numPages;
+    }
+
+    zoomSelect.addEventListener("change", () => {
+      zoomMode = zoomSelect.value;
+      renderPage();
+    });
+    $("prev-page").addEventListener("click", () => {
+      if (pageNum > 1) { pageNum--; renderPage(); }
+    });
+    $("next-page").addEventListener("click", () => {
+      if (pageNum < pdf.numPages) { pageNum++; renderPage(); }
+    });
+
+    // Ctrl/Cmd + scroll wheel zoom — step one preset at a time so the user
+    // always sees a clear, predictable size change. Earlier version bumped by
+    // 0.10 then snapped to nearest preset, but 0.10 < 0.25 (preset spacing)
+    // meant a tick from 1.0 went 1.0→1.1→nearest=1.0 → looked like a flash.
+    function nearestPresetIndex(scale) {
+      let bestIdx = 0;
+      let bestDiff = Math.abs(ZOOM_PRESETS[0] - scale);
+      for (let i = 1; i < ZOOM_PRESETS.length; i++) {
+        const d = Math.abs(ZOOM_PRESETS[i] - scale);
+        if (d < bestDiff) { bestDiff = d; bestIdx = i; }
+      }
+      return bestIdx;
+    }
+    content.addEventListener("wheel", (ev) => {
+      if (!(ev.ctrlKey || ev.metaKey)) return;
+      ev.preventDefault();
+      let idx = nearestPresetIndex(currentScale);
+      idx = Math.max(0, Math.min(ZOOM_PRESETS.length - 1, idx + (ev.deltaY < 0 ? 1 : -1)));
+      const next = ZOOM_PRESETS[idx];
+      zoomMode = String(next);
+      zoomSelect.value = String(next);
+      renderPage();
+    }, { passive: false });
+
+    // Re-fit when the pane is resized while in fit-width mode.
+    let resizeTimer = null;
+    const onResize = () => {
+      if (zoomMode !== ZOOM_FIT_WIDTH) return;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => renderPage(), 100);
+    };
+    window.addEventListener("resize", onResize);
+    new ResizeObserver(onResize).observe(content);
+
+    // PDF.js v4 first-render quirk: when computeFitWidthZoom calls
+    // page.getViewport({ scale: 1 }) and then renderPage() calls it again
+    // with a different scale, the FIRST page.render() draws the content
+    // upside-down. Subsequent renders work fine because the page's internal
+    // state is established. Warmup render to a throwaway offscreen canvas
+    // at scale:1 primes the page state via the safe single-getViewport path.
+    // The user sees only the subsequent visible render.
+    try {
+      const _warmupPage = await pdf.getPage(1);
+      const _warmupVp = _warmupPage.getViewport({ scale: 1 });
+      const _warmupCanvas = document.createElement("canvas");
+      _warmupCanvas.width = _warmupVp.width;
+      _warmupCanvas.height = _warmupVp.height;
+      await _warmupPage.render({
+        canvasContext: _warmupCanvas.getContext("2d"),
+        viewport: _warmupVp,
+      }).promise;
+      _warmupCanvas.width = 0;
+      _warmupCanvas.height = 0;
+    } catch (_e) { /* best-effort */ }
+
+    await renderPage();
+  }
+
+  async function renderDocx(blob) {
+    await loadScript(CDN.mammoth);
+    if (!window.mammoth) throw new Error("mammoth failed to load");
+    const buf = await blob.arrayBuffer();
+    const result = await window.mammoth.convertToHtml({ arrayBuffer: buf });
+    content.className = "content doc-pane";
+    content.innerHTML = `<div class="doc-render">${result.value || "<p><em>(empty document)</em></p>"}</div>`;
+  }
+
+  async function renderSheet(blob) {
+    await loadScript(CDN.xlsx);
+    if (!window.XLSX) throw new Error("SheetJS failed to load");
+    const buf = await blob.arrayBuffer();
+    const wb = window.XLSX.read(new Uint8Array(buf), { type: "array" });
+    content.className = "content sheet-pane";
+    content.innerHTML = "";
+
+    if (wb.SheetNames.length > 1) {
+      const tabs = document.createElement("div");
+      tabs.className = "sheet-tabs";
+      wb.SheetNames.forEach((name, idx) => {
+        const tab = document.createElement("button");
+        tab.className = "sheet-tab" + (idx === 0 ? " active" : "");
+        tab.textContent = name;
+        tab.onclick = () => {
+          tabs.querySelectorAll(".sheet-tab").forEach((t) => t.classList.remove("active"));
+          tab.classList.add("active");
+          const sheetArea = content.querySelector(".sheet-render");
+          if (sheetArea) sheetArea.innerHTML = window.XLSX.utils.sheet_to_html(wb.Sheets[name]);
+        };
+        tabs.appendChild(tab);
+      });
+      content.appendChild(tabs);
+    }
+    const sheetArea = document.createElement("div");
+    sheetArea.className = "sheet-render";
+    sheetArea.innerHTML = window.XLSX.utils.sheet_to_html(wb.Sheets[wb.SheetNames[0]]);
+    content.appendChild(sheetArea);
+  }
+
+  function renderImage(blob) {
+    const url = URL.createObjectURL(blob);
+    content.className = "content img-pane";
+    content.innerHTML = "";
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = titleHint;
+    img.onload = () => URL.revokeObjectURL(url);
+    content.appendChild(img);
+  }
+
+  async function renderText(blob) {
+    const text = await blob.text();
+    content.className = "content txt-pane";
+    content.innerHTML = `<pre class="txt-render">${escapeHtml(text)}</pre>`;
+  }
+})();
+</script>
+</body>
+</html>

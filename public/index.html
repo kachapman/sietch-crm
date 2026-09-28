@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=3.5.1" />
+  <link rel="stylesheet" href="styles.css?v=3.5.5" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
 </head>
 <body>
@@ -1473,9 +1473,13 @@
             </div>
           </div>
 
-          <div id="documents-ctx" class="ctx-menu hidden" role="menu">
+<div id="documents-ctx" class="ctx-menu hidden" role="menu">
+            <button type="button" class="ctx-menu-item" data-doc-ctx="preview" data-doc-id="">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6"/></svg>
+              Preview
+            </button>
             <button type="button" class="ctx-menu-item" data-doc-ctx="open" data-doc-id="">
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1 -2 2H5a2 2 0 0 1 -2 -2V8a2 2 0 0 1 2 -2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
               Open in editor
             </button>
             <button type="button" class="ctx-menu-item" data-doc-ctx="download" data-doc-id="">
@@ -1509,6 +1513,34 @@
             </button>
           </div>
         </div>
+        <aside id="documents-preview-pane" class="documents-preview-pane documents-preview-pane-collapsed" aria-label="Document preview">
+          <div class="documents-preview-header">
+            <div class="documents-preview-title" id="documents-preview-title">
+              <i class="ti ti-file-text"></i>
+              <span id="documents-preview-title-text">No document selected</span>
+            </div>
+            <div class="documents-preview-actions">
+              <button type="button" id="documents-preview-open" class="btn-icon-only" title="Open in full editor" aria-label="Open in full editor" disabled>
+                <i class="ti ti-external-link"></i>
+              </button>
+              <button type="button" id="documents-preview-close" class="btn-icon-only" title="Close preview" aria-label="Close preview">
+                <i class="ti ti-x"></i>
+              </button>
+            </div>
+          </div>
+          <div class="documents-preview-activity" id="documents-preview-activity"></div>
+          <div class="documents-preview-frame-wrap">
+            <iframe id="documents-preview-iframe" class="documents-preview-iframe hidden"
+                    title="Document preview"
+                    referrerpolicy="no-referrer"
+                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-popups-to-escape-sandbox"></iframe>
+            <div class="documents-preview-empty" id="documents-preview-empty">
+              <i class="ti ti-file-text"></i>
+              <p>Select a document to preview</p>
+              <p class="documents-preview-empty-hint">Click the eye icon on any row, or right-click → Preview.</p>
+            </div>
+          </div>
+        </aside>
       </div>
     </div>
   </div>
@@ -3448,6 +3480,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3.5.2" type="module"></script>
+  <script src="app.js?v=3.5.5" type="module"></script>
 </body>
 </html>

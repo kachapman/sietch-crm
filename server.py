@@ -1445,6 +1445,99 @@ def _document_type_from_ext(ext: str) -> str:
     return "word"
 
 
+def _record_document_activity(doc_id: int, user_id: int | None, action: str, meta: dict | None = None, dedup_seconds: int = 0) -> None:
+    """Best-effort insert into document_activity. Never raises.
+
+    dedup_seconds: when > 0, skip insert if same (doc_id, user_id, action) row
+    exists within the window. Used to keep 'opened' writes sane when the preview
+    iframe reloads every few seconds.
+    """
+    try:
+        import json
+        if dedup_seconds > 0 and user_id is not None:
+            recent = db.query(
+                "SELECT 1 FROM document_activity WHERE document_id=%s AND user_id=%s AND action=%s AND created_at > NOW() - make_interval(secs => %s) LIMIT 1",
+                (doc_id, user_id, action, dedup_seconds),
+                fetch="one",
+            )
+            if recent:
+                return
+        params = [doc_id, user_id, action]
+        meta_sql = ""
+        if meta is not None:
+            meta_sql = ", meta"
+            params.append(json.dumps(meta))
+        db.execute(
+            f"INSERT INTO document_activity (document_id, user_id, action{meta_sql}) VALUES (%s, %s, %s{', %s' if meta_sql else ''})",
+            tuple(params),
+        )
+    except Exception as exc:
+        logger.debug("document_activity insert failed: %s", exc)
+
+
+def _build_onlyoffice_customization(brand_label: str = "Sietch CRM") -> dict:
+    """Shared customization block for both document and mail-attachment editor configs.
+
+    Pulled out so any change to the Sietch branding or feature toggles happens in
+    one place. Values are conservative defaults; user-level toggles (track changes
+    on/off, modes) still flow through OnlyOffice's own editor toolbar.
+    """
+    public_base = (CRM_PUBLIC_URL or DOCS_PUBLIC_URL or "").rstrip("/")
+    www = public_base.replace("https://", "").replace("http://", "").strip("/")
+    return {
+        "chat": True,
+        "comments": True,
+        "spellcheck": True,
+        "autosave": True,
+        "forcesave": True,
+        "compactHeader": False,
+        "toolbarNoTabs": False,
+        "hideRightMenu": False,
+        "review": {
+            "showReviewChanges": True,
+            "reviewDisplay": "markup",
+        },
+        "logo": {
+            "image": f"{public_base}/ship-logo-white.png" if public_base else "",
+            "imageDark": f"{public_base}/ship-logo-white.png" if public_base else "",
+            "url": public_base or None,
+        },
+        "customer": {
+            "name": brand_label,
+            "www": www,
+        },
+    }
+
+
+def _build_onlyoffice_permissions(can_edit: bool) -> dict:
+    """Document permissions block. Always lets users download/print/copy; review
+    and fillForms are edit-only because they don't make sense on a read-only doc."""
+    return {
+        "download": True,
+        "edit": can_edit,
+        "print": True,
+        "copy": True,
+        "comment": True,
+        "chat": True,
+        "fillForms": can_edit,
+        "modifyFilter": can_edit,
+        "modifyContentControl": can_edit,
+        "review": can_edit,
+        "protect": True,
+    }
+
+
+def _parse_view_mode_override(qs_value: str | None) -> str | None:
+    """Return 'view' if the client asked for view-only, None otherwise.
+
+    Used by the preview pane iframe; ignored when called from a regular editor
+    tab so existing open-in-new-tab flows are untouched.
+    """
+    if qs_value and str(qs_value).lower() in ("view", "1", "true"):
+        return "view"
+    return None
+
+
 def _blank_docx_bytes() -> bytes:
     """Return a minimal valid .docx file (OOXML zip with empty document)."""
     import zipfile, io
@@ -2501,6 +2594,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         m = re.match(r"^/api/v2/documents/(\d+)/editor-config$", api_path)
         if m:
             self._handle_document_editor_config(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/documents/(\d+)/activity$", api_path)
+        if m:
+            self._handle_document_activity(int(m.group(1)), qs)
             return
 
         # ── Batch tags ──
@@ -9567,32 +9664,127 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         file_ext = Path(title).suffix.lstrip(".").lower() or "docx"
         doc_type = _document_type_from_ext(file_ext)
-        # document.key must be a plain unique string (OnlyOffice 7.1+ requirement).
-        # Use a separate JWT for the CRM download endpoint so auth stays stateless.
-        ts = int(time.time())
-        doc_key = f"sietch-doc-{doc_id}-{ts}"
-        download_token = _sign_jwt({"id": doc_id, "path": file_path, "ts": ts}, DOCS_JWT_SECRET)
+        # Stable key per document id so multiple users opening the same file join
+        # the same editing session (OnlyOffice keys the session off document.key).
+        # Stable keys + coEditing.mode:"fast" = real-time collaboration working.
+        doc_key = f"sietch-doc-{doc_id}"
+        # The download token stays short-lived (JWT expiry handled by the verifier)
+        # so a leaked key can't be reused indefinitely.
+        download_token = _sign_jwt({"id": doc_id, "path": file_path, "ts": int(time.time())}, DOCS_JWT_SECRET)
         # Public URL that Document Server will use to download the file
         download_url = f"{CRM_PUBLIC_URL}/api/v2/documents/{doc_id}?token={download_token}"
         editor_mode = "view" if doc_type == "pdf" else "edit"
+        # Preview pane iframe forces view-only. Other callers pass nothing.
+        qs = parse_qs(urlparse(self.path).query)
+        view_override = _parse_view_mode_override(qs.get("mode", [None])[0])
+        if view_override == "view":
+            editor_mode = "view"
         config = {
             "document": {
                 "fileType": file_ext,
                 "key": doc_key,
                 "title": title,
                 "url": download_url,
-                "permissions": {"download": True, "edit": editor_mode == "edit"},
+                "permissions": _build_onlyoffice_permissions(can_edit=(editor_mode == "edit")),
             },
             "documentType": doc_type,
             "editorConfig": {
                 "callbackUrl": f"{CRM_PUBLIC_URL}/api/v2/documents/{doc_id}/callback",
                 "mode": editor_mode,
-                "user": {"id": str(user["id"]), "name": user.get("display_name") or user.get("email") or "User"},
+                "coEditing": {
+                    "mode": "fast",
+                    "change": True,
+                },
+                "lang": "en",
+                "region": "en-US",
+                "user": {
+                    "id": str(user["id"]),
+                    "name": user.get("display_name") or user.get("email") or "User",
+                },
+                "customization": _build_onlyoffice_customization(),
             },
         }
         config["token"] = _sign_jwt(config, DOCS_JWT_SECRET)
         config["docsApiUrl"] = f"{DOCS_PUBLIC_URL}/web-apps/apps/api/documents/api.js"
+        # Record activity best-effort. Deduped server-side (60s) so a user reloading
+        # the preview iframe doesn't spam the table.
+        _record_document_activity(doc_id, user["id"], "opened", dedup_seconds=60)
         _json_response(self, 200, config)
+
+    def _handle_document_activity(self, doc_id: int, qs: dict) -> None:
+        """Return recent document activity (last N events of any kind) for the preview pane.
+
+        Query params:
+            limit  — max rows (default 20, cap 100)
+            action — optional filter ('opened', 'saved', 'renamed', etc.)
+            since  — optional ISO timestamp; only events after this time
+        """
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            limit_raw = qs.get("limit", ["20"])[0]
+            limit = max(1, min(100, int(limit_raw)))
+        except Exception:
+            limit = 20
+        action_filter = qs.get("action", [None])[0]
+        since_filter = qs.get("since", [None])[0]
+        # Confirm the doc exists + user has access (mirrors the editor config check,
+        # so we don't leak IDs to unauthorized callers).
+        row = db.query(
+            "SELECT 1 FROM project_documents WHERE id = %s AND is_deleted = FALSE",
+            (doc_id,), fetch="one",
+        )
+        if not row:
+            self.send_error(404)
+            return
+        try:
+            params = [doc_id]
+            action_sql = ""
+            since_sql = ""
+            if action_filter:
+                action_sql = "AND a.action = %s"
+                params.append(action_filter)
+            if since_filter:
+                since_sql = "AND a.created_at >= %s"
+                params.append(since_filter)
+            params.append(limit)
+            rows = db.query_dicts(
+                f"""SELECT a.id, a.document_id, a.user_id, a.action, a.meta, a.created_at,
+                           u.display_name, u.email, u.avatar_url
+                    FROM document_activity a
+                    LEFT JOIN users u ON u.id = a.user_id
+                    WHERE a.document_id = %s {action_sql} {since_sql}
+                    ORDER BY a.created_at DESC
+                    LIMIT %s""",
+                tuple(params),
+            )
+        except Exception as exc:
+            logger.exception("document activity fetch failed")
+            log_infra_event("error", f"document_activity fetch failed: {exc}", source="documents", method=self.command, path="/activity")
+            _json_response(self, 500, {"error": "Failed to load activity"})
+            return
+        events = []
+        for r in rows:
+            meta = r.get("meta")
+            if isinstance(meta, str):
+                try:
+                    import json as _json
+                    meta = _json.loads(meta)
+                except Exception:
+                    pass
+            events.append({
+                "id": r["id"],
+                "userId": r.get("user_id"),
+                "userName": r.get("display_name") or (r.get("email") or "").split("@")[0] or "Unknown",
+                "userEmail": r.get("email"),
+                "userAvatar": r.get("avatar_url"),
+                "action": r["action"],
+                "meta": meta,
+                "createdAt": r["created_at"].isoformat() if r.get("created_at") else None,
+            })
+        _json_response(self, 200, {"events": events, "count": len(events)})
+
 
     def _handle_document_delete(self, doc_id: int) -> None:
         user = _require_auth(self)
@@ -10416,13 +10608,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
         row = db.query(
-            "SELECT file_path FROM project_documents WHERE id = %s AND is_deleted = FALSE",
+            "SELECT file_path, title FROM project_documents WHERE id = %s AND is_deleted = FALSE",
             (doc_id,), fetch="one",
         )
         if not row:
             _json_response(self, 404, {"error": "Document not found"})
             return
-        file_path = row[0]
+        file_path, old_title = row
         key = _sign_jwt({"id": doc_id, "path": file_path, "ts": int(time.time())}, DOCS_JWT_SECRET)
         command = dict(body)
         command["key"] = key
@@ -10438,6 +10630,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             )
             with urllib.request.urlopen(req, timeout=30) as resp:
                 result = json.loads(resp.read() or b"{}")
+            # Only record rename activity when the actual rename command succeeds.
+            # Meta command (c=='meta') is what OnlyOffice fires for title changes
+            # via the editor's "Rename..." menu (also via doc-editor.html onRequestRename).
+            if not result.get("error") and command.get("c") == "meta":
+                new_title = (command.get("meta") or {}).get("title")
+                if new_title and new_title != old_title:
+                    _record_document_activity(
+                        doc_id,
+                        user["id"],
+                        "renamed",
+                        meta={"from": old_title, "to": new_title},
+                    )
             _json_response(self, 200, result)
         except Exception as exc:
             logger.exception("Document command proxy failed")
@@ -10524,6 +10728,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"error": 0})
             return
         status = payload.get("status")
+        # OnlyOffice passes the acting user via payload['users'] (list) or payload['userdata'].
+        # We best-effort resolve to a CRM user; falls through to None if we can't.
+        acting_user_id = None
+        users_field = payload.get("users")
+        if isinstance(users_field, list) and users_field:
+            candidate = str(users_field[0].get("id") if isinstance(users_field[0], dict) else users_field[0])
+            if candidate.isdigit():
+                acting_user_id = int(candidate)
         if status in (1, 2, 4):
             url = payload.get("url")
             if url:
@@ -10543,6 +10755,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         log_infra_event("info", f"Callback saved doc {doc_id}: {len(data)} bytes (status={status})", source="docserver", method="POST", path="/callback")
                 except Exception as exc:
                     log_infra_event("error", f"Callback download failed for doc {doc_id}: {exc}", source="docserver", method="POST", path="/callback")
+            # Record 'saved' (status 2 = ready, 4 = saved/copy save).
+            # status 1 is "editing" — too noisy; skip.
+            if status in (2, 4):
+                # Dedup "saved" rows from rapid autosaves: only insert if no save in last 30s.
+                # Forcesave also fires this so users do see continuous entries during co-edit;
+                # the 30s window keeps that sane while still showing each user's session.
+                _record_document_activity(doc_id, acting_user_id, "saved", dedup_seconds=30)
+            elif status == 3:
+                _record_document_activity(doc_id, acting_user_id, "closed", dedup_seconds=30)
         _json_response(self, 200, {"error": 0})
 
     # ── Batch Tags ──────────────────────────────────────────────────────────
@@ -15029,7 +15250,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_attachment_editor_config(self, message_id: int, attachment_id: int) -> None:
-        """Return OnlyOffice editor config for a mail attachment (view-only)."""
+        """Return OnlyOffice editor config for a mail attachment (view-only, comment + chat enabled)."""
         try:
             user = _require_auth(self)
             if not user:
@@ -15057,24 +15278,32 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not DOCS_JWT_SECRET:
                 _json_response(self, 503, {"error": "Document Server JWT secret not configured"})
                 return
-            ts = int(time.time())
-            doc_key = f"sietch-mail-att-{attachment_id}-{ts}"
-            token_payload = {"type": "mail_att", "message_id": message_id, "attachment_id": attachment_id, "ts": ts}
+            # Stable key per attachment id so reloads join the same comment/chat session.
+            doc_key = f"sietch-mail-att-{attachment_id}"
+            token_payload = {"type": "mail_att", "message_id": message_id, "attachment_id": attachment_id, "ts": int(time.time())}
             download_token = _sign_jwt(token_payload, DOCS_JWT_SECRET)
             serve_url = f"{CRM_PUBLIC_URL}/api/v2/mail/attachments/serve?token={download_token}"
             editor_mode = "view"  # mail attachments are always view-only
+            customization = _build_onlyoffice_customization()
+            customization["review"]["trackChanges"] = False
             config = {
                 "document": {
                     "fileType": file_ext,
                     "key": doc_key,
                     "title": filename,
                     "url": serve_url,
-                    "permissions": {"download": True, "edit": False},
+                    "permissions": _build_onlyoffice_permissions(can_edit=False),
                 },
                 "documentType": doc_type,
                 "editorConfig": {
                     "mode": editor_mode,
-                    "user": {"id": str(user["id"]), "name": user.get("display_name") or user.get("email") or "User"},
+                    "lang": "en",
+                    "region": "en-US",
+                    "user": {
+                        "id": str(user["id"]),
+                        "name": user.get("display_name") or user.get("email") or "User",
+                    },
+                    "customization": customization,
                 },
             }
             config["token"] = _sign_jwt(config, DOCS_JWT_SECRET)

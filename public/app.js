@@ -3612,6 +3612,12 @@ const docsState = {
   sort: "recent",
   folderTree: [],        // flat list of {id, name, parentId} from /documents/folders/tree
   expandedFolders: new Set(), // expanded folder IDs in sidebar tree
+  // Preview pane state — survives minimize/restore so the same doc is still
+  // visible when the user re-opens the modal.
+  previewOpen: false,
+  previewDocId: null,
+  previewDocTitle: null,
+  previewActivity: [],   // last activities, refreshed when the pane is shown
 };
 
 function docsIconForMime(mimeType) {
@@ -3693,6 +3699,8 @@ function closeDocumentsModal() {
   docsState.selected.clear();
   docsState.searchQuery = "";
   docsState.scope = "projects";
+  // Kill any active preview iframe session before clearing state.
+  _documentsPreviewCleanupOnClose();
   // Clear parked state
   minimizedDocsState = null;
   try { localStorage.removeItem(DOCS_MINIMIZED_STORAGE_KEY); } catch {}
@@ -3792,10 +3800,17 @@ function renderDocumentRow(d) {
        </span>`
     : `<span class="doc-doc-title" data-doc-title data-doc-id="${d.id}" title="${escapeHtml(d.title)}">${escapeHtml(d.title)}</span>`;
   const isDraggable = docsState.scope !== "projects";
+  // Eye-icon only shown when not renaming (renaming inline replaces eye area anyway).
+  const previewBtnHtml = isRenaming
+    ? ""
+    : `<button type="button" class="doc-preview-btn" data-doc-id="${d.id}" title="Preview" aria-label="Preview ${escapeHtml(d.title)}">
+         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6"/></svg>
+       </button>`;
   return `<div class="documents-list-row${selClass}" data-doc-id="${d.id}" draggable="${isDraggable ? "true" : "false"}">
     <input type="checkbox" class="doc-cb" data-id="${d.id}" ${checked} />
     ${docsIconForMime(d.mimeType)}
     ${titleHtml}
+    ${previewBtnHtml}
     <span class="doc-doc-meta">
       <span class="doc-doc-size">${formatDocSize(d.fileSize)}</span>
       <span class="doc-doc-date">${d.uploadedAt ? escapeHtml(d.uploadedAt.split("T")[0]) : "—"}</span>
@@ -4002,6 +4017,7 @@ function bindDocumentsListEvents(list) {
     row.addEventListener("click", e => {
       if (e.target.tagName === "INPUT") return;
       if (e.target.closest(".doc-doc-title")) return;
+      if (e.target.closest(".doc-preview-btn")) return;
       const id = Number(row.dataset.docId);
       if (docsState.selected.has(id)) {
         docsState.selected.delete(id);
@@ -4013,6 +4029,16 @@ function bindDocumentsListEvents(list) {
         row.querySelector(".doc-cb").checked = true;
       }
       updateDocsToolbar();
+    });
+  });
+  // Eye-icon preview button — opens the preview pane without consuming the
+  // multi-select. e.stopPropagation keeps it from also toggling the row.
+  list.querySelectorAll(".doc-preview-btn").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      const id = Number(btn.dataset.docId);
+      if (!id) return;
+      openDocumentPreview(id);
     });
   });
   list.querySelectorAll(".doc-doc-title[data-doc-id]").forEach(titleEl => {
@@ -4592,6 +4618,201 @@ function openDocEditor(docId) {
   window.open(`/doc-editor.html?id=${docId}`, "_blank");
 }
 
+// ── Document preview pane ──────────────────────────────────────────────────
+
+function _setPreviewOpen(open) {
+  const pane = $("#documents-preview-pane");
+  if (!pane) return;
+  docsState.previewOpen = !!open;
+  if (open) {
+    pane.classList.remove("documents-preview-pane-collapsed");
+    // Auto-collapse the left directory sidebar so the preview pane gets more
+    // width. Leave it collapsed on preview close — user can re-open via toggle.
+    const sidebar = $("#documents-sidebar");
+    const sidebarToggle = $("#documents-sidebar-toggle");
+    if (sidebar && sidebarToggle && !sidebar.classList.contains("documents-sidebar-collapsed")) {
+      sidebar.classList.add("documents-sidebar-collapsed");
+      sidebarToggle.textContent = "▶";
+      sidebarToggle.setAttribute("aria-label", "Show sidebar");
+      sidebarToggle.setAttribute("title", "Show sidebar");
+    }
+  } else {
+    pane.classList.add("documents-preview-pane-collapsed");
+    // Reset iframe to release the editor session when fully hidden.
+    const iframe = $("#documents-preview-iframe");
+    if (iframe) iframe.src = "about:blank";
+    const empty = $("#documents-preview-empty");
+    const frame = $("#documents-preview-iframe");
+    if (empty) empty.style.display = "flex";
+    if (frame) frame.classList.add("hidden");
+    docsState.previewDocId = null;
+    docsState.previewDocTitle = null;
+  }
+}
+
+function _renderPreviewActivity(events) {
+  const el = $("#documents-preview-activity");
+  if (!el) return;
+  if (!events || !events.length) {
+    // Collapse to zero height when empty so the preview pane doesn't show a
+    // dark band between the file-name header and the toolbar.
+    el.innerHTML = "";
+    el.style.display = "none";
+    return;
+  }
+  el.style.display = "";
+  // Header line: who opened most recently (or last save/rename).
+  const latest = events[0];
+  const actionVerb = {
+    opened: "opened",
+    saved: "edited",
+    renamed: "renamed",
+    closed: "closed",
+  }[latest.action] || latest.action;
+  let html = `<div class="documents-preview-activity-row">`;
+  html += `<span class="documents-preview-activity-avatar">${escapeHtml((latest.userName || "?").slice(0, 1).toUpperCase())}</span>`;
+  html += `<span class="documents-preview-activity-meta">Last ${actionVerb} by <strong>${escapeHtml(latest.userName || "—")}</strong> · ${escapeHtml(formatRelativeTime(latest.createdAt))}</span>`;
+  html += `</div>`;
+  // Group "opened" by user → "X editors today"
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const opens = events.filter(e => e.action === "opened" && new Date(e.createdAt) >= today);
+  const uniqueEditorsToday = new Set(opens.map(e => e.userId).filter(Boolean)).size;
+  if (uniqueEditorsToday > 1) {
+    html += `<div class="documents-preview-activity-row" style="margin-top:0.25rem;"><span class="documents-preview-activity-meta" style="padding-left:1.9rem;">👥 ${uniqueEditorsToday} editors today</span></div>`;
+  }
+  el.innerHTML = html;
+}
+
+async function _refreshPreviewActivity(docId) {
+  if (!docId) return;
+  try {
+    const data = await api(`/api/v2/documents/${docId}/activity?limit=20`);
+    docsState.previewActivity = data.events || [];
+    _renderPreviewActivity(docsState.previewActivity);
+  } catch (err) {
+    const el = $("#documents-preview-activity");
+    if (el) el.textContent = "";
+    // Preview pane still works without activity; just leave it silent.
+    logger && logger.debug && logger.debug("preview activity fetch failed", err);
+  }
+}
+
+async function openDocumentPreview(docId) {
+  const pane = $("#documents-preview-pane");
+  const iframe = $("#documents-preview-iframe");
+  const empty = $("#documents-preview-empty");
+  const titleText = $("#documents-preview-title-text");
+  const openBtn = $("#documents-preview-open");
+  if (!pane || !iframe || !empty || !titleText || !openBtn) return;
+
+  // If user clicked the same doc again, treat as no-op (pane is already showing it).
+  if (docsState.previewDocId === docId && docsState.previewOpen) {
+    // Just refresh activity in case more events came in.
+    _refreshPreviewActivity(docId);
+    return;
+  }
+
+  // Look up title in current docsState first; fall back to no title.
+  const doc = (docsState.documents || []).find(d => String(d.id) === String(docId));
+  const title = doc?.title || docsState.previewDocTitle || "Document";
+  docsState.previewDocId = docId;
+  docsState.previewDocTitle = title;
+  titleText.textContent = title.length > 60 ? title.slice(0, 57) + "…" : title;
+  openBtn.disabled = false;
+  empty.style.display = "none";
+  iframe.classList.remove("hidden");
+  // Lightweight viewer by default; doc-preview.html falls back to OnlyOffice
+  // automatically for legacy formats or files > 15 MB (via postMessage).
+  iframe.src = `/doc-preview.html?id=${docId}&embedded=1&title=${encodeURIComponent(title)}`;
+  _setPreviewOpen(true);
+  _refreshPreviewActivity(docId);
+}
+
+function closeDocumentPreview() {
+  _setPreviewOpen(false);
+}
+
+async function bindDocumentsPreviewPane() {
+  const closeBtn = $("#documents-preview-close");
+  if (closeBtn && !closeBtn.dataset.bound) {
+    closeBtn.dataset.bound = "1";
+    closeBtn.addEventListener("click", closeDocumentPreview);
+  }
+  const openBtn = $("#documents-preview-open");
+  if (openBtn && !openBtn.dataset.bound) {
+    openBtn.dataset.bound = "1";
+    openBtn.addEventListener("click", () => {
+      if (!docsState.previewDocId) return;
+      openDocEditor(docsState.previewDocId);
+    });
+  }
+  // Listen for fallback requests from doc-preview.html (lightweight viewer).
+  // When a doc is > 15 MB or in a legacy format, the lightweight viewer
+  // postMessages here and we swap the iframe to the existing OnlyOffice
+  // view-only editor (preserves the "stay-in-pane" UX).
+  if (!window._docsPreviewFallbackBound) {
+    window._docsPreviewFallbackBound = true;
+    window.addEventListener("message", (ev) => {
+      if (ev.origin !== window.location.origin) return;
+      const data = ev.data;
+      if (!data || data.type !== "docs-preview-fallback") return;
+      if (!docsState.previewDocId || String(data.docId) !== String(docsState.previewDocId)) return;
+      const iframe = $("#documents-preview-iframe");
+      if (!iframe) return;
+      iframe.src = `/doc-editor.html?id=${docsState.previewDocId}&embedded=1&mode=view`;
+    });
+  }
+}
+
+function _documentsPreviewCleanupOnClose() {
+  // Reset preview pane state when the modal fully closes (not on minimize —
+  // minimize keeps the doc, restore re-renders it).
+  const iframe = $("#documents-preview-iframe");
+  if (iframe) iframe.src = "about:blank";
+  docsState.previewDocId = null;
+  docsState.previewDocTitle = null;
+  docsState.previewActivity = [];
+  _setPreviewOpen(false);
+}
+
+function _docsPreviewCurrentPayload() {
+  // Snapshot for the minimize/restore payloads so we can restore the same doc.
+  return {
+    previewOpen: docsState.previewOpen,
+    previewDocId: docsState.previewDocId,
+    previewDocTitle: docsState.previewDocTitle,
+  };
+}
+
+function _docsPreviewRestoreFromPayload(p) {
+  if (!p || !p.previewDocId) return;
+  docsState.previewDocTitle = p.previewDocTitle || null;
+  // Defer DOM updates until next tick — the modal element may not be visible yet.
+  setTimeout(() => {
+    openDocumentPreview(p.previewDocId);
+  }, 50);
+}
+
+// Human-friendly "5m ago / 2h ago / yesterday" — falls back to date if >7d.
+function formatRelativeTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const diff = Date.now() - d.getTime();
+  const sec = Math.max(1, Math.floor(diff / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 7) return day === 1 ? "yesterday" : `${day}d ago`;
+  return d.toLocaleDateString();
+}
+
+
+
 function downloadDoc(docId, title) {
   const a = document.createElement("a");
   a.href = `/api/v2/documents/${docId}`;
@@ -4628,6 +4849,9 @@ function bindDocumentsModal() {
   const modal = $("#documents-modal");
   if (!modal || modal.dataset.bound) return;
   modal.dataset.bound = "1";
+
+  // Preview pane (eye-icon + header buttons + toggle strip)
+  bindDocumentsPreviewPane();
 
   // Backdrop click -> minimize instead of close
   const docsBackdrop = modal.querySelector(".modal-backdrop");
@@ -4916,7 +5140,9 @@ function bindDocumentsModal() {
     const docId = ctxDocId;
     hideDocCtxMenu();
     if (!docId) return;
-    if (action === "open") {
+    if (action === "preview") {
+      openDocumentPreview(docId);
+    } else if (action === "open") {
       openDocEditor(docId);
     } else if (action === "download") {
       downloadDoc(docId, ctxDocTitle);
@@ -25858,6 +26084,9 @@ function _doClosePreviewModal() {
   restoreSideBySideCards();
   oppPreviewMailCache.clear();
   setOpportunityPreviewContext(null);
+  // Notify any open document-preview pane to reset its state (so the iframe
+  // doesn't keep a session alive after the modal is hidden).
+  window.dispatchEvent(new CustomEvent("opp-preview-modal-closing"));
   $("#opp-preview-modal")?.classList.add("hidden");
 }
 
@@ -25918,8 +26147,8 @@ function layoutSideBySideDealEditAndPreview() {
     previewTop = 36;
   }
 
-  sCard.style.cssText = `position:fixed!important; left:${sideLeft}px!important; top:${sideTop}px!important; width:${sideW}px!important; max-height:${isMobile ? "40vh" : "92vh"}!important; overflow:auto!important; z-index:2100!important; margin:0!important; box-shadow:var(--shadow); pointer-events:auto!important;`;
-  pCard.style.cssText = `position:fixed!important; left:${previewLeft}px!important; top:${previewTop}px!important; width:${previewW}px!important; max-height:${isMobile ? "55vh" : "92vh"}!important; overflow:auto!important; z-index:2005!important; margin:0!important; box-shadow:var(--shadow);`;
+  sCard.style.cssText = `position:fixed!important; left:${sideLeft}px!important; top:${sideTop}px!important; width:${sideW}px!important; height:${isMobile ? "40vh" : "92vh"}!important; max-height:${isMobile ? "40vh" : "92vh"}!important; overflow:auto!important; z-index:2100!important; margin:0!important; box-shadow:var(--shadow); pointer-events:auto!important;`;
+  pCard.style.cssText = `position:fixed!important; left:${previewLeft}px!important; top:${previewTop}px!important; width:${previewW}px!important; height:${isMobile ? "55vh" : "92vh"}!important; max-height:${isMobile ? "55vh" : "92vh"}!important; overflow:auto!important; z-index:2005!important; margin:0!important; box-shadow:var(--shadow);`;
 
   if (isMobile) {
     // Improved mobile vertical stacking: side (edit/quick) fixed near top, preview pushed below it
@@ -26004,8 +26233,8 @@ function layoutSideBySideDealEditAndSearchPopup() {
     previewTop = 36;
   }
 
-  sCard.style.cssText = `position:fixed!important; left:${sideLeft}px!important; top:${sideTop}px!important; width:${sideW}px!important; max-height:${isMobile ? "40vh" : "92vh"}!important; overflow:auto!important; z-index:2100!important; margin:0!important; box-shadow:var(--shadow); pointer-events:auto!important;`;
-  pCard.style.cssText = `position:fixed!important; left:${previewLeft}px!important; top:${previewTop}px!important; width:${previewW}px!important; max-height:${isMobile ? "55vh" : "92vh"}!important; overflow:auto!important; z-index:2005!important; margin:0!important; box-shadow:var(--shadow);`;
+  sCard.style.cssText = `position:fixed!important; left:${sideLeft}px!important; top:${sideTop}px!important; width:${sideW}px!important; height:${isMobile ? "40vh" : "92vh"}!important; max-height:${isMobile ? "40vh" : "92vh"}!important; overflow:auto!important; z-index:2100!important; margin:0!important; box-shadow:var(--shadow); pointer-events:auto!important;`;
+  pCard.style.cssText = `position:fixed!important; left:${previewLeft}px!important; top:${previewTop}px!important; width:${previewW}px!important; height:${isMobile ? "55vh" : "92vh"}!important; max-height:${isMobile ? "55vh" : "92vh"}!important; overflow:auto!important; z-index:2005!important; margin:0!important; box-shadow:var(--shadow);`;
 
   if (isMobile) {
     const adjustMobileVerticalStack = () => {
@@ -26600,7 +26829,11 @@ function minimizeDocsModal() {
     searchQuery: docsState.searchQuery,
     currentProjectId: docsState.currentProjectId,
     currentProjectTitle: docsState.currentProjectTitle,
+    ..._docsPreviewCurrentPayload(),
   };
+  // When minimized, the iframe loses the live editor session anyway. Clear it
+  // so we don't leak a "blank page loading" state while the modal is parked.
+  closeDocumentPreview();
   try { localStorage.setItem(DOCS_MINIMIZED_STORAGE_KEY, JSON.stringify(minimizedDocsState)); } catch {}
   // Save to server for cross-device persistence
   api('/api/v2/minimized-state', {
@@ -26636,6 +26869,10 @@ function restoreDocsModal() {
     document.querySelectorAll(".documents-scope-btn").forEach(b => b.classList.toggle("active", b.dataset.scope === docsState.scope));
   }
   openDocumentsModal();
+  // Restore preview pane after the list has had a chance to render.
+  if (state && state.previewDocId) {
+    _docsPreviewRestoreFromPayload(state);
+  }
 }
 
 // ── Sidebar trigger coordination ─────────────────────────────────────────────
@@ -35630,7 +35867,15 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
   docsContent.dataset.tabContent = "documents";
   docsContent.style.display = "none";
 
-  const previewDocsState = { selected: new Set(), documents: documents || [], sort: "recent" };
+  const previewDocsState = {
+    selected: new Set(),
+    documents: documents || [],
+    sort: "recent",
+    previewOpen: false,
+    previewDocId: null,
+    previewDocTitle: null,
+    previewActivity: [],
+  };
 
   // Toolbar: upload + select-all + Actions dropdown
   const docsToolbar = document.createElement("div");
@@ -35783,9 +36028,49 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
   destPanel.appendChild(destActions);
   docsContent.appendChild(destPanel);
 
+  // Container with file list + side preview pane (preview pane hidden until eye icon is clicked)
+  const docsPaneContainer = document.createElement("div");
+  docsPaneContainer.className = "opp-preview-doc-container";
+  docsContent.appendChild(docsPaneContainer);
+
   const docsList = document.createElement("ul");
   docsList.className = "opp-preview-docs-list";
-  docsContent.appendChild(docsList);
+  docsPaneContainer.appendChild(docsList);
+
+  // Preview pane (matches the structure used by the standalone documents modal)
+  const oppPreviewPane = document.createElement("aside");
+  oppPreviewPane.className = "opp-preview-doc-pane opp-preview-doc-pane-collapsed";
+  oppPreviewPane.id = "opp-preview-doc-pane";
+  oppPreviewPane.setAttribute("aria-label", "Document preview");
+  oppPreviewPane.innerHTML = `
+    <div class="opp-preview-doc-header">
+      <div class="opp-preview-doc-title-row">
+        <i class="ti ti-file-text"></i>
+        <span class="opp-preview-doc-title-text" id="opp-preview-doc-title-text">No document selected</span>
+      </div>
+      <div class="opp-preview-doc-actions">
+        <button type="button" class="btn-icon-only opp-preview-doc-open-editor" title="Open in full editor" aria-label="Open in full editor" disabled>
+          <i class="ti ti-external-link"></i>
+        </button>
+        <button type="button" class="btn-icon-only opp-preview-doc-close" title="Close preview" aria-label="Close preview">
+          <i class="ti ti-x"></i>
+        </button>
+      </div>
+    </div>
+    <div class="opp-preview-doc-activity" id="opp-preview-doc-activity"></div>
+    <div class="opp-preview-doc-frame-wrap">
+      <iframe id="opp-preview-doc-iframe" class="opp-preview-doc-iframe hidden"
+              title="Document preview"
+              referrerpolicy="no-referrer"
+              sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-popups-to-escape-sandbox"></iframe>
+      <div class="opp-preview-doc-empty" id="opp-preview-doc-empty">
+        <i class="ti ti-file-text"></i>
+        <p>Select a document to preview</p>
+        <p class="opp-preview-doc-empty-hint">Click the eye icon on any row.</p>
+      </div>
+    </div>
+  `;
+  docsPaneContainer.appendChild(oppPreviewPane);
 
   let destMode = null; // 'move' | 'copy'
   let destProjectId = null;
@@ -35882,6 +36167,16 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       li.appendChild(meta);
 
       if (docId) {
+        // Eye-icon preview button — mirrors the documents-modal eye icon
+        const eyeBtn = document.createElement("button");
+        eyeBtn.type = "button";
+        eyeBtn.className = "opp-preview-doc-eye";
+        eyeBtn.title = "Preview";
+        eyeBtn.setAttribute("aria-label", `Preview ${title}`);
+        eyeBtn.dataset.docId = String(docId);
+        eyeBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6"/></svg>`;
+        li.appendChild(eyeBtn);
+
         const dl = document.createElement("a");
         dl.className = "opp-doc-download";
         dl.href = `/api/v2/documents/${docId}`;
@@ -35893,6 +36188,28 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       }
 
       list.appendChild(li);
+    });
+  }
+
+  // Delegated click handler for eye-icon button on rows. Done at the list level
+  // so it survives any re-render and is robust to event-bubbling order.
+  // Using event delegation avoids relying on inline-handler attachment timing.
+  // Re-attached on every render (the flag check below skips duplicate adds).
+  if (docsList && !docsList.dataset.eyeDelegated) {
+    docsList.dataset.eyeDelegated = "1";
+    docsList.addEventListener("click", (e) => {
+      const eyeBtn = e.target.closest(".opp-preview-doc-eye");
+      if (!eyeBtn) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const id = Number(eyeBtn.dataset.docId);
+      const li = eyeBtn.closest(".opp-preview-doc-item");
+      const title = li ? (li.querySelector(".opp-doc-title")?.textContent || "").trim() : "";
+      console.log("[opp-preview] eye button clicked for doc", id, title);
+      window.dispatchEvent(new CustomEvent("opp-preview-eye-clicked", {
+        detail: { id, title, origin: "delegated-list-click" }
+      }));
+      if (id) openOppDocumentPreview(id, title);
     });
   }
 
@@ -36031,6 +36348,160 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
 
   renderPreviewDocsList();
   updateDocsToolbar();
+
+  // ── Document preview pane (right side of the Documents tab) ─────────
+  // IMPORTANT: oppPreviewPane is in a DETACHED subtree when this modal is
+  // setting up (container.appendChild hasn't run yet). document.querySelector
+  // only searches the LIVE document tree — it would return null for IDs in a
+  // detached subtree. oppPreviewPane is itself a valid element reference, so
+  // its descendants can be queried via oppPreviewPane.querySelector(...) which
+  // works on detached subtrees too. We use a lazy helper instead of caching refs
+  // at this point so the refs are valid when used.
+  function _getOppPreviewRefs() {
+    return {
+      iframe: oppPreviewPane.querySelector("#opp-preview-doc-iframe"),
+      empty: oppPreviewPane.querySelector("#opp-preview-doc-empty"),
+      titleText: oppPreviewPane.querySelector("#opp-preview-doc-title-text"),
+      activity: oppPreviewPane.querySelector("#opp-preview-doc-activity"),
+      openBtn: oppPreviewPane.querySelector(".opp-preview-doc-open-editor"),
+      closeBtn: oppPreviewPane.querySelector(".opp-preview-doc-close"),
+    };
+  }
+
+  function _setOppPreviewOpen(open) {
+    if (!oppPreviewPane) return;
+    const refs = _getOppPreviewRefs();
+    previewDocsState.previewOpen = !!open;
+    if (open) {
+      oppPreviewPane.classList.remove("opp-preview-doc-pane-collapsed");
+      docsPaneContainer.classList.add("preview-open");
+    } else {
+      oppPreviewPane.classList.add("opp-preview-doc-pane-collapsed");
+      docsPaneContainer.classList.remove("preview-open");
+      if (refs.iframe) refs.iframe.src = "about:blank";
+      if (refs.empty) refs.empty.style.display = "flex";
+      if (refs.iframe) refs.iframe.classList.add("hidden");
+      if (refs.openBtn) refs.openBtn.disabled = true;
+      previewDocsState.previewDocId = null;
+      previewDocsState.previewDocTitle = null;
+    }
+  }
+
+  function _renderOppPreviewActivity(events) {
+    const refs = _getOppPreviewRefs();
+    if (!refs.activity) return;
+    if (!events || !events.length) {
+      // Collapse the activity row to zero height when empty so the preview pane
+      // doesn't show a dark band between the file-name header and the toolbar.
+      refs.activity.innerHTML = "";
+      refs.activity.style.display = "none";
+      return;
+    }
+    refs.activity.style.display = "";
+    const latest = events[0];
+    const actionVerb = {
+      opened: "opened",
+      saved: "edited",
+      renamed: "renamed",
+      closed: "closed",
+    }[latest.action] || latest.action;
+    let html = `<div class="opp-preview-doc-activity-row">`;
+    html += `<span class="opp-preview-doc-activity-avatar">${escapeHtml((latest.userName || "?").slice(0, 1).toUpperCase())}</span>`;
+    html += `<span class="opp-preview-doc-activity-meta">Last ${actionVerb} by <strong>${escapeHtml(latest.userName || "—")}</strong> · ${escapeHtml(formatRelativeTime(latest.createdAt))}</span>`;
+    html += `</div>`;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const opens = events.filter(e => e.action === "opened" && new Date(e.createdAt) >= today);
+    const uniqueEditorsToday = new Set(opens.map(e => e.userId).filter(Boolean)).size;
+    if (uniqueEditorsToday > 1) {
+      html += `<div class="opp-preview-doc-activity-row" style="margin-top:0.25rem;"><span class="opp-preview-doc-activity-meta" style="padding-left:1.9rem;">👥 ${uniqueEditorsToday} editors today</span></div>`;
+    }
+    refs.activity.innerHTML = html;
+  }
+
+  async function _refreshOppPreviewActivity(docId) {
+    if (!docId) return;
+    try {
+      const data = await api(`/api/v2/documents/${docId}/activity?limit=20`);
+      const events = data.events || [];
+      previewDocsState.previewActivity = events;
+      _renderOppPreviewActivity(events);
+    } catch (err) { /* silent — preview works without activity */ }
+  }
+
+  function openOppDocumentPreview(docId, titleHint) {
+    const refs = _getOppPreviewRefs();
+    console.log("[opp-preview] openOppDocumentPreview called", {
+      docId,
+      titleHint,
+      hasIframe: !!refs.iframe,
+      hasEmpty: !!refs.empty,
+      hasTitle: !!refs.titleText,
+      hasOpenBtn: !!refs.openBtn,
+    });
+    if (!refs.iframe || !refs.empty || !refs.titleText || !refs.openBtn) {
+      console.warn("[opp-preview] openOppDocumentPreview aborted: missing DOM refs");
+      return;
+    }
+    if (previewDocsState.previewDocId === docId && previewDocsState.previewOpen) {
+      _refreshOppPreviewActivity(docId);
+      return;
+    }
+    const doc = (previewDocsState.documents || []).find(d => String(d.id) === String(docId));
+    const title = doc?.title || titleHint || previewDocsState.previewDocTitle || "Document";
+    previewDocsState.previewDocId = docId;
+    previewDocsState.previewDocTitle = title;
+    refs.titleText.textContent = title.length > 60 ? title.slice(0, 57) + "…" : title;
+    refs.openBtn.disabled = false;
+    refs.openBtn.dataset.docId = String(docId);
+    refs.empty.style.display = "none";
+    refs.iframe.classList.remove("hidden");
+    refs.iframe.src = `/doc-preview.html?id=${docId}&embedded=1&title=${encodeURIComponent(title)}`;
+    _setOppPreviewOpen(true);
+    _refreshOppPreviewActivity(docId);
+  }
+
+  function closeOppDocumentPreview() {
+    _setOppPreviewOpen(false);
+  }
+
+  // Wire up close + open-in-editor buttons (one-time, idempotent).
+  // Use lazy querySelector because cached refs may be null (this block runs
+  // before docsContent is appended to the document).
+  const oppCloseBtnNow = oppPreviewPane.querySelector(".opp-preview-doc-close");
+  if (oppCloseBtnNow && !oppCloseBtnNow.dataset.bound) {
+    oppCloseBtnNow.dataset.bound = "1";
+    oppCloseBtnNow.addEventListener("click", closeOppDocumentPreview);
+  }
+  const oppOpenEditorBtnNow = oppPreviewPane.querySelector(".opp-preview-doc-open-editor");
+  if (oppOpenEditorBtnNow && !oppOpenEditorBtnNow.dataset.bound) {
+    oppOpenEditorBtnNow.dataset.bound = "1";
+    oppOpenEditorBtnNow.addEventListener("click", () => {
+      if (!previewDocsState.previewDocId) return;
+      window.open(`/doc-editor.html?id=${previewDocsState.previewDocId}`, "_blank");
+    });
+  }
+
+  // Listen for fallback requests from the doc-preview iframe (files > 15 MB
+  // or unsupported legacy formats). Swap iframe to existing OnlyOffice view-only
+  // editor instead of OnlyOffice loading its own heavy editor.
+  if (!window._oppDocsPreviewFallbackBound) {
+    window._oppDocsPreviewFallbackBound = true;
+    window.addEventListener("message", (ev) => {
+      if (ev.origin !== window.location.origin) return;
+      const data = ev.data;
+      if (!data || data.type !== "docs-preview-fallback") return;
+      if (!previewDocsState.previewDocId || String(data.docId) !== String(previewDocsState.previewDocId)) return;
+      const iframe = oppPreviewPane.querySelector("#opp-preview-doc-iframe");
+      if (iframe) iframe.src = `/doc-editor.html?id=${previewDocsState.previewDocId}&embedded=1&mode=view`;
+    });
+  }
+
+  // Modal-close cleanup hook (also called from _doClosePreviewModal via window event)
+  function cleanupOppPreviewPane() {
+    _setOppPreviewOpen(false);
+  }
+  window.addEventListener("opp-preview-modal-closing", cleanupOppPreviewPane);
 
   document.addEventListener("photo-report-saved", function onPhotoReportSaved(e) {
     if (e.detail && e.detail.oppId === oppId) {

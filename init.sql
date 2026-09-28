@@ -477,6 +477,21 @@ CREATE INDEX idx_project_documents_uploaded ON project_documents(uploaded_at DES
 CREATE INDEX idx_documents_company ON project_documents(company_scope) WHERE company_scope = TRUE;
 CREATE INDEX idx_project_documents_folder ON project_documents(folder_id) WHERE folder_id IS NOT NULL;
 
+-- Tracks who opens/edits/saves/renames CRM documents. Read by the new
+-- preview pane to show "Last opened by X" + co-editing editors-today count.
+CREATE TABLE document_activity (
+    id          SERIAL PRIMARY KEY,
+    document_id INTEGER NOT NULL REFERENCES project_documents(id) ON DELETE CASCADE,
+    user_id     INTEGER REFERENCES users(id),
+    action      TEXT NOT NULL,
+    meta        JSONB,
+    created_at  TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_document_activity_doc ON document_activity(document_id, created_at DESC);
+CREATE INDEX idx_document_activity_user ON document_activity(user_id, created_at DESC);
+CREATE INDEX idx_document_activity_action_doc ON document_activity(document_id, action, created_at DESC);
+
 CREATE TABLE photo_exif_cache (
     image_path TEXT PRIMARY KEY,
     camera_make TEXT,
