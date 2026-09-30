@@ -555,6 +555,34 @@ CREATE TABLE IF NOT EXISTS photo_report_templates (
 );
 
 -- ============================================================================
+-- 7.14 Document Templates (Invoice + Certificate of Completion)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS document_templates (
+    id                       SERIAL PRIMARY KEY,
+    name                     TEXT NOT NULL,
+    logo_path                TEXT,
+    company_name             TEXT NOT NULL DEFAULT '',
+    company_address          TEXT NOT NULL DEFAULT '',
+    company_city_state_zip   TEXT NOT NULL DEFAULT '',
+    company_phone            TEXT NOT NULL DEFAULT '',
+    company_email            TEXT NOT NULL DEFAULT '',
+    primary_color            TEXT NOT NULL DEFAULT '#1a1a1a',
+    invoice_title            TEXT NOT NULL DEFAULT 'INVOICE',
+    coc_title                TEXT NOT NULL DEFAULT 'CERTIFICATE OF COMPLETION',
+    default_terms            TEXT NOT NULL DEFAULT 'Due on receipt',
+    default_sales_rep        TEXT NOT NULL DEFAULT '',
+    default_line_items       JSONB NOT NULL DEFAULT '[]'::jsonb,
+    show_signature           BOOLEAN NOT NULL DEFAULT TRUE,
+    signature_name           TEXT NOT NULL DEFAULT '',
+    signature_path           TEXT,
+    show_branding_footer     BOOLEAN NOT NULL DEFAULT TRUE,
+    is_default               BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at               TIMESTAMP DEFAULT NOW(),
+    updated_at               TIMESTAMP DEFAULT NOW()
+);
+
+-- ============================================================================
 -- 7.12 Mail (IMAP Sync Module — Phase 3+)
 -- ============================================================================
 

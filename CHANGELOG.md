@@ -2,6 +2,182 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Changelog modal full-screen on narrow / mobile + X close button (2026-09-29)
+
+Follow-up fix from the same release. On phones and narrow viewports the changelog modal was rendering far wider than the viewport (overflowing left of the screen) so the close button wasn't reachable.
+
+### Changes
+- **`public/styles.css`**: added `@media (max-width: 720px)` rule for `.modal-card-changelog` + `#changelog-modal` that makes the modal card fill the viewport (`100vw` × `100dvh`, no border-radius, no padding around the card). Matches the same full-screen mobile pattern used by the photo-report / invoice-generator / coc-generator modals.
+- **`public/styles.css`**: `.changelog-body code` now wraps long content (`word-break: break-word; overflow-wrap: anywhere;`) so very long inline code spans (e.g. `createBlankDocument(type, oppId)`) don't force horizontal overflow.
+- **`public/index.html`**: added a `×` close button to `.changelog-modal-head` (matches the header pattern used by every other modal). The existing `[data-changelog-dismiss]` binding already handles the close action — no JS change needed.
+
+### Files changed
+- `public/styles.css` (~20 lines added).
+- `public/index.html` (1 button added to the changelog modal head).
+- Cache buster `?v=3.5.9` → `?v=3.6.0`. VERSION unchanged at 2.3.0.
+
+### Verified
+- `py_compile` + `node --check` pass.
+- The changelog modal will now fill the screen on any viewport ≤720px wide, putting the X close button at top-right and the Close button at bottom — both always visible without scrolling.
+
+---
+
+## v2.3.0 — Project doc refresh + auto-open + diagnostics + upload-button cleanup (2026-09-28)
+
+Four follow-up fixes from the same session that shipped v2.3.0 invoice/COC generators.
+
+### Project modal now refreshes after creating Word/Excel + auto-opens editor
+- **Refresh.** `createBlankDocument(type, oppId)` on the project-scoped path was a no-op for the project Documents tab — it only refreshed the standalone Documents modal's list. Fixed by dispatching a `document-created` CustomEvent (`{detail: {oppId, docId, mimeType}}`) and adding a listener inside `renderOpportunityPreviewContent` that calls the existing `refreshDocs()`. Mirrors the pattern already used for `photo-report-saved` / `invoice-generated` / `coc-generated`. Standalone modal path still calls `loadDocumentsList()` as before.
+- **Auto-open in new tab.** On BOTH the standalone and project paths, the newly created doc now opens its editor in a new tab (`window.open(data.editUrl, "_blank")`). The standalone path also still triggers the inline rename prompt (per your request — "leave it for inline rename as is") so the user can rename the doc without leaving the list; the project path is toast-only since the user is opening the editor.
+- This means: creating a fresh `.xlsx`/`.docx` from anywhere now refreshes the relevant list and opens the editor in a new tab automatically.
+
+### Diagnostic logs for "Download failed" + slow editor
+- Added one-line `log_infra_event("info", ...)` after each successful `_handle_document_create_blank` that records the doc id, type, **absolute path** on disk, **file existence** check, and byte count. Confirms whether the file is actually there at the path the download handler will read from.
+- Added a second `log_infra_event("info", ...)` in `_handle_document_editor_config` that records what URL (`{CRM_PUBLIC_URL}/api/v2/documents/{id}?token=...`) was handed to OnlyOffice.
+- Added error-path logs in `_handle_document_download`: 404 when the doc id doesn't exist in DB, and 404 when the file path in the DB doesn't exist on disk (with the absolute path that was missing). Plus a `Cache-Control: no-store` header on the download response to avoid stale bytes being served through proxy caches if any are introduced.
+- **When you reproduce the failure next**, check the dashboard's infra ring buffer (Admin → Infrastructure tab, or `/tmp/crm-server.log`) for `documents` and `docserver` events around the failure time. They will tell us whether (a) the create actually wrote the file, (b) the editor-config pointed at the right URL, (c) the download handler saw the request and either served it or 404'd, and (d) whether the file was actually on disk at request time. This will pinpoint whether the issue is the create path, the network path from Document Server → CRM, a Docker volume mount issue, or a JWT-only fetch from OnlyOffice (we'd see a 200 in our logs but a "Download failed" in the OnlyOffice container log).
+
+### Upload button icon-only in project modals
+- Removed the literal `Upload` text from the project Documents tab and Photos tab upload buttons (both created in `app.js`); the SVG icon now stands alone, matching the standalone Documents modal's `#documents-upload-btn` which already uses `btn-icon-only`.
+
+### Files changed
+- `public/app.js` — `createBlankDocument` now dispatches `document-created` + opens editor in new tab + still calls `loadDocumentsList()` for standalone path; added `document-created` listener in project Documents tab; removed "Upload" text from both upload buttons (Documents tab + Photos tab).
+- `server.py` — added `log_infra_event` calls in `_handle_document_create_blank`, `_handle_document_download` (success and 404 paths), and `_handle_document_editor_config`; added `Cache-Control: no-store` to download response.
+- `public/index.html` — cache buster `?v=3.5.7` → `?v=3.5.8`.
+
+### Verified
+- `py_compile` + `node --check` pass.
+- Server restarted clean (PID 2634947); `/api/v2/documents/1` returns 200.
+- App.js compiles.
+
+---
+
+## v2.3.0 — Invoice / COC generators (cont.) + signature upload + footer toggle + Unicode fix (2026-09-28)
+
+Three follow-up fixes from the same session that shipped v2.3.0:
+
+### Signature image upload in template editor
+- **New endpoint** `POST /api/v2/admin/document-templates/{id}/signature` — multipart upload of a signature PNG/JPG, stored at `data/logos/docsig_{id}_{safename}`, replaces any existing signature for that template (the old file is unlinked). Pattern mirrors the logo upload endpoint.
+- **Editor UI**: added a **Signature Image** file input next to the existing Logo input. When editing, shows the current signature preview (max 120×32px) when one exists. Save flow uploads the signature (sequentially with the logo if both are set).
+- **Generation**: the existing `signature_path` column was already used by `_create_invoice_pdf` / `_create_coc_pdf` — now actually populated from the UI.
+
+### "Generated by Sietch CRM" footer toggle on COC
+- **New column** `document_templates.show_branding_footer BOOLEAN NOT NULL DEFAULT TRUE`. Added to `init.sql`, migration `021_add_document_templates.sql`, and the runtime `CREATE TABLE IF NOT EXISTS` block in `server.py`. Idempotent `ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS show_branding_footer` covers databases that already created the table before this column existed.
+- **Editor UI**: new checkbox **"Show 'Generated by Sietch CRM' footer"** next to the existing Include Signature / Set as Default checkboxes.
+- **PDF**: `_create_coc_pdf` reads `template.get("show_branding_footer", True)` and only draws the "Generated by Sietch CRM" footer text when True. The page X of Y cell is unchanged. Invoice footer is just Job # + page X of Y and is unaffected.
+
+### Em dash / Unicode crash fix
+- **Root cause.** fpdf2's built-in Helvetica only covers Latin-1 (U+0000–U+00FF). Strings containing em dash (U+2014), smart quotes (U+2018–U+201D), ellipsis (U+2026), etc. crash generation with: `Character "—" at index N in text is outside the range of characters supported by the font used: "helvetica"`. `_doc_pdf_safe` previously only stripped ASCII control chars.
+- **Fix.** `_doc_pdf_safe` now maps a table of common Unicode punctuation to ASCII equivalents (em/en/figure dash → `-`, smart quotes → `'"/`, ellipsis → `...`, bullets → `*`, arrows → `->`/`<-`/`^`/`v`, NBSP → space, line/paragraph separators → newline), drops remaining control chars, and finally strips anything still above U+00FF as a belt-and-suspenders guard.
+- **Also wrapped** every `pdf.cell()` / `pdf.multi_cell()` / `pdf.get_string_width()` call in the invoice + COC functions with `_doc_pdf_safe(...)`. The width-check call (`pdf.get_string_width(desc)` for line-item wrap) was the original crash site — `get_string_width` also throws on unsupported chars, so it has to be sanitized too.
+- **Verified** the same input that previously crashed ("Smith — Family Trust", claim number `—`, em dash in line items, signature name, footer text) now produces a valid PDF with em dashes converted to plain `-`.
+
+### Files changed
+- `migrations/021_add_document_templates.sql` — added `show_branding_footer` column + `ALTER TABLE … ADD COLUMN IF NOT EXISTS`.
+- `init.sql` — same column in the `CREATE TABLE IF NOT EXISTS` block.
+- `server.py` — added the column to the startup-time CREATE TABLE; added `ALTER TABLE IF NOT EXISTS` for existing DBs; replaced `_doc_pdf_safe` with the Unicode-mapping version; added `_handle_document_template_signature_upload`; added new route dispatch entry; added `show_branding_footer` to the PUT allowlist; wrapped 6 unsanitized `pdf.cell()` / `pdf.get_string_width()` calls with `_doc_pdf_safe`; gated the COC "Generated by Sietch CRM" footer text behind the new toggle.
+- `public/index.html` — added the Signature Image upload input + preview area; added the footer checkbox.
+- `public/app.js` — wired signature upload in `saveAdminDocTpl`; renders logo + signature previews in `openAdminDocTplEditor`; reads/writes `show_branding_footer`.
+- Cache buster `?v=3.5.6` → `?v=3.5.7`. (VERSION unchanged at 2.3.0 — same release.)
+
+### Verified
+- `python3 -m py_compile server.py` + `node --check public/app.js` pass.
+- `document_templates.show_branding_footer` column visible in `information_schema` after server restart.
+- All 4 admin endpoints respond correctly (401 = auth required).
+- Direct PDF generation with em dashes everywhere now succeeds (was crashing on `get_string_width(desc)`).
+- Both PDFs valid (`file` confirms PDF v1.3).
+- Server restarted clean.
+
+---
+
+## v2.3.0 — Invoice / Certificate of Completion (COC) PDF generators + Reports sub-tab + system action notes (2026-09-28)
+
+**User request.** "Invoice/COC (certificate of completion) pdf generator added to docs tab in projects modals. Grabs data from user fields. User editable company fields (with templates to input different logos, company information and standard line items - add to photo report template area). Creating an invoice in a job should produce a system action note. Same with photo reports and COC. Add invoice document to the create document button in the documents modal and make a create documents (no new folders needed) button in the documents tab of all projects modal (project, bookmarks, search)."
+
+This release adds the full invoice + COC PDF generator subsystem, derived from the same Sherwood toolbox pattern that produced the photo report generator. Two new modal flows (one in every project preview's Documents tab, one in the standalone Documents modal), one new admin sub-tab under the existing Reports tab, one new database table, and one bonus fix that makes photo report generation produce the same system action note on the project timeline.
+
+### Backend
+
+- **New table `document_templates`** (migration `021_add_document_templates.sql` + idempotent `CREATE TABLE IF NOT EXISTS` in `init.sql` and in `server.py`'s schema-migration section). Single template table reused by both document types — no separate "invoice template" / "COC template" rows. Columns: `name`, `logo_path`, `company_name`, `company_address`, `company_city_state_zip`, `company_phone`, `company_email`, `primary_color`, `invoice_title`, `coc_title`, `default_terms`, `default_sales_rep`, `default_line_items` (JSONB array of `{description, amount}`), `show_signature`, `signature_name`, `signature_path`, `is_default`, timestamps.
+- **Admin CRUD endpoints** (admin role required):
+  - `GET /api/v2/admin/document-templates` → list, ordered `is_default DESC, name`
+  - `POST /api/v2/admin/document-templates` → create (clears other defaults if `is_default=true`)
+  - `PUT /api/v2/admin/document-templates/{id}` → partial update on allowlist
+  - `DELETE /api/v2/admin/document-templates/{id}` → refuses to delete the default
+  - `POST /api/v2/admin/document-templates/{id}/logo` → multipart upload to `data/logos/doctemplate_{id}_{safename}`
+- **PDF generation endpoints**:
+  - `POST /api/v2/projects/{oppId}/invoice` → project-scoped invoice. Saves PDF to `data/documents/{opp_id}/{timestamp}_{safe_name}.pdf` + `INSERT INTO project_documents (opportunity_id, ..., mime_type='application/pdf', uploaded_by)`.
+  - `POST /api/v2/projects/{oppId}/coc` → project-scoped COC. Same storage pattern.
+  - `POST /api/v2/documents/invoice` → standalone (no project). Saves to `data/documents/shared/personal/{user_id}/...` + `INSERT INTO project_documents (..., opportunity_id=NULL, company_scope=FALSE)`.
+  - `POST /api/v2/documents/coc` → standalone COC, same personal-scope storage.
+- **PDF rendering** uses `fpdf2` (already installed) — kept consistent with the photo report generator instead of bringing in `reportlab` for just two doc types. Two new functions: `_create_invoice_pdf` (Letter portrait, header with logo + company info + big "INVOICE" title, BILL TO block, two-column meta (Invoice # / Date / Job # / Claim # / Terms), line items table with grand total, optional notes block, optional signature image, footer with page X of Y + Job #) and `_create_coc_pdf` (Letter portrait, centered logo + right-aligned company info, big "CERTIFICATE OF COMPLETION" title with underline, label/value pairs (Customer / Address / Job # / Claim # / Sales Rep / Completion Date), wrapped Note, signature block, footer).
+- **System action note on every generated document.** Each of the four generator handlers (`_handle_project_invoice_generate`, `_handle_project_coc_generate`, `_handle_standalone_invoice_generate`, `_handle_standalone_coc_generate`) inserts an `INSERT INTO history_events (opportunity_id, category_id, title, content, created_by)` row using the system "Action" category. The category id is resolved at runtime via `_resolve_action_category_id()` (cached lookup; falls back gracefully if missing). Note title format: `"Invoice generated"`, `"Certificate of Completion generated"`. Note content format: `"<doc type> generated: <filename> (<size>, Claim #<n>)"`.
+- **Photo report system-note fix (bonus).** `_handle_project_photo_report` previously generated the PDF and saved it to `project_documents` but did NOT create a history event. Added the same system action note INSERT so photo reports now produce `"Photo Report generated: <filename> (<size>, Claim #<n>)"` history entries, matching invoice/COC behavior.
+- **Helpers added at module level**: `_humanize_file_size`, `_doc_pdf_safe`, `_money`, `_normalize_line_items`, `_resolve_document_template`, `_doc_draw_invoice_table_header`, `_resolve_action_category_id`.
+
+### Admin UI
+
+- **Reports admin tab** (existing `#admin-tab-photo-reports`) now contains a **sub-tab bar** at the top with two tabs: **"Photo Report Templates"** (existing) and **"Document Templates (Invoice / COC)"** (new). The sub-tab switcher is handled by `bindAdminDocumentTemplates()` (called next to `bindAdminPhotoReports()`).
+- The Document Templates sub-tab has:
+  - List of all templates with name, default badge, company name + line-item count summary, **Edit** / **Delete** buttons (Delete disabled for default).
+  - **+ Add Template** button → opens the editor.
+  - Editor (hidden until clicked): name, company info (name/address/city/phone/email), primary color picker, logo upload, invoice title text, COC title text, default terms, default sales rep, signature name, "Include Signature" + "Set as Default" checkboxes, **editable line-items table** (add/remove rows), Cancel / Delete / Save buttons.
+
+### Project Modal — Documents tab
+
+- Added a **"Create Document" button + dropdown** to the Documents tab toolbar in every opportunity preview modal (main modal, bookmark sidebar, search popup — all share `renderOpportunityPreviewContent`, so all three pick it up automatically).
+- Dropdown options: **Word Document / Excel Spreadsheet / Invoice / Certificate of Completion**. Folders are intentionally NOT included (user explicitly requested "no new folders needed" in project modals).
+- Word / Excel use `createBlankDocument(type, oppId)` which now accepts an optional `oppId` and routes the new blank doc to `opportunity_id=<oppId>` via the existing `_handle_document_create_blank` (which already supported `opportunity_id` in the body).
+- Invoice / COC open `openInvoiceModal(oppId, "project")` / `openCocModal(oppId, "project")` — auto-fills customer name, claim # (via `field_11` / label-includes-"claim" lookup, same pattern as photo report), project #, address, sales rep. User can override any field. Default line items are pre-populated from the selected template.
+
+### Standalone Documents Modal
+
+- The existing "Create document or folder" dropdown (`#documents-new-btn` → `#documents-new-menu`) now includes **Invoice** and **Certificate of Completion** options in addition to Word / Excel / New Folder.
+- When clicked, opens `openInvoiceModal(null, "standalone")` / `openCocModal(null, "standalone")` — opens the modal in manual-entry mode (no project fetches, all fields blank except template defaults, signature checkbox from template). User types everything manually. Resulting PDF is saved to the user's personal Documents scope with `opportunity_id=NULL` — appears in the standalone Documents modal like any uploaded file, never shows in any project's Documents tab. No new folders are created.
+
+### Photo Report fix
+
+- Photo report generation now produces a system action note on the project's history timeline (same category + format as invoice/COC). The PDF still downloads normally; the existing toast + docs-tab refresh behavior is unchanged.
+
+### Cache buster / version
+
+- Bumped `styles.css?v=3.5.5` → `?v=3.5.6` and `app.js?v=3.5.5` → `?v=3.5.6`.
+- `VERSION` bumped `2.2.5` → `2.3.0`.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `migrations/021_add_document_templates.sql` | **NEW** — `document_templates` schema + index. |
+| `init.sql` | Added same `CREATE TABLE IF NOT EXISTS document_templates …` block (~25 lines) under a new "7.14" section for fresh installs. |
+| `server.py` | +~1100 lines: route dispatch entries (8 new), document template CRUD handlers (~150), invoice generator handler (~140), COC generator handler (~110), standalone invoice/COC handlers (~200 each), `_create_invoice_pdf` (~250), `_create_coc_pdf` (~150), photo-report system-note fix (~6), `createBlankDocument` route already supported `opportunity_id` (verified), startup-time `CREATE TABLE IF NOT EXISTS document_templates` (idempotent), helpers (~80). |
+| `public/index.html` | +~100 lines: invoice/COC generator modals, admin Document Templates sub-tab + form, standalone Documents modal Invoice/COC options, sub-tab switcher markup. |
+| `public/app.js` | +~700 lines: `bindAdminDocumentTemplates`, `populateAdminDocumentTemplates`, `openAdminDocTplEditor`, `closeAdminDocTplEditor`, `addDocTplLineRow`, `collectDocTplLineItems`, `saveAdminDocTpl`, `deleteAdminDocTpl`, `deleteEditingAdminDocTpl`, `_docGenResolveClaimNumber`, `_docGenToday`, `_docGenField`, `_docGenNumberField`, `_docGenTextarea`, `_docGenSection`, `openInvoiceModal`, `openCocModal`, `renderInvoiceForm`, `addInvoiceLineRow`, `renderCocForm`. `createBlankDocument` updated to accept `oppId`. New "Create Document" dropdown wired into the Documents tab toolbar (works in main / bookmark / search popup). Auto-refresh listeners for `invoice-generated` and `coc-generated` events on Documents tab. |
+| `public/styles.css` | +~140 lines: `.modal-card-invoice-generator` / `.modal-card-coc-generator` (resize/min/max/flex), `.invoice-generator-body` / `.coc-generator-body`, `.invoice-section` / `.invoice-section-title`, `.invoice-lineitems` table styling, `.invoice-grand-total`, `.invoice-actions` / `.coc-actions`, mobile full-screen overrides, `.reports-subtabs` / `.reports-subtab` (active + hover). |
+| `VERSION` | 2.2.5 → 2.3.0 |
+| `AGENTS.md` | Session summary updated |
+
+### Verified
+- `python3 -m py_compile server.py` passes.
+- `node --check public/app.js` passes.
+- `document_templates` table auto-created on server startup (verified via `information_schema`).
+- `GET /api/v2/admin/document-templates` returns 401 (auth required) → handler is wired.
+- Direct PDF generation test (`_create_invoice_pdf` + `_create_coc_pdf`) → both produce valid PDFs (`file test_invoice.pdf` → "PDF document, version 1.3, 1 page(s)").
+- Server restarted cleanly (PID 2551738).
+- Test template cleaned up from DB after smoke test.
+
+### Test in browser (manual)
+1. **Admin → Reports → Document Templates** — create a "Default Invoice" template with company info, logo upload, 2 default line items. Verify list refreshes + default badge.
+2. **Project preview → Create Document → Invoice** — modal opens with project fields auto-filled, default line items from template. Click Generate → toast + PDF appears in Documents tab list.
+3. **Project preview → Create Document → COC** — modal opens with auto-fill + signature checkbox. Generate → PDF appears.
+4. **Standalone Documents modal → Create Document → Invoice** — opens in manual mode (all fields blank except template defaults). Generate → PDF appears in standalone Documents modal (NOT in any project).
+5. **Standalone → COC** — same as invoice, manual mode.
+6. **Project history tab** — verify "Invoice generated", "Certificate of Completion generated", and "Photo Report generated" all appear under the "Action" category with the pencil icon.
+7. **Bookmark sidebar / search popup** — open a project's Documents tab → verify the new "Create Document" button appears and works (uses same `oppId`).
+8. **Hard refresh** (`Ctrl+Shift+R`) to pick up the cache-buster bump.
+
+---
+
 ## Add `display: flex; flex-direction: column;` to bookmark and search-popup preview bodies (2026-09-22)
 
 **User feedback.** "YOU STILL HAVENT FIXED PDF OPP PREVIEW HEIGHT IN THE SIDEBAR PROJECT MODAL." The user was in the bookmark sidebar (the "Bookmarks" panel on the right) showing the opp preview modal. The preview pane still wasn't filling the panel vertically even after my `display: flex` fix on `.opp-preview-body` (the regular modal) and the cache buster bump.

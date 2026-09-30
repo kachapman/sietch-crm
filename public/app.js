@@ -4314,14 +4314,15 @@ async function deleteFolder(folderId) {
   }
 }
 
-async function createBlankDocument(type) {
+async function createBlankDocument(type, oppId) {
   const defaultName = type === "word" ? "New Document" : "New Spreadsheet";
   try {
     const body = {
       type,
       title: defaultName,
-      scope: docsState.scope === "company" ? "company" : "personal",
-      folder_id: docsState.currentFolderId || null,
+      scope: oppId ? "project" : (docsState.scope === "company" ? "company" : "personal"),
+      folder_id: oppId ? null : (docsState.currentFolderId || null),
+      opportunity_id: oppId || null,
     };
     const data = await api("/api/v2/documents/create", {
       method: "POST",
@@ -4329,9 +4330,26 @@ async function createBlankDocument(type) {
       body: JSON.stringify(body),
     });
     showToast(`${type === "word" ? "Word" : "Excel"} document created`);
-    await loadDocumentsList();
+    // Always refresh the relevant list and auto-open the editor in a new tab.
+    if (oppId) {
+      // Project-scoped: refresh the project's Documents tab and notify any
+      // listeners via the same CustomEvent pattern used by invoice/COC saves.
+      document.dispatchEvent(new CustomEvent("document-created", {
+        detail: { oppId, docId: data.id, mimeType: data.mimeType },
+      }));
+    } else {
+      await loadDocumentsList();
+    }
     if (data && data.id) {
-      startRenameDoc(data.id);
+      // Auto-open the new doc in a new tab (both standalone + project paths).
+      if (data.editUrl) {
+        try { window.open(data.editUrl, "_blank"); } catch (e) { /* popup blocked */ }
+      }
+      // Inline rename for the standalone path only (project path stays toast-only
+      // since the user is opening the editor and will rename from there).
+      if (!oppId) {
+        startRenameDoc(data.id);
+      }
     }
   } catch (err) {
     showToast(err.message, true);
@@ -5208,6 +5226,10 @@ function bindDocumentsModal() {
           createBlankDocument(action);
         } else if (action === "folder") {
           createFolder();
+        } else if (action === "invoice") {
+          openInvoiceModal(null, "standalone");
+        } else if (action === "coc") {
+          openCocModal(null, "standalone");
         }
       });
     });
@@ -29274,6 +29296,7 @@ function openAdminConsoleModal() {
     bindDailyQuoteConfig();
     bindAdminAutomation();
     bindAdminPhotoReports();
+    bindAdminDocumentTemplates();
     // Sync buttons — real implementation
     function getSyncPayload() {
       return {
@@ -29855,6 +29878,7 @@ function switchAdminTab(tab) {
   }
   if (tab === "photo-reports") {
     populateAdminPhotoReportTemplates();
+    populateAdminDocumentTemplates();
   }
 }
 
@@ -35889,7 +35913,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
   const uploadBtn = document.createElement("button");
   uploadBtn.type = "button";
   uploadBtn.className = "btn btn-primary btn-sm";
-  uploadBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload`;
+  uploadBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`;
   uploadBtn.addEventListener("click", () => uploadInput.click());
   uploadInput.addEventListener("change", async () => {
     const files = Array.from(uploadInput.files).filter(f => f.size > 0);
@@ -35910,6 +35934,50 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     if (ok) await refreshDocs();
     uploadInput.value = "";
   });
+
+  // Create Document dropdown (Word / Excel / Invoice / COC). Folder creation is
+  // intentionally NOT included — the user can manage folders via the standalone
+  // Documents modal.
+  const createWrap = document.createElement("div");
+  createWrap.className = "documents-new-wrap opp-docs-new-wrap";
+  const createBtn = document.createElement("button");
+  createBtn.type = "button";
+  createBtn.className = "btn btn-primary btn-icon-only btn-sm";
+  createBtn.title = "Create document";
+  createBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z"/><path d="M12 8v8"/><path d="M8 12h8"/></svg>';
+  const createMenu = document.createElement("div");
+  createMenu.className = "documents-new-menu hidden";
+  createMenu.innerHTML = `
+    <button type="button" class="documents-new-option" data-new="word">Word Document</button>
+    <button type="button" class="documents-new-option" data-new="excel">Excel Spreadsheet</button>
+    <button type="button" class="documents-new-option" data-new="invoice">Invoice</button>
+    <button type="button" class="documents-new-option" data-new="coc">Certificate of Completion</button>
+  `;
+  createBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    createMenu.classList.toggle("hidden");
+  });
+  createMenu.addEventListener("click", (e) => {
+    const opt = e.target.closest(".documents-new-option");
+    if (!opt) return;
+    createMenu.classList.add("hidden");
+    const action = opt.dataset.new;
+    if (action === "word" || action === "excel") {
+      // Create blank document scoped to this project (no folder change needed).
+      createBlankDocument(action, oppId);
+    } else if (action === "invoice") {
+      openInvoiceModal(oppId, "project");
+    } else if (action === "coc") {
+      openCocModal(oppId, "project");
+    }
+  });
+  document.addEventListener("click", (e) => {
+    if (!createMenu.classList.contains("hidden") && !createWrap.contains(e.target)) {
+      createMenu.classList.add("hidden");
+    }
+  });
+  createWrap.appendChild(createBtn);
+  createWrap.appendChild(createMenu);
 
   const selectAllCheckbox = document.createElement("input");
   selectAllCheckbox.type = "checkbox";
@@ -35942,6 +36010,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
   docsCount.className = "opp-docs-count";
 
   docsToolbar.appendChild(uploadBtn);
+  docsToolbar.appendChild(createWrap);
   docsToolbar.appendChild(selectAllLabel);
   docsToolbar.appendChild(actionsSelect);
 
@@ -36508,6 +36577,21 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       refreshDocs();
     }
   });
+  document.addEventListener("invoice-generated", function onInvoiceGenerated(e) {
+    if (e.detail && e.detail.oppId === oppId) {
+      refreshDocs();
+    }
+  });
+  document.addEventListener("coc-generated", function onCocGenerated(e) {
+    if (e.detail && e.detail.oppId === oppId) {
+      refreshDocs();
+    }
+  });
+  document.addEventListener("document-created", function onDocumentCreated(e) {
+    if (e.detail && e.detail.oppId === oppId) {
+      refreshDocs();
+    }
+  });
 
   container.appendChild(docsContent);
 
@@ -36566,7 +36650,7 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
   const uploadBtn = document.createElement("button");
   uploadBtn.type = "button";
   uploadBtn.className = "btn btn-primary btn-sm";
-  uploadBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload`;
+  uploadBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`;
   uploadBtn.addEventListener("click", () => uploadInput.click());
 
   const selectAllCheckbox = document.createElement("input");
@@ -41781,6 +41865,505 @@ generateBtn.addEventListener("click", () => {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   Invoice / COC PDF Generators
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+// Resolve a project's claim number (field_11, fallback to label-includes-"claim")
+function _docGenResolveClaimNumber(project) {
+  const customFields = (project && project.customFields) || [];
+  for (const cf of customFields) {
+    if ((cf.key === "field_11") || (cf.label && String(cf.label).toLowerCase().includes("claim"))) {
+      return (cf.value || "").toString();
+    }
+  }
+  return "";
+}
+
+function _docGenToday() {
+  const d = new Date();
+  return `${(d.getMonth() + 1).toString().padStart(2, "0")}/${d.getDate().toString().padStart(2, "0")}/${d.getFullYear()}`;
+}
+
+// mode: "project" → auto-fill from project; "standalone" → blank for manual entry
+function openInvoiceModal(oppId, mode) {
+  mode = mode || (oppId ? "project" : "standalone");
+  const modal = $("#invoice-generator-modal");
+  const body = $("#invoice-generator-body");
+  if (!modal || !body) return;
+  body.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--muted)">Loading...</div>';
+  modal.classList.remove("hidden");
+  // Bind dismiss once
+  if (!modal.dataset.boundInvoice) {
+    modal.dataset.boundInvoice = "1";
+    modal.querySelectorAll("[data-invoice-dismiss]").forEach(el => {
+      el.addEventListener("click", () => modal.classList.add("hidden"));
+    });
+  }
+  const projP = mode === "project" && oppId
+    ? api(`/api/v2/projects/${oppId}`).catch(() => null)
+    : Promise.resolve(null);
+  const tmplP = api("/api/v2/admin/document-templates").catch(() => []);
+  Promise.all([projP, tmplP]).then(([project, templates]) => {
+    renderInvoiceForm(body, project || null, templates || [], oppId || null, mode);
+  }).catch(err => {
+    body.innerHTML = `<div style="padding:2rem;color:var(--danger)">Failed to load: ${escapeHtml(err.message)}</div>`;
+  });
+}
+
+function openCocModal(oppId, mode) {
+  mode = mode || (oppId ? "project" : "standalone");
+  const modal = $("#coc-generator-modal");
+  const body = $("#coc-generator-body");
+  if (!modal || !body) return;
+  body.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--muted)">Loading...</div>';
+  modal.classList.remove("hidden");
+  if (!modal.dataset.boundCoc) {
+    modal.dataset.boundCoc = "1";
+    modal.querySelectorAll("[data-coc-dismiss]").forEach(el => {
+      el.addEventListener("click", () => modal.classList.add("hidden"));
+    });
+  }
+  const projP = mode === "project" && oppId
+    ? api(`/api/v2/projects/${oppId}`).catch(() => null)
+    : Promise.resolve(null);
+  const tmplP = api("/api/v2/admin/document-templates").catch(() => []);
+  Promise.all([projP, tmplP]).then(([project, templates]) => {
+    renderCocForm(body, project || null, templates || [], oppId || null, mode);
+  }).catch(err => {
+    body.innerHTML = `<div style="padding:2rem;color:var(--danger)">Failed to load: ${escapeHtml(err.message)}</div>`;
+  });
+}
+
+function _docGenField(label, value, placeholder) {
+  // Build a labeled text input row (label above, full width input).
+  const wrap = document.createElement("div");
+  wrap.className = "photo-report-field";
+  if (label) {
+    const lbl = document.createElement("label");
+    lbl.textContent = label;
+    wrap.appendChild(lbl);
+  }
+  const input = document.createElement("input");
+  input.type = "text";
+  if (placeholder) input.placeholder = placeholder;
+  if (value !== undefined && value !== null) input.value = value;
+  wrap.appendChild(input);
+  return { wrap, input };
+}
+
+function _docGenNumberField(label, value, placeholder) {
+  const out = _docGenField(label, value, placeholder);
+  out.input.type = "number";
+  out.input.step = "0.01";
+  out.input.style.textAlign = "right";
+  return out;
+}
+
+function _docGenTextarea(label, value, placeholder, rows) {
+  const wrap = document.createElement("div");
+  wrap.className = "photo-report-field";
+  if (label) {
+    const lbl = document.createElement("label");
+    lbl.textContent = label;
+    wrap.appendChild(lbl);
+  }
+  const ta = document.createElement("textarea");
+  ta.rows = rows || 3;
+  if (placeholder) ta.placeholder = placeholder;
+  if (value) ta.value = value;
+  ta.style.cssText = "width:100%;padding:0.4rem;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text);font-size:0.85rem;resize:vertical;";
+  wrap.appendChild(ta);
+  return { wrap, input: ta };
+}
+
+function _docGenSection(title) {
+  const sec = document.createElement("div");
+  sec.className = "invoice-section";
+  const h = document.createElement("div");
+  h.className = "invoice-section-title";
+  h.textContent = title;
+  sec.appendChild(h);
+  return sec;
+}
+
+function renderInvoiceForm(body, project, templates, oppId, mode) {
+  body.innerHTML = "";
+  const contact = (project && project.contact) || {};
+  const isProject = mode === "project" && !!project;
+  // Default template (first default, else first)
+  let defaultTpl = templates.find(t => t.is_default) || templates[0] || null;
+  const today = _docGenToday();
+  // Build form structure
+  const sectionsWrap = document.createElement("div");
+  body.appendChild(sectionsWrap);
+  // Section: Template
+  const tmplSec = _docGenSection("Template");
+  const tmplRow = document.createElement("div");
+  tmplRow.className = "photo-report-field";
+  const tmplLbl = document.createElement("label");
+  tmplLbl.textContent = "Company template";
+  tmplRow.appendChild(tmplLbl);
+  const tmplSelect = document.createElement("select");
+  tmplSelect.style.cssText = "width:100%;padding:0.4rem;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text);";
+  if (!templates.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "(no templates — defaults will be used)";
+    tmplSelect.appendChild(opt);
+  }
+  templates.forEach(t => {
+    const opt = document.createElement("option");
+    opt.value = t.id;
+    opt.textContent = `${t.name}${t.is_default ? " (Default)" : ""}${t.company_name ? ` — ${t.company_name}` : ""}`;
+    if (defaultTpl && t.id === defaultTpl.id) opt.selected = true;
+    tmplSelect.appendChild(opt);
+  });
+  tmplRow.appendChild(tmplSelect);
+  tmplSec.appendChild(tmplRow);
+  sectionsWrap.appendChild(tmplSec);
+  // Section: Invoice Info
+  const infoSec = _docGenSection("Invoice Info");
+  const infoGrid = document.createElement("div");
+  infoGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;";
+  const claimNumber = isProject ? _docGenResolveClaimNumber(project) : "";
+  const customerName = isProject ? (contact.displayName || project.title || "") : "";
+  const projectNumber = isProject ? (project.project_number || "") : "";
+  const street = isProject ? (contact.addressStreet || "") : "";
+  const cityStateZip = isProject ? [
+    contact.addressCity || "",
+    contact.addressState || "",
+    contact.addressZip || "",
+  ].filter(Boolean).join(", ") : "";
+  const fInvoiceNum = _docGenField("Invoice #", projectNumber, "Defaults to job #");
+  const fInvoiceDate = _docGenField("Date", today, "MM/DD/YYYY");
+  const fTerms = _docGenField("Terms", (defaultTpl && defaultTpl.default_terms) || "Due on receipt");
+  const fSalesRep = _docGenField("Sales Rep", (defaultTpl && defaultTpl.default_sales_rep) || "");
+  const fClaimNum = _docGenField("Claim #", claimNumber);
+  const fJobNum = _docGenField("Job #", projectNumber);
+  const fCustomer = _docGenField("Customer Name", customerName);
+  const fStreet = _docGenField("Street", street);
+  const fCityStateZip = _docGenField("City, State ZIP", cityStateZip);
+  const fFileName = _docGenField("File Name", "", "e.g. Invoice_Smith_2026-09-28");
+  [fInvoiceNum, fInvoiceDate, fTerms, fSalesRep, fClaimNum, fJobNum].forEach(f => infoGrid.appendChild(f.wrap));
+  infoSec.appendChild(infoGrid);
+  sectionsWrap.appendChild(infoSec);
+  // Section: Bill To
+  const billSec = _docGenSection("Bill To");
+  const billGrid = document.createElement("div");
+  billGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;";
+  [fCustomer, fStreet, fCityStateZip].forEach(f => billGrid.appendChild(f.wrap));
+  billSec.appendChild(billGrid);
+  sectionsWrap.appendChild(billSec);
+  // Section: Line items
+  const linesSec = _docGenSection("Line Items");
+  const table = document.createElement("table");
+  table.className = "invoice-lineitems";
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th>Description</th>
+        <th class="amount-col">Amount</th>
+        <th class="del-col"></th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  `;
+  const tbody = table.querySelector("tbody");
+  const totalRow = document.createElement("tr");
+  totalRow.innerHTML = `<td colspan="3"><div class="invoice-grand-total">Grand Total: <span id="invoice-grand-total-val">$0.00</span></div></td>`;
+  table.appendChild(totalRow);
+  linesSec.appendChild(table);
+  const addLineBtn = document.createElement("button");
+  addLineBtn.type = "button";
+  addLineBtn.className = "btn btn-ghost btn-sm";
+  addLineBtn.textContent = "+ Add Line";
+  addLineBtn.style.cssText = "margin-top:0.4rem;";
+  addLineBtn.addEventListener("click", () => {
+    addInvoiceLineRow(tbody, recompute);
+  });
+  linesSec.appendChild(addLineBtn);
+  sectionsWrap.appendChild(linesSec);
+  // Section: Notes
+  const notesSec = _docGenSection("Notes");
+  const fNotes = _docGenTextarea("Notes (printed at bottom of PDF)", "", "Optional", 3);
+  notesSec.appendChild(fNotes.wrap);
+  sectionsWrap.appendChild(notesSec);
+  // Section: Signature
+  const sigSec = _docGenSection("Signature");
+  const sigRow = document.createElement("div");
+  sigRow.style.cssText = "display:flex;gap:1rem;align-items:center;flex-wrap:wrap;";
+  const showSig = document.createElement("input");
+  showSig.type = "checkbox";
+  showSig.checked = defaultTpl ? !!defaultTpl.show_signature : true;
+  showSig.id = "invoice-show-sig";
+  const showSigLbl = document.createElement("label");
+  showSigLbl.htmlFor = "invoice-show-sig";
+  showSigLbl.style.cssText = "display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;";
+  showSigLbl.appendChild(showSig);
+  showSigLbl.appendChild(document.createTextNode("Include signature (from template)"));
+  sigRow.appendChild(showSigLbl);
+  const fSigName = _docGenField("Signature name", (defaultTpl && defaultTpl.signature_name) || (defaultTpl && defaultTpl.default_sales_rep) || "");
+  fSigName.wrap.style.flex = "1";
+  fSigName.wrap.style.minWidth = "200px";
+  sigRow.appendChild(fSigName.wrap);
+  sigSec.appendChild(sigRow);
+  sectionsWrap.appendChild(sigSec);
+  // Pre-populate line items from default template
+  const initialLines = (() => {
+    if (!defaultTpl) return [];
+    const raw = defaultTpl.default_line_items;
+    if (typeof raw === "string") {
+      try { return JSON.parse(raw); } catch { return []; }
+    }
+    return Array.isArray(raw) ? raw : [];
+  })();
+  if (initialLines.length) {
+    initialLines.forEach(li => addInvoiceLineRow(tbody, recompute, li.description || "", li.amount || 0));
+  } else {
+    addInvoiceLineRow(tbody, recompute);
+  }
+  // Recompute helper
+  function recompute() {
+    let total = 0;
+    tbody.querySelectorAll("tr").forEach(tr => {
+      const amtIn = tr.querySelector(".li-amt");
+      if (amtIn) {
+        const v = parseFloat(String(amtIn.value).replace(/[^0-9.\-]/g, "")) || 0;
+        total += v;
+      }
+    });
+    const valEl = body.querySelector("#invoice-grand-total-val");
+    if (valEl) valEl.textContent = `$${total.toFixed(2)}`;
+  }
+  recompute();
+  // When template changes, refill terms / sales rep / signature defaults
+  tmplSelect.addEventListener("change", () => {
+    const t = templates.find(x => String(x.id) === String(tmplSelect.value));
+    if (!t) return;
+    fTerms.input.value = t.default_terms || "Due on receipt";
+    fSalesRep.input.value = t.default_sales_rep || "";
+    fSigName.input.value = t.signature_name || t.default_sales_rep || "";
+    showSig.checked = !!t.show_signature;
+  });
+  // Footer / Generate button
+  const actions = document.createElement("div");
+  actions.className = "invoice-actions";
+  const generateBtn = document.createElement("button");
+  generateBtn.type = "button";
+  generateBtn.className = "invoice-generate-btn";
+  generateBtn.textContent = "Generate Invoice PDF";
+  actions.appendChild(generateBtn);
+  body.appendChild(actions);
+  // Click handler
+  generateBtn.addEventListener("click", async () => {
+    generateBtn.disabled = true;
+    try {
+      const lineItems = [];
+      tbody.querySelectorAll("tr").forEach(tr => {
+        const desc = (tr.querySelector(".li-desc") || {}).value || "";
+        const amtRaw = (tr.querySelector(".li-amt") || {}).value || "";
+        const amt = parseFloat(String(amtRaw).replace(/[^0-9.\-]/g, "")) || 0;
+        if (desc.trim() || amt) lineItems.push({ description: desc.trim(), amount: amt });
+      });
+      const payload = {
+        template_id: tmplSelect.value ? parseInt(tmplSelect.value, 10) : null,
+        invoice_number: fInvoiceNum.input.value.trim(),
+        invoice_date: fInvoiceDate.input.value.trim(),
+        terms: fTerms.input.value.trim(),
+        sales_rep: fSalesRep.input.value.trim(),
+        claim_number: fClaimNum.input.value.trim(),
+        project_number: fJobNum.input.value.trim(),
+        customer_name: fCustomer.input.value.trim(),
+        street: fStreet.input.value.trim(),
+        city_state_zip: fCityStateZip.input.value.trim(),
+        notes: fNotes.input.value.trim(),
+        line_items: lineItems,
+        include_signature: !!showSig.checked,
+        signature_name: fSigName.input.value.trim(),
+        file_name: fFileName.input.value.trim(),
+      };
+      const url = isProject
+        ? `/api/v2/projects/${oppId}/invoice`
+        : `/api/v2/documents/invoice`;
+      const result = await api(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      showToast(`Invoice generated: ${result.title || "PDF"}`);
+      // Close modal
+      const modal = $("#invoice-generator-modal");
+      if (modal) modal.classList.add("hidden");
+      // Dispatch refresh event (project mode → refresh docs; standalone mode → refresh documents modal)
+      if (isProject) {
+        document.dispatchEvent(new CustomEvent("invoice-generated", { detail: { oppId, docId: result.id } }));
+      } else {
+        document.dispatchEvent(new CustomEvent("invoice-generated-standalone", { detail: { docId: result.id } }));
+        if (typeof loadDocumentsList === "function") loadDocumentsList();
+      }
+    } catch (err) {
+      showToast("Invoice failed: " + err.message, true);
+      generateBtn.disabled = false;
+    }
+  });
+}
+
+function addInvoiceLineRow(tbody, onChange, desc, amt) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td><input type="text" class="li-desc" placeholder="Line item description" value="${escapeHtml(desc || "")}"></td>
+    <td class="amount-col"><input type="number" class="li-amt" step="0.01" placeholder="0.00" value="${amt !== undefined && amt !== null && amt !== "" ? amt : ""}"></td>
+    <td class="del-col"><button type="button" class="btn btn-ghost btn-sm li-del" title="Remove">&times;</button></td>
+  `;
+  tbody.appendChild(tr);
+  tr.querySelector(".li-amt").addEventListener("input", onChange);
+  tr.querySelector(".li-del").addEventListener("click", () => {
+    tr.remove();
+    onChange();
+  });
+}
+
+function renderCocForm(body, project, templates, oppId, mode) {
+  body.innerHTML = "";
+  const contact = (project && project.contact) || {};
+  const isProject = mode === "project" && !!project;
+  let defaultTpl = templates.find(t => t.is_default) || templates[0] || null;
+  const today = _docGenToday();
+  const sectionsWrap = document.createElement("div");
+  body.appendChild(sectionsWrap);
+  // Template section
+  const tmplSec = _docGenSection("Template");
+  const tmplRow = document.createElement("div");
+  tmplRow.className = "photo-report-field";
+  const tmplLbl = document.createElement("label");
+  tmplLbl.textContent = "Company template";
+  tmplRow.appendChild(tmplLbl);
+  const tmplSelect = document.createElement("select");
+  tmplSelect.style.cssText = "width:100%;padding:0.4rem;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text);";
+  if (!templates.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "(no templates — defaults will be used)";
+    tmplSelect.appendChild(opt);
+  }
+  templates.forEach(t => {
+    const opt = document.createElement("option");
+    opt.value = t.id;
+    opt.textContent = `${t.name}${t.is_default ? " (Default)" : ""}${t.company_name ? ` — ${t.company_name}` : ""}`;
+    if (defaultTpl && t.id === defaultTpl.id) opt.selected = true;
+    tmplSelect.appendChild(opt);
+  });
+  tmplRow.appendChild(tmplSelect);
+  tmplSec.appendChild(tmplRow);
+  sectionsWrap.appendChild(tmplSec);
+  // Customer section
+  const custSec = _docGenSection("Customer / Job");
+  const custGrid = document.createElement("div");
+  custGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;";
+  const claimNumber = isProject ? _docGenResolveClaimNumber(project) : "";
+  const projectNumber = isProject ? (project.project_number || "") : "";
+  const customerName = isProject ? (contact.displayName || project.title || "") : "";
+  const street = isProject ? (contact.addressStreet || "") : "";
+  const cityStateZip = isProject ? [
+    contact.addressCity || "",
+    contact.addressState || "",
+    contact.addressZip || "",
+  ].filter(Boolean).join(", ") : "";
+  const fCustomer = _docGenField("Customer Name", customerName);
+  const fJobNum = _docGenField("Job #", projectNumber);
+  const fClaimNum = _docGenField("Claim #", claimNumber);
+  const fSalesRep = _docGenField("Sales Rep", (defaultTpl && defaultTpl.default_sales_rep) || "");
+  const fStreet = _docGenField("Street", street);
+  const fCityStateZip = _docGenField("City, State ZIP", cityStateZip);
+  const fCompletionDate = _docGenField("Completion Date", today, "MM/DD/YYYY");
+  const fFileName = _docGenField("File Name", "", "e.g. Certificate_of_Completion_Smith");
+  [fCustomer, fJobNum, fClaimNum, fSalesRep, fStreet, fCityStateZip, fCompletionDate].forEach(f => custGrid.appendChild(f.wrap));
+  custSec.appendChild(custGrid);
+  sectionsWrap.appendChild(custSec);
+  // Note
+  const noteSec = _docGenSection("Note");
+  const fNote = _docGenTextarea("Note (printed on the certificate)", "", "Optional", 3);
+  noteSec.appendChild(fNote.wrap);
+  sectionsWrap.appendChild(noteSec);
+  // Signature
+  const sigSec = _docGenSection("Signature");
+  const sigRow = document.createElement("div");
+  sigRow.style.cssText = "display:flex;gap:1rem;align-items:center;flex-wrap:wrap;";
+  const showSig = document.createElement("input");
+  showSig.type = "checkbox";
+  showSig.checked = defaultTpl ? !!defaultTpl.show_signature : true;
+  showSig.id = "coc-show-sig";
+  const showSigLbl = document.createElement("label");
+  showSigLbl.htmlFor = "coc-show-sig";
+  showSigLbl.style.cssText = "display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;";
+  showSigLbl.appendChild(showSig);
+  showSigLbl.appendChild(document.createTextNode("Include signature (from template)"));
+  sigRow.appendChild(showSigLbl);
+  const fSigName = _docGenField("Signature name", (defaultTpl && defaultTpl.signature_name) || (defaultTpl && defaultTpl.default_sales_rep) || "");
+  fSigName.wrap.style.flex = "1";
+  fSigName.wrap.style.minWidth = "200px";
+  sigRow.appendChild(fSigName.wrap);
+  sigSec.appendChild(sigRow);
+  sectionsWrap.appendChild(sigSec);
+  // Footer / Generate
+  const actions = document.createElement("div");
+  actions.className = "coc-actions";
+  const generateBtn = document.createElement("button");
+  generateBtn.type = "button";
+  generateBtn.className = "coc-generate-btn";
+  generateBtn.textContent = "Generate COC PDF";
+  actions.appendChild(generateBtn);
+  body.appendChild(actions);
+  // Template change refills defaults
+  tmplSelect.addEventListener("change", () => {
+    const t = templates.find(x => String(x.id) === String(tmplSelect.value));
+    if (!t) return;
+    fSalesRep.input.value = t.default_sales_rep || "";
+    fSigName.input.value = t.signature_name || t.default_sales_rep || "";
+    showSig.checked = !!t.show_signature;
+  });
+  generateBtn.addEventListener("click", async () => {
+    generateBtn.disabled = true;
+    try {
+      const payload = {
+        template_id: tmplSelect.value ? parseInt(tmplSelect.value, 10) : null,
+        customer_name: fCustomer.input.value.trim(),
+        project_number: fJobNum.input.value.trim(),
+        claim_number: fClaimNum.input.value.trim(),
+        sales_rep: fSalesRep.input.value.trim(),
+        street: fStreet.input.value.trim(),
+        city_state_zip: fCityStateZip.input.value.trim(),
+        completion_date: fCompletionDate.input.value.trim(),
+        note: fNote.input.value.trim(),
+        include_signature: !!showSig.checked,
+        signature_name: fSigName.input.value.trim(),
+        file_name: fFileName.input.value.trim(),
+      };
+      const url = isProject
+        ? `/api/v2/projects/${oppId}/coc`
+        : `/api/v2/documents/coc`;
+      const result = await api(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      showToast(`COC generated: ${result.title || "PDF"}`);
+      const modal = $("#coc-generator-modal");
+      if (modal) modal.classList.add("hidden");
+      if (isProject) {
+        document.dispatchEvent(new CustomEvent("coc-generated", { detail: { oppId, docId: result.id } }));
+      } else {
+        document.dispatchEvent(new CustomEvent("coc-generated-standalone", { detail: { docId: result.id } }));
+        if (typeof loadDocumentsList === "function") loadDocumentsList();
+      }
+    } catch (err) {
+      showToast("COC failed: " + err.message, true);
+      generateBtn.disabled = false;
+    }
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    Admin — Photo Report Templates
    ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -41912,4 +42495,241 @@ function deleteAdminPRTemplate(template) {
       populateAdminPhotoReportTemplates();
     })
     .catch(err => showToast("Failed: " + err.message, true));
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Admin — Document Templates (Invoice + COC)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+let _adminDocTpls = [];
+let _adminDocTplEditingId = null;
+
+function bindAdminDocumentTemplates() {
+  // Sub-tab switching inside Reports
+  const subtabs = document.querySelectorAll("#reports-subtabs .reports-subtab");
+  subtabs.forEach(btn => {
+    btn.addEventListener("click", () => {
+      subtabs.forEach(b => b.classList.toggle("active", b === btn));
+      const target = btn.dataset.reportsSubtab;
+      const photoPane = $("#reports-subtab-photo");
+      const docPane = $("#reports-subtab-document");
+      if (photoPane) photoPane.classList.toggle("hidden", target !== "photo");
+      if (docPane) docPane.classList.toggle("hidden", target !== "document");
+    });
+  });
+  const addBtn = $("#admin-doc-tpl-add-btn");
+  if (addBtn) addBtn.addEventListener("click", () => openAdminDocTplEditor(null));
+  const cancelBtn = $("#doc-tpl-admin-cancel");
+  if (cancelBtn) cancelBtn.addEventListener("click", () => closeAdminDocTplEditor());
+  const saveBtn = $("#doc-tpl-admin-save");
+  if (saveBtn) saveBtn.addEventListener("click", saveAdminDocTpl);
+  const delBtn = $("#doc-tpl-admin-delete");
+  if (delBtn) delBtn.addEventListener("click", deleteEditingAdminDocTpl);
+  const addLineBtn = $("#doc-tpl-admin-add-line");
+  if (addLineBtn) addLineBtn.addEventListener("click", () => addDocTplLineRow());
+}
+
+function populateAdminDocumentTemplates() {
+  const list = $("#admin-doc-tpl-list");
+  if (!list) return;
+  api("/api/v2/admin/document-templates").then(templates => {
+    _adminDocTpls = templates || [];
+    if (!_adminDocTpls.length) {
+      list.innerHTML = '<p style="color:var(--muted);font-size:0.85rem;">No document templates yet. Click "Add Template" to create one.</p>';
+      return;
+    }
+    list.innerHTML = "";
+    _adminDocTpls.forEach(t => {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:0.75rem;padding:0.6rem 0.75rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-2);margin-bottom:0.4rem;";
+      const info = document.createElement("div");
+      info.style.cssText = "flex:1;min-width:0;";
+      const lines = (() => {
+        const li = t.default_line_items;
+        if (typeof li === "string") {
+          try { return JSON.parse(li); } catch { return []; }
+        }
+        return Array.isArray(li) ? li : [];
+      })();
+      const lineCount = lines.length;
+      info.innerHTML = `<strong>${escapeHtml(t.name)}</strong>${t.is_default ? ' <span style="font-size:0.7rem;color:var(--accent);">(Default)</span>' : ''}<br><span style="font-size:0.75rem;color:var(--muted);">${escapeHtml(t.company_name || "No company set")}${lineCount ? ` · ${lineCount} default line item${lineCount === 1 ? "" : "s"}` : ""}</span>`;
+      row.appendChild(info);
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "btn btn-ghost btn-sm";
+      editBtn.textContent = "Edit";
+      editBtn.addEventListener("click", () => openAdminDocTplEditor(t));
+      row.appendChild(editBtn);
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "btn btn-ghost btn-sm";
+      delBtn.style.color = "var(--danger)";
+      delBtn.textContent = "Delete";
+      delBtn.addEventListener("click", () => deleteAdminDocTpl(t));
+      row.appendChild(delBtn);
+      list.appendChild(row);
+    });
+  }).catch(err => {
+    list.innerHTML = `<p style="color:var(--danger);">Failed to load templates: ${escapeHtml(err.message)}</p>`;
+  });
+}
+
+function addDocTplLineRow(desc, amt) {
+  const body = $("#doc-tpl-admin-lineitems-body");
+  if (!body) return;
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td><input type="text" class="li-desc" placeholder="Line item description" value="${escapeHtml(desc || "")}"></td>
+    <td class="amount-col"><input type="number" class="li-amt" step="0.01" placeholder="0.00" value="${amt !== undefined && amt !== null ? amt : ""}"></td>
+    <td class="del-col"><button type="button" class="btn btn-ghost btn-sm li-del" title="Remove">&times;</button></td>
+  `;
+  body.appendChild(tr);
+  tr.querySelector(".li-del").addEventListener("click", () => tr.remove());
+}
+
+function openAdminDocTplEditor(template) {
+  const editor = $("#admin-doc-tpl-editor");
+  const title = $("#admin-doc-tpl-editor-title");
+  if (!editor) return;
+  _adminDocTplEditingId = template ? template.id : null;
+  title.textContent = template ? "Edit Template" : "New Template";
+  $("#doc-tpl-admin-name").value = template ? (template.name || "") : "";
+  $("#doc-tpl-admin-company").value = template ? (template.company_name || "") : "";
+  $("#doc-tpl-admin-address").value = template ? (template.company_address || "") : "";
+  $("#doc-tpl-admin-city").value = template ? (template.company_city_state_zip || "") : "";
+  $("#doc-tpl-admin-phone").value = template ? (template.company_phone || "") : "";
+  $("#doc-tpl-admin-email").value = template ? (template.company_email || "") : "";
+  $("#doc-tpl-admin-color").value = template ? (template.primary_color || "#1a1a1a") : "#1a1a1a";
+  $("#doc-tpl-admin-invoice-title").value = template ? (template.invoice_title || "INVOICE") : "INVOICE";
+  $("#doc-tpl-admin-coc-title").value = template ? (template.coc_title || "CERTIFICATE OF COMPLETION") : "CERTIFICATE OF COMPLETION";
+  $("#doc-tpl-admin-terms").value = template ? (template.default_terms || "Due on receipt") : "Due on receipt";
+  $("#doc-tpl-admin-sales-rep").value = template ? (template.default_sales_rep || "") : "";
+  $("#doc-tpl-admin-sig-name").value = template ? (template.signature_name || "") : "";
+  $("#doc-tpl-admin-show-sig").checked = template ? !!template.show_signature : true;
+  $("#doc-tpl-admin-show-footer").checked = template ? (template.show_branding_footer !== false) : true;
+  $("#doc-tpl-admin-default").checked = template ? !!template.is_default : false;
+  $("#doc-tpl-admin-logo").value = "";
+  $("#doc-tpl-admin-signature").value = "";
+  // Preview existing logo
+  const logoPreview = $("#doc-tpl-admin-logo-preview");
+  if (logoPreview) {
+    logoPreview.innerHTML = template && template.logo_path
+      ? `<img src="/${escapeHtml(template.logo_path)}" alt="logo" style="max-height:32px;max-width:120px;margin-top:0.25rem;border:1px solid var(--border);padding:2px;background:var(--surface);">`
+      : "";
+  }
+  // Preview existing signature
+  const sigPreview = $("#doc-tpl-admin-signature-preview");
+  if (sigPreview) {
+    sigPreview.innerHTML = template && template.signature_path
+      ? `<img src="/${escapeHtml(template.signature_path)}" alt="signature" style="max-height:32px;max-width:120px;margin-top:0.25rem;border:1px solid var(--border);padding:2px;background:var(--surface);">`
+      : "";
+  }
+  const delBtn = $("#doc-tpl-admin-delete");
+  if (delBtn) delBtn.classList.toggle("hidden", !template || template.is_default);
+  // Line items
+  const body = $("#doc-tpl-admin-lineitems-body");
+  body.innerHTML = "";
+  let lines = [];
+  if (template) {
+    if (typeof template.default_line_items === "string") {
+      try { lines = JSON.parse(template.default_line_items); } catch { lines = []; }
+    } else if (Array.isArray(template.default_line_items)) {
+      lines = template.default_line_items;
+    }
+  }
+  if (!lines.length) {
+    addDocTplLineRow();
+  } else {
+    for (const li of lines) addDocTplLineRow(li.description || "", li.amount || 0);
+  }
+  editor.classList.remove("hidden");
+}
+
+function closeAdminDocTplEditor() {
+  const editor = $("#admin-doc-tpl-editor");
+  if (editor) editor.classList.add("hidden");
+  _adminDocTplEditingId = null;
+}
+
+function collectDocTplLineItems() {
+  const rows = document.querySelectorAll("#doc-tpl-admin-lineitems-body tr");
+  const out = [];
+  rows.forEach(tr => {
+    const desc = (tr.querySelector(".li-desc") || {}).value || "";
+    const amtRaw = (tr.querySelector(".li-amt") || {}).value || "";
+    const amt = parseFloat(String(amtRaw).replace(/[^0-9.\-]/g, "")) || 0;
+    out.push({ description: desc.trim(), amount: amt });
+  });
+  return out;
+}
+
+function saveAdminDocTpl() {
+  const name = ($("#doc-tpl-admin-name") || {}).value || "";
+  if (!name.trim()) { showToast("Template name is required", true); return; }
+  const payload = {
+    name: name.trim(),
+    company_name: (($("#doc-tpl-admin-company") || {}).value || "").trim(),
+    company_address: (($("#doc-tpl-admin-address") || {}).value || "").trim(),
+    company_city_state_zip: (($("#doc-tpl-admin-city") || {}).value || "").trim(),
+    company_phone: (($("#doc-tpl-admin-phone") || {}).value || "").trim(),
+    company_email: (($("#doc-tpl-admin-email") || {}).value || "").trim(),
+    primary_color: ($("#doc-tpl-admin-color") || {}).value || "#1a1a1a",
+    invoice_title: (($("#doc-tpl-admin-invoice-title") || {}).value || "INVOICE").trim() || "INVOICE",
+    coc_title: (($("#doc-tpl-admin-coc-title") || {}).value || "CERTIFICATE OF COMPLETION").trim() || "CERTIFICATE OF COMPLETION",
+    default_terms: (($("#doc-tpl-admin-terms") || {}).value || "Due on receipt").trim() || "Due on receipt",
+    default_sales_rep: (($("#doc-tpl-admin-sales-rep") || {}).value || "").trim(),
+    signature_name: (($("#doc-tpl-admin-sig-name") || {}).value || "").trim(),
+    show_signature: !!($("#doc-tpl-admin-show-sig") || {}).checked,
+    show_branding_footer: !!($("#doc-tpl-admin-show-footer") || {}).checked,
+    is_default: !!($("#doc-tpl-admin-default") || {}).checked,
+    default_line_items: collectDocTplLineItems(),
+  };
+  const logoInput = $("#doc-tpl-admin-logo");
+  const sigInput = $("#doc-tpl-admin-signature");
+  const promise = _adminDocTplEditingId
+    ? api(`/api/v2/admin/document-templates/${_adminDocTplEditingId}`, { method: "PUT", body: JSON.stringify(payload) })
+    : api("/api/v2/admin/document-templates", { method: "POST", body: JSON.stringify(payload) });
+  promise.then(result => {
+    const tplId = _adminDocTplEditingId || result.id;
+    // Upload logo and/or signature sequentially; both are optional.
+    const uploads = [];
+    if (logoInput && logoInput.files && logoInput.files[0]) {
+      const fd = new FormData();
+      fd.append("file", logoInput.files[0]);
+      uploads.push(fetch(`/api/v2/admin/document-templates/${tplId}/logo`, {
+        method: "POST", credentials: "same-origin", body: fd,
+      }));
+    }
+    if (sigInput && sigInput.files && sigInput.files[0]) {
+      const fd = new FormData();
+      fd.append("file", sigInput.files[0]);
+      uploads.push(fetch(`/api/v2/admin/document-templates/${tplId}/signature`, {
+        method: "POST", credentials: "same-origin", body: fd,
+      }));
+    }
+    if (uploads.length) return Promise.all(uploads);
+  }).then(() => {
+    showToast("Template saved");
+    closeAdminDocTplEditor();
+    populateAdminDocumentTemplates();
+  }).catch(err => {
+    showToast("Failed: " + err.message, true);
+  });
+}
+
+function deleteAdminDocTpl(template) {
+  if (!confirm(`Delete template "${template.name}"?`)) return;
+  api(`/api/v2/admin/document-templates/${template.id}`, { method: "DELETE" })
+    .then(() => {
+      showToast("Template deleted");
+      populateAdminDocumentTemplates();
+    })
+    .catch(err => showToast("Failed: " + err.message, true));
+}
+
+function deleteEditingAdminDocTpl() {
+  if (!_adminDocTplEditingId) return;
+  const tpl = _adminDocTpls.find(t => t.id === _adminDocTplEditingId);
+  if (!tpl) return;
+  deleteAdminDocTpl(tpl);
 }

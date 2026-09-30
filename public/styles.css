@@ -6288,6 +6288,8 @@ body {
   padding: 0.1rem 0.25rem;
   border-radius: 4px;
   font-size: 0.78rem;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .changelog-body hr {
@@ -6299,6 +6301,27 @@ body {
 .modal-card-changelog .modal-actions {
   padding-top: 0.75rem;
   justify-content: flex-end;
+}
+
+/* Changelog modal: fill the screen on narrow viewports so the close button
+   is always reachable (matches the mobile full-screen pattern used by
+   photo-report / invoice-generator / coc-generator modals). */
+@media (max-width: 720px) {
+  #changelog-modal {
+    padding: 0;
+  }
+  .modal-card-changelog {
+    width: 100vw;
+    max-width: 100vw;
+    /* Reset the desktop min-width: 720px — otherwise the card is forced to
+       720px wide on narrow viewports and overflows the right edge. */
+    min-width: 0;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    padding: 1rem;
+    margin: 0;
+  }
 }
 
 .opp-preview-head {
@@ -7484,10 +7507,19 @@ body {
 .opp-docs-toolbar {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
   padding: 0.5rem 0 0.75rem;
   border-bottom: 1px solid var(--border);
   margin-bottom: 0.5rem;
+}
+
+/* Match icon-only button sizing in the project modal Documents tab toolbar so
+   Upload and the + (Create Document) buttons render at the same dimensions as
+   the standalone Documents modal's toolbar. */
+.opp-docs-toolbar .btn-icon-only {
+  min-width: 2.1rem;
+  min-height: 2.1rem;
+  padding: 0.35rem;
 }
 
 .opp-docs-select-all-label {
@@ -17819,6 +17851,162 @@ select.form-control {
     min-width: 0;
   }
   .photo-report-row { flex-direction: column; gap: 0; }
+}
+
+/* ── Invoice / COC Generator Modals ───────────────────────────────────── */
+.modal-card-invoice-generator,
+.modal-card-coc-generator {
+  resize: both;
+  min-width: 560px;
+  min-height: 460px;
+  max-width: 96vw;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+.invoice-generator-body,
+.coc-generator-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem 1rem;
+}
+.invoice-section,
+.coc-section {
+  margin-bottom: 0.75rem;
+}
+.invoice-section-title,
+.coc-section-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.35rem;
+}
+.invoice-lineitems,
+.coc-lineitems {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.invoice-lineitems th,
+.coc-lineitems th {
+  text-align: left;
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-weight: 500;
+  padding: 0.3rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.invoice-lineitems td,
+.coc-lineitems td {
+  padding: 0.25rem 0.4rem;
+  vertical-align: middle;
+}
+.invoice-lineitems input,
+.coc-lineitems input {
+  width: 100%;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  background: var(--surface);
+  color: var(--text);
+}
+.invoice-lineitems .amount-col,
+.coc-lineitems .amount-col {
+  width: 130px;
+  text-align: right;
+}
+.invoice-lineitems .amount-col input,
+.coc-lineitems .amount-col input {
+  text-align: right;
+}
+.invoice-lineitems .del-col,
+.coc-lineitems .del-col {
+  width: 32px;
+  text-align: center;
+}
+.invoice-grand-total {
+  text-align: right;
+  font-weight: 600;
+  padding: 0.4rem 0.4rem;
+  margin-top: 0.4rem;
+  border-top: 2px solid var(--border);
+  font-size: 0.9rem;
+}
+.invoice-actions,
+.coc-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.invoice-generate-btn,
+.coc-generate-btn {
+  padding: 0.4rem 1rem;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.invoice-generate-btn:hover,
+.coc-generate-btn:hover {
+  background: color-mix(in srgb, var(--accent) 85%, #000);
+}
+.invoice-generate-btn:disabled,
+.coc-generate-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+@media (max-width: 600px) {
+  #invoice-generator-modal,
+  #coc-generator-modal { padding: 0; }
+  #invoice-generator-modal .modal-card,
+  #coc-generator-modal .modal-card {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    max-height: 100dvh !important;
+    border-radius: 0;
+    resize: none;
+    min-width: 0;
+  }
+}
+
+/* ── Reports Admin Sub-tabs (Photo Reports / Document Templates) ─────── */
+.reports-subtabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1rem;
+}
+.reports-subtab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.reports-subtab:hover {
+  color: var(--text);
+}
+.reports-subtab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
 }
 
 .modal-card-photo-markup {

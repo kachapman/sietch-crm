@@ -405,6 +405,41 @@ try:
 except Exception:
     pass  # table may not exist yet
 
+# Migration 021: document_templates table (Invoice + COC PDF generator)
+try:
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS document_templates (
+            id                       SERIAL PRIMARY KEY,
+            name                     TEXT NOT NULL,
+            logo_path                TEXT,
+            company_name             TEXT NOT NULL DEFAULT '',
+            company_address          TEXT NOT NULL DEFAULT '',
+            company_city_state_zip   TEXT NOT NULL DEFAULT '',
+            company_phone            TEXT NOT NULL DEFAULT '',
+            company_email            TEXT NOT NULL DEFAULT '',
+            primary_color            TEXT NOT NULL DEFAULT '#1a1a1a',
+            invoice_title            TEXT NOT NULL DEFAULT 'INVOICE',
+            coc_title                TEXT NOT NULL DEFAULT 'CERTIFICATE OF COMPLETION',
+            default_terms            TEXT NOT NULL DEFAULT 'Due on receipt',
+            default_sales_rep        TEXT NOT NULL DEFAULT '',
+            default_line_items       JSONB NOT NULL DEFAULT '[]'::jsonb,
+            show_signature           BOOLEAN NOT NULL DEFAULT TRUE,
+            signature_name           TEXT NOT NULL DEFAULT '',
+            signature_path           TEXT,
+            show_branding_footer     BOOLEAN NOT NULL DEFAULT TRUE,
+            is_default               BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at               TIMESTAMP DEFAULT NOW(),
+            updated_at               TIMESTAMP DEFAULT NOW()
+        )
+    """)
+except Exception:
+    pass
+# Additive column for databases that created the table before show_branding_footer existed.
+try:
+    db.execute("ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS show_branding_footer BOOLEAN NOT NULL DEFAULT TRUE")
+except Exception:
+    pass
+
 try:
     db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS display_name TEXT")
 except Exception:
@@ -800,6 +835,186 @@ def _require_role(handler: SimpleHTTPRequestHandler, *allowed_roles: str) -> dic
 def _require_strict_admin(handler: SimpleHTTPRequestHandler) -> dict | None:
     """Return user dict only for admin role (not manager). For user-management endpoints."""
     return _require_role(handler, "admin")
+
+
+def _humanize_file_size(size_bytes) -> str:
+    """Render a byte count as a short human label (e.g. '142 KB', '2.3 MB')."""
+    try:
+        n = int(size_bytes or 0)
+    except (TypeError, ValueError):
+        return "0 B"
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.0f} KB"
+    return f"{n / (1024 * 1024):.1f} MB"
+
+
+# Cache the system "Action" category id (init.sql ships it with title='Action'
+# and sort_order=15; id is data-driven because rows may be inserted in any
+# order across environments). -1 means "not yet resolved / not present".
+_ACTION_CATEGORY_ID: int = -1
+
+
+def _resolve_action_category_id() -> int:
+    """Return the id of the system 'Action' history category, or -1 if absent."""
+    global _ACTION_CATEGORY_ID
+    if _ACTION_CATEGORY_ID > 0:
+        return _ACTION_CATEGORY_ID
+    try:
+        row = db.query_one(
+            "SELECT id FROM history_categories WHERE title = 'Action' LIMIT 1"
+        )
+        if row and row.get("id"):
+            _ACTION_CATEGORY_ID = int(row["id"])
+            return _ACTION_CATEGORY_ID
+    except Exception:
+        pass
+    return -1
+
+
+def _doc_pdf_safe(text) -> str:
+    """Sanitize text for fpdf2's built-in Helvetica (Latin-1 only).
+
+    Maps common Unicode punctuation that Helvetica can't render to ASCII
+    equivalents, drops ASCII control chars, and strips anything above U+00FF.
+    Without this, strings like "Smith — Family Trust" or any text containing
+    a smart-quote / em-dash crash PDF generation with::
+
+        Character "—" at index 0 in text is outside the range of characters
+        supported by the font used: "helvetica".
+    """
+    if text is None:
+        return ""
+    s = str(text)
+    # 1) Map unsupported-but-common Unicode glyphs to ASCII equivalents.
+    _unicode_map = {
+        "\u2014": "-",   # em dash
+        "\u2013": "-",   # en dash
+        "\u2012": "-",   # figure dash
+        "\u2015": "-",   # horizontal bar
+        "\u2212": "-",   # minus sign
+        "\u2026": "...", # horizontal ellipsis
+        "\u2018": "'",   # left single quote
+        "\u2019": "'",   # right single quote / apostrophe
+        "\u201A": "'",   # single low-9 quotation mark
+        "\u201C": '"',   # left double quote
+        "\u201D": '"',   # right double quote
+        "\u201E": '"',   # double low-9 quotation mark
+        "\u00AB": "<<",  # left guillemet
+        "\u00BB": ">>",  # right guillemet
+        "\u2022": "*",   # bullet
+        "\u25E6": "*",   # white bullet
+        "\u2023": ">",   # triangular bullet
+        "\u2043": "-",   # hyphen bullet
+        "\u2192": "->",  # rightwards arrow
+        "\u2190": "<-",  # leftwards arrow
+        "\u2191": "^",   # upwards arrow
+        "\u2193": "v",   # downwards arrow
+        "\u00A0": " ",   # non-breaking space -> regular space
+        "\u2007": " ",   # figure space
+        "\u2028": "\n",  # line separator
+        "\u2029": "\n",  # paragraph separator
+    }
+    for src, dst in _unicode_map.items():
+        s = s.replace(src, dst)
+    # 2) Drop ASCII control chars except newline / tab.
+    s = "".join(ch for ch in s if (ch == "\n" or ch == "\t" or ord(ch) >= 32))
+    # 3) Belt-and-suspenders: anything still above U+00FF (Latin-1 boundary)
+    #    gets stripped rather than crash the renderer.
+    return "".join(ch for ch in s if ord(ch) <= 0xFF)
+
+
+def _money(value) -> float:
+    """Coerce a user-entered amount string to float; returns 0 on failure."""
+    if value is None:
+        return 0.0
+    try:
+        return float(str(value).replace(",", "").replace("$", "").strip() or 0)
+    except (TypeError, ValueError):
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+
+
+def _normalize_line_items(items) -> list:
+    """Filter to {description, amount} dicts; drop empty rows."""
+    out = []
+    if not isinstance(items, list):
+        return out
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        desc = (it.get("description") or "").strip()
+        amt = _money(it.get("amount"))
+        if not desc and amt == 0:
+            continue
+        out.append({"description": desc, "amount": amt})
+    return out
+
+
+def _resolve_document_template(template_id) -> dict | None:
+    """Fetch a document template by id, or fall back to is_default=TRUE."""
+    if template_id:
+        try:
+            row = db.query_one(
+                "SELECT * FROM document_templates WHERE id = %s",
+                (int(template_id),),
+            )
+            if row:
+                return row
+        except Exception:
+            pass
+    try:
+        row = db.query_one(
+            "SELECT * FROM document_templates WHERE is_default = TRUE ORDER BY id LIMIT 1"
+        )
+        if row:
+            return row
+    except Exception:
+        pass
+    # Final fallback: first row
+    try:
+        row = db.query_one(
+            "SELECT * FROM document_templates ORDER BY id LIMIT 1"
+        )
+        if row:
+            return row
+    except Exception:
+        pass
+    # No templates at all — return a hardcoded default so generation still works.
+    return {
+        "id": None,
+        "company_name": "",
+        "company_address": "",
+        "company_city_state_zip": "",
+        "company_phone": "",
+        "company_email": "",
+        "primary_color": "#1a1a1a",
+        "invoice_title": "INVOICE",
+        "coc_title": "CERTIFICATE OF COMPLETION",
+        "default_terms": "Due on receipt",
+        "default_sales_rep": "",
+        "default_line_items": "[]",
+        "show_signature": False,
+        "signature_name": "",
+        "signature_path": None,
+        "logo_path": None,
+    }
+
+
+def _doc_draw_invoice_table_header(pdf, margin_l, usable_w, header_h, r_c, g_c, b_c):
+    """Render the invoice line-items table header row (used after page breaks)."""
+    pdf.set_fill_color(240, 240, 240)
+    pdf.set_xy(margin_l, 0.7)
+    pdf.cell(usable_w, header_h, "", fill=True, ln=1)
+    pdf.set_xy(margin_l, 0.7)
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_text_color(r_c, g_c, b_c)
+    pdf.cell(usable_w - 1.3, header_h, "DESCRIPTION", align="L")
+    pdf.cell(1.3, header_h, "AMOUNT", align="R")
+    pdf.set_text_color(0, 0, 0)
 
 
 def _is_limited(user: dict) -> bool:
@@ -2417,6 +2632,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/admin/photo-report-templates":
             self._handle_photo_report_templates_get()
             return
+        if api_path == "/api/v2/admin/document-templates":
+            self._handle_document_templates_get()
+            return
 
         # ── v2 API: Projects ──
         if api_path == "/api/v2/projects/count":
@@ -3311,6 +3529,56 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         m = re.match(r"^/api/v2/admin/photo-report-templates$", api_path)
         if m and method == "POST":
             self._handle_photo_report_template_create()
+            return
+        # ── Document Templates (Invoice + COC) ─────────────────────────────
+        m = re.match(r"^/api/v2/admin/document-templates/(\d+)/logo$", api_path)
+        if m and method == "POST":
+            self._handle_document_template_logo_upload(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/admin/document-templates/(\d+)/signature$", api_path)
+        if m and method == "POST":
+            self._handle_document_template_signature_upload(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/admin/document-templates/(\d+)$", api_path)
+        if m:
+            if method == "PUT":
+                self._handle_document_template_update(int(m.group(1)))
+            elif method == "DELETE":
+                self._handle_document_template_delete(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/admin/document-templates$", api_path)
+        if m:
+            if method == "GET":
+                self._handle_document_templates_get()
+            elif method == "POST":
+                self._handle_document_template_create()
+            return
+        # ── Invoice / COC generation ───────────────────────────────────────
+        m = re.match(r"^/api/v2/projects/(\d+)/invoice$", api_path)
+        if m and method == "POST":
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_invoice_generate(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/coc$", api_path)
+        if m and method == "POST":
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_coc_generate(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
+            return
+        # Standalone (project-less) invoice/COC generation — saves to user's
+        # personal Documents scope with opportunity_id=NULL.
+        m = re.match(r"^/api/v2/documents/invoice$", api_path)
+        if m and method == "POST":
+            self._handle_standalone_invoice_generate()
+            return
+        m = re.match(r"^/api/v2/documents/coc$", api_path)
+        if m and method == "POST":
+            self._handle_standalone_coc_generate()
             return
         m = re.match(r"^/api/v2/projects/(\d+)/history/(\d+)/replies$", api_path)
         if m and method == "POST":
@@ -7234,6 +7502,197 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                    (str(file_path.relative_to(ROOT)), template_id))
         _json_response(self, 200, {"ok": True, "logoPath": str(file_path.relative_to(ROOT))})
 
+    # ── Document Templates (admin) ───────────────────────────────────────
+
+    def _handle_document_templates_get(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        rows = db.query_dicts("SELECT * FROM document_templates ORDER BY is_default DESC, name")
+        for r in rows:
+            for k in ("created_at", "updated_at"):
+                if r.get(k):
+                    r[k] = r[k].isoformat() if hasattr(r[k], "isoformat") else str(r[k])
+            if r.get("default_line_items") is None:
+                r["default_line_items"] = []
+        _json_response(self, 200, rows)
+
+    def _handle_document_template_create(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            data = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        if not data or not data.get("name"):
+            _json_response(self, 400, {"error": "name is required"})
+            return
+        if data.get("is_default"):
+            db.execute("UPDATE document_templates SET is_default = FALSE")
+        line_items = data.get("default_line_items", [])
+        if not isinstance(line_items, list):
+            line_items = []
+        try:
+            line_items_json = json.dumps(line_items)
+        except Exception:
+            line_items_json = "[]"
+        row = db.query_one(
+            """INSERT INTO document_templates
+               (name, company_name, company_address, company_city_state_zip,
+                company_phone, company_email, primary_color,
+                invoice_title, coc_title, default_terms, default_sales_rep,
+                default_line_items, show_signature, signature_name, is_default)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               RETURNING id""",
+            (data["name"],
+             data.get("company_name", ""), data.get("company_address", ""),
+             data.get("company_city_state_zip", ""), data.get("company_phone", ""),
+             data.get("company_email", ""), data.get("primary_color", "#1a1a1a"),
+             data.get("invoice_title", "INVOICE"),
+             data.get("coc_title", "CERTIFICATE OF COMPLETION"),
+             data.get("default_terms", "Due on receipt"),
+             data.get("default_sales_rep", ""),
+             line_items_json,
+             data.get("show_signature", True),
+             data.get("signature_name", ""),
+             data.get("is_default", False)),
+        )
+        _json_response(self, 201, {"id": row["id"]})
+
+    def _handle_document_template_update(self, template_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            data = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        if not data:
+            _json_response(self, 400, {"error": "No data"})
+            return
+        existing = db.query_one("SELECT id, is_default FROM document_templates WHERE id = %s", (template_id,))
+        if not existing:
+            _json_response(self, 404, {"error": "Template not found"})
+            return
+        if data.get("is_default") and not existing["is_default"]:
+            db.execute("UPDATE document_templates SET is_default = FALSE")
+        fields = []
+        params = []
+        for key in ("name", "company_name", "company_address", "company_city_state_zip",
+                     "company_phone", "company_email", "primary_color",
+                     "invoice_title", "coc_title", "default_terms", "default_sales_rep",
+                     "show_signature", "signature_name", "show_branding_footer", "is_default"):
+            if key in data:
+                fields.append(f"{key} = %s")
+                params.append(data[key])
+        if "default_line_items" in data:
+            li = data["default_line_items"]
+            if not isinstance(li, list):
+                li = []
+            try:
+                fields.append("default_line_items = %s")
+                params.append(json.dumps(li))
+            except Exception:
+                pass
+        if fields:
+            fields.append("updated_at = NOW()")
+            params.append(template_id)
+            db.execute(f"UPDATE document_templates SET {', '.join(fields)} WHERE id = %s", tuple(params))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_document_template_delete(self, template_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        existing = db.query_one("SELECT id, is_default FROM document_templates WHERE id = %s", (template_id,))
+        if not existing:
+            _json_response(self, 404, {"error": "Template not found"})
+            return
+        if existing["is_default"]:
+            _json_response(self, 400, {"error": "Cannot delete the default template"})
+            return
+        db.execute("DELETE FROM document_templates WHERE id = %s", (template_id,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_document_template_logo_upload(self, template_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.startswith("multipart/form-data"):
+            _json_response(self, 400, {"error": "Expected multipart/form-data"})
+            return
+        try:
+            parsed = _parse_multipart(_read_body(self), content_type)
+        except Exception as exc:
+            _json_response(self, 400, {"error": f"Invalid multipart body: {exc}"})
+            return
+        file_info = parsed.get("file")
+        if not file_info:
+            _json_response(self, 400, {"error": "file field required"})
+            return
+        data = file_info["data"]
+        filename = file_info["filename"]
+        safe_name = re.sub(r'[^\w.\-]', '_', filename)
+        logos_dir = ROOT / "data" / "logos"
+        logos_dir.mkdir(parents=True, exist_ok=True)
+        file_path = logos_dir / f"doctemplate_{template_id}_{safe_name}"
+        file_path.write_bytes(data)
+        rel = str(file_path.relative_to(ROOT))
+        db.execute("UPDATE document_templates SET logo_path = %s, updated_at = NOW() WHERE id = %s",
+                   (rel, template_id))
+        _json_response(self, 200, {"ok": True, "logoPath": rel})
+
+    def _handle_document_template_signature_upload(self, template_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.startswith("multipart/form-data"):
+            _json_response(self, 400, {"error": "Expected multipart/form-data"})
+            return
+        try:
+            parsed = _parse_multipart(_read_body(self), content_type)
+        except Exception as exc:
+            _json_response(self, 400, {"error": f"Invalid multipart body: {exc}"})
+            return
+        file_info = parsed.get("file")
+        if not file_info:
+            _json_response(self, 400, {"error": "file field required"})
+            return
+        data = file_info["data"]
+        filename = file_info["filename"]
+        safe_name = re.sub(r'[^\w.\-]', '_', filename)
+        sigs_dir = ROOT / "data" / "logos"
+        sigs_dir.mkdir(parents=True, exist_ok=True)
+        # Use a distinct filename prefix so signatures don't collide with logos.
+        file_path = sigs_dir / f"docsig_{template_id}_{safe_name}"
+        # Replace any existing signature file for this template.
+        try:
+            existing = db.query_one(
+                "SELECT signature_path FROM document_templates WHERE id = %s",
+                (template_id,),
+            )
+            if existing and existing.get("signature_path"):
+                _old = ROOT / existing["signature_path"]
+                if _old.exists() and _old != file_path:
+                    try:
+                        _old.unlink()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        file_path.write_bytes(data)
+        rel = str(file_path.relative_to(ROOT))
+        db.execute(
+            "UPDATE document_templates SET signature_path = %s, updated_at = NOW() WHERE id = %s",
+            (rel, template_id),
+        )
+        _json_response(self, 200, {"ok": True, "signaturePath": rel})
+
     # ── Photo Report Generation ──────────────────────────────────────────
 
     def _handle_project_photo_report(self, opp_id: int) -> None:
@@ -7377,6 +7836,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                VALUES (%s, %s, %s, %s, 'application/pdf', %s) RETURNING id""",
             (opp_id, pdf_title, rel_path, file_size, user["id"]),
         )
+        # System action note (matches invoice/COC behavior). category_id 15 =
+        # the "Action" category shipped in init.sql (sort_order 15, icon_key
+        # 'pencil'). Keep this consistent with the invoice/COC handlers.
+        _size_label = _humanize_file_size(file_size)
+        _action_content = f"Photo report generated: {pdf_title} ({_size_label}"
+        if claim_number:
+            _action_content += f", Claim #{claim_number}"
+        _action_content += ")"
+        try:
+            db.execute(
+                """INSERT INTO history_events
+                   (opportunity_id, category_id, title, content, created_by)
+                   VALUES (%s, %s, %s, %s, %s)""",
+                (opp_id, _resolve_action_category_id(), "Photo Report generated", _action_content, user["id"]),
+            )
+        except Exception:
+            pass
         _json_response(self, 201, {
             "id": photo_id_result, "title": pdf_title, "fileSize": file_size,
             "mimeType": "application/pdf",
@@ -7642,6 +8118,723 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 if batch:
                     _draw_photo_batch(pdf, batch, content_top, content_h)
                     photo_idx += len(batch)
+        pdf.output(output_path)
+
+    # ── Invoice / Certificate of Completion Generation ───────────────────
+
+    def _handle_project_invoice_generate(self, opp_id: int) -> None:
+        """Generate an Invoice PDF scoped to a project, save to its Documents,
+        and insert a system action note on the project's history timeline."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            from fpdf import FPDF
+        except Exception:
+            _json_response(self, 500, {"error": "fpdf2 not installed"})
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        template = _resolve_document_template(payload.get("template_id"))
+        if not template:
+            _json_response(self, 400, {"error": "No document template configured"})
+            return
+        # Build line items: payload overrides template defaults.
+        line_items = _normalize_line_items(payload.get("line_items"))
+        if not line_items:
+            tmpl_lines = template.get("default_line_items") or []
+            if isinstance(tmpl_lines, str):
+                try:
+                    tmpl_lines = json.loads(tmpl_lines)
+                except Exception:
+                    tmpl_lines = []
+            line_items = _normalize_line_items(tmpl_lines)
+        customer_name = (payload.get("customer_name") or "").strip()
+        if not customer_name:
+            # Try to resolve from project's primary contact.
+            try:
+                _proj = db.query_one("SELECT title FROM opportunities WHERE id = %s", (opp_id,))
+                customer_name = (_proj or {}).get("title") or "Customer"
+            except Exception:
+                customer_name = "Customer"
+        base_amount = _money(payload.get("base_amount"))
+        invoice_number = (payload.get("invoice_number") or "").strip()
+        if not invoice_number:
+            try:
+                _proj = db.query_one("SELECT project_number FROM opportunities WHERE id = %s", (opp_id,))
+                invoice_number = str((_proj or {}).get("project_number") or "")
+            except Exception:
+                invoice_number = ""
+        invoice_date = (payload.get("invoice_date") or "").strip() or datetime.now().strftime("%m/%d/%Y")
+        terms = (payload.get("terms") or template.get("default_terms") or "Due on receipt").strip()
+        sales_rep = (payload.get("sales_rep") or template.get("default_sales_rep") or "").strip()
+        claim_number = (payload.get("claim_number") or "").strip()
+        project_number = (payload.get("project_number") or "").strip()
+        street = (payload.get("street") or "").strip()
+        city_state_zip = (payload.get("city_state_zip") or "").strip()
+        notes = (payload.get("notes") or "").strip()
+        include_signature = bool(payload.get("include_signature", template.get("show_signature", True)))
+        signature_name = (payload.get("signature_name") or template.get("signature_name") or sales_rep).strip()
+        signature_path = template.get("signature_path") or None
+        # Output path
+        safe_stem = re.sub(r'[^\w.\-]', '_', (payload.get("file_name") or f"Invoice_{customer_name}_{invoice_number}").strip()) or "Invoice"
+        safe_stem = safe_stem[:80]
+        target_dir = (ROOT / "data" / "documents" / str(opp_id))
+        target_dir.mkdir(parents=True, exist_ok=True)
+        output_path = target_dir / f"{int(time.time())}_{safe_stem}.pdf"
+        try:
+            self._create_invoice_pdf(
+                output_path=str(output_path),
+                invoice_number=invoice_number, invoice_date=invoice_date,
+                terms=terms, customer_name=customer_name,
+                claim_number=claim_number, project_number=project_number,
+                street=street, city_state_zip=city_state_zip,
+                notes=notes, sales_rep=sales_rep,
+                line_items=line_items, base_amount=base_amount,
+                template=template,
+                include_signature=include_signature,
+                signature_name=signature_name,
+                signature_path=signature_path,
+            )
+        except Exception as exc:
+            log_infra_event("error", f"PDF generation failed for opp {opp_id}: {exc}", source="doc-invoice")
+            _json_response(self, 500, {"error": f"PDF generation failed: {exc}"})
+            return
+        file_size = os.path.getsize(output_path)
+        rel_path = os.path.relpath(output_path, ROOT)
+        pdf_title = f"{safe_stem}.pdf"
+        doc_id = db.insert_returning(
+            """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by)
+               VALUES (%s, %s, %s, %s, 'application/pdf', %s) RETURNING id""",
+            (opp_id, pdf_title, rel_path, file_size, user["id"]),
+        )
+        _size_label = _humanize_file_size(file_size)
+        _action_content = f"Invoice generated: {pdf_title} ({_size_label}"
+        if claim_number:
+            _action_content += f", Claim #{claim_number}"
+        _action_content += ")"
+        try:
+            db.execute(
+                """INSERT INTO history_events
+                   (opportunity_id, category_id, title, content, created_by)
+                   VALUES (%s, %s, %s, %s, %s)""",
+                (opp_id, _resolve_action_category_id(), "Invoice generated", _action_content, user["id"]),
+            )
+        except Exception:
+            pass
+        _json_response(self, 201, {
+            "id": doc_id, "title": pdf_title, "fileSize": file_size,
+            "mimeType": "application/pdf", "historyNoteCreated": True,
+        })
+
+    def _handle_project_coc_generate(self, opp_id: int) -> None:
+        """Generate a Certificate of Completion PDF scoped to a project."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            from fpdf import FPDF
+        except Exception:
+            _json_response(self, 500, {"error": "fpdf2 not installed"})
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        template = _resolve_document_template(payload.get("template_id"))
+        if not template:
+            _json_response(self, 400, {"error": "No document template configured"})
+            return
+        customer_name = (payload.get("customer_name") or "").strip()
+        if not customer_name:
+            try:
+                _proj = db.query_one("SELECT title FROM opportunities WHERE id = %s", (opp_id,))
+                customer_name = (_proj or {}).get("title") or "Customer"
+            except Exception:
+                customer_name = "Customer"
+        claim_number = (payload.get("claim_number") or "").strip()
+        project_number = (payload.get("project_number") or "").strip()
+        street = (payload.get("street") or "").strip()
+        city_state_zip = (payload.get("city_state_zip") or "").strip()
+        sales_rep = (payload.get("sales_rep") or template.get("default_sales_rep") or "").strip()
+        note = (payload.get("note") or "").strip()
+        include_signature = bool(payload.get("include_signature", template.get("show_signature", True)))
+        signature_name = (payload.get("signature_name") or template.get("signature_name") or sales_rep).strip()
+        signature_path = template.get("signature_path") or None
+        safe_stem = re.sub(r'[^\w.\-]', '_', (payload.get("file_name") or f"Certificate_of_Completion_{customer_name}").strip()) or "Certificate_of_Completion"
+        safe_stem = safe_stem[:80]
+        target_dir = (ROOT / "data" / "documents" / str(opp_id))
+        target_dir.mkdir(parents=True, exist_ok=True)
+        output_path = target_dir / f"{int(time.time())}_{safe_stem}.pdf"
+        try:
+            self._create_coc_pdf(
+                output_path=str(output_path),
+                customer_name=customer_name,
+                claim_number=claim_number, project_number=project_number,
+                street=street, city_state_zip=city_state_zip,
+                sales_rep=sales_rep, note=note,
+                template=template,
+                include_signature=include_signature,
+                signature_name=signature_name,
+                signature_path=signature_path,
+            )
+        except Exception as exc:
+            log_infra_event("error", f"PDF generation failed for opp {opp_id}: {exc}", source="doc-coc")
+            _json_response(self, 500, {"error": f"PDF generation failed: {exc}"})
+            return
+        file_size = os.path.getsize(output_path)
+        rel_path = os.path.relpath(output_path, ROOT)
+        pdf_title = f"{safe_stem}.pdf"
+        doc_id = db.insert_returning(
+            """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by)
+               VALUES (%s, %s, %s, %s, 'application/pdf', %s) RETURNING id""",
+            (opp_id, pdf_title, rel_path, file_size, user["id"]),
+        )
+        _size_label = _humanize_file_size(file_size)
+        _action_content = f"Certificate of Completion generated: {pdf_title} ({_size_label}"
+        if claim_number:
+            _action_content += f", Claim #{claim_number}"
+        _action_content += ")"
+        try:
+            db.execute(
+                """INSERT INTO history_events
+                   (opportunity_id, category_id, title, content, created_by)
+                   VALUES (%s, %s, %s, %s, %s)""",
+                (opp_id, _resolve_action_category_id(), "Certificate of Completion generated", _action_content, user["id"]),
+            )
+        except Exception:
+            pass
+        _json_response(self, 201, {
+            "id": doc_id, "title": pdf_title, "fileSize": file_size,
+            "mimeType": "application/pdf", "historyNoteCreated": True,
+        })
+
+    def _handle_standalone_invoice_generate(self) -> None:
+        """Generate an Invoice PDF without a project context. The PDF is saved
+        to the user's personal Documents scope with opportunity_id=NULL."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            from fpdf import FPDF
+        except Exception:
+            _json_response(self, 500, {"error": "fpdf2 not installed"})
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        template = _resolve_document_template(payload.get("template_id"))
+        if not template:
+            _json_response(self, 400, {"error": "No document template configured"})
+            return
+        line_items = _normalize_line_items(payload.get("line_items"))
+        if not line_items:
+            tmpl_lines = template.get("default_line_items") or []
+            if isinstance(tmpl_lines, str):
+                try:
+                    tmpl_lines = json.loads(tmpl_lines)
+                except Exception:
+                    tmpl_lines = []
+            line_items = _normalize_line_items(tmpl_lines)
+        customer_name = (payload.get("customer_name") or "").strip() or "Customer"
+        base_amount = _money(payload.get("base_amount"))
+        invoice_number = (payload.get("invoice_number") or "").strip()
+        invoice_date = (payload.get("invoice_date") or "").strip() or datetime.now().strftime("%m/%d/%Y")
+        terms = (payload.get("terms") or template.get("default_terms") or "Due on receipt").strip()
+        sales_rep = (payload.get("sales_rep") or template.get("default_sales_rep") or "").strip()
+        claim_number = (payload.get("claim_number") or "").strip()
+        project_number = (payload.get("project_number") or "").strip()
+        street = (payload.get("street") or "").strip()
+        city_state_zip = (payload.get("city_state_zip") or "").strip()
+        notes = (payload.get("notes") or "").strip()
+        include_signature = bool(payload.get("include_signature", template.get("show_signature", True)))
+        signature_name = (payload.get("signature_name") or template.get("signature_name") or sales_rep).strip()
+        signature_path = template.get("signature_path") or None
+        safe_stem = re.sub(r'[^\w.\-]', '_', (payload.get("file_name") or f"Invoice_{customer_name}_{invoice_number}").strip()) or "Invoice"
+        safe_stem = safe_stem[:80]
+        scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "personal" / str(user["id"])
+        scope_dir.mkdir(parents=True, exist_ok=True)
+        output_path = scope_dir / f"{int(time.time())}_{safe_stem}.pdf"
+        try:
+            self._create_invoice_pdf(
+                output_path=str(output_path),
+                invoice_number=invoice_number, invoice_date=invoice_date,
+                terms=terms, customer_name=customer_name,
+                claim_number=claim_number, project_number=project_number,
+                street=street, city_state_zip=city_state_zip,
+                notes=notes, sales_rep=sales_rep,
+                line_items=line_items, base_amount=base_amount,
+                template=template,
+                include_signature=include_signature,
+                signature_name=signature_name,
+                signature_path=signature_path,
+            )
+        except Exception as exc:
+            log_infra_event("error", f"PDF generation failed for user {user['id']}: {exc}", source="doc-invoice-standalone")
+            _json_response(self, 500, {"error": f"PDF generation failed: {exc}"})
+            return
+        file_size = os.path.getsize(output_path)
+        rel_path = os.path.relpath(output_path, ROOT)
+        pdf_title = f"{safe_stem}.pdf"
+        doc_id = db.insert_returning(
+            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
+               VALUES (%s, %s, %s, %s, 'application/pdf', %s, NULL, FALSE) RETURNING id""",
+            (pdf_title, rel_path, file_size, user["id"], None, False),
+        )
+        _json_response(self, 201, {
+            "id": doc_id, "title": pdf_title, "fileSize": file_size,
+            "mimeType": "application/pdf",
+        })
+
+    def _handle_standalone_coc_generate(self) -> None:
+        """Generate a Certificate of Completion PDF without a project context.
+        Saved to the user's personal Documents scope with opportunity_id=NULL."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            from fpdf import FPDF
+        except Exception:
+            _json_response(self, 500, {"error": "fpdf2 not installed"})
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        template = _resolve_document_template(payload.get("template_id"))
+        if not template:
+            _json_response(self, 400, {"error": "No document template configured"})
+            return
+        customer_name = (payload.get("customer_name") or "").strip() or "Customer"
+        claim_number = (payload.get("claim_number") or "").strip()
+        project_number = (payload.get("project_number") or "").strip()
+        street = (payload.get("street") or "").strip()
+        city_state_zip = (payload.get("city_state_zip") or "").strip()
+        sales_rep = (payload.get("sales_rep") or template.get("default_sales_rep") or "").strip()
+        note = (payload.get("note") or "").strip()
+        include_signature = bool(payload.get("include_signature", template.get("show_signature", True)))
+        signature_name = (payload.get("signature_name") or template.get("signature_name") or sales_rep).strip()
+        signature_path = template.get("signature_path") or None
+        safe_stem = re.sub(r'[^\w.\-]', '_', (payload.get("file_name") or f"Certificate_of_Completion_{customer_name}").strip()) or "Certificate_of_Completion"
+        safe_stem = safe_stem[:80]
+        scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "personal" / str(user["id"])
+        scope_dir.mkdir(parents=True, exist_ok=True)
+        output_path = scope_dir / f"{int(time.time())}_{safe_stem}.pdf"
+        try:
+            self._create_coc_pdf(
+                output_path=str(output_path),
+                customer_name=customer_name,
+                claim_number=claim_number, project_number=project_number,
+                street=street, city_state_zip=city_state_zip,
+                sales_rep=sales_rep, note=note,
+                template=template,
+                include_signature=include_signature,
+                signature_name=signature_name,
+                signature_path=signature_path,
+            )
+        except Exception as exc:
+            log_infra_event("error", f"PDF generation failed for user {user['id']}: {exc}", source="doc-coc-standalone")
+            _json_response(self, 500, {"error": f"PDF generation failed: {exc}"})
+            return
+        file_size = os.path.getsize(output_path)
+        rel_path = os.path.relpath(output_path, ROOT)
+        pdf_title = f"{safe_stem}.pdf"
+        doc_id = db.insert_returning(
+            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
+               VALUES (%s, %s, %s, %s, 'application/pdf', %s, NULL, FALSE) RETURNING id""",
+            (pdf_title, rel_path, file_size, user["id"], None, False),
+        )
+        _json_response(self, 201, {
+            "id": doc_id, "title": pdf_title, "fileSize": file_size,
+            "mimeType": "application/pdf",
+        })
+
+    def _create_invoice_pdf(self, output_path, invoice_number, invoice_date,
+                             terms, customer_name, claim_number, project_number,
+                             street, city_state_zip, notes, sales_rep,
+                             line_items, base_amount, template,
+                             include_signature, signature_name, signature_path):
+        """Render an Invoice PDF (Letter portrait) using fpdf2."""
+        from fpdf import FPDF
+        # Parse primary color
+        try:
+            hex_color = (template.get("primary_color") or "#1a1a1a").lstrip("#")
+            r_c, g_c, b_c = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+        except Exception:
+            r_c, g_c, b_c = 26, 26, 26
+        company_name = template.get("company_name") or ""
+        comp_address = template.get("company_address") or ""
+        comp_city = template.get("company_city_state_zip") or ""
+        comp_phone = template.get("company_phone") or ""
+        comp_email = template.get("company_email") or ""
+        invoice_title = template.get("invoice_title") or "INVOICE"
+        logo_path = template.get("logo_path")
+        # Compute grand total
+        grand_total = base_amount or 0.0
+        for li in line_items:
+            try:
+                grand_total += float(li.get("amount") or 0)
+            except Exception:
+                pass
+        pdf = FPDF(orientation="P", unit="in", format="Letter")
+        pdf.set_auto_page_break(False)
+        pdf.set_margins(left=0.5, top=0.5, right=0.5)
+        pdf.add_page()
+        usable_w = 8.5 - 0.5 - 0.5  # 7.5
+        margin_l = 0.5
+        margin_r = 0.5
+        page_w = 8.5
+        page_h = 11.0
+        # ── Header ────────────────────────────────────────────
+        # Logo (left)
+        if logo_path:
+            try:
+                _lp = ROOT / logo_path if not os.path.isabs(logo_path) else Path(logo_path)
+                if _lp.exists():
+                    # Fit within 1.5" x 0.5"
+                    from PIL import Image as _PILImage
+                    with _PILImage.open(_lp) as _img:
+                        iw, ih = _img.size
+                    max_w, max_h = 1.5, 0.5
+                    scale = min(max_w / (iw / 96), max_h / (ih / 96), 1.0)
+                    draw_w = (iw / 96) * scale
+                    draw_h = (ih / 96) * scale
+                    pdf.image(str(_lp), x=margin_l, y=0.5, w=draw_w, h=draw_h)
+            except Exception:
+                pass
+        # Big title
+        pdf.set_text_color(r_c, g_c, b_c)
+        pdf.set_font("Helvetica", "B", 24)
+        pdf.set_xy(page_w - margin_r - 3.0, 0.5)
+        pdf.cell(3.0, 0.4, _doc_pdf_safe(invoice_title), align="R")
+        pdf.set_text_color(0, 0, 0)
+        # Company info (right column)
+        pdf.set_xy(page_w - margin_r - 2.5, 0.95)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(2.5, 0.18, _doc_pdf_safe(company_name), align="R", ln=1)
+        pdf.set_font("Helvetica", "", 9)
+        if comp_address:
+            pdf.set_x(page_w - margin_r - 2.5)
+            pdf.cell(2.5, 0.15, _doc_pdf_safe(comp_address), align="R", ln=1)
+        if comp_city:
+            pdf.set_x(page_w - margin_r - 2.5)
+            pdf.cell(2.5, 0.15, _doc_pdf_safe(comp_city), align="R", ln=1)
+        if comp_phone:
+            pdf.set_x(page_w - margin_r - 2.5)
+            pdf.cell(2.5, 0.15, _doc_pdf_safe(comp_phone), align="R", ln=1)
+        if comp_email:
+            pdf.set_x(page_w - margin_r - 2.5)
+            pdf.cell(2.5, 0.15, _doc_pdf_safe(comp_email), align="R", ln=1)
+        # Divider
+        pdf.set_draw_color(180, 180, 180)
+        pdf.set_line_width(0.01)
+        pdf.line(margin_l, 1.85, page_w - margin_r, 1.85)
+        # ── Bill-to + meta block ──────────────────────────────
+        bill_to_y = 2.05
+        pdf.set_xy(margin_l, bill_to_y)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(r_c, g_c, b_c)
+        pdf.cell(2.0, 0.18, "BILL TO", ln=1)
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_x(margin_l)
+        pdf.cell(3.5, 0.22, _doc_pdf_safe(customer_name), ln=1)
+        pdf.set_font("Helvetica", "", 10)
+        if street:
+            pdf.set_x(margin_l)
+            pdf.cell(3.5, 0.18, _doc_pdf_safe(street), ln=1)
+        if city_state_zip:
+            pdf.set_x(margin_l)
+            pdf.cell(3.5, 0.18, _doc_pdf_safe(city_state_zip), ln=1)
+        # Meta (right): Invoice # / Date / Job # / Claim # / Terms
+        meta_x = page_w - margin_r - 2.7
+        meta_w = 2.7
+        meta_pairs = [
+            ("Invoice #", invoice_number),
+            ("Date", invoice_date),
+            ("Job #", project_number),
+            ("Claim #", claim_number),
+            ("Terms", terms),
+        ]
+        for i, (label, value) in enumerate(meta_pairs):
+            yy = bill_to_y + i * 0.22
+            pdf.set_xy(meta_x, yy)
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(r_c, g_c, b_c)
+            pdf.cell(0.9, 0.18, label, ln=0)
+            pdf.set_text_color(0, 0, 0)
+            pdf.set_font("Helvetica", "", 9)
+            pdf.cell(meta_w - 0.9, 0.18, _doc_pdf_safe(value or "—"), ln=1)
+        # ── Line items table ──────────────────────────────────
+        table_top = 3.30
+        header_h = 0.28
+        row_h = 0.22
+        # Header row (gray fill)
+        pdf.set_fill_color(240, 240, 240)
+        pdf.set_xy(margin_l, table_top)
+        pdf.cell(usable_w, header_h, "", fill=True, ln=1)
+        pdf.set_xy(margin_l, table_top)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(r_c, g_c, b_c)
+        pdf.cell(usable_w - 1.3, header_h, "DESCRIPTION", align="L")
+        pdf.cell(1.3, header_h, "AMOUNT", align="R")
+        pdf.set_text_color(0, 0, 0)
+        # Base charge row (if any)
+        y = table_top + header_h
+        # First row: insurance claim info if present
+        first_line_added = False
+        if base_amount and base_amount > 0:
+            pdf.set_xy(margin_l, y)
+            pdf.set_font("Helvetica", "", 10)
+            pdf.cell(usable_w - 1.3, row_h, _doc_pdf_safe(terms or "Services"), align="L")
+            pdf.cell(1.3, row_h, f"${base_amount:,.2f}", align="R")
+            y += row_h
+            first_line_added = True
+        elif claim_number:
+            pdf.set_xy(margin_l, y)
+            pdf.set_font("Helvetica", "", 10)
+            pdf.cell(usable_w - 1.3, row_h, _doc_pdf_safe(f"Insurance Claim # {claim_number}"), align="L")
+            pdf.cell(1.3, row_h, "", align="R")
+            y += row_h
+            first_line_added = True
+        # Line items
+        for li in line_items:
+            desc = (li.get("description") or "").strip()
+            amt = float(li.get("amount") or 0)
+            if not desc and amt == 0:
+                continue
+            # Page break check
+            if y + row_h + 0.6 > page_h - 0.5:
+                # Footer on previous page implicitly via header below; just break
+                pdf.add_page()
+                y = 0.7
+                _doc_draw_invoice_table_header(pdf, margin_l, usable_w, header_h, r_c, g_c, b_c)
+                y = 0.7 + header_h
+            pdf.set_xy(margin_l, y)
+            pdf.set_font("Helvetica", "", 10)
+            # Wrap description if too long
+            _desc_cell_w = usable_w - 1.3
+            _safe_desc = _doc_pdf_safe(desc)
+            if pdf.get_string_width(_safe_desc) > _desc_cell_w:
+                pdf.multi_cell(_desc_cell_w, row_h, _safe_desc, align="L")
+                pdf.set_xy(margin_l + _desc_cell_w, y)
+                pdf.cell(1.3, row_h, f"${amt:,.2f}" if amt >= 0 else f"-${abs(amt):,.2f}", align="R")
+                y = pdf.get_y()
+            else:
+                pdf.cell(_desc_cell_w, row_h, _safe_desc, align="L")
+                pdf.cell(1.3, row_h, f"${amt:,.2f}" if amt >= 0 else f"-${abs(amt):,.2f}", align="R")
+                y += row_h
+        # ── Grand total ──────────────────────────────────────
+        if y + 0.6 > page_h - 0.5:
+            pdf.add_page()
+            y = 1.0
+        y += 0.1
+        pdf.set_fill_color(240, 240, 240)
+        pdf.rect(margin_l, y, usable_w, 0.35, style="F")
+        pdf.set_xy(margin_l + 0.1, y + 0.05)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_text_color(r_c, g_c, b_c)
+        pdf.cell(usable_w - 1.5, 0.25, "Grand Total", align="L")
+        pdf.cell(1.4, 0.25, f"${grand_total:,.2f}", align="R")
+        pdf.set_text_color(0, 0, 0)
+        y += 0.45
+        # ── Notes ─────────────────────────────────────────────
+        if notes:
+            if y + 0.6 > page_h - 0.5:
+                pdf.add_page()
+                y = 1.0
+            pdf.set_xy(margin_l, y)
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_text_color(r_c, g_c, b_c)
+            pdf.cell(usable_w, 0.18, "Notes:", ln=1)
+            pdf.set_text_color(0, 0, 0)
+            pdf.set_font("Helvetica", "", 9)
+            pdf.set_x(margin_l)
+            pdf.multi_cell(usable_w, 0.16, _doc_pdf_safe(notes), align="L")
+        # ── Signature ─────────────────────────────────────────
+        if include_signature and signature_path:
+            try:
+                _sp = ROOT / signature_path if not os.path.isabs(signature_path) else Path(signature_path)
+                if _sp.exists():
+                    if y + 0.8 > page_h - 0.5:
+                        pdf.add_page()
+                        y = 1.0
+                    sig_w, sig_h = 1.5, 0.5
+                    sig_x = page_w - margin_r - sig_w
+                    sig_y = y + 0.1
+                    pdf.image(str(_sp), x=sig_x, y=sig_y, w=sig_w, h=sig_h)
+                    pdf.set_draw_color(180, 180, 180)
+                    pdf.line(sig_x, sig_y + sig_h + 0.05, sig_x + sig_w, sig_y + sig_h + 0.05)
+                    pdf.set_xy(sig_x, sig_y + sig_h + 0.1)
+                    pdf.set_font("Helvetica", "", 8)
+                    pdf.cell(sig_w, 0.15, _doc_pdf_safe(f"By {signature_name or sales_rep or 'Representative'}"), align="L")
+                    pdf.set_x(sig_x)
+                    pdf.cell(sig_w, 0.15, f"Date: {invoice_date}", align="L")
+            except Exception:
+                pass
+        # ── Footer (last page) ────────────────────────────────
+        pdf.set_draw_color(180, 180, 180)
+        pdf.set_line_width(0.01)
+        pdf.line(margin_l, page_h - 0.4, page_w - margin_r, page_h - 0.4)
+        pdf.set_xy(margin_l, page_h - 0.35)
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(100, 100, 100)
+        left_txt = f"Job #{project_number}" if project_number else f"Invoice #{invoice_number}"
+        pdf.cell(usable_w * 0.5, 0.15, _doc_pdf_safe(left_txt), align="L")
+        pdf.cell(usable_w * 0.5, 0.15, f"Page {pdf.page_no()} of {{{{nb}}}}", align="R")
+        pdf.set_text_color(0, 0, 0)
+        pdf.output(output_path)
+
+    def _create_coc_pdf(self, output_path, customer_name, claim_number,
+                         project_number, street, city_state_zip,
+                         sales_rep, note, template,
+                         include_signature, signature_name, signature_path):
+        """Render a Certificate of Completion PDF (Letter portrait) using fpdf2."""
+        from fpdf import FPDF
+        try:
+            hex_color = (template.get("primary_color") or "#1a1a1a").lstrip("#")
+            r_c, g_c, b_c = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+        except Exception:
+            r_c, g_c, b_c = 26, 26, 26
+        company_name = template.get("company_name") or ""
+        comp_address = template.get("company_address") or ""
+        comp_city = template.get("company_city_state_zip") or ""
+        comp_phone = template.get("company_phone") or ""
+        comp_email = template.get("company_email") or ""
+        coc_title = template.get("coc_title") or "CERTIFICATE OF COMPLETION"
+        logo_path = template.get("logo_path")
+        today = datetime.now().strftime("%m/%d/%Y")
+        pdf = FPDF(orientation="P", unit="in", format="Letter")
+        pdf.set_auto_page_break(False)
+        pdf.set_margins(left=0.75, top=0.75, right=0.75)
+        pdf.add_page()
+        margin_l = 0.75
+        margin_r = 0.75
+        page_w = 8.5
+        page_h = 11.0
+        usable_w = page_w - margin_l - margin_r
+        # ── Header: logo (centered) + company info (right) ───
+        if logo_path:
+            try:
+                _lp = ROOT / logo_path if not os.path.isabs(logo_path) else Path(logo_path)
+                if _lp.exists():
+                    from PIL import Image as _PILImage
+                    with _PILImage.open(_lp) as _img:
+                        iw, ih = _img.size
+                    max_w, max_h = 2.0, 0.6
+                    scale = min(max_w / (iw / 96), max_h / (ih / 96), 1.0)
+                    draw_w = (iw / 96) * scale
+                    draw_h = (ih / 96) * scale
+                    # Centered horizontally
+                    logo_x = (page_w - draw_w) / 2
+                    pdf.image(str(_lp), x=logo_x, y=0.75, w=draw_w, h=draw_h)
+            except Exception:
+                pass
+        # Company info right-aligned
+        pdf.set_text_color(r_c, g_c, b_c)
+        pdf.set_xy(margin_l, 1.55)
+        pdf.set_font("Helvetica", "", 10)
+        if comp_address:
+            pdf.cell(usable_w, 0.16, _doc_pdf_safe(comp_address), align="R", ln=1)
+            pdf.set_x(margin_l)
+        if comp_city:
+            pdf.cell(usable_w, 0.16, _doc_pdf_safe(comp_city), align="R", ln=1)
+            pdf.set_x(margin_l)
+        if comp_email:
+            pdf.cell(usable_w, 0.16, _doc_pdf_safe(comp_email), align="R", ln=1)
+            pdf.set_x(margin_l)
+        if comp_phone:
+            pdf.cell(usable_w, 0.16, _doc_pdf_safe(comp_phone), align="R", ln=1)
+        pdf.set_text_color(0, 0, 0)
+        # ── Title ─────────────────────────────────────────────
+        pdf.set_xy(margin_l, 2.55)
+        pdf.set_font("Helvetica", "B", 18)
+        pdf.set_text_color(r_c, g_c, b_c)
+        # Center the title
+        _safe_coc_title = _doc_pdf_safe(coc_title)
+        title_w = pdf.get_string_width(_safe_coc_title)
+        pdf.set_x((page_w - title_w) / 2)
+        pdf.cell(title_w, 0.3, _safe_coc_title, ln=1)
+        # Underline beneath title
+        pdf.set_draw_color(r_c, g_c, b_c)
+        pdf.set_line_width(0.015)
+        title_y = pdf.get_y() + 0.02
+        pdf.line((page_w - title_w) / 2, title_y, (page_w - title_w) / 2 + title_w, title_y)
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_line_width(0.01)
+        # ── Fields ────────────────────────────────────────────
+        fields_y = title_y + 0.45
+        address_one = ", ".join(filter(None, [street, city_state_zip])).strip()
+        fields = [
+            ("Customer:", customer_name),
+            ("Address:", address_one),
+            ("Job #:", project_number),
+            ("Claim #:", claim_number),
+            ("Sales Rep:", sales_rep),
+            ("Completion Date:", today),
+        ]
+        label_w = 1.6
+        value_x = margin_l + label_w
+        value_w = usable_w - label_w
+        line_h = 0.30
+        for i, (label, value) in enumerate(fields):
+            yy = fields_y + i * line_h
+            pdf.set_xy(margin_l, yy)
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.set_text_color(r_c, g_c, b_c)
+            pdf.cell(label_w, 0.22, label)
+            pdf.set_text_color(0, 0, 0)
+            pdf.set_font("Helvetica", "", 11)
+            pdf.cell(value_w, 0.22, _doc_pdf_safe(value or "—"))
+        # Note (free text, wrapped)
+        note_y = fields_y + len(fields) * line_h + 0.15
+        pdf.set_xy(margin_l, note_y)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(r_c, g_c, b_c)
+        pdf.cell(label_w, 0.22, "Note:")
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Helvetica", "", 11)
+        pdf.set_xy(value_x, note_y)
+        pdf.multi_cell(value_w, 0.22, _doc_pdf_safe(note or "Work completed per agreement."), align="L")
+        # ── Signature ─────────────────────────────────────────
+        if include_signature and signature_path:
+            try:
+                _sp = ROOT / signature_path if not os.path.isabs(signature_path) else Path(signature_path)
+                if _sp.exists():
+                    sig_w, sig_h = 1.7, 0.55
+                    sig_x = page_w - margin_r - sig_w
+                    sig_y = page_h - 2.0
+                    pdf.image(str(_sp), x=sig_x, y=sig_y, w=sig_w, h=sig_h)
+                    pdf.set_draw_color(180, 180, 180)
+                    pdf.set_line_width(0.01)
+                    pdf.line(sig_x, sig_y + sig_h + 0.05, sig_x + sig_w, sig_y + sig_h + 0.05)
+                    pdf.set_xy(sig_x, sig_y + sig_h + 0.1)
+                    pdf.set_font("Helvetica", "", 8)
+                    pdf.cell(sig_w, 0.14, _doc_pdf_safe(f"By {signature_name or sales_rep or 'Representative'}"), align="L")
+                    pdf.set_x(sig_x)
+                    pdf.cell(sig_w, 0.14, f"Date: {today}", align="L")
+            except Exception:
+                pass
+        # ── Footer ────────────────────────────────────────────
+        pdf.set_draw_color(180, 180, 180)
+        pdf.set_line_width(0.01)
+        pdf.line(margin_l, page_h - 0.4, page_w - margin_r, page_h - 0.4)
+        pdf.set_xy(margin_l, page_h - 0.35)
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(100, 100, 100)
+        if template.get("show_branding_footer", True):
+            pdf.cell(usable_w * 0.5, 0.15, "Generated by Sietch CRM", align="L")
+        else:
+            pdf.cell(usable_w * 0.5, 0.15, "", align="L")
+        pdf.cell(usable_w * 0.5, 0.15, f"Page {pdf.page_no()} of {{{{nb}}}}", align="R")
+        pdf.set_text_color(0, 0, 0)
         pdf.output(output_path)
 
     def _handle_project_photo_folders_get(self, opp_id: int) -> None:
@@ -9627,6 +10820,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             (doc_id,),
         )
         if not row:
+            try:
+                log_infra_event(
+                    "warn",
+                    f"Document download 404: doc_id={doc_id} not found",
+                    source="documents",
+                    method=self.command,
+                    path=api_path if 'api_path' in dir() else '/api/v2/documents/{id}',
+                )
+            except Exception:
+                pass
             self.send_error(404)
             return
         file_path = row["file_path"]
@@ -9634,6 +10837,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         mime_type = row.get("mime_type")
         full_path = ROOT / file_path
         if not full_path.exists():
+            try:
+                log_infra_event(
+                    "error",
+                    f"Document download 404: doc_id={doc_id} db_path={file_path} abs={full_path} exists=False (file missing on disk)",
+                    source="documents",
+                    method=self.command,
+                    path=f"/api/v2/documents/{doc_id}",
+                )
+            except Exception:
+                pass
             self.send_error(404)
             return
         data = full_path.read_bytes()
@@ -9641,6 +10854,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", mime_type or "application/octet-stream")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Content-Disposition", f'inline; filename="{title}"')
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
 
@@ -9673,6 +10887,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         download_token = _sign_jwt({"id": doc_id, "path": file_path, "ts": int(time.time())}, DOCS_JWT_SECRET)
         # Public URL that Document Server will use to download the file
         download_url = f"{CRM_PUBLIC_URL}/api/v2/documents/{doc_id}?token={download_token}"
+        # Diagnostic log so we can correlate "Download failed" in the OnlyOffice
+        # editor with what we actually told the Document Server to fetch.
+        try:
+            log_infra_event(
+                "info",
+                f"Editor config: doc_id={doc_id} ext={file_ext} size={file_size} url={download_url}",
+                source="docserver",
+                method=self.command,
+                path=f"/api/v2/documents/{doc_id}/editor-config",
+            )
+        except Exception:
+            pass
         editor_mode = "view" if doc_type == "pdf" else "edit"
         # Preview pane iframe forces view-only. Other callers pass nothing.
         qs = parse_qs(urlparse(self.path).query)
@@ -10589,6 +11815,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
             (full_title, str(file_path.relative_to(ROOT)), file_size, mime, uploaded_by, new_opp_id, company_scope, folder_id),
         )
+        # Diagnostic log: confirms the file is on disk at the path the download
+        # handler will read from. Useful when OnlyOffice reports "Download failed"
+        # or the editor hangs on a freshly-created blank doc.
+        try:
+            log_infra_event(
+                "info",
+                f"Blank doc created id={doc_id} type={doc_type} path={file_path} exists={file_path.exists()} bytes={file_size}",
+                source="documents",
+                method="POST",
+                path="/api/v2/documents/create",
+            )
+        except Exception:
+            pass
         _json_response(self, 201, {
             "id": doc_id, "title": full_title, "fileSize": file_size,
             "mimeType": mime, "editUrl": f"/doc-editor.html?id={doc_id}",
