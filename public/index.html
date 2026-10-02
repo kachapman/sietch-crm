@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=3.6.1" />
+  <link rel="stylesheet" href="styles.css?v=3.6.4" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
 </head>
 <body>
@@ -2105,6 +2105,10 @@
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
             <span class="admin-tab-label">Customize Projects</span>
           </button>
+          <button class="admin-tab-btn btn btn-ghost" data-tab="photo-reports" title="Reports">
+            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+            <span class="admin-tab-label">Reports</span>
+          </button>
           <button class="admin-tab-btn btn btn-ghost" data-tab="automation" title="Automation">
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M17 17v4h1a2 2 0 1 0 0 -4h-1"/><path d="M17 11h1.5a1.5 1.5 0 0 0 0 -3h-1.5v5"/><path d="M3 5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M5 7v3a1 1 0 0 0 1 1h3v7a1 1 0 0 0 1 1h3"/><path d="M9 11h4"/></svg>
             <span class="admin-tab-label">Automation</span>
@@ -2132,10 +2136,6 @@
           <button class="admin-tab-btn btn btn-ghost" data-tab="sync" title="Import / Export">
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             <span class="admin-tab-label">Import / Export</span>
-          </button>
-          <button class="admin-tab-btn btn btn-ghost" data-tab="photo-reports" title="Reports">
-            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
-            <span class="admin-tab-label">Reports</span>
           </button>
         </div>
         <div class="admin-main">
@@ -2166,6 +2166,23 @@
               <button type="button" id="alt-smtp-test" class="btn btn-secondary btn-sm">Send Test Email</button>
             </div>
             <div id="alt-smtp-status" style="margin-top:0.5rem; font-size:0.8rem;"></div>
+
+            <!-- ── Server Time Zone ── -->
+            <div style="margin-top:1.5rem; border-top:1px solid var(--border); padding-top:1rem;">
+              <h4 style="margin:0 0 0.5rem; font-size:0.85rem;">Server Time Zone</h4>
+              <p style="font-size:0.8rem; color:var(--muted); margin-bottom:0.75rem;">
+                Timezone used for <strong>server-side date math</strong> (when the daily quote rolls over, when automation rules check their schedules, when task reminders fire, when mail retention decides what's "this week"). All <strong>user-facing timestamps</strong> — activity logs, document dates, mail, photos, notes, history — render in each viewer's local timezone regardless of this setting.
+              </p>
+              <div style="display:flex; gap:0.4rem; align-items:center;">
+                <select id="server-tz-select" class="form-control" style="max-width:340px;"></select>
+                <span id="server-tz-current" style="font-size:0.82rem; color:var(--muted);"></span>
+              </div>
+              <div style="margin-top:0.5rem; display:flex; gap:0.3rem; align-items:center;">
+                <button type="button" id="server-tz-save" class="btn btn-primary btn-sm">Save Time Zone</button>
+                <button type="button" id="server-tz-reset" class="btn btn-secondary btn-sm">Reset to default (Eastern)</button>
+                <span id="server-tz-status" style="font-size:0.8rem;"></span>
+              </div>
+            </div>
 
             <!-- ── Daily Quote ── -->
             <div style="margin-top:1.5rem; border-top:1px solid var(--border); padding-top:1rem;">
@@ -2246,6 +2263,67 @@
                 <div style="margin-top:0.75rem; display:flex; gap:0.3rem; align-items:center;">
                   <button type="button" id="dq-save" class="btn btn-primary btn-sm">Save</button>
                   <div id="dq-status" style="margin-left:0.5rem; font-size:0.8rem;"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- ── Service Feeds (Cloud Status Notifications) ── -->
+            <div style="margin-top:1.5rem; border-top:1px solid var(--border); padding-top:1rem;">
+              <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.4rem;">
+                <h4 style="margin:0; font-size:0.85rem;">Service Feeds (Cloud Status Notifications)</h4>
+                <button type="button" id="admin-sf-add-btn" class="btn btn-primary btn-sm">+ Add Feed</button>
+              </div>
+              <p style="font-size:0.8rem; color:var(--muted); margin:0 0 0.75rem;">
+                Subscribe to third-party services (Proton status, BlueBubbles webhooks, etc.). Their incidents / status changes become in-app notifications with a cloud icon and the feed's accent color. RSS feeds are polled on the per-feed interval; webhooks are delivered by the provider POSTing to the URL shown on each feed.
+              </p>
+              <div id="admin-sf-list"></div>
+              <div id="admin-sf-editor" class="hidden" style="margin-top:1rem; padding:1rem; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface-2);">
+                <h5 id="admin-sf-editor-title" style="margin:0 0 0.6rem;">New Feed</h5>
+                <input type="hidden" id="sf-edit-id">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.4rem 0.6rem;">
+                  <div class="photo-report-field"><label>Name</label><input type="text" id="sf-edit-name" placeholder="e.g. Proton Status"></div>
+                  <div class="photo-report-field"><label>Kind</label>
+                    <select id="sf-edit-kind">
+                      <option value="rss">RSS / Atom</option>
+                      <option value="webhook">Webhook</option>
+                    </select>
+                  </div>
+                  <div class="photo-report-field"><label>Feed URL (RSS only)</label><input type="url" id="sf-edit-url" placeholder="https://status.example.com/feed.xml"></div>
+                  <div class="photo-report-field"><label>Poll interval (seconds, RSS only)</label><input type="number" id="sf-edit-interval" min="60" max="86400" value="300"></div>
+                  <div class="photo-report-field"><label>Accent color</label><input type="color" id="sf-edit-color" value="#e6a700"></div>
+                  <div class="photo-report-field" style="display:flex; align-items:center; gap:0.5rem;">
+                    <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.8rem;"><input type="checkbox" id="sf-edit-enabled" checked> Enabled</label>
+                  </div>
+                </div>
+                <div style="margin-top:0.6rem;">
+                  <label style="font-size:0.82rem; color:var(--muted); display:block; margin-bottom:0.25rem;">Recipients</label>
+                  <div style="display:flex; gap:1rem; align-items:center; margin-bottom:0.5rem;">
+                    <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.85rem;">
+                      <input type="radio" name="sf-edit-target-mode" value="all" checked> All users (including admins)
+                    </label>
+                    <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.85rem;">
+                      <input type="radio" name="sf-edit-target-mode" value="specific"> Specific users
+                    </label>
+                  </div>
+                  <div id="sf-edit-specific-wrap" class="hidden">
+                    <div style="display:flex; gap:0.3rem; align-items:center;">
+                      <input type="text" id="sf-edit-user-search" placeholder="Search users by name or email…" style="flex:1;">
+                      <button type="button" id="sf-edit-user-search-btn" class="btn btn-secondary btn-sm">Search</button>
+                    </div>
+                    <div id="sf-edit-user-results" style="margin-top:0.3rem; max-height:120px; overflow-y:auto; border:1px solid var(--border); border-radius:4px;"></div>
+                    <div id="sf-edit-user-chosen" style="margin-top:0.5rem; display:flex; flex-wrap:wrap; gap:0.3rem;"></div>
+                  </div>
+                </div>
+                <div id="sf-edit-webhook-info" class="hidden" style="margin-top:0.6rem; padding:0.6rem; background:var(--surface); border:1px solid var(--border); border-radius:4px;">
+                  <div style="font-size:0.82rem; color:var(--muted); margin-bottom:0.3rem;">Webhook URL (give this to your provider):</div>
+                  <div style="display:flex; gap:0.3rem; align-items:center;">
+                    <code id="sf-edit-webhook-url" style="flex:1; padding:0.4rem 0.5rem; background:var(--surface-2); border:1px solid var(--border); border-radius:4px; font-size:0.78rem; word-break:break-all;"></code>
+                    <button type="button" id="sf-edit-webhook-copy" class="btn btn-secondary btn-sm">Copy</button>
+                  </div>
+                </div>
+                <div style="display:flex; gap:0.4rem; margin-top:0.75rem; justify-content:flex-end;">
+                  <button type="button" id="sf-edit-cancel" class="btn btn-ghost btn-sm">Cancel</button>
+                  <button type="button" id="sf-edit-save" class="btn btn-primary btn-sm">Save Feed</button>
                 </div>
               </div>
             </div>
@@ -3579,6 +3657,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3.6.1" type="module"></script>
+  <script src="app.js?v=3.6.2" type="module"></script>
 </body>
 </html>

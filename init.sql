@@ -583,6 +583,35 @@ CREATE TABLE IF NOT EXISTS document_templates (
 );
 
 -- ============================================================================
+-- 7.15 Service Feeds (third-party status / webhook → notifications)
+-- ============================================================================
+-- Lets admins subscribe to third-party services (Proton status page,
+-- BlueBubbles webhooks, etc.) and surface their incidents/status changes as
+-- in-app notifications. RSS/Atom feeds are polled on an interval; webhooks
+-- are delivered by the provider POSTing to /api/v2/service-feeds/webhook/{secret}.
+
+CREATE TABLE IF NOT EXISTS service_feeds (
+    id                  SERIAL PRIMARY KEY,
+    name                TEXT NOT NULL,
+    kind                TEXT NOT NULL DEFAULT 'rss',
+    url                 TEXT,
+    webhook_secret      TEXT,
+    poll_interval_sec   INTEGER NOT NULL DEFAULT 300,
+    last_polled_at      TIMESTAMPTZ,
+    last_item_id        TEXT,
+    enabled             BOOLEAN NOT NULL DEFAULT TRUE,
+    target_mode         TEXT NOT NULL DEFAULT 'all',
+    target_user_ids     INTEGER[] NOT NULL DEFAULT '{}'::integer[],
+    accent_color        TEXT NOT NULL DEFAULT '#e6a700',
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_service_feeds_webhook_secret
+    ON service_feeds(webhook_secret)
+    WHERE webhook_secret IS NOT NULL;
+
+-- ============================================================================
 -- 7.12 Mail (IMAP Sync Module — Phase 3+)
 -- ============================================================================
 

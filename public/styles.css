@@ -13479,14 +13479,13 @@ body {
 /* ── Admin Console Modal ─────────────────────────────────────────────────────── */
 #admin-console-modal .modal-card,
 .admin-modal-card {
-  width: 1200px;
-  max-width: 95vw;
+  width: min(96vw, 1440px);
   height: min(840px, 85vh);
   display: flex;
   flex-direction: column;
   resize: both;
   overflow: hidden;
-  min-width: 520px;
+  min-width: 0;
   max-width: 96vw;
   min-height: 420px;
   max-height: 90vh;
@@ -13502,10 +13501,10 @@ body {
 
 #admin-console-modal .admin-tabs {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 0.25rem;
   padding: 0.5rem;
-  overflow-x: auto;
+  overflow-x: visible;
   overflow-y: hidden;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -18220,5 +18219,85 @@ select.form-control {
     height: 1.75rem;
   }
   .photo-markup-size-slider { width: 45px; }
+}
+
+/* ── Service Feeds (Admin Console → General tab) ─────────────────────── */
+.admin-sf-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  margin-bottom: 0.4rem;
+}
+.admin-sf-card-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--surface);
+}
+.admin-sf-card-info {
+  flex: 1;
+  min-width: 0;
+}
+.admin-sf-card-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+.admin-sf-card-meta {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-top: 0.15rem;
+}
+.admin-sf-card-actions {
+  display: flex;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+.admin-sf-kind-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  margin-left: 0.4rem;
+}
+.admin-sf-user-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.78rem;
+}
+.admin-sf-user-chip button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 0;
+  line-height: 1;
+}
+
+/* Service-feed notification card accent stripe */
+.notification-drawer-item.service-feed {
+  border-left: 3px solid var(--service-feed-accent, #e6a700);
+}
+.notification-drawer-item.service-feed .notification-drawer-item-icon {
+  background: var(--service-feed-accent, #e6a700);
+  color: #000;
 }
 

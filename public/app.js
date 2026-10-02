@@ -23120,7 +23120,7 @@ function renderMailList(msgs) {
     const from = (m.from_addr || m.from || m.fromEmail || "").toString();
     const subj = (m.subject || m.Subject || "(no subject)").toString();
     const date = m.date || m.date_received || m.receivedDate || m.Date || "";
-    const dateStr = date ? new Date(date).toLocaleDateString('en-US', {timeZone:'America/New_York'}) + " " + new Date(date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', timeZone:'America/New_York'}) : "";
+    const dateStr = date ? new Date(date).toLocaleDateString('en-US') + " " + new Date(date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : "";
 
     const item = document.createElement("div");
     item.className = "mail-item";
@@ -29293,10 +29293,12 @@ function openAdminConsoleModal() {
     bindAdminHistoryCats();
     bindAdminTaskLabels();
     bindAlternateSmtp();
+    bindServerTimezone();
     bindDailyQuoteConfig();
     bindAdminAutomation();
     bindAdminPhotoReports();
     bindAdminDocumentTemplates();
+    bindServiceFeedsAdmin();
     // Sync buttons — real implementation
     function getSyncPayload() {
       return {
@@ -29880,6 +29882,9 @@ function switchAdminTab(tab) {
     populateAdminPhotoReportTemplates();
     populateAdminDocumentTemplates();
   }
+  if (tab === "general") {
+    populateServiceFeedsAdmin();
+  }
 }
 
 async function populateAdminGeneral() {
@@ -29900,6 +29905,96 @@ async function populateAdminGeneral() {
     // Config may not exist yet, that's fine
   }
   populateDailyQuoteConfig();
+}
+
+// Server Time Zone (General tab — server-side date math only; user-facing
+// timestamps render in each viewer's local timezone).
+let _serverTimezoneCache = null;
+function bindServerTimezone() {
+  const saveBtn = $("#server-tz-save");
+  const resetBtn = $("#server-tz-reset");
+  if (saveBtn) {
+    saveBtn.addEventListener("click", async () => {
+      const sel = $("#server-tz-select");
+      const tz = sel ? sel.value : "";
+      if (!tz) { showToast("Pick a timezone", true); return; }
+      try {
+        await api("/api/v2/admin/timezone", { method: "POST", body: JSON.stringify({ timezone: tz }) });
+        _serverTimezoneCache = tz;
+        showToast("Server timezone saved");
+        updateServerTzCurrent();
+      } catch (err) {
+        showToast("Failed: " + err.message, true);
+      }
+    });
+  }
+  if (resetBtn) {
+    resetBtn.addEventListener("click", async () => {
+      try {
+        await api("/api/v2/admin/timezone", { method: "POST", body: JSON.stringify({ timezone: "America/New_York" }) });
+        _serverTimezoneCache = "America/New_York";
+        await loadServerTimezone();
+        showToast("Reset to America/New_York");
+      } catch (err) {
+        showToast("Failed: " + err.message, true);
+      }
+    });
+  }
+  loadServerTimezone();
+}
+
+async function loadServerTimezone() {
+  const sel = $("#server-tz-select");
+  const status = $("#server-tz-status");
+  if (!sel) return;
+  // Populate the dropdown with Common timezones first, then the full list.
+  if (!sel.options.length) {
+    const opts = [];
+    for (const tz of (typeof window !== "undefined" && window.CALENDAR_TZ_COMMON) || [
+      "America/New_York","America/Chicago","America/Denver","America/Los_Angeles",
+      "America/Phoenix","America/Anchorage","Pacific/Honolulu","UTC","Europe/London","Asia/Tokyo",
+    ]) {
+      opts.push(`<option value="${escapeHtml(tz)}">${escapeHtml(tz.replace(/_/g, " "))}</option>`);
+    }
+    if (typeof Intl !== "undefined" && Intl.supportedValuesOf) {
+      try {
+        const all = Intl.supportedValuesOf("timeZone").filter(t => !opts.find(o => o.includes(`value="${t}"`))).sort();
+        const group = document.createElement("optgroup");
+        group.label = "All timezones";
+        for (const tz of all) {
+          const o = document.createElement("option");
+          o.value = tz;
+          o.textContent = tz.replace(/_/g, " ");
+          group.appendChild(o);
+        }
+        sel.appendChild(group);
+      } catch {}
+    }
+    sel.innerHTML = opts.join("") + sel.innerHTML;
+  }
+  try {
+    const r = await api("/api/v2/admin/timezone");
+    _serverTimezoneCache = r.timezone;
+    sel.value = r.timezone;
+    updateServerTzCurrent();
+  } catch (err) {
+    if (status) status.textContent = "Failed to load timezone: " + err.message;
+  }
+}
+
+function updateServerTzCurrent() {
+  const cur = $("#server-tz-current");
+  if (cur && _serverTimezoneCache) {
+    try {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: _serverTimezoneCache, timeZoneName: "short",
+      }).formatToParts(new Date());
+      const abbr = parts.find(p => p.type === "timeZoneName")?.value || "";
+      cur.textContent = `Currently: ${_serverTimezoneCache.replace(/_/g, " ")} (${abbr})`;
+    } catch {
+      cur.textContent = `Currently: ${_serverTimezoneCache}`;
+    }
+  }
 }
 
 function bindAlternateSmtp() {
@@ -30689,7 +30784,7 @@ async function populateEmailScannerTab() {
         // Track selected log entries for correction
         window._scannerLogSelected = window._scannerLogSelected || new Set();
         html += sortedEntries.map((e, i) => {
-          const ts = e.timestamp ? new Date(e.timestamp).toLocaleTimeString('en-US', {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit', timeZone:'America/New_York'}) : '--:--:--';
+          const ts = e.timestamp ? new Date(e.timestamp).toLocaleTimeString('en-US', {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'}) : '--:--:--';
           const status = (e.status || 'unknown').toUpperCase();
           const cls = e.status === 'processed' ? 'log-processed' : e.status === 'error' ? 'log-error' : e.status === 'skipped' || e.status === 'already_processed' ? 'log-skipped' : e.status === 'dry_run' ? 'log-dry-run' : e.classification && e.classification.startsWith('rule_') ? 'log-rule' : '';
           const subj = (e.subject || '').slice(0, 50);
@@ -40679,12 +40774,18 @@ function _notifTypeIcon(type) {
   if (type === "note_tagged") {
     return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0"/><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0v-1.5a9 9 0 1 0 -5.5 8.28"/></svg>`;
   }
+  if (type === "service_feed") {
+    // Cloud icon for third-party service status notifications.
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M17.5 19a4.5 4.5 0 1 0 0 -9a4.5 4.5 0 0 0 -8.5 -2a4.5 4.5 0 0 0 -4 11h12.5z"/></svg>`;
+  }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M8 9l3 3l-2 1"/><path d="M10.5 17.5l-3.5 -2l-2 1"/><path d="M17 3l4 4"/><path d="M21 7l-6 6"/><path d="M16 3l0 5l5 0"/></svg>`;
 }
 
 function _renderNotificationDrawerItem(n) {
   const el = document.createElement("div");
-  el.className = "notification-drawer-item" + (n.isRead ? "" : " unread");
+  // Add a feed-specific class so the accent stripe CSS can target it.
+  const typeClass = n.type === "service_feed" ? " service-feed" : "";
+  el.className = "notification-drawer-item" + typeClass + (n.isRead ? "" : " unread");
   el.dataset.notifId = n.id;
 
   const typeIcon = _notifTypeIcon(n.type);
@@ -40692,6 +40793,11 @@ function _renderNotificationDrawerItem(n) {
   const time = _notifTimeAgo(n.created);
   const hasPayload = n.type === "note_tagged" && n.payload && n.payload.event_id && n.opportunityId;
   const snippet = escapeHtml((n.snippet || "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&"));
+
+  // Apply per-feed accent color as a CSS variable so the border + icon background tint.
+  if (n.type === "service_feed" && n.payload && n.payload.color) {
+    el.style.setProperty("--service-feed-accent", n.payload.color);
+  }
 
   let msgHtml = escapeHtml(n.message || "");
   if (projectTitle && msgHtml.includes(escapeHtml(projectTitle))) {
@@ -40715,6 +40821,10 @@ function _renderNotificationDrawerItem(n) {
   // Mark as read on click
   el.addEventListener("click", (e) => {
     if (e.target.closest(".notification-drawer-item-expand") || e.target.closest(".notif-inline-link")) return;
+    // Service-feed notifications: if the payload includes a URL, open it in a new tab.
+    if (n.type === "service_feed" && n.payload && n.payload.url) {
+      try { window.open(n.payload.url, "_blank", "noopener,noreferrer"); } catch (e) {}
+    }
     if (!n.isRead) {
       n.isRead = true;
       el.classList.remove("unread");
@@ -42732,4 +42842,303 @@ function deleteEditingAdminDocTpl() {
   const tpl = _adminDocTpls.find(t => t.id === _adminDocTplEditingId);
   if (!tpl) return;
   deleteAdminDocTpl(tpl);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Admin — Service Feeds (Cloud Status Notifications)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+let _adminSFs = [];
+let _adminSFEditingId = null;
+let _adminSFChosenUsers = []; // [{id, display_name, email}] — when target_mode='specific'
+let _adminSFCachedUsers = []; // user list for the picker
+
+const SF_CLOUD_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19a4.5 4.5 0 1 0 0 -9a4.5 4.5 0 0 0 -8.5 -2a4.5 4.5 0 0 0 -4 11h12.5z"/></svg>`;
+
+function bindServiceFeedsAdmin() {
+  const addBtn = $("#admin-sf-add-btn");
+  if (addBtn) addBtn.addEventListener("click", () => openSFEditor(null));
+  const cancelBtn = $("#sf-edit-cancel");
+  if (cancelBtn) cancelBtn.addEventListener("click", () => closeSFEditor());
+  const saveBtn = $("#sf-edit-save");
+  if (saveBtn) saveBtn.addEventListener("click", saveSFFeed);
+  const kindSel = $("#sf-edit-kind");
+  if (kindSel) kindSel.addEventListener("change", () => _sfUpdateKindUI());
+  // Target-mode toggle
+  document.querySelectorAll('input[name="sf-edit-target-mode"]').forEach(r => {
+    r.addEventListener("change", () => _sfUpdateTargetModeUI());
+  });
+  // User search
+  const searchBtn = $("#sf-edit-user-search-btn");
+  if (searchBtn) searchBtn.addEventListener("click", () => _sfSearchUsers());
+  const searchInput = $("#sf-edit-user-search");
+  if (searchInput) searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); _sfSearchUsers(); }
+  });
+  // Webhook copy
+  const copyBtn = $("#sf-edit-webhook-copy");
+  if (copyBtn) copyBtn.addEventListener("click", () => {
+    const txt = $("#sf-edit-webhook-url")?.textContent || "";
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(() => showToast("Copied"), () => showToast("Copy failed", true));
+    } else {
+      // Fallback: temporary textarea
+      const ta = document.createElement("textarea");
+      ta.value = txt;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); showToast("Copied"); } catch (e) { showToast("Copy failed", true); }
+      document.body.removeChild(ta);
+    }
+  });
+}
+
+function populateServiceFeedsAdmin() {
+  const list = $("#admin-sf-list");
+  if (!list) return;
+  api("/api/v2/admin/service-feeds").then(feeds => {
+    _adminSFs = feeds || [];
+    if (!_adminSFs.length) {
+      list.innerHTML = '<p style="color:var(--muted);font-size:0.85rem;">No feeds yet. Click "Add Feed" to subscribe to a service.</p>';
+      return;
+    }
+    list.innerHTML = "";
+    _adminSFs.forEach(f => {
+      const row = document.createElement("div");
+      row.className = "admin-sf-card";
+      const targetText = f.target_mode === "all"
+        ? "All users"
+        : `${(f.target_user_ids || []).length} specific user(s)`;
+      const lastPolled = f.last_polled_at
+        ? `Last polled: ${new Date(f.last_polled_at).toLocaleString()}`
+        : "Never polled";
+      const accent = f.accent_color || "#e6a700";
+      row.innerHTML = `
+        <div class="admin-sf-card-icon" style="background:${escapeHtml(accent)}20;color:${escapeHtml(accent)};">${SF_CLOUD_ICON}</div>
+        <div class="admin-sf-card-info">
+          <div class="admin-sf-card-name">${escapeHtml(f.name)}<span class="admin-sf-kind-badge">${escapeHtml(f.kind)}</span></div>
+          <div class="admin-sf-card-meta">
+            ${escapeHtml(targetText)} · ${escapeHtml(lastPolled)}${!f.enabled ? ' · disabled' : ''}
+          </div>
+        </div>
+        <div class="admin-sf-card-actions">
+          ${f.kind === 'rss' ? `<button type="button" class="btn btn-ghost btn-sm" data-sf-action="refresh" data-sf-id="${f.id}">Refresh</button>` : ''}
+          <button type="button" class="btn btn-ghost btn-sm" data-sf-action="edit" data-sf-id="${f.id}">Edit</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-sf-action="delete" data-sf-id="${f.id}" style="color:var(--danger);">Delete</button>
+        </div>
+      `;
+      list.appendChild(row);
+    });
+    list.querySelectorAll("button[data-sf-action]").forEach(btn => {
+      const action = btn.dataset.sfAction;
+      const id = parseInt(btn.dataset.sfId, 10);
+      btn.addEventListener("click", () => {
+        const f = _adminSFs.find(x => x.id === id);
+        if (!f) return;
+        if (action === "edit") openSFEditor(f);
+        else if (action === "delete") deleteSFFeed(f);
+        else if (action === "refresh") refreshSFFeedNow(f);
+      });
+    });
+  }).catch(err => {
+    list.innerHTML = `<p style="color:var(--danger);">Failed to load feeds: ${escapeHtml(err.message)}</p>`;
+  });
+}
+
+function openSFEditor(feed) {
+  _adminSFEditingId = feed ? feed.id : null;
+  _adminSFChosenUsers = [];
+  const editor = $("#admin-sf-editor");
+  const title = $("#admin-sf-editor-title");
+  if (!editor) return;
+  title.textContent = feed ? "Edit Feed" : "New Feed";
+  $("#sf-edit-id").value = feed ? String(feed.id) : "";
+  $("#sf-edit-name").value = feed ? (feed.name || "") : "";
+  $("#sf-edit-kind").value = feed ? (feed.kind || "rss") : "rss";
+  $("#sf-edit-url").value = feed ? (feed.url || "") : "";
+  $("#sf-edit-interval").value = feed ? (feed.poll_interval_sec || 300) : 300;
+  $("#sf-edit-color").value = feed ? (feed.accent_color || "#e6a700") : "#e6a700";
+  $("#sf-edit-enabled").checked = feed ? !!feed.enabled : true;
+  // Target mode + chosen users
+  const mode = (feed && feed.target_mode) || "all";
+  const modeRadio = document.querySelector(`input[name="sf-edit-target-mode"][value="${mode}"]`);
+  if (modeRadio) modeRadio.checked = true;
+  if (mode === "specific" && feed && Array.isArray(feed.target_user_ids)) {
+    _adminSFChosenUsers = (feed.target_user_ids || []).map(id => ({ id, display_name: `User #${id}`, email: "" }));
+  }
+  // Webhook info: only shows webhook URL after save. For new webhook feeds
+  // we can't predict the URL until save. For existing feeds we display it.
+  const webhookInfo = $("#sf-edit-webhook-info");
+  if (webhookInfo) {
+    if (feed && feed.kind === "webhook") {
+      webhookInfo.classList.remove("hidden");
+      $("#sf-edit-webhook-url").textContent = buildSFWebhookUrl(feed.webhook_secret);
+    } else {
+      webhookInfo.classList.add("hidden");
+    }
+  }
+  _sfUpdateKindUI();
+  _sfUpdateTargetModeUI();
+  _sfRenderChosenUsers();
+  editor.classList.remove("hidden");
+}
+
+function closeSFEditor() {
+  const editor = $("#admin-sf-editor");
+  if (editor) editor.classList.add("hidden");
+  _adminSFEditingId = null;
+}
+
+function _sfUpdateKindUI() {
+  const kind = $("#sf-edit-kind")?.value || "rss";
+  const isRss = kind === "rss";
+  const urlInput = $("#sf-edit-url");
+  const intervalInput = $("#sf-edit-interval");
+  if (urlInput) {
+    urlInput.disabled = !isRss;
+    urlInput.placeholder = isRss ? "https://status.example.com/feed.xml" : "(webhooks use the auto-generated URL below)";
+  }
+  if (intervalInput) intervalInput.disabled = !isRss;
+  const webhookInfo = $("#sf-edit-webhook-info");
+  // Only show webhook info if kind=webhook AND editing existing feed (new
+  // webhook feeds get the URL after first save).
+  if (webhookInfo) {
+    if (kind === "webhook" && _adminSFEditingId) {
+      webhookInfo.classList.remove("hidden");
+      const feed = _adminSFs.find(f => f.id === _adminSFEditingId);
+      if (feed && feed.webhook_secret) {
+        $("#sf-edit-webhook-url").textContent = buildSFWebhookUrl(feed.webhook_secret);
+      }
+    } else {
+      webhookInfo.classList.add("hidden");
+    }
+  }
+}
+
+function _sfUpdateTargetModeUI() {
+  const mode = document.querySelector('input[name="sf-edit-target-mode"]:checked')?.value || "all";
+  const wrap = $("#sf-edit-specific-wrap");
+  if (wrap) wrap.classList.toggle("hidden", mode !== "specific");
+  if (mode === "specific" && !_adminSFCachedUsers.length) {
+    _sfLoadAllUsers();
+  }
+}
+
+async function _sfLoadAllUsers() {
+  try {
+    const users = await api("/api/v2/users");
+    _adminSFCachedUsers = users || [];
+  } catch (e) {
+    _adminSFCachedUsers = [];
+  }
+}
+
+function _sfSearchUsers() {
+  const q = ($("#sf-edit-user-search")?.value || "").toLowerCase().trim();
+  const box = $("#sf-edit-user-results");
+  if (!box) return;
+  if (!_adminSFCachedUsers.length) {
+    _sfLoadAllUsers().then(() => _sfSearchUsers());
+    return;
+  }
+  const filtered = _adminSFCachedUsers.filter(u => {
+    if (!q) return true;
+    const s = ((u.display_name || "") + " " + (u.email || "")).toLowerCase();
+    return s.includes(q);
+  }).slice(0, 20);
+  if (!filtered.length) {
+    box.innerHTML = '<div style="padding:0.4rem;color:var(--muted);font-size:0.8rem;">No matches.</div>';
+    return;
+  }
+  box.innerHTML = "";
+  filtered.forEach(u => {
+    const row = document.createElement("div");
+    row.style.cssText = "padding:0.35rem 0.5rem;cursor:pointer;font-size:0.8rem;border-bottom:1px solid var(--border);";
+    row.innerHTML = `<strong>${escapeHtml(u.display_name || u.email || "User #" + u.id)}</strong> <span style="color:var(--muted);">${escapeHtml(u.email || "")}</span>`;
+    row.addEventListener("click", () => {
+      if (!_adminSFChosenUsers.find(c => c.id === u.id)) {
+        _adminSFChosenUsers.push({ id: u.id, display_name: u.display_name || u.email || `User #${u.id}`, email: u.email || "" });
+        _sfRenderChosenUsers();
+      }
+      const searchInput = $("#sf-edit-user-search");
+      if (searchInput) searchInput.value = "";
+      box.innerHTML = "";
+    });
+    box.appendChild(row);
+  });
+}
+
+function _sfRenderChosenUsers() {
+  const box = $("#sf-edit-user-chosen");
+  if (!box) return;
+  if (!_adminSFChosenUsers.length) {
+    box.innerHTML = '<span style="font-size:0.78rem;color:var(--muted);">No users selected.</span>';
+    return;
+  }
+  box.innerHTML = "";
+  _adminSFChosenUsers.forEach(u => {
+    const chip = document.createElement("span");
+    chip.className = "admin-sf-user-chip";
+    chip.innerHTML = `${escapeHtml(u.display_name || u.email || ("User #" + u.id))} <button type="button" title="Remove">&times;</button>`;
+    chip.querySelector("button").addEventListener("click", () => {
+      _adminSFChosenUsers = _adminSFChosenUsers.filter(c => c.id !== u.id);
+      _sfRenderChosenUsers();
+    });
+    box.appendChild(chip);
+  });
+}
+
+function buildSFWebhookUrl(secret) {
+  // Build the absolute webhook URL the provider should POST to.
+  const base = window.location.origin || "";
+  return `${base}/api/v2/service-feeds/webhook/${encodeURIComponent(secret || "")}`;
+}
+
+function collectSFFormData() {
+  const mode = document.querySelector('input[name="sf-edit-target-mode"]:checked')?.value || "all";
+  const payload = {
+    name: ($("#sf-edit-name")?.value || "").trim(),
+    kind: $("#sf-edit-kind")?.value || "rss",
+    url: ($("#sf-edit-url")?.value || "").trim() || null,
+    poll_interval_sec: parseInt($("#sf-edit-interval")?.value || "300", 10),
+    enabled: !!$("#sf-edit-enabled")?.checked,
+    accent_color: $("#sf-edit-color")?.value || "#e6a700",
+    target_mode: mode,
+    target_user_ids: mode === "specific" ? _adminSFChosenUsers.map(u => u.id) : [],
+  };
+  return payload;
+}
+
+function saveSFFeed() {
+  const name = ($("#sf-edit-name")?.value || "").trim();
+  if (!name) { showToast("Name is required", true); return; }
+  const payload = collectSFFormData();
+  if (payload.kind === "rss" && !payload.url) {
+    showToast("RSS feeds need a URL", true); return;
+  }
+  if (payload.kind === "webhook") {
+    payload.url = null; // webhooks have no feed URL
+  }
+  const promise = _adminSFEditingId
+    ? api(`/api/v2/admin/service-feeds/${_adminSFEditingId}`, { method: "PUT", body: JSON.stringify(payload) })
+    : api("/api/v2/admin/service-feeds", { method: "POST", body: JSON.stringify(payload) });
+  promise.then(result => {
+    showToast(_adminSFEditingId ? "Feed updated" : "Feed created" + (result && result.webhookSecret ? " — copy the webhook URL below" : ""));
+    closeSFEditor();
+    populateServiceFeedsAdmin();
+  }).catch(err => showToast("Failed: " + err.message, true));
+}
+
+function deleteSFFeed(feed) {
+  if (!confirm(`Delete feed "${feed.name}"?`)) return;
+  api(`/api/v2/admin/service-feeds/${feed.id}`, { method: "DELETE" })
+    .then(() => { showToast("Feed deleted"); populateServiceFeedsAdmin(); })
+    .catch(err => showToast("Failed: " + err.message, true));
+}
+
+function refreshSFFeedNow(feed) {
+  showToast("Refreshing…");
+  api(`/api/v2/admin/service-feeds/${feed.id}/refresh`, { method: "POST" })
+    .then(() => { showToast("Refreshed"); populateServiceFeedsAdmin(); })
+    .catch(err => showToast("Failed: " + err.message, true));
 }

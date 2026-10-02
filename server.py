@@ -440,6 +440,60 @@ try:
 except Exception:
     pass
 
+# Migration 022: service_feeds table (third-party status / webhook → notifications)
+try:
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS service_feeds (
+            id                  SERIAL PRIMARY KEY,
+            name                TEXT NOT NULL,
+            kind                TEXT NOT NULL DEFAULT 'rss',
+            url                 TEXT,
+            webhook_secret      TEXT,
+            poll_interval_sec   INTEGER NOT NULL DEFAULT 300,
+            last_polled_at      TIMESTAMP,
+            last_item_id        TEXT,
+            enabled             BOOLEAN NOT NULL DEFAULT TRUE,
+            target_mode         TEXT NOT NULL DEFAULT 'all',
+            target_user_ids     INTEGER[] NOT NULL DEFAULT '{}'::integer[],
+            accent_color        TEXT NOT NULL DEFAULT '#e6a700',
+            created_at          TIMESTAMP DEFAULT NOW(),
+            updated_at          TIMESTAMP DEFAULT NOW()
+        )
+    """)
+except Exception:
+    pass
+try:
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_service_feeds_webhook_secret ON service_feeds(webhook_secret) WHERE webhook_secret IS NOT NULL")
+except Exception:
+    pass
+
+# Migration 023: convert service_feeds timestamps to TIMESTAMPTZ so the user's
+# browser correctly interprets the ISO string and converts to local time on
+# display. Idempotent ALTER TYPE statements.
+try:
+    db.execute("ALTER TABLE service_feeds ALTER COLUMN last_polled_at TYPE TIMESTAMPTZ USING last_polled_at AT TIME ZONE 'UTC'")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE service_feeds ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC'")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE service_feeds ALTER COLUMN updated_at TYPE TIMESTAMPTZ USING updated_at AT TIME ZONE 'UTC'")
+except Exception:
+    pass
+
+# Seed server_timezone default (Eastern) so the system always has a baseline.
+try:
+    db.execute(
+        """INSERT INTO system_settings (key, value, description)
+           VALUES ('server_timezone', 'America/New_York',
+                   'Server timezone for scheduled-task math. User-facing timestamps render in each viewer local timezone.')
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, description = EXCLUDED.description"""
+    )
+except Exception as exc:
+    print(f"server_timezone seed error: {exc}")
+
 try:
     db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS display_name TEXT")
 except Exception:
@@ -952,6 +1006,154 @@ def _normalize_line_items(items) -> list:
             continue
         out.append({"description": desc, "amount": amt})
     return out
+
+
+# Cached server timezone (IANA name). Read once from system_settings.key=
+# 'server_timezone', validated via zoneinfo. Defaults to America/New_York so
+# the system always has an Eastern baseline for server-side date math
+# (automation triggers, daily-quote rollover, task reminders, mail retention).
+# User-facing displays do NOT use this — they render in the browser's local TZ.
+_SERVER_TZ_CACHE: str | None = None
+_SERVER_TZ_DEFAULT = "America/New_York"
+
+
+def _server_timezone() -> str:
+    """Return the configured server timezone (IANA name). Cached after first call."""
+    global _SERVER_TZ_CACHE
+    if _SERVER_TZ_CACHE is not None:
+        return _SERVER_TZ_CACHE
+    try:
+        row = db.query_one("SELECT value FROM system_settings WHERE key = 'server_timezone'")
+        if row and row.get("value"):
+            tz = str(row["value"]).strip()
+            try:
+                from zoneinfo import ZoneInfo
+                ZoneInfo(tz)  # raises if invalid
+                _SERVER_TZ_CACHE = tz
+                return tz
+            except Exception:
+                pass
+    except Exception:
+        pass
+    _SERVER_TZ_CACHE = _SERVER_TZ_DEFAULT
+    return _SERVER_TZ_CACHE
+
+
+def _server_now() -> "datetime":
+    """Current time in the configured server timezone (naive, for SQL NOW() parity).
+
+    Use this anywhere the server needs a "wall clock" timestamp for date math
+    (e.g., is it past 5pm today?). Strip the tzinfo before INSERT because our
+    timestamp columns are TIMESTAMP WITHOUT TIME ZONE stored as the server's
+    local wall clock.
+    """
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(_server_timezone())
+        return datetime.now(tz).replace(tzinfo=None)
+    except Exception:
+        return datetime.now()
+
+
+def _insert_feed_notification(feed: dict, entry: dict) -> None:
+    """Insert a notification row for every user targeted by the feed.
+
+    Module-level wrapper so the background poller (which runs in its own
+    thread context) can call us directly without needing a KanbanHandler
+    instance. The class method on KanbanHandler just delegates here.
+    """
+    feed_id = feed.get("id") if isinstance(feed, dict) else feed["id"]
+    feed_name = (feed.get("name") if isinstance(feed, dict) else feed.get("name")) or "Service"
+    accent = (feed.get("accent_color") if isinstance(feed, dict) else feed.get("accent_color")) or "#e6a700"
+    title = ((entry.get("title") if isinstance(entry, dict) else entry["title"]) or "(no title)").strip()
+    snippet = ((entry.get("summary") if isinstance(entry, dict) else entry.get("summary")) or "").strip()
+    import re as _re
+    snippet_plain = _re.sub(r"<[^>]+>", " ", snippet).strip()
+    url = ((entry.get("link") if isinstance(entry, dict) else entry.get("link")) or "").strip()
+    message = f"{feed_name}: {title}"
+    if len(message) > 200:
+        message = message[:197] + "..."
+    payload = {
+        "event_title": title,
+        "snippet": snippet_plain[:240],
+        "url": url,
+        "color": accent,
+        "feed_id": feed_id,
+        "feed_name": feed_name,
+    }
+    target_user_ids = _resolve_feed_target_user_ids(feed if isinstance(feed, dict) else {
+        "target_mode": feed.get("target_mode"),
+        "target_user_ids": feed.get("target_user_ids"),
+    })
+    if not target_user_ids:
+        return
+    try:
+        for uid in target_user_ids:
+            try:
+                db.execute(
+                    """INSERT INTO notifications
+                       (type, opportunity_id, actor_user_id, message, payload)
+                       VALUES (%s, NULL, NULL, %s, %s::jsonb)""",
+                    ("service_feed", message, json.dumps(payload)),
+                )
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _normalize_target_user_ids(raw) -> str:
+    """Coerce a target_user_ids payload (list / JSON-encoded string / None) into a Postgres int[] literal."""
+    if raw is None:
+        return "{}"
+    if isinstance(raw, str):
+        # Accept JSON-encoded list.
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return "{}"
+    if not isinstance(raw, list):
+        return "{}"
+    parts: list[str] = []
+    for v in raw:
+        try:
+            parts.append(str(int(v)))
+        except (TypeError, ValueError):
+            pass
+    return "{" + ",".join(parts) + "}"
+
+
+def _resolve_feed_target_user_ids(feed: dict) -> list[int]:
+    """Resolve the list of user IDs to notify for a service feed.
+
+    target_mode='all'      → every active user.
+    target_mode='specific' → only users whose id is in feed.target_user_ids.
+    """
+    mode = feed.get("target_mode") or "all"
+    if mode == "specific":
+        raw = feed.get("target_user_ids")
+        if raw is None:
+            return []
+        if isinstance(raw, str):
+            # psycopg2 returns PG arrays as "{1,2,3}" strings when no
+            # typecaster is registered. Parse to a list of ints.
+            try:
+                return [int(x) for x in raw.strip("{}").split(",") if x.strip()]
+            except Exception:
+                return []
+        if isinstance(raw, list):
+            try:
+                return [int(x) for x in raw if str(x).strip()]
+            except Exception:
+                return []
+        return []
+    # 'all' — every active user (including admins).
+    try:
+        rows = db.query("SELECT id FROM users WHERE is_active = TRUE")
+        return [int(r[0]) for r in rows] if rows else []
+    except Exception:
+        return []
 
 
 def _resolve_document_template(template_id) -> dict | None:
@@ -2635,6 +2837,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/admin/document-templates":
             self._handle_document_templates_get()
             return
+        if api_path == "/api/v2/admin/service-feeds":
+            self._handle_service_feeds_get()
+            return
+        if api_path == "/api/v2/admin/timezone":
+            self._handle_server_timezone_get()
+            return
 
         # ── v2 API: Projects ──
         if api_path == "/api/v2/projects/count":
@@ -3553,6 +3761,25 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             elif method == "POST":
                 self._handle_document_template_create()
             return
+        # ── Service Feeds (admin) — POST/PUT/DELETE only; GET handled in _handle_api_get ──
+        m = re.match(r"^/api/v2/admin/service-feeds/(\d+)/refresh$", api_path)
+        if m and method == "POST":
+            self._handle_service_feed_refresh(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/admin/service-feeds/(\d+)$", api_path)
+        if m:
+            if method == "PUT":
+                self._handle_service_feed_update(int(m.group(1)))
+            elif method == "DELETE":
+                self._handle_service_feed_delete(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/admin/service-feeds$", api_path)
+        if m and method == "POST":
+            self._handle_service_feed_create()
+            return
+        if api_path == "/api/v2/admin/timezone" and method == "POST":
+            self._handle_server_timezone_post()
+            return
         # ── Invoice / COC generation ───────────────────────────────────────
         m = re.match(r"^/api/v2/projects/(\d+)/invoice$", api_path)
         if m and method == "POST":
@@ -3579,6 +3806,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         m = re.match(r"^/api/v2/documents/coc$", api_path)
         if m and method == "POST":
             self._handle_standalone_coc_generate()
+            return
+        # ── Service-feed webhook receiver (no auth — secret-token-in-URL) ────
+        m = re.match(r"^/api/v2/service-feeds/webhook/([A-Za-z0-9_\-]+)$", api_path)
+        if m and method == "POST":
+            self._handle_service_feed_webhook(m.group(1))
             return
         m = re.match(r"^/api/v2/projects/(\d+)/history/(\d+)/replies$", api_path)
         if m and method == "POST":
@@ -7692,6 +7924,260 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             (rel, template_id),
         )
         _json_response(self, 200, {"ok": True, "signaturePath": rel})
+
+    # ── Service Feeds (third-party status / webhook → notifications) ───────
+
+    def _handle_server_timezone_get(self) -> None:
+        """Return the server's configured timezone (IANA name).
+
+        Affects server-side date math only (automation triggers, daily-quote
+        rollover, task reminders). User-facing timestamps are rendered in each
+        viewer's local timezone by their browser — not by this setting.
+        """
+        user = _require_auth(self)
+        if not user:
+            return
+        tz = _server_timezone()
+        _json_response(self, 200, {"timezone": tz, "default": _SERVER_TZ_DEFAULT})
+
+    def _handle_server_timezone_post(self) -> None:
+        """Set the server's timezone. Validates the value against zoneinfo."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            data = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        tz = (data.get("timezone") or "").strip()
+        if not tz:
+            _json_response(self, 400, {"error": "timezone is required"})
+            return
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(tz)
+        except Exception as exc:
+            _json_response(self, 400, {"error": f"Unknown timezone: {tz}"})
+            return
+        global _SERVER_TZ_CACHE
+        _SERVER_TZ_CACHE = tz  # invalidate cache
+        try:
+            db.execute(
+                """INSERT INTO system_settings (key, value, description)
+                   VALUES ('server_timezone', %s, 'Server timezone for scheduled-task math. User-facing timestamps render in each viewer local timezone.')
+                   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()""",
+                (tz,),
+            )
+        except Exception as exc:
+            _json_response(self, 500, {"error": f"Failed to save timezone: {exc}"})
+            return
+        _json_response(self, 200, {"ok": True, "timezone": tz})
+
+    def _handle_service_feeds_get(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        rows = db.query_dicts(
+            """SELECT id, name, kind, url, poll_interval_sec, last_polled_at, last_item_id,
+                      enabled, target_mode, target_user_ids, accent_color, created_at, updated_at
+               FROM service_feeds ORDER BY name"""
+        )
+        for r in rows:
+            for k in ("last_polled_at", "created_at", "updated_at"):
+                if r.get(k):
+                    r[k] = r[k].isoformat() if hasattr(r[k], "isoformat") else str(r[k])
+        _json_response(self, 200, rows)
+
+    def _handle_service_feed_create(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            data = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        if not data.get("name"):
+            _json_response(self, 400, {"error": "name is required"})
+            return
+        kind = data.get("kind", "rss")
+        if kind not in ("rss", "webhook"):
+            _json_response(self, 400, {"error": "kind must be 'rss' or 'webhook'"})
+            return
+        # Generate webhook secret on create so the URL is available immediately.
+        webhook_secret = None
+        if kind == "webhook":
+            import service_feed_poller
+            webhook_secret = service_feed_poller.generate_webhook_secret()
+        row = db.query_one(
+            """INSERT INTO service_feeds
+               (name, kind, url, webhook_secret, poll_interval_sec, enabled,
+                target_mode, target_user_ids, accent_color)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+               RETURNING id""",
+            (data["name"].strip(), kind,
+             (data.get("url") or "").strip() or None,
+             webhook_secret,
+             max(60, int(data.get("poll_interval_sec") or 300)),
+             bool(data.get("enabled", True)),
+             data.get("target_mode", "all") if data.get("target_mode") in ("all", "specific") else "all",
+             _normalize_target_user_ids(data.get("target_user_ids")),
+             (data.get("accent_color") or "#e6a700").strip() or "#e6a700",
+            ),
+        )
+        _json_response(self, 201, {"id": row["id"], "webhookSecret": webhook_secret})
+
+    def _handle_service_feed_update(self, feed_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            data = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        if not data:
+            _json_response(self, 400, {"error": "No data"})
+            return
+        existing = db.query_one(
+            "SELECT id, kind FROM service_feeds WHERE id = %s", (feed_id,)
+        )
+        if not existing:
+            _json_response(self, 404, {"error": "Feed not found"})
+            return
+        fields = []
+        params: list = []
+        for key in ("name", "url", "poll_interval_sec", "enabled", "accent_color"):
+            if key in data:
+                if key == "poll_interval_sec":
+                    fields.append(f"{key} = %s")
+                    params.append(max(60, int(data[key])))
+                elif key == "enabled":
+                    fields.append(f"{key} = %s")
+                    params.append(bool(data[key]))
+                else:
+                    fields.append(f"{key} = %s")
+                    params.append(data[key] if data[key] is not None else None)
+        if "target_mode" in data and data["target_mode"] in ("all", "specific"):
+            fields.append("target_mode = %s")
+            params.append(data["target_mode"])
+        if "target_user_ids" in data:
+            fields.append("target_user_ids = %s")
+            params.append(_normalize_target_user_ids(data["target_user_ids"]))
+        if fields:
+            fields.append("updated_at = NOW()")
+            params.append(feed_id)
+            db.execute(f"UPDATE service_feeds SET {', '.join(fields)} WHERE id = %s", tuple(params))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_service_feed_delete(self, feed_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        existing = db.query_one("SELECT id FROM service_feeds WHERE id = %s", (feed_id,))
+        if not existing:
+            _json_response(self, 404, {"error": "Feed not found"})
+            return
+        db.execute("DELETE FROM service_feeds WHERE id = %s", (feed_id,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_service_feed_refresh(self, feed_id: int) -> None:
+        """Force an immediate poll of one RSS feed (admin only)."""
+        user = _require_admin(self)
+        if not user:
+            return
+        feed = db.query_one(
+            "SELECT id, name, kind, url, poll_interval_sec, last_polled_at, last_item_id, enabled, accent_color FROM service_feeds WHERE id = %s",
+            (feed_id,),
+        )
+        if not feed:
+            _json_response(self, 404, {"error": "Feed not found"})
+            return
+        if feed.get("kind") != "rss" or not feed.get("url"):
+            _json_response(self, 400, {"error": "Feed is not an RSS feed with a URL"})
+            return
+        # Reset last_polled_at to force the poller to pick it up immediately.
+        try:
+            db.execute(
+                "UPDATE service_feeds SET last_polled_at = NULL, updated_at = NOW() WHERE id = %s",
+                (feed_id,),
+            )
+        except Exception:
+            pass
+        # Best-effort immediate poll so the admin sees results without waiting.
+        try:
+            import service_feed_poller
+            service_feed_poller._poll_one_feed(sys.modules[__name__], feed)
+        except Exception as exc:
+            log_infra_event("warn", f"Manual feed refresh failed for {feed_id}: {exc}", source="service-feed")
+        # Re-fetch the feed so the response reflects the updated last_polled_at.
+        fresh = db.query_one(
+            "SELECT id, name, last_polled_at, last_item_id FROM service_feeds WHERE id = %s",
+            (feed_id,),
+        )
+        if fresh and fresh.get("last_polled_at"):
+            fresh["last_polled_at"] = fresh["last_polled_at"].isoformat() if hasattr(fresh["last_polled_at"], "isoformat") else str(fresh["last_polled_at"])
+        _json_response(self, 200, {"ok": True, "feed": fresh})
+
+    def _handle_service_feed_webhook(self, secret: str) -> None:
+        """Receive a webhook POST from a third-party service.
+
+        No auth (secret token in URL is the auth). Returns 200 for both
+        success and unknown-secret to prevent probing.
+        """
+        try:
+            data = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            data = {}
+        feed = db.query_one(
+            "SELECT id, name, kind, enabled, accent_color FROM service_feeds WHERE webhook_secret = %s",
+            (secret,),
+        )
+        if not feed:
+            # Return 200 anyway to avoid leaking which secrets exist.
+            _json_response(self, 200, {"ok": True})
+            return
+        if not feed.get("enabled"):
+            _json_response(self, 200, {"ok": True})
+            return
+        # Accept multiple shapes: Proton status (event/title/body),
+        # generic {title, message, url}, or anything else where we can find a
+        # title-ish field.
+        title = (
+            (data.get("event") or {}).get("title")
+            or data.get("title")
+            or data.get("subject")
+            or data.get("name")
+            or data.get("incident_name")
+            or "(no title)"
+        )
+        body = (
+            (data.get("event") or {}).get("body")
+            or data.get("message")
+            or data.get("summary")
+            or data.get("description")
+            or data.get("body")
+            or ""
+        )
+        url = (
+            (data.get("event") or {}).get("shortlink")
+            or (data.get("event") or {}).get("url")
+            or data.get("url")
+            or data.get("link")
+            or ""
+        )
+        entry = {"id": data.get("id") or data.get("event_id") or url or title, "title": title, "summary": body, "link": url}
+        try:
+            self._insert_feed_notification(feed, entry)
+        except Exception as exc:
+            log_infra_event("error", f"Webhook insert failed for feed {feed.get('id')}: {exc}", source="service-feed")
+        _json_response(self, 200, {"ok": True})
+
+    def _insert_feed_notification(self, feed: dict, entry: dict) -> None:
+        """Delegate to the module-level helper so the background poller can
+        call it without needing a KanbanHandler instance."""
+        _insert_feed_notification(feed, entry)
 
     # ── Photo Report Generation ──────────────────────────────────────────
 
@@ -16965,6 +17451,13 @@ def main() -> None:
     print(f"Version: {APP_VERSION}")
     dispatcher_stop = start_dispatcher()
     scanner_stop = mail_scanner.start_scanner() if mail_scanner else None
+    # Service-feed poller (RSS/Atom → notifications). Started after dispatcher
+    # so notification rows inserted by the poller get picked up immediately.
+    try:
+        import service_feed_poller
+        service_feed_poller.start_poller(sys.modules[__name__])
+    except Exception as e:
+        print(f"Service feed poller not started: {e}")
     backup_stop = None
     reminders_stop = None
     calendar_sync_stop = None

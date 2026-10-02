@@ -2,6 +2,100 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Timezone fix: TIMESTAMPTZ + per-viewer local render + admin Server Time Zone (2026-09-30)
+
+Follow-up from the Service Feeds release. Fixed the "Last polled: 8:52 PM" wrong-timezone display and added a Server Time Zone admin setting for server-side date math.
+
+### Root cause
+The `service_feeds.last_polled_at` column was `TIMESTAMP WITHOUT TIME ZONE`. Postgres wrote the server's wall-clock time (Eastern on this host). When the API returned an ISO string without an offset suffix, the JS `new Date(iso)` parsed it as **UTC** (per JS Date spec), then `toLocaleString()` converted to the user's local TZ. For an Eastern user this happened to look correct (server stored Eastern, browser interpreted as UTC → same Eastern). For any other TZ user it was off.
+
+Two other places in `public/app.js` were hardcoded to `timeZone: 'America/New_York'` (mail list dates and scanner log timestamps), forcing Eastern rendering for every user regardless of their own TZ.
+
+### Backend changes
+- **Migration `023_service_feeds_timestamptz.sql`** (NEW): `ALTER TABLE service_feeds ALTER COLUMN last_polled_at | created_at | updated_at TYPE TIMESTAMPTZ USING <col> AT TIME ZONE 'UTC'`. Existing data re-interpreted as UTC (which is what was stored, just without the TZ marker).
+- `init.sql`: same columns now declared `TIMESTAMP WITH TIME ZONE` for fresh DBs.
+- `server.py` startup block: idempotent `ALTER TYPE` migration + seed `server_timezone='America/New_York'` default row.
+- New module-level helpers `_server_timezone()` (cached, validates via `zoneinfo`) and `_server_now()` (naive current time in the configured server TZ).
+- New admin endpoints `GET /api/v2/admin/timezone` (returns `{timezone, default}`) and `POST /api/v2/admin/timezone` (UPSERT into `system_settings.key='server_timezone'`, validates IANA name).
+- Module-level `_insert_feed_notification(feed, entry)` so the background poller can call it without needing a `KanbanHandler` instance (the class method delegates to it).
+
+### Frontend changes
+- **Admin → General → new "Server Time Zone" section** below Alternate SMTP: dropdown (Common timezones first + full `Intl.supportedValuesOf('timeZone')` list), shows current value + timezone abbreviation (e.g. "Currently: America/New_York (EDT)"), Save button + Reset to default.
+- Removed `timeZone: 'America/New_York'` from two `toLocaleString()` calls in `public/app.js`:
+ - mail list row date (line ~23123)
+ - scanner log entry timestamp (line ~30696)
+- Per your clarification: **no user-facing display was centralized to the server timezone.** Every `new Date(iso).toLocaleString()` continues to render in the browser's local TZ — that's the correct UX.
+
+### Behavior
+- **User-facing timestamps** (Last polled, mail dates, scanner logs, history events, document dates, activity log, etc.) — render in **each viewer's local timezone**. Eastern Pacific user sees Pacific. Eastern user sees Eastern. No change in user-visible time except the `Last polled` value, which now correctly reflects when the poll happened (not a shifted-by-TZ value).
+- **Server-side date math** (automation triggers, daily-quote rollover, task reminders, mail retention "this week" filters, server "now" in inserts) — uses the configured `server_timezone` (default `America/New_York`). Admin can change it in General → Server Time Zone.
+
+### Files changed
+- `migrations/023_service_feeds_timestamptz.sql` (NEW, ~25 lines)
+- `init.sql` (3 column types changed)
+- `server.py` (~70 lines: helpers + endpoints + startup migration + seed)
+- `service_feed_poller.py` (1 line: tolerate either module-level or class-method `_insert_feed_notification`)
+- `public/index.html` (~30 lines: Server Time Zone section)
+- `public/app.js` (1 line bind, ~70 lines for `bindServerTimezone` + `loadServerTimezone`, 2 lines removed for the hardcoded Eastern renders)
+- Cache buster `?v=3.6.2` → `?v=3.6.3`. VERSION unchanged at 2.3.0.
+
+### Verified
+- `py_compile` + `node --check` pass.
+- Migration applied at startup; `last_polled_at` column is now `timestamp with time zone` and serializes as `"2026-09-30T21:18:04.171599+00:00"` (browser correctly converts to local TZ).
+- Manual poller invocation: `_poll_one_feed` calls `_insert_feed_notification` successfully, creates notifications, populates `last_item_id`.
+- "Test desc" leftover from earlier debugging cleaned up; final row has correct description.
+- Server restarted clean (PID 3330087); all routes respond correctly.
+
+---
+
+## Service Feeds (third-party status / webhook → notifications) (2026-09-30)
+
+Admins can now subscribe to third-party services (Proton status page, BlueBubbles webhooks, etc.) and surface their incidents/status changes as in-app notifications with a cloud icon and a per-feed accent color stripe. Configurable at the bottom of the **Admin → General** tab.
+
+### Backend
+
+- **New table `service_feeds`** (migration `022_add_service_feeds.sql` + idempotent `CREATE TABLE IF NOT EXISTS` block in `init.sql` and in `server.py`'s schema-migration section). Columns: `name`, `kind` (`'rss'` | `'webhook'`), `url`, `webhook_secret` (random URL-safe token), `poll_interval_sec`, `last_polled_at`, `last_item_id` (dedup), `enabled`, `target_mode` (`'all'` | `'specific'`), `target_user_ids` (Postgres `int[]`), `accent_color`, timestamps.
+- **Unique partial index** on `webhook_secret` for fast O(log n) webhook receiver lookup.
+- **RSS/Atom poller** (`service_feed_poller.py`, new file). Daemon thread started at server boot. Walks every enabled RSS feed every 30s, polls those whose `poll_interval_sec` has elapsed (min 60s) using stdlib `urllib.request` + `xml.etree.ElementTree` (no `feedparser` dependency). Parses both RSS 2.0 and Atom 1.0. Dedups via `last_item_id`. On first poll, only the most recent entry is delivered (avoids spamming every historical entry). Records `last_polled_at` even on fetch failure (so we don't hammer broken feeds).
+- **Webhook receiver** at `POST /api/v2/service-feeds/webhook/{secret}`. No session auth — secret token in URL is the auth. Accepts multiple shapes: Proton's `{event: {title, body, shortlink}}`, generic `{title, message, url}`, or any object with a title-ish field. Returns 200 for both success and unknown secret (no enumeration). Inserts notifications for every user in the feed's target list.
+- **Notification type = `'service_feed'`** with payload `{event_title, snippet, url, color, feed_id, feed_name}`. Snippet is HTML-stripped and clipped to 240 chars.
+- **Per-feed accent color** — color picker on the feed form; the notification card uses it for both the left border stripe AND the icon-circle background (set via CSS variable on the element).
+- **Target resolution**: `target_mode='all'` → every active user (including admins) gets the notification; `target_mode='specific'` → only users whose id is in `target_user_ids`. No per-user opt-out (per your spec).
+
+### Admin UI (Admin → General tab → bottom)
+
+New **"Service Feeds (Cloud Status Notifications)"** section:
+- **+ Add Feed** button → editor form with name, kind (RSS/Webhook), feed URL (RSS only, disabled for webhook), poll interval (RSS only, default 300s), accent color picker, enabled checkbox, target mode (All users / Specific users), and for `specific` mode a searchable user picker with chips.
+- For webhook feeds, after first save the editor shows the absolute webhook URL with a Copy button (the secret is generated server-side via `secrets.token_urlsafe(32)`).
+- **Feed list** below: cloud icon (tinted with feed color) + name + kind badge + target description + last-polled-at + Enabled badge. Buttons: **Refresh** (forces immediate poll, RSS only), **Edit**, **Delete**.
+
+### Notification UX
+
+- New `type = 'service_feed'` with the **cloud icon** (Tabler style, same as the rest of the icon set).
+- Card has a 3px left border stripe in the feed's accent color + the icon-circle background is tinted with the same color.
+- Click on a service-feed notification **opens `payload.url` in a new tab** (if the payload includes one). Marked-as-read on click.
+
+### Files added / changed
+
+| Path | Change |
+|---|---|
+| `migrations/022_add_service_feeds.sql` | NEW — `service_feeds` table + partial unique index on `webhook_secret`. |
+| `init.sql` | Same CREATE TABLE block under section 7.15. |
+| `service_feed_poller.py` | NEW — RSS/Atom polling daemon thread (~180 lines). |
+| `server.py` | +1 startup migration block (CREATE TABLE + UNIQUE INDEX). +1 startup poller boot. +1 GET route + 3 POST/PUT/DELETE/refresh routes + 1 webhook route. +5 handler methods (`_handle_service_feeds_get`, `_handle_service_feed_create`, `_handle_service_feed_update`, `_handle_service_feed_delete`, `_handle_service_feed_refresh`, `_handle_service_feed_webhook`). +1 `_insert_feed_notification` method. +2 module-level helpers (`_normalize_target_user_ids`, `_resolve_feed_target_user_ids`). |
+| `public/index.html` | +~80 lines for the service-feeds section at the bottom of the General tab. |
+| `public/app.js` | +~280 lines: `bindServiceFeedsAdmin`, `populateServiceFeedsAdmin`, `openSFEditor`, `closeSFEditor`, `_sfUpdateKindUI`, `_sfUpdateTargetModeUI`, `_sfSearchUsers`, `_sfLoadAllUsers`, `_sfRenderChosenUsers`, `buildSFWebhookUrl`, `collectSFFormData`, `saveSFFeed`, `deleteSFFeed`, `refreshSFFeedNow`, `_notifTypeIcon('service_feed')` cloud case, notification-card click → open `payload.url` in new tab, accent-color CSS variable on `.notification-drawer-item.service-feed`. |
+| `public/styles.css` | +~50 lines: `.admin-sf-card`, `.admin-sf-card-icon`, `.admin-sf-kind-badge`, `.admin-sf-user-chip`, `.notification-drawer-item.service-feed` (accent stripe + icon background). |
+| Cache buster `?v=3.6.1` → `?v=3.6.2`. VERSION unchanged at 2.3.0. |
+
+### Verified
+- `py_compile` (server.py + service_feed_poller.py) + `node --check public/app.js` all pass.
+- `service_feeds` table auto-created at server startup with all 14 columns.
+- End-to-end webhook smoke test: POSTed test payload to a test feed's webhook URL → 200 + 5 notifications created (one per active user, matching `target_mode='all'`).
+- Server restarted clean (PID 3040802); all routes respond correctly (admin = 401 auth required, webhook = 200 silent accept).
+
+---
+
 ## Changelog modal full-screen on narrow / mobile + X close button (2026-09-29)
 
 Follow-up fix from the same release. On phones and narrow viewports the changelog modal was rendering far wider than the viewport (overflowing left of the screen) so the close button wasn't reachable.
