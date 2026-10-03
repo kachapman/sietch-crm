@@ -24420,11 +24420,18 @@ function extractHistoryAttachments(ev) {
     if (typeof raw !== "object") return;
 
     const id = raw.id ?? raw.ID ?? raw.fileId ?? raw.FileId ?? raw.documentId ?? raw.DocumentId;
+    // Server (v2 /api/v2/projects/{id}/history) sends the real filename under
+    // the lowercase key 'filename' (matches the history_attachments DB column).
+    // Capture it separately so we can both use it for the title AND propagate it
+    // through to consumers like renderHistoryAttachmentsAside, which prefers
+    // file.filename over file.title.
+    const filename = raw.filename || raw.Filename || "";
     const title =
       raw.title ||
       raw.Title ||
       raw.fileName ||
       raw.FileName ||
+      filename ||
       raw.name ||
       raw.Name ||
       raw.displayName ||
@@ -24447,6 +24454,7 @@ function extractHistoryAttachments(ev) {
     if (!url && !title) return;
     const file = {
       id: id != null ? String(id) : "",
+      filename: filename,
       title: String(title || "Attachment").trim(),
       url: url ? (url.startsWith("/") ? url : portalAbsoluteUrl(url)) : "",
     };
