@@ -5296,8 +5296,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         attachments_by_event: dict[int, list] = {}
         if event_ids:
             att_rows = db.query(
-                """SELECT id, event_id, filename, file_path, file_size, mime_type, uploaded_by, crm_file_id
-                   FROM history_attachments WHERE event_id = ANY(%s)""",
+                """SELECT ha.id, ha.event_id, ha.filename, ha.file_path, ha.file_size,
+                          ha.mime_type, ha.uploaded_by, ha.crm_file_id,
+                          pd.id AS project_documents_id
+                   FROM history_attachments ha
+                   LEFT JOIN project_documents pd
+                          ON pd.file_path = ha.file_path
+                          AND pd.opportunity_id = (SELECT opportunity_id FROM history_events WHERE id = ha.event_id)
+                   WHERE ha.event_id = ANY(%s)""",
                 (event_ids,),
             )
             for ar in att_rows:
@@ -5305,6 +5311,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     "id": ar[0], "filename": ar[2], "filePath": ar[3],
                     "fileSize": ar[4], "mimeType": ar[5], "uploadedBy": ar[6],
                     "crmFileId": ar[7],
+                    "projectDocumentsId": ar[8],
                 })
         events = []
         for r in rows:

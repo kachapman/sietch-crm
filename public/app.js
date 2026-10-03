@@ -25249,25 +25249,46 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
     atts.forEach((a) => {
       const fileName = a.filename || a.fileName || a.title || a.storedFileName || "file";
       const aid = a.id || a.attachment_id;
+      const isImported = a._isImported === true;
+      const historyAttId = isImported ? aid : null;          // history_attachments.id
+      const projectDocId = a.project_documents_id || null;  // populated for back-filled imported atts
       const sizeBytes = a.size_bytes || a.size || 0;
       const fileSize = sizeBytes > 1024 * 1024 ? ` (${(sizeBytes / 1024 / 1024).toFixed(1)} MB)` : sizeBytes > 1024 ? ` (${Math.round(sizeBytes / 1024)} KB)` : sizeBytes ? ` (${sizeBytes} B)` : "";
       const wrap = document.createElement("span");
       wrap.className = "mail-attachment-link";
-      if (aid) {
+      // Has something we can link to: a live mail attachment id, a history_attachments id,
+      // or a back-filled project_documents id.
+      const hasAnyId = aid || historyAttId || projectDocId;
+      if (hasAnyId) {
         const ext = (fileName.split('.').pop() || '').toLowerCase();
         const link = document.createElement("a");
         link.textContent = fileName + fileSize;
-        if (_mailAttSupportedExts.includes(ext)) {
-          // Open in OnlyOffice editor (view-only)
+        if (_mailAttSupportedExts.includes(ext) && projectDocId) {
+          // Back-filled imported attachment → open in project_documents editor (the
+          // path that actually works since we promoted history_attachments to
+          // project_documents in commit 28346a9).
+          link.href = `/doc-editor.html?id=${projectDocId}`;
+          link.target = "_blank";
+        } else if (_mailAttSupportedExts.includes(ext) && aid && messageId) {
+          // Live mail attachment → mail-attachment editor route (uses mail_attachments table)
           link.href = "#";
           link.addEventListener("click", (e) => {
             e.preventDefault();
-            window.open(`/doc-editor.html?mail_msg=${messageId}&mail_att=${aid}`, "_blank");
+            window.open(`/doc-editor.html?mail_msg=${encodeURIComponent(messageId)}&mail_att=${encodeURIComponent(aid)}`, "_blank");
           });
-        } else {
-          // Download directly
-          link.href = `/api/v2/mail/messages/${encodeURIComponent(messageId)}/attachments/${aid}/download`;
+        } else if (isImported && historyAttId) {
+          // Unsupported extension or no project_documents row → download via the
+          // history-attachment route (serves data/history-attachments/.../ with the
+          // real filename in Content-Disposition).
+          link.href = `/api/v2/history-attachments/${encodeURIComponent(historyAttId)}/download`;
           link.target = "_blank";
+          link.rel = "noopener noreferrer";
+        } else if (aid && messageId) {
+          // Live mail fallback: download via mail_messages route.
+          link.href = `/api/v2/mail/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(aid)}/download`;
+          link.target = "_blank";
+        } else {
+          wrap.textContent = fileName + fileSize;
         }
         wrap.appendChild(link);
       } else {
@@ -25506,6 +25527,41 @@ function renderHistoryEventItem(ev) {
 
       if (isImportedEmail) {
         // Imported snapshots are self-contained; render directly without fetching mail_messages.
+        // For attachments, prefer the rich data from history_attachments (filename,
+        // size, mime, project_documents_id for the editor URL) over the sparser
+        // `mailPayload.attachments` from the original OnlyOffice event JSON
+        // (which only has fileId + viewUrl). Fall back to mailPayload.attachments
+        // and enrich by matching fileId to ev.attachments.crmFileId.
+        const evAttByCrmId = new Map();
+        for (const a of (ev.attachments || [])) {
+          if (a.crmFileId != null) evAttByCrmId.set(String(a.crmFileId), a);
+        }
+        const enrichedAttachments = (mailPayload.attachments || []).map((raw) => {
+          const fileId = raw.fileId ?? raw.file_id;
+          const match = fileId != null ? evAttByCrmId.get(String(fileId)) : null;
+          if (!match) return { ...raw, _isImported: true };
+          return {
+            fileId: raw.fileId ?? raw.file_id,
+            filename: match.filename || raw.filename || raw.title || "",
+            size_bytes: match.fileSize || raw.size_bytes || raw.size || 0,
+            mime_type: match.mimeType || raw.mime_type || raw.mimeType || "",
+            project_documents_id: match.projectDocumentsId || null,
+            url: raw.viewUrl || raw.url || "",
+            _isImported: true,
+          };
+        });
+        // If mailPayload had no attachments but ev.attachments does (rare), use those.
+        const finalAttachments = enrichedAttachments.length
+          ? enrichedAttachments
+          : (ev.attachments || []).map((a) => ({
+              fileId: a.crmFileId,
+              filename: a.filename,
+              size_bytes: a.fileSize,
+              mime_type: a.mimeType,
+              project_documents_id: a.projectDocumentsId || null,
+              url: "",
+              _isImported: true,
+            }));
         const snapshotMail = {
           subject: mailPayload.subject,
           from: mailPayload.from,
@@ -25515,7 +25571,7 @@ function renderHistoryEventItem(ev) {
           dateSent: mailPayload.date,
           htmlBody: mailPayload.body_html || "",
           textBody: mailPayload.body_text || mailPayload.introduction || "",
-          attachments: mailPayload.attachments || [],
+          attachments: finalAttachments,
         };
         renderMailEmbedPanel(mailPanel, snapshotMail, null, { crmPayload: mailPayload, hideOpenInMail: true });
         mailPanel.dataset.loaded = "imported";
