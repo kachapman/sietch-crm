@@ -3047,6 +3047,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 404, {"error": "Project not found"})
             return
 
+        # History attachment download (serves the file from data/history-attachments/)
+        m = re.match(r"^/api/v2/history-attachments/(\d+)/download$", api_path)
+        if m:
+            self._handle_history_attachment_download(int(m.group(1)))
+            return
+
         # ── v2 API: Other resources ──
         if api_path == "/api/v2/stages":
             self._handle_stages_get()
@@ -5290,7 +5296,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         attachments_by_event: dict[int, list] = {}
         if event_ids:
             att_rows = db.query(
-                """SELECT id, event_id, filename, file_path, file_size, mime_type, uploaded_by
+                """SELECT id, event_id, filename, file_path, file_size, mime_type, uploaded_by, crm_file_id
                    FROM history_attachments WHERE event_id = ANY(%s)""",
                 (event_ids,),
             )
@@ -5298,6 +5304,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 attachments_by_event.setdefault(ar[1], []).append({
                     "id": ar[0], "filename": ar[2], "filePath": ar[3],
                     "fileSize": ar[4], "mimeType": ar[5], "uploadedBy": ar[6],
+                    "crmFileId": ar[7],
                 })
         events = []
         for r in rows:
@@ -5399,6 +5406,59 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         db.execute("DELETE FROM history_events WHERE id = %s", (event_id,))
         _json_response(self, 200, {"ok": True})
+
+    def _handle_history_attachment_download(self, attachment_id: int) -> None:
+        """Serve a history-attachment file by its history_attachments.id.
+
+        Restores the pre-regression behavior (commit 40e0b61) where clicking
+        a history attachment downloads the file from the local cache. The file
+        lives at data/history-attachments/<opp>/<event>/<crm_file_id>_<safe>
+        and we serve it with the original filename + correct Content-Type so
+        the browser saves it as e.g. "Schemel Xact estimate.pdf" instead of
+        "File 17814.pdf".
+        """
+        user = _require_auth(self)
+        if not user:
+            return
+        row = db.query_one(
+            "SELECT filename, file_path, mime_type, file_size FROM history_attachments WHERE id = %s",
+            (attachment_id,),
+        )
+        if not row:
+            self.send_error(404)
+            return
+        filename = row.get("filename") or "attachment"
+        rel_path = row.get("file_path") or ""
+        # file_path is stored relative to project root (e.g. data/history-attachments/...)
+        # Path-traversal-safe: the row's file_path was written by the importer
+        # with safe characters, but we re-validate against the canonical base.
+        base = (Path(__file__).parent / "data" / "history-attachments").resolve()
+        try:
+            full_path = (Path(__file__).parent / rel_path).resolve()
+        except (OSError, ValueError):
+            self.send_error(400)
+            return
+        # Must be inside the history-attachments directory tree
+        try:
+            full_path.relative_to(base)
+        except ValueError:
+            self.send_error(400)
+            return
+        if not full_path.is_file():
+            self.send_error(404)
+            return
+        data = full_path.read_bytes()
+        ctype = row.get("mime_type") or "application/octet-stream"
+        # Sanitize filename for Content-Disposition header
+        safe_name = re.sub(r"[^\w.\- ]+", "_", filename).strip("._") or "attachment"
+        disposition = f"attachment; filename=\"{safe_name}\""
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", disposition)
+        self.send_header("Cache-Control", "private, max-age=300")
+        self.end_headers()
+        self.wfile.write(data)
 
     # ── Threaded Replies ────────────────────────────────────────────────────
 

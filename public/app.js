@@ -16086,7 +16086,7 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
 
     const avatar = document.createElement("span");
     avatar.className = "presence-user-avatar";
-    const initial = (u.displayName || u.email || "?")[0]?.toUpperCase() || "?";
+    const initial = userInitials(u) || "?";
     const avatarUrl = avatarMap[id];
     if (avatarUrl) {
       const img = document.createElement("img");
@@ -17353,7 +17353,7 @@ function renderPresenceTileCompact(snapshot = null) {
     // Avatar with initials + optional photo
     const avatar = document.createElement("span");
     avatar.className = "presence-user-avatar";
-    const initials = ((u.displayName || u.email || "?")[0] || "?").toUpperCase();
+    const initials = userInitials(u) || "?";
     const avatarUrl = avatarMap[u.id] || u.thumbnailUrl || u.avatarUrl;
     if (avatarUrl) {
       const img = document.createElement("img");
@@ -25353,8 +25353,14 @@ function renderHistoryAttachmentsAside(parent, attachments) {
     const filename = file.filename || file.title || file.name || "Attachment";
     const a = document.createElement("a");
     a.className = "opp-preview-attachment-link";
-    a.href = docId ? `/doc-editor.html?id=${docId}` : (file.url || "#");
-    a.target = "_blank";
+    // History attachments live in data/history-attachments/ and are served by
+    // the Sietch /api/v2/history-attachments/{id}/download route with the real
+    // filename in Content-Disposition. This restores the pre-regression behavior
+    // (commit 40e0b61) where clicking an attachment downloaded the actual file
+    // instead of opening a non-existent /api/v2/documents/{id}/editor-config
+    // route (which only knows about project_documents rows, not history_attachments).
+    a.href = docId ? `/api/v2/history-attachments/${encodeURIComponent(docId)}/download` : (file.url || "#");
+    a.download = filename;
     a.rel = "noopener noreferrer";
     a.title = filename;
     a.textContent = filename;
@@ -32235,6 +32241,12 @@ async function populateAdminUsersList() {
         const form = $("#admin-user-edit-form");
         if (!form) return;
         form.classList.remove("hidden");
+        // Scroll the form into view — on mobile the user list is taller
+        // than the viewport, so without this the form appears off-screen
+        // below the fold and the user sees "nothing happened" after tapping Edit.
+        try {
+          form.scrollIntoView({ behavior: "smooth", block: "center" });
+        } catch (_) { /* noop for browsers without smooth-scroll */ }
         form.innerHTML = `
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.4rem 0.6rem; margin-bottom:0.5rem;">
             <input type="text" id="edit-user-first" class="form-control" placeholder="First name" value="${escapeHtml(user.firstName || "")}" />
