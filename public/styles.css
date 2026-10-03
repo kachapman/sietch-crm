@@ -18301,3 +18301,77 @@ select.form-control {
   color: #000;
 }
 
+
+/* ── Tabler icon picker (user avatar + mail tab appearance) ── */
+.tabler-icon-picker-card {
+  width: 720px;
+  max-width: 95vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+.tabler-icon-picker-body {
+  overflow-y: auto;
+  padding: 1rem;
+}
+.tabler-icon-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 0.4rem;
+}
+.tabler-icon-pick {
+  background: var(--bg-elevated, #2a2a2a);
+  border: 1px solid var(--border, #3a3a3a);
+  border-radius: 6px;
+  padding: 0.4rem 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s;
+  font-size: 1.3rem;
+  color: var(--text, #eee);
+  aspect-ratio: 1 / 1;
+}
+.tabler-icon-pick:hover {
+  border-color: var(--accent, #4f8cff);
+}
+.tabler-icon-pick.selected {
+  border-color: var(--accent, #4f8cff);
+  background: var(--accent, #4f8cff);
+  color: #fff;
+}
+@media (max-width: 720px) {
+  .tabler-icon-picker-grid {
+    grid-template-columns: repeat(5, 1fr);
+  }
+}
+
+/* ── Avatar chips (users + contacts) ── */
+.user-avatar-chip,
+.contact-avatar-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-elevated, #2a2a2a);
+  color: var(--text, #eee);
+  overflow: hidden;
+  flex-shrink: 0;
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: middle;
+}
+.user-avatar-chip[data-size="sm"], .contact-avatar-chip[data-size="sm"] { width: 24px; height: 24px; font-size: 0.7rem; }
+.user-avatar-chip[data-size="md"], .contact-avatar-chip[data-size="md"] { width: 32px; height: 32px; font-size: 0.85rem; }
+.user-avatar-chip[data-size="lg"], .contact-avatar-chip[data-size="lg"] { width: 48px; height: 48px; font-size: 1.2rem; }
+.user-avatar-chip img, .contact-avatar-chip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+.user-avatar-chip.user-avatar-icon, .contact-avatar-chip.contact-avatar-icon {
+  /* Icon style — accent bg set inline */
+  font-size: 1rem;
+}

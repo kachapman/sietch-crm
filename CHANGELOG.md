@@ -2,6 +2,118 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## OnlyOffice import/sync v2 audit + rewrite (2026-10-02)
+
+Pre-cutover fix-up of the migration pipeline from the older production OnlyOffice CRM (currently in use, will be retired at Sietch deployment). The audit found **22 bugs**; this release addresses the live handler issues that affected every import (numeric custom-field type mapping, missing attachments download, no author mapping, no actualCloseDate capture, missing onlyoffice_id dedup, destructive `pull-deal-tags`, wrong task endpoint, missing contact multi-value / upsert, missing avatar download) and rewrites both `import_json_export.py` and `migrate_from_onlyoffice.py` so the JSON export shape and the live API both feed clean data into the same DB.
+
+### Schema additions (migrations 024, 025, 026, 027, 028)
+
+- `024_onlyoffice_ids_and_actual_close.sql` (NEW):
+  - `opportunities.onlyoffice_id TEXT` + partial unique index `uq_opportunities_onlyoffice_id` (WHERE NOT NULL) — stable ID for re-run dedup
+  - `opportunities.actual_close_date DATE` — the "Closed Won on YYYY-MM-DD" date OnlyOffice stored as `actualCloseDate` and that we previously dropped
+  - `opportunities.actual_close_value NUMERIC(12,2)` — final deal value
+  - `tasks.onlyoffice_id TEXT` + partial unique index
+  - `history_events.crm_event_id BIGINT` + index — enables exact dedup instead of fragile (category, content-prefix, created-at) tuple
+  - `history_events.crm_entity_id BIGINT` — the opp id in source
+  - `history_attachments.original_url TEXT` — preserves the OnlyOffice download URL for audit/debug
+  - `history_attachments.crm_file_id BIGINT` — source file id for cross-reference + dedup
+- `025_contact_multi_values.sql` (NEW): `contact_emails` / `contact_phones` / `contact_addresses` (1:N to contacts), `contacts.onlyoffice_task_count` / `onlyoffice_status_id` / `raw_about` / `raw_industry` / `avatar_local_path`
+- `026_user_avatar_icon.sql` (NEW): `users.avatar_icon TEXT` (NULL = initials); also one-shot cleanup to clear `contacts.avatar_url` when `avatar_local_path` is set
+- `027_unique_contact_onlyoffice_id.sql` (NEW): promote `contacts(onlyoffice_id)` index to unique-partial (required for `ON CONFLICT (onlyoffice_id)` dedup)
+- `028_contact_multi_value_unique.sql` (NEW): unique-partial indexes on `contact_emails/phones/addresses(onlyoffice_id)` for idempotent re-runs
+- `init.sql`: same tables/columns for fresh DBs
+
+### Audit bugs fixed
+
+| # | Bug | Fix |
+|---|---|---|
+| #1 | Custom-field `type_map` was string-only; source has `fieldType` as NUMERIC (0/1/3/5) — every field became `text` | New `OO_FIELD_TYPE_MAP` with integer keys; `Date of Loss` (5) → `date`, `Address` (1) → `textarea`, file pickers (3) → `url` |
+| #2 | File-picker fields lost clickability | Stored as `field_type='url'`; ready for UI rendering |
+| #3 | `field_key` naming convention split between scripts | Both scripts use `field_<int_id>`; onlyoffice_id column added for stable identity |
+| #4 | `pull-deals` only synced tags/CFs for **new** deals | Now always upserts tags + CF values for new AND existing deals |
+| #5 | History-event attachments never downloaded | New per-event file downloader: `data/history-attachments/<opp>/<event>/<id>_<safe_name>` |
+| #6 | Email snapshot didn't reference actual file downloads | Email-attached files now downloaded into history_attachments; `crm_file_id` set for dedup |
+| #7 | `pull-email-bodies` sequential (3h for 10k emails) | Documented as known limitation; helper `ThreadPoolExecutor` ready for next iteration |
+| #8 | `pull-tasks` used `/api/2.0/crm/task/filter` (wrong endpoint for current OO version) | Both `pull-tasks` and `full-reconcile` switched to `/api/2.0/crm/task/filter?isClosed=true/false` |
+| #9 | `pull-contacts` was INSERT-only | Now `ON CONFLICT (onlyoffice_id) DO UPDATE` covering all mutable fields |
+| #10 | Multi-value contact data collapsed to one row | Inserts per-entry rows into `contact_emails`/`contact_phones`/`contact_addresses` |
+| #11 | `actualCloseDate` dropped on import | New column + import (ignores the `0001-01-01T00:00:00` .NET sentinel) |
+| #12 | `full-reconcile` was misleading read-only sweep | Now runs users → stages → tags → cf-defs chain (still no deals, but documented) |
+| #13 | `pull-deal-tags` `DELETE`d all local tags/CFs (destructive on partial failure) | Now scoped to deals with `onlyoffice_id IS NOT NULL` only |
+| #14 | No `onlyoffice_id` on opportunities → duplicates on title mismatch | `pull-deals` matches by `onlyoffice_id` first, falls back to title |
+| #15 | History `created_by` was always `NULL` | New `_crm_fetch_user_id_map()` builds OO-uuid→sietch-id map (matched by email), passed to history insert |
+| #16 | Orphan-cleanup count log was wrong | `DELETE … RETURNING id` so the count is exact |
+| #17 | Dead loop in `import_json_export.py` | Removed; tag lookup goes straight to SQL |
+| #18 | Sync log is a 500-entry deque lost on tab close | Documented as known limitation |
+| #19 | Contact avatars stored as remote URLs | Downloaded at import to `data/contact-avatars/<oo_id>.jpg`; `contacts.avatar_local_path` set; new `GET /api/v2/contact-avatars/<name>` route serves them |
+| #20 | User profile JSON not importable | Out of scope (handled by `migrate_dashboard_data.py`) |
+| #21 | All pulls were full-table, no filters | `pull-deals` now accepts `since`, `stage_id`, `responsible_id` in payload |
+| #22 | Top-level OnlyOffice documents not Sietch-mappable | History-attachment is the proxy; documented |
+
+### Live-API sync (first successful end-to-end run)
+
+Final state from live `office.publicadjustermidwest.com` API pull:
+- **11 users** (preserved bot password; 9 from live + 2 admin extras kept by ON CONFLICT)
+- **19 stages** (was 18 — added "BANEY TANTRUM - PAUSE WORK")
+- **23 tag definitions** (was 21 — added 2 new)
+- **30 custom field defs** (numeric fieldType correctly mapped: 22 text, 4 url, 3 textarea, 1 date)
+- **18 contacts** (was 16 — added MDM Construction + 1 more)
+- **1229 opportunities** (was 1191 — 38 new deals created since the export)
+- **190 opportunity_tags** (was 0 in export — live API has per-deal tag endpoint)
+- **12612 opportunity_custom_field_values** (vs 12062 in export)
+- **41745 history events** (was 38898 in export — 2847 new events)
+- **836 tasks** (was 0 — export had no tasks.json; live API returns full task list via `/api/2.0/crm/task/filter`)
+- **18 contact avatars** downloaded to `data/contact-avatars/`
+- All Mail Message events have `created_by` mapped to a real user (verified: `claudc@vanguardadj.com`)
+
+### Endpoint corrections during live run
+
+| Was | Now |
+|------|------|
+| `/api/2.0/people/` | `/api/2.0/people` |
+| `/api/2.0/crm/contact` | `/api/2.0/crm/contact/filter?count=500` |
+| `/api/2.0/projects/task/` (404) | `/api/2.0/crm/task/filter?isClosed=true/false` |
+| `/api/2.0/files/{id}` (403 for bot) | `/Products/Files/HttpHandlers/filehandler.ashx?action=download&fileid={id}` |
+
+### User avatar picker (Phase B)
+
+- `users.avatar_icon TEXT` column (migration 026).
+- New `TABLER_ICON_OPTIONS` constant in `public/app.js` — **100 icons** across people/animals/nature/buildings/transport/media/food/tech/office/security/misc.
+- New "Pick Icon" button in profile modal alongside "Upload Photo".
+- New `openTablerIconPicker()` modal — same 10×10 grid as the reference screenshot.
+- New server endpoints: `GET /api/v2/my/avatar-style`, `PUT /api/v2/my/avatar-style`, `GET /api/v2/users/avatar-styles`, `GET /api/v2/contact-avatars/<filename>`.
+- Initials helper uses `first + last` name (was `slice(0,1)`).
+- `renderUserAvatar()` and `renderContactAvatar()` helpers prioritize photo > icon > initials.
+- Mail-account "Tab Appearance" icon picker now uses the same 100-icon pool (was 18).
+
+### Files changed
+- `migrations/024_*`, `…025_*`, `…026_*`, `…027_*`, `…028_*` (NEW)
+- `init.sql` (~120 lines: new tables + new columns + unique indexes)
+- `import_json_export.py` (full rewrite)
+- `migrate_from_onlyoffice.py` (full rewrite: live endpoint corrections)
+- `server.py` (helpers + 6 handler refactors + 4 new API endpoints)
+- `public/app.js` (~150 new lines: helpers, picker, modal, multi-render fixes)
+- `public/index.html` (tabler icon picker modal + Pick Icon button)
+- `public/styles.css` (~80 lines: picker modal + avatar chip styles)
+- `sync_opp_details.py` (NEW: focused live API per-opp tags+CF+history sync, used after bulk import)
+- `tests/test_onlyoffice_import.py` (NEW, 8 unit tests)
+
+### Verified
+- Migrations 024-028 all applied; schema sanity-checked.
+- Full live API sync (via `migrate_from_onlyoffice.py` + `sync_opp_details.py`) against `office.publicadjustermidwest.com` succeeded; bot password preserved.
+- `/api/v2/my/avatar-style` PUT/GET tested with valid + invalid icons.
+- `/api/v2/contact-avatars/<filename>` tested: valid file 200, missing 404, traversal attempt 404.
+- 8/8 unit tests pass.
+- `py_compile server.py` + `py_compile import_json_export.py` + `py_compile migrate_from_onlyoffice.py` + `node --check public/app.js` all pass.
+- Server restarted clean (PID 190502); `/api/config` returns 200.
+
+### Next
+- File download from `filehandler.ashx` returns 403 for bot user on most files (folder permissions) — manual admin intervention needed, or admin token must be used.
+- Threaded `pull-email-bodies` for faster email body fetch (Bug #7).
+- Persistent sync log (Bug #18).
+
+---
+
 ## Timezone fix: TIMESTAMPTZ + per-viewer local render + admin Server Time Zone (2026-09-30)
 
 Follow-up from the Service Feeds release. Fixed the "Last polled: 8:52 PM" wrong-timezone display and added a Server Time Zone admin setting for server-side date math.

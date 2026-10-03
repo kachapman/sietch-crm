@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""One-time migration from OnlyOffice CRM to PostgreSQL (Sietch CRM v3.0).
+"""One-time migration from OnlyOffice CRM to PostgreSQL (Sietch CRM).
 
-Run after init.sql has been executed and the PostgreSQL container is up.
+Run after init.sql + migrations 024/025 have been applied.
 
 For --export-only (recommended for round-trip tests): no psycopg2 required.
 For full migration (writes to DB): requires psycopg2 (pip install psycopg2-binary)
@@ -9,8 +9,8 @@ For full migration (writes to DB): requires psycopg2 (pip install psycopg2-binar
 Usage:
     python migrate_from_onlyoffice.py --portal-url https://office.publicadjustermidwest.com --email admin@example.com --password secret
     python migrate_from_onlyoffice.py --portal-url ... --email ... --password ... --export-only --export-dir ./crm-export
-    python migrate_from_onlyoffice.py --help
- """
+    python migrate_from_onlyoffice.py --portal-url ... --email ... --password ... --skip-attachment-download
+"""
 
 from __future__ import annotations
 
@@ -29,18 +29,19 @@ from pathlib import Path
 from typing import Any
 
 # psycopg2 is only required for non-export runs.
-# We set it to None here so --export-only works even if the package is not installed.
 psycopg2 = None
 
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
-RATE_LIMIT_DELAY = 0.1       # 10 requests/sec
-SUB_REQUEST_DELAY = 1.0      # 1s between opportunity sub-requests
+RATE_LIMIT_DELAY = 0.05       # 20 req/sec
+SUB_REQUEST_DELAY = 0.05      # sub-requests between opp history/tags/CF
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 1.0
-ATTACHMENT_DIR = Path(__file__).resolve().parent / "data" / "attachments"
+HISTORY_ATTACHMENT_DIR = Path(__file__).resolve().parent / "data" / "history-attachments"
+CONTACT_AVATAR_DIR = Path(__file__).resolve().parent / "data" / "contact-avatars"
 MIGRATION_REPORT = Path(__file__).resolve().parent / "migration_report.txt"
+OO_CLOSURE_SENTINEL = "0001-01-01T00:00:00"
 
 
 MIME_TYPES = {
@@ -60,25 +61,51 @@ MIME_TYPES = {
     "bmp": "image/bmp",
     "tiff": "image/tiff",
     "webp": "image/webp",
+    "esx": "application/octet-stream",
 }
 
 
 def _guess_mime_type(ext: str) -> str:
     return MIME_TYPES.get(ext.lower(), "application/octet-stream")
 
-# Map CRM user IDs to new v3 user IDs
-_crm_id_map: dict[str, dict[str, int]] = {
-    "users": {},        # crm_user_id -> v3 user.id
-    "contacts": {},     # crm_contact_id -> v3 contact.id
-    "opportunities": {},  # crm_opp_id -> v3 opportunity.id
-    "stages": {},       # crm_stage_id -> v3 stage.id
-    "tags": {},         # crm_tag_id -> v3 tag.id
-    "custom_fields": {},  # crm_field_id -> v3 custom_field_definition.id
-    "history_categories": {},  # crm_category_title -> v3 history_category.id
+
+# OnlyOffice fieldType is NUMERIC. Map every value we've seen.
+_OO_FIELD_TYPE_MAP = {
+    "0": "text", "1": "textarea", "2": "number", "3": "url",
+    "4": "select", "5": "date", "6": "checkbox", "7": "currency",
+    "8": "text",
 }
 
 
-# ── SSL Context ────────────────────────────────────────────────────────────────
+def _normalize_field_type(raw: Any) -> str:
+    if raw is None:
+        return "text"
+    return _OO_FIELD_TYPE_MAP.get(str(raw).strip().lower(), "text")
+
+
+def _is_closure_sentinel(raw: Any) -> bool:
+    s = str(raw or "").strip()
+    return s.startswith(OO_CLOSURE_SENTINEL)
+
+
+def _safe_filename(name: str) -> str:
+    out = re.sub(r"[^\w.\-]+", "_", name or "").strip("._")
+    return out or "file"
+
+
+# Map CRM user IDs to new v3 user IDs
+_crm_id_map: dict[str, dict[str, str]] = {
+    "users": {},            # crm_user_id -> v3 user.id (as str to keep UUIDs)
+    "contacts": {},         # crm_contact_id (str) -> v3 contact.id
+    "opportunities": {},    # crm_opp_id (str) -> v3 opportunity.id
+    "stages": {},
+    "tags": {},
+    "custom_fields": {},
+    "history_categories": {},
+}
+
+
+# ── SSL / HTTP ─────────────────────────────────────────────────────────────────
 
 def _ssl_context():
     verify = os.environ.get("ONLYOFFICE_SSL_VERIFY", "true").lower() not in ("0", "false", "no")
@@ -89,8 +116,6 @@ def _ssl_context():
     ctx.verify_mode = ssl.CERT_NONE
     return ctx
 
-
-# ── HTTP Helpers ───────────────────────────────────────────────────────────────
 
 def _crm_get(portal: str, token: str, path: str, retries: int = MAX_RETRIES) -> Any:
     """GET from the CRM API with rate limiting and retry."""
@@ -147,8 +172,30 @@ def _crm_get_raw(portal: str, token: str, path: str, retries: int = MAX_RETRIES)
     return None
 
 
+def _crm_get_json_body(portal: str, token: str, path: str) -> Any:
+    """GET a body that may be JSON or HTML (filehandler.ashx)."""
+    url = f"{portal.rstrip('/')}{path}"
+    for attempt in range(MAX_RETRIES):
+        try:
+            req = urllib.request.Request(url, headers={
+                "Accept": "application/json, text/html, */*",
+                "Authorization": token,
+            })
+            with urllib.request.urlopen(req, context=_ssl_context(), timeout=30) as resp:
+                ctype = resp.headers.get("Content-Type", "")
+                raw = resp.read().decode("utf-8", errors="replace")
+            if "application/json" in ctype or raw.lstrip().startswith(("{", "[")):
+                try:
+                    return json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    return None
+            return raw
+        except Exception:
+            time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
+    return None
+
+
 def _unwrap(data: Any) -> Any:
-    """Unwrap OnlyOffice API response envelope."""
     if isinstance(data, dict):
         if "response" in data:
             return data["response"]
@@ -158,7 +205,6 @@ def _unwrap(data: Any) -> Any:
 
 
 def _paginate(portal: str, token: str, base_path: str, param_name: str = "count", page_size: int = 500) -> list:
-    """Paginate through a CRM list endpoint."""
     items = []
     start = 0
     while True:
@@ -174,23 +220,11 @@ def _paginate(portal: str, token: str, base_path: str, param_name: str = "count"
     return items
 
 
-# ── Database Helpers ───────────────────────────────────────────────────────────
-
-def _db_insert_returning(cur, sql: str, params: tuple = ()) -> int:
-    cur.execute(sql, params)
-    return cur.fetchone()[0]
-
-
-def _db_insert(cur, sql: str, params: tuple = ()) -> None:
-    cur.execute(sql, params)
-
-
 # ── Migration Steps ────────────────────────────────────────────────────────────
 
 def _migrate_users(conn, portal: str, token: str) -> int:
-    """Step 1: Pull users from CRM and insert into PostgreSQL."""
     print("\n[Step 1] Migrating users...")
-    data = _unwrap(_crm_get(portal, token, "/api/2.0/people/"))
+    data = _unwrap(_crm_get(portal, token, "/api/2.0/people"))
     users = data if isinstance(data, list) else []
     count = 0
     with conn.cursor() as cur:
@@ -229,7 +263,6 @@ def _migrate_users(conn, portal: str, token: str) -> int:
 
 
 def _migrate_stages(conn, portal: str, token: str) -> int:
-    """Step 2: Pull stages from CRM."""
     print("\n[Step 2] Migrating stages...")
     data = _unwrap(_crm_get(portal, token, "/api/2.0/crm/opportunity/stage"))
     stages = data if isinstance(data, list) else []
@@ -245,13 +278,17 @@ def _migrate_stages(conn, portal: str, token: str) -> int:
             color = str(s.get("color") or s.get("Color") or "#999999").strip()
             sort_order = int(s.get("sortOrder") or s.get("SortOrder") or 0)
             stage_type = int(s.get("stageType") or s.get("StageType") or 0)
-            probability = int(s.get("probability") or s.get("Probability") or 0)
+            probability = int(s.get("probability") or s.get("Probability") or
+                              s.get("successProbability") or 0)
 
             cur.execute(
                 """INSERT INTO stages (title, color, sort_order, stage_type, probability)
                    VALUES (%s, %s, %s, %s, %s)
                    ON CONFLICT (title) DO UPDATE SET
-                       color = EXCLUDED.color, sort_order = EXCLUDED.sort_order
+                       color = EXCLUDED.color,
+                       sort_order = EXCLUDED.sort_order,
+                       stage_type = EXCLUDED.stage_type,
+                       probability = EXCLUDED.probability
                    RETURNING id""",
                 (title, color, sort_order, stage_type, probability),
             )
@@ -265,9 +302,8 @@ def _migrate_stages(conn, portal: str, token: str) -> int:
 
 
 def _migrate_tags(conn, portal: str, token: str) -> int:
-    """Step 3: Pull tag definitions from CRM."""
     print("\n[Step 3] Migrating tags...")
-    data = _unwrap(_crm_get(portal, token, "/api/2.0/crm/tag"))
+    data = _unwrap(_crm_get(portal, token, "/api/2.0/crm/opportunity/tag"))
     tags = data if isinstance(data, list) else []
     count = 0
     with conn.cursor() as cur:
@@ -278,7 +314,7 @@ def _migrate_tags(conn, portal: str, token: str) -> int:
             title = str(t.get("title") or t.get("name") or t.get("Title") or t.get("Name") or "").strip()
             if not title:
                 continue
-            color = str(t.get("color") or t.get("Color") or "").strip() or None
+            color = str(t.get("color") or t.get("Color") or "#6c757d").strip() or None
 
             cur.execute(
                 """INSERT INTO tag_definitions (title, color)
@@ -297,7 +333,6 @@ def _migrate_tags(conn, portal: str, token: str) -> int:
 
 
 def _migrate_custom_fields(conn, portal: str, token: str) -> int:
-    """Step 4: Pull custom field definitions."""
     print("\n[Step 4] Migrating custom field definitions...")
     data = _unwrap(_crm_get(portal, token, "/api/2.0/crm/opportunity/customfield/definitions"))
     fields = data if isinstance(data, list) else []
@@ -310,25 +345,20 @@ def _migrate_custom_fields(conn, portal: str, token: str) -> int:
             label = str(f.get("label") or f.get("Label") or f.get("name") or f.get("Name") or "").strip()
             if not label:
                 continue
-            field_key = str(f.get("key") or f.get("Key") or f.get("fieldKey") or "").strip() or f"field_{crm_id}"
-            field_type = str(f.get("type") or f.get("Type") or f.get("fieldType") or "text").strip().lower()
+            # Convention: field_key = "field_<crm_id>" (so live handlers can map)
+            field_key = f"field_{crm_id}" if crm_id else f"field_{label.lower().replace(' ', '_')}"
+            mapped_type = _normalize_field_type(f.get("type") or f.get("Type") or f.get("fieldType"))
             is_required = bool(f.get("isRequired") or f.get("IsRequired"))
-            sort_order = int(f.get("sortOrder") or 0)
-
-            # Map OnlyOffice field types to our types
-            type_map = {
-                "text": "text", "textarea": "textarea", "htmleditor": "textarea",
-                "select": "select", "combobox": "select", "checkbox": "checkbox",
-                "date": "date", "datetime": "date", "number": "number",
-                "money": "currency", "currency": "currency",
-            }
-            mapped_type = type_map.get(field_type, "text")
+            sort_order = int(f.get("sortOrder") or f.get("position") or 0)
 
             cur.execute(
                 """INSERT INTO custom_field_definitions (field_key, label, field_type, is_required, sort_order)
                    VALUES (%s, %s, %s, %s, %s)
                    ON CONFLICT (field_key) DO UPDATE SET
-                       label = EXCLUDED.label, field_type = EXCLUDED.field_type
+                       label = EXCLUDED.label,
+                       field_type = EXCLUDED.field_type,
+                       is_required = EXCLUDED.is_required,
+                       sort_order = EXCLUDED.sort_order
                    RETURNING id""",
                 (field_key, label, mapped_type, is_required, sort_order),
             )
@@ -337,58 +367,239 @@ def _migrate_custom_fields(conn, portal: str, token: str) -> int:
                 _crm_id_map["custom_fields"][crm_id] = v3_id
 
             # Pull options for select-type fields
-            if mapped_type in ("select",):
-                opts_data = _unwrap(_crm_get(portal, token, f"/api/2.0/crm/opportunity/customfield/{crm_id}/options"))
-                opts = opts_data if isinstance(opts_data, list) else []
-                for idx, opt in enumerate(opts):
-                    if isinstance(opt, dict):
-                        ov = str(opt.get("value") or opt.get("Value") or opt.get("displayText") or "").strip()
-                        ol = str(opt.get("displayText") or opt.get("DisplayText") or ov).strip()
-                        if ov:
-                            cur.execute(
-                                """INSERT INTO custom_field_options (field_id, option_value, option_label, sort_order)
-                                   VALUES (%s, %s, %s, %s)""",
-                                (v3_id, ov, ol, idx),
-                            )
+            if mapped_type == "select":
+                try:
+                    opts_data = _unwrap(_crm_get(portal, token, f"/api/2.0/crm/opportunity/customfield/{crm_id}/options"))
+                    opts = opts_data if isinstance(opts_data, list) else []
+                    for idx, opt in enumerate(opts):
+                        if isinstance(opt, dict):
+                            ov = str(opt.get("value") or opt.get("Value") or opt.get("displayText") or "").strip()
+                            ol = str(opt.get("displayText") or opt.get("DisplayText") or ov).strip()
+                            if ov:
+                                cur.execute(
+                                    """INSERT INTO custom_field_options (field_id, option_value, option_label, sort_order)
+                                       VALUES (%s, %s, %s, %s)""",
+                                    (v3_id, ov, ol, idx),
+                                )
+                except Exception as exc:
+                    print(f"  [warn] CF options for {crm_id}: {exc}")
             count += 1
         conn.commit()
     print(f"  → {count} custom field definitions imported")
     return count
 
 
-def _migrate_contacts(conn, portal: str, token: str) -> int:
-    """Step 5: Pull contacts."""
+def _migrate_contacts(conn, portal: str, token: str, download_avatars: bool = True) -> int:
     print("\n[Step 5] Migrating contacts...")
-    crm_contacts = _paginate(portal, token, "/api/2.0/crm/contact")
+    crm_contacts = _paginate(portal, token, "/api/2.0/crm/contact/filter?count=500")
     count = 0
     with conn.cursor() as cur:
         for c in crm_contacts:
             if not isinstance(c, dict):
                 continue
             crm_id = str(c.get("id") or c.get("ID") or "")
-            first_name = str(c.get("firstName") or c.get("FirstName") or "").strip()
-            last_name = str(c.get("lastName") or c.get("LastName") or "").strip()
-            email = str(c.get("email") or c.get("Email") or "").strip() or None
-            phone = str(c.get("phone") or c.get("Phone") or "").strip() or None
-            company = str(c.get("companyName") or c.get("CompanyName") or "").strip() or None
+            if not crm_id:
+                continue
+
+            # Skip if already imported
+            cur.execute("SELECT id FROM contacts WHERE onlyoffice_id = %s", (crm_id,))
+            if cur.fetchone():
+                continue
+
+            first_name = str(c.get("firstName") or c.get("FirstName") or "").strip() or None
+            last_name = str(c.get("lastName") or c.get("LastName") or "").strip() or None
+            company_name = str(c.get("companyName") or "").strip() or None
+            is_company = bool(c.get("isCompany", False))
+            about = str(c.get("about") or "").strip() or None
+            industry = str(c.get("industry") or "").strip() or None
+
+            contact_status = None
+            cs = c.get("contactStatus")
+            if isinstance(cs, dict):
+                contact_status = str(cs.get("title") or "").strip() or None
+            status_id = cs.get("id") if isinstance(cs, dict) else None
+
+            task_count = int(c.get("taskCount") or 0) if c.get("taskCount") is not None else None
+
+            # commonData
+            common_data = c.get("commonData") or []
+            primary_email = None
+            primary_phone = None
+            website = None
+            for item in common_data:
+                if not isinstance(item, dict):
+                    continue
+                info_type = item.get("infoType")
+                data = str(item.get("data") or "").strip()
+                is_primary = bool(item.get("isPrimary"))
+                if info_type == 1 and is_primary and not primary_email:
+                    primary_email = data or None
+                if info_type == 0 and is_primary and not primary_phone:
+                    primary_phone = data or None
+                if info_type == 2 and not website:
+                    website = data or None
+            if not primary_email:
+                for item in common_data:
+                    if isinstance(item, dict) and item.get("infoType") == 1:
+                        primary_email = str(item.get("data") or "").strip() or None
+                        break
+            if not primary_phone:
+                for item in common_data:
+                    if isinstance(item, dict) and item.get("infoType") == 0:
+                        primary_phone = str(item.get("data") or "").strip() or None
+                        break
+
+            # addresses
+            addresses = c.get("addresses") or []
+            primary_addr = None
+            for a in addresses:
+                if isinstance(a, dict) and a.get("isPrimary"):
+                    primary_addr = a
+                    break
+            if not primary_addr and addresses and isinstance(addresses[0], dict):
+                primary_addr = addresses[0]
+
+            # Avatar download
+            avatar_remote = str(c.get("smallFotoUrl") or "").strip() or None
+            avatar_local = None
+            if download_avatars and avatar_remote:
+                # Build full URL — only OO likes relative paths
+                if not avatar_remote.startswith("http"):
+                    full_url = f"{portal.rstrip('/')}{avatar_remote}"
+                else:
+                    full_url = avatar_remote
+                raw = _crm_get_raw(portal, token, avatar_remote)
+                if raw:
+                    ext = "jpg"
+                    if "png" in full_url.lower():
+                        ext = "png"
+                    avatar_local_path = CONTACT_AVATAR_DIR / f"{crm_id}.{ext}"
+                    avatar_local_path.parent.mkdir(parents=True, exist_ok=True)
+                    avatar_local_path.write_bytes(raw)
+                    avatar_local = str(avatar_local_path.relative_to(Path(__file__).resolve().parent))
+
+            # Creator
+            create_by = c.get("createBy") or {}
+            creator_id = _crm_id_map["users"].get(str(create_by.get("id") or "")) if isinstance(create_by, dict) else None
 
             cur.execute(
-                """INSERT INTO contacts (first_name, last_name, email, phone, company)
-                   VALUES (%s, %s, %s, %s, %s)
+                """INSERT INTO contacts (
+                       first_name, last_name, company, email, phone, is_company,
+                       website, industry, about, contact_status, avatar_url,
+                       onlyoffice_id, address_street, address_city, address_state, address_zip,
+                       address_country, created_by,
+                       onlyoffice_task_count, onlyoffice_status_id,
+                       raw_about, raw_industry, avatar_local_path)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (onlyoffice_id) WHERE onlyoffice_id IS NOT NULL DO NOTHING
                    RETURNING id""",
-                (first_name or None, last_name or None, email, phone, company),
+                (first_name, last_name, company_name, primary_email, primary_phone, is_company,
+                 website, industry, about, contact_status,
+                 # If avatar_local_path is set, prefer it (clear avatar_url so UI never
+                 # accidentally renders the broken remote URL).
+                 None if avatar_local else avatar_remote,
+                 crm_id,
+                 str(primary_addr.get("street") or "").strip() or None if primary_addr else None,
+                 str(primary_addr.get("city") or "").strip() or None if primary_addr else None,
+                 str(primary_addr.get("state") or "").strip() or None if primary_addr else None,
+                 str(primary_addr.get("zip") or "").strip() or None if primary_addr else None,
+                 str(primary_addr.get("country") or "").strip() or None if primary_addr else None,
+                 creator_id,
+                 task_count,
+                 status_id,
+                 about, industry, avatar_local),
             )
-            v3_id = cur.fetchone()[0]
-            if crm_id:
-                _crm_id_map["contacts"][crm_id] = v3_id
+            row = cur.fetchone()
+            if not row:
+                # Already imported (cross-run dedupe). Look up existing id.
+                cur.execute("SELECT id FROM contacts WHERE onlyoffice_id = %s", (crm_id,))
+                erow = cur.fetchone()
+                if not erow:
+                    continue
+                local_id = erow[0]
+            else:
+                local_id = row[0]
+            _crm_id_map["contacts"][crm_id] = local_id
             count += 1
+
+            # Multi-value commonData entries
+            for it in common_data:
+                if not isinstance(it, dict):
+                    continue
+                data = str(it.get("data") or "").strip()
+                if not data:
+                    continue
+                info_type = it.get("infoType")
+                is_primary = bool(it.get("isPrimary"))
+                cat_id = it.get("category")
+                cat_name = str(it.get("categoryName") or "")
+                oo_id = int(it.get("id") or 0) or None
+                if info_type == 1:
+                    cur.execute(
+                        """INSERT INTO contact_emails (contact_id, email, category, category_id, is_primary, onlyoffice_id)
+                           VALUES (%s, %s, %s, %s, %s, %s)
+                           ON CONFLICT DO NOTHING""",
+                        (local_id, data, cat_name or None, cat_id, is_primary, oo_id),
+                    )
+                elif info_type == 0:
+                    cur.execute(
+                        """INSERT INTO contact_phones (contact_id, phone, category, category_id, is_primary, onlyoffice_id)
+                           VALUES (%s, %s, %s, %s, %s, %s)
+                           ON CONFLICT DO NOTHING""",
+                        (local_id, data, cat_name or None, cat_id, is_primary, oo_id),
+                    )
+
+            # Multi-value addresses
+            for a in addresses:
+                if not isinstance(a, dict):
+                    continue
+                cur.execute(
+                    """INSERT INTO contact_addresses
+                           (contact_id, street, city, state, zip, country, category, category_id, is_primary, onlyoffice_id)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       ON CONFLICT DO NOTHING""",
+                    (local_id,
+                     str(a.get("street") or "").strip() or None,
+                     str(a.get("city") or "").strip() or None,
+                     str(a.get("state") or "").strip() or None,
+                     str(a.get("zip") or "").strip() or None,
+                     str(a.get("country") or "").strip() or None,
+                     str(a.get("categoryName") or "") or None,
+                     a.get("category"),
+                     bool(a.get("isPrimary")),
+                     a.get("id")),
+                )
         conn.commit()
-    print(f"  → {count} contacts imported")
+
+        # Second pass: link persons to companies
+        linked = 0
+        for c in crm_contacts:
+            if not isinstance(c, dict) or c.get("isCompany"):
+                continue
+            crm_id = str(c.get("id") or "")
+            local_id = _crm_id_map["contacts"].get(crm_id)
+            if not local_id:
+                continue
+            company_obj = c.get("company")
+            if isinstance(company_obj, dict):
+                comp_oo_id = str(company_obj.get("id") or "")
+                comp_local_id = _crm_id_map["contacts"].get(comp_oo_id)
+                if comp_local_id:
+                    cur.execute(
+                        "UPDATE contacts SET company_id = %s, company = COALESCE(company, %s) WHERE id = %s",
+                        (comp_local_id, str(company_obj.get("displayName") or "").strip() or None, local_id),
+                    )
+                    linked += 1
+        conn.commit()
+
+    print(f"  → {count} contacts imported ({linked} person→company links)")
     return count
 
 
-def _migrate_opportunities(conn, portal: str, token: str) -> tuple[int, int, int]:
-    """Step 6: Pull all opportunities (all stages) with tags, custom fields, history, files."""
+def _migrate_opportunities(
+    conn, portal: str, token: str, download_attachments: bool = True,
+) -> tuple[int, int, int]:
+    """Returns (opps, history, attachments)."""
     print("\n[Step 6] Migrating opportunities (all stages)...")
     crm_opps = _paginate(portal, token, "/api/2.0/crm/opportunity/filter?count=500")
 
@@ -401,67 +612,110 @@ def _migrate_opportunities(conn, portal: str, token: str) -> tuple[int, int, int
             if not isinstance(o, dict):
                 continue
             crm_id = str(o.get("id") or o.get("ID") or "")
-            title = str(o.get("title") or o.get("Title") or "Untitled").strip()
+            if not crm_id:
+                continue
 
-            # Stage mapping
-            stage_data = o.get("stage") or o.get("Stage") or {}
-            crm_stage_id = str(stage_data.get("id") or stage_data.get("ID") or "")
-            v3_stage_id = _crm_id_map["stages"].get(crm_stage_id)
-            stage_type = int(stage_data.get("stageType") or 0) if isinstance(stage_data, dict) else 0
+            # Skip if already imported by onlyoffice_id
+            cur.execute("SELECT id FROM opportunities WHERE onlyoffice_id = %s", (crm_id,))
+            existing = cur.fetchone()
+            if existing:
+                v3_opp_id = existing[0]
+                opp_count += 1
+            else:
+                title = str(o.get("title") or o.get("Title") or "Untitled").strip()
 
-            # Contact mapping
-            contact_data = o.get("contact") or o.get("Contact") or {}
-            crm_contact_id = str(contact_data.get("id") or contact_data.get("ID") or "") if isinstance(contact_data, dict) else ""
-            v3_contact_id = _crm_id_map["contacts"].get(crm_contact_id)
+                # Stage
+                stage_data = o.get("stage") or o.get("Stage") or {}
+                crm_stage_id = str(stage_data.get("id") or stage_data.get("ID") or "")
+                v3_stage_id = _crm_id_map["stages"].get(crm_stage_id)
+                stage_type = int(stage_data.get("stageType") or 0) if isinstance(stage_data, dict) else 0
 
-            # Responsible user mapping
-            responsible_data = o.get("responsible") or o.get("Responsible") or {}
-            crm_responsible_id = str(responsible_data.get("id") or responsible_data.get("ID") or "") if isinstance(responsible_data, dict) else ""
-            v3_responsible_id = _crm_id_map["users"].get(crm_responsible_id)
+                # Contact
+                contact_data = o.get("contact") or o.get("Contact") or {}
+                crm_contact_id = str(contact_data.get("id") or contact_data.get("ID") or "") if isinstance(contact_data, dict) else ""
+                v3_contact_id = _crm_id_map["contacts"].get(crm_contact_id)
 
-            # Bid value
-            bid_value = None
-            for bv_key in ("bidValue", "BidValue", "value", "Value"):
-                raw = o.get(bv_key)
-                if raw is not None:
+                # Responsible
+                responsible_data = o.get("responsible") or o.get("Responsible") or {}
+                crm_responsible_id = str(responsible_data.get("id") or responsible_data.get("ID") or "") if isinstance(responsible_data, dict) else ""
+                v3_responsible_id = _crm_id_map["users"].get(crm_responsible_id)
+
+                # Bid value
+                bid_value = None
+                for bv_key in ("bidValue", "BidValue", "value", "Value"):
+                    raw = o.get(bv_key)
+                    if raw is not None:
+                        try:
+                            bid_value = float(raw)
+                        except (TypeError, ValueError):
+                            pass
+                        break
+
+                # Due date
+                due_date = None
+                for dd_key in ("expectedCloseDate", "ExpectedCloseDate"):
+                    raw = o.get(dd_key)
+                    if raw:
+                        try:
+                            due_date = str(raw)[:10]
+                        except Exception:
+                            due_date = None
+                        if due_date:
+                            break
+
+                # Actual close date
+                actual_close_date = None
+                actual_close_value = None
+                acd = o.get("actualCloseDate")
+                if acd and not _is_closure_sentinel(acd):
                     try:
-                        bid_value = float(raw)
-                    except (TypeError, ValueError):
-                        pass
-                    break
+                        actual_close_date = str(acd)[:10]
+                    except Exception:
+                        actual_close_date = None
+                for k in ("actualCloseValue", "ActualCloseValue"):
+                    if k in o and o[k] is not None:
+                        try:
+                            actual_close_value = float(o[k])
+                        except Exception:
+                            actual_close_value = None
+                        break
 
-            # Due date
-            due_date = None
-            for dd_key in ("expectedCloseDate", "ExpectedCloseDate"):
-                raw = o.get(dd_key)
-                if raw:
-                    due_date = str(raw)[:10]  # YYYY-MM-DD
-                    break
+                description = str(o.get("description") or o.get("Description") or "").strip() or None
 
-            description = str(o.get("description") or o.get("Description") or "").strip() or None
+                created_raw = o.get("created")
+                created_at = None
+                if created_raw:
+                    try:
+                        created_at = str(created_raw)[:19]
+                    except Exception:
+                        created_at = None
 
-            cur.execute(
-                """INSERT INTO opportunities (title, description, stage_id, stage_type, bid_value,
-                       expected_close_date, contact_id, responsible_user_id, created_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                   RETURNING id""",
-                (title, description, v3_stage_id, stage_type, bid_value, due_date, v3_contact_id, v3_responsible_id),
-            )
-            v3_opp_id = cur.fetchone()[0]
-            if crm_id:
-                _crm_id_map["opportunities"][crm_id] = v3_opp_id
+                cur.execute(
+                    """INSERT INTO opportunities
+                           (title, description, stage_id, stage_type, bid_value,
+                            expected_close_date, actual_close_date, actual_close_value,
+                            contact_id, responsible_user_id, created_at, onlyoffice_id)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,COALESCE(%s,NOW()),%s)
+                       ON CONFLICT (onlyoffice_id) WHERE onlyoffice_id IS NOT NULL DO UPDATE SET title = EXCLUDED.title
+                       RETURNING id""",
+                    (title, description, v3_stage_id, stage_type, bid_value,
+                     due_date, actual_close_date, actual_close_value,
+                     v3_contact_id, v3_responsible_id, created_at, crm_id),
+                )
+                v3_opp_id = cur.fetchone()[0]
+                opp_count += 1
 
-            # ── Tags for this opportunity ──
+            _crm_id_map["opportunities"][crm_id] = v3_opp_id
+
+            # ── Tags ──
             time.sleep(SUB_REQUEST_DELAY)
             try:
                 tags_data = _unwrap(_crm_get(portal, token, f"/api/2.0/crm/opportunity/tag/{crm_id}"))
                 tag_list = tags_data if isinstance(tags_data, list) else []
                 for t in tag_list:
                     tag_title = ""
-                    tag_crm_id = ""
                     if isinstance(t, dict):
                         tag_title = str(t.get("title") or t.get("name") or t.get("Title") or t.get("Name") or "").strip()
-                        tag_crm_id = str(t.get("id") or t.get("ID") or "")
                     elif isinstance(t, str):
                         tag_title = t.strip()
                     if tag_title:
@@ -475,7 +729,7 @@ def _migrate_opportunities(conn, portal: str, token: str) -> tuple[int, int, int
             except Exception as exc:
                 print(f"  [warn] Tags for opp {crm_id}: {exc}")
 
-            # ── Custom field values ──
+            # ── Custom field values (try /customfield endpoint, fall back to embedded) ──
             time.sleep(SUB_REQUEST_DELAY)
             try:
                 cf_data = _unwrap(_crm_get(portal, token, f"/api/2.0/crm/opportunity/{crm_id}/customfield"))
@@ -499,10 +753,11 @@ def _migrate_opportunities(conn, portal: str, token: str) -> tuple[int, int, int
             except Exception as exc:
                 print(f"  [warn] Custom fields for opp {crm_id}: {exc}")
 
-            # ── History events ──
+            # ── History events + attachments ──
             time.sleep(SUB_REQUEST_DELAY)
             try:
-                hist_data = _unwrap(_crm_get(portal, token, f"/api/2.0/crm/history/filter?entityType=opportunity&entityId={crm_id}&count=500&startIndex=0"))
+                hist_data = _unwrap(_crm_get(portal, token,
+                    f"/api/2.0/crm/history/filter?entityType=opportunity&entityId={crm_id}&count=500"))
                 hist_list = hist_data if isinstance(hist_data, list) else []
                 for h in hist_list:
                     if not isinstance(h, dict):
@@ -512,34 +767,45 @@ def _migrate_opportunities(conn, portal: str, token: str) -> tuple[int, int, int
                     cat_title = str(cat_data.get("title") or cat_data.get("Title") or "Note").strip() if isinstance(cat_data, dict) else "Note"
                     cur.execute("SELECT id FROM history_categories WHERE title = %s", (cat_title,))
                     cat_row = cur.fetchone()
-                    if not cat_row:
+                    if cat_row:
+                        cat_id = cat_row[0]
+                    else:
                         cur.execute(
                             "INSERT INTO history_categories (title, is_system) VALUES (%s, TRUE) RETURNING id",
                             (cat_title,),
                         )
                         cat_id = cur.fetchone()[0]
-                    else:
-                        cat_id = cat_row[0]
 
-                    event_content = str(h.get("content") or h.get("Content") or "").strip() or None
+                    raw_content = h.get("content") or h.get("Content") or ""
+                    event_content = str(raw_content).strip() or None if isinstance(raw_content, str) else None
+
                     event_created = h.get("created") or h.get("Created") or h.get("date") or None
 
-                    # Author mapping
+                    # Author
                     create_by = h.get("createBy") or h.get("CreateBy") or h.get("createdBy") or {}
                     crm_author_id = str(create_by.get("id") or create_by.get("ID") or "") if isinstance(create_by, dict) else ""
                     v3_author_id = _crm_id_map["users"].get(crm_author_id)
 
+                    crm_event_id = int(h.get("id") or 0) or None
+
                     cur.execute(
-                        """INSERT INTO history_events (opportunity_id, category_id, content, created_by, created_at)
-                           VALUES (%s, %s, %s, %s, COALESCE(%s, NOW()))
+                        """INSERT INTO history_events
+                               (opportunity_id, category_id, content, created_by, created_at, backdated_created_at,
+                                crm_event_id, crm_entity_id)
+                           VALUES (%s,%s,%s,%s,COALESCE(%s,NOW()),%s,%s,%s)
+                           ON CONFLICT DO NOTHING
                            RETURNING id""",
-                        (v3_opp_id, cat_id, event_content, v3_author_id, event_created),
+                        (v3_opp_id, cat_id, event_content, v3_author_id, event_created, event_created,
+                         crm_event_id, int(crm_id) if crm_id.isdigit() else None),
                     )
+                    row = cur.fetchone()
+                    if not row:
+                        continue
+                    event_id = row[0]
                     history_count += 1
 
                     # Notify users from this event
                     notify_list = h.get("notifyUserList") or h.get("NotifyUserList") or []
-                    event_id = cur.fetchone()[0]
                     if isinstance(notify_list, list):
                         for nu in notify_list:
                             if isinstance(nu, dict):
@@ -554,51 +820,56 @@ def _migrate_opportunities(conn, portal: str, token: str) -> tuple[int, int, int
                                     "INSERT INTO history_notify_users (event_id, user_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                                     (event_id, v3_nu_id),
                                 )
-            except Exception as exc:
-                print(f"  [warn] History for opp {crm_id}: {exc}")
 
-            # ── Attachments ──
-            time.sleep(SUB_REQUEST_DELAY)
-            try:
-                files_data = _unwrap(_crm_get(portal, token, f"/api/2.0/crm/opportunity/{crm_id}/files"))
-                files_list = files_data if isinstance(files_data, list) else []
-                for f_item in files_data if isinstance(files_data, dict) else files_list:
-                    if not isinstance(f_item, dict):
-                        continue
-                    file_id = str(f_item.get("id") or f_item.get("ID") or "")
-                    file_name = str(f_item.get("name") or f_item.get("Name") or f"file_{file_id}").strip()
-                    file_size = int(f_item.get("size") or f_item.get("Size") or 0)
-                    file_ext = Path(file_name).suffix.lstrip(".").lower()
-                    mime_type = _guess_mime_type(file_ext)
+                    # Attachments — DOWNLOAD files
+                    files = h.get("files") or []
+                    if not isinstance(files, list):
+                        files = []
+                    for f_item in files:
+                        if not isinstance(f_item, dict):
+                            continue
+                        file_id = int(f_item.get("id") or 0)
+                        if not file_id:
+                            continue
+                        file_name = str(f_item.get("title") or f"file_{file_id}").strip()
+                        file_size = int(f_item.get("pureContentLength") or f_item.get("size") or 0)
+                        file_ext = Path(file_name).suffix.lstrip(".").lower()
+                        mime_type = _guess_mime_type(file_ext)
+                        view_url = f_item.get("viewUrl") or f_item.get("webUrl") or ""
 
-                    # Map file owner to v3 user
-                    owner = f_item.get("createdBy") or f_item.get("CreatedBy") or f_item.get("owner") or f_item.get("Owner") or {}
-                    owner_crm_id = str(owner.get("id") or owner.get("ID") or "") if isinstance(owner, dict) else ""
-                    v3_uploader_id = _crm_id_map["users"].get(owner_crm_id) or v3_author_id
+                        # Owner
+                        owner = f_item.get("createdBy") or f_item.get("CreatedBy") or f_item.get("owner") or f_item.get("Owner") or {}
+                        owner_crm_id = str(owner.get("id") or owner.get("ID") or "") if isinstance(owner, dict) else ""
+                        v3_uploader_id = _crm_id_map["users"].get(owner_crm_id) or v3_author_id
 
-                    # Download file
-                    opp_dir = ATTACHMENT_DIR / str(v3_opp_id)
-                    opp_dir.mkdir(parents=True, exist_ok=True)
-                    safe_name = re.sub(r'[^\w.\-]', '_', file_name)
-                    if not safe_name:
-                        safe_name = f"file_{file_id}"
-                    unique_name = f"{int(time.time())}_{safe_name}"
-                    file_path = opp_dir / unique_name
+                        # Download
+                        rel_dir = Path("data") / "history-attachments" / str(v3_opp_id) / str(event_id)
+                        safe_name = _safe_filename(file_name)
+                        # Use crm_file_id to guarantee unique filenames within an event
+                        unique_name = f"{file_id}_{safe_name}"
+                        file_path = Path(__file__).resolve().parent / rel_dir / unique_name
+                        file_path.parent.mkdir(parents=True, exist_ok=True)
 
-                    raw = _crm_get_raw(portal, token, f"/api/2.0/files/{file_id}")
-                    if raw:
-                        file_path.write_bytes(raw)
+                        actual_size = file_size
+                        if download_attachments:
+                            raw = _crm_get_raw(portal, token, f"/Products/Files/HttpHandlers/filehandler.ashx?action=download&fileid={file_id}")
+                            if raw:
+                                file_path.write_bytes(raw)
+                                actual_size = len(raw)
+
                         cur.execute(
-                            """INSERT INTO history_attachments (event_id, filename, file_path, file_size, mime_type, uploaded_by)
-                               VALUES (%s, %s, %s, %s, %s, %s)""",
-                            (event_id, file_name, str(file_path.relative_to(Path(__file__).resolve().parent)), file_size, mime_type, v3_uploader_id),
+                            """INSERT INTO history_attachments
+                                   (event_id, filename, file_path, file_size, mime_type, uploaded_by,
+                                    original_url, crm_file_id)
+                               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                            (event_id, file_name, str(rel_dir / unique_name), actual_size, mime_type,
+                             v3_uploader_id, view_url, file_id),
                         )
                         attachment_count += 1
             except Exception as exc:
-                print(f"  [warn] Files for opp {crm_id}: {exc}")
+                print(f"  [warn] History for opp {crm_id}: {exc}")
 
-            opp_count += 1
-            if opp_count % 50 == 0:
+            if (opp_count) % 50 == 0:
                 conn.commit()
                 print(f"  ... {opp_count}/{len(crm_opps)} opportunities processed")
 
@@ -608,10 +879,9 @@ def _migrate_opportunities(conn, portal: str, token: str) -> tuple[int, int, int
 
 
 def _migrate_tasks(conn, portal: str, token: str) -> int:
-    """Step 7: Pull tasks (open + closed)."""
     print("\n[Step 7] Migrating tasks...")
-    open_tasks = _paginate(portal, token, "/api/2.0/projects/task/")
-    closed_tasks = _paginate(portal, token, "/api/2.0/projects/task/?closed=true")
+    open_tasks = _paginate(portal, token, "/api/2.0/crm/task/filter?count=500&isClosed=false")
+    closed_tasks = _paginate(portal, token, "/api/2.0/crm/task/filter?count=500&isClosed=true")
     all_tasks = open_tasks + closed_tasks
 
     count = 0
@@ -625,12 +895,24 @@ def _migrate_tasks(conn, portal: str, token: str) -> int:
             description = str(t.get("description") or t.get("Description") or "").strip() or None
             is_closed = bool(t.get("isClosed") or t.get("IsClosed") or t.get("closed") or False)
 
-            # Link to opportunity
-            opp_data = t.get("opportunity") or t.get("Opportunity") or {}
-            crm_opp_id = str(opp_data.get("id") or opp_data.get("ID") or "") if isinstance(opp_data, dict) else ""
+            crm_task_id = str(t.get("id") or t.get("ID") or "")
+            if crm_task_id:
+                cur.execute("SELECT id FROM tasks WHERE onlyoffice_id = %s", (crm_task_id,))
+                if cur.fetchone():
+                    continue
+
+            # Link via opportunity entity OR top-level opportunityId
+            opp_data = t.get("opportunity") or {}
+            crm_opp_id = ""
+            if isinstance(opp_data, dict):
+                crm_opp_id = str(opp_data.get("id") or "")
+            if not crm_opp_id:
+                ent = t.get("entity") or {}
+                if isinstance(ent, dict) and ent.get("entityType") == "opportunity":
+                    crm_opp_id = str(ent.get("entityId") or "")
             v3_opp_id = _crm_id_map["opportunities"].get(crm_opp_id)
 
-            # Responsible user
+            # Responsible
             resp_data = t.get("responsible") or t.get("Responsible") or {}
             crm_resp_id = str(resp_data.get("id") or resp_data.get("ID") or "") if isinstance(resp_data, dict) else ""
             v3_resp_id = _crm_id_map["users"].get(crm_resp_id)
@@ -638,12 +920,18 @@ def _migrate_tasks(conn, portal: str, token: str) -> int:
             due_date = t.get("dueDate") or t.get("DueDate") or None
             priority = int(t.get("priority") or t.get("Priority") or 0)
 
+            closed_at = None
+            if is_closed:
+                closed_at = t.get("closedDate") or t.get("ClosedDate") or None
+
             cur.execute(
-                """INSERT INTO tasks (title, description, opportunity_id, responsible_user_id,
-                       due_date, priority, is_closed, closed_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-                (title, description, v3_opp_id, v3_resp_id, due_date, priority, is_closed,
-                 t.get("closedDate") or t.get("ClosedDate") if is_closed else None),
+                """INSERT INTO tasks
+                       (title, description, opportunity_id, responsible_user_id,
+                        due_date, priority, is_closed, closed_at, created_at, onlyoffice_id)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW(),%s)
+                   ON CONFLICT (onlyoffice_id) WHERE onlyoffice_id IS NOT NULL DO NOTHING""",
+                (title, description, v3_opp_id, v3_resp_id, due_date, priority, is_closed, closed_at,
+                 crm_task_id or None),
             )
             count += 1
         conn.commit()
@@ -651,35 +939,10 @@ def _migrate_tasks(conn, portal: str, token: str) -> int:
     return count
 
 
-def _migrate_user_profiles(conn) -> int:
-    """Step 9: Migrate existing JSON user profiles."""
-    print("\n[Step 9] Migrating user profiles from JSON...")
-    profiles_dir = Path(__file__).resolve().parent / "data" / "user-profiles"
-    if not profiles_dir.is_dir():
-        print("  → No user-profiles directory found, skipping")
-        return 0
-
-    count = 0
-    with conn.cursor() as cur:
-        for portal_dir in profiles_dir.iterdir():
-            if not portal_dir.is_dir():
-                continue
-            for profile_file in portal_dir.glob("*.json"):
-                try:
-                    data = json.loads(profile_file.read_text(encoding="utf-8"))
-                    if not isinstance(data, dict):
-                        continue
-
-                    # Profiles are remapped properly by migrate_dashboard_data.py using external_user_id
-                    # Skip insert here to avoid polluting with user_id=1.
-                    # This step is kept for compatibility but does not write.
-                    print(f"  [note] Skipping profile insert for {profile_file.name} (use migrate_dashboard_data.py for remap)")
-                    count += 1  # counted for report, no DB write
-                except (json.JSONDecodeError, OSError) as exc:
-                    print(f"  [warn] Profile {profile_file}: {exc}")
-        conn.commit()
-    print(f"  → {count} user profiles migrated (remap after user migration)")
-    return count
+def _migrate_user_profiles(_conn) -> int:
+    """Placeholder — JSON profile remap is done by migrate_dashboard_data.py."""
+    print("\n[Step 9] User profile remap (skipped — use migrate_dashboard_data.py)")
+    return 0
 
 
 # ── Export-only (Phase 2) ──────────────────────────────────────────────────────
@@ -687,13 +950,11 @@ def _migrate_user_profiles(conn) -> int:
 def _write_json(out_dir: Path, name: str, data: Any) -> None:
     path = out_dir / f"{name}.json"
     path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
-    print(f"  wrote {name}.json ({len(data) if isinstance(data, (list, dict)) else 'data'})")
+    n = len(data) if isinstance(data, (list, dict)) else 0
+    print(f"  wrote {name}.json ({n} items)")
 
 
 def _do_export_only(portal: str, token: str, out_dir: Path) -> None:
-    """Fetch data from OnlyOffice and write portable JSON files. No DB writes."""
-
-    # Users (for reference / later mapping)
     print("Exporting users...")
     try:
         users = _paginate(portal, token, "/api/2.0/people/filter?count=500")
@@ -701,7 +962,6 @@ def _do_export_only(portal: str, token: str, out_dir: Path) -> None:
     except Exception as e:
         print(f"  [warn] users: {e}")
 
-    # Stages
     print("Exporting stages...")
     try:
         stages = _unwrap(_crm_get(portal, token, "/api/2.0/crm/opportunity/stage"))
@@ -709,7 +969,6 @@ def _do_export_only(portal: str, token: str, out_dir: Path) -> None:
     except Exception as e:
         print(f"  [warn] stages: {e}")
 
-    # Tags
     print("Exporting tags...")
     try:
         tags = _unwrap(_crm_get(portal, token, "/api/2.0/crm/opportunity/tag"))
@@ -717,7 +976,6 @@ def _do_export_only(portal: str, token: str, out_dir: Path) -> None:
     except Exception as e:
         print(f"  [warn] tags: {e}")
 
-    # Custom field definitions
     print("Exporting custom field defs...")
     try:
         cfs = _unwrap(_crm_get(portal, token, "/api/2.0/crm/opportunity/customfield/definitions"))
@@ -725,7 +983,6 @@ def _do_export_only(portal: str, token: str, out_dir: Path) -> None:
     except Exception as e:
         print(f"  [warn] custom_fields: {e}")
 
-    # Contacts (working /filter query)
     print("Exporting contacts...")
     try:
         contacts = _paginate(portal, token, "/api/2.0/crm/contact/filter?count=500")
@@ -733,7 +990,6 @@ def _do_export_only(portal: str, token: str, out_dir: Path) -> None:
     except Exception as e:
         print(f"  [warn] contacts: {e}")
 
-    # Opportunities (working query)
     print("Exporting opportunities...")
     try:
         opps = _paginate(portal, token, "/api/2.0/crm/opportunity/filter?count=500")
@@ -741,18 +997,20 @@ def _do_export_only(portal: str, token: str, out_dir: Path) -> None:
     except Exception as e:
         print(f"  [warn] opportunities: {e}")
 
-    # History — per-opportunity (the only pattern that works)
-    print("Exporting history events...")
+    print("Exporting history events (this takes the longest)...")
     history = []
     try:
-        opps = json.load(open(out_dir / "opportunities.json")) or []
-        total = len(opps)
-        for idx, opp in enumerate(opps):
-            if not isinstance(opp, dict): continue
+        opps_data = json.load(open(out_dir / "opportunities.json")) or []
+        total = len(opps_data)
+        for idx, opp in enumerate(opps_data):
+            if not isinstance(opp, dict):
+                continue
             oid = opp.get("id") or opp.get("ID")
-            if not oid: continue
+            if not oid:
+                continue
             try:
-                hlist = _unwrap(_crm_get(portal, token, f"/api/2.0/crm/history/filter?entityType=opportunity&entityId={oid}&count=500"))
+                hlist = _unwrap(_crm_get(portal, token,
+                    f"/api/2.0/crm/history/filter?entityType=opportunity&entityId={oid}&count=500"))
                 if isinstance(hlist, list):
                     for h in hlist:
                         if isinstance(h, dict):
@@ -761,28 +1019,35 @@ def _do_export_only(portal: str, token: str, out_dir: Path) -> None:
             except Exception:
                 pass
             if (idx + 1) % 100 == 0:
-                print(f"  ... {idx+1}/{total} opportunities")
+                print(f"  ... {idx+1}/{total} opportunities ({len(history)} events)")
         _write_json(out_dir, "history", history)
-        print(f"  → {len(history)} history events")
     except Exception as e:
         print(f"  [warn] history: {e}")
         _write_json(out_dir, "history", history)
 
-    # Tasks
     print("Exporting tasks...")
     try:
-        open_tasks = _paginate(portal, token, "/api/2.0/projects/task/")
-        closed_tasks = _paginate(portal, token, "/api/2.0/projects/task/?closed=true")
+        open_tasks = _paginate(portal, token, "/api/2.0/crm/task/filter?count=500&isClosed=false")
+        closed_tasks = _paginate(portal, token, "/api/2.0/crm/task/filter?count=500&isClosed=true")
         all_tasks = (open_tasks or []) + (closed_tasks or [])
         _write_json(out_dir, "tasks", all_tasks)
     except Exception as e:
         print(f"  [warn] tasks: {e}")
 
-    # Optional: basic files metadata note (attachments are pulled during history in full migration)
-    print("Exporting notes (files metadata not bulk-exported here; use full migration for attachments)")
+    print("Exporting task labels...")
+    try:
+        labels = _unwrap(_crm_get(portal, token, "/api/2.0/crm/task/label"))
+        if not isinstance(labels, list):
+            labels = []
+        _write_json(out_dir, "task_labels", labels)
+    except Exception as e:
+        print(f"  [warn] task_labels: {e}")
+        _write_json(out_dir, "task_labels", [])
+
+    print("Export done.")
     _write_json(out_dir, "export_manifest", {
         "exported_at": datetime.now(timezone.utc).isoformat(),
-        "note": "Run with full migration or use document endpoints for files. This export is for core CRM entities."
+        "note": "Portable export with per-opportunity history + tasks + task_labels. Re-import with import_json_export.py --portal-url <portal> to download attachments + avatars.",
     })
 
 
@@ -795,14 +1060,14 @@ def main():
     parser.add_argument("--password", required=True, help="Admin password for CRM login")
     parser.add_argument("--db-host", default=os.getenv("DB_HOST", "localhost"))
     parser.add_argument("--db-port", default=os.getenv("DB_PORT", "5432"))
-    parser.add_argument("--db-name", default=os.getenv("DB_NAME", "vanguard"))
-    parser.add_argument("--db-user", default=os.getenv("DB_USER", "vanguard"))
+    parser.add_argument("--db-name", default=os.getenv("DB_NAME", "sietch_crm"))
+    parser.add_argument("--db-user", default=os.getenv("DB_USER", "sietch"))
     parser.add_argument("--db-password", default=os.getenv("DB_PASSWORD", ""))
-    parser.add_argument("--export-only", action="store_true", help="Export OnlyOffice data to JSON files only (portable, no DB connection or writes)")
-    parser.add_argument("--export-dir", default="crm_export_json", help="Output directory for JSON export when using --export-only")
+    parser.add_argument("--export-only", action="store_true", help="Export OnlyOffice data to JSON files only")
+    parser.add_argument("--export-dir", default="crm_export_json", help="Output directory for --export-only")
+    parser.add_argument("--skip-attachment-download", action="store_true", help="Don't download file attachments/avatars (metadata only)")
     args = parser.parse_args()
 
-    # ── Connect to OnlyOffice CRM ──
     print(f"Authenticating to {args.portal_url}...")
     auth_body = json.dumps({"userName": args.email, "password": args.password}).encode("utf-8")
     req = urllib.request.Request(
@@ -829,12 +1094,11 @@ def main():
         export_dir.mkdir(parents=True, exist_ok=True)
         print(f"\n[EXPORT-ONLY] Writing to {export_dir.resolve()}")
         _do_export_only(args.portal_url, token, export_dir)
-        print("\nExport complete. JSON files written.")
+        print("\nExport complete.")
         return
 
-    # ── Connect to PostgreSQL ──
     try:
-        import psycopg2
+        import psycopg2  # noqa: F811
     except ImportError:
         sys.exit("psycopg2 not found. Install with: pip install psycopg2-binary")
 
@@ -852,7 +1116,6 @@ def main():
     report_lines = []
 
     try:
-        # Run migration steps in dependency order
         u = _migrate_users(conn, args.portal_url, token)
         report_lines.append(f"  Users imported:       {u}")
 
@@ -865,10 +1128,14 @@ def main():
         cf = _migrate_custom_fields(conn, args.portal_url, token)
         report_lines.append(f"  Custom field defs:    {cf}")
 
-        c = _migrate_contacts(conn, args.portal_url, token)
+        c = _migrate_contacts(conn, args.portal_url, token,
+                              download_avatars=not args.skip_attachment_download)
         report_lines.append(f"  Contacts imported:    {c}")
 
-        opps, hist, att = _migrate_opportunities(conn, args.portal_url, token)
+        opps, hist, att = _migrate_opportunities(
+            conn, args.portal_url, token,
+            download_attachments=not args.skip_attachment_download,
+        )
         report_lines.append(f"  Opportunities:        {opps}")
         report_lines.append(f"  History events:       {hist}")
         report_lines.append(f"  Attachments:          {att}")
@@ -882,7 +1149,6 @@ def main():
         elapsed = time.time() - start_time
         report_lines.append(f"\n  Migration completed in {elapsed:.1f}s")
         report_lines.append(f"\n  CRM user ID map: {json.dumps(_crm_id_map['users'], indent=4)}")
-
     except Exception as exc:
         conn.rollback()
         print(f"\n❌ Migration failed: {exc}")

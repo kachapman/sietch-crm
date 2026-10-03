@@ -20,6 +20,7 @@ CREATE TABLE users (
     is_admin BOOLEAN DEFAULT FALSE,
     is_active BOOLEAN DEFAULT TRUE,
     avatar_url TEXT,
+    avatar_icon TEXT,
     created_at TIMESTAMP DEFAULT NOW(),
     last_login TIMESTAMP
 );
@@ -104,12 +105,66 @@ CREATE TABLE contacts (
     address_country TEXT,
     onlyoffice_id TEXT,
     contact_status TEXT DEFAULT 'active',
-    avatar_url TEXT
+    avatar_url TEXT,
+    onlyoffice_task_count INTEGER,
+    onlyoffice_status_id BIGINT,
+    raw_about TEXT,
+    raw_industry TEXT,
+    avatar_local_path TEXT
 );
 
 CREATE INDEX idx_contacts_name ON contacts(first_name, last_name);
 CREATE INDEX idx_contacts_email ON contacts(email);
 CREATE INDEX idx_contacts_company ON contacts(company);
+
+-- Multi-value contact data from OnlyOffice (Work/Mobile/Home phones,
+-- multiple emails, multiple addresses, all with isPrimary + category).
+CREATE TABLE IF NOT EXISTS contact_emails (
+    id SERIAL PRIMARY KEY,
+    contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,
+    category TEXT,
+    category_id INTEGER,
+    is_primary BOOLEAN DEFAULT FALSE,
+    onlyoffice_id BIGINT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_contact_emails_contact ON contact_emails(contact_id);
+CREATE INDEX IF NOT EXISTS idx_contact_emails_email ON contact_emails(email);
+
+CREATE TABLE IF NOT EXISTS contact_phones (
+    id SERIAL PRIMARY KEY,
+    contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE,
+    phone TEXT NOT NULL,
+    category TEXT,
+    category_id INTEGER,
+    is_primary BOOLEAN DEFAULT FALSE,
+    onlyoffice_id BIGINT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_contact_phones_contact ON contact_phones(contact_id);
+
+CREATE TABLE IF NOT EXISTS contact_addresses (
+    id SERIAL PRIMARY KEY,
+    contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE,
+    street TEXT,
+    city TEXT,
+    state TEXT,
+    zip TEXT,
+    country TEXT,
+    category TEXT,
+    category_id INTEGER,
+    is_primary BOOLEAN DEFAULT FALSE,
+    onlyoffice_id BIGINT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_contact_addresses_contact ON contact_addresses(contact_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_contact_emails_oo_id
+    ON contact_emails(onlyoffice_id) WHERE onlyoffice_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_contact_phones_oo_id
+    ON contact_phones(onlyoffice_id) WHERE onlyoffice_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_contact_addresses_oo_id
+    ON contact_addresses(onlyoffice_id) WHERE onlyoffice_id IS NOT NULL;
 
 -- ============================================================================
 -- 7.5 Custom Fields
@@ -158,13 +213,18 @@ CREATE TABLE opportunities (
     created_by INTEGER REFERENCES users(id),
     updated_at TIMESTAMP DEFAULT NOW(),
     updated_by INTEGER REFERENCES users(id),
-    project_number SERIAL UNIQUE
+    project_number SERIAL UNIQUE,
+    onlyoffice_id TEXT,
+    actual_close_date DATE,
+    actual_close_value NUMERIC(12,2)
 );
 
 CREATE INDEX idx_opportunities_stage ON opportunities(stage_id);
 CREATE INDEX idx_opportunities_stage_type ON opportunities(stage_type);
 CREATE INDEX idx_opportunities_contact ON opportunities(contact_id);
 CREATE INDEX idx_opportunities_responsible ON opportunities(responsible_user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_opportunities_onlyoffice_id
+    ON opportunities(onlyoffice_id) WHERE onlyoffice_id IS NOT NULL;
 
 CREATE TABLE opportunity_custom_field_values (
     id SERIAL PRIMARY KEY,
@@ -226,11 +286,15 @@ CREATE TABLE history_events (
     content TEXT,
     created_by INTEGER REFERENCES users(id),
     created_at TIMESTAMP DEFAULT NOW(),
-    backdated_created_at TIMESTAMP
+    backdated_created_at TIMESTAMP,
+    crm_event_id BIGINT,
+    crm_entity_id BIGINT
 );
 
 CREATE INDEX idx_history_opp ON history_events(opportunity_id);
 CREATE INDEX idx_history_created ON history_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_history_events_crm_event_id
+    ON history_events(crm_event_id) WHERE crm_event_id IS NOT NULL;
 
 CREATE TABLE history_replies (
     id SERIAL PRIMARY KEY,
@@ -258,8 +322,13 @@ CREATE TABLE history_attachments (
     file_size BIGINT,
     mime_type TEXT,
     uploaded_by INTEGER REFERENCES users(id),
-    uploaded_at TIMESTAMP DEFAULT NOW()
+    uploaded_at TIMESTAMP DEFAULT NOW(),
+    original_url TEXT,
+    crm_file_id BIGINT
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_history_attachments_crm_file_id
+    ON history_attachments(crm_file_id) WHERE crm_file_id IS NOT NULL;
 
 CREATE TABLE history_notify_users (
     event_id INTEGER REFERENCES history_events(id) ON DELETE CASCADE,
@@ -295,7 +364,8 @@ CREATE TABLE tasks (
     category_id INTEGER REFERENCES history_categories(id),
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
-    created_by INTEGER REFERENCES users(id)
+    created_by INTEGER REFERENCES users(id),
+    onlyoffice_id TEXT
 );
 
 CREATE INDEX idx_tasks_responsible ON tasks(responsible_user_id);
@@ -303,6 +373,8 @@ CREATE INDEX idx_tasks_opportunity ON tasks(opportunity_id);
 CREATE INDEX idx_tasks_closed ON tasks(is_closed);
 CREATE INDEX idx_tasks_owner ON tasks(owner_user_id);
 CREATE INDEX idx_tasks_reminders ON tasks(owner_user_id, remind_at) WHERE remind_at IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_onlyoffice_id
+    ON tasks(onlyoffice_id) WHERE onlyoffice_id IS NOT NULL;
 
 -- ============================================================================
 -- 7.10 Notifications (Internal Feed)
@@ -1045,9 +1117,10 @@ UPDATE contacts SET is_company = TRUE
 WHERE first_name IS NULL AND last_name IS NULL AND company IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_contacts_company_id ON contacts(company_id);
-CREATE INDEX IF NOT EXISTS idx_contacts_onlyoffice_id ON contacts(onlyoffice_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_is_company ON contacts(is_company);
 CREATE INDEX IF NOT EXISTS idx_contacts_contact_type ON contacts(contact_type);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_contacts_onlyoffice_id
+    ON contacts(onlyoffice_id) WHERE onlyoffice_id IS NOT NULL;
 
 -- ============================================================================
 -- 7.21 Contact history: link history_events to contacts

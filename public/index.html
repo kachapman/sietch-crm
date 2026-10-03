@@ -444,7 +444,7 @@
           <div class="calendar-source-type-btns">
             <button type="button" class="btn btn-ghost calendar-source-type-btn active" data-source-type="ics"><i class="ti ti-link"></i> ICS Feed</button>
             <button type="button" class="btn btn-ghost calendar-source-type-btn" data-source-type="google_oauth"><i class="ti ti-brand-google"></i> Google</button>
-            <button type="button" class="btn btn-ghost calendar-source-type-btn" data-source-type="microsoft_oauth"><i class="ti ti-brand-microsoft"></i> Outlook</button>
+            <button type="button" class="btn btn-ghost calendar-source-type-btn" data-source-type="microsoft_oauth"><i class="ti ti-brand-windows"></i> Outlook</button>
             <button type="button" class="btn btn-ghost calendar-source-type-btn" data-source-type="caldav"><i class="ti ti-server"></i> CalDAV</button>
           </div>
         </div>
@@ -640,7 +640,7 @@
         </div>
         <button type="button" id="mail-select-all" class="btn btn-ghost btn-small" title="Select all"><i class="ti ti-checkbox"></i></button>
         <button type="button" id="mail-clear-selection" class="btn btn-ghost btn-small" disabled title="Clear selection"><i class="ti ti-x"></i></button>
-        <button type="button" id="mail-mark-read" class="btn btn-ghost btn-small" disabled title="Mark read"><i class="ti ti-mail-open"></i></button>
+        <button type="button" id="mail-mark-read" class="btn btn-ghost btn-small" disabled title="Mark read"><i class="ti ti-mail-opened"></i></button>
         <button type="button" id="mail-mark-unread" class="btn btn-ghost btn-small" disabled title="Mark unread"><i class="ti ti-mail"></i></button>
         <button type="button" id="mail-delete" class="btn btn-ghost btn-small" disabled title="Delete selected"><i class="ti ti-trash"></i></button>
         <button type="button" id="mail-mark-all-read" class="btn btn-ghost btn-small" title="Mark all loaded as read"><i class="ti ti-mail-opened"></i></button>
@@ -1194,7 +1194,7 @@
         </div>
 
         <div id="account-settings-tab-appearance" style="border-top:1px solid var(--border); margin-top:0.75rem; padding-top:0.75rem;">
-          <h4 style="margin:0 0 0.4rem; font-size:0.85rem; color:var(--text);"><i class="ti ti-tab" style="margin-right:0.25rem;"></i>Tab Appearance</h4>
+          <h4 style="margin:0 0 0.4rem; font-size:0.85rem; color:var(--text);"><i class="ti ti-rectangle" style="margin-right:0.25rem;"></i>Tab Appearance</h4>
           <div style="margin-bottom:0.4rem;">
             <div style="font-size:0.8rem; color:var(--muted); margin-bottom:0.15rem;">Icon</div>
             <div id="account-settings-tab-icons" style="display:flex; flex-wrap:wrap; gap:0.3rem;"></div>
@@ -1222,7 +1222,7 @@
 
         <div id="account-settings-oauth-section" class="hidden" style="text-align:center; padding:1rem 0;">
           <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.5rem;">Connect your email account via OAuth. IMAP/SMTP settings will be auto-configured.</p>
-          <button type="button" id="account-settings-oauth-connect" class="btn btn-primary"><i class="ti ti-brand-microsoft"></i> Connect with <span id="account-settings-oauth-provider-label">Microsoft 365</span></button>
+          <button type="button" id="account-settings-oauth-connect" class="btn btn-primary"><i class="ti ti-brand-windows"></i> Connect with <span id="account-settings-oauth-provider-label">Microsoft 365</span></button>
           <p id="account-settings-oauth-status" style="font-size:0.8rem; margin-top:0.5rem;"></p>
           <p style="font-size:0.75rem; color:var(--muted); margin-top:0.3rem;">You will be redirected to sign in and grant permission.</p>
         </div>
@@ -1232,7 +1232,7 @@
           <p style="font-size:0.8rem; color:var(--muted); margin:0 0 0.5rem;">Microsoft sometimes disables SMTP AUTH on Outlook mailboxes (error "5.7.139 SmtpClientAuthentication is disabled") and refuses to re-enable it via support. Connect a Microsoft Graph token to send via the Microsoft Graph API instead — bypasses the SMTP AUTH disable entirely.</p>
           <div style="display:flex; align-items:center; gap:0.5rem;">
             <span id="account-settings-graph-status" style="font-size:0.8rem;"></span>
-            <button type="button" id="account-settings-graph-connect" class="btn btn-primary" style="margin-left:auto;"><i class="ti ti-brand-microsoft"></i> Connect Graph</button>
+            <button type="button" id="account-settings-graph-connect" class="btn btn-primary" style="margin-left:auto;"><i class="ti ti-brand-windows"></i> Connect Graph</button>
             <button type="button" id="account-settings-graph-disconnect" class="btn btn-ghost btn-small hidden"><i class="ti ti-unlink"></i> Disconnect</button>
           </div>
         </div>
@@ -1585,7 +1585,7 @@
           <div class="calendar-source-type-btns" style="margin-bottom:0.5rem;">
             <button type="button" class="btn btn-ghost calendar-source-type-btn active" data-source-type="ics"><i class="ti ti-link"></i> ICS</button>
             <button type="button" class="btn btn-ghost calendar-source-type-btn" data-source-type="google_oauth"><i class="ti ti-brand-google"></i> Google</button>
-            <button type="button" class="btn btn-ghost calendar-source-type-btn" data-source-type="microsoft_oauth"><i class="ti ti-brand-microsoft"></i> Outlook</button>
+            <button type="button" class="btn btn-ghost calendar-source-type-btn" data-source-type="microsoft_oauth"><i class="ti ti-brand-windows"></i> Outlook</button>
             <button type="button" class="btn btn-ghost calendar-source-type-btn" data-source-type="caldav"><i class="ti ti-server"></i> CalDAV</button>
           </div>
           <div class="field"><label>Name</label><input type="text" id="cal-settings-src-name" placeholder="My calendar" /></div>
@@ -3453,6 +3453,9 @@
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"/><path d="M7 9l5 -5l5 5"/><path d="M12 4l0 11"/></svg>
               Upload Photo
             </button>
+            <button type="button" id="profile-avatar-pick-icon-btn" class="btn btn-ghost btn-sm" title="Pick a Tabler icon">
+              <i class="ti ti-palette"></i> Pick Icon
+            </button>
             <button type="button" id="profile-avatar-save-crop" class="btn btn-primary btn-sm hidden" title="Save crop">Save</button>
             <button type="button" id="profile-avatar-cancel-crop" class="btn btn-ghost btn-sm hidden" title="Cancel">Cancel</button>
           </div>
@@ -3654,6 +3657,22 @@
         <canvas id="photo-markup-canvas"></canvas>
       </div>
       <div class="photo-markup-footer" id="photo-markup-footer"></div>
+    </div>
+  </div>
+
+  <!-- Tabler icon picker modal (used by user avatar picker; reused for mail tab appearance too) -->
+  <div id="tabler-icon-picker-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="tabler-icon-picker-title">
+    <div class="modal-backdrop" data-tabler-picker-dismiss></div>
+    <div class="modal-card tabler-icon-picker-card" role="document">
+      <header class="modal-header">
+        <h2 id="tabler-icon-picker-title" class="modal-title">Pick icon (<span id="tabler-icon-picker-count">100</span> Tabler svgs)</h2>
+        <button type="button" class="btn btn-icon-only modal-header-control" title="Close" data-tabler-picker-dismiss>
+          <i class="ti ti-x"></i>
+        </button>
+      </header>
+      <div class="modal-body tabler-icon-picker-body">
+        <div id="tabler-icon-picker-grid" class="tabler-icon-picker-grid"></div>
+      </div>
     </div>
   </div>
 

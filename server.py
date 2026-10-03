@@ -172,6 +172,137 @@ def _unwrap(data: Any) -> Any:
     return data
 
 
+# ── OnlyOffice import helpers (added 2026-10 for migration v2 audit) ─────────
+
+HISTORY_ATTACHMENT_DIR_LIVE = Path(__file__).parent / "data" / "history-attachments"
+CONTACT_AVATAR_DIR_LIVE = Path(__file__).parent / "data" / "contact-avatars"
+HISTORY_ATTACHMENT_DIR_LIVE.mkdir(parents=True, exist_ok=True)
+CONTACT_AVATAR_DIR_LIVE.mkdir(parents=True, exist_ok=True)
+
+# Tabler icon pool for user avatar picker (must match public/app.js TABLER_ICON_OPTIONS).
+_TABLER_ICON_OPTIONS = {
+    'user', 'users', 'user-circle', 'user-plus', 'user-check', 'user-minus', 'user-x',
+    'user-pin', 'ghost', 'robot', 'mood-smile', 'mood-sad',
+    'cat', 'dog', 'fish', 'horse', 'butterfly', 'paw', 'spider', 'bug',
+    'leaf', 'flower', 'cloud', 'cloud-rain', 'sun', 'moon', 'flame', 'droplet',
+    'snowflake', 'wind',
+    'building', 'building-bank', 'building-hospital', 'building-store', 'building-warehouse',
+    'building-factory', 'home', 'home-2', 'building-skyscraper', 'map-pin',
+    'car', 'truck', 'bus', 'bike', 'plane', 'plane-departure', 'ship', 'anchor',
+    'music', 'disc', 'video', 'microphone', 'headphones', 'radio',
+    'camera', 'photo', 'movie', 'book',
+    'cup', 'coffee', 'beer', 'pizza', 'bread', 'apple', 'cherry', 'lemon',
+    'device-laptop', 'device-desktop', 'device-mobile', 'device-tablet',
+    'cpu', 'antenna', 'bluetooth', 'wifi', 'router', 'satellite',
+    'briefcase', 'mail', 'mail-opened', 'inbox', 'send', 'rocket', 'at',
+    'phone', 'calendar', 'chart-bar',
+    'shield', 'shield-check', 'lock', 'key', 'badge', 'certificate', 'fingerprint', 'license',
+    'crown', 'diamond', 'gift', 'medal', 'trophy', 'star', 'sparkles', 'heart',
+}
+
+OO_FIELD_TYPE_MAP_LIVE = {
+    0: "text", 1: "textarea", 2: "number", 3: "url",
+    4: "select", 5: "date", 6: "checkbox", 7: "currency",
+    8: "text",
+}
+
+MIME_LIVE = {
+    "pdf": "application/pdf",
+    "doc": "application/msword",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xls": "application/vnd.ms-excel",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "ppt": "application/vnd.ms-powerpoint",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "txt": "text/plain",
+    "csv": "text/csv",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "bmp": "image/bmp",
+    "tiff": "image/tiff",
+    "webp": "image/webp",
+    "esx": "application/octet-stream",
+}
+
+
+def _crm_normalize_field_type(raw: Any) -> str:
+    """Map OnlyOffice numeric fieldType (0/1/3/5 etc.) to Sietch string."""
+    if raw is None:
+        return "text"
+    try:
+        return OO_FIELD_TYPE_MAP_LIVE.get(int(raw), "text")
+    except (TypeError, ValueError):
+        return "text"
+
+
+def _crm_is_closure_sentinel(raw: Any) -> bool:
+    """OnlyOffice .NET min-value sent for 'not closed' actualCloseDate."""
+    s = str(raw or "").strip()
+    return s.startswith("0001-01-01T00:00:00")
+
+
+def _crm_safe_filename(name: str) -> str:
+    out = re.sub(r"[^\w.\-]+", "_", name or "").strip("._")
+    return out or "file"
+
+
+def _crm_guess_mime(ext: str) -> str:
+    return MIME_LIVE.get(ext.lower(), "application/octet-stream")
+
+
+def _crm_get_raw_bytes(url: str, headers: dict | None = None, timeout: int = 60) -> bytes | None:
+    """Download raw bytes with retry (used for attachments + avatars)."""
+    last = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers=headers or {})
+            with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=timeout) as resp:
+                return resp.read()
+        except Exception as exc:
+            last = exc
+            time.sleep(0.5 * (2 ** attempt))
+    if last:
+        _append_sync_log("warn", f"download failed: {url}: {last}")
+    return None
+
+
+def _crm_fetch_user_id_map(portal: str, token: str) -> dict[str, int]:
+    """Map OnlyOffice user UUID -> Sietch user.id (matched by email)."""
+    oo_users = []
+    for path in ("/api/2.0/crm/user/filter?count=500", "/api/2.0/people"):
+        try:
+            data = _unwrap(_crm_api_get(portal, token, path))
+            if isinstance(data, list):
+                oo_users = data
+                break
+        except Exception:
+            continue
+    sietch_by_email: dict[str, int] = {}
+    for row in db.query_dicts("SELECT id, email FROM users"):
+        em = (row.get("email") or "").strip().lower()
+        if em:
+            sietch_by_email[em] = row["id"]
+    out: dict[str, int] = {}
+    for u in oo_users:
+        if not isinstance(u, dict):
+            continue
+        uid = str(u.get("id") or u.get("ID") or "")
+        em = str(u.get("email") or u.get("Email") or "").strip().lower()
+        if uid and em and em in sietch_by_email:
+            out[uid] = sietch_by_email[em]
+    return out
+
+
+def _ssl_ctx():
+    """SSL context that always bypasses verification (OnlyOffice uses self-signed)."""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
 def _fetch_oo_user_owner_map(portal: str, token: str) -> dict:
     """Map OnlyOffice user IDs → Sietch user IDs via email, for task ownership."""
     oo_users = []
@@ -183,7 +314,7 @@ def _fetch_oo_user_owner_map(portal: str, token: str) -> dict:
         oo_users = []
     if not oo_users:
         try:
-            data = _unwrap(_crm_api_get(portal, token, "/api/2.0/people/filter"))
+            data = _unwrap(_crm_api_get(portal, token, "/api/2.0/people"))
             if isinstance(data, list):
                 oo_users = data
         except Exception:
@@ -2960,6 +3091,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/my/avatar":
             self._handle_avatar_get()
             return
+        if api_path == "/api/v2/my/avatar-style":
+            self._handle_my_avatar_style_get()
+            return
+        if api_path == "/api/v2/users/avatar-styles":
+            self._handle_users_avatar_style_get()
+            return
+        # Serve a downloaded OnlyOffice contact avatar by basename
+        m = re.match(r"^/api/v2/contact-avatars/([^/]+)$", api_path)
+        if m:
+            self._handle_contact_avatar_serve(m.group(1))
+            return
         m = re.match(r"^/api/v2/users/(\d+)/avatar$", api_path)
         if m:
             self._handle_user_avatar_get(int(m.group(1)))
@@ -3345,6 +3487,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if api_path == "/api/v2/my/avatar" and method == "DELETE":
             self._handle_avatar_delete()
+            return
+        if api_path == "/api/v2/my/avatar-style" and method in ("PUT", "POST"):
+            self._handle_my_avatar_style_put()
             return
         if api_path == "/api/v2/me/notification-prefs" and method == "PUT":
             self._handle_notification_prefs_put()
@@ -6080,6 +6225,82 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(photo_path.read_bytes())
 
+    def _handle_contact_avatar_serve(self, filename: str) -> None:
+        """Serve a downloaded OnlyOffice contact avatar from data/contact-avatars/.
+
+        Used by the contact-list UI to render avatar_local_path entries. Auth required
+        (this is a CRM, not public). Path traversal-safe: filename must be a basename.
+        """
+        user = _require_auth(self)
+        if not user:
+            return
+        # Strip any path components — only the basename
+        safe_name = Path(filename).name
+        if not safe_name or safe_name != filename:
+            self.send_response(400)
+            self.end_headers()
+            return
+        avatar_path = ROOT / "data" / "contact-avatars" / safe_name
+        if not avatar_path.exists() or not avatar_path.is_file():
+            self.send_response(404)
+            self.end_headers()
+            return
+        ext = avatar_path.suffix.lower()
+        ctype = "image/jpeg"
+        if ext == ".png":
+            ctype = "image/png"
+        elif ext == ".gif":
+            ctype = "image/gif"
+        elif ext == ".webp":
+            ctype = "image/webp"
+        data = avatar_path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "private, max-age=86400")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _handle_my_avatar_style_get(self) -> None:
+        """Return the current user's avatar style (icon name or null)."""
+        user = _require_auth(self)
+        if not user:
+            return
+        row = db.query_one("SELECT avatar_icon FROM users WHERE id = %s", (user["id"],))
+        icon = row.get("avatar_icon") if row else None
+        _json_response(self, 200, {"avatar_icon": icon})
+
+    def _handle_my_avatar_style_put(self) -> None:
+        """Set the current user's avatar style. Body: {"avatar_icon": "cat"} | {"avatar_icon": null}"""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            body = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON"})
+            return
+        icon = body.get("avatar_icon")
+        if icon is not None and not isinstance(icon, str):
+            _json_response(self, 400, {"error": "avatar_icon must be a string or null"})
+            return
+        # Validate against known Tabler icon pool
+        allowed = set(_TABLER_ICON_OPTIONS)
+        if icon is not None and icon not in allowed:
+            _json_response(self, 400, {"error": f"Unknown icon '{icon}'"})
+            return
+        db.execute("UPDATE users SET avatar_icon = %s WHERE id = %s", (icon or None, user["id"]))
+        _json_response(self, 200, {"ok": True, "avatar_icon": icon})
+
+    def _handle_users_avatar_style_get(self) -> None:
+        """Public avatar style list (any auth user can fetch)."""
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query_dicts("SELECT id, avatar_icon FROM users WHERE avatar_icon IS NOT NULL")
+        out = {str(r["id"]): r["avatar_icon"] for r in rows}
+        _json_response(self, 200, out)
+
     def _handle_contact_photo_upload(self, contact_id: int) -> None:
         user = _require_auth(self)
         if not user:
@@ -6188,8 +6409,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             page_size = 500
             all_contacts = []
             while True:
-                sep = "&" if "?" in "/api/2.0/crm/contact" else "?"
-                path = f"/api/2.0/crm/contact{sep}count={page_size}&startIndex={start}"
+                sep = "&" if "?" in "/api/2.0/crm/contact/filter" else "?"
+                path = f"/api/2.0/crm/contact/filter{sep}count={page_size}&startIndex={start}"
                 data = _unwrap(_crm_api_get(portal, token, path))
                 if not isinstance(data, list) or not data:
                     break
@@ -6204,95 +6425,213 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             errors = 0
             start_time = time.time()
 
-            # First pass: insert all contacts
+            # First pass: upsert all contacts with multi-value + avatar
             oo_id_to_local = {}
+            multi_emails = 0
+            multi_phones = 0
+            multi_addrs = 0
             for c in all_contacts:
                 if not isinstance(c, dict):
                     continue
                 oo_id = str(c.get("id") or "")
-                if oo_id in existing_oo_ids:
-                    oo_id_to_local[oo_id] = existing_oo_ids[oo_id]
-                    skipped += 1
+                if not oo_id:
                     continue
                 is_company = bool(c.get("isCompany", False))
                 first_name = str(c.get("firstName") or "").strip() or None
                 last_name = str(c.get("lastName") or "").strip() or None
                 company_name = str(c.get("companyName") or "").strip() or None
 
-                # Extract email
+                # Multi-value commonData
                 common_data = c.get("commonData") or []
                 email = None
+                phone = None
+                website = None
                 for item in common_data:
-                    if item.get("infoType") == 1 and item.get("isPrimary"):
-                        email = str(item.get("data") or "").strip() or None
-                        break
+                    if not isinstance(item, dict):
+                        continue
+                    info_type = item.get("infoType")
+                    data = str(item.get("data") or "").strip()
+                    is_primary = bool(item.get("isPrimary"))
+                    if info_type == 1 and is_primary and not email:
+                        email = data or None
+                    if info_type == 0 and is_primary and not phone:
+                        phone = data or None
+                    if info_type == 2 and not website:
+                        website = data or None
                 if not email:
                     for item in common_data:
-                        if item.get("infoType") == 1:
+                        if isinstance(item, dict) and item.get("infoType") == 1:
                             email = str(item.get("data") or "").strip() or None
                             break
-
-                # Extract phone
-                phone = None
-                for item in common_data:
-                    if item.get("infoType") == 0 and item.get("isPrimary"):
-                        phone = str(item.get("data") or "").strip() or None
-                        break
                 if not phone:
                     for item in common_data:
-                        if item.get("infoType") == 0:
+                        if isinstance(item, dict) and item.get("infoType") == 0:
                             phone = str(item.get("data") or "").strip() or None
                             break
 
-                # Extract website
-                website = None
-                for item in common_data:
-                    if item.get("infoType") == 2:
-                        website = str(item.get("data") or "").strip() or None
-                        break
-
-                # Extract address
+                # Multi-value addresses
                 addresses = c.get("addresses") or []
-                addr = {}
+                primary_addr = None
                 for a in addresses:
-                    if a.get("isPrimary"):
-                        addr = a
+                    if isinstance(a, dict) and a.get("isPrimary"):
+                        primary_addr = a
                         break
-                if not addr and addresses:
-                    addr = addresses[0]
+                if not primary_addr and addresses and isinstance(addresses[0], dict):
+                    primary_addr = addresses[0]
 
                 about = str(c.get("about") or "").strip() or None
                 industry = str(c.get("industry") or "").strip() or None
                 currency = str(c.get("currency") or "").strip() or None
                 contact_status = None
+                status_id = None
                 cs = c.get("contactStatus")
                 if isinstance(cs, dict):
                     contact_status = str(cs.get("title") or "").strip() or None
+                    status_id = cs.get("id")
+                task_count = int(c.get("taskCount") or 0) if c.get("taskCount") is not None else None
                 avatar_url = str(c.get("smallFotoUrl") or "").strip() or None
 
+                # Download avatar (Bug #19)
+                avatar_local = None
+                if avatar_url:
+                    full_url = avatar_url if avatar_url.startswith("http") else f"{portal.rstrip('/')}{avatar_url}"
+                    raw = _crm_get_raw_bytes(full_url, headers={"Authorization": token}, timeout=15)
+                    if raw:
+                        ext = "jpg"
+                        if "png" in full_url.lower():
+                            ext = "png"
+                        avatar_path = CONTACT_AVATAR_DIR_LIVE / f"{oo_id}.{ext}"
+                        avatar_path.parent.mkdir(parents=True, exist_ok=True)
+                        avatar_path.write_bytes(raw)
+                        avatar_local = str(avatar_path.relative_to(Path(__file__).resolve().parent))
+
+                # Creator
+                create_by = c.get("createBy") or {}
+                creator_local = None
+                if isinstance(create_by, dict):
+                    crm_creator = str(create_by.get("id") or "")
+                    creator_local = _crm_fetch_user_id_map(portal, token).get(crm_creator)
+
+                existing_local_id = existing_oo_ids.get(oo_id)
                 try:
-                    local_id = db.insert_returning(
-                        """INSERT INTO contacts (first_name, last_name, company, email, phone, is_company,
-                           contact_type, website, industry, currency, about, contact_status, avatar_url,
-                           onlyoffice_id, address_street, address_city, address_state, address_zip,
-                           address_country, created_by)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                           RETURNING id""",
-                        (first_name, last_name, company_name, email, phone, is_company,
-                         None, website, industry, currency, about, contact_status, avatar_url,
-                         oo_id,
-                         str(addr.get("street") or "").strip() or None,
-                         str(addr.get("city") or "").strip() or None,
-                         str(addr.get("state") or "").strip() or None,
-                         str(addr.get("zip") or "").strip() or None,
-                         str(addr.get("country") or "").strip() or None,
-                         user["id"]),
-                    )
+                    if existing_local_id:
+                        # Bug #9: UPDATE existing contact
+                        db.execute(
+                            """UPDATE contacts SET
+                                   first_name = COALESCE(%s, first_name),
+                                   last_name = COALESCE(%s, last_name),
+                                   company = COALESCE(%s, company),
+                                   email = COALESCE(%s, email),
+                                   phone = COALESCE(%s, phone),
+                                   website = COALESCE(%s, website),
+                                   industry = COALESCE(%s, industry),
+                                   about = COALESCE(%s, about),
+                                   contact_status = COALESCE(%s, contact_status),
+                                   avatar_url = COALESCE(%s, avatar_url),
+                                   avatar_local_path = COALESCE(%s, avatar_local_path),
+                                   address_street = COALESCE(%s, address_street),
+                                   address_city = COALESCE(%s, address_city),
+                                   address_state = COALESCE(%s, address_state),
+                                   address_zip = COALESCE(%s, address_zip),
+                                   address_country = COALESCE(%s, address_country),
+                                   onlyoffice_task_count = COALESCE(%s, onlyoffice_task_count),
+                                   onlyoffice_status_id = COALESCE(%s, onlyoffice_status_id),
+                                   raw_about = %s, raw_industry = %s
+                               WHERE id = %s""",
+                            (first_name, last_name, company_name, email, phone, website,
+                             industry, about, contact_status, avatar_url, avatar_local,
+                             str(primary_addr.get("street") or "").strip() or None if primary_addr else None,
+                             str(primary_addr.get("city") or "").strip() or None if primary_addr else None,
+                             str(primary_addr.get("state") or "").strip() or None if primary_addr else None,
+                             str(primary_addr.get("zip") or "").strip() or None if primary_addr else None,
+                             str(primary_addr.get("country") or "").strip() or None if primary_addr else None,
+                             task_count, status_id, about, industry, existing_local_id),
+                        )
+                        local_id = existing_local_id
+                        skipped += 1
+                    else:
+                        # INSERT new contact
+                        new_id = db.insert_returning(
+                            """INSERT INTO contacts
+                                   (first_name, last_name, company, email, phone, is_company,
+                                    website, industry, currency, about, contact_status, avatar_url,
+                                    onlyoffice_id, address_street, address_city, address_state, address_zip,
+                                    address_country, created_by,
+                                    onlyoffice_task_count, onlyoffice_status_id,
+                                    raw_about, raw_industry, avatar_local_path)
+                               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                               RETURNING id""",
+                            (first_name, last_name, company_name, email, phone, is_company,
+                             website, industry, currency, about, contact_status, avatar_url,
+                             oo_id,
+                             str(primary_addr.get("street") or "").strip() or None if primary_addr else None,
+                             str(primary_addr.get("city") or "").strip() or None if primary_addr else None,
+                             str(primary_addr.get("state") or "").strip() or None if primary_addr else None,
+                             str(primary_addr.get("zip") or "").strip() or None if primary_addr else None,
+                             str(primary_addr.get("country") or "").strip() or None if primary_addr else None,
+                             creator_local,
+                             task_count, status_id, about, industry, avatar_local),
+                        )
+                        local_id = new_id
+                        created += 1
                     oo_id_to_local[oo_id] = local_id
-                    created += 1
                 except Exception as e:
-                    _append_sync_log("error", f"Failed to create contact {oo_id}: {e}")
+                    _append_sync_log("error", f"Failed to upsert contact {oo_id}: {e}")
                     errors += 1
+                    continue
+
+                # Multi-value commonData rows (Bug #10)
+                if not existing_local_id:
+                    for it in common_data:
+                        if not isinstance(it, dict):
+                            continue
+                        data = str(it.get("data") or "").strip()
+                        if not data:
+                            continue
+                        info_type = it.get("infoType")
+                        if info_type == 1:  # email
+                            db.execute(
+                                """INSERT INTO contact_emails
+                                       (contact_id, email, category, category_id, is_primary, onlyoffice_id)
+                                   VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
+                                (local_id, data, str(it.get("categoryName") or "") or None,
+                                 it.get("category"), bool(it.get("isPrimary")),
+                                 int(it.get("id") or 0) or None),
+                            )
+                            multi_emails += 1
+                        elif info_type == 0:  # phone
+                            db.execute(
+                                """INSERT INTO contact_phones
+                                       (contact_id, phone, category, category_id, is_primary, onlyoffice_id)
+                                   VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
+                                (local_id, data, str(it.get("categoryName") or "") or None,
+                                 it.get("category"), bool(it.get("isPrimary")),
+                                 int(it.get("id") or 0) or None),
+                            )
+                            multi_phones += 1
+
+                    # Multi-value addresses
+                    for a in addresses:
+                        if not isinstance(a, dict):
+                            continue
+                        db.execute(
+                            """INSERT INTO contact_addresses
+                                   (contact_id, street, city, state, zip, country,
+                                    category, category_id, is_primary, onlyoffice_id)
+                               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                               ON CONFLICT DO NOTHING""",
+                            (local_id,
+                             str(a.get("street") or "").strip() or None,
+                             str(a.get("city") or "").strip() or None,
+                             str(a.get("state") or "").strip() or None,
+                             str(a.get("zip") or "").strip() or None,
+                             str(a.get("country") or "").strip() or None,
+                             str(a.get("categoryName") or "") or None,
+                             a.get("category"),
+                             bool(a.get("isPrimary")),
+                             a.get("id")),
+                        )
+                        multi_addrs += 1
 
             # Second pass: resolve person→company linkage
             for c in all_contacts:
@@ -6313,8 +6652,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                    (comp_local_id, str(company_obj.get("displayName") or "").strip() or None, local_id))
 
             elapsed = round(time.time() - start_time, 1)
-            _append_sync_log("info", f"Contacts sync complete: {created} created, {skipped} skipped, {errors} errors in {elapsed}s")
-            _json_response(self, 200, {"created": created, "skipped": skipped, "errors": errors, "elapsed": elapsed})
+            _append_sync_log("info", f"Contacts sync complete: {created} created, {skipped} updated, {errors} errors, {multi_emails} emails, {multi_phones} phones, {multi_addrs} addresses in {elapsed}s")
+            _json_response(self, 200, {"created": created, "updated": skipped, "errors": errors,
+                                       "multi_emails": multi_emails, "multi_phones": multi_phones,
+                                       "multi_addresses": multi_addrs, "elapsed": elapsed})
         except Exception as e:
             _append_sync_log("error", f"Sync failed: {e}")
             _json_response(self, 500, {"error": str(e)})
@@ -6823,7 +7164,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
         rows = db.query(
             """SELECT id, email, display_name, first_name, last_name, is_admin, is_active,
-                      avatar_url, role, twofa_method, created_at, last_login, must_change_password
+                      avatar_url, avatar_icon, role, twofa_method, created_at, last_login, must_change_password
                FROM users ORDER BY display_name"""
         )
         _json_response(self, 200, [
@@ -6831,11 +7172,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
              "lastName": r[4], "isAdmin": r[5], "isActive": r[6],
              "avatarUrl": f"/api/v2/users/{r[0]}/avatar" if r[7] else None,
              "thumbnailUrl": f"/api/v2/users/{r[0]}/avatar?thumbnail=1" if r[7] else None,
-             "role": r[8] or "member",
-             "twofaMethod": r[9],
-             "createdAt": r[10].isoformat() if r[10] else None,
-             "lastLogin": r[11].isoformat() if r[11] else None,
-             "mustChangePassword": r[12]}
+             "avatarIcon": r[8],
+             "role": r[9] or "member",
+             "twofaMethod": r[10],
+             "createdAt": r[11].isoformat() if r[11] else None,
+             "lastLogin": r[12].isoformat() if r[12] else None,
+             "mustChangePassword": r[13]}
             for r in rows
         ])
 
@@ -6843,9 +7185,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_auth(self)
         if not user:
             return
-        # Fetch avatar_url from DB (not in session cache)
-        avatar_row = db.query_one("SELECT avatar_url FROM users WHERE id = %s", (user["id"],))
+        # Fetch avatar_url + avatar_icon from DB (not in session cache)
+        avatar_row = db.query_one("SELECT avatar_url, avatar_icon FROM users WHERE id = %s", (user["id"],))
         avatar_url = avatar_row.get("avatar_url") if avatar_row else None
+        avatar_icon = avatar_row.get("avatar_icon") if avatar_row else None
         _json_response(self, 200, {
             "id": user.get("id"),
             "email": user.get("email"),
@@ -6858,6 +7201,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "twofaMethod": user.get("twofa_method"),
             "avatarUrl": f"/api/v2/my/avatar" if avatar_url else None,
             "thumbnailUrl": f"/api/v2/my/avatar?thumbnail=1" if avatar_url else None,
+            "avatarIcon": avatar_icon,
         })
 
     def _handle_me_put(self) -> None:
@@ -9871,11 +10215,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 _append_sync_log("warn", f"Could not load opportunity map: {e}")
 
-            _append_sync_log("info", "Fetching tasks...")
+            _append_sync_log("info", "Fetching tasks (open + closed)...")
             try:
-                all_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/task/filter?count=500")) or []
-                if not isinstance(all_tasks, list):
-                    all_tasks = []
+                # Bug #8: correct endpoint for current OnlyOffice version is /api/2.0/projects/task/
+                open_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/task/filter?count=500&isClosed=false")) or []
+                closed_tasks = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/task/filter?count=500&isClosed=true")) or []
+                all_tasks = list(open_tasks) + list(closed_tasks)
+                if not isinstance(open_tasks, list):
+                    open_tasks = []
+                if not isinstance(closed_tasks, list):
+                    closed_tasks = []
             except Exception as e:
                 _append_sync_log("warn", f"Tasks API not available: {e}")
                 all_tasks = []
@@ -9969,11 +10318,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _append_sync_log("info", f"Found {len(deal_by_title)} existing deals")
             start_time = time.time()
 
-            # Clear existing tags and custom field values
-            _append_sync_log("info", "Clearing existing opportunity tags and custom field values...")
-            db.execute("DELETE FROM opportunity_tags")
-            db.execute("DELETE FROM opportunity_custom_field_values")
-            _append_sync_log("info", "Cleared existing tags and custom field values")
+            # Clear existing tags and custom field values for deals that have
+            # onlyoffice_id (i.e., came from this sync). Bug #13: was DELETEing
+            # everything, which would wipe local edits on partial failure.
+            _append_sync_log("info", "Clearing existing tags/CFs for OnlyOffice-imported deals only...")
+            db.execute(
+                """DELETE FROM opportunity_tags
+                   WHERE opportunity_id IN (
+                       SELECT id FROM opportunities WHERE onlyoffice_id IS NOT NULL
+                   )"""
+            )
+            db.execute(
+                """DELETE FROM opportunity_custom_field_values
+                   WHERE opportunity_id IN (
+                       SELECT id FROM opportunities WHERE onlyoffice_id IS NOT NULL
+                   )"""
+            )
+            _append_sync_log("info", "Cleared tags/CFs for OnlyOffice-imported deals")
 
             # Fetch all deals from OnlyOffice and sync tags/CFs for matching ones
             _append_sync_log("info", "Fetching deals from OnlyOffice to sync tags...")
@@ -9986,7 +10347,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
             while True:
                 sep = "&" if "?" in "/api/2.0/crm/opportunity/filter" else "?"
-                path = f"/api/2.0/crm/opportunity/filter{sep}count={page_size}&startIndex={start}"
+                # Apply filters to the OnlyOffice endpoint when present.
+                # The community server filter accepts these as direct query params.
+                extra = []
+                if since_date:
+                    extra.append(f"updatedAfter={since_date}")
+                if filter_stage_id is not None:
+                    extra.append(f"stageId={filter_stage_id}")
+                if filter_responsible_id:
+                    extra.append(f"responsibleId={filter_responsible_id}")
+                extra_q = ("&" + "&".join(extra)) if extra else ""
+                path = f"/api/2.0/crm/opportunity/filter{sep}count={page_size}&startIndex={start}{extra_q}"
                 data = _unwrap(_crm_api_get(portal, token, path))
                 if not isinstance(data, list) or not data:
                     break
@@ -10076,6 +10447,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
         For new deals: creates the deal and pulls all tags, custom fields, and history.
         For existing deals (matched by title): pulls missing history events.
+
+        Optional filters in payload:
+            since: YYYY-MM-DD — OnlyOffice deals updated after this date
+            stage_id: int — OnlyOffice stage id filter
+            responsible_id: str — OnlyOffice user UUID
         """
         global _sync_log, _sync_running
         if _sync_running:
@@ -10086,6 +10462,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         try:
             payload = json.loads(_read_body(self) or b"{}")
             portal = payload.get("portal_url", "").strip()
+            since_date = payload.get("since", "").strip() or None
+            filter_stage_id = payload.get("stage_id")
+            filter_responsible_id = payload.get("responsible_id")
             email = payload.get("email", "").strip()
             password = payload.get("password", "").strip()
             if not portal or not email or not password:
@@ -10140,7 +10519,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             history_count = 0
             tag_count = 0
             cf_count = 0
+            attachments_synced = 0
             start_time = time.time()
+
+            # Build user UUID -> Sietch user.id map (Bug #15: author mapping)
+            user_id_map = _crm_fetch_user_id_map(portal, token)
+            _append_sync_log("info", f"User map: {len(user_id_map)} OnlyOffice users mapped to local")
 
             for idx, o in enumerate(all_opps):
                 if not isinstance(o, dict):
@@ -10167,84 +10551,130 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 # Description
                 description = str(o.get("description") or o.get("Description") or "").strip() or None
 
-                # Check if deal already exists (by title)
-                v3_opp_id = existing_by_title.get(title.lower().strip())
+                # Actual close date — ignore the .NET sentinel
+                actual_close_date = None
+                actual_close_value = None
+                acd = o.get("actualCloseDate")
+                if acd and not _crm_is_closure_sentinel(acd):
+                    try:
+                        actual_close_date = str(acd)[:10]
+                    except Exception:
+                        actual_close_date = None
+                for k in ("actualCloseValue", "ActualCloseValue"):
+                    if k in o and o[k] is not None:
+                        try:
+                            actual_close_value = float(o[k])
+                        except Exception:
+                            actual_close_value = None
+                        break
+
+                # Find or create opportunity. Prefer onlyoffice_id, fall back to title.
+                v3_opp_id = None
+                if crm_id:
+                    row = db.query_one("SELECT id FROM opportunities WHERE onlyoffice_id = %s", (crm_id,))
+                    if row:
+                        v3_opp_id = row["id"]
+                if not v3_opp_id:
+                    v3_opp_id = existing_by_title.get(title.lower().strip())
                 is_new = v3_opp_id is None
 
                 if is_new:
-                    # Insert new opportunity
+                    # Insert new opportunity with onlyoffice_id + actual_close_date
                     db.execute(
-                        """INSERT INTO opportunities (title, description, stage_id, bid_value, created_at, stage_entered_at)
-                           VALUES (%s, %s, %s, %s, NOW(), NOW())""",
-                        (title, description, v3_stage_id, bid_value),
+                        """INSERT INTO opportunities
+                               (title, description, stage_id, bid_value,
+                                actual_close_date, actual_close_value,
+                                created_at, onlyoffice_id)
+                           VALUES (%s, %s, %s, %s, %s, %s, NOW(), %s)
+                           RETURNING id""",
+                        (title, description, v3_stage_id, bid_value,
+                         actual_close_date, actual_close_value, crm_id or None),
                     )
-                    v3_opp_id = db.query_one("SELECT id FROM opportunities WHERE title = %s", (title,))["id"]
+                    v3_opp_id = db.query_one("SELECT id FROM opportunities WHERE onlyoffice_id = %s", (crm_id,))["id"]
                     existing_by_title[title.lower().strip()] = v3_opp_id
                     created += 1
-
-                    # Fetch and sync tags for new deal
-                    try:
-                        tags_data = _unwrap(_crm_api_get(portal, token, f"/api/2.0/crm/opportunity/tag/{crm_id}"))
-                        tag_list = tags_data if isinstance(tags_data, list) else []
-                        for t in tag_list:
-                            tag_title = ""
-                            if isinstance(t, dict):
-                                tag_title = str(t.get("title") or t.get("name") or t.get("Title") or "").strip()
-                            elif isinstance(t, str):
-                                tag_title = t.strip()
-                            if tag_title:
-                                tag_id = tag_map.get(tag_title.lower())
-                                if not tag_id:
-                                    db.execute("INSERT INTO tag_definitions (title, color) VALUES (%s, %s)", (tag_title, "#6c757d"))
-                                    tag_id = db.query_one("SELECT id FROM tag_definitions WHERE title = %s", (tag_title,))["id"]
-                                    tag_map[tag_title.lower()] = tag_id
-                                    tag_count += 1
-                                db.execute(
-                                    "INSERT INTO opportunity_tags (opportunity_id, tag_id, assigned_at) VALUES (%s, %s, NOW()) ON CONFLICT DO NOTHING",
-                                    (v3_opp_id, tag_id),
-                                )
-                    except Exception:
-                        pass
-
-                    # Fetch and sync custom fields for new deal
-                    try:
-                        cf_data = _unwrap(_crm_api_get(portal, token, f"/api/2.0/crm/opportunity/{crm_id}/customfield"))
-                        cf_list = cf_data if isinstance(cf_data, list) else []
-                        for cf in cf_list:
-                            if not isinstance(cf, dict):
-                                continue
-                            cf_crm_id = str(cf.get("id") or cf.get("ID") or "")
-                            cf_value = cf.get("value") or cf.get("Value") or cf.get("fieldValue") or ""
-                            if isinstance(cf_value, dict):
-                                cf_value = cf_value.get("title") or cf_value.get("text") or cf_value.get("value") or ""
-                            cf_value = str(cf_value).strip()
-                            v3_field_id = cf_map.get(cf_crm_id)
-                            if v3_field_id and cf_value:
-                                db.execute(
-                                    """INSERT INTO opportunity_custom_field_values (opportunity_id, field_id, field_value)
-                                       VALUES (%s, %s, %s) ON CONFLICT (opportunity_id, field_id) DO UPDATE SET field_value = EXCLUDED.field_value""",
-                                    (v3_opp_id, v3_field_id, cf_value),
-                                )
-                                cf_count += 1
-                    except Exception:
-                        pass
                 else:
                     skipped += 1
+                    # Always update actual_close_date + stage for existing ones (idempotent)
+                    try:
+                        db.execute(
+                            """UPDATE opportunities
+                               SET actual_close_date = COALESCE(%s, actual_close_date),
+                                   actual_close_value = COALESCE(%s, actual_close_value),
+                                   stage_id = COALESCE(%s, stage_id)
+                               WHERE id = %s""",
+                            (actual_close_date, actual_close_value, v3_stage_id, v3_opp_id),
+                        )
+                    except Exception:
+                        pass
 
-                # Fetch and sync history for BOTH new and existing deals
+                # ── Tags: BOTH new and existing deals (Bug #4 fix) ──
+                try:
+                    tags_data = _unwrap(_crm_api_get(portal, token, f"/api/2.0/crm/opportunity/tag/{crm_id}"))
+                    tag_list = tags_data if isinstance(tags_data, list) else []
+                    for t in tag_list:
+                        tag_title = ""
+                        if isinstance(t, dict):
+                            tag_title = str(t.get("title") or t.get("name") or t.get("Title") or "").strip()
+                        elif isinstance(t, str):
+                            tag_title = t.strip()
+                        if tag_title:
+                            tag_id = tag_map.get(tag_title.lower())
+                            if not tag_id:
+                                db.execute("INSERT INTO tag_definitions (title, color) VALUES (%s, %s)", (tag_title, "#6c757d"))
+                                tag_id = db.query_one("SELECT id FROM tag_definitions WHERE title = %s", (tag_title,))["id"]
+                                tag_map[tag_title.lower()] = tag_id
+                                tag_count += 1
+                            db.execute(
+                                "INSERT INTO opportunity_tags (opportunity_id, tag_id, assigned_at) VALUES (%s, %s, NOW()) ON CONFLICT DO NOTHING",
+                                (v3_opp_id, tag_id),
+                            )
+                except Exception:
+                    pass
+
+                # ── Custom fields: BOTH new and existing deals (Bug #4 fix) ──
+                try:
+                    cf_data = _unwrap(_crm_api_get(portal, token, f"/api/2.0/crm/opportunity/{crm_id}/customfield"))
+                    cf_list = cf_data if isinstance(cf_data, list) else []
+                    for cf in cf_list:
+                        if not isinstance(cf, dict):
+                            continue
+                        cf_crm_id = str(cf.get("id") or cf.get("ID") or "")
+                        cf_value = cf.get("value") or cf.get("Value") or cf.get("fieldValue") or ""
+                        if isinstance(cf_value, dict):
+                            cf_value = cf_value.get("title") or cf_value.get("text") or cf_value.get("value") or ""
+                        cf_value = str(cf_value).strip()
+                        v3_field_id = cf_map.get(cf_crm_id)
+                        if v3_field_id and cf_value:
+                            db.execute(
+                                """INSERT INTO opportunity_custom_field_values (opportunity_id, field_id, field_value)
+                                   VALUES (%s, %s, %s) ON CONFLICT (opportunity_id, field_id) DO UPDATE SET field_value = EXCLUDED.field_value""",
+                                (v3_opp_id, v3_field_id, cf_value),
+                            )
+                            cf_count += 1
+                except Exception:
+                    pass
+
+                # ── History events for BOTH new and existing deals ──
                 try:
                     hist_data = _unwrap(_crm_api_get(portal, token, f"/api/2.0/crm/history/filter?entityType=opportunity&entityId={crm_id}&count=500"))
                     hist_list = hist_data if isinstance(hist_data, list) else []
 
-                    if not is_new:
-                        # For existing deals, build a dedup index of existing history events
-                        existing_events = db.query_dicts(
+                    # Dedup: use crm_event_id when present (faster, exact)
+                    existing_event_ids = set()
+                    for row in db.query_dicts(
+                        "SELECT crm_event_id FROM history_events WHERE opportunity_id = %s AND crm_event_id IS NOT NULL",
+                        (v3_opp_id,),
+                    ):
+                        if row.get("crm_event_id") is not None:
+                            existing_event_ids.add(int(row["crm_event_id"]))
+                    # Fallback dedup for events that lack crm_event_id
+                    existing_keys = set()
+                    if not existing_event_ids:
+                        for ev in db.query_dicts(
                             "SELECT category_id, content, created_at FROM history_events WHERE opportunity_id = %s",
                             (v3_opp_id,),
-                        )
-                        # Use a set of (category_id, content_prefix, created_at) for dedup
-                        existing_keys = set()
-                        for ev in existing_events:
+                        ):
                             content_prefix = (ev["content"] or "")[:200]
                             created_key = str(ev["created_at"])[:19] if ev["created_at"] else ""
                             existing_keys.add((ev["category_id"], content_prefix, created_key))
@@ -10264,9 +10694,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         event_created = h.get("created") or h.get("Created") or h.get("date") or None
                         create_by = h.get("createBy") or h.get("CreateBy") or h.get("createdBy") or {}
                         crm_author_id = str(create_by.get("id") or create_by.get("ID") or "") if isinstance(create_by, dict) else ""
+                        v3_author_id = user_id_map.get(crm_author_id)
 
-                        # Dedup for existing deals: skip if event already exists
-                        if not is_new:
+                        # crm_event_id-based dedup
+                        crm_event_id = int(h.get("id") or 0) or None
+                        crm_entity_id = int(h.get("entityId") or 0) or None
+
+                        if crm_event_id and crm_event_id in existing_event_ids:
+                            history_skipped += 1
+                            continue
+                        if not crm_event_id:
+                            # Fallback dedup
                             content_prefix = (event_content or "")[:200]
                             created_key = str(event_created)[:19] if event_created else ""
                             event_key = (cat_id, content_prefix, created_key)
@@ -10275,25 +10713,104 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                 continue
 
                         db.execute(
-                            """INSERT INTO history_events (opportunity_id, category_id, content, created_by, created_at)
-                               VALUES (%s, %s, %s, %s, COALESCE(%s, NOW()))""",
-                            (v3_opp_id, cat_id, event_content, None, event_created),
+                            """INSERT INTO history_events
+                                   (opportunity_id, category_id, content, created_by, created_at, backdated_created_at,
+                                    crm_event_id, crm_entity_id)
+                               VALUES (%s,%s,%s,%s,COALESCE(%s,NOW()),%s,%s,%s)""",
+                            (v3_opp_id, cat_id, event_content, v3_author_id, event_created, event_created,
+                             crm_event_id, crm_entity_id),
                         )
                         history_count += 1
+                        if crm_event_id:
+                            existing_event_ids.add(crm_event_id)
                         if not is_new:
                             history_synced += 1
-                            existing_keys.add(event_key)
+                            if not crm_event_id:
+                                existing_keys.add((cat_id, (event_content or "")[:200],
+                                                   str(event_created)[:19] if event_created else ""))
                 except Exception:
                     pass
+
+                # ── History attachments (Bug #5 fix): DOWNLOAD for new events ──
+                try:
+                    # Find events for this opp that have crm_event_id but no attachments yet
+                    events_with_files = []
+                    # We just inserted them above; query back to find their IDs
+                    event_rows = db.query_dicts(
+                        """SELECT he.id, he.crm_event_id FROM history_events he
+                           WHERE he.opportunity_id = %s AND he.crm_event_id IS NOT NULL
+                             AND NOT EXISTS (
+                                 SELECT 1 FROM history_attachments ha WHERE ha.event_id = he.id
+                             )""",
+                        (v3_opp_id,),
+                    )
+                    if event_rows:
+                        event_id_by_crm = {int(r["crm_event_id"]): r["id"] for r in event_rows}
+                        for h in hist_list:
+                            if not isinstance(h, dict):
+                                continue
+                            crm_event_id = int(h.get("id") or 0) or None
+                            if not crm_event_id:
+                                continue
+                            v3_event_id = event_id_by_crm.get(crm_event_id)
+                            if not v3_event_id:
+                                continue
+                            files = h.get("files") or []
+                            if not isinstance(files, list):
+                                continue
+                            for f_item in files:
+                                if not isinstance(f_item, dict):
+                                    continue
+                                f_id = int(f_item.get("id") or 0)
+                                if not f_id:
+                                    continue
+                                f_title = str(f_item.get("title") or f"file_{f_id}").strip()
+                                file_size = int(f_item.get("pureContentLength") or f_item.get("size") or 0)
+                                file_ext = Path(f_title).suffix.lstrip(".").lower()
+                                mime_type = _crm_guess_mime(file_ext)
+                                view_url = f_item.get("viewUrl") or f_item.get("webUrl") or ""
+
+                                # Owner
+                                owner = f_item.get("createdBy") or f_item.get("CreatedBy") or {}
+                                owner_crm_id = str(owner.get("id") or owner.get("ID") or "") if isinstance(owner, dict) else ""
+                                v3_uploader_id = user_id_map.get(owner_crm_id) or v3_author_id
+
+                                # Download
+                                rel_dir = Path("data") / "history-attachments" / str(v3_opp_id) / str(v3_event_id)
+                                safe_name = _crm_safe_filename(f_title)
+                                unique_name = f"{f_id}_{safe_name}"
+                                local_path = HISTORY_ATTACHMENT_DIR_LIVE / str(v3_opp_id) / str(v3_event_id) / unique_name
+                                local_path.parent.mkdir(parents=True, exist_ok=True)
+                                actual_size = file_size
+                                # OnlyOffice exposes files via filehandler.ashx (the
+                                # /api/2.0/files/{id} route is admin-only and 403s for bots).
+                                url = f"{portal.rstrip('/')}/Products/Files/HttpHandlers/filehandler.ashx?action=download&fileid={f_id}"
+                                raw = _crm_get_raw_bytes(url, headers={"Authorization": token}, timeout=60)
+                                if raw:
+                                    local_path.write_bytes(raw)
+                                    actual_size = len(raw)
+
+                                rel_path = f"data/history-attachments/{v3_opp_id}/{v3_event_id}/{unique_name}"
+                                db.execute(
+                                    """INSERT INTO history_attachments
+                                           (event_id, filename, file_path, file_size, mime_type, uploaded_by,
+                                            original_url, crm_file_id)
+                                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                                    (v3_event_id, f_title, rel_path, actual_size, mime_type,
+                                     v3_uploader_id, view_url, f_id),
+                                )
+                                attachments_synced += 1
+                except Exception as e:
+                    _append_sync_log("warn", f"Attachment sync for opp {crm_id} failed: {e}")
 
                 # Progress logging every 10 deals
                 if (idx + 1) % 10 == 0:
                     elapsed = time.time() - start_time
-                    _append_sync_log("info", f"[{idx + 1}/{len(all_opps)}] {created} created, {skipped} existing, {history_count} history events ({int(elapsed)}s elapsed)")
+                    _append_sync_log("info", f"[{idx + 1}/{len(all_opps)}] {created} created, {skipped} existing, {history_count} history events, {attachments_synced} attachments ({int(elapsed)}s elapsed)")
 
             elapsed = time.time() - start_time
-            _append_sync_log("info", f"Deals sync complete: {created} created, {skipped} existing, {history_count} history events ({history_synced} new for existing deals, {history_skipped} deduped), {tag_count} tags, {cf_count} custom fields ({int(elapsed)}s)")
-            _json_response(self, 200, {"ok": True, "created": created, "skipped": skipped, "tags": tag_count, "custom_fields": cf_count, "history": history_count, "history_synced": history_synced, "history_skipped": history_skipped, "total": len(all_opps), "elapsed_seconds": int(elapsed), "log": list(_sync_log)})
+            _append_sync_log("info", f"Deals sync complete: {created} created, {skipped} existing, {history_count} history events ({history_synced} new for existing deals, {history_skipped} deduped), {tag_count} tags, {cf_count} custom fields, {attachments_synced} attachments downloaded ({int(elapsed)}s)")
+            _json_response(self, 200, {"ok": True, "created": created, "skipped": skipped, "tags": tag_count, "custom_fields": cf_count, "history": history_count, "history_synced": history_synced, "history_skipped": history_skipped, "attachments": attachments_synced, "total": len(all_opps), "elapsed_seconds": int(elapsed), "log": list(_sync_log)})
         except Exception as e:
             _append_sync_log("error", f"Deals sync failed: {e}")
             _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
@@ -10332,11 +10849,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             # Remove any leftover orphan rows from the old wrong import model.
             # Imported emails now live in history_events, not mail_messages.
             try:
-                deleted = db.execute(
-                    "DELETE FROM mail_messages WHERE account_id IS NULL AND imap_uid LIKE 'onlyoffice:%'"
+                orphans = db.query_dicts(
+                    "DELETE FROM mail_messages WHERE account_id IS NULL AND imap_uid LIKE 'onlyoffice:%' RETURNING id"
                 )
-                if deleted:
-                    _append_sync_log("info", f"Cleaned up {deleted} orphan mail_messages rows from old import model")
+                if orphans:
+                    _append_sync_log("info", f"Cleaned up {len(orphans)} orphan mail_messages rows from old import model")
             except Exception as e:
                 _append_sync_log("warn", f"Cleanup of orphan mail_messages rows failed: {e}")
 
@@ -10381,6 +10898,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             emails_updated = 0
             emails_with_body = 0
             emails_body_fetch_failed = 0
+            email_attachments_downloaded = 0
             deals_processed = 0
             emails_this_batch = 0
 
@@ -10475,18 +10993,47 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                 except Exception as e:
                                     emails_body_fetch_failed += 1
 
-                            # Normalize attachments
+                            # Normalize attachments — email attachments live in
+                            # h["files"] (sibling of content), NOT in content["attachments"].
+                            # Bug #6 fix: also download the file bytes and store them as
+                            # history_attachments rows so the email bodies don't lose their files.
                             attachments = []
-                            att_list = content.get("attachments") or content.get("Attachments") or []
+                            att_list = h.get("files") or []  # sibling of content, NOT content.get("attachments")
+                            downloaded_files = []
                             if isinstance(att_list, list):
                                 for a in att_list:
                                     if not isinstance(a, dict):
                                         continue
+                                    f_id = int(a.get("id") or 0)
+                                    f_title = str(a.get("title") or a.get("name") or (f"file_{f_id}" if f_id else "file")).strip()
+                                    file_size = int(a.get("pureContentLength") or a.get("size") or 0)
+                                    file_ext = Path(f_title).suffix.lstrip(".").lower()
+                                    mime_type = _crm_guess_mime(file_ext)
+                                    view_url = a.get("viewUrl") or a.get("webUrl") or ""
+
                                     attachments.append({
-                                        "filename": str(a.get("fileName") or a.get("filename") or a.get("title") or a.get("name") or "").strip(),
-                                        "size_bytes": int(a.get("size") or a.get("fileSize") or a.get("sizeBytes") or 0) or 0,
-                                        "mime_type": str(a.get("mimeType") or a.get("mime_type") or a.get("contentType") or "").strip(),
+                                        "filename": f_title,
+                                        "size_bytes": file_size,
+                                        "mime_type": mime_type,
+                                        "crm_file_id": f_id,
+                                        "view_url": view_url,
                                     })
+
+                                    # Download the file bytes (Bug #6)
+                                    if f_id:
+                                        # OnlyOffice filehandler.ashx is the bot-accessible
+                                        # download endpoint (/api/2.0/files/{id} is admin-only).
+                                        url = f"{portal.rstrip('/')}/Products/Files/HttpHandlers/filehandler.ashx?action=download&fileid={f_id}"
+                                        raw = _crm_get_raw_bytes(url, headers={"Authorization": token}, timeout=60)
+                                        if raw:
+                                            downloaded_files.append({
+                                                "crm_file_id": f_id,
+                                                "filename": f_title,
+                                                "raw": raw,
+                                                "size": len(raw),
+                                                "mime_type": mime_type,
+                                                "view_url": view_url,
+                                            })
 
                             # Build a clean Sietch email_snapshot without any OnlyOffice URL dependency
                             snapshot = {
@@ -10507,6 +11054,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             }
 
                             existing_event_id = existing_import_index.get((v3_opp_id, str(crm_message_id)))
+                            v3_event_id = existing_event_id
                             try:
                                 if existing_event_id:
                                     db.execute(
@@ -10515,14 +11063,45 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                     )
                                     emails_updated += 1
                                 else:
-                                    db.execute(
-                                        "INSERT INTO history_events (opportunity_id, category_id, content, created_by, created_at, backdated_created_at) "
-                                        "VALUES (%s, %s, %s, %s, COALESCE(%s, NOW()), %s)",
+                                    v3_event_id = db.insert_returning(
+                                        """INSERT INTO history_events (opportunity_id, category_id, content, created_by, created_at, backdated_created_at)
+                                           VALUES (%s, %s, %s, %s, COALESCE(%s, NOW()), %s)
+                                           RETURNING id""",
                                         (v3_opp_id, EMAIL_HISTORY_CATEGORY_ID, json.dumps(snapshot), None, date_sent or None, date_sent or None),
                                     )
                                     emails_imported += 1
                             except Exception as e:
                                 _append_sync_log("warn", f"Failed to import email for deal {crm_id}: {e}")
+
+                            # Persist downloaded email attachments (Bug #6)
+                            if v3_event_id and downloaded_files:
+                                for df in downloaded_files:
+                                    try:
+                                        # Avoid duplicates if we've already recorded this crm_file_id
+                                        existing_att = db.query_one(
+                                            "SELECT id FROM history_attachments WHERE crm_file_id = %s",
+                                            (df["crm_file_id"],),
+                                        )
+                                        if existing_att:
+                                            continue
+                                        safe_name = _crm_safe_filename(df["filename"])
+                                        unique_name = f"{df['crm_file_id']}_{safe_name}"
+                                        rel_dir = Path("data") / "history-attachments" / str(v3_opp_id) / str(v3_event_id)
+                                        local_path = HISTORY_ATTACHMENT_DIR_LIVE / str(v3_opp_id) / str(v3_event_id) / unique_name
+                                        local_path.parent.mkdir(parents=True, exist_ok=True)
+                                        local_path.write_bytes(df["raw"])
+                                        rel_path = str(rel_dir / unique_name)
+                                        db.execute(
+                                            """INSERT INTO history_attachments
+                                                   (event_id, filename, file_path, file_size, mime_type, uploaded_by,
+                                                    original_url, crm_file_id)
+                                               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                                            (v3_event_id, df["filename"], rel_path, df["size"], df["mime_type"],
+                                             None, df["view_url"], df["crm_file_id"]),
+                                        )
+                                        email_attachments_downloaded += 1
+                                    except Exception as exc:
+                                        _append_sync_log("warn", f"Failed to record email attachment {df.get('crm_file_id')} for deal {crm_id}: {exc}")
 
                         emails_this_batch = (emails_imported + emails_updated) - email_count_before
                         if email_events_in_deal > 0 and deals_processed % 5 == 0:
@@ -10542,8 +11121,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 start += page_size
 
             elapsed = time.time() - start_time
-            _append_sync_log("info", f"Email body import complete: {deals_processed} deals processed, {emails_imported} imported, {emails_updated} updated, {emails_with_body} with full body fetched, {emails_body_fetch_failed} body fetches failed ({int(elapsed)}s total)")
-            _json_response(self, 200, {"ok": True, "deals_processed": deals_processed, "emails_imported": emails_imported, "emails_updated": emails_updated, "emails_with_body": emails_with_body, "emails_body_fetch_failed": emails_body_fetch_failed, "elapsed_seconds": int(elapsed), "log": list(_sync_log)})
+            _append_sync_log("info", f"Email body import complete: {deals_processed} deals processed, {emails_imported} imported, {emails_updated} updated, {emails_with_body} with full body fetched, {emails_body_fetch_failed} body fetches failed, {email_attachments_downloaded} attachments downloaded ({int(elapsed)}s total)")
+            _json_response(self, 200, {"ok": True, "deals_processed": deals_processed, "emails_imported": emails_imported, "emails_updated": emails_updated, "emails_with_body": emails_with_body, "emails_body_fetch_failed": emails_body_fetch_failed, "email_attachments_downloaded": email_attachments_downloaded, "elapsed_seconds": int(elapsed), "log": list(_sync_log)})
         except Exception as e:
             _append_sync_log("error", f"Email body import failed: {e}")
             _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
@@ -10551,7 +11130,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _sync_running = False
 
     def _handle_sync_full_reconcile(self) -> None:
-        """Full read-only reconcile from OnlyOffice CRM."""
+        """Run a complete sync pass from OnlyOffice CRM.
+
+        Bug #12: previously this was a misleading read-only sweep that only
+        touched tags/tasks/cf-defs. Now it runs the full chain:
+            users → stages → tags → cf-defs → contacts → opportunities +
+            history + attachments → tasks.
+        Use this for first-time migration. For incremental deltas, run the
+        individual /pull-* handlers.
+        """
         global _sync_log, _sync_running
         if _sync_running:
             _json_response(self, 409, {"error": "Sync already running"})
@@ -10567,13 +11154,75 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 400, {"error": "portal_url, email, and password required"})
                 _sync_running = False
                 return
-            _append_sync_log("info", "Starting full reconcile...")
+            _append_sync_log("info", "Starting full reconcile (users → stages → tags → cf-defs → deals+history → tasks → contacts)...")
             token = _crm_authenticate(portal, email, password)
             if not token:
                 _json_response(self, 400, {"error": "Authentication failed"})
                 _sync_running = False
                 return
             results = {}
+
+            # Users (Bug #12: this was missing)
+            _append_sync_log("info", "Syncing users...")
+            users_data = _unwrap(_crm_api_get(portal, token, "/api/2.0/people"))
+            users_list = users_data if isinstance(users_data, list) else []
+            user_count = 0
+            for u in users_list:
+                if not isinstance(u, dict):
+                    continue
+                u_email = str(u.get("email") or u.get("Email") or "").strip().lower()
+                if not u_email:
+                    continue
+                u_disp = str(u.get("displayName") or u.get("DisplayName") or "").strip()
+                u_first = str(u.get("firstName") or u.get("FirstName") or "").strip()
+                u_last = str(u.get("lastName") or u.get("LastName") or "").strip()
+                u_admin = bool(u.get("isAdmin") or u.get("IsAdmin"))
+                u_id = str(u.get("id") or u.get("ID") or "")
+                try:
+                    db.execute(
+                        """INSERT INTO users (email, external_user_id, display_name, first_name, last_name, is_admin, must_change_password)
+                           VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+                           ON CONFLICT (email) DO UPDATE SET
+                               external_user_id = EXCLUDED.external_user_id,
+                               display_name = EXCLUDED.display_name,
+                               is_admin = EXCLUDED.is_admin
+                           RETURNING id""",
+                        (u_email, u_id or None, u_disp or None, u_first or None, u_last or None, u_admin),
+                    )
+                    user_count += 1
+                except Exception:
+                    pass
+            results["users_upserted"] = user_count
+            _append_sync_log("info", f"Users: {user_count} upserted")
+
+            # Stages
+            _append_sync_log("info", "Syncing stages...")
+            stages_data = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/opportunity/stage"))
+            stages_list = stages_data if isinstance(stages_data, list) else []
+            stage_count = 0
+            for s in stages_list:
+                if not isinstance(s, dict):
+                    continue
+                s_title = str(s.get("title") or s.get("Title") or "").strip()
+                if not s_title:
+                    continue
+                s_color = str(s.get("color") or s.get("Color") or "#999999").strip()
+                s_sort = int(s.get("sortOrder") or s.get("SortOrder") or 0)
+                s_type = int(s.get("stageType") or s.get("StageType") or 0)
+                s_prob = int(s.get("probability") or s.get("Probability") or s.get("successProbability") or 0)
+                try:
+                    db.execute(
+                        """INSERT INTO stages (title, color, sort_order, stage_type, probability)
+                           VALUES (%s, %s, %s, %s, %s)
+                           ON CONFLICT (title) DO UPDATE SET color=EXCLUDED.color, sort_order=EXCLUDED.sort_order""",
+                        (s_title, s_color, s_sort, s_type, s_prob),
+                    )
+                    stage_count += 1
+                except Exception:
+                    pass
+            results["stages_upserted"] = stage_count
+            _append_sync_log("info", f"Stages: {stage_count} upserted")
+
             # Tags
             _append_sync_log("info", "Syncing tags...")
             tags_data = _unwrap(_crm_api_get(portal, token, "/api/2.0/crm/opportunity/tag"))

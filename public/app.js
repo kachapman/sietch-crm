@@ -19594,7 +19594,7 @@ async function openMailInboxModal() {
       const tabColor = acct.tab_color || 'var(--accent)';
       const tabIcon = acct.tab_icon || 'user';
       let authBadge = '';
-      if (acct.authType === 'microsoft') authBadge = '<i class="ti ti-brand-microsoft" style="font-size:0.8rem;margin-left:0.25rem;" title="Microsoft 365 OAuth"></i>';
+      if (acct.authType === 'microsoft') authBadge = '<i class="ti ti-brand-windows" style="font-size:0.8rem;margin-left:0.25rem;" title="Microsoft 365 OAuth"></i>';
       else if (acct.authType === 'google') authBadge = '<i class="ti ti-brand-google" style="font-size:0.8rem;margin-left:0.25rem;" title="Google OAuth"></i>';
       html += `<button type="button" class="mail-inbox-tab ${isActive ? 'active' : ''}" data-mailtab="inbox" data-account-id="${acct.id}">`;
       html += `<span class="mail-tab-avatar" style="--tab-color:${tabColor};"><i class="ti ti-${tabIcon}"></i></span>`;
@@ -21015,8 +21015,107 @@ async function openReplyCompose(messageId, type = 'reply') {
   }
 }
 
-const MAIL_TAB_ICON_OPTIONS = ['user', 'building', 'mail', 'mail-opened', 'inbox', 'send', 'paper-plane', 'at', 'briefcase', 'phone', 'calendar', 'book', 'shield', 'star', 'chart-bar', 'badge', 'lock', 'rocket'];
+// Shared Tabler icon pool (~100). Used by mail account tab picker AND user avatar picker.
+// Icons all exist in the @tabler/icons-webfont font (loaded in public/index.html).
+// Shared Tabler icon pool — all names verified against @tabler/icons-webfont@latest.
+// Used by mail account tab picker AND user avatar picker.
+const TABLER_ICON_OPTIONS = [
+  // People / characters (12)
+  'user', 'users', 'user-circle', 'user-plus', 'user-check', 'user-minus', 'user-x',
+  'user-pin', 'ghost', 'robot', 'mood-smile', 'mood-sad',
+  // Animals (8)
+  'cat', 'dog', 'fish', 'horse', 'butterfly', 'paw', 'spider', 'bug',
+  // Nature / weather (10)
+  'leaf', 'flower', 'cloud', 'cloud-rain', 'sun', 'moon', 'flame', 'droplet',
+  'snowflake', 'wind',
+  // Buildings / places (10)
+  'building', 'building-bank', 'building-hospital', 'building-store', 'building-warehouse',
+  'building-factory', 'home', 'home-2', 'building-skyscraper', 'map-pin',
+  // Transport (8)
+  'car', 'truck', 'bus', 'bike', 'plane', 'plane-departure', 'ship', 'anchor',
+  // Media / entertainment (10)
+  'music', 'disc', 'video', 'microphone', 'headphones', 'radio',
+  'camera', 'photo', 'movie', 'book',
+  // Food / drink (8)
+  'cup', 'coffee', 'beer', 'pizza', 'bread', 'apple', 'cherry', 'lemon',
+  // Tech / devices (10)
+  'device-laptop', 'device-desktop', 'device-mobile', 'device-tablet',
+  'cpu', 'antenna', 'bluetooth', 'wifi', 'router', 'satellite',
+  // Office / business (10)
+  'briefcase', 'mail', 'mail-opened', 'inbox', 'send', 'rocket', 'at',
+  'phone', 'calendar', 'chart-bar',
+  // Security / status (8)
+  'shield', 'shield-check', 'lock', 'key', 'badge', 'certificate', 'fingerprint', 'license',
+  // Misc / fun (8)
+  'crown', 'diamond', 'gift', 'medal', 'trophy', 'star', 'sparkles', 'heart',
+];
+// Keep legacy alias so mail-account picker still works.
+const MAIL_TAB_ICON_OPTIONS = TABLER_ICON_OPTIONS;
 const MAIL_TAB_COLOR_OPTIONS = ['var(--accent)', '#e74c3c', '#e67e22', '#f1c40f', '#2ecc71', '#3498db', '#9b59b6', '#e91e63', '#795548', '#607d8b', '#8b95a8'];
+
+// ── Avatar helpers (used by users + contacts + anywhere else we show a chip) ──
+
+/** Two-letter initials from first + last name, fallback to email, then '?' */
+function userInitials(u) {
+  const f = (u && (u.first_name || u.firstName) || '').toString().trim();
+  const l = (u && (u.last_name || u.lastName) || '').toString().trim();
+  if (f && l) return (f[0] + l[0]).toUpperCase();
+  if (f) return f.slice(0, 2).toUpperCase();
+  if (l) return l.slice(0, 2).toUpperCase();
+  const email = (u && u.email || '').toString().trim();
+  if (email) return email[0].toUpperCase();
+  return '?';
+}
+
+/** Initials for contacts: same logic as users (handles persons + companies). */
+function contactInitials(c) {
+  if (!c) return '?';
+  if (c.is_company || c.isCompany) {
+    const company = (c.company || c.displayName || c.companyName || '').toString().trim();
+    if (company) return company.slice(0, 2).toUpperCase();
+  }
+  const f = (c.first_name || c.firstName || '').toString().trim();
+  const l = (c.last_name || c.lastName || '').toString().trim();
+  if (f && l) return (f[0] + l[0]).toUpperCase();
+  if (f) return f.slice(0, 2).toUpperCase();
+  if (l) return l.slice(0, 2).toUpperCase();
+  const company = (c.company || c.displayName || c.companyName || '').toString().trim();
+  if (company) return company.slice(0, 2).toUpperCase();
+  return '?';
+}
+
+/**
+ * Render a user avatar chip.
+ * Priority:  uploaded avatar_url > avatar_icon (Tabler) > initials
+ * Returns HTML safe to drop into a template.
+ */
+function renderUserAvatar(u, size) {
+  const initials = userInitials(u);
+  if (u && u.avatarUrl) {
+    return `<span class="user-avatar-chip" data-size="${size || 'md'}"><img src="${escapeHtml(u.avatarUrl)}" alt="" onerror="this.replaceWith(document.createTextNode(${JSON.stringify(initials)}))" /></span>`;
+  }
+  if (u && u.avatar_icon && TABLER_ICON_OPTIONS.includes(u.avatar_icon)) {
+    return `<span class="user-avatar-chip user-avatar-icon" data-size="${size || 'md'}" style="background:var(--accent);color:#fff;"><i class="ti ti-${escapeHtml(u.avatar_icon)}"></i></span>`;
+  }
+  return `<span class="user-avatar-chip user-avatar-initials" data-size="${size || 'md'}">${escapeHtml(initials)}</span>`;
+}
+
+/** Render a contact avatar chip. Prefers avatar_local_path (downloaded file)
+ *  over avatar_url (remote — usually broken), falls back to initials. */
+function renderContactAvatar(c, size) {
+  const initials = contactInitials(c);
+  // avatar_local_path looks like "data/contact-avatars/15.jpg"; rewrite to API route
+  let src = null;
+  if (c && c.avatar_local_path) {
+    const m = c.avatar_local_path.match(/contact-avatars\/([^/]+)$/);
+    if (m) src = `/api/v2/contact-avatars/${encodeURIComponent(m[1])}`;
+  }
+  if (!src && c && c.avatarUrl) src = c.avatarUrl;
+  if (src) {
+    return `<span class="contact-avatar-chip" data-size="${size || 'md'}"><img src="${escapeHtml(src)}" alt="" onerror="this.replaceWith(document.createTextNode(${JSON.stringify(initials)}))" /></span>`;
+  }
+  return `<span class="contact-avatar-chip contact-avatar-initials" data-size="${size || 'md'}">${escapeHtml(initials)}</span>`;
+}
 
 function renderAccountTabPickers() {
   const iconBox = $('#account-settings-tab-icons');
@@ -21131,7 +21230,7 @@ function openAccountSettingsModal(editAccountId, opts) {
     if (oauthStatusEl) oauthStatusEl.textContent = '';
     // Change connect button icon
     const icon = oauthConnectBtn?.querySelector('i');
-    if (icon) icon.className = mode === 'microsoft' ? 'ti ti-brand-microsoft' : 'ti ti-brand-google';
+    if (icon) icon.className = mode === 'microsoft' ? 'ti ti-brand-windows' : 'ti ti-brand-google';
   }
 
   // "Edit servers" button: toggle from read-only to editable
@@ -23298,7 +23397,7 @@ function renderMailList(msgs) {
         { icon: 'ti ti-arrow-back-up', label: 'Reply', click: () => { openEmailPreviewModal(id); setTimeout(() => { const btn = document.querySelector('.email-preview-action[data-action="reply"]'); if (btn) btn.click(); }, 200); } },
         { icon: 'ti ti-arrow-forward-up', label: 'Forward', click: () => { openEmailPreviewModal(id); setTimeout(() => { const btn = document.querySelector('.email-preview-action[data-action="forward"]'); if (btn) btn.click(); }, 200); } },
         'separator',
-        { icon: getMailMessageIsRead(m) ? 'ti ti-mail' : 'ti ti-mail-open', label: getMailMessageIsRead(m) ? 'Mark unread' : 'Mark read', click: async () => { if (getMailMessageIsRead(m)) { try { await api(`/api/v2/mail/messages/${id}/unread`, { method: 'PUT' }); } catch {} } else { await markMailMessageRead(id); } loadMailMessagesForModal(); } },
+        { icon: getMailMessageIsRead(m) ? 'ti ti-mail' : 'ti ti-mail-opened', label: getMailMessageIsRead(m) ? 'Mark unread' : 'Mark read', click: async () => { if (getMailMessageIsRead(m)) { try { await api(`/api/v2/mail/messages/${id}/unread`, { method: 'PUT' }); } catch {} } else { await markMailMessageRead(id); } loadMailMessagesForModal(); } },
         { icon: 'ti ti-star', label: 'Star', click: async () => { try { await api(`/api/v2/mail/messages/${id}/star`, { method: 'PUT' }); loadMailMessagesForModal(); } catch {} } },
         { icon: 'ti ti-archive', label: 'Archive', click: async () => { try { await api(`/api/v2/mail/messages/${id}/move`, { method: 'POST', body: JSON.stringify({ folder: 'Archive' }) }); loadMailMessagesForModal(); } catch {} } },
         { icon: 'ti ti-trash', label: 'Delete', click: async () => { if (!confirm('Delete this email?')) return; try { await api(`/api/v2/mail/messages/${id}`, { method: 'DELETE' }); loadMailMessagesForModal(); } catch {} } },
@@ -26968,9 +27067,7 @@ function renderSearchContactRow(c) {
   const name = c.isCompany ? (c.company || c.displayName) : `${c.firstName || ''} ${c.lastName || ''}`.trim();
   const typeBadge = c.contactType ? `<span class="contact-type-badge">${escapeHtml(c.contactType)}</span>` : '';
   const companyLabel = !c.isCompany && c.company ? `<span class="contact-row-company">${escapeHtml(c.company)}</span>` : '';
-  const avatarContent = c.avatarUrl
-    ? `<img src="${escapeHtml(c.avatarUrl)}" alt="" />`
-    : `<span>${escapeHtml(initials || '?')}</span>`;
+  const avatarContent = renderContactAvatar(c);
   return `<div class="search-popup-contact-row" data-contact-id="${c.id}">
     <div class="contact-avatar">${avatarContent}</div>
     <div class="search-popup-contact-info">
@@ -27271,9 +27368,8 @@ function renderSearchContactDetail(container, contact, history) {
   const initials = ((c.firstName || '')[0] || '') + ((c.lastName || '')[0] || '');
   const name = c.isCompany ? (c.company || c.displayName) : `${c.firstName || ''} ${c.lastName || ''}`.trim();
   const typeBadge = c.contactType ? `<span class="contact-type-badge">${escapeHtml(c.contactType)}</span>` : '';
-  const avatarHtml = c.avatarUrl
-    ? `<img src="${escapeHtml(c.avatarUrl)}" alt="" style="width:100%;height:100%;border-radius:50%;object-fit:cover;">`
-    : `<span>${escapeHtml(initials || '?')}</span>`;
+  // Use the helper that prefers avatar_local_path over the broken remote URL.
+  const avatarHtml = renderContactAvatar(c, 'lg');
 
   const fieldRow = (label, val) => val ? `<div class="contact-detail-field"><span class="contact-detail-label">${label}</span> <span>${escapeHtml(val)}</span></div>` : '';
   const address = [c.addressStreet, c.addressCity, c.addressState, c.addressZip, c.addressCountry].filter(Boolean).join(', ');
@@ -30644,7 +30740,7 @@ async function populateEmailScannerTab() {
           return `
           <div style="padding:4px 0; border-bottom:1px solid var(--border);">
             <div style="display:flex; justify-content:space-between; align-items:center;">
-              <span>${escapeHtml(a.email || '')}${typeLabel} — ${escapeHtml(a.imap_host || '')}:${a.imap_port || 993}${a.authType === 'microsoft' ? ' <i class="ti ti-brand-microsoft" style="font-size:0.8rem;" title="Microsoft 365"></i>' : ''}${a.authType === 'google' ? ' <i class="ti ti-brand-google" style="font-size:0.8rem;" title="Google"></i>' : ''}</span>
+              <span>${escapeHtml(a.email || '')}${typeLabel} — ${escapeHtml(a.imap_host || '')}:${a.imap_port || 993}${a.authType === 'microsoft' ? ' <i class="ti ti-brand-windows" style="font-size:0.8rem;" title="Microsoft 365"></i>' : ''}${a.authType === 'google' ? ' <i class="ti ti-brand-google" style="font-size:0.8rem;" title="Google"></i>' : ''}</span>
               <span style="display:flex; gap:0.3rem; align-items:center;">
                 <span style="font-size:0.75rem; color:${a.sync_enabled ? 'var(--accent)' : 'var(--muted)'};">${a.sync_enabled ? '● Active' : '○ Disabled'}</span>
               <button type="button" class="btn btn-ghost btn-sm scanner-acct-edit" data-id="${a.id}" style="font-size:0.75rem;"><i class="ti ti-pencil"></i></button>
@@ -32298,9 +32394,7 @@ function renderAdminContactRow(c) {
   const name = c.isCompany ? (c.company || c.displayName) : `${c.firstName || ''} ${c.lastName || ''}`.trim();
   const typeBadge = c.contactType ? `<span class="contact-type-badge">${escapeHtml(c.contactType)}</span>` : '';
   const companyLabel = !c.isCompany && c.company ? `<span class="contact-row-company">${escapeHtml(c.company)}</span>` : '';
-  const avatarContent = c.avatarUrl
-    ? `<img src="${escapeHtml(c.avatarUrl)}" alt="" />`
-    : `<span>${escapeHtml(initials || '?')}</span>`;
+  const avatarContent = renderContactAvatar(c);
   return `<div class="contact-row" data-id="${c.id}">
     <div class="contact-avatar">${avatarContent}</div>
     <div class="contact-info">
@@ -32410,7 +32504,7 @@ function setContactAvatar(avatarUrl, firstName, lastName) {
   const img = $("#admin-contact-avatar-img");
   const initials = $("#admin-contact-avatar-initials");
   if (avatarUrl) {
-    if (img) { img.src = avatarUrl; img.style.display = ""; }
+    if (img) { img.src = avatarUrl; img.style.display = ""; img.onerror = () => { img.style.display = "none"; if (initials) { initials.style.display = ""; } }; }
     if (initials) { initials.style.display = "none"; }
   } else {
     const init = ((firstName || '')[0] || '') + ((lastName || '')[0] || '');
@@ -34593,7 +34687,7 @@ function renderAutomationRulesList() {
             <span class="toggle-track"></span>
             <span class="toggle-thumb"></span>
           </label>
-          <button class="btn btn-ghost btn-icon-only btn-sm" title="Test" data-action="test"><i class="ti ti-play"></i></button>
+          <button class="btn btn-ghost btn-icon-only btn-sm" title="Test" data-action="test"><i class="ti ti-player-play"></i></button>
           <button class="btn btn-ghost btn-icon-only btn-sm" title="Edit" data-action="edit"><i class="ti ti-pencil"></i></button>
           <button class="btn btn-ghost btn-icon-only btn-sm" title="Delete" data-action="delete"><i class="ti ti-trash"></i></button>
         </div>
@@ -39427,6 +39521,10 @@ async function _profileLoadAvatar() {
   if (!circle) return;
   try {
     const me = await api("/api/v2/me");
+    if (state.currentUser) {
+      state.currentUser.avatarUrl = me.avatarUrl || null;
+      state.currentUser.avatarIcon = me.avatarIcon || null;
+    }
     if (me.avatarUrl) {
       circle.innerHTML = `<img src="${me.avatarUrl}?thumbnail=1&_t=${Date.now()}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" />`;
       circle.classList.add("has-image");
@@ -39436,8 +39534,16 @@ async function _profileLoadAvatar() {
         uploadBtn.title = "Delete Photo";
         uploadBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 8h.01"/><path d="M13 21h-7a3 3 0 0 1 -3 -3v-12a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v7"/><path d="M3 16l5 -5c.928 -.893 2.072 -.893 3 0l3 3"/><path d="M14 14l1 -1c.928 -.893 2.072 -.893 3 0"/><path d="M22 22l-5 -5"/><path d="M17 22l5 -5"/></svg>`;
       }
+    } else if (me.avatarIcon && TABLER_ICON_OPTIONS.includes(me.avatarIcon)) {
+      circle.innerHTML = `<i class="ti ti-${escapeHtml(me.avatarIcon)}" style="font-size:1.6rem;color:#fff;background:var(--accent);width:100%;height:100%;display:flex;align-items:center;justify-content:center;border-radius:50%;"></i>`;
+      circle.classList.remove("has-image");
+      if (uploadBtn) {
+        uploadBtn.classList.remove("has-photo");
+        uploadBtn.title = "Upload Photo";
+        uploadBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"/><path d="M7 9l5 -5l5 5"/><path d="M12 4l0 11"/></svg> Upload Photo`;
+      }
     } else {
-      const initials = _profileGetInitials(state.currentUserName || "");
+      const initials = _profileGetInitials((me.firstName || "") + " " + (me.lastName || "") + " " + (me.displayName || state.currentUserName || ""));
       circle.innerHTML = escapeHtml(initials);
       circle.style.setProperty("--mention-color", _mentionColor(state.currentUserName || ""));
       circle.classList.remove("has-image");
@@ -39455,6 +39561,88 @@ function _profileGetInitials(name) {
   const parts = (name || "").trim().split(/\s+/);
   if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   return (name || "U").slice(0, 2).toUpperCase();
+}
+
+/**
+ * Apply a Tabler icon as the user's avatar (clears uploaded photo).
+ * Returns the promise from the API.
+ */
+async function _profileSetIcon(icon) {
+  try {
+    await api("/api/v2/my/avatar-style", { method: "PUT", body: JSON.stringify({ avatar_icon: icon }) });
+    if (state.currentUser) state.currentUser.avatarIcon = icon;
+    // If user also has an uploaded photo, the photo takes priority at render time.
+    // They can keep both; clearing photo is optional via the existing delete button.
+    _profileRenderFromState();
+    return true;
+  } catch (e) {
+    showToast(`Failed to set icon: ${e.message || e}`, true);
+    return false;
+  }
+}
+
+/** Re-render the profile avatar circle based on current state (photo > icon > initials). */
+function _profileRenderFromState() {
+  const circle = $("#profile-avatar-circle");
+  if (!circle) return;
+  const me = state.currentUser || {};
+  if (me.avatarUrl) {
+    // Photo already shown by _profileLoadAvatar; nothing to do.
+    return;
+  }
+  if (me.avatarIcon && TABLER_ICON_OPTIONS.includes(me.avatarIcon)) {
+    circle.innerHTML = `<i class="ti ti-${escapeHtml(me.avatarIcon)}" style="font-size:1.6rem;color:#fff;background:var(--accent);width:100%;height:100%;display:flex;align-items:center;justify-content:center;border-radius:50%;"></i>`;
+    circle.classList.remove("has-image");
+    return;
+  }
+  // Fall back to initials (first + last)
+  const init = _profileGetInitials((me.firstName || "") + " " + (me.lastName || "") + " " + (me.displayName || ""));
+  circle.innerHTML = escapeHtml(init);
+  circle.classList.remove("has-image");
+}
+
+/* ── Tabler icon picker modal (user avatar + mail tab appearance share) ── */
+
+/**
+ * Open the Tabler icon picker. Returns a Promise<string|null|undefined>:
+ *   - resolves to the chosen icon name (string) on confirm
+ *   - resolves to null if user wants initials (no icon)
+ *   - resolves to undefined if user dismissed (no change)
+ */
+function openTablerIconPicker(currentIcon) {
+  return new Promise((resolve) => {
+    const modal = $("#tabler-icon-picker-modal");
+    const grid = $("#tabler-icon-picker-grid");
+    const count = $("#tabler-icon-picker-count");
+    if (!modal || !grid) { resolve(undefined); return; }
+    grid.innerHTML = TABLER_ICON_OPTIONS.map(ic => `
+      <button type="button" class="tabler-icon-pick ${ic === currentIcon ? 'selected' : ''}" data-icon="${ic}" title="${ic}">
+        <i class="ti ti-${ic}"></i>
+      </button>
+    `).join('');
+    if (count) count.textContent = TABLER_ICON_OPTIONS.length;
+
+    let chosen = currentIcon || null;
+    grid.querySelectorAll('.tabler-icon-pick').forEach(b => {
+      b.addEventListener('click', () => {
+        grid.querySelectorAll('.tabler-icon-pick').forEach(x => x.classList.remove('selected'));
+        b.classList.add('selected');
+        chosen = b.dataset.icon;
+      });
+    });
+
+    const onDismiss = () => {
+      modal.classList.add('hidden');
+      modal.querySelectorAll('[data-tabler-picker-dismiss]').forEach(el => el.removeEventListener('click', onDismiss));
+      document.removeEventListener('keydown', onEsc);
+      resolve(undefined);
+    };
+    const onEsc = (e) => { if (e.key === 'Escape') onDismiss(); };
+    modal.querySelectorAll('[data-tabler-picker-dismiss]').forEach(el => el.addEventListener('click', onDismiss));
+    document.addEventListener('keydown', onEsc);
+
+    modal.classList.remove('hidden');
+  });
 }
 
 /* ── Avatar crop helper ───────────────────────────────────────────────── */
@@ -39799,6 +39987,18 @@ function _setupProfileEvents() {
       if (avatarUploadBtn && !avatarUploadBtn.classList.contains("has-photo")) {
         avatarInput?.click();
       }
+    });
+  }
+
+  // Tabler icon picker button (for user avatar)
+  const pickIconBtn = $("#profile-avatar-pick-icon-btn");
+  if (pickIconBtn) {
+    pickIconBtn.addEventListener("click", () => {
+      const current = (state.currentUser && state.currentUser.avatarIcon) || null;
+      openTablerIconPicker(current).then(icon => {
+        if (icon === undefined) return; // dismissed
+        _profileSetIcon(icon);
+      });
     });
   }
 
