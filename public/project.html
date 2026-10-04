@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Project — Sietch CRM</title>
-  <link rel="stylesheet" href="styles.css?v=3.5.0" />
+  <link rel="stylesheet" href="styles.css?v=3.5.1" />
   <script>
     // Apply cached brand colors before content renders (matches index.html pattern)
     (function() {
@@ -72,6 +72,31 @@
     .event-body { font-size: 0.88rem; margin-top: 0.2rem; color: var(--text); max-height: 280px; overflow: auto; position: relative; word-break: break-word; white-space: normal; }
     .event-body img { max-width: 100%; height: auto; }
     .event-body table { max-width: 100%; }
+    .opp-preview-audio-player {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.2rem;
+      margin: 0.2rem 0;
+      max-width: 100%;
+    }
+    .opp-preview-audio-player--stacked {
+      align-items: flex-end;
+      width: 100%;
+    }
+    .opp-preview-audio-player .opp-preview-attachment-link {
+      max-width: none;
+      font-size: 0.78rem;
+    }
+    .opp-preview-audio-player-el {
+      width: 100%;
+      max-width: 18rem;
+      height: 32px;
+      display: block;
+    }
+    @media (max-width: 480px) {
+      .opp-preview-audio-player-el { max-width: 100%; }
+    }
     .event-email-summary { display: flex; flex-direction: column; gap: 0.15rem; }
     .event-email-from, .event-email-date { font-size: 0.78rem; color: var(--muted); }
     .event-email-snippet { font-size: 0.82rem; color: var(--text); opacity: 0.8; }
@@ -242,6 +267,60 @@
       var d = document.createElement("div");
       d.textContent = s;
       return d.innerHTML;
+    }
+
+    // Audio extension matcher + player injector for the standalone project
+    // page (mirrors the same logic in public/app.js sanitizeHistoryHtml /
+    // renderHistoryAttachmentsAside). Replaces any <a href="...mp3|.m4a|.wav|...">
+    // inside an event body with a wrapper containing the original link + a
+    // native <audio controls preload="none"> element below it.
+    var PHTML_AUDIO_EXTS = [".mp3",".m4a",".wav",".ogg",".oga",".opus",".flac",".aac",".webm"];
+    function isAudioUrlPhtml(url) {
+      var u = String(url || "").trim();
+      if (!u) return false;
+      var noQuery = u.split("#")[0].split("?")[0].toLowerCase();
+      for (var i = 0; i < PHTML_AUDIO_EXTS.length; i++) {
+        if (noQuery.endsWith(PHTML_AUDIO_EXTS[i])) return true;
+      }
+      return false;
+    }
+    function isAudioUrlOrTextPhtml(href, text) {
+      var h = String(href || "").trim();
+      var noQuery = h.split("#")[0].split("?")[0].toLowerCase();
+      var t = String(text || "").toLowerCase().trim();
+      for (var i = 0; i < PHTML_AUDIO_EXTS.length; i++) {
+        if (noQuery.endsWith(PHTML_AUDIO_EXTS[i])) return true;
+        if (t.endsWith(PHTML_AUDIO_EXTS[i])) return true;
+      }
+      return false;
+    }
+    function injectAudioPlayers(rootEl) {
+      if (!rootEl) return;
+      var links = Array.prototype.slice.call(rootEl.querySelectorAll("a[href]"));
+      for (var i = 0; i < links.length; i++) {
+        var a = links[i];
+        var href = a.getAttribute("href") || "";
+        if (!isAudioUrlOrTextPhtml(href, (a.textContent || "").trim())) continue;
+        var filename = (a.textContent || "").trim() || href.split("/").pop() || "Audio";
+        var parent = a.parentNode;
+        if (!parent) continue;
+        var next = a.nextSibling;
+        var wrap = document.createElement("div");
+        wrap.className = "opp-preview-audio-player opp-preview-audio-player--stacked";
+        a.className = "opp-preview-attachment-link";
+        a.setAttribute("target", "_blank");
+        a.setAttribute("rel", "noopener noreferrer");
+        wrap.appendChild(a);
+        var audio = document.createElement("audio");
+        audio.controls = true;
+        audio.preload = "none";
+        audio.src = href;
+        audio.className = "opp-preview-audio-player-el";
+        audio.setAttribute("aria-label", "Play " + filename);
+        wrap.appendChild(audio);
+        if (next) parent.insertBefore(wrap, next);
+        else parent.appendChild(wrap);
+      }
     }
 
     function showToast(msg, isError) {
@@ -439,6 +518,12 @@
         }
 
         li.innerHTML = html;
+        // Audio-link post-pass: any <a> in the rendered event body whose href
+        // looks like an audio file gets replaced with an embedded
+        // <audio controls> player (filename link + native control bar). This
+        // mirrors the equivalent helper in public/app.js sanitizeHistoryHtml
+        // so the same audio-file links work in every project modal.
+        injectAudioPlayers(li);
         list.appendChild(li);
 
         // Auto-load and render replies for this event

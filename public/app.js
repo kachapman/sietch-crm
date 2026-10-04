@@ -24024,6 +24024,104 @@ function portalMailMessageUrl(messageId) {
   return `${base}/addons/mail/Default.aspx#conversation/${id}`;
 }
 
+// Audio file detection — used to inline an <audio controls> player for audio
+// files referenced from history notes (via links in the note body) and from
+// the structured attachments aside. Detection is based on URL extension,
+// link text (OnlyOffice filehandler URLs don't carry the extension in the
+// URL — the extension lives in the link's visible text), filename, or
+// MIME type — no HEAD request required.
+const AUDIO_EXTENSIONS = [".mp3", ".m4a", ".wav", ".ogg", ".oga", ".opus", ".flac", ".aac", ".webm"];
+const AUDIO_MIME_PREFIX = "audio/";
+function _hasAudioExt(text) {
+  const t = String(text || "").toLowerCase();
+  if (!t) return false;
+  for (const ext of AUDIO_EXTENSIONS) {
+    if (t.endsWith(ext)) return true;
+  }
+  return false;
+}
+function isAudioUrl(url) {
+  const u = String(url || "").trim();
+  if (!u) return false;
+  const noQuery = u.split("#")[0].split("?")[0].toLowerCase();
+  return _hasAudioExt(noQuery);
+}
+// Convenience for note-body links: also returns true when the link's visible
+// text ends with an audio extension (OnlyOffice filehandler URLs expose the
+// filename only as the link's inner text, not as part of the URL).
+function isAudioLink(aEl) {
+  if (!aEl || aEl.tagName !== "A") return false;
+  if (isAudioUrl(aEl.getAttribute("href") || "")) return true;
+  return _hasAudioExt((aEl.textContent || "").trim());
+}
+function isAudioFile(file) {
+  if (!file) return false;
+  const mime = String(file.mimeType || file.mime_type || file.contentType || file.content_type || "").toLowerCase().trim();
+  if (mime.startsWith(AUDIO_MIME_PREFIX)) return true;
+  const fname = String(file.filename || file.title || file.name || "").toLowerCase();
+  for (const ext of AUDIO_EXTENSIONS) {
+    if (fname.endsWith(ext)) return true;
+  }
+  if (isAudioUrl(file.url)) return true;
+  return false;
+}
+// Build a single <div class="opp-preview-audio-player"> wrapper containing
+// the existing <a> link (kept for download/new-tab fallback) + a native
+// <audio controls preload="none"> element below it. `inline` layout means
+// the player is injected after the link inside a block of prose; `stacked`
+// means it's appended below the link as its own block.
+//
+// IMPORTANT: this function MOVES the supplied <a> element into the wrapper.
+// Callers must replace the original position with the returned wrapper.
+function buildAudioPlayerFromLink(aEl, { inline = false } = {}) {
+  if (!aEl || aEl.tagName !== "A") return null;
+  const href = aEl.getAttribute("href") || "";
+  if (!href) return null;
+  // Caller is expected to have already verified this is an audio link via
+  // isAudioLink() (which checks both the URL extension AND the visible link
+  // text). We don't re-check here so this helper remains a thin builder.
+  const filename = (aEl.textContent || "").trim() || href.split("/").pop() || "Audio";
+  const wrap = document.createElement("div");
+  wrap.className = inline ? "opp-preview-audio-player opp-preview-audio-player--inline" : "opp-preview-audio-player opp-preview-audio-player--stacked";
+  // Keep the existing <a> as the first child — it's still clickable (opens
+  // in new tab) and remains visible for accessibility / fallback when the
+  // browser can't play the audio codec.
+  aEl.classList.add("opp-preview-attachment-link");
+  wrap.appendChild(aEl);
+  const audio = document.createElement("audio");
+  audio.controls = true;
+  audio.preload = "none";
+  audio.src = href;
+  audio.className = "opp-preview-audio-player-el";
+  audio.setAttribute("aria-label", `Play ${filename}`);
+  wrap.appendChild(audio);
+  return wrap;
+}
+function buildAudioPlayerFromAttachment(file) {
+  const url = file.url || "";
+  if (!url) return null;
+  const filename = String(file.filename || file.title || file.name || "Audio");
+  const wrap = document.createElement("div");
+  wrap.className = "opp-preview-audio-player opp-preview-audio-player--stacked";
+  const link = document.createElement("a");
+  link.className = "opp-preview-attachment-link";
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.download = filename;
+  link.title = filename;
+  link.textContent = filename;
+  wrap.appendChild(link);
+  const audio = document.createElement("audio");
+  audio.controls = true;
+  audio.preload = "none";
+  audio.src = url;
+  audio.className = "opp-preview-audio-player-el";
+  audio.setAttribute("aria-label", `Play ${filename}`);
+  wrap.appendChild(audio);
+  return wrap;
+}
+
 function sanitizeHistoryHtml(html) {
   const wrap = document.createElement("div");
   wrap.innerHTML = html;
@@ -24056,6 +24154,26 @@ function sanitizeHistoryHtml(html) {
     el.removeAttribute('bgcolor');
     el.removeAttribute('background');
   });
+  // Audio-link post-pass: walk every <a> in the sanitized tree and, for any
+  // whose href OR visible text looks like an audio file, replace it with an
+  // <audio controls> player wrapper. We do this on the sanitized output
+  // rather than during the scrub loop so the link's href/rel/target are
+  // already final.
+  const audioLinks = Array.from(wrap.querySelectorAll("a[href]"));
+  for (const aEl of audioLinks) {
+    if (!isAudioLink(aEl)) continue;
+    const parent = aEl.parentNode;
+    if (!parent) continue;
+    // Capture the link's position before we hand it to the builder (the
+    // builder MOVES the <a> into the wrapper, detaching it from `parent`).
+    const next = aEl.nextSibling;
+    const player = buildAudioPlayerFromLink(aEl, { inline: true });
+    if (!player) continue;
+    // Splice the wrapper into the original parent's child list at the link's
+    // previous position; place it before `next` (or append if `next` is null).
+    if (next) parent.insertBefore(player, next);
+    else parent.appendChild(player);
+  }
   return wrap.innerHTML;
 }
 
@@ -25380,15 +25498,27 @@ function renderHistoryAttachmentsAside(parent, attachments) {
   for (const file of attachments) {
     const docId = file.id ?? file.documentId ?? file.fileId ?? "";
     const filename = file.filename || file.title || file.name || "Attachment";
-    const a = document.createElement("a");
-    a.className = "opp-preview-attachment-link";
     // History attachments live in data/history-attachments/ and are served by
     // the Sietch /api/v2/history-attachments/{id}/download route with the real
     // filename in Content-Disposition. This restores the pre-regression behavior
     // (commit 40e0b61) where clicking an attachment downloaded the actual file
     // instead of opening a non-existent /api/v2/documents/{id}/editor-config
     // route (which only knows about project_documents rows, not history_attachments).
-    a.href = docId ? `/api/v2/history-attachments/${encodeURIComponent(docId)}/download` : (file.url || "#");
+    const url = docId ? `/api/v2/history-attachments/${encodeURIComponent(docId)}/download` : (file.url || "");
+    if (isAudioFile({ ...file, url })) {
+      // For audio files, render an embedded player (filename link + native
+      // <audio controls> below) instead of just the bare download link, so
+      // users can preview audio without leaving the modal.
+      const playerFile = { ...file, url, filename };
+      const player = buildAudioPlayerFromAttachment(playerFile);
+      if (player) {
+        aside.appendChild(player);
+        continue;
+      }
+    }
+    const a = document.createElement("a");
+    a.className = "opp-preview-attachment-link";
+    a.href = url || "#";
     a.download = filename;
     a.rel = "noopener noreferrer";
     a.title = filename;

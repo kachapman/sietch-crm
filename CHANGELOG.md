@@ -2,6 +2,19 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Embedded audio player in history notes (2026-10-04)
+
+Audio files linked from history notes — whether sitting inline in the note body (e.g. an OnlyOffice filehandler link whose visible text ends in `.mp3`) or listed in the structured attachments aside — now render with a native `audio controls` player alongside the filename link, instead of just a bare download link.
+
+- **Detection** — `isAudioUrl(url)` checks the URL extension (`.mp3 .m4a .wav .ogg .oga .opus .flac .aac .webm`); `isAudioLink(aEl)` also checks the link's visible text (OnlyOffice filehandler URLs don't carry the extension in the URL — the extension is in the link's inner text); `isAudioFile(file)` additionally checks `mime_type` and the attachment's `filename` field for the structured path.
+- **Note body** — `sanitizeHistoryHtml` in `public/app.js` runs an audio post-pass after the existing safety scrub; any matching `<a>` is replaced in place by a `<div class="opp-preview-audio-player">` wrapper containing the original link (kept, opens in new tab on click) + a `<audio controls preload="none" src="...">` below it. `preload="none"` keeps the page lightweight — audio only fetches on play.
+- **Attachments aside** — `renderHistoryAttachmentsAside` calls `buildAudioPlayerFromAttachment` for any audio file; non-audio files still render as the original bare link.
+- **Standalone `/project.html`** — mirrored with a local `injectAudioPlayers(rootEl)` helper that walks the rendered `<li>` after `li.innerHTML = html` and inserts the same wrapper for any matching audio link. Local `PHTML_AUDIO_EXTS` + `isAudioUrlOrTextPhtml()` helpers.
+- **CSS** — new `.opp-preview-audio-player` / `--inline` / `--stacked` rules in `public/styles.css` (and inlined into `public/project.html`'s `<style>` block): flex-column wrapper, 32px-tall audio bar, `max-width: 18rem`, `100%` on narrow viewports. Filename link inside keeps the existing `.opp-preview-attachment-link` styling.
+- **Coverage** — change lives in the shared `renderOpportunityPreviewContent` pipeline, so the player appears in the main project preview modal, the bookmark sidebar preview, and the global search popup preview; the standalone project page has its own copy.
+- **Files** — `public/app.js` (+136/-6), `public/styles.css` (+35), `public/index.html` (cache buster `styles.css?v=3.6.4`→`3.6.5`, `app.js?v=3.6.2`→`3.6.3`), `public/project.html` (+86/-1, cache buster `styles.css?v=3.5.0`→`3.5.1`). No server changes.
+- **Verified** — `node --check public/app.js` + all inline `<script>` blocks in `public/project.html` pass; `python3 tests/test_onlyoffice_import.py` still passes (8/8); end-to-end jsdom smoke test (6/6 cases: filehandler-with-mp3-text, direct-mp3-url, non-audio-link-not-replaced, mixed-note, query-stripped-filehandler, wav-no-query) all behave as expected.
+
 ## Full re-sync + history_attachments uniqueness fix (2026-10-04)
 
 Follow-up to the v2 rewrite: the first live migration run died partway (killed mid-run, 250/1229 opps) and the retry died on opp 1243 with `duplicate key on uq_history_attachments_crm_file_id (18133)` — migration 029 had made `crm_file_id` GLOBALLY unique, but the same OnlyOffice file is routinely referenced by multiple history events (forwarded emails, re-sent estimates). The aborted transaction then poisoned the whole run.
