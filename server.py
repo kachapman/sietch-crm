@@ -10862,7 +10862,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                     """INSERT INTO history_attachments
                                            (event_id, filename, file_path, file_size, mime_type, uploaded_by,
                                             original_url, crm_file_id)
-                                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                                       ON CONFLICT (event_id, crm_file_id) WHERE crm_file_id IS NOT NULL DO NOTHING""",
                                     (v3_event_id, f_title, rel_path, actual_size, mime_type,
                                      v3_uploader_id, view_url, f_id),
                                 )
@@ -11144,10 +11145,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             if v3_event_id and downloaded_files:
                                 for df in downloaded_files:
                                     try:
-                                        # Avoid duplicates if we've already recorded this crm_file_id
+                                        # Avoid duplicates per (event, file) — the same file MAY
+                                        # appear on multiple events, so the check must include event_id.
                                         existing_att = db.query_one(
-                                            "SELECT id FROM history_attachments WHERE crm_file_id = %s",
-                                            (df["crm_file_id"],),
+                                            "SELECT id FROM history_attachments WHERE event_id = %s AND crm_file_id = %s",
+                                            (v3_event_id, df["crm_file_id"],),
                                         )
                                         if existing_att:
                                             continue
@@ -11162,7 +11164,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                             """INSERT INTO history_attachments
                                                    (event_id, filename, file_path, file_size, mime_type, uploaded_by,
                                                     original_url, crm_file_id)
-                                               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                                               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                                               ON CONFLICT (event_id, crm_file_id) WHERE crm_file_id IS NOT NULL DO NOTHING""",
                                             (v3_event_id, df["filename"], rel_path, df["size"], df["mime_type"],
                                              None, df["view_url"], df["crm_file_id"]),
                                         )

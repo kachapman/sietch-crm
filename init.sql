@@ -327,7 +327,9 @@ CREATE TABLE history_attachments (
     crm_file_id BIGINT
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_history_attachments_crm_file_id
+CREATE UNIQUE INDEX IF NOT EXISTS uq_history_attachments_event_file
+    ON history_attachments(event_id, crm_file_id) WHERE crm_file_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_history_attachments_crm_file_id
     ON history_attachments(crm_file_id) WHERE crm_file_id IS NOT NULL;
 
 CREATE TABLE history_notify_users (

@@ -959,13 +959,20 @@ def _insert_history(
                         """INSERT INTO history_attachments
                                (event_id, filename, file_path, file_size, mime_type, uploaded_by,
                                 original_url, crm_file_id)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                           ON CONFLICT (event_id, crm_file_id) WHERE crm_file_id IS NOT NULL DO NOTHING""",
                         (event_id, f_title, str(rel_dir / unique_name), actual_size, mime_type,
                          author_id, view_url, f_id),
                     )
-                    attachments_inserted += 1
+                    if cur.rowcount:
+                        attachments_inserted += 1
                 except Exception as exc:
                     print(f"    [warn] attachment insert failed for {f_id}: {exc}")
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    cur = conn.cursor()
 
     conn.commit()
     print(f"  history events: {count} (skipped no-opp: {skipped_no_opp}), attachments downloaded+recorded: {attachments_inserted}")

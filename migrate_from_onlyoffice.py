@@ -709,6 +709,7 @@ def _migrate_opportunities(
 
             # ── Tags ──
             time.sleep(SUB_REQUEST_DELAY)
+            cur.execute("SAVEPOINT sp_opp_tags")
             try:
                 tags_data = _unwrap(_crm_get(portal, token, f"/api/2.0/crm/opportunity/tag/{crm_id}"))
                 tag_list = tags_data if isinstance(tags_data, list) else []
@@ -726,11 +727,18 @@ def _migrate_opportunities(
                                 "INSERT INTO opportunity_tags (opportunity_id, tag_id, assigned_at) VALUES (%s, %s, NOW()) ON CONFLICT DO NOTHING",
                                 (v3_opp_id, tag_row[0]),
                             )
+                cur.execute("RELEASE SAVEPOINT sp_opp_tags")
             except Exception as exc:
+                try:
+                    cur.execute("ROLLBACK TO SAVEPOINT sp_opp_tags")
+                    cur.execute("RELEASE SAVEPOINT sp_opp_tags")
+                except Exception:
+                    pass
                 print(f"  [warn] Tags for opp {crm_id}: {exc}")
 
             # ── Custom field values (try /customfield endpoint, fall back to embedded) ──
             time.sleep(SUB_REQUEST_DELAY)
+            cur.execute("SAVEPOINT sp_opp_cf")
             try:
                 cf_data = _unwrap(_crm_get(portal, token, f"/api/2.0/crm/opportunity/{crm_id}/customfield"))
                 cf_list = cf_data if isinstance(cf_data, list) else []
@@ -750,11 +758,18 @@ def _migrate_opportunities(
                                ON CONFLICT (opportunity_id, field_id) DO UPDATE SET field_value = EXCLUDED.field_value""",
                             (v3_opp_id, v3_field_id, cf_value),
                         )
+                cur.execute("RELEASE SAVEPOINT sp_opp_cf")
             except Exception as exc:
+                try:
+                    cur.execute("ROLLBACK TO SAVEPOINT sp_opp_cf")
+                    cur.execute("RELEASE SAVEPOINT sp_opp_cf")
+                except Exception:
+                    pass
                 print(f"  [warn] Custom fields for opp {crm_id}: {exc}")
 
             # ── History events + attachments ──
             time.sleep(SUB_REQUEST_DELAY)
+            cur.execute("SAVEPOINT sp_opp_hist")
             try:
                 hist_data = _unwrap(_crm_get(portal, token,
                     f"/api/2.0/crm/history/filter?entityType=opportunity&entityId={crm_id}&count=500"))
@@ -861,12 +876,22 @@ def _migrate_opportunities(
                             """INSERT INTO history_attachments
                                    (event_id, filename, file_path, file_size, mime_type, uploaded_by,
                                     original_url, crm_file_id)
-                               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                               ON CONFLICT (event_id, crm_file_id) WHERE crm_file_id IS NOT NULL DO NOTHING""",
                             (event_id, file_name, str(rel_dir / unique_name), actual_size, mime_type,
                              v3_uploader_id, view_url, file_id),
                         )
-                        attachment_count += 1
+                        # rowcount is 0 on conflict (same file already recorded for this event);
+                        # same file on a DIFFERENT event is a separate row (allowed by design).
+                        if cur.rowcount:
+                            attachment_count += 1
+                cur.execute("RELEASE SAVEPOINT sp_opp_hist")
             except Exception as exc:
+                try:
+                    cur.execute("ROLLBACK TO SAVEPOINT sp_opp_hist")
+                    cur.execute("RELEASE SAVEPOINT sp_opp_hist")
+                except Exception:
+                    pass
                 print(f"  [warn] History for opp {crm_id}: {exc}")
 
             if (opp_count) % 50 == 0:
