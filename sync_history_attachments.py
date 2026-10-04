@@ -130,11 +130,15 @@ def main():
             events.append((he_id, opp_id, str(oo_id), int(crm_eid)))
     print(f"Loaded {len(events)} history events with crm_event_id.")
 
-    # Existing attachments as (event_id, crm_file_id) pairs — the same file MAY
-    # legitimately appear on multiple events, so dedup must be per-event, not
-    # global by crm_file_id.
-    cur.execute("SELECT event_id, crm_file_id FROM history_attachments WHERE crm_file_id IS NOT NULL")
-    existing_files = {(r[0], r[1]) for r in cur.fetchall()}
+    # Existing attachments as (event_id, crm_file_id) -> (row_id, file_path, file_size).
+    # The same file MAY legitimately appear on multiple events, so dedup must
+    # be per-event, not global by crm_file_id. We also keep the path/size so
+    # rows created by a --skip-attachment-download migrate run (metadata row
+    # present, zero bytes on disk) can be back-filled here instead of skipped.
+    cur.execute("SELECT event_id, crm_file_id, id, file_path, file_size FROM history_attachments WHERE crm_file_id IS NOT NULL")
+    existing_files = {}
+    for ev_id, cf_id, row_id, fpath, fsize in cur.fetchall():
+        existing_files[(ev_id, cf_id)] = (row_id, fpath, fsize)
     print(f"Already have {len(existing_files)} attachments by (event_id, crm_file_id).")
 
     # Group events by opp
@@ -186,9 +190,21 @@ def main():
                 f_id = int(f_item.get("id") or 0)
                 if not f_id:
                     continue
-                if (he_id, f_id) in existing_files:
-                    skipped += 1
-                    continue
+                prior = existing_files.get((he_id, f_id))
+                _backfill_row_id = None
+                if prior is not None:
+                    _row_id, _fpath, _fsize = prior
+                    try:
+                        _disk_ok = bool(_fpath) and (Path(__file__).resolve().parent / _fpath).exists()
+                    except Exception:
+                        _disk_ok = False
+                    if _disk_ok:
+                        skipped += 1
+                        continue
+                    # Row exists but file bytes are missing (e.g. created by a
+                    # --skip-attachment-download migrate run) — fall through to
+                    # download and UPDATE the row instead of skipping.
+                    _backfill_row_id = _row_id
                 f_title = str(f_item.get("title") or f"file_{f_id}").strip()
                 file_size = int(f_item.get("pureContentLength") or f_item.get("size") or 0)
                 file_ext = Path(f_title).suffix.lstrip(".").lower()
@@ -215,17 +231,29 @@ def main():
                     actual_size = 0
                 rel_path = str(rel_dir / f"{f_id}_{safe_filename(f_title)}")
                 try:
-                    cur.execute(
-                        """INSERT INTO history_attachments
-                               (event_id, filename, file_path, file_size, mime_type, uploaded_by,
-                                original_url, crm_file_id)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-                           ON CONFLICT (event_id, crm_file_id) WHERE crm_file_id IS NOT NULL DO NOTHING""",
-                        (he_id, f_title, rel_path, actual_size, mime_type,
-                         None, view_url, f_id),
-                    )
-                    if cur.rowcount:
-                        existing_files.add((he_id, f_id))
+                    if _backfill_row_id is not None:
+                        cur.execute(
+                            """UPDATE history_attachments
+                               SET filename = %s, file_path = %s, file_size = %s,
+                                   mime_type = %s, original_url = %s
+                               WHERE id = %s""",
+                            (f_title, rel_path, actual_size, mime_type, view_url, _backfill_row_id),
+                        )
+                        existing_files[(he_id, f_id)] = (_backfill_row_id, rel_path, actual_size)
+                    else:
+                        cur.execute(
+                            """INSERT INTO history_attachments
+                                   (event_id, filename, file_path, file_size, mime_type, uploaded_by,
+                                    original_url, crm_file_id)
+                               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                               ON CONFLICT (event_id, crm_file_id) WHERE crm_file_id IS NOT NULL DO NOTHING""",
+                            (he_id, f_title, rel_path, actual_size, mime_type,
+                             None, view_url, f_id),
+                        )
+                        if cur.rowcount:
+                            cur.execute("SELECT id FROM history_attachments WHERE event_id = %s AND crm_file_id = %s", (he_id, f_id))
+                            _new = cur.fetchone()
+                            existing_files[(he_id, f_id)] = (_new[0] if _new else None, rel_path, actual_size)
                 except Exception as exc:
                     print(f"    [warn] insert for file {f_id} on event {he_id}: {exc}")
                     try:
@@ -234,8 +262,10 @@ def main():
                         pass
                     # Rebuild cursor state after rollback
                     cur = conn.cursor()
-                    cur.execute("SELECT event_id, crm_file_id FROM history_attachments WHERE crm_file_id IS NOT NULL")
-                    existing_files = {(r[0], r[1]) for r in cur.fetchall()}
+                    cur.execute("SELECT event_id, crm_file_id, id, file_path, file_size FROM history_attachments WHERE crm_file_id IS NOT NULL")
+                    existing_files = {}
+                    for ev_id, cf_id, row_id, fpath, fsize in cur.fetchall():
+                        existing_files[(ev_id, cf_id)] = (row_id, fpath, fsize)
 
         if processed % 5 == 0:
             conn.commit()
