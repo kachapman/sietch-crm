@@ -56,12 +56,17 @@ def crm_get_raw(portal, token, path, retries=3):
                 return "marker", None
             return "html", raw
         except urllib.error.HTTPError as e:
+            # 401/403/404 are permanent (bot lacks folder permission) — fail
+            # fast instead of burning 4 retries + ~8s of backoff per message.
+            if e.code in (401, 403, 404):
+                return "err", e
             if e.code in (429, 503) and attempt < retries:
                 time.sleep(0.5 * (2 ** attempt))
                 continue
             return "err", e
         except Exception:
-            time.sleep(0.5 * (2 ** attempt))
+            if attempt < retries:
+                time.sleep(0.5 * (2 ** attempt))
     return "err", None
 
 
@@ -76,6 +81,8 @@ def main():
     p.add_argument("--db-user", default=os.getenv("DB_USER", "sietch"))
     p.add_argument("--db-password", default=os.getenv("DB_PASSWORD", ""))
     p.add_argument("--limit", type=int, default=0)
+    p.add_argument("--shard", type=int, default=0, help="0 = all; else 1-based shard index with --shards N")
+    p.add_argument("--shards", type=int, default=1, help="total shard count (run one process per shard)")
     args = p.parse_args()
 
     print(f"Authenticating to {args.portal_url}...")
@@ -111,9 +118,14 @@ def main():
     if args.limit:
         rows = rows[: args.limit]
 
+    if args.shards > 1 and args.shard >= 1:
+        rows = rows[(args.shard - 1)::args.shards]
+        print(f"Shard {args.shard}/{args.shards}: {len(rows)} messages.")
+
     updated = 0
     skipped = 0
     failed = 0
+    start_time = time.time()
     for i, (event_id, content) in enumerate(rows):
         if not content:
             continue
@@ -174,7 +186,10 @@ def main():
             print(f"  [warn] update event {event_id}: {e}")
             failed += 1
         if (i + 1) % 25 == 0:
-            print(f"  [{i+1}/{len(rows)}] {updated} updated, {skipped} skipped, {failed} failed")
+            elapsed = time.time() - start_time
+            rate = (i + 1) / elapsed if elapsed > 0 else 0
+            remaining = (len(rows) - i - 1) / rate if rate > 0 else 0
+            print(f"  [{i+1}/{len(rows)}] {updated} updated, {skipped} skipped, {failed} failed ({elapsed:.0f}s, ~{remaining:.0f}s left)")
             conn.commit()
 
     conn.commit()
