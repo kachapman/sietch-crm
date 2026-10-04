@@ -2,6 +2,17 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Full re-sync + history_attachments uniqueness fix (2026-10-04)
+
+Follow-up to the v2 rewrite: the first live migration run died partway (killed mid-run, 250/1229 opps) and the retry died on opp 1243 with `duplicate key on uq_history_attachments_crm_file_id (18133)` — migration 029 had made `crm_file_id` GLOBALLY unique, but the same OnlyOffice file is routinely referenced by multiple history events (forwarded emails, re-sent estimates). The aborted transaction then poisoned the whole run.
+
+- New migration `030_fix_history_attachment_uniqueness.sql`: drops the global unique index, adds `UNIQUE (event_id, crm_file_id) WHERE NOT NULL` (per-event dedup — same file on different events is allowed, same file twice on one event is skipped) + plain index on `crm_file_id` for lookups. `init.sql` mirrored.
+- `migrate_from_onlyoffice.py`: attachment INSERT now `ON CONFLICT (event_id, crm_file_id) DO NOTHING` (rowcount-gated count); tags/CF/history sections each wrapped in `SAVEPOINT` with `ROLLBACK TO` on failure so one bad opp can no longer abort the entire transaction.
+- `sync_history_attachments.py`: dedup changed from global `{crm_file_id}` to per-event `{(event_id, crm_file_id)}`; now also back-fills file bytes for rows created by `--skip-attachment-download` runs (metadata present, zero bytes on disk) via UPDATE instead of skipping.
+- `server.py` (pull-deals + pull-email-bodies) and `import_json_export.py`: same per-event dedup + ON CONFLICT target.
+- Full migration re-run completed: **1229 opportunities / 48822 history events / 17180 attachments (metadata) / 190 opp_tags / 12612 CF values / 837 tasks** (tasks verified complete — live pagination returns nothing new). No crashes.
+- Follow-ups queued: `sync_history_attachments.py` (fill ~15k file bytes; bot 403s expected on restricted folders), `sync_email_bodies.py` (364 Mail Message bodies still missing `body_html`), `promote_history_attachments.py` (promote new rows to project_documents).
+
 ## OnlyOffice import/sync v2 audit + rewrite (2026-10-02)
 
 Pre-cutover fix-up of the migration pipeline from the older production OnlyOffice CRM (currently in use, will be retired at Sietch deployment). The audit found **22 bugs**; this release addresses the live handler issues that affected every import (numeric custom-field type mapping, missing attachments download, no author mapping, no actualCloseDate capture, missing onlyoffice_id dedup, destructive `pull-deal-tags`, wrong task endpoint, missing contact multi-value / upsert, missing avatar download) and rewrites both `import_json_export.py` and `migrate_from_onlyoffice.py` so the JSON export shape and the live API both feed clean data into the same DB.
