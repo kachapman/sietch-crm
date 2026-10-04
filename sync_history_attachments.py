@@ -68,13 +68,22 @@ def unwrap(data):
 
 
 def crm_get_raw(url, headers=None, retries=3, timeout=60):
+    import urllib.error
     for attempt in range(retries + 1):
         try:
             req = urllib.request.Request(url, headers=headers or {})
             with urllib.request.urlopen(req, context=ssl_ctx(), timeout=timeout) as resp:
                 return resp.read()
+        except urllib.error.HTTPError as e:
+            # 403/404 are permanent (bot lacks folder permission / file gone) —
+            # fail fast instead of burning 4 retries + ~8s of backoff per file.
+            if e.code in (401, 403, 404):
+                return None
+            if attempt < retries:
+                time.sleep(0.5 * (2 ** attempt))
         except Exception:
-            time.sleep(0.5 * (2 ** attempt))
+            if attempt < retries:
+                time.sleep(0.5 * (2 ** attempt))
     return None
 
 
@@ -94,6 +103,8 @@ def main():
     p.add_argument("--db-user", default=os.getenv("DB_USER", "sietch"))
     p.add_argument("--db-password", default=os.getenv("DB_PASSWORD", ""))
     p.add_argument("--limit", type=int, default=0)
+    p.add_argument("--shard", type=int, default=0, help="0 = all; else 1-based shard index with --shards N")
+    p.add_argument("--shards", type=int, default=1, help="total shard count (run one process per shard)")
     args = p.parse_args()
 
     print(f"Authenticating to {args.portal_url}...")
@@ -149,6 +160,12 @@ def main():
     if args.limit:
         keys = sorted(by_opp.keys(), key=lambda x: int(x))[: args.limit]
         by_opp = {k: by_opp[k] for k in keys}
+
+    if args.shards > 1 and args.shard >= 1:
+        keys = sorted(by_opp.keys(), key=lambda x: int(x))
+        mine = [k for i, k in enumerate(keys) if (i % args.shards) == (args.shard - 1)]
+        by_opp = {k: by_opp[k] for k in mine}
+        print(f"Shard {args.shard}/{args.shards}: {len(by_opp)} opps.")
 
     total = len(by_opp)
     start = time.time()
