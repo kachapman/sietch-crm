@@ -13,6 +13,44 @@ Follow-up to the v2 rewrite: the first live migration run died partway (killed m
 - Full migration re-run completed: **1229 opportunities / 48822 history events / 17180 attachments (metadata) / 190 opp_tags / 12612 CF values / 837 tasks** (tasks verified complete — live pagination returns nothing new). No crashes.
 - Follow-ups queued: `sync_history_attachments.py` (fill ~15k file bytes; bot 403s expected on restricted folders), `sync_email_bodies.py` (364 Mail Message bodies still missing `body_html`), `promote_history_attachments.py` (promote new rows to project_documents).
 
+### Final live-sync state (post re-sync)
+
+| Table | Count | Coverage |
+|---|---:|---|
+| users | 11 | 100% of live |
+| contacts / contact_emails / contact_phones / contact_addresses | 18 / 16 / 14 / 21 | ✓ |
+| stages / tag_defs / custom_field_defs | 19 / 23 / 30 | ✓ |
+| opportunities | **1,229** | ✓ full live |
+| opportunity_tags | 190 | ✓ |
+| opportunity_custom_field_values | 12,612 | ✓ |
+| opportunity stage / responsible / onlyoffice_id / expected_close | 1,229 / 1,228 / 1,229 / 1,229 | owner 1 missing (live has null) |
+| opportunity actual_close_date | 1,009 | live has null in ~220 open deals — expected |
+| history_events | **48,822** | ✓ |
+| history_attachments (metadata) | **17,180** | ✓ |
+| project_documents (after promote) | 17,166 | (= 17,180 − 14 missing bytes) |
+| history attachments on disk | **17,196 of 17,180 rows (17,166 distinct files), 33 GB** | 14 bot 403s on folder-restricted files |
+| Mail Message events | 13,016 | 5,223 with body_html (40%); 7,793 bot 403s |
+| tasks (verified complete via full pagination) | 837 | ✓ |
+| Cross-table FK integrity | — | **0 breaks** |
+
+### Known source-API gaps (no fix — live API limits)
+
+- **1,081 opps with no tags** — `/crm/opportunity/tag/{id}` returns empty for older/dead deals even though the master tag list has them.
+- **1,124 opps with no tasks** — same: `/crm/task/filter` doesn't return per-deal tasks for these. Global task pagination is complete.
+- **7 opps with no history events** — bot can't see their event stream at all.
+- **512 orphan tasks** — tasks reference deal IDs that no longer exist in live data.
+- **535 history events with NULL author** — system-generated events (file uploads) on the OO side that don't track a creator.
+- **1 history event NULL category** — opp 69 event 7075; one-off.
+
+### Deploy checklist
+
+- `data/history-attachments/` is **33 GB** — `rsync -a --partial` to the droplet before cutover. The full migrate on the droplet will be a no-op delta (idempotent ON CONFLICT) since the DB is already complete.
+- Verify ~50 GB free on droplet (33 GB payload + headroom for the DB + cache).
+- 7,793 Mail Message bodies need admin-token fetch or manual file copy. Defer to post-deploy if needed.
+- 14 history attachments failed bot 403 — same: admin-token or manual copy.
+
+**Files:** `migrations/030_*.sql` (NEW), `init.sql`, `migrate_from_onlyoffice.py`, `sync_history_attachments.py`, `sync_email_bodies.py`, `server.py`, `import_json_export.py`, `promote_history_attachments.py` (run, no change), `CHANGELOG.md`.
+
 ## OnlyOffice import/sync v2 audit + rewrite (2026-10-02)
 
 Pre-cutover fix-up of the migration pipeline from the older production OnlyOffice CRM (currently in use, will be retired at Sietch deployment). The audit found **22 bugs**; this release addresses the live handler issues that affected every import (numeric custom-field type mapping, missing attachments download, no author mapping, no actualCloseDate capture, missing onlyoffice_id dedup, destructive `pull-deal-tags`, wrong task endpoint, missing contact multi-value / upsert, missing avatar download) and rewrites both `import_json_export.py` and `migrate_from_onlyoffice.py` so the JSON export shape and the live API both feed clean data into the same DB.
