@@ -11210,12 +11210,26 @@ body {
 }
 
 /* Deal-status filter sits to the right of the search input inside the
-   search-popup-input-wrap. Keep it narrow so the search input fills. */
+   search-popup-input-wrap. Keep it narrow so the search input fills.
+   Background + color + border come from .search-popup-filter-bar select
+   (matched by class) but the descendant selector here needs them too
+   because it's not a child of the filter bar. */
 .search-popup-input-wrap > .search-popup-filter-select {
   flex: 0 0 auto;
   min-width: 7.5rem;
   font-size: 0.85rem;
   padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font);
+  cursor: pointer;
+}
+.search-popup-input-wrap > .search-popup-filter-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
 }
 
 .search-popup-input {

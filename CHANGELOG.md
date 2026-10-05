@@ -2,6 +2,25 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Fix status-filter select theme (was white-on-dark) (2026-10-05)
+
+User screenshot showed the new All / Open / Closed `<select>` in the search
+modal had a **white background** instead of the dark theme's `var(--surface-2)`.
+The previous move to `.search-popup-input-wrap` left the select styled only
+with `font-size` + `padding`, missing the `background`, `color`, `border`,
+`border-radius`, `font-family`, and `cursor` properties that the original
+`.search-popup-filter-bar select` rule provides. Added the missing theme
+properties to the `.search-popup-input-wrap > .search-popup-filter-select`
+descendant selector, plus a matching `:focus` rule (border-color + box-shadow).
+
+- **Files:** `public/styles.css` (+14).
+- **No JS / HTML / server changes** — only the descendant selector needed
+  the theme treatment copied over. Existing filter-bar dropdowns (stage /
+  owner / tag / sort) are unaffected (they still match the original rule).
+- Cache buster bumped: `styles.css?v=3.7.0`→`3.7.1`.
+- **Verified:** `node --check` passes; `git diff --stat` shows the CSS + buster
+  diff is clean.
+
 ## Search popup modal — deal status filter moved to input row (2026-10-05)
 
 User request: move the All / Open / Closed `<select>` from the secondary
