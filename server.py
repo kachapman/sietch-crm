@@ -5511,6 +5511,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not content:
             _json_response(self, 400, {"error": "Content is required"})
             return
+        # TODO: client sends notifyUserList (extracted from @-mentions in the
+        # reply body). Currently we don't act on it for replies — only history
+        # events get notification rows. Mirroring the event-side logic would
+        # require either reusing history_notify_users (with a nullable
+        # reply_id) or a new history_reply_notify_users table.
+        # notify_list = payload.get("notifyUserList") or []
         parent_reply_id = payload.get("parentReplyId")
         reply_id = db.insert_returning(
             """INSERT INTO history_replies (event_id, parent_reply_id, content, created_by)

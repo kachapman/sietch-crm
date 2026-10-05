@@ -2,6 +2,19 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Rich-text replies + reply delete + reply-highlight fix (2026-10-04)
+
+Audit + fixes for project history notes:
+
+- **Inconsistent highlight / dark-mode contrast for replies** — `public/styles.css` + `public/project.html` now apply the same dark-mode-aware highlight rule (and b/i/u typography) to `.opp-preview-history-reply-body` and `.event-reply-body` that the main note body already has. Reply highlights are now readable in dark mode.
+- **Replies are now rich-text** — the reply editor in both the main project preview modal and the standalone `/project.html` was a bare `<textarea>`. Replaced with the same `.note-format-toolbar` + `.note-editor` (contenteditable) + `.mention-dropdown` pair used by the main "Add Note" editor; the document-level delegates (paste handler, toolbar click handler, hi-lite / emoji / link dropdowns) all wire up automatically.
+- **@-mentions in replies** — `setupMentionAutocomplete(editor, dropdown)` is now wired into both reply editors; `extractMentionsFromContent` runs on submit and posts `notifyUserList` alongside the reply. Server `_handle_history_reply_create` accepts `notifyUserList` but currently ignores it (TODO comment added — server-side notification on replies is a separate, additive feature).
+- **Reply delete (× button)** — `DELETE /api/v2/history-replies/{id}` route already existed on the server but had no client UI. Added a `×` button on each reply that the current user authored, and on all replies if the viewer is an admin. Soft-delete on the server; client re-fetches the thread after a successful delete. Permission gate is client-side only (server route stays open).
+- **XSS hardening on reply bodies** — reply content was previously inserted via `innerHTML = r.content` with no sanitization at all. Now wrapped in `sanitizeHistoryHtml` (app.js) / `sanitizeHistoryHtmlPhtml` (project.html), which strips scripts/iframes/inline event handlers, blocks `javascript:` / `data:` / `vbscript:` URI schemes on `<a>` hrefs (new), and removes white-on-white email backgrounds. Note bodies get the same `javascript:` URI block as a bonus.
+- **Coverage** — main project preview modal (lazy-loaded replies via Reply button), auto-loaded replies on initial preview open, bookmark sidebar preview, search popup preview, and the standalone `/project.html` page.
+- **Files** — `public/app.js` (+178/-30, sanitizeHistoryHtml URI block + bulk `renderHistoryEventItem` rewrite for replies + auto-load path + rich-text reply editor + delete button + handlers), `public/styles.css` (+102/-7, new reply toolbar / delete button / mention dropdown / dark-mode-aware highlight / b/i/u typography), `public/project.html` (+214/-12, rich-text reply editor + delete button + handlers, `sanitizeHistoryHtmlPhtml`, lifted `currentUser`/`currentUserIsAdmin` module-level, CSS for dark-mode highlight + delete button + reply toolbar), `public/index.html` (cache buster `styles.css?v=3.6.5`→`3.6.6`, `app.js?v=3.6.3`→`3.6.4`), `public/project.html` (`styles.css?v=3.5.1`→`3.5.2`), `server.py` (+6, TODO comment in `_handle_history_reply_create`).
+- **Verified** — `node --check public/app.js` + both inline `<script>` blocks in `public/project.html` pass; `python3 tests/test_onlyoffice_import.py` still 8/8; jsdom sanitizer smoke test 11/11 (`<script>`, `<img onerror>`, `javascript:` URI (lower + upper case), `data:` URI, white-bg email div, `<iframe>`, `<b>`/`<mark>` kept, normal `https://` link, white-bg+padding div). Server restarted clean, `/api/config` 200.
+
 ## Embedded audio player in history notes (2026-10-04)
 
 Audio files linked from history notes — whether sitting inline in the note body (e.g. an OnlyOffice filehandler link whose visible text ends in `.mp3`) or listed in the structured attachments aside — now render with a native `audio controls` player alongside the filename link, instead of just a bare download link.

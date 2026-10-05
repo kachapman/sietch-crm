@@ -7124,6 +7124,34 @@ body {
   color: var(--text);
   line-height: 1.4;
 }
+/* Typography for reply bodies — same baseline as the main history body so bold /
+   italic / underline renders visibly (the regular note-body rule targets
+   .opp-preview-history-body, which doesn't match reply bodies). */
+.opp-preview-history-reply-body strong,
+.opp-preview-history-reply-body b {
+  font-weight: 700;
+}
+.opp-preview-history-reply-body em,
+.opp-preview-history-reply-body i {
+  font-style: italic;
+}
+.opp-preview-history-reply-body u {
+  text-decoration: underline;
+}
+/* Dark-mode-aware highlight for reply bodies (mirrors the rule set at lines
+   3268-3291 for the main note body). Without this, any <mark> / inline
+   background-color in a reply renders with raw high-contrast colors and is
+   invisible / unreadable in dark mode. */
+.opp-preview-history-reply-body mark,
+.opp-preview-history-reply-body span[style*="background-color"],
+.opp-preview-history-reply-body span[style*="background:"],
+.opp-preview-history-reply-body b[style*="background-color"],
+.opp-preview-history-reply-body b[style*="background:"] {
+  background-color: rgba(34, 197, 94, 0.65) !important;
+  color: #000 !important;
+  padding: 0 2px;
+  border-radius: 2px;
+}
 .opp-preview-history-reply-body.deleted {
   font-style: italic;
   color: var(--muted);
@@ -7131,21 +7159,91 @@ body {
 .opp-preview-history-reply-editor {
   margin-top: 0.3rem;
 }
+/* Reply toolbar — same look as the main preview note toolbar but smaller and
+   aligned to the right (mirrors the compact email-compose / quick-note
+   toolbars). */
+.opp-preview-history-reply-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  background: var(--surface);
+  padding: 0.15rem 0.25rem;
+  margin-bottom: 0;
+}
+.opp-preview-history-reply-toolbar .note-format-btn {
+  font-size: 0.78rem;
+  padding: 0.15rem 0.35rem;
+  min-width: 1.4rem;
+}
+.opp-preview-history-reply-editor-body {
+  position: relative;
+}
 .opp-preview-history-reply-input {
   width: 100%;
   padding: 0.3rem 0.5rem;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 0 0 4px 4px;
   background: var(--surface-2);
   color: var(--text);
   font: inherit;
   font-size: 0.82rem;
-  resize: vertical;
   min-height: 2.5rem;
+  max-height: 240px;
+  overflow-y: auto;
 }
+/* Keep the contenteditable reply editor looking like the previous textarea. */
 .opp-preview-history-reply-input:focus {
   outline: none;
   border-color: var(--accent);
+}
+.opp-preview-history-reply-input:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+  font-style: italic;
+  pointer-events: none;
+}
+/* Mention dropdown anchored to the reply editor (same look as the existing
+   preview mention-dropdown — the reply dropdown reuses .mention-dropdown). */
+.opp-preview-history-reply-mention {
+  position: absolute;
+  z-index: 100;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  max-height: 180px;
+  overflow-y: auto;
+  min-width: 160px;
+}
+/* Per-reply delete button (×) inside the reply meta row — author or admin
+   only; the renderer hides it otherwise. Inline with the meta text on the
+   right edge. */
+.opp-preview-history-reply-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.opp-preview-history-reply-delete {
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.opp-preview-history-reply-delete:hover,
+.opp-preview-history-reply-delete:focus {
+  color: var(--danger, #ef4444);
+  background: var(--surface-2);
+  outline: none;
 }
 .opp-preview-history-reply-actions {
   display: flex;

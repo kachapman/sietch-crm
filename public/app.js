@@ -24134,9 +24134,17 @@ function sanitizeHistoryHtml(html) {
     if (el.tagName === "A") {
       const href = el.getAttribute("href");
       if (href) {
-        el.setAttribute("href", portalAbsoluteUrl(href));
-        el.setAttribute("target", "_blank");
-        el.setAttribute("rel", "noopener noreferrer");
+        // Block javascript: / data: / vbscript: URI schemes before rewriting
+        // the href — defense-in-depth for reply bodies (which now flow through
+        // this sanitizer), and consistent behavior for note bodies.
+        const lower = href.trim().toLowerCase();
+        if (lower.startsWith("javascript:") || lower.startsWith("data:") || lower.startsWith("vbscript:")) {
+          el.removeAttribute("href");
+        } else {
+          el.setAttribute("href", portalAbsoluteUrl(href));
+          el.setAttribute("target", "_blank");
+          el.setAttribute("rel", "noopener noreferrer");
+        }
       }
     }
     // sanitize white/light backgrounds from email HTML so it sits on dark mode
@@ -25817,11 +25825,57 @@ function renderHistoryEventItem(ev) {
               const author = r.author || "";
               const when = r.created ? formatPreviewDateTime(r.created) : "";
               rMeta.textContent = [author, when].filter(Boolean).join(" · ");
+              // Delete button — author or admin only (matches the convention
+              // for "delete my own comment" in most apps). Server route is
+              // still open to any authenticated user (no server permission
+              // check); we just hide the button.
+              const canDelete = !r.isDeleted && r.id != null &&
+                (state.currentUserIsAdmin === true ||
+                 (state.currentUserId != null && sameUserId(r.createdBy, state.currentUserId)));
+              if (canDelete) {
+                const delBtn = document.createElement("button");
+                delBtn.type = "button";
+                delBtn.className = "opp-preview-history-reply-delete";
+                delBtn.textContent = "×";
+                delBtn.title = "Delete this reply";
+                delBtn.setAttribute("aria-label", "Delete this reply");
+                delBtn.addEventListener("click", async (ev) => {
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                  const ok = await confirmDialog({
+                    title: "Delete reply?",
+                    message: "This marks the reply as deleted. The original content is hidden everywhere it's shown.",
+                    confirmLabel: "Delete",
+                    danger: true,
+                  });
+                  if (!ok) return;
+                  try {
+                    await api(`/api/v2/history-replies/${encodeURIComponent(r.id)}`, {
+                      method: "DELETE",
+                      showCrashBanner: false,
+                    });
+                    showToast("Reply deleted");
+                    // Reload the thread by re-clicking the reply button.
+                    const threadEl = replyWrap.querySelector(".opp-preview-history-thread");
+                    if (threadEl) threadEl.remove();
+                    replyWrap.dataset.loaded = "";
+                    replyBtn.click();
+                  } catch (err) {
+                    showToast(err.message || "Failed to delete reply", true);
+                  }
+                });
+                rMeta.appendChild(delBtn);
+              }
               rDiv.appendChild(rMeta);
               if (!r.isDeleted) {
                 const rBody = document.createElement("div");
                 rBody.className = "opp-preview-history-reply-body";
-                rBody.innerHTML = r.content || "";
+                // Sanitize the reply content — server stores whatever the
+                // client sent (plain or rich) and the client previously
+                // rendered it raw. Using sanitizeHistoryHtml keeps <mark>,
+                // <b>, <i>, <u>, <a>, mentions etc. but removes scripts and
+                // strips white-on-white email backgrounds.
+                rBody.innerHTML = sanitizeHistoryHtml(r.content || "");
                 rDiv.appendChild(rBody);
               } else {
                 const rBody = document.createElement("div");
@@ -25837,13 +25891,30 @@ function renderHistoryEventItem(ev) {
         } catch { /* ignore */ }
         replyWrap.dataset.loaded = "1";
       }
-      // Open reply editor
+      // Open reply editor — rich text + @-mention, mirrors the main preview
+      // "Add Note" editor. Toolbar buttons and the @-mention dropdown are
+      // picked up by the document-level delegates (initNoteEditorPasteHandlers
+      // + setupMentionAutocomplete + the note-format-btn click delegate at
+      // line 40631). The image-paste handler is also automatic — any
+      // .note-editor triggers it.
       const editor = document.createElement("div");
       editor.className = "opp-preview-history-reply-editor";
-      const textarea = document.createElement("textarea");
-      textarea.className = "opp-preview-history-reply-input";
-      textarea.placeholder = "Write a reply…";
-      textarea.rows = 2;
+      editor.innerHTML =
+        '<div class="note-format-toolbar opp-preview-history-reply-toolbar" aria-label="Formatting">' +
+          '<button type="button" class="note-format-btn" data-cmd="bold" title="Bold"><b>B</b></button>' +
+          '<button type="button" class="note-format-btn" data-cmd="italic" title="Italic"><i>I</i></button>' +
+          '<button type="button" class="note-format-btn" data-cmd="underline" title="Underline"><u>U</u></button>' +
+          '<button type="button" class="note-format-btn" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>' +
+          '<span class="note-format-sep"></span>' +
+          '<button type="button" class="note-format-btn note-format-hilite-btn" title="Highlight color">🖍</button>' +
+          '<button type="button" class="note-format-btn note-format-emoji-btn" title="Emoji">😀</button>' +
+          '<button type="button" class="note-format-btn note-format-link-btn" title="Insert link">🔗</button>' +
+          '<button type="button" class="note-format-btn note-format-color-btn" title="Text color">A<span class="note-format-color-bar"></span></button>' +
+        '</div>' +
+        '<div class="opp-preview-history-reply-editor-body">' +
+          '<div class="note-editor opp-preview-history-reply-input" contenteditable="true" data-placeholder="Write a reply…"></div>' +
+          '<div class="opp-preview-history-reply-mention mention-dropdown hidden"></div>' +
+        '</div>';
       const actions = document.createElement("div");
       actions.className = "opp-preview-history-reply-actions";
       const submitBtn = document.createElement("button");
@@ -25856,23 +25927,36 @@ function renderHistoryEventItem(ev) {
       cancelBtn.textContent = "Cancel";
       actions.appendChild(cancelBtn);
       actions.appendChild(submitBtn);
-      editor.appendChild(textarea);
       editor.appendChild(actions);
       replyWrap.appendChild(editor);
       replyBtn.style.display = "none"; // Hide while editor is open
-      textarea.focus();
+      const replyEditor = editor.querySelector(".note-editor");
+      const replyDropdown = editor.querySelector(".opp-preview-history-reply-mention");
+      if (replyEditor && replyDropdown) {
+        setupMentionAutocomplete(replyEditor, replyDropdown);
+      }
+      replyEditor.focus();
       cancelBtn.addEventListener("click", () => { editor.remove(); replyBtn.style.display = ""; });
       submitBtn.addEventListener("click", async () => {
-        const content = textarea.value.trim();
-        if (!content) return;
+        if (!replyEditor) return;
+        const html = (replyEditor.innerHTML || "").trim();
+        // Treat empty content (whitespace, <br>, empty <div><br></div>) as no content.
+        if (!html || /^(<br\s*\/?>|\s*|<div>\s*<br\s*\/?>\s*<\/div>)$/i.test(html)) {
+          showToast("Please write a reply first.", true);
+          return;
+        }
+        // Extract mention user IDs from the editor (mirrors the preview-note
+        // submission flow). Server currently accepts notifyUserList but does
+        // not act on it for replies — see TODO in _handle_history_reply_create.
+        const notifyUserList = extractMentionsFromContent(replyEditor).map(String);
         submitBtn.disabled = true;
         try {
           await api(`/api/v2/projects/${oppPreviewContext?.oppId}/history/${eventId}/replies`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ content }),
+            body: JSON.stringify({ content: html, notifyUserList }),
           });
-          textarea.value = "";
+          replyEditor.innerHTML = "";
           editor.remove();
           replyBtn.style.display = "";
           replyWrap.dataset.loaded = "";
@@ -36264,10 +36348,72 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
             const rMeta = document.createElement("div");
             rMeta.className = "opp-preview-history-reply-meta";
             rMeta.textContent = [r.author || "", r.created ? formatPreviewDateTime(r.created) : ""].filter(Boolean).join(" · ");
+            // Delete button — author or admin only. Mirrors the same logic in
+            // renderHistoryEventItem above so the auto-loaded replies behave
+            // identically to the lazy-loaded ones.
+            const canDelete = !r.isDeleted && r.id != null &&
+              (state.currentUserIsAdmin === true ||
+               (state.currentUserId != null && sameUserId(r.createdBy, state.currentUserId)));
+            if (canDelete) {
+              const delBtn = document.createElement("button");
+              delBtn.type = "button";
+              delBtn.className = "opp-preview-history-reply-delete";
+              delBtn.textContent = "×";
+              delBtn.title = "Delete this reply";
+              delBtn.setAttribute("aria-label", "Delete this reply");
+              delBtn.addEventListener("click", async (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                const ok = await confirmDialog({
+                  title: "Delete reply?",
+                  message: "This marks the reply as deleted. The original content is hidden everywhere it's shown.",
+                  confirmLabel: "Delete",
+                  danger: true,
+                });
+                if (!ok) return;
+                try {
+                  await api(`/api/v2/history-replies/${encodeURIComponent(r.id)}`, {
+                    method: "DELETE",
+                    showCrashBanner: false,
+                  });
+                  showToast("Reply deleted");
+                  // Reload the thread by clearing and re-fetching.
+                  if (threadEl.parentNode) threadEl.parentNode.removeChild(threadEl);
+                  replyWrap.dataset.loaded = "";
+                  // Re-fetch in place
+                  api(`/api/v2/projects/${oppPreviewContext.oppId}/history/${eventId}/replies`).then(replies2 => {
+                    const list2 = unwrap(replies2) || replies2 || [];
+                    if (list2.length) {
+                      // Reuse the same threadEl — clear and re-populate.
+                      while (threadEl.firstChild) threadEl.removeChild(threadEl.firstChild);
+                      for (const r2 of list2) {
+                        const rDiv2 = document.createElement("div");
+                        rDiv2.className = "opp-preview-history-reply-item";
+                        if (r2.isDeleted) rDiv2.classList.add("deleted");
+                        const rMeta2 = document.createElement("div");
+                        rMeta2.className = "opp-preview-history-reply-meta";
+                        rMeta2.textContent = [r2.author || "", r2.created ? formatPreviewDateTime(r2.created) : ""].filter(Boolean).join(" · ");
+                        rDiv2.appendChild(rMeta2);
+                        const rBody2 = document.createElement("div");
+                        rBody2.className = "opp-preview-history-reply-body" + (r2.isDeleted ? " deleted" : "");
+                        rBody2.innerHTML = r2.isDeleted ? "This reply was deleted." : sanitizeHistoryHtml(r2.content || "");
+                        rDiv2.appendChild(rBody2);
+                        threadEl.appendChild(rDiv2);
+                      }
+                      replyWrap.insertBefore(threadEl, replyWrap.querySelector(".opp-preview-history-reply-btn"));
+                    }
+                    replyWrap.dataset.loaded = "1";
+                  }).catch(() => {});
+                } catch (err) {
+                  showToast(err.message || "Failed to delete reply", true);
+                }
+              });
+              rMeta.appendChild(delBtn);
+            }
             rDiv.appendChild(rMeta);
             const rBody = document.createElement("div");
             rBody.className = "opp-preview-history-reply-body" + (r.isDeleted ? " deleted" : "");
-            rBody.innerHTML = r.isDeleted ? "This reply was deleted." : (r.content || "");
+            rBody.innerHTML = r.isDeleted ? "This reply was deleted." : sanitizeHistoryHtml(r.content || "");
             rDiv.appendChild(rBody);
             threadEl.appendChild(rDiv);
           }

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Project — Sietch CRM</title>
-  <link rel="stylesheet" href="styles.css?v=3.5.1" />
+  <link rel="stylesheet" href="styles.css?v=3.5.2" />
   <script>
     // Apply cached brand colors before content renders (matches index.html pattern)
     (function() {
@@ -125,16 +125,51 @@
     }
     .event-reply-item { padding: 0.3rem 0; font-size: 0.78rem; }
     .event-reply-item + .event-reply-item { border-top: 1px solid var(--border); }
-    .event-reply-meta { font-size: 0.68rem; color: var(--muted); margin-bottom: 0.15rem; }
+    .event-reply-meta { font-size: 0.68rem; color: var(--muted); margin-bottom: 0.15rem; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
     .event-reply-body { color: var(--text); line-height: 1.4; }
+    .event-reply-body strong, .event-reply-body b { font-weight: 700; }
+    .event-reply-body em, .event-reply-body i { font-style: italic; }
+    .event-reply-body u { text-decoration: underline; }
+    /* Dark-mode-aware highlighter for reply bodies (same rule as the
+       .opp-preview-history-reply-body rule in styles.css). Without this
+       <mark> + inline background-color highlights are invisible. */
+    .event-reply-body mark,
+    .event-reply-body span[style*="background-color"],
+    .event-reply-body span[style*="background:"],
+    .event-reply-body b[style*="background-color"],
+    .event-reply-body b[style*="background:"] {
+      background-color: rgba(34, 197, 94, 0.65) !important;
+      color: #000 !important;
+      padding: 0 2px;
+      border-radius: 2px;
+    }
     .event-reply-body.deleted { font-style: italic; color: var(--muted); }
     .event-reply-editor { margin-top: 0.3rem; }
+    .event-reply-toolbar {
+      display: flex; flex-wrap: wrap; gap: 0;
+      border: 1px solid var(--border); border-bottom: none;
+      border-radius: 4px 4px 0 0; background: var(--surface);
+      padding: 0.15rem 0.25rem;
+    }
+    .event-reply-toolbar .phtml-note-format-btn { font-size: 0.78rem; padding: 0.15rem 0.35rem; min-width: 1.4rem; }
+    .event-reply-editor-body { position: relative; }
     .event-reply-input {
       width: 100%; padding: 0.3rem 0.5rem; border: 1px solid var(--border);
-      border-radius: var(--radius, 6px); background: var(--surface-2); color: var(--text);
-      font: inherit; font-size: 0.82rem; resize: vertical; min-height: 2.5rem;
+      border-radius: 0 0 4px 4px; background: var(--surface-2); color: var(--text);
+      font: inherit; font-size: 0.82rem; min-height: 2.5rem; max-height: 240px; overflow-y: auto;
     }
     .event-reply-input:focus { outline: none; border-color: var(--accent); }
+    .event-reply-input:empty::before { content: attr(data-placeholder); color: var(--muted); font-style: italic; pointer-events: none; }
+    /* Per-reply delete button (×) — only shown on replies the viewer authored
+       (or for admins on all). Inline with the meta text. */
+    .event-reply-delete {
+      font: inherit; font-size: 0.78rem; line-height: 1; color: var(--muted);
+      background: transparent; border: none; padding: 0.1rem 0.35rem;
+      border-radius: 4px; cursor: pointer; flex-shrink: 0;
+    }
+    .event-reply-delete:hover, .event-reply-delete:focus {
+      color: #ef4444; background: var(--surface-2); outline: none;
+    }
     .event-reply-actions { display: flex; justify-content: flex-end; gap: 0.4rem; margin-top: 0.25rem; }
     .event-reply-cancel {
       font: inherit; font-size: 0.75rem; padding: 0.2rem 0.5rem;
@@ -262,6 +297,11 @@
     var highlightEventId = params.get("event");
     var opp = null;
     var portalUsers = [];
+    // Current user (fetched in the load IIFE) — exposed module-level so the
+    // reply renderer can decide whether to show the delete button (author or
+    // admin). Populated after the /api/v2/me call succeeds.
+    var currentUserId = null;
+    var currentUserIsAdmin = false;
 
     function esc(s) {
       var d = document.createElement("div");
@@ -321,6 +361,55 @@
         if (next) parent.insertBefore(wrap, next);
         else parent.appendChild(wrap);
       }
+    }
+
+    // Lightweight HTML sanitizer for reply bodies. Mirrors the safety scrub
+    // in app.js sanitizeHistoryHtml but is implemented locally for the
+    // standalone project page (which can't import app.js). Strips script /
+    // iframe / object / embed / form controls, removes inline event handlers
+    // and white-on-white email backgrounds, forces <a> links to open in a
+    // new tab with rel="noopener noreferrer". Keeps <mark>, <b>, <i>, <u>,
+    // <a>, mentions, etc. for visual fidelity.
+    function sanitizeHistoryHtmlPhtml(html) {
+      if (!html) return "";
+      var tmp = document.createElement("div");
+      tmp.innerHTML = String(html);
+      tmp.querySelectorAll("script,style,iframe,object,embed,form,input,textarea,select,button,link,meta,base").forEach(function(el) { el.remove(); });
+      tmp.querySelectorAll("*").forEach(function(el) {
+        // Strip inline event handlers and srcdoc on iframes (in case any survived)
+        for (var k = el.attributes.length - 1; k >= 0; k--) {
+          var a = el.attributes[k];
+          if (a && a.name && (a.name.toLowerCase().indexOf("on") === 0 || a.name.toLowerCase() === "srcdoc")) {
+            el.removeAttribute(a.name);
+          }
+        }
+        // Force-rewrite <a> href + rel. Block javascript: / data: / vbscript:
+// schemes (defense-in-depth — reply bodies now flow through this sanitizer).
+        if (el.tagName === "A") {
+          var href = el.getAttribute("href");
+          if (href) {
+            var hrefLow = String(href).trim().toLowerCase();
+            if (hrefLow.indexOf("javascript:") === 0 || hrefLow.indexOf("data:") === 0 || hrefLow.indexOf("vbscript:") === 0) {
+              el.removeAttribute("href");
+            } else {
+              el.setAttribute("href", href);
+              el.setAttribute("target", "_blank");
+              el.setAttribute("rel", "noopener noreferrer");
+            }
+          }
+        }
+        // Strip white backgrounds (mirrors app.js sanitizeHistoryHtml).
+        if (el.hasAttribute && el.hasAttribute("style")) {
+          var s = el.getAttribute("style") || "";
+          s = s.replace(/background(-color)?\s*:\s*[^;]*(white|#fff|#ffffff|rgb\(\s*255\s*,\s*255\s*,\s*255\s*\)|rgba\(\s*255\s*,\s*255\s*,\s*255[^)]*\))[^;]*;?/gi, "");
+          s = s.replace(/background\s*:\s*[^;]*(white|#fff|#ffffff)[^;]*;?/gi, "");
+          if (s.trim()) el.setAttribute("style", s);
+          else el.removeAttribute("style");
+        }
+        el.removeAttribute && el.removeAttribute("bgcolor");
+        el.removeAttribute && el.removeAttribute("background");
+      });
+      return tmp.innerHTML;
     }
 
     function showToast(msg, isError) {
@@ -555,10 +644,51 @@
                 let rMeta = document.createElement("div");
                 rMeta.className = "event-reply-meta";
                 rMeta.textContent = [r.author || "", r.created ? formatDate(r.created) : ""].filter(Boolean).join(" \u00b7 ");
+                // Delete button — author or admin only.
+                let canDel = !r.isDeleted && r.id != null &&
+                  (currentUserIsAdmin === true ||
+                   (currentUserId != null && Number(r.createdBy) === Number(currentUserId)));
+                if (canDel) {
+                  let delBtn = document.createElement("button");
+                  delBtn.type = "button";
+                  delBtn.className = "event-reply-delete";
+                  delBtn.textContent = "\u00d7";
+                  delBtn.title = "Delete this reply";
+                  delBtn.setAttribute("aria-label", "Delete this reply");
+                  (function(replyId) {
+                    delBtn.addEventListener("click", function(ev) {
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      if (!confirm("Delete this reply? This marks it as deleted.")) return;
+                      fetch("/api/v2/history-replies/" + encodeURIComponent(replyId), {
+                        method: "DELETE",
+                        credentials: "same-origin"
+                      }).then(function(r2) {
+                        if (!r2.ok) throw new Error("Failed");
+                        // Refresh r_i rendering with "This reply was deleted."
+                        rDiv.classList.add("deleted");
+                        while (rMeta.firstChild) rMeta.removeChild(rMeta.firstChild);
+                        rMeta.textContent = [r.author || "", r.created ? formatDate(r.created) : ""].filter(Boolean).join(" \u00b7 ");
+                        while (rDiv.firstChild) rDiv.removeChild(rDiv.firstChild);
+                        rDiv.appendChild(rMeta);
+                        let placeholder = document.createElement("div");
+                        placeholder.className = "event-reply-body deleted";
+                        placeholder.textContent = "This reply was deleted.";
+                        rDiv.appendChild(placeholder);
+                      }).catch(function() {
+                        alert("Failed to delete reply.");
+                      });
+                    });
+                  })(r.id);
+                  rMeta.appendChild(delBtn);
+                }
                 rDiv.appendChild(rMeta);
                 let rBody = document.createElement("div");
                 rBody.className = "event-reply-body";
-                rBody.innerHTML = r.isDeleted ? "This reply was deleted." : (r.content || "");
+                // Sanitize reply content before injecting (defense in depth —
+                // server stores whatever client sends). Keeps <mark>, <b>,
+                // <i>, <u>, <a>; strips scripts/white-bg email styles.
+                rBody.innerHTML = r.isDeleted ? "This reply was deleted." : sanitizeHistoryHtmlPhtml(r.content || "");
                 rDiv.appendChild(rBody);
                 threadEl.appendChild(rDiv);
               }
@@ -566,17 +696,31 @@
               replyWrap.dataset.loaded = "1";
             }).catch(function() {});
 
-          // Reply button click handler
+          // Reply button click handler — rich-text editor with @-mention
+          // (mirrors the standalone "Add Note" editor's structure).
           replyBtn.addEventListener("click", function() {
             let existing = replyWrap.querySelector(".event-reply-editor");
             if (existing) { existing.remove(); replyBtn.style.display = ""; return; }
             replyBtn.style.display = "none";
             let editor = document.createElement("div");
             editor.className = "event-reply-editor";
-            let textarea = document.createElement("textarea");
-            textarea.className = "event-reply-input";
-            textarea.placeholder = "Write a reply\u2026";
-            textarea.rows = 2;
+            // Toolbar — same shape as the main preview-note toolbar so the
+            // delegated .note-format-btn click handler in app.js works.
+            // (project.html doesn't have its own toolbar delegate, so we
+            // implement the basic commands inline below.)
+            editor.innerHTML =
+              '<div class="phtml-note-format-toolbar note-format-toolbar event-reply-toolbar" aria-label="Formatting">' +
+                '<button type="button" class="phtml-note-format-btn note-format-btn" data-cmd="bold" title="Bold"><b>B</b></button>' +
+                '<button type="button" class="phtml-note-format-btn note-format-btn" data-cmd="italic" title="Italic"><i>I</i></button>' +
+                '<button type="button" class="phtml-note-format-btn note-format-btn" data-cmd="underline" title="Underline"><u>U</u></button>' +
+                '<button type="button" class="phtml-note-format-btn note-format-btn" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>' +
+                '<span class="phtml-note-sep note-format-sep"></span>' +
+                '<button type="button" class="phtml-note-format-btn note-format-btn note-format-hilite-btn" title="Highlight color">🖍</button>' +
+              '</div>' +
+              '<div class="event-reply-editor-body">' +
+                '<div class="phtml-note-editor note-editor event-reply-input" contenteditable="true" data-placeholder="Write a reply…"></div>' +
+                '<div class="phtml-mention-dropdown event-reply-mention"></div>' +
+              '</div>';
             let actions = document.createElement("div");
             actions.className = "event-reply-actions";
             let cancelBtn = document.createElement("button");
@@ -589,21 +733,58 @@
             postBtn.textContent = "Post";
             actions.appendChild(cancelBtn);
             actions.appendChild(postBtn);
-            editor.appendChild(textarea);
             editor.appendChild(actions);
             replyWrap.appendChild(editor);
-            textarea.focus();
+
+            let replyInput = editor.querySelector(".event-reply-input");
+            let replyDropdown = editor.querySelector(".event-reply-mention");
+
+            // Wire toolbar buttons — basic execCommand calls. The
+            // dedicated .phtml-note-format-btn handlers from app.js
+            // aren't available here, so we wire the basic commands
+            // ourselves.
+            editor.querySelectorAll(".note-format-btn").forEach(function(btn) {
+              btn.addEventListener("mousedown", function(e) {
+                // Preserve selection by focusing the editor first.
+                e.preventDefault();
+                replyInput.focus();
+              });
+              btn.addEventListener("click", function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var cmd = btn.dataset.cmd;
+                if (!cmd) return;
+                if (cmd === "hiliteColor" || cmd === "backColor") {
+                  document.execCommand("hiliteColor", false, "#c8e6c9");
+                } else {
+                  document.execCommand(cmd, false, null);
+                }
+              });
+            });
+
+            // Wire @-mention autocomplete (reuse the same helper as the
+            // main "Add Note" editor).
+            if (typeof setupMentionAutocomplete === "function" && replyDropdown) {
+              setupMentionAutocomplete(replyInput, replyDropdown);
+            }
+            replyInput.focus();
 
             cancelBtn.addEventListener("click", function() { editor.remove(); replyBtn.style.display = ""; });
             postBtn.addEventListener("click", function() {
-              var content = textarea.value.trim();
-              if (!content) return;
+              var html = (replyInput.innerHTML || "").trim();
+              if (!html || /^(<br\s*\/?>|\s*|<div>\s*<br\s*\/?>\s*<\/div>)$/i.test(html)) return;
+              // Extract mentions from the editor (if setupMentionAutocomplete wired
+              // them in as .phtml-mention-inline[data-user-id]).
+              let notifyUserList = [];
+              if (typeof extractMentions === "function") {
+                notifyUserList = extractMentions(replyInput).map(String);
+              }
               postBtn.disabled = true;
               fetch("/api/v2/projects/" + projectId + "/history/" + ev.id + "/replies", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 credentials: "same-origin",
-                body: JSON.stringify({ content: content })
+                body: JSON.stringify({ content: html, notifyUserList: notifyUserList })
               }).then(function(r) {
                 if (!r.ok) throw new Error("Failed");
                 editor.remove();
@@ -614,6 +795,7 @@
                 replyBtn.click(); // Reload replies
               }).catch(function() {
                 postBtn.disabled = false;
+                alert("Failed to post reply.");
               });
             });
           });
@@ -788,6 +970,8 @@
         var authResp = await fetch("/api/v2/me", { credentials: "same-origin" });
         if (!authResp.ok) throw new Error("not authed");
         me = await authResp.json();
+        currentUserId = me.id ?? me.ID ?? null;
+        currentUserIsAdmin = me.isAdmin === true;
       } catch(e) {
         showAuth();
         return;
