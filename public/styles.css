@@ -11201,12 +11201,26 @@ body {
 
 /* Search tab */
 .search-popup-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
 
+/* Deal-status filter sits to the right of the search input inside the
+   search-popup-input-wrap. Keep it narrow so the search input fills. */
+.search-popup-input-wrap > .search-popup-filter-select {
+  flex: 0 0 auto;
+  min-width: 7.5rem;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.6rem;
+}
+
 .search-popup-input {
+  flex: 1;
+  min-width: 0; /* allow the flex item to shrink below its content size */
   width: 100%;
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--border);

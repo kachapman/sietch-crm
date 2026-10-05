@@ -2,6 +2,32 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Search popup modal — deal status filter moved to input row (2026-10-05)
+
+User request: move the All / Open / Closed `<select>` from the secondary
+`.search-popup-filter-bar` row up to the search input row, sitting to the
+right of the search field. The search field shrinks to fit (grows via
+`flex: 1`).
+
+- **HTML** — `<select id="search-popup-status-filter">` moved out of
+  `.search-popup-filter-bar` and into `.search-popup-input-wrap`, placed
+  immediately after the `<input id="search-popup-input">`.
+- **CSS** — `.search-popup-input-wrap` is now `display: flex; align-items:
+  center; gap: 0.5rem` so the input + select sit on one row. The input
+  grows with `flex: 1; min-width: 0` (the `min-width: 0` lets it shrink
+  below its intrinsic content size when the select takes its share).
+  `.search-popup-input-wrap > .search-popup-filter-select` shrinks to
+  `flex: 0 0 auto` with a `min-width: 7.5rem` floor and matches the
+  filter-bar select font/padding for visual consistency.
+- The contacts tab's `.search-popup-input-wrap` (which has no select
+  child) is unaffected — the descendant selector only matches when a
+  filter select is present.
+- Cache busters bumped: `styles.css?v=3.6.9`→`3.7.0`,
+  `app.js?v=3.6.7`→`3.6.8`.
+- No JS / server / DB changes — `getSearchPopupQueryParams` /
+  `performSearchPopupQuery` already read `#search-popup-status-filter`
+  wherever it lives in the DOM.
+
 ## Search popup modal — deal status filter (All / Open / Closed) (2026-10-05)
 
 The search modal's projects tab was hardcoded to `stageType: "0"` (Open only)
