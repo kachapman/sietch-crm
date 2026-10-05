@@ -614,6 +614,26 @@ try:
 except Exception:
     pass
 
+# Migration 031: history_reply_notify_users table — tagged (mentioned) users
+# on history replies. Populated by _handle_history_reply_create when the
+# rich-text reply editor posts @-mentions; used to create 'reply_tagged'
+# notification rows mirroring the event-side 'note_tagged' flow. Idempotent
+# CREATE TABLE IF NOT EXISTS so safe on restart.
+try:
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS history_reply_notify_users (
+            reply_id INTEGER REFERENCES history_replies(id) ON DELETE CASCADE,
+            user_id INTEGER REFERENCES users(id),
+            PRIMARY KEY (reply_id, user_id)
+        )
+    """)
+except Exception:
+    pass
+try:
+    db.execute("CREATE INDEX IF NOT EXISTS idx_history_reply_notify_users_reply ON history_reply_notify_users(reply_id)")
+except Exception:
+    pass
+
 # Seed server_timezone default (Eastern) so the system always has a baseline.
 try:
     db.execute(
@@ -5482,12 +5502,30 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                ORDER BY r.created_at ASC""",
             (event_id,),
         )
+        # One fetch for the tagged-user IDs across every reply on this event.
+        # Indexed on reply_id (see idx_history_reply_notify_users_reply,
+        # migration 031).
+        reply_ids = [r[0] for r in rows]
+        notify_by_reply: dict[int, list[int]] = {}
+        if reply_ids:
+            nrows = db.query(
+                "SELECT reply_id, user_id FROM history_reply_notify_users WHERE reply_id = ANY(%s)",
+                (reply_ids,),
+            )
+            for nr in nrows:
+                notify_by_reply.setdefault(int(nr[0]), []).append(int(nr[1]))
         replies = []
         for r in rows:
+            rid = int(r[0])
             replies.append({
-                "id": r[0], "parentReplyId": r[1], "content": "" if r[5] else r[2],
+                "id": rid, "parentReplyId": r[1], "content": "" if r[5] else r[2],
                 "createdBy": r[3], "created": r[4].isoformat() if r[4] else None,
                 "isDeleted": r[5], "author": r[6] or "",
+                # Tagged (mentioned) user IDs on this reply — parallel to the
+                # notifyUserList the client sends on POST. Useful for future
+                # UI work (e.g. "Tagged: Alice, Bob" indicator under a
+                # reply); additive change, no behavior change today.
+                "notifyUserIds": notify_by_reply.get(rid, []),
             })
         _json_response(self, 200, replies)
 
@@ -5511,18 +5549,57 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not content:
             _json_response(self, 400, {"error": "Content is required"})
             return
-        # TODO: client sends notifyUserList (extracted from @-mentions in the
-        # reply body). Currently we don't act on it for replies — only history
-        # events get notification rows. Mirroring the event-side logic would
-        # require either reusing history_notify_users (with a nullable
-        # reply_id) or a new history_reply_notify_users table.
-        # notify_list = payload.get("notifyUserList") or []
         parent_reply_id = payload.get("parentReplyId")
         reply_id = db.insert_returning(
             """INSERT INTO history_replies (event_id, parent_reply_id, content, created_by)
                VALUES (%s, %s, %s, %s) RETURNING id""",
             (event_id, parent_reply_id, content, user["id"]),
         )
+        # Insert notify users (extracted from @-mentions by the rich-text
+        # reply editor) and create notification rows for each. Mirrors the
+        # event-side flow at lines 5357-5389 for history_notify_users +
+        # 'note_tagged' notifications, but uses a new dedicated table
+        # (history_reply_notify_users) and notification type ('reply_tagged')
+        # so reply tags and event tags remain independent. Migration 031.
+        notify_list = payload.get("notifyUserList") or []
+        # Don't notify the actor about their own reply.
+        actor_id = int(user["id"])
+        notify_list = [int(uid) for uid in notify_list if uid and int(uid) != actor_id]
+        for uid in notify_list:
+            try:
+                db.execute(
+                    "INSERT INTO history_reply_notify_users (reply_id, user_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (reply_id, int(uid)),
+                )
+            except (TypeError, ValueError):
+                pass
+        if notify_list:
+            import re as _re, html as _html_mod
+            # Strip tags to a 120-char preview for the notification body.
+            snippet = _html_mod.unescape(_re.sub(r'<[^>]+>', '', content))[:120].strip()
+            for uid in notify_list:
+                try:
+                    # Reuse the same notifications table; payload carries
+                    # both event_id and reply_id so the client can deep-link
+                    # directly to the reply.
+                    db.execute(
+                        """INSERT INTO notifications (user_id, type, opportunity_id, actor_user_id, message, payload)
+                           SELECT %s, 'reply_tagged', %s, %s,
+                                  u.display_name || ' replied on ' || p.title,
+                                  jsonb_build_object('event_id', %s, 'reply_id', %s, 'snippet', %s)
+                           FROM users u, opportunities p WHERE p.id = %s AND u.id = %s""",
+                        (int(uid), opp_id, actor_id, event_id, reply_id, snippet, opp_id, int(uid)),
+                    )
+                    event_bus.publish("notification:new", {
+                        "type": "reply_tagged",
+                        "message": f"{user.get('display_name', 'Someone')} replied to a note you're tagged on",
+                        "payload": {"event_id": event_id, "reply_id": reply_id, "snippet": snippet},
+                        "opportunity_id": opp_id,
+                        "actor_user_id": actor_id,
+                    }, user_ids=[str(int(uid))])
+                except Exception as e:
+                    print(f"[WARN] Failed to create reply notification for user {uid}: {e}", file=sys.stderr)
+                    traceback.print_exc(file=sys.stderr)
         _json_response(self, 201, {"id": reply_id, "ok": True})
 
     def _handle_history_reply_delete(self, reply_id: int) -> None:
@@ -11407,6 +11484,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         ("history_replies", "SELECT * FROM history_replies ORDER BY id"),
         ("history_attachments", "SELECT * FROM history_attachments ORDER BY id"),
         ("history_notify_users", "SELECT * FROM history_notify_users"),
+        ("history_reply_notify_users", "SELECT * FROM history_reply_notify_users"),
         ("mail_accounts", "SELECT * FROM mail_accounts ORDER BY id"),
         ("mail_messages", "SELECT * FROM mail_messages ORDER BY id"),
         ("mail_deal_links", "SELECT * FROM mail_deal_links ORDER BY id"),

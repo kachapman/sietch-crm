@@ -2,6 +2,46 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Server-side reply notifications (2026-10-04)
+
+The rich-text reply editor + `@`-mention UI shipped in the previous session
+silently dropped `notifyUserList` on the server (it was a TODO). This change
+wires it up end-to-end, mirroring the event-side `note_tagged` flow.
+
+- **New table** — `history_reply_notify_users (reply_id, user_id)`. Parallel
+  to `history_notify_users` but keyed on `reply_id` so reply tags and event
+  tags remain independent (no schema-level entanglement with the existing
+  `note_tagged` notification flow). Migration `031_history_reply_notify_users.sql`
+  + `init.sql` mirror + idempotent `CREATE TABLE IF NOT EXISTS` block in
+  `server.py` so restart auto-applies the schema.
+- **`_handle_history_reply_create`** — accepts `notifyUserList` from the
+  payload, inserts one row per tagged user into `history_reply_notify_users`
+  (excluding the actor — never notify yourself), then creates a
+  `'reply_tagged'` notification row per tagged user. Payload carries
+  `event_id` + `reply_id` + `snippet` so the client can deep-link back to
+  the reply. `event_bus.publish("notification:new", ...)` fires per-tag so
+  the SSE feed pushes instantly to the tagged user's open tabs.
+- **`_handle_history_replies_get`** — extended to return `notifyUserIds` per
+  reply (additive — single batched `WHERE reply_id = ANY(...)` lookup,
+  indexed by `idx_history_reply_notify_users_reply`). Useful for future UI
+  work ("Tagged: Alice, Bob" indicator under a reply) — no behavior change
+  today.
+- **Client notification icon** — `public/app.js` `_notifTypeIcon('reply_tagged')`
+  adds an @-with-reply-bubble variant. The drawer's `Show note` expand
+  button now fires for both `note_tagged` and `reply_tagged` (both carry
+  `event_id` in their payload), opening the parent event's history (which
+  includes the reply).
+- **Files** — `migrations/031_history_reply_notify_users.sql` (NEW), `init.sql`
+  (+11), `server.py` (+87/-30, reply POST flow + GET extension + runtime
+  `CREATE TABLE IF NOT EXISTS` block), `public/app.js` (+9/-1, icon +
+  `hasPayload` matcher).
+- **Verified** — `python3 -m py_compile server.py` + `node --check public/app.js`
+  pass; `python3 tests/test_onlyoffice_import.py` still 8/8; end-to-end
+  smoke test (insert reply + notify-user row + notification row, query
+  GET path's `notifyUserIds`, cleanup) all behave correctly. Server
+  restarted clean, `/api/config` 200. New table `history_reply_notify_users`
+  exists in DB with `reply_id` + `user_id` columns.
+
 ## Rich-text replies + reply delete + reply-highlight fix (2026-10-04)
 
 Audit + fixes for project history notes:

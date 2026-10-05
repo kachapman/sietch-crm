@@ -338,6 +338,17 @@ CREATE TABLE history_notify_users (
     PRIMARY KEY (event_id, user_id)
 );
 
+-- Per-reply tagged users (mirrors history_notify_users for history_replies).
+-- Populated when a reply is created with @-mentions; used by the reply
+-- notification flow in _handle_history_reply_create.
+CREATE TABLE history_reply_notify_users (
+    reply_id INTEGER REFERENCES history_replies(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id),
+    PRIMARY KEY (reply_id, user_id)
+);
+CREATE INDEX idx_history_reply_notify_users_reply
+    ON history_reply_notify_users(reply_id);
+
 -- ============================================================================
 -- 7.9 Tasks
 -- ============================================================================

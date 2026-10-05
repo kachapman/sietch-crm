@@ -41326,6 +41326,11 @@ function _notifTypeIcon(type) {
   if (type === "note_tagged") {
     return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0"/><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0v-1.5a9 9 0 1 0 -5.5 8.28"/></svg>`;
   }
+  if (type === "reply_tagged") {
+    // Reply-on-tagged-note variant — same @-icon with a small reply bubble
+    // in the corner to indicate "a reply" rather than a new note.
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0"/><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0v-1.5a9 9 0 1 0 -5.5 8.28"/><path d="M4 20l1 -3"/></svg>`;
+  }
   if (type === "service_feed") {
     // Cloud icon for third-party service status notifications.
     return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M17.5 19a4.5 4.5 0 1 0 0 -9a4.5 4.5 0 0 0 -8.5 -2a4.5 4.5 0 0 0 -4 11h12.5z"/></svg>`;
@@ -41343,7 +41348,9 @@ function _renderNotificationDrawerItem(n) {
   const typeIcon = _notifTypeIcon(n.type);
   const projectTitle = n.projectTitle || "";
   const time = _notifTimeAgo(n.created);
-  const hasPayload = n.type === "note_tagged" && n.payload && n.payload.event_id && n.opportunityId;
+  // Both note_tagged and reply_tagged carry event_id in their payload and
+  // are expandable to the parent event's content (which includes any replies).
+  const hasPayload = (n.type === "note_tagged" || n.type === "reply_tagged") && n.payload && n.payload.event_id && n.opportunityId;
   const snippet = escapeHtml((n.snippet || "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&"));
 
   // Apply per-feed accent color as a CSS variable so the border + icon background tint.
