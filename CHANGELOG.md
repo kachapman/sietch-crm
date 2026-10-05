@@ -2,6 +2,20 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Header quick-search placeholder → "Search open projects…" (2026-10-05)
+
+User request: change the header `#global-opp-search-input` placeholder + the
+matching screen-reader label from `Search projects…` to `Search open projects…`
+to make it explicit that the quick search filters to open deals only. The
+underlying `searchOpportunitiesByTitle` query keeps `stageType: "0"` (Open)
+hardcoded by design — no filter UI was added for this surface; the placeholder
+now reflects the actual behavior so users aren't confused when closed deals
+don't appear.
+
+- `public/index.html` line 197: `<label>` for the input → "Search open projects".
+- `public/index.html` line 202: input `placeholder` → "Search open projects…".
+- Cache busters bumped: `styles.css?v=3.6.7`→`3.6.8`, `app.js?v=3.6.5`→`3.6.6`.
+
 ## Double reply-field min-height (2026-10-05)
 
 User request: "double the height of the reply field". The reply editor's
