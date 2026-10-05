@@ -148,7 +148,13 @@ function handleSSEEvent(type, data) {
       loadTasks();
       break;
 case "notification:new":
-    _updateNotificationBadge();
+    // Always re-poll the server count for the badge, not just trust the
+    // local cache. The cache can be empty (drawer never opened, or the SSE
+    // arrived while the drawer was in the middle of a fetch). Without this
+    // re-poll, automation notifications can land in the DB without ever
+    // lighting the bell badge — the user opens the drawer later, sees the
+    // notification, but the badge was hidden the whole time.
+    _pollNotificationBadge();
     // Pulse animation on bell icon
     const bellBtn = $("#notification-bell-btn");
     if (bellBtn) {
@@ -25946,12 +25952,25 @@ function renderHistoryEventItem(ev) {
           return;
         }
         // Extract mention user IDs from the editor (mirrors the preview-note
-        // submission flow). Server currently accepts notifyUserList but does
-        // not act on it for replies — see TODO in _handle_history_reply_create.
+        // submission flow).
         const notifyUserList = extractMentionsFromContent(replyEditor).map(String);
+        // Defensive oppId resolution: oppPreviewContext is the primary source
+        // but can be null on the bookmark sidebar / search popup preview if a
+        // future caller forgets setOpportunityPreviewContext. Fall back to
+        // state.activeBookmarkTab (covers bookmark sidebar), then to the opp
+        // object on the preview context if it was set without an id, then to
+        // a global "current preview oppId" if available. We surface a clear
+        // toast if we still can't resolve one rather than silently 404.
+        let oppId =
+          oppPreviewContext?.oppId ||
+          state.activeBookmarkTab ||
+          (oppPreviewContext?.opp?.id ?? oppPreviewContext?.opp?.ID ?? null);
         submitBtn.disabled = true;
         try {
-          await api(`/api/v2/projects/${oppPreviewContext?.oppId}/history/${eventId}/replies`, {
+          if (!oppId) {
+            throw new Error("Cannot determine which project this is — try re-opening the deal preview.");
+          }
+          await api(`/api/v2/projects/${oppId}/history/${eventId}/replies`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ content: html, notifyUserList }),
@@ -28485,6 +28504,11 @@ async function openSearchPreviewTab(oppId, titleHint, { activate = true } = {}) 
     const shortFull = fullTitle.length > 24 ? fullTitle.slice(0, 22) + "…" : fullTitle;
     const tabTitleEl = tabBtn.querySelector(".search-popup-tab-title");
     if (tabTitleEl) tabTitleEl.textContent = shortFull;
+    // Set preview context so the reply submit (and any other preview-aware
+    // code in renderOpportunityPreviewContent) knows which opp this preview
+    // is showing. Without this, replies from the search popup submit against
+    // /api/v2/projects/null/... and silently 404.
+    setOpportunityPreviewContext(id, data.opp, null);
     // Store data for edit
     const tab = searchPopupPreviewTabs.get(id);
     if (tab) tab.data = data;
@@ -28508,6 +28532,10 @@ async function refreshSearchPreviewTab(oppId) {
     const data = await fetchOpportunityPreviewData(id, true);
     if (body) {
       body.innerHTML = "";
+      // Refresh preview context with the freshly loaded opp so any reply
+      // posted in this tab still works (defense in depth — same as the
+      // initial setOpportunityPreviewContext call in the opener).
+      setOpportunityPreviewContext(id, data.opp, null);
       renderOpportunityPreviewContent(body, data);
       linkifyPhonesAndEmails(body);
     }
@@ -28932,6 +28960,12 @@ async function activateBookmarkTab(oppId) {
   if (deal?._cachedData) {
     titleEl.textContent = deal.title;
     bodyEl.innerHTML = "";
+    // Set preview context so reply submit (and any other preview-context-aware
+    // code in renderOpportunityPreviewContent) knows which opp it's working
+    // with. Without this, replies from the bookmark sidebar preview submit
+    // against /api/v2/projects/null/... and 404 — bug surfaced when the user
+    // tagged @crm bot in a bookmark-sidebar reply and saw no notification.
+    setOpportunityPreviewContext(id, deal._cachedData.opp || null, null);
     renderOpportunityPreviewContent(bodyEl, deal._cachedData, "bookmark");
     linkifyPhonesAndEmails(bodyEl);
     setBookmarkPreviewCrmLink(id, deal._cachedData.opp?.project_number);
@@ -28939,6 +28973,9 @@ async function activateBookmarkTab(oppId) {
   } else {
     titleEl.textContent = deal?.title || `Project #${id}`;
     bodyEl.innerHTML = '<p class="opp-preview-loading">Loading project…</p>';
+    // Set context with just the id so reply submit knows the opp even before
+    // data is loaded.
+    setOpportunityPreviewContext(id, null, null);
   }
 
   // Fetch data in background (always refresh if not cached, or on explicit refresh only)
@@ -28950,6 +28987,10 @@ async function activateBookmarkTab(oppId) {
       if (deal) deal._cachedData = data;
       titleEl.textContent = data.opp?.title || data.opp?.Title || deal?.title || `Project #${id}`;
       bodyEl.innerHTML = "";
+      // Update preview context with the now-loaded opp object (defense in depth
+      // — setOpportunityPreviewContext was already called above with just the
+      // id, this adds the opp reference).
+      setOpportunityPreviewContext(id, data.opp, null);
       renderOpportunityPreviewContent(bodyEl, data, "bookmark");
       linkifyPhonesAndEmails(bodyEl);
       setBookmarkPreviewCrmLink(id, data.opp?.project_number);
@@ -29030,6 +29071,11 @@ async function refreshBookmarkTab(oppId, showLoading = true) {
     if (titleEl) titleEl.textContent = data.opp?.title || data.opp?.Title || deal.title;
     if (bodyEl) {
       bodyEl.innerHTML = "";
+      // Refresh preview context so replies from the refreshed bookmark
+      // preview continue to submit against the right opp (defense in depth
+      // — same as the initial setOpportunityPreviewContext call in
+      // activateBookmarkTab).
+      setOpportunityPreviewContext(id, data.opp, null);
       renderOpportunityPreviewContent(bodyEl, data, "bookmark");
       linkifyPhonesAndEmails(bodyEl);
     }

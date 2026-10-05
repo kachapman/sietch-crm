@@ -2,6 +2,68 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Reply-notification bugs from bookmark/search previews + SSE badge fix (2026-10-04)
+
+User report: "I clicked reply and tagged @crm bot but the reply was not in the notifications. I also noticed that there was a newer notification in the drawer from an automation I setup earlier, but the notification icon in the header was not lit up or indicating anything."
+
+**Root causes** (data + code trace confirmed):
+
+1. **Reply from bookmark sidebar / search popup preview silently 404'd.** DB
+   inspection showed **zero user-created replies** — every reply in the system
+   was created by CRM Bot (the automation, which uses a different code path).
+   Cause: `activateBookmarkTab` and the search-popup preview opener both call
+   `renderOpportunityPreviewContent(...)` **without first calling
+   `setOpportunityPreviewContext(id, data.opp, ...)`**. With
+   `oppPreviewContext.oppId === null`, the reply POST URL became
+   `/api/v2/projects/null/history/.../replies`, the server regex
+   `^/api/v2/projects/(\d+)/.../replies$` didn't match, the route returned
+   404, the client threw an error toast, the reply never saved → no
+   notification for the tagged user.
+2. **Notification bell badge not lit after automation posts a notification.**
+   Cause: SSE `notification:new` handler at line 150-158 calls
+   `_updateNotificationBadge()`, which is **cache-only** (`_notificationCache`).
+   If the cache is empty (drawer never opened, or SSE arrived mid-fetch),
+   `unread = 0`, badge hides. `startNotificationBadgePoll()` is a one-shot
+   startup poll, not an interval.
+
+**Fixes:**
+
+- **`activateBookmarkTab`** — call `setOpportunityPreviewContext(id, ...)`
+  before `renderOpportunityPreviewContent` in both the cached-data and the
+  async-fetch paths, plus the loading-placeholder path (so replies work
+  even before data arrives).
+- **Search-popup preview opener + `refreshSearchPreviewTab`** — call
+  `setOpportunityPreviewContext(id, data.opp, null)` before
+  `renderOpportunityPreviewContent`.
+- **`refreshBookmarkTab`** — same fix in the manual refresh path.
+- **Defensive reply submit fallback** — the submit handler at line 25954 now
+  resolves `oppId` from `oppPreviewContext.oppId → state.activeBookmarkTab →
+  oppPreviewContext.opp.id/ID → null`. If still null, throws a clear toast
+  ("Cannot determine which project this is — try re-opening the deal
+  preview.") instead of silently 404'ing. Belt-and-suspenders against
+  future preview surfaces that forget to set context.
+- **SSE `notification:new` handler** — now calls `_pollNotificationBadge()`
+  (single COUNT query) instead of trusting the cache. The cache-count
+  `_updateNotificationBadge()` is kept as the optimistic pre-poll UI update.
+
+**Files:** `public/app.js` (+51/-5), `public/index.html` (cache buster
+`app.js?v=3.6.4`→`3.6.5`).
+
+**Verified:** `node --check public/app.js` passes; defensive-fallback
+simulation 4/4 (primary context, activeBookmarkTab, opp.id on context, no
+resolution → null); existing `python3 tests/test_onlyoffice_import.py`
+still 8/8. Server PID restarted clean, `/api/config` 200.
+
+**Browser-test checklist** (next session):
+
+1. Open a project from the bookmark sidebar → click Reply → type @crm bot
+   + select chip → submit → verify reply row in DB + history_reply_notify_users
+   row for CRM Bot + notifications row for CRM Bot.
+2. Trigger an automation that creates a notification for the current user
+   → bell badge lights up immediately (SSE drives _pollNotificationBadge).
+3. Open the drawer → reply in the thread → check reply appears, bell
+   updates count (decrements on mark-read).
+
 ## Server-side reply notifications (2026-10-04)
 
 The rich-text reply editor + `@`-mention UI shipped in the previous session
