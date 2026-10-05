@@ -2,6 +2,25 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Double reply-field min-height (2026-10-05)
+
+User request: "double the height of the reply field". The reply editor's
+`min-height: 2.5rem` (≈ one line + a little padding) made typing uncomfortable
+for anything longer than a single short sentence. Doubled to `5rem` on both
+surfaces.
+
+- `.opp-preview-history-reply-input` in `public/styles.css` (line 7193) —
+  main project preview modal + bookmark sidebar preview + search popup
+  preview (all share this class).
+- `.event-reply-input` in `public/project.html` inline `<style>` block
+  (line 159) — standalone `/project.html` reply editor (matches the modal
+  for consistency).
+- `max-height: 240px` preserved — long replies still scroll instead of
+  pushing the page.
+- No JS, no server, no DB changes. Cache busters bumped:
+  `styles.css?v=3.6.6`→`3.6.7` (index.html), `styles.css?v=3.5.2`→`3.5.3`
+  (project.html).
+
 ## Reply-notification bugs from bookmark/search previews + SSE badge fix (2026-10-04)
 
 User report: "I clicked reply and tagged @crm bot but the reply was not in the notifications. I also noticed that there was a newer notification in the drawer from an automation I setup earlier, but the notification icon in the header was not lit up or indicating anything."

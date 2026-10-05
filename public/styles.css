@@ -7190,7 +7190,7 @@ body {
   color: var(--text);
   font: inherit;
   font-size: 0.82rem;
-  min-height: 2.5rem;
+  min-height: 5rem;
   max-height: 240px;
   overflow-y: auto;
 }
