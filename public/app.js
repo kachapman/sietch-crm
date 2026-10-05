@@ -27489,6 +27489,10 @@ function bindSearchPopupModal() {
   $("#search-popup-minimize")?.addEventListener("click", minimizeSearchPopup);
 
   // Filters
+  $("#search-popup-status-filter")?.addEventListener("change", () => {
+    searchPopupStartIndex = 0;
+    performSearchPopupQuery();
+  });
   $("#search-popup-stage-filter")?.addEventListener("change", () => {
     searchPopupStartIndex = 0;
     performSearchPopupQuery();
@@ -27847,8 +27851,15 @@ function getSearchPopupQueryParams() {
   const params = new URLSearchParams({
     startIndex: String(searchPopupStartIndex),
     count: String(SEARCH_POPUP_PAGE_SIZE),
-    stageType: "0",
   });
+
+  // Deal status filter — 'open' = stageType 0, 'closed' = Won (1) + Lost (2)
+  // (merged via two parallel fetches in performSearchPopupQuery), 'all' = no
+  // stageType so the server returns open + won + lost.
+  const statusFilter = $("#search-popup-status-filter")?.value || "all";
+  if (statusFilter === "open") {
+    params.set("stageType", "0");
+  }
 
   const q = $("#search-popup-input")?.value.trim();
   if (q) params.set("filterValue", q);
@@ -27883,22 +27894,82 @@ async function performSearchPopupQuery() {
 
   const abortController = searchPopupQueryAbort;
   results.innerHTML = '<p class="search-popup-results-empty">Loading…</p>';
-  const params = getSearchPopupQueryParams();
+
+  // Closed deals = Won (1) + Lost (2). Run two parallel fetches (one per
+  // stageType) and merge. All + Open go through a single fetch.
+  const statusFilter = $("#search-popup-status-filter")?.value || "all";
+  const isClosed = statusFilter === "closed";
+  const stageTypes = isClosed ? ["1", "2"] : null;
 
   try {
-    const [data, countData] = await Promise.all([
-      api(`/api/v2/projects?${params}`),
-      api(`/api/v2/projects/count?${params}`),
-    ]);
-    if (abortController && abortController.aborted) return;
-    let opps = unwrap(data);
-    searchPopupTotal = countData?.count ?? opps.length;
-    searchPopupCurrentOpps = opps;
-    searchPopupCurrentTagLabel = null;
-    searchPopupSelected.clear();
-    updateSearchPopupBatchBar();
-    updateSearchPopupPagination();
-    renderSearchPopupResults(opps);
+    if (!isClosed) {
+      const params = getSearchPopupQueryParams();
+      const [data, countData] = await Promise.all([
+        api(`/api/v2/projects?${params}`),
+        api(`/api/v2/projects/count?${params}`),
+      ]);
+      if (abortController && abortController.aborted) return;
+      let opps = unwrap(data);
+      searchPopupTotal = countData?.count ?? opps.length;
+      searchPopupCurrentOpps = opps;
+      searchPopupCurrentTagLabel = null;
+      searchPopupSelected.clear();
+      updateSearchPopupBatchBar();
+      updateSearchPopupPagination();
+      renderSearchPopupResults(opps);
+    } else {
+      // Closed: fetch Won + Lost in parallel, merge by id (de-dup if a deal
+      // somehow appears in both — shouldn't happen because stageType is
+      // mutually exclusive server-side, but defensive). We fetch ALL closed
+      // matches per stageType (no per-stageType page limit) so pagination
+      // works across the merged client-side list.
+      const baseParams = getSearchPopupQueryParams();
+      const wonParams = new URLSearchParams(baseParams);
+      wonParams.set("stageType", "1");
+      wonParams.set("count", "500");
+      const wonParamsStr = wonParams.toString();
+      const lostParams = new URLSearchParams(baseParams);
+      lostParams.set("stageType", "2");
+      lostParams.set("count", "500");
+      const lostParamsStr = lostParams.toString();
+      const [
+        [wonData, wonCount],
+        [lostData, lostCount],
+      ] = await Promise.all([
+        Promise.all([
+          api(`/api/v2/projects?${wonParamsStr}`),
+          api(`/api/v2/projects/count?${wonParamsStr}`),
+        ]),
+        Promise.all([
+          api(`/api/v2/projects?${lostParamsStr}`),
+          api(`/api/v2/projects/count?${lostParamsStr}`),
+        ]),
+      ]);
+      if (abortController && abortController.aborted) return;
+      const wonOpps = unwrap(wonData) || [];
+      const lostOpps = unwrap(lostData) || [];
+      const seen = new Set();
+      const opps = [];
+      for (const o of wonOpps) {
+        const id = Number(o.id ?? o.ID);
+        if (id != null && !seen.has(id)) { seen.add(id); opps.push(o); }
+      }
+      for (const o of lostOpps) {
+        const id = Number(o.id ?? o.ID);
+        if (id != null && !seen.has(id)) { seen.add(id); opps.push(o); }
+      }
+      searchPopupTotal = (wonCount?.count ?? wonOpps.length) + (lostCount?.count ?? lostOpps.length);
+      // Slice the merged list to the current page (client-side pagination).
+      const start = searchPopupStartIndex;
+      const end = start + SEARCH_POPUP_PAGE_SIZE;
+      const pageSlice = opps.slice(start, end);
+      searchPopupCurrentOpps = opps;
+      searchPopupCurrentTagLabel = null;
+      searchPopupSelected.clear();
+      updateSearchPopupBatchBar();
+      updateSearchPopupPagination();
+      renderSearchPopupResults(pageSlice);
+    }
   } catch (err) {
     if (abortController && abortController.aborted) return;
     results.innerHTML = `<p class="search-popup-results-empty">${escapeHtml(err.message)}</p>`;
@@ -27933,19 +28004,27 @@ function renderSearchPopupResults(opps, container) {
   if (!results) return;
   results.innerHTML = "";
 
+  const statusFilter = $("#search-popup-status-filter")?.value || "all";
+  const noun = statusFilter === "open" ? "open deals"
+    : statusFilter === "closed" ? "closed deals"
+    : "deals";
+
   const countEl = $("#search-popup-results-count");
   if (countEl) {
     if (searchPopupTotal > 0) {
       const start = searchPopupStartIndex + 1;
       const end = Math.min(searchPopupStartIndex + SEARCH_POPUP_PAGE_SIZE, searchPopupTotal);
-      countEl.textContent = `Showing ${start}–${end} of ${searchPopupTotal} open projects`;
+      countEl.textContent = `Showing ${start}–${end} of ${searchPopupTotal} ${noun}`;
     } else {
       countEl.textContent = "";
     }
   }
 
   if (!opps.length) {
-    results.innerHTML = '<p class="search-popup-results-empty">No open deals found</p>';
+    const emptyNoun = statusFilter === "open" ? "open deals"
+      : statusFilter === "closed" ? "closed deals"
+      : "deals";
+    results.innerHTML = `<p class="search-popup-results-empty">No ${emptyNoun} found</p>`;
     return;
   }
 
@@ -28139,6 +28218,7 @@ function populateSearchFilterDropdowns() {
 
 function clearSearchPopupFilters() {
   const input = $('#search-popup-input'); if (input) input.value = '';
+  const stat = $('#search-popup-status-filter'); if (stat) stat.value = 'all';
   const sf = $('#search-popup-stage-filter'); if (sf) sf.value = '';
   const rf = $('#search-popup-responsible-filter'); if (rf) rf.value = '';
   const tf = $('#search-popup-tag-filter'); if (tf) tf.value = '';

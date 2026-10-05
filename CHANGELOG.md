@@ -2,6 +2,42 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Search popup modal — deal status filter (All / Open / Closed) (2026-10-05)
+
+The search modal's projects tab was hardcoded to `stageType: "0"` (Open only)
+— couldn't see Won or Lost deals. Added a new `<select>` to the filter bar with
+three values, dynamic empty-state + count-text based on the selection, and
+Won+Lost merged via two parallel fetches when "Closed" is selected.
+
+- **New UI** — `<select id="search-popup-status-filter">` as the first item in
+  the existing `.search-popup-filter-bar`, options `<option value="all">All
+  | <option value="open">Open | <option value="closed">Closed</option>`. Default
+  is `all` (matches the previous behavior of returning only open deals — but
+  now defaults to showing all, including Won + Lost, so the user can pick a
+  narrower filter if they want).
+- **`getSearchPopupQueryParams`** — drops the hardcoded `stageType: "0"`,
+  reads `#search-popup-status-filter`. `open` → `stageType=0`. `closed` is
+  resolved inside `performSearchPopupQuery` via two parallel fetches
+  (`stageType=1` Won + `stageType=2` Lost) merged client-side, de-duped by id
+  (defensive; stageType is mutually exclusive server-side).
+- **`performSearchPopupQuery`** — split: `all` + `open` use a single fetch;
+  `closed` uses two parallel fetches (each pulls 500 rows so client-side slicing
+  can paginate across the merged list). Pagination state preserved.
+- **Dynamic count + empty-state text** — `renderSearchPopupResults` now reads
+  the selected status and renders `Showing X–Y of Z open deals` / `…closed
+  deals` / `…deals` for the count text, and `No open deals found` / `No
+  closed deals found` / `No deals found` for the empty state.
+- **`clearSearchPopupFilters`** — resets the new status filter to `all`.
+- **Placeholder** — `#search-popup-input` placeholder: `Search open deals…` →
+  `Search deals…` (filter is now explicit in the UI).
+- **Cache busters** — `styles.css?v=3.6.8`→`3.6.9`, `app.js?v=3.6.6`→`3.6.7`.
+- **No server changes** — server's `/api/v2/projects` already accepts optional
+  `stageType` (omitting returns all deals; `stageType=1` → Won, `stageType=2` →
+  Lost). `_handle_projects_count` uses the same `_build_projects_where` so
+  the count is consistent.
+- **Verified** — `node --check public/app.js` passes; `git diff --stat` shows
+  clean 2-file change.
+
 ## Header quick-search placeholder → "Search open projects…" (2026-10-05)
 
 User request: change the header `#global-opp-search-input` placeholder + the

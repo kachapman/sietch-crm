@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=3.6.8" />
+  <link rel="stylesheet" href="styles.css?v=3.6.9" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
 </head>
 <body>
@@ -1992,9 +1992,14 @@
       <!-- Projects tab content -->
       <div class="search-popup-tab-content" data-tab-content="projects">
         <div class="search-popup-input-wrap">
-          <input type="search" id="search-popup-input" class="search-popup-input" placeholder="Search open deals…" autocomplete="off" />
+          <input type="search" id="search-popup-input" class="search-popup-input" placeholder="Search deals…" autocomplete="off" />
         </div>
         <div class="search-popup-filter-bar">
+          <select id="search-popup-status-filter" class="search-popup-filter-select" title="Filter by deal status">
+            <option value="all">All</option>
+            <option value="open">Open</option>
+            <option value="closed">Closed</option>
+          </select>
           <select id="search-popup-stage-filter" class="search-popup-filter-select" title="Filter by stage">
             <option value="">All stages</option>
           </select>
@@ -3676,6 +3681,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3.6.6" type="module"></script>
+  <script src="app.js?v=3.6.7" type="module"></script>
 </body>
 </html>
