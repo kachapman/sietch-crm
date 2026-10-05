@@ -2,6 +2,101 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Admin user-profile modal + "Delete Personal Data" action (2026-10-05)
+
+User request: mirror the onlyOffice workflow where an admin can open a
+user's profile and from a drop-down menu next to the name run a
+"Delete personal data" action that clears PII + frees storage, while
+keeping the user record intact so historical references stay valid.
+
+**Server (server.py):**
+
+- **`GET /api/v2/users/{id}`** (admin or self) — `_handle_user_get`
+  returns the full user record (id, email, displayName, firstName,
+  lastName, isAdmin, isActive, avatarUrl, avatarIcon, role,
+  mustChangePassword, createdAt, lastLogin). No password hash / 2FA
+  secret. 403 if not admin + not self; 404 if not found.
+- **`POST /api/v2/users/{id}/delete-personal-data`** (admin only) —
+  `_handle_user_delete_personal_data` runs a single transaction that
+  clears email (placeholder `deleted-{id}@removed.local` to keep the
+  UNIQUE NOT NULL constraint), password_hash, password_salt, name
+  fields, avatar fields; sets `must_change_password = TRUE` and
+  `is_active = FALSE`; DELETEs from `sessions` and
+  `notification_preferences`. After the transaction commits, the
+  on-disk avatar file is unlinked (path-traversal-guarded to stay
+  inside `AVATAR_STORAGE_PATH`), the per-user presence file is
+  unlinked, and a single audit line is printed to stderr (no new
+  audit table). Returns `{"ok": true, "userId": ..., "filesRemoved": [...]}`.
+  409 if the admin tries to delete their own data; 404 if not found.
+
+**Client (public/app.js):**
+
+- New `openAdminUserProfileModal(userId, opts)` — fetches the user,
+  renders the modal (avatar + name + email + role badges + field
+  grid + status hint), and builds the kebab dropdown menu.
+- New `closeAdminUserProfileModal()` — hides the modal + clears the
+  kebab popover.
+- New `_renderAdminUserKebabMenu(user, opts)` — builds the dropdown
+  items: Reset Password (with copy-friendly temp-password dialog),
+  Revoke All Sessions, Deactivate/Reactivate (state-dependent),
+  divider, **Delete Personal Data** (only when user is already
+  inactive — to prevent accidental wipe of an active user).
+- New `_adminUserDeletePersonalDataFlow(user, opts)` — typed-email
+  confirmation dialog (admin must type the user's email exactly)
+  before the destructive action proceeds. The endpoint call returns
+  a success toast with the number of files removed.
+- New `_renderProfileInitials(container, user)` — small helper for
+  computing 1–2 letter initials from name/email.
+- `populateAdminUsersList` (line 32689) now adds a "View" button to
+  each user row that opens the modal (kept the existing inline Edit /
+  Reset PW / Sessions / Deactivate buttons for quick access).
+
+**HTML (public/index.html):**
+
+- New `<div id="admin-user-profile-modal">` markup (modal-card with
+  header containing title + kebab dropdown trigger + close button,
+  body with avatar + name + email + badges + field grid + status
+  hint). Added to index.html after the existing `admin-console-modal`.
+
+**CSS (public/styles.css):**
+
+- New `.kebab-menu` / `.kebab-menu-popover` / `.kebab-menu-item` /
+  `.kebab-menu-divider` rules (small reusable popover, dark theme,
+  danger variant for destructive items).
+
+**Cache busters bumped:** `styles.css?v=3.7.3`→`3.7.4`,
+`app.js?v=3.7.0`→`3.7.1`.
+
+**Verified:**
+
+- `node --check public/app.js` passes.
+- `python3 -m py_compile server.py` passes.
+- `python3 tests/test_onlyoffice_import.py` 8/8.
+- Direct DB test: created a test user + 1 session + 1 notification
+  preference, confirmed the expected SQL would clear them.
+- Server restarted clean, `/api/config` 200.
+
+**Browser-test checklist:**
+
+1. Open Admin → Users tab → click "View" on a user → modal opens
+   with name as title, avatar, email, role badges, and a kebab
+   dropdown trigger (3-dot icon) to the right of the title.
+2. Click the kebab → dropdown shows: Reset Password, Revoke All
+   Sessions, [Deactivate if active / Reactivate if inactive],
+   divider, [Delete Personal Data if inactive].
+3. Deactivate a user first, then reopen the modal → the Deactivate
+   item is replaced with Reactivate, and the Delete Personal Data
+   item now appears below the divider.
+4. Click "Delete Personal Data" → confirm dialog asks to type
+   the user's email exactly. Mismatched email → toast "Email did
+   not match. Aborted." Matched email → POST runs, success toast
+   appears, modal closes, user list refreshes.
+5. After delete: avatar falls back to initials, email becomes
+   `deleted-{id}@removed.local`, user shows as inactive.
+6. Admin can now send a password reset link and Reactivate the
+   user — the user record still exists with the same id, so all
+   history references (tasks, history events, etc.) remain valid.
+
 ## Larger Tabler icon avatars in the team list (2026-10-05)
 
 User report: avatar icons in the team list (modal + tile) render

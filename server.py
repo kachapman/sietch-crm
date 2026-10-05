@@ -4220,6 +4220,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if m and method == "DELETE":
             self._handle_user_delete(int(m.group(1)))
             return
+        m = re.match(r"^/api/v2/users/(\d+)$", api_path)
+        if m and method == "GET":
+            self._handle_user_get(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/users/(\d+)/delete-personal-data$", api_path)
+        if m and method == "POST":
+            self._handle_user_delete_personal_data(int(m.group(1)))
+            return
 
         # ── DELETE handlers ──
         m = re.match(r"^/api/v2/history/(\d+)$", api_path)
@@ -7819,6 +7827,132 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         db.execute("UPDATE users SET is_active = FALSE WHERE id = %s", (user_id,))
         auth_mod.destroy_all_user_sessions(user_id)
         _json_response(self, 200, {"ok": True})
+
+    def _handle_user_get(self, user_id: int) -> None:
+        # GET /api/v2/users/{id} — admin (or the user themselves) fetches a
+        # full user record for the admin user-profile modal. Returns the
+        # public-facing fields only (no password hash, no twofa secret).
+        user = _require_auth(self)
+        if not user:
+            return
+        if not (user.get("is_admin") or int(user["id"]) == int(user_id)):
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        row = db.query_one(
+            "SELECT id, email, display_name, first_name, last_name, is_admin, "
+            "is_active, avatar_url, avatar_icon, role, must_change_password, "
+            "created_at, last_login "
+            "FROM users WHERE id = %s",
+            (user_id,),
+        )
+        if not row:
+            _json_response(self, 404, {"error": "User not found"})
+            return
+        _json_response(self, 200, {
+            "id": row[0],
+            "email": row[1] or "",
+            "displayName": row[2] or "",
+            "firstName": row[3] or "",
+            "lastName": row[4] or "",
+            "isAdmin": bool(row[5]),
+            "isActive": bool(row[6]),
+            "avatarUrl": row[7] or "",
+            "avatarIcon": row[8] or "",
+            "role": row[9] or "member",
+            "mustChangePassword": bool(row[10]),
+            "createdAt": row[11].isoformat() if row[11] else None,
+            "lastLogin": row[12].isoformat() if row[12] else None,
+        })
+
+    def _handle_user_delete_personal_data(self, user_id: int) -> None:
+        # POST /api/v2/users/{id}/delete-personal-data — admin action that
+        # clears the user's PII + sessions + presence + notification prefs +
+        # avatar file, and deactivates the account. The user row itself
+        # (and its id) is preserved so existing references in history_events,
+        # tasks, mail, etc. continue to work — the foreign keys remain valid.
+        # Admin can later reset their password (sends a reset link) and
+        # reactivate the account.
+        admin = _require_admin(self)
+        if not admin:
+            return
+        if int(user_id) == int(admin["id"]):
+            _json_response(self, 409, {"error": "You cannot delete your own personal data"})
+            return
+        # Read the avatar path BEFORE the transaction so we can unlink the
+        # file after the DB write commits.
+        avatar_row = db.query_one("SELECT avatar_url, email FROM users WHERE id = %s", (user_id,))
+        if not avatar_row:
+            _json_response(self, 404, {"error": "User not found"})
+            return
+        avatar_path = (avatar_row.get("avatar_url") if avatar_row else None) or ""
+        original_email = (avatar_row.get("email") if avatar_row else None) or ""
+        placeholder_email = f"deleted-{user_id}@removed.local"
+
+        try:
+            with db.db_cursor() as cur:
+                # 1. Wipe PII on the user row. The id stays. We set a
+                #    placeholder email because the column is UNIQUE NOT NULL.
+                cur.execute(
+                    "UPDATE users SET "
+                    "email = %s, "
+                    "password_hash = NULL, password_salt = NULL, "
+                    "first_name = NULL, last_name = NULL, display_name = NULL, "
+                    "avatar_url = NULL, avatar_icon = NULL, "
+                    "must_change_password = TRUE, "
+                    "is_active = FALSE "
+                    "WHERE id = %s",
+                    (placeholder_email, user_id),
+                )
+                # 2. Revoke every session for this user.
+                cur.execute("DELETE FROM sessions WHERE user_id = %s", (user_id,))
+                # 3. Wipe notification preferences + any 2FA rows.
+                cur.execute("DELETE FROM notification_preferences WHERE user_id = %s", (user_id,))
+        except Exception as exc:
+            print(f"[ERROR] delete-personal-data failed for user {user_id}: {exc}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            _json_response(self, 500, {"error": f"Failed to clear personal data: {exc}"})
+            return
+
+        # 4. Unlink the on-disk avatar file (best-effort, after commit).
+        files_removed = []
+        if avatar_path:
+            try:
+                rel = avatar_path
+                # Stored value is a relative path like "data/avatars/123/avatar.jpg".
+                abs_path = (ROOT / rel).resolve() if not Path(rel).is_absolute() else Path(rel)
+                base = AVATAR_STORAGE_PATH.resolve()
+                # Only unlink files inside AVATAR_STORAGE_PATH (path-traversal guard).
+                if base in abs_path.resolve().parents and abs_path.exists():
+                    abs_path.unlink()
+                    files_removed.append(str(abs_path))
+                    thumb = abs_path.parent / f"thumb_{abs_path.name}"
+                    if thumb.exists():
+                        thumb.unlink()
+                        files_removed.append(str(thumb))
+            except Exception as exc:
+                print(f"[WARN] failed to unlink avatar file {avatar_path} for user {user_id}: {exc}", file=sys.stderr)
+
+        # 5. Wipe per-user presence file (best-effort).
+        try:
+            from presence_store import presence_file_path
+            pres_path = presence_file_path("sietch", str(user_id))
+            if pres_path.exists():
+                pres_path.unlink()
+        except Exception as exc:
+            print(f"[WARN] failed to unlink presence file for user {user_id}: {exc}", file=sys.stderr)
+
+        # 6. Print a summary line to stderr (no new audit_log table for v1).
+        print(
+            f"[AUDIT] delete-personal-data admin_id={admin['id']} target_user_id={user_id} "
+            f"original_email={original_email!r} files_removed={files_removed}",
+            file=sys.stderr,
+        )
+
+        _json_response(self, 200, {
+            "ok": True,
+            "userId": int(user_id),
+            "filesRemoved": files_removed,
+        })
 
     # ── Notifications ───────────────────────────────────────────────────────
 

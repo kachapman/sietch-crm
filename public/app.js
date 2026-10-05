@@ -32695,6 +32695,7 @@ async function populateAdminUsersList() {
         ${roleBadge(u.role)}
         <span style="font-size:0.7rem;color:var(--muted);min-width:80px;">Login: ${escapeHtml(lastLogin)}</span>
         <div style="display:flex;gap:0.3rem;flex-shrink:0;">
+          <button type="button" class="btn btn-ghost btn-sm admin-user-view" data-uid="${escapeHtml(u.id)}" title="Open user profile">View</button>
           <button type="button" class="btn btn-ghost btn-sm admin-user-edit" data-uid="${escapeHtml(u.id)}" title="Edit">Edit</button>
           <button type="button" class="btn btn-ghost btn-sm admin-user-reset" data-uid="${escapeHtml(u.id)}" data-email="${escapeHtml(u.email || "")}" title="Reset Password">Reset PW</button>
           <button type="button" class="btn btn-ghost btn-sm admin-user-sessions" data-uid="${escapeHtml(u.id)}" title="Revoke Sessions">Sessions</button>
@@ -32746,6 +32747,17 @@ async function populateAdminUsersList() {
 
     // Edit handler
     container.addEventListener("click", async (e) => {
+      // View — open the admin user profile modal (kebab dropdown with
+      // Reset PW / Sessions / Deactivate / Reactivate / Delete Personal Data).
+      const viewBtn = e.target.closest(".admin-user-view");
+      if (viewBtn) {
+        openAdminUserProfileModal(viewBtn.dataset.uid, { onChange: () => {
+          container.dataset.populated = "";
+          populateAdminUsersList();
+        } });
+        return;
+      }
+
       const editBtn = e.target.closest(".admin-user-edit");
       if (editBtn) {
         const uid = editBtn.dataset.uid;
@@ -32893,6 +32905,291 @@ async function populateAdminUsersList() {
     }
   } catch (e) {
     container.innerHTML = `<p style="color:#b00;">Failed to load users: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+/**
+ * Open the admin user profile modal. Fetches the user record, renders the
+ * header (name + email) and a kebab dropdown with management actions
+ * (Reset Password, Revoke Sessions, Deactivate/Reactivate, Delete Personal
+ * Data). Designed to mirror the onlyOffice user-profile UX where a
+ * destructive "Delete personal data" action is available from a per-user
+ * dropdown next to the name.
+ *
+ * opts.onChange: callback invoked after any successful mutation so the
+ *   caller can refresh the user list.
+ */
+async function openAdminUserProfileModal(userId, opts = {}) {
+  const modal = $("#admin-user-profile-modal");
+  if (!modal) return;
+  let user = null;
+  try {
+    user = await api(`/api/v2/users/${encodeURIComponent(userId)}`);
+  } catch (err) {
+    showToast(err.message || "Failed to load user", true);
+    return;
+  }
+  if (!user) return;
+  const name = user.displayName || (user.firstName || user.lastName ? `${user.firstName || ""} ${user.lastName || ""}`.trim() : null) || user.email || `User #${user.id}`;
+  const isActive = user.isActive !== false;
+  const isAdmin = user.isAdmin === true;
+
+  // Header
+  const titleEl = $("#admin-user-profile-title");
+  if (titleEl) titleEl.textContent = name;
+  const nameEl = $("#admin-user-profile-name");
+  const emailEl = $("#admin-user-profile-email");
+  if (nameEl) nameEl.textContent = name;
+  if (emailEl) emailEl.textContent = user.email || "(no email)";
+
+  // Avatar — priority: photo > icon > initials
+  const avatarEl = $("#admin-user-profile-avatar");
+  if (avatarEl) {
+    avatarEl.innerHTML = "";
+    avatarEl.className = "";
+    if (user.avatarUrl) {
+      const img = document.createElement("img");
+      img.src = user.avatarUrl;
+      img.alt = "";
+      img.style.cssText = "width:100%;height:100%;object-fit:cover;";
+      img.onerror = () => { img.remove(); _renderProfileInitials(avatarEl, user); };
+      avatarEl.appendChild(img);
+      avatarEl.style.cssText = "width:56px;height:56px;border-radius:50%;background:var(--surface-2);display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:600;color:var(--text);flex-shrink:0;overflow:hidden;";
+    } else if (user.avatarIcon && _getValidTablerIconSet().has(user.avatarIcon)) {
+      avatarEl.style.cssText = "width:56px;height:56px;border-radius:50%;background:color-mix(in srgb, var(--accent) 18%, transparent);display:flex;align-items:center;justify-content:center;font-size:1.4rem;color:var(--accent);flex-shrink:0;overflow:hidden;";
+      avatarEl.innerHTML = `<i class="ti ti-${escapeHtml(user.avatarIcon)}"></i>`;
+    } else {
+      _renderProfileInitials(avatarEl, user);
+      avatarEl.style.cssText = "width:56px;height:56px;border-radius:50%;background:var(--surface-2);display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:600;color:var(--text);flex-shrink:0;overflow:hidden;";
+    }
+  }
+
+  // Status badges
+  const badges = [];
+  if (isAdmin) badges.push('<span class="role-badge role-badge-admin" style="background:rgba(99,102,241,0.18);color:#818cf8;padding:0.1rem 0.4rem;border-radius:4px;font-size:0.7rem;font-weight:600;">admin</span>');
+  if (!isActive) badges.push('<span style="background:rgba(239,68,68,0.18);color:#f87171;padding:0.1rem 0.4rem;border-radius:4px;font-size:0.7rem;font-weight:600;">inactive</span>');
+  if (user.mustChangePassword) badges.push('<span style="background:rgba(234,179,8,0.18);color:#fbbf24;padding:0.1rem 0.4rem;border-radius:4px;font-size:0.7rem;font-weight:600;">password reset</span>');
+  if (user.role && user.role !== "member") badges.push(`<span class="role-badge role-badge-${escapeHtml(user.role)}" style="background:var(--surface-2);color:var(--text);padding:0.1rem 0.4rem;border-radius:4px;font-size:0.7rem;font-weight:600;">${escapeHtml(user.role)}</span>`);
+  const badgesEl = $("#admin-user-profile-badges");
+  if (badgesEl) badgesEl.innerHTML = badges.join("");
+
+  // Fields grid
+  const fields = $("#admin-user-profile-fields");
+  if (fields) {
+    const f = user.firstName || "—";
+    const l = user.lastName || "—";
+    const dn = user.displayName || "—";
+    const role = user.role || "member";
+    const created = user.createdAt ? new Date(user.createdAt).toLocaleString() : "—";
+    const lastLogin = user.lastLogin ? new Date(user.lastLogin).toLocaleString() : "—";
+    fields.innerHTML =
+      `<dt style="color:var(--muted);">First name</dt><dd style="margin:0;color:var(--text);">${escapeHtml(f)}</dd>` +
+      `<dt style="color:var(--muted);">Last name</dt><dd style="margin:0;color:var(--text);">${escapeHtml(l)}</dd>` +
+      `<dt style="color:var(--muted);">Display name</dt><dd style="margin:0;color:var(--text);">${escapeHtml(dn)}</dd>` +
+      `<dt style="color:var(--muted);">Role</dt><dd style="margin:0;color:var(--text);">${escapeHtml(role)}</dd>` +
+      `<dt style="color:var(--muted);">Created</dt><dd style="margin:0;color:var(--text);">${escapeHtml(created)}</dd>` +
+      `<dt style="color:var(--muted);">Last login</dt><dd style="margin:0;color:var(--text);">${escapeHtml(lastLogin)}</dd>`;
+  }
+
+  // Status hint
+  const statusEl = $("#admin-user-profile-status");
+  if (statusEl) {
+    statusEl.textContent = isActive
+      ? "Account is active."
+      : "Account is inactive. Admin can send a password reset link and reactivate.";
+  }
+
+  // Kebab menu
+  _renderAdminUserKebabMenu(user, { onChange: () => {
+    closeAdminUserProfileModal();
+    if (opts.onChange) opts.onChange();
+  } });
+
+  // Wire modal dismiss + kebab toggle
+  const kebabBtn = $("#admin-user-profile-kebab-btn");
+  const kebabPopover = $("#admin-user-profile-kebab-popover");
+  if (kebabBtn && kebabPopover) {
+    kebabBtn.onclick = (e) => {
+      e.stopPropagation();
+      const isHidden = kebabPopover.classList.toggle("hidden");
+      if (!isHidden) {
+        const close = (ev) => {
+          if (!kebabPopover.contains(ev.target) && ev.target !== kebabBtn) {
+            kebabPopover.classList.add("hidden");
+            document.removeEventListener("click", close);
+          }
+        };
+        setTimeout(() => document.addEventListener("click", close), 0);
+      }
+    };
+  }
+  modal.querySelectorAll("[data-admin-user-profile-dismiss]").forEach(el => {
+    el.onclick = closeAdminUserProfileModal;
+  });
+
+  modal.classList.remove("hidden");
+}
+
+function _renderProfileInitials(container, user) {
+  if (!container) return;
+  const name = user.displayName || `${user.firstName || ""} ${user.lastName || ""}`.trim() || user.email || "?";
+  const init = (name.match(/\b\w/g) || ["?"]).slice(0, 2).join("").toUpperCase();
+  container.textContent = init;
+}
+
+function closeAdminUserProfileModal() {
+  $("#admin-user-profile-modal")?.classList.add("hidden");
+  // Reset kebab state
+  const pop = $("#admin-user-profile-kebab-popover");
+  if (pop) {
+    pop.classList.add("hidden");
+    pop.innerHTML = "";
+  }
+}
+
+/**
+ * Build the kebab dropdown menu for the admin user profile modal.
+ * Each item is a button that runs the corresponding action on the user.
+ */
+function _renderAdminUserKebabMenu(user, opts = {}) {
+  const pop = $("#admin-user-profile-kebab-popover");
+  if (!pop) return;
+  pop.innerHTML = "";
+  const isActive = user.isActive !== false;
+  const isSelf = Number(user.id) === Number(state.currentUserId);
+
+  const items = [];
+  // Reset Password
+  items.push({ icon: "ti-key", label: "Reset Password", onClick: async () => {
+    const ok = await confirmDialog({
+      title: "Reset Password",
+      message: `Generate a temporary password for ${user.displayName || user.email}? You'll need to share it with them.`,
+      confirmLabel: "Generate Temp Password",
+    });
+    if (!ok) return;
+    try {
+      const res = await api(`/api/v2/users/${encodeURIComponent(user.id)}/reset-password/send`, { method: "POST" });
+      if (res && res.temporaryPassword) {
+        // Show the temp password in a copy-friendly dialog.
+        await confirmDialog({
+          title: "Temporary Password",
+          message: `New temporary password for ${user.email}:\n\n${res.temporaryPassword}\n\nShare this with the user. They'll be forced to change it on next login.`,
+          confirmLabel: "Copy & Close",
+          danger: false,
+        });
+        if (navigator.clipboard) {
+          try { await navigator.clipboard.writeText(res.temporaryPassword); showToast("Copied to clipboard"); } catch (_) {}
+        }
+      } else {
+        showToast("Password reset initiated");
+      }
+    } catch (err) {
+      showToast(err.message || "Failed to reset password", true);
+    }
+  } });
+
+  // Revoke all sessions
+  items.push({ icon: "ti-logout", label: "Revoke All Sessions", onClick: async () => {
+    const ok = await confirmDialog({ title: "Revoke Sessions", message: "Sign this user out of all devices immediately?", confirmLabel: "Revoke" });
+    if (!ok) return;
+    try {
+      await api(`/api/v2/users/${encodeURIComponent(user.id)}/sessions`, { method: "DELETE" });
+      showToast("All sessions revoked");
+    } catch (err) {
+      showToast(err.message || "Failed to revoke sessions", true);
+    }
+  } });
+
+  // Toggle active state
+  if (isActive) {
+    if (!isSelf) {
+      items.push({ icon: "ti-user-off", label: "Deactivate", danger: true, onClick: async () => {
+        const ok = await confirmDialog({ title: "Deactivate User", message: "This user will be signed out and unable to log in.", confirmLabel: "Deactivate", danger: true });
+        if (!ok) return;
+        try {
+          await api(`/api/v2/users/${encodeURIComponent(user.id)}`, { method: "DELETE" });
+          showToast("User deactivated");
+          opts.onChange && opts.onChange();
+        } catch (err) {
+          showToast(err.message || "Failed to deactivate user", true);
+        }
+      } });
+    }
+  } else {
+    items.push({ icon: "ti-user-check", label: "Reactivate", onClick: async () => {
+      try {
+        await api(`/api/v2/users/${encodeURIComponent(user.id)}/reactivate`, { method: "POST" });
+        showToast("User reactivated");
+        opts.onChange && opts.onChange();
+      } catch (err) {
+        showToast(err.message || "Failed to reactivate user", true);
+      }
+    } });
+  }
+
+  // Divider
+  if (items.length) items.push({ divider: true });
+
+  // Delete personal data — only available if the user is already inactive
+  // (to prevent accidental wipe of an active user). Mirrors the onlyOffice
+  // "Delete personal data" workflow.
+  if (!isActive) {
+    items.push({
+      icon: "ti-eraser",
+      label: "Delete Personal Data",
+      danger: true,
+      onClick: () => _adminUserDeletePersonalDataFlow(user, opts),
+    });
+  }
+
+  for (const it of items) {
+    if (it.divider) {
+      const div = document.createElement("div");
+      div.className = "kebab-menu-divider";
+      pop.appendChild(div);
+      continue;
+    }
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "kebab-menu-item" + (it.danger ? " danger" : "");
+    btn.setAttribute("role", "menuitem");
+    btn.innerHTML = `<i class="ti ${it.icon}"></i><span>${escapeHtml(it.label)}</span>`;
+    btn.addEventListener("click", async () => {
+      pop.classList.add("hidden");
+      await it.onClick();
+    });
+    pop.appendChild(btn);
+  }
+}
+
+async function _adminUserDeletePersonalDataFlow(user, opts = {}) {
+  if (Number(user.id) === Number(state.currentUserId)) {
+    showToast("You cannot delete your own personal data", true);
+    return;
+  }
+  // Typed-confirmation dialog: admin must type the user's email to confirm.
+  const typed = window.prompt(
+    `This will permanently wipe personal data for:\n\n  ${user.displayName || user.email}\n  ${user.email}\n\n` +
+    `What will be cleared:\n` +
+    `  • display name, first name, last name, email, avatar photo + icon\n` +
+    `  • password (sessions revoked, account deactivated)\n` +
+    `  • notification preferences\n` +
+    `  • presence file\n\n` +
+    `The user record and its ID are preserved so historical references stay valid.\n\n` +
+    `Type the user's email exactly to confirm:`
+  );
+  if (!typed) return; // cancelled
+  if (typed.trim() !== (user.email || "").trim()) {
+    showToast("Email did not match. Aborted.", true);
+    return;
+  }
+  try {
+    const res = await api(`/api/v2/users/${encodeURIComponent(user.id)}/delete-personal-data`, { method: "POST" });
+    const fileCount = Array.isArray(res?.filesRemoved) ? res.filesRemoved.length : 0;
+    showToast(`Personal data deleted for user #${user.id}` + (fileCount ? ` (${fileCount} file${fileCount !== 1 ? "s" : ""} removed)` : ""));
+    opts.onChange && opts.onChange();
+  } catch (err) {
+    showToast(err.message || "Failed to delete personal data", true);
   }
 }
 

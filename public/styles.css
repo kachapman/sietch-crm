@@ -18475,6 +18475,63 @@ select.form-control {
 }
 
 
+/* ── Kebab menu (admin user profile + reusable) ──────────────────────────── */
+.kebab-menu {
+  display: inline-block;
+  position: relative;
+}
+.kebab-menu-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 200px;
+  background: var(--bg-elevated, #1f2128);
+  border: 1px solid var(--border, #2a2e3a);
+  border-radius: var(--radius, 6px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  padding: 0.3rem;
+  z-index: 1000;
+}
+.kebab-menu-popover.hidden {
+  display: none;
+}
+.kebab-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text, #e0e0e0);
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+.kebab-menu-item:hover {
+  background: var(--hover-bg, rgba(255, 255, 255, 0.06));
+}
+.kebab-menu-item i {
+  font-size: 1rem;
+  width: 1.1rem;
+  text-align: center;
+  flex-shrink: 0;
+  color: var(--muted, #8b95a8);
+}
+.kebab-menu-item.danger {
+  color: var(--danger, #ef4444);
+}
+.kebab-menu-item.danger i {
+  color: var(--danger, #ef4444);
+}
+.kebab-menu-divider {
+  height: 1px;
+  background: var(--border, #2a2e3a);
+  margin: 0.3rem 0;
+}
+
 /* ── Tabler icon picker (user avatar + mail tab appearance) ── */
 .tabler-icon-picker-card {
   width: 720px;

@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=3.7.3" />
+  <link rel="stylesheet" href="styles.css?v=3.7.4" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
 </head>
 <body>
@@ -3432,6 +3432,40 @@
     </div>
   </div>
 
+  <!-- Admin User Profile Modal — opened when an admin clicks "View" on a user
+       in the admin user list. Header shows the user's name + a kebab dropdown
+       menu (right side) with destructive + management actions. -->
+  <div id="admin-user-profile-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="admin-user-profile-title">
+    <div class="modal-backdrop" data-admin-user-profile-dismiss></div>
+    <div class="modal-card" role="document" style="width:480px;max-width:95vw;">
+      <header class="modal-header" style="display:flex;align-items:center;gap:0.5rem;padding:0.75rem 1rem;border-bottom:1px solid var(--border);">
+        <h2 id="admin-user-profile-title" class="modal-title" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">User</h2>
+        <div class="kebab-menu" style="position:relative;">
+          <button type="button" id="admin-user-profile-kebab-btn" class="btn btn-icon-only" title="User actions" aria-label="User actions">
+            <i class="ti ti-dots-vertical"></i>
+          </button>
+          <div id="admin-user-profile-kebab-popover" class="kebab-menu-popover hidden" role="menu"></div>
+        </div>
+        <button type="button" class="btn btn-icon-only modal-header-control" title="Close" data-admin-user-profile-dismiss>
+          <i class="ti ti-x"></i>
+        </button>
+      </header>
+      <div class="modal-body" style="padding:1rem;">
+        <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;">
+          <div id="admin-user-profile-avatar" style="width:56px;height:56px;border-radius:50%;background:var(--surface-2);display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:600;color:var(--text);flex-shrink:0;overflow:hidden;"></div>
+          <div style="flex:1;min-width:0;">
+            <div id="admin-user-profile-name" style="font-size:1.05rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></div>
+            <div id="admin-user-profile-email" style="font-size:0.82rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></div>
+            <div id="admin-user-profile-badges" style="margin-top:0.25rem;display:flex;gap:0.3rem;flex-wrap:wrap;"></div>
+          </div>
+        </div>
+        <dl id="admin-user-profile-fields" style="display:grid;grid-template-columns:max-content 1fr;gap:0.4rem 0.75rem;font-size:0.85rem;margin:0;">
+        </dl>
+        <p id="admin-user-profile-status" class="profile-field-hint" style="margin-top:0.85rem;"></p>
+      </div>
+    </div>
+  </div>
+
   <!-- Profile Modal (Phase 2G) -->
   <div id="profile-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title">
     <div class="modal-backdrop" data-profile-dismiss></div>
@@ -3685,6 +3719,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3.7.0" type="module"></script>
+  <script src="app.js?v=3.7.1" type="module"></script>
 </body>
 </html>
