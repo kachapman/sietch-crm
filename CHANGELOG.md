@@ -2,6 +2,73 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Profile icon picker OK button + doubled icon set + first/last initials in team tile/modal (2026-10-05)
+
+User report (four bugs):
+
+1. **Can't change avatar icon in profile settings — no OK button.** The
+   `openTablerIconPicker` (app.js) was a click-to-preview-only modal with
+   no commit action — `chosen` was stored in a closure but never returned
+   to the caller (only `dismiss` + `Escape` resolved the promise with
+   `undefined`).
+2. **Need to double the icon options, avoiding derivatives** of the same
+   shape. The existing 108-icon list had many `*-plus` / `*-check` /
+   `*-x` / `cloud-rain` / `building-*` derivative pairs.
+3. **Team tile avatars only show the first initial of the name**, not
+   first+last (e.g. "Breanna Chapman" → `B` not `BC`).
+4. **Team modal shows question marks for user avatars** when both
+   `first_name` and `last_name` are empty AND email is empty.
+
+**Fixes:**
+
+- **`openTablerIconPicker` (public/app.js:40090)** — added a confirm-button
+  handler (`data-tabler-picker-confirm`) that resolves the promise with
+  the currently-selected icon. Refactored shared dismiss/cleanup into a
+  reusable path so the OK + Cancel + Escape paths all clean up listeners
+  identically.
+- **Modal footer (public/index.html:3669-3682)** — new `<footer
+  class="modal-footer">` with `<button data-tabler-picker-dismiss>Cancel</button>`
+  + `<button data-tabler-picker-confirm>OK</button>`.
+- **CSS (public/styles.css:18474-18486)** — new `.tabler-icon-picker-card
+  .modal-footer` rule (right-aligned flex row, top border, bg-elevated
+  background) + `.tabler-icon-picker-body { flex: 1; min-height: 0; }`
+  so the grid + footer share height correctly.
+- **`TABLER_ICON_OPTIONS` (public/app.js:21028-21247)** — replaced the
+  108-icon list with a 234-icon de-duplicated curated set spanning
+  People/Characters, Animals, Nature, Plants, Buildings, Transport,
+  Media, Sports, Board games, Food, Tech, Office, Office supplies, Tools,
+  Security, Time, Numbers, Currency, Brand/social, Navigation, Halloween,
+  Misc. All `*-plus` / `-check` / `-x` / `-filled` / `-off` derivatives
+  of the same shape excluded. Remaining family groups (e.g. `user` /
+  `user-circle` / `user-pin`, `sun` / `sun-moon`, `mood-smile` /
+  `mood-sad` / etc.) are **distinct** shapes (silhouettes, compositions,
+  expressions) — not derivatives.
+- **Server `/_handle_presence_users` (server.py:14856)** — added
+  `firstName`, `lastName`, `isAdmin` to the payload.
+- **Server `/_handle_presence_get` (server.py:14882-14891)** — added
+  `firstName` and `lastName` to each user in `out_users`. The client
+  `userInitials(u)` (public/app.js:21065) already had the first+last
+  initial logic — it just wasn't getting the data.
+- **Cache busters** bumped: `styles.css?v=3.7.1`→`3.7.2`,
+  `app.js?v=3.6.8`→`3.6.9`.
+
+**Verified:** `node --check public/app.js` passes; icon de-dup
+simulation confirms 234 unique names + no `*-plus` / `*-check` / `*-x`
+derivatives; `python3 -m py_compile server.py` passes; existing
+`test_onlyoffice_import.py` still 8/8. Server PID restarted clean,
+`/api/config` 200.
+
+**Browser-test checklist** (next session):
+
+1. Open profile modal → click "Pick Icon" → see ~234 icons (no
+   `user-plus` / `user-check` / `cloud-rain` / etc.) → click any icon
+   → it highlights → click OK → avatar updates.
+2. Open team tile in dashboard → users with first + last name now show
+   initials like "BC", "CC", "RB" instead of single letters.
+3. Open the Team modal → all users with `first_name` + `last_name` show
+   correct two-letter initials; users missing both fields now show the
+   first letter of their email (or `?` only if email is also empty).
+
 ## Fix status-filter select theme (was white-on-dark) (2026-10-05)
 
 User screenshot showed the new All / Open / Closed `<select>` in the search

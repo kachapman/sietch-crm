@@ -21025,35 +21025,74 @@ async function openReplyCompose(messageId, type = 'reply') {
 // Icons all exist in the @tabler/icons-webfont font (loaded in public/index.html).
 // Shared Tabler icon pool — all names verified against @tabler/icons-webfont@latest.
 // Used by mail account tab picker AND user avatar picker.
+// Tabler icon pool used by the user-avatar icon picker and the mail-account
+// tab-icon picker. Doubled (≈210 distinct svgs) and de-duplicated — no
+// `*-plus` / `-minus` / `-check` / `-x` / `-filled` / `-off` derivatives of
+// the same shape (e.g. `user-plus` is excluded because `user` is already in
+// the list; `cloud-rain` excluded because `cloud` is in the list).
 const TABLER_ICON_OPTIONS = [
-  // People / characters (12)
-  'user', 'users', 'user-circle', 'user-plus', 'user-check', 'user-minus', 'user-x',
-  'user-pin', 'ghost', 'robot', 'mood-smile', 'mood-sad',
-  // Animals (8)
+  // People / characters (15)
+  'user', 'users', 'user-circle', 'user-pin', 'ghost', 'ghost-2', 'robot', 'robot-face',
+  'alien', 'mood-smile', 'mood-sad', 'mood-neutral', 'mood-tongue', 'mood-empty', 'baby',
+  // Animals (12)
   'cat', 'dog', 'fish', 'horse', 'butterfly', 'paw', 'spider', 'bug',
-  // Nature / weather (10)
-  'leaf', 'flower', 'cloud', 'cloud-rain', 'sun', 'moon', 'flame', 'droplet',
-  'snowflake', 'wind',
-  // Buildings / places (10)
-  'building', 'building-bank', 'building-hospital', 'building-store', 'building-warehouse',
-  'building-factory', 'home', 'home-2', 'building-skyscraper', 'map-pin',
-  // Transport (8)
+  'rabbit', 'cow', 'chicken', 'whale',
+  // Nature / weather (14)
+  'leaf', 'flower', 'cloud', 'sun', 'moon', 'flame', 'droplet',
+  'snowflake', 'wind', 'rainbow', 'bolt', 'tornado', 'mountain', 'tree',
+  // Plants (6)
+  'cactus', 'mushroom', 'bamboo', 'plant', 'plant-2', 'seeds',
+  // Buildings / places (14)
+  'building', 'home', 'home-2', 'building-skyscraper', 'map-pin', 'map',
+  'church', 'mosque', 'hospital', 'school', 'tent', 'windmill', 'lamp', 'door',
+  // Transport (11)
   'car', 'truck', 'bus', 'bike', 'plane', 'plane-departure', 'ship', 'anchor',
-  // Media / entertainment (10)
+  'train', 'helicopter', 'scooter',
+  // Media / entertainment (14)
   'music', 'disc', 'video', 'microphone', 'headphones', 'radio',
-  'camera', 'photo', 'movie', 'book',
-  // Food / drink (8)
+  'camera', 'photo', 'movie', 'book', 'playlist', 'aperture', 'palette', 'brush',
+  // Sports (12)
+  'basketball', 'football', 'baseball', 'volleyball', 'tennis', 'badminton',
+  'golf', 'swimming', 'medal', 'trophy', 'crown', 'run',
+  // Board games (6)
+  'chess-bishop', 'chess-king', 'chess-knight', 'chess-pawn', 'chess-queen', 'chess-rook',
+  // Food / drink (12)
   'cup', 'coffee', 'beer', 'pizza', 'bread', 'apple', 'cherry', 'lemon',
-  // Tech / devices (10)
+  'cookie', 'ice-cream', 'salad', 'soup',
+  // Tech / devices (14)
   'device-laptop', 'device-desktop', 'device-mobile', 'device-tablet',
   'cpu', 'antenna', 'bluetooth', 'wifi', 'router', 'satellite',
-  // Office / business (10)
+  'keyboard', 'mouse', 'printer', 'drone',
+  // Office / business (12)
   'briefcase', 'mail', 'mail-opened', 'inbox', 'send', 'rocket', 'at',
-  'phone', 'calendar', 'chart-bar',
-  // Security / status (8)
-  'shield', 'shield-check', 'lock', 'key', 'badge', 'certificate', 'fingerprint', 'license',
-  // Misc / fun (8)
-  'crown', 'diamond', 'gift', 'medal', 'trophy', 'star', 'sparkles', 'heart',
+  'phone', 'calendar', 'chart-bar', 'chart-line', 'chart-pie',
+  // Office supplies (8)
+  'pencil', 'pen', 'highlighter', 'eraser', 'ruler', 'scissors', 'paperclip', 'stamp',
+  // Tools (10)
+  'hammer', 'screwdriver', 'wrench', 'tool', 'shovel', 'axe', 'knife', 'fork', 'spoon', 'ladder',
+  // Security / status (10)
+  'shield', 'lock', 'key', 'badge', 'certificate', 'fingerprint', 'license',
+  'eye', 'eye-closed', 'scan',
+  // Time (8)
+  'alarm', 'clock', 'hourglass', 'hourglass-low', 'hourglass-high',
+  'calendar-event', 'sun-moon', 'history',
+  // Numbers / symbols (12)
+  '123', 'ab', 'hash', 'asterisk', 'plus', 'minus', 'equal', 'slash',
+  'circle', 'square', 'triangle', 'percentage',
+  // Currency (6)
+  'currency-bitcoin', 'currency-euro', 'currency-pound', 'currency-yen', 'currency-dollar', 'coin',
+  // Brand / social (12)
+  'brand-twitter', 'brand-facebook', 'brand-instagram', 'brand-linkedin',
+  'brand-youtube', 'brand-github', 'brand-slack', 'brand-discord',
+  'brand-tiktok', 'brand-reddit', 'brand-spotify', 'brand-twitch',
+  // Navigation / direction (9)
+  'compass', 'map-2', 'route', 'signpost', 'navigation',
+  'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right',
+  // Halloween (5)
+  'pumpkin', 'witch-hat', 'skull', 'bat', 'candy',
+  // Misc / fun (12)
+  'diamond', 'gift', 'star', 'sparkles', 'heart',
+  'flag', 'magnet', 'yin-yang', 'peace', 'peace-2', 'target', 'flame-2',
 ];
 // Keep legacy alias so mail-account picker still works.
 const MAIL_TAB_ICON_OPTIONS = TABLER_ICON_OPTIONS;
@@ -40112,11 +40151,20 @@ function openTablerIconPicker(currentIcon) {
     const onDismiss = () => {
       modal.classList.add('hidden');
       modal.querySelectorAll('[data-tabler-picker-dismiss]').forEach(el => el.removeEventListener('click', onDismiss));
+      modal.querySelectorAll('[data-tabler-picker-confirm]').forEach(el => el.removeEventListener('click', onConfirm));
       document.removeEventListener('keydown', onEsc);
       resolve(undefined);
     };
+    const onConfirm = () => {
+      modal.classList.add('hidden');
+      modal.querySelectorAll('[data-tabler-picker-dismiss]').forEach(el => el.removeEventListener('click', onDismiss));
+      modal.querySelectorAll('[data-tabler-picker-confirm]').forEach(el => el.removeEventListener('click', onConfirm));
+      document.removeEventListener('keydown', onEsc);
+      resolve(chosen || undefined);
+    };
     const onEsc = (e) => { if (e.key === 'Escape') onDismiss(); };
     modal.querySelectorAll('[data-tabler-picker-dismiss]').forEach(el => el.addEventListener('click', onDismiss));
+    modal.querySelectorAll('[data-tabler-picker-confirm]').forEach(el => el.addEventListener('click', onConfirm));
     document.addEventListener('keydown', onEsc);
 
     modal.classList.remove('hidden');
