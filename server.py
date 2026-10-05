@@ -14851,13 +14851,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         # Return users from DB instead of CRM API
         rows = db.query(
-            "SELECT id, email, display_name, first_name, last_name, is_admin FROM users WHERE is_active = TRUE"
+            "SELECT id, email, display_name, first_name, last_name, is_admin, avatar_icon FROM users WHERE is_active = TRUE"
         )
         people = [{"id": r[0], "email": r[1],
                     "displayName": r[2] or f"{r[3] or ''} {r[4] or ''}".strip(),
                     "firstName": r[3] or "",
                     "lastName": r[4] or "",
-                    "isAdmin": bool(r[5])} for r in rows]
+                    "isAdmin": bool(r[5]),
+                    "avatarIcon": r[6] or ""} for r in rows]
         _json_response(self, 200, people)
 
     def _handle_presence_get(self) -> None:
@@ -14870,7 +14871,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         now = datetime.now(timezone.utc)
 
         rows = db.query(
-            "SELECT id, email, display_name, first_name, last_name FROM users WHERE is_active = TRUE"
+            "SELECT id, email, display_name, first_name, last_name, avatar_icon FROM users WHERE is_active = TRUE"
         )
         out_users = []
         for r in rows:
@@ -14889,6 +14890,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "email": r[1] or "",
                 "firstName": r[3] or "",
                 "lastName": r[4] or "",
+                "avatarIcon": r[5] or "",
                 "online": online,
                 "afd": afd,
                 "status": ov.get("status", ""),

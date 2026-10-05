@@ -12426,6 +12426,15 @@ async function loadPortalUsers() {
         id: u.id ?? u.ID,
         displayName: u.displayName || u.DisplayName || u.userName || u.UserName || u.id,
         isActive: u.isActive !== false && u.is_active !== false,
+        // Carry extra fields so downstream renders can show first+last initials
+        // and Tabler icon avatars. The /api/v2/users endpoint returns the full
+        // user row (id, email, displayName, firstName, lastName, avatarIcon,
+        // etc.) but we previously stripped everything except id + displayName.
+        email: u.email || "",
+        firstName: u.firstName || u.first_name || "",
+        lastName: u.lastName || u.last_name || "",
+        avatarIcon: u.avatarIcon || u.avatar_icon || null,
+        avatarUrl: u.avatarUrl || u.avatar_url || null,
       }))
       .filter((u) => u.id);
     state.portalUsers.sort((a, b) => String(a.displayName || "").localeCompare(String(b.displayName || "")));
@@ -16094,6 +16103,13 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
     avatar.className = "presence-user-avatar";
     const initial = userInitials(u) || "?";
     const avatarUrl = avatarMap[id];
+    // Priority: photo > icon (Tabler) > initials. Resolve the icon through
+    // the runtime-validated set so we don't render an empty square for a
+    // name the current webfont doesn't ship.
+    const validIcons = _getValidTablerIconSet();
+    const userIcon = u && (u.avatar_icon || u.avatarIcon) && validIcons.has(u.avatar_icon || u.avatarIcon)
+      ? (u.avatar_icon || u.avatarIcon)
+      : null;
     if (avatarUrl) {
       const img = document.createElement("img");
       img.src = avatarUrl;
@@ -16102,6 +16118,11 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
       img.onerror = () => { img.remove(); avatar.textContent = initial; };
       avatar.textContent = "";
       avatar.appendChild(img);
+    } else if (userIcon) {
+      avatar.classList.add("user-avatar-icon");
+      const i = document.createElement("i");
+      i.className = `ti ti-${userIcon}`;
+      avatar.appendChild(i);
     } else {
       avatar.textContent = initial;
     }
@@ -17356,11 +17377,17 @@ function renderPresenceTileCompact(snapshot = null) {
     row.className = "presence-user";
     row.dataset.userId = u.id;
 
-    // Avatar with initials + optional photo
+    // Avatar with initials + optional photo + optional Tabler icon.
+    // Priority: photo > icon > initials. Icon is resolved through the
+    // runtime-validated set so we don't render empty squares.
     const avatar = document.createElement("span");
     avatar.className = "presence-user-avatar";
     const initials = userInitials(u) || "?";
     const avatarUrl = avatarMap[u.id] || u.thumbnailUrl || u.avatarUrl;
+    const validIcons = _getValidTablerIconSet();
+    const userIcon = u && (u.avatar_icon || u.avatarIcon) && validIcons.has(u.avatar_icon || u.avatarIcon)
+      ? (u.avatar_icon || u.avatarIcon)
+      : null;
     if (avatarUrl) {
       const img = document.createElement("img");
       img.src = avatarUrl;
@@ -17369,6 +17396,11 @@ function renderPresenceTileCompact(snapshot = null) {
       img.onerror = () => { img.remove(); avatar.textContent = initials; };
       avatar.textContent = "";
       avatar.appendChild(img);
+    } else if (userIcon) {
+      avatar.classList.add("user-avatar-icon");
+      const i = document.createElement("i");
+      i.className = `ti ti-${userIcon}`;
+      avatar.appendChild(i);
     } else {
       avatar.textContent = initials;
     }
@@ -21098,6 +21130,44 @@ const TABLER_ICON_OPTIONS = [
 const MAIL_TAB_ICON_OPTIONS = TABLER_ICON_OPTIONS;
 const MAIL_TAB_COLOR_OPTIONS = ['var(--accent)', '#e74c3c', '#e67e22', '#f1c40f', '#2ecc71', '#3498db', '#9b59b6', '#e91e63', '#795548', '#607d8b', '#8b95a8'];
 
+// Runtime cache: subset of TABLER_ICON_OPTIONS that actually render a glyph in
+// the loaded Tabler webfont. The webfont is loaded from a CDN and gets
+// updated over time, so some names we ship may not exist in the current
+// version. openTablerIconPicker validates the set on first open and caches
+// the result here so subsequent opens are O(1).
+let _validTablerIconSet = null;
+function _getValidTablerIconSet() {
+  if (_validTablerIconSet) return _validTablerIconSet;
+  if (typeof document === "undefined") {
+    _validTablerIconSet = new Set(TABLER_ICON_OPTIONS);
+    return _validTablerIconSet;
+  }
+  // Render every candidate into a hidden test container, measure each.
+  // The Tabler webfont uses ::before pseudo-elements with unicode content;
+  // an icon that doesn't exist in the font renders with zero width.
+  const test = document.createElement("div");
+  test.style.cssText = "position:absolute;visibility:hidden;left:-9999px;top:-9999px;pointer-events:none;";
+  document.body.appendChild(test);
+  const valid = new Set();
+  try {
+    for (const ic of TABLER_ICON_OPTIONS) {
+      const el = document.createElement("i");
+      el.className = `ti ti-${ic}`;
+      test.appendChild(el);
+      // Force layout, then measure.
+      const w = el.getBoundingClientRect().width;
+      if (w > 0) valid.add(ic);
+      el.remove();
+    }
+  } finally {
+    test.remove();
+  }
+  // If validation removed everything (font not loaded yet, CDN outage),
+  // fall back to the full set so the picker is still usable.
+  _validTablerIconSet = valid.size > 0 ? valid : new Set(TABLER_ICON_OPTIONS);
+  return _validTablerIconSet;
+}
+
 // ── Avatar helpers (used by users + contacts + anywhere else we show a chip) ──
 
 /** Two-letter initials from first + last name, fallback to email, then '?' */
@@ -21139,7 +21209,7 @@ function renderUserAvatar(u, size) {
   if (u && u.avatarUrl) {
     return `<span class="user-avatar-chip" data-size="${size || 'md'}"><img src="${escapeHtml(u.avatarUrl)}" alt="" onerror="this.replaceWith(document.createTextNode(${JSON.stringify(initials)}))" /></span>`;
   }
-  if (u && u.avatar_icon && TABLER_ICON_OPTIONS.includes(u.avatar_icon)) {
+  if (u && u.avatar_icon && _getValidTablerIconSet().has(u.avatar_icon)) {
     return `<span class="user-avatar-chip user-avatar-icon" data-size="${size || 'md'}" style="background:var(--accent);color:#fff;"><i class="ti ti-${escapeHtml(u.avatar_icon)}"></i></span>`;
   }
   return `<span class="user-avatar-chip user-avatar-initials" data-size="${size || 'md'}">${escapeHtml(initials)}</span>`;
@@ -40107,7 +40177,7 @@ function _profileRenderFromState() {
     // Photo already shown by _profileLoadAvatar; nothing to do.
     return;
   }
-  if (me.avatarIcon && TABLER_ICON_OPTIONS.includes(me.avatarIcon)) {
+  if (me.avatarIcon && _getValidTablerIconSet().has(me.avatarIcon)) {
     circle.innerHTML = `<i class="ti ti-${escapeHtml(me.avatarIcon)}" style="font-size:1.6rem;color:#fff;background:var(--accent);width:100%;height:100%;display:flex;align-items:center;justify-content:center;border-radius:50%;"></i>`;
     circle.classList.remove("has-image");
     return;
@@ -40132,12 +40202,17 @@ function openTablerIconPicker(currentIcon) {
     const grid = $("#tabler-icon-picker-grid");
     const count = $("#tabler-icon-picker-count");
     if (!modal || !grid) { resolve(undefined); return; }
-    grid.innerHTML = TABLER_ICON_OPTIONS.map(ic => `
+    // Use the runtime-validated set so we don't render empty squares for
+    // icon names the current Tabler webfont doesn't ship. Cache is built
+    // on first call (per-session).
+    const validSet = _getValidTablerIconSet();
+    const validIcons = TABLER_ICON_OPTIONS.filter(ic => validSet.has(ic));
+    grid.innerHTML = validIcons.map(ic => `
       <button type="button" class="tabler-icon-pick ${ic === currentIcon ? 'selected' : ''}" data-icon="${ic}" title="${ic}">
         <i class="ti ti-${ic}"></i>
       </button>
     `).join('');
-    if (count) count.textContent = TABLER_ICON_OPTIONS.length;
+    if (count) count.textContent = validIcons.length;
 
     let chosen = currentIcon || null;
     grid.querySelectorAll('.tabler-icon-pick').forEach(b => {

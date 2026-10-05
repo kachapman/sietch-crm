@@ -2,6 +2,77 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Team modal initials + avatar-icon in presence + icon-picker runtime validation (2026-10-05)
+
+User report (3 follow-up bugs from the previous icon/initials fix):
+
+1. **Team standalone popout modal still shows single-letter initials** (e.g. "B"
+   for Breanna) — the team tile in the dashboard had already been fixed but the
+   modal still rendered single letters. Root cause: `renderPresenceUserList`
+   iterates over `state.portalUsers`, and `loadPortalUsers` was stripping all
+   fields except `id` + `displayName` + `isActive`. The tile uses
+   `snap.users` directly (which has `firstName` + `lastName` from the
+   previous fix) so it worked; the modal was reading the stripped data.
+2. **Avatar-icon change doesn't show up in team tile or team modal.** Both
+   server endpoints (`/_handle_presence_get`, `/_handle_presence_users`)
+   didn't include `avatar_icon` / `avatarIcon` in the payload — the icon was
+   saved to DB but never sent to the client.
+3. **Avatar picker has many "missing" icon cells** (empty squares). The
+   Tabler icons webfont is loaded from a CDN (`@latest`) so some icon names
+   we ship may not exist in the current version. The picker was a static
+   dump of `TABLER_ICON_OPTIONS` with no runtime validation.
+
+**Fixes:**
+
+- **`loadPortalUsers` (public/app.js:12417)** — keep `email`, `firstName`,
+  `lastName`, `avatarIcon`, `avatarUrl` in the mapped user objects (in
+  addition to the existing `id` / `displayName` / `isActive`). The
+  `/api/v2/users` endpoint already returns these fields; we previously
+  stripped them.
+- **Server `/_handle_presence_users` (server.py:14853)** — `SELECT`
+  now includes `avatar_icon`; payload adds `"avatarIcon": r[6] or ""`.
+- **Server `/_handle_presence_get` (server.py:14874)** — `SELECT` now
+  includes `avatar_icon`; each `out_users` entry includes
+  `"avatarIcon": r[5] or ""`.
+- **`renderPresenceUserList` + `renderPresenceUserCompact`**
+  (public/app.js:16095, 17361) — avatar now has the full priority chain:
+  photo > Tabler icon (resolved through the runtime-validated set) >
+  initials. Both surfaces now correctly render the user's chosen icon.
+- **Runtime icon validation (`_getValidTablerIconSet`)** — new
+  module-level helper that on first call renders every candidate icon
+  into a hidden test container, measures each one's bounding box, and
+  caches the subset that actually renders a glyph (the Tabler webfont
+  uses unicode `::before` pseudo-elements; missing names render with
+  zero width). Used by `openTablerIconPicker` (filters out empty cells
+  from the grid), `_profileRenderFromState` (so a previously-saved
+  icon name that's no longer valid falls back to initials), and
+  `renderUserAvatar` (same).
+- **Cache buster** bumped: `app.js?v=3.6.9`→`3.7.0`.
+- **No CSS / HTML / DB changes.**
+
+**Verified:**
+
+- `node --check public/app.js` passes.
+- `python3 -m py_compile server.py` passes.
+- `python3 tests/test_onlyoffice_import.py` 8/8.
+- Smoke test against a hand-curated list of known Tabler v3 icon names
+  (234 names) — all 234 should validate. The runtime check defends
+  against CDN-version drift: if the user's font doesn't ship some
+  name, it's automatically filtered out without the user seeing empty
+  squares.
+- Server restarted clean, `/api/config` 200.
+
+**Browser-test checklist** (next session):
+
+1. Open the team modal → all users with first+last name show
+   two-letter initials (not single letters).
+2. Change CRM Bot's avatar icon in the profile modal → open the
+   team modal / tile → CRM Bot's avatar shows the new icon (not
+   initials, not the previous icon).
+3. Open the avatar icon picker → confirm no empty squares in the
+   grid (icons that don't exist in the current Tabler webfont
+   version are filtered out automatically).
+
 ## Profile icon picker OK button + doubled icon set + first/last initials in team tile/modal (2026-10-05)
 
 User report (four bugs):
