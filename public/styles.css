@@ -5049,6 +5049,18 @@ body {
   object-fit: cover;
   border-radius: 6px;
 }
+/* Icon avatars inside the team list (Tabler icon). The default font-size
+   on .presence-user-avatar is set for 2-letter initials (11px); bump the
+   icon to fill the 31×31 box more naturally so the icon weight matches
+   the visual weight of the bold uppercase initials next to it. */
+.presence-user-avatar.user-avatar-icon {
+  font-size: 1.05rem;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.presence-user-avatar.user-avatar-icon i {
+  color: var(--accent);
+  line-height: 1;
+}
 /* Presence dot on avatar */
 .presence-user-avatar .presence-dot {
   position: absolute;

@@ -2,6 +2,34 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Larger Tabler icon avatars in the team list (2026-10-05)
+
+User report: avatar icons in the team list (modal + tile) render
+visibly smaller than the bold uppercase initials avatars next to them.
+Root cause: `.presence-user-avatar` (public/styles.css:5029) sets
+`font-size: 11px` (tuned for two-letter initials), and the
+`<i class="ti ti-NAME">` icon inside inherits that 11px — so the
+icon is rendered at 11px even though the box is 31×31, looking
+visibly smaller than the bold initials.
+
+- **`public/styles.css`** — new rule for
+  `.presence-user-avatar.user-avatar-icon { font-size: 1.05rem; ... }`
+  so the icon fills the 31×31 box more naturally and matches the
+  visual weight of the bold initials avatars. Added
+  `color: var(--accent)` on the `<i>` child so the icon reads as
+  the accent color, plus a subtle accent-tinted background
+  (`color-mix` of `--accent` 18% + transparent) for visual
+  consistency with the profile-avatar icon.
+- Cache buster bumped: `styles.css?v=3.7.2`→`3.7.3`.
+- **No JS / server / HTML / DB changes.**
+
+**Verified:** `node --check` passes; clean 2-file diff
+(`public/styles.css` +12, `public/index.html` +1/-1).
+
+**Browser-test checklist:** hard-refresh → open team modal →
+icons (e.g. CRM Bot's ship icon) should now visually match the size
+weight of the initials avatars (BC, CC, DJ, etc.).
+
 ## Team modal initials + avatar-icon in presence + icon-picker runtime validation (2026-10-05)
 
 User report (3 follow-up bugs from the previous icon/initials fix):
