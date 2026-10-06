@@ -2,6 +2,92 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Server-side hardening — SSE leak + readiness log + swallowed exceptions (2026-10-06)
+
+User-selected loose-ends task (5 items, all small). Implemented:
+
+**(1) Closed the SSE connection leak** — when a user opens two tabs in
+quick succession, the second tab's `event_bus.subscribe(user_id)`
+replaces the first tab's queue in the subscribers map and pushes
+`None` to the old queue to signal it to exit. The bug: the old tab's
+finally block called `event_bus.unsubscribe(user_id)` with no
+arguments, which removed whichever queue was currently registered —
+**the NEW tab's queue**. The new tab then sat on a queue no publisher
+was pushing to, with `q.get(timeout=2)` returning `queue.Empty`
+forever. Thread + connection leak per multi-tab user.
+
+Fix:
+- `event_bus.py` — each `Queue` now has a private
+  `_event_bus_token = object()` attribute. `unsubscribe` accepts
+  `expected_q` and `expected_id` arguments; if the registered queue
+  doesn't match (or its token doesn't match), the unsubscribe is a no-op.
+  Documented the reason in the docstring.
+- `server.py` — `_handle_sse_stream` generates a per-request
+  `connection_id = object()` sentinel and passes it to the
+  unsubscribe. The old tab's cleanup no longer accidentally removes
+  the new tab's queue. Verified via Python test: simulate two
+  subscribes, then `unsubscribe('1', expected_q=q1)` — the map still
+  holds q2.
+
+**(2) Added a `[READY]` readiness log** to `main()` in server.py,
+printed just before `server.serve_forever()`. Reports the PID,
+current Unix timestamp, and a per-subsystem status string
+(`dispatcher=ok,scanner=ok,service_feeds=ok,backup=ok,
+task_reminders=ok,calendar_sync=ok,automation=ok`). Ops can `grep
+'\[READY'` to confirm the process is up and which subsystems
+actually started. `flush=True` on the print so it appears before
+`serve_forever()` blocks the main thread.
+
+**(3) Verified no bot-token leakage in logs.** Grep for `bot_token`,
+`Authorization`, `Bearer` in server.py. The only references are:
+- Storing the token in `_bot_token_cache` (in-memory only).
+- Building the `Bearer` header for OUTGOING calls to the bot's
+  webhook.
+- Reading the request's `Authorization` header in `_handle_user_*`
+  to compare against the stored token.
+No log line, no exception message, no error response includes the
+token. The bot auth path returns silently (`return`) on failure —
+no error message that could leak anything.
+
+**(4) Confirmed migrations are idempotent.** All `CREATE TABLE` /
+`CREATE INDEX` / `ALTER TABLE ADD COLUMN` statements either:
+- Live in `init.sql` (mounted into `/docker-entrypoint-initdb.d/`,
+  runs once on first DB init).
+- Use `IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS` (runtime,
+  idempotent on every restart).
+- The `try: ... except Exception: pass` wrappers around these
+  statements are intentional — the operations are no-ops if the
+  schema already matches, and any actual schema error would surface
+  on the FIRST startup (not subsequent ones).
+
+**(5) Audited catch-all-and-swallow patterns in server.py.** The
+server-side reply notification flow (added in commit `0871506`)
+properly logs + tracebacks on failure (server.py:5624-5626). The
+delete-personal-data flow has no exception handlers (relies on
+the connection-level error handling). `event_bus.publish`
+previously swallowed `queue.Full` silently — now it counts drops
+and emits a single stderr line per publish with drops
+(`[event_bus] dropped N events for type=X (slow consumers)`) so ops
+can spot slow consumers without log spam.
+
+**Files:** `event_bus.py` (+37), `server.py` (+33). **No JS / HTML
+/ CSS / DB changes.**
+
+**Verified:**
+- `python3 -m py_compile server.py event_bus.py` passes.
+- `python3 tests/test_onlyoffice_import.py` 8/8.
+- Server restarts cleanly; `[READY 1791292672] sietch-crm ready on port
+  8766 pid 2215140 subsystems=dispatcher=ok,scanner=ok,
+  service_feeds=ok,backup=ok,task_reminders=ok,calendar_sync=ok,
+  automation=ok` printed at boot.
+- SSE leak fix verified via Python test: simulate two `subscribe`
+  calls, then `unsubscribe('1', expected_q=q1)` — q2 remains
+  registered. Before the fix, q2 would be removed by the old tab's
+  cleanup.
+- Dropped-events log verified by filling a test queue to
+  maxsize + publishing — prints
+  `[event_bus] dropped 1 events for type=test-event (slow consumers)`.
+
 ## Fix admin user profile modal — giant padding bar, light popover, double ADMIN badge (2026-10-06)
 
 User report (DevTools screenshot of the admin user profile modal for

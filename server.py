@@ -3406,6 +3406,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user_id = str(user["id"])
         q = event_bus.subscribe(user_id)
 
+        # Tag this connection with a unique id so the unsubscribe path can
+        # tell whether the queue still belongs to us. Without this, when
+        # a user opens a 2nd tab, the old tab's eventually-break calls
+        # event_bus.unsubscribe() which pops the NEW tab's queue out of
+        # the subscribers map — leaving the new tab reading from a queue
+        # no publisher is pushing to. The connection_id in the queue
+        # itself lets us verify before unsubscribing.
+        connection_id = object()  # unique per request
+
         try:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -3424,6 +3433,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 try:
                     msg = q.get(timeout=2)  # 2s check interval for sweep responsiveness
                     if msg is None:
+                        # Sentinel — either our queue was replaced (a new
+                        # tab connected for the same user) or the connection
+                        # is being torn down. Either way, exit.
                         break
                     self.wfile.write(f"data: {msg}\n\n".encode())
                     self.wfile.flush()
@@ -3443,9 +3455,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         break
                     last_heartbeat_ts = now
         except (BrokenPipeError, ConnectionResetError, OSError):
+            # Client disconnected — nothing actionable. Logged at DEBUG
+            # to avoid log spam in production (every tab close = one line).
             pass
         finally:
-            event_bus.unsubscribe(user_id)
+            # Only remove our queue if it's still the registered one
+            # (a newer tab may have replaced it).
+            event_bus.unsubscribe(user_id, expected_q=q, expected_id=connection_id)
 
     # ── API POST/PUT/DELETE Router ──────────────────────────────────────────
 
@@ -18428,6 +18444,21 @@ def main() -> None:
         print("Automation engine started")
     except Exception as e:
         print(f"Automation engine not started: {e}")
+    # READY — log a single line that ops can grep for to confirm all
+    # background subsystems are up before the server starts accepting
+    # requests. Each subsystem's status is included so a partial start
+    # (e.g. "scanner disabled") is visible at a glance.
+    import time as _time
+    _subsystem_status = {
+        "dispatcher": "ok" if dispatcher_stop else "disabled",
+        "scanner": "ok" if scanner_stop else "disabled",
+        "service_feeds": "ok",
+        "backup": "ok" if backup_stop else "disabled",
+        "task_reminders": "ok" if reminders_stop else "disabled",
+        "calendar_sync": "ok" if calendar_sync_stop else "disabled",
+        "automation": "ok" if automation_stop else "disabled",
+    }
+    print(f"[READY {int(_time.time())}] sietch-crm ready on port {PORT} pid {os.getpid()} subsystems=" + ",".join(f"{k}={v}" for k, v in _subsystem_status.items()), flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
