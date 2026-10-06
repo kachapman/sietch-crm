@@ -2,6 +2,62 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Kanban column fills tile height before scrolling (2026-10-06)
+
+User report: "on the group tile kanban board, the card lists are
+arbitrarily height restricted. They should fill available tile height
+before scrolling."
+
+**Root cause:** `.column` (public/styles.css:711) had
+`max-height: calc(100vh - 280px)` — a viewport-relative cap that
+hard-coded how tall each kanban column could be. The dashboard tile's
+natural height is determined by the grid row sizing to its tallest
+content, and the tile often ended up much taller than `100vh - 280px`,
+but the columns couldn't grow with the tile. The cap was correct for
+small viewports and short tiles but produced large empty bands below
+the card lists on taller tiles.
+
+**Fix (public/styles.css):**
+
+- New `.dashboard-tile.local-kanban-tile .local-kanban-body` rule
+  (`flex: 1 1 auto; display: flex; flex-direction: column;
+  min-height: 0`) — gives the kanban body a flexible height inside
+  the tile. The `min-height: 0` is critical (default is `auto`,
+  which would prevent the children from shrinking).
+- Updated `.dashboard-tile.local-kanban-tile .board` rule
+  (`flex: 1 1 auto; min-height: 0; overflow: auto`) — gives the
+  board flexible height inside the kanban body, with horizontal +
+  vertical scroll as needed.
+- Updated `.column` rule — replaced
+  `max-height: calc(100vh - 280px)` with
+  `max-height: none; min-height: 0` so the column takes its full
+  height from `.board` (which is now flex: 1).
+
+The chain is now:
+`.dashboard-tile (display: flex; flex-direction: column) →
+ .local-kanban-body (flex: 1; display: flex; flex-direction: column) →
+  .board (flex: 1; overflow: auto) →
+   .column (display: flex; flex-direction: column; max-height: none) →
+    .column-header (natural height) +
+    .column-body (flex: 1; overflow-y: auto; min-height: 80px) →
+     .card (cards)`.
+
+The inner `.column-body` already had `flex: 1; overflow-y: auto;
+min-height: 80px`, so it correctly fills the column and scrolls when
+content overflows. No change to that rule.
+
+**Cache buster bumped:** `styles.css?v=3.7.6`→`3.7.7`.
+
+**Verified:** `node --check public/app.js` passes (no JS change).
+2-file diff (`public/styles.css` +22/-7, `public/index.html` +1/-1).
+
+**Browser-test:** open a local-kanban tile with many cards → cards
+now fill the full tile height before scrolling. A tile with 2 cards
+in one column and 12 in another → both columns extend to the tile's
+full height; the short column shows 2 cards stacked at the top with
+empty space below; the long column shows 12 cards filling the
+column with the column-body scrolling.
+
 ## Server-side hardening — SSE leak + readiness log + swallowed exceptions (2026-10-06)
 
 User-selected loose-ends task (5 items, all small). Implemented:

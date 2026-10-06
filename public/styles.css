@@ -715,7 +715,13 @@ body {
   border-radius: var(--radius);
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 280px);
+  /* Was: max-height: calc(100vh - 280px) — caused the column to fall
+     short of the tile's actual height on tall tiles. Now the column
+     takes its full height from the .board (which is flex: 1 inside
+     .local-kanban-body). The inner .column-body scrolls when content
+     overflows. */
+  max-height: none;
+  min-height: 0;
 }
 
 .column-header {
@@ -1955,16 +1961,27 @@ body {
   padding-bottom: 1rem;
 }
 
-/* Local kanban: cap board height, scroll vertically when columns overflow.
-   Keep horizontal scroll for column navigation. Padding-bottom keeps the
-   horizontal scrollbar above the tile's rounded bottom corners. */
+/* Local kanban: fill the available tile height before scrolling.
+   The chain above .column needs flex: 1 + min-height: 0 so the column
+   can grow into the tile's actual height (the tile's natural height is
+   often much taller than the previous `100vh - 280px` viewport cap).
+   Keep horizontal scroll for column navigation. Padding-bottom keeps
+   the horizontal scrollbar above the tile's rounded bottom corners. */
+.dashboard-tile.local-kanban-tile .local-kanban-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0; /* critical: lets the children shrink + scroll */
+}
 .dashboard-tile.local-kanban-tile .board {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
   padding-bottom: 1rem;
-  overflow-x: auto;
 }
 .dashboard-tile.local-kanban-tile.tile-double .board {
   padding-bottom: 1rem;
-  overflow-x: auto;
+  overflow: auto;
 }
 
 /* Top panels */
