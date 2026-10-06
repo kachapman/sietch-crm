@@ -2,6 +2,46 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Fix 500 on View user — row dict access (2026-10-05)
+
+User report: after the previous 404 fix, clicking "View" still showed
+`Internal Server Error` for admin user records.
+
+**Root cause** (captured in `/tmp/crm-server.log`):
+```
+File "server.py", line 7852, in _handle_user_get
+    "id": row[0],
+KeyError: 0
+```
+
+The new `_handle_user_get` (added in the previous commit) used
+tuple-style access (`row[0]`, `row[1]`, ...). But `db.query_one`
+returns a `dict | None` (see db.py:127 — `return row_to_dict(row,
+columns)`), not a tuple. The first attempt to index `row[0]` raised
+`KeyError: 0`, which the server's generic error handler caught and
+returned as 500.
+
+**Fix:**
+
+- **server.py (`_handle_user_get`, line 7851-7865)** — replaced all
+  13 `row[N]` accesses with `row["column_name"]` accesses
+  (`row["id"]`, `row["email"]`, `row["display_name"]`, ...,
+  `row["last_login"]`). The handler now uses dict access consistent
+  with the rest of the codebase.
+
+**Verified:** `db.query_one("SELECT ...")` returns a `dict` (direct
+test against the live DB shows `id`, `email`, `display_name`,
+`is_admin`, `is_active`, `role`, `avatar_icon`, `created_at`,
+`last_login` all present and readable via string keys). Endpoint
+now returns `401` (auth required) when called without a session
+instead of `500` (KeyError).
+
+**Files:** `server.py` (13 lines changed, dict access in
+`_handle_user_get` only — `_handle_user_delete_personal_data`
+already used dict-style access correctly).
+
+**No JS / HTML / CSS / DB changes.**
+
 ## Fix 404 on View user — route registered in wrong dispatch block (2026-10-05)
 
 User report: clicking the new "View" button in Admin → Users returned

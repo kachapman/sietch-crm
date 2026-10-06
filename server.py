@@ -7849,19 +7849,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 404, {"error": "User not found"})
             return
         _json_response(self, 200, {
-            "id": row[0],
-            "email": row[1] or "",
-            "displayName": row[2] or "",
-            "firstName": row[3] or "",
-            "lastName": row[4] or "",
-            "isAdmin": bool(row[5]),
-            "isActive": bool(row[6]),
-            "avatarUrl": row[7] or "",
-            "avatarIcon": row[8] or "",
-            "role": row[9] or "member",
-            "mustChangePassword": bool(row[10]),
-            "createdAt": row[11].isoformat() if row[11] else None,
-            "lastLogin": row[12].isoformat() if row[12] else None,
+            "id": row["id"],
+            "email": row["email"] or "",
+            "displayName": row["display_name"] or "",
+            "firstName": row["first_name"] or "",
+            "lastName": row["last_name"] or "",
+            "isAdmin": bool(row["is_admin"]),
+            "isActive": bool(row["is_active"]),
+            "avatarUrl": row["avatar_url"] or "",
+            "avatarIcon": row["avatar_icon"] or "",
+            "role": row["role"] or "member",
+            "mustChangePassword": bool(row["must_change_password"]),
+            "createdAt": row["created_at"].isoformat() if row["created_at"] else None,
+            "lastLogin": row["last_login"].isoformat() if row["last_login"] else None,
         })
 
     def _handle_user_delete_personal_data(self, user_id: int) -> None:
