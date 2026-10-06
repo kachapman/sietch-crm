@@ -650,3 +650,53 @@ Because the v2.0 token endpoint mints one access token with one audience, Graph 
 | Rate limit (20 req/min/user) | Matters only for high-volume senders; falls back to SMTP |
 | Tenant admin consent | Required for `Mail.Send` on managed tenants; rare |
 | Refresh token revocation | If the Graph token is revoked, falls back to SMTP and surfaces the error |
+
+
+## ISSUE-016 — Deal-level kanban column body doesn't scroll when content overflows (2026-10-06)
+
+**Status:** ❌ Documented; deferred (no code change applied after multiple attempts failed to satisfy user).  
+**Priority:** Medium (visual UX only; no data loss)  
+**Area:** `public/styles.css` (`.board`, `.column`, `.dashboard-tile.board-group-tile` rules at lines 700-770, 1942-1962)
+
+### Summary
+
+User expectation: when a column on the deal-level kanban (e.g. "Tagged deals") has more cards than fit in the visible area, the column body should scroll so the user can see the additional cards inside the column.
+
+### What was tried
+
+- **Attempt 1:** Removed `.column { max-height: calc(100vh - 280px); }` and replaced with `max-height: none; min-height: 0;` so the column could fill the available tile height. Result: all cards visible in the DOM but only the top few rendered visibly; no clear scroll affordance.
+- **Attempt 2:** Added `flex: 1 1 auto; min-height: 0;` to `.dashboard-tile.local-kanban-tile .board` and `.dashboard-tile.local-kanban-tile .local-kanban-body` so the board fills the tile. Added `max-height: min(70vh, 800px); overflow: hidden;` on `.dashboard-tile.local-kanban-tile` to cap the tile and prevent one overstuffed column from blowing up the whole grid row. Result: tile is capped, but the user reports the columns STILL don't scroll to show the additional cards.
+- **Audit findings:** The deal-level kanban (`.board` rule at line 700) has `align-items: flex-start;` which prevents columns from stretching to the board's cross-axis height. Combined with no explicit `flex: 1; min-height: 0;` on `.dashboard-tile.board-group-tile .board`, the board doesn't fill the tile, and the columns don't fill the board. The natural fix would be: (a) change `.board { align-items: flex-start; }` to `align-items: stretch;` (or scope to the deal-kanban variant), (b) add `flex: 1 1 auto; min-height: 0;` to `.dashboard-tile.board-group-tile .board`, (c) keep the column at `max-height: none; min-height: 0;` so the column-body's `overflow-y: auto;` kicks in. **The user opted to defer this work after multiple attempts failed to satisfy the requirement.**
+
+### Why it's deferred
+
+User explicitly requested leaving this bug for future investigation: "Leave it for now. Document this bug for future investigation." Per AGENTS.md guidance ("If the user has to argue 'where is the HTML?', the agent has failed the rule."), continuing to add speculative CSS without confirming the actual visual problem is wasteful.
+
+### Proposed fix (for when work resumes)
+
+```css
+/* In .board or a deal-kanban-specific override: */
+align-items: stretch;  /* default for flex rows, but explicitly set */
+
+/* In .dashboard-tile.board-group-tile .board: */
+.dashboard-tile.board-group-tile .board {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;  /* already there */
+}
+
+/* .column and .column-body are already correct (max-height: none + overflow-y: auto) */
+```
+
+This is **3 lines of CSS**. The risk is that the rule applies to the main page-wide kanban too (not just the deal-level tile), which may visually stretch columns in ways the user doesn't want. Scoping via `.dashboard-tile.board-group-tile .board` (line 1958-1960) would limit the change to the deal-tile case.
+
+### Verification (when work resumes)
+
+- Open a deal-level kanban tile (e.g. "Tagged deals") with 35+ cards in one column.
+- Each column should stretch to fill the tile's height.
+- The column-body should scroll to show cards beyond the visible area.
+- The board itself should NOT scroll (its height is fixed by the tile).
+- Other tiles in the same grid row should NOT be dragged down by the overstuffed column.
+
+### Files (when fixed)
+- `public/styles.css` — 3-line edit to `.board` and `.dashboard-tile.board-group-tile .board`.

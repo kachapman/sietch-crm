@@ -98,27 +98,86 @@ PART B — ON THE SERVER (DigitalOcean droplet)
 
    nano /opt/vanguard/sietch-crm/.env
 
-   Document Server (OnlyOffice) — REQUIRED for document editing to work:
+   ⚠️  .env contains secrets. .gitignore line 3 prevents commits, and the file
+       must be chmod 600 owned by the deploy user. The full list of variables,
+       which are sensitive, and the audit of where secrets are used lives in
+       docs/SECRETS_AUDIT.md.
 
-   DOCS_JWT_SECRET=change_me_in_production
-   DOCS_PUBLIC_URL=https://docs.publicadjustermidwest.com
+   === MINIMUM REQUIRED (always) ===
+   DB_HOST=<your-db-host>
+   DB_PORT=5432
+   DB_NAME=sietch_crm
+   DB_USER=sietch
+   DB_PASSWORD=<generated-strong-password>
+
+   COOKIE_SECURE=true
+   COOKIE_SECRET=<python3 -c "import secrets; print(secrets.token_urlsafe(32))">
+
+   === DOCUMENT SERVER (REQUIRED for document editing) ===
+   DOCS_JWT_SECRET=<must match OnlyOffice JWT_SECRET>
    # In production the Document Server is co-located in Docker on the dashboard
    # droplet. Use the container hostname/port, NOT the legacy placeholder
    # http://docserver:8080. Examples:
    #   http://onlyoffice-docserver:80
    #   https://onlyoffice-docserver:443
    DOCS_INTERNAL_URL=http://onlyoffice-docserver:80
+   DOCS_PUBLIC_URL=https://docs.publicadjustermidwest.com
    CRM_PUBLIC_URL=https://dashboard.publicadjustermidwest.com
    DOCSERVER_CONTAINER_NAME=onlyoffice-docserver
 
-   VERIFY: grep -E "DOCS_JWT_SECRET|DOCS_PUBLIC_URL|DOCS_INTERNAL_URL|CRM_PUBLIC_URL|DOCSERVER_CONTAINER_NAME" .env
+   VERIFY: grep -E "DB_PASSWORD|COOKIE_SECRET|DOCS_JWT_SECRET|DOCS_PUBLIC_URL|DOCS_INTERNAL_URL|CRM_PUBLIC_URL|DOCSERVER_CONTAINER_NAME" .env
 
-    If deploying the Telegram bot for the first time, ensure this line exists
-    (ask the developer for the actual value):
+   === TELEGRAM BOT (REQUIRED if using bot integration) ===
+   TELEGRAM_BOT_TOKEN=<from @BotFather>
 
-    TELEGRAM_BOT_TOKEN=your_token_here
+   VERIFY: grep -E "TELEGRAM_BOT_TOKEN" .env
 
-    VERIFY: grep -E "TELEGRAM_BOT_TOKEN" .env
+   === OPTIONAL: SMTP for password-reset / system email ===
+   SMTP_HOST=
+   SMTP_PORT=587
+   SMTP_USER=
+   SMTP_PASSWORD=
+   SMTP_USE_TLS=true
+   SMTP_FROM_NAME="Sietch CRM"
+
+   === OPTIONAL: OAuth for CRM mail ===
+   OAUTH_MICROSOFT_CLIENT_ID=
+   OAUTH_MICROSOFT_CLIENT_SECRET=
+   OAUTH_MICROSOFT_TENANT=common
+   OAUTH_GOOGLE_CLIENT_ID=
+   OAUTH_GOOGLE_CLIENT_SECRET=
+   OAUTH_REDIRECT_URI=https://dashboard.publicadjustermidwest.com/api/v2/mail/oauth/callback
+
+   === OPTIONAL: Mail scanner + backups ===
+   SCANNER_ENABLED=true
+   SCANNER_IMAP_HOST=
+   SCANNER_IMAP_PORT=993
+   SCANNER_IMAP_USER=
+   SCANNER_IMAP_PASSWORD=
+
+   BACKUP_ENABLED=true
+   BACKUP_REMOTE_TYPE=sftp
+   BACKUP_REMOTE_HOST=<backup-host>
+   BACKUP_REMOTE_USER=<backup-user>
+   BACKUP_REMOTE_KEY_FILE=/run/secrets/backup_ssh_key
+   BACKUP_REMOTE_PATH=/backups/sietch-crm
+
+   === PRE-DEPLOY VERIFICATION ===
+   a) Confirm .env is not tracked by git:
+      git check-ignore -v .env     # → ".gitignore:3:.env .env"
+      git ls-files | grep '\.env$' → only "config.example.env"
+
+   b) Confirm secrets are present after the container starts:
+      docker exec sietch-crm env | grep -E 'TOKEN|SECRET|PASSWORD'
+      (each should show a value, confirming docker compose substituted them)
+
+   c) Confirm no plaintext secrets leaked into logs:
+      docker compose logs dashboard | grep -E 'TOKEN|SECRET|PASSWORD'
+      (should return no matches)
+
+   d) Confirm the app is up:
+      curl -s http://127.0.0.1:8766/api/config
+      VERIFY: JSON with portalUrl. If refused, docker compose logs dashboard.
 
 10. Rebuild and restart (CRM container only)
 
