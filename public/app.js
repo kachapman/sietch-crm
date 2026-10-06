@@ -32942,7 +32942,11 @@ async function openAdminUserProfileModal(userId, opts = {}) {
   if (isAdmin) badges.push('<span class="role-badge role-badge-admin" style="background:rgba(99,102,241,0.18);color:#818cf8;padding:0.1rem 0.4rem;border-radius:4px;font-size:0.7rem;font-weight:600;">admin</span>');
   if (!isActive) badges.push('<span style="background:rgba(239,68,68,0.18);color:#f87171;padding:0.1rem 0.4rem;border-radius:4px;font-size:0.7rem;font-weight:600;">inactive</span>');
   if (user.mustChangePassword) badges.push('<span style="background:rgba(234,179,8,0.18);color:#fbbf24;padding:0.1rem 0.4rem;border-radius:4px;font-size:0.7rem;font-weight:600;">password reset</span>');
-  if (user.role && user.role !== "member") badges.push(`<span class="role-badge role-badge-${escapeHtml(user.role)}" style="background:var(--surface-2);color:var(--text);padding:0.1rem 0.4rem;border-radius:4px;font-size:0.7rem;font-weight:600;">${escapeHtml(user.role)}</span>`);
+  if (user.role && user.role !== "member" && user.role !== "admin") {
+    // Skip "admin" here — the isAdmin badge above already shows it. This
+    // branch only fires for non-default roles like "manager" or "limited".
+    badges.push(`<span class="role-badge role-badge-${escapeHtml(user.role)}" style="background:var(--surface-2);color:var(--text);padding:0.1rem 0.4rem;border-radius:4px;font-size:0.7rem;font-weight:600;">${escapeHtml(user.role)}</span>`);
+  }
   const badgesEl = $("#admin-user-profile-badges");
   if (badgesEl) badgesEl.innerHTML = badges.join("");
 

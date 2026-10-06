@@ -18475,6 +18475,21 @@ select.form-control {
 }
 
 
+/* ── Admin user profile modal: explicit dark background + zero outer padding ──
+   The default .modal-card rule sets padding: 1.25rem 1.5rem, which leaves a
+   ~20px empty bar at the bottom of the modal below the footer (and ~20px
+   above the header). The body+footer already have their own padding, so the
+   outer card padding is redundant. Also force a dark elevated background so
+   the modal matches the rest of the dark UI even when --surface resolves to a
+   lighter color in some themes. */
+#admin-user-profile-modal .modal-card {
+  padding: 0;
+  background: var(--bg-elevated, #1a1e2a);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
 /* ── Generic modal footer (right-aligned action row at the bottom of a
    modal — used by the admin user profile modal for the Edit / Save /
    Cancel buttons. Reusable for any future modal that needs a footer
@@ -18501,7 +18516,9 @@ select.form-control {
   right: 0;
   top: calc(100% + 4px);
   min-width: 200px;
-  background: var(--bg-elevated, #1f2128);
+  background-color: var(--bg-elevated, #1f2128);
+  background-image: none; /* prevent any inherited gradient */
+  color: var(--text, #e0e0e0);
   border: 1px solid var(--border, #2a2e3a);
   border-radius: var(--radius, 6px);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);

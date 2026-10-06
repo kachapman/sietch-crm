@@ -2,6 +2,52 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Fix admin user profile modal — giant padding bar, light popover, double ADMIN badge (2026-10-06)
+
+User report (DevTools screenshot of the admin user profile modal for
+Breanna Chapman):
+  1. A "weird giant bar" around the Edit button at the bottom of the
+     modal — large empty space below the footer.
+  2. The user actions menu (kebab dropdown) is "the wrong color theme"
+     — light background instead of the dark elevated background.
+  3. The badges row shows "ADMIN password reset ADMIN" — ADMIN appears
+     twice.
+
+**Root causes + fixes:**
+
+- **`public/styles.css`** — new `#admin-user-profile-modal .modal-card`
+  rule that sets `padding: 0` (kills the 1.25rem default outer padding
+  that was creating the giant empty bar at the bottom of the modal
+  below the footer) and `background: var(--bg-elevated, #1a1e2a)`
+  (consistent dark elevated background regardless of theme).
+- **`public/styles.css`** — `.kebab-menu-popover` updated to use
+  `background-color: var(--bg-elevated, #1f2128)` + `background-image:
+  none` + explicit `color: var(--text, #e0e0e0)`. The change from
+  `background` to `background-color` + `background-image: none` ensures
+  no inherited gradient bleeds through and forces a consistent dark
+  popover backdrop everywhere it's used.
+- **`public/app.js`** (`openAdminUserProfileModal` line 32945) — the
+  role-badge branch now skips when `user.role === "admin"` because
+  the first `if (isAdmin) badges.push(...)` already emits the "admin"
+  badge. The role branch now fires only for non-default roles like
+  "manager" or "limited". Admins see one "ADMIN" badge; managers see
+  "manager" (and "admin" if they're also admins); limited users see
+  "limited".
+- **No `mustChangePassword` change** — that badge is correctly
+  shown in amber when `users.must_change_password` is true (set by
+  the "Reset Password" action). The user just hadn't realized
+  Reset Password toggles this flag.
+
+**Cache busters bumped:** `styles.css?v=3.7.5`→`3.7.6`,
+`app.js?v=3.7.3`→`3.7.4`.
+
+**Verified:** `node --check public/app.js` passes. 3-file diff
+(`public/styles.css` +19, `public/app.js` +5, `public/index.html`
++2/-2). Hard-refresh the browser → View Breanna Chapman →
+modal should show the Edit button flush at the bottom of the modal
+card (no giant bar), exactly one "ADMIN" badge, and the kebab
+popover (click the 3-dot icon) should open with a dark background.
+
 ## User editing moved into the admin user profile modal (2026-10-05)
 
 User request: the user edit form was rendered as a separate `<div>` below
