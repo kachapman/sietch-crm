@@ -3132,6 +3132,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if m:
             self._handle_user_avatar_get(int(m.group(1)))
             return
+        m = re.match(r"^/api/v2/users/(\d+)$", api_path)
+        if m:
+            self._handle_user_get(int(m.group(1)))
+            return
         m = re.match(r"^/api/v2/users/(\d+)/sessions$", api_path)
         if m:
             self._handle_user_sessions_get(int(m.group(1)))
@@ -4219,10 +4223,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         m = re.match(r"^/api/v2/users/(\d+)$", api_path)
         if m and method == "DELETE":
             self._handle_user_delete(int(m.group(1)))
-            return
-        m = re.match(r"^/api/v2/users/(\d+)$", api_path)
-        if m and method == "GET":
-            self._handle_user_get(int(m.group(1)))
             return
         m = re.match(r"^/api/v2/users/(\d+)/delete-personal-data$", api_path)
         if m and method == "POST":

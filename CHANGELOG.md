@@ -2,6 +2,33 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Fix 404 on View user — route registered in wrong dispatch block (2026-10-05)
+
+User report: clicking the new "View" button in Admin → Users returned
+`Error response 404: Not Found`.
+
+**Root cause:** the new `GET /api/v2/users/{id}` route (added in the
+previous commit) was registered in the `do_api_post_put` dispatch
+block (server.py:4219-4222), but the GET block fires first and the
+route was never reached. Worse, the GET block doesn't have a
+`method` variable in scope — referencing `method` inside the GET
+block raised `NameError: name 'method' is not defined` once the
+route was moved to the right block.
+
+**Fix:**
+
+- **server.py (line 3137)** — moved the `GET /api/v2/users/{id}`
+  route into `_handle_api_get`, right after the existing
+  `users/{id}/avatar` route. Dropped the redundant `method == "GET"`
+  check (the GET block only handles GET) and removed the dead entry
+  from `do_api_post_put`.
+- Verified: `GET /api/v2/users/3` now returns `401` (auth required)
+  when called without a session, instead of `404` (route not
+  found) or `500` (NameError).
+
+**Files:** `server.py` (route relocation, ~3 lines net).
+**No JS / HTML / CSS changes.**
+
 ## Admin user-profile modal + "Delete Personal Data" action (2026-10-05)
 
 User request: mirror the onlyOffice workflow where an admin can open a
