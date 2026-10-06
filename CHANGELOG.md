@@ -2,6 +2,63 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## User editing moved into the admin user profile modal (2026-10-05)
+
+User request: the user edit form was rendered as a separate `<div>` below
+the user list — should be inside the modal instead, since the modal
+already opens when an admin clicks "View" on a user.
+
+**Fixes:**
+
+- **public/index.html** — new `<footer class="modal-footer">` on
+  `#admin-user-profile-modal` with three buttons: an `Edit` button
+  (default visible to admins viewing any other user, hidden when
+  viewing self), a `Save` button (hidden in view mode), and a
+  `Cancel` button (hidden in view mode).
+- **public/styles.css** — new generic `.modal-footer` rule
+  (right-aligned flex row with top border + `--bg-elevated`
+  background) so the user-profile modal footer matches the existing
+  `.tabler-icon-picker-card .modal-footer` styling and is reusable
+  for any future modal that needs a footer action row. Also added
+  `.modal-footer.hidden { display: none; }` for the show/hide
+  toggling.
+- **public/app.js**:
+  - `openAdminUserProfileModal` now wires the Edit / Save / Cancel
+    buttons. Edit button shows when an admin views any other user
+    (not for self). Save PUTs to `/api/v2/users/{id}` and re-opens
+    the modal in view mode to show the new values. Cancel re-opens
+    the modal in view mode.
+  - New `openAdminUserProfileEditForm(user)` helper that swaps
+    the read-only `<dt>/<dd>` field grid for an inline form
+    (firstName, lastName, displayName, email, role select,
+    isActive checkbox), hides the Edit button, shows Save + Cancel,
+    and focuses the first input.
+  - `_renderAdminUserKebabMenu` now also includes an "Edit" item
+    in the kebab dropdown (so admins can choose Edit from either
+    the footer button or the kebab menu).
+  - The inline `Edit` button in the user list (`.admin-user-edit`)
+    no longer toggles the old inline form below the list — it now
+    opens the user profile modal in edit mode via
+    `openAdminUserProfileModal(uid, { initialMode: "edit" })`.
+  - The old `<div id="admin-user-edit-form">` placeholder in the
+    user list is removed (it was a stale host for the form that
+    was deleted above).
+- **Cache busters bumped:** `styles.css?v=3.7.4`→`3.7.5`,
+  `app.js?v=3.7.1`→`3.7.2`.
+
+**Verified:** `node --check public/app.js` passes. The
+`_renderAdminUserKebabMenu` includes a defensive
+`if (!isSelf)` guard around the Edit item so admins can't easily
+edit their own row through the modal (consistent with the
+inline Edit button behavior).
+
+**Browser-test checklist:** admin → Users → click "View" on a
+user → modal opens with read-only fields + Edit button in
+footer → click Edit → fields become inputs + Save/Cancel
+appear → change a value → Save → modal switches back to
+read-only with the new value. Or: click the 3-dot kebab → click
+"Edit" → same edit flow.
+
 ## Fix 500 on View user — row dict access (2026-10-05)
 
 User report: after the previous 404 fix, clicking "View" still showed

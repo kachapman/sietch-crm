@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=3.7.4" />
+  <link rel="stylesheet" href="styles.css?v=3.7.5" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
 </head>
 <body>
@@ -3463,6 +3463,17 @@
         </dl>
         <p id="admin-user-profile-status" class="profile-field-hint" style="margin-top:0.85rem;"></p>
       </div>
+      <footer id="admin-user-profile-footer" class="modal-footer" style="display:flex;justify-content:flex-end;gap:0.5rem;padding:0.75rem 1rem;border-top:1px solid var(--border);background:var(--bg-elevated);">
+        <button type="button" id="admin-user-profile-edit-btn" class="btn btn-ghost btn-sm" title="Edit user">
+          <i class="ti ti-edit"></i> Edit
+        </button>
+        <button type="button" id="admin-user-profile-save-btn" class="btn btn-primary btn-sm hidden" title="Save changes">
+          <i class="ti ti-check"></i> Save
+        </button>
+        <button type="button" id="admin-user-profile-cancel-btn" class="btn btn-ghost btn-sm hidden" title="Discard changes">
+          Cancel
+        </button>
+      </footer>
     </div>
   </div>
 
@@ -3719,6 +3730,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3.7.1" type="module"></script>
+  <script src="app.js?v=3.7.2" type="module"></script>
 </body>
 </html>

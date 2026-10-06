@@ -32713,7 +32713,6 @@ async function populateAdminUsersList() {
         <button type="button" id="admin-add-user-btn" class="btn btn-primary btn-sm" style="margin-left:auto; white-space:nowrap;">Add User</button>
       </div>
       <div id="admin-users-list" style="overflow-y:auto;">${rows}</div>
-      <div id="admin-user-edit-form" class="hidden" style="margin-top:0.75rem; padding:0.75rem; background:var(--surface-2); border-radius:var(--radius); border:1px solid var(--border);"></div>
       <div id="admin-add-user-form" class="hidden" style="margin-top:0.75rem; padding:0.75rem; background:var(--surface-2); border-radius:var(--radius); border:1px solid var(--border);">
         <div style="display:flex; flex-direction:column; gap:0.4rem; margin-bottom:0.5rem;">
           <input type="text" id="new-user-first" class="form-control" placeholder="First name" />
@@ -32761,58 +32760,19 @@ async function populateAdminUsersList() {
       const editBtn = e.target.closest(".admin-user-edit");
       if (editBtn) {
         const uid = editBtn.dataset.uid;
-        const user = (users || []).find(u => String(u.id) === String(uid));
-        if (!user) return;
-        const form = $("#admin-user-edit-form");
-        if (!form) return;
-        form.classList.remove("hidden");
-        // Scroll the form into view — on mobile the user list is taller
-        // than the viewport, so without this the form appears off-screen
-        // below the fold and the user sees "nothing happened" after tapping Edit.
-        try {
-          form.scrollIntoView({ behavior: "smooth", block: "center" });
-        } catch (_) { /* noop for browsers without smooth-scroll */ }
-        form.innerHTML = `
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.4rem 0.6rem; margin-bottom:0.5rem;">
-            <input type="text" id="edit-user-first" class="form-control" placeholder="First name" value="${escapeHtml(user.firstName || "")}" />
-            <input type="text" id="edit-user-last" class="form-control" placeholder="Last name" value="${escapeHtml(user.lastName || "")}" />
-            <input type="email" id="edit-user-email" class="form-control" placeholder="Email" value="${escapeHtml(user.email || "")}" />
-            <input type="text" id="edit-user-display" class="form-control" placeholder="Display name" value="${escapeHtml(user.displayName || "")}" />
-            <select id="edit-user-role" class="form-control" style="width:auto;">
-              <option value="member" ${(user.role || "member") === "member" ? "selected" : ""}>Member</option>
-              <option value="limited" ${user.role === "limited" ? "selected" : ""}>Limited</option>
-              <option value="manager" ${user.role === "manager" ? "selected" : ""}>Manager</option>
-              <option value="admin" ${user.role === "admin" ? "selected" : ""}>Admin</option>
-            </select>
-            <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.8rem; color:var(--muted); cursor:pointer;">
-              <input type="checkbox" id="edit-user-active" ${user.isActive !== false ? "checked" : ""} /> Active
-            </label>
-          </div>
-          <div style="display:flex; gap:0.3rem;">
-            <button type="button" class="btn btn-primary btn-sm" id="admin-save-edit-user">Save</button>
-            <button type="button" class="btn btn-ghost btn-sm" id="admin-cancel-edit-user">Cancel</button>
-          </div>`;
-        $("#admin-cancel-edit-user")?.addEventListener("click", () => form.classList.add("hidden"));
-        $("#admin-save-edit-user")?.addEventListener("click", async () => {
-          const payload = {
-            email: $("#edit-user-email")?.value.trim() || null,
-            firstName: $("#edit-user-first")?.value.trim() || null,
-            lastName: $("#edit-user-last")?.value.trim() || null,
-            displayName: $("#edit-user-display")?.value.trim() || null,
-            role: $("#edit-user-role")?.value || "member",
-            isActive: $("#edit-user-active")?.checked ?? true,
-          };
-          try {
-            await api(`/api/v2/users/${uid}`, { method: "PUT", body: JSON.stringify(payload) });
-            form.classList.add("hidden");
-            showToast("User updated");
+        // Open the user profile modal directly in edit mode (the old
+        // inline-form-below-the-list UX is replaced by the modal-based one).
+        openAdminUserProfileModal(uid, {
+          onChange: () => {
             container.dataset.populated = "";
             populateAdminUsersList();
-          } catch (err) {
-            showToast(err.message || "Failed to update user", true);
-          }
+          },
+          initialMode: "edit",
         });
+        return;
       }
+      // (Old inline form handler removed — editing now lives in the
+      // admin user profile modal.)
 
       // Reset password
       const resetBtn = e.target.closest(".admin-user-reset");
@@ -33005,6 +32965,54 @@ async function openAdminUserProfileModal(userId, opts = {}) {
     if (opts.onChange) opts.onChange();
   } });
 
+  // If the caller asked to open directly in edit mode (e.g. the inline
+  // "Edit" button on a user list row), switch to the edit form after
+  // the modal is rendered.
+  if (opts.initialMode === "edit") {
+    openAdminUserProfileEditForm(user);
+  }
+
+  // Edit form footer buttons — wire the Edit / Save / Cancel pair.
+  // Edit button is visible to admins viewing any other user (hides for self).
+  const editBtn = $("#admin-user-profile-edit-btn");
+  const saveBtn = $("#admin-user-profile-save-btn");
+  const cancelBtn = $("#admin-user-profile-cancel-btn");
+  const footer = $("#admin-user-profile-footer");
+  if (editBtn && saveBtn && cancelBtn && footer) {
+    const canEdit = !isSelf; // admins can't easily edit their own row through this modal
+    editBtn.classList.toggle("hidden", !canEdit);
+    saveBtn.classList.add("hidden");
+    cancelBtn.classList.add("hidden");
+    editBtn.onclick = () => openAdminUserProfileEditForm(user);
+    saveBtn.onclick = async () => {
+      const fields = $("#admin-user-profile-fields");
+      if (!fields) return;
+      const payload = {
+        email: $("#admin-user-profile-edit-email")?.value.trim() || null,
+        firstName: $("#admin-user-profile-edit-first")?.value.trim() || null,
+        lastName: $("#admin-user-profile-edit-last")?.value.trim() || null,
+        displayName: $("#admin-user-profile-edit-display")?.value.trim() || null,
+        role: $("#admin-user-profile-edit-role")?.value || "member",
+        isActive: $("#admin-user-profile-edit-active")?.checked ?? true,
+      };
+      saveBtn.disabled = true;
+      try {
+        await api(`/api/v2/users/${encodeURIComponent(user.id)}`, { method: "PUT", body: JSON.stringify(payload) });
+        showToast("User updated");
+        // Re-fetch + re-render the modal in view mode so the new values show
+        if (opts.onChange) opts.onChange();
+        await openAdminUserProfileModal(user.id, opts);
+      } catch (err) {
+        showToast(err.message || "Failed to update user", true);
+        saveBtn.disabled = false;
+      }
+    };
+    cancelBtn.onclick = () => {
+      // Reset the field grid back to the read-only view of the current user.
+      openAdminUserProfileModal(user.id, opts);
+    };
+  }
+
   // Wire modal dismiss + kebab toggle
   const kebabBtn = $("#admin-user-profile-kebab-btn");
   const kebabPopover = $("#admin-user-profile-kebab-popover");
@@ -33048,6 +33056,58 @@ function closeAdminUserProfileModal() {
 }
 
 /**
+ * Switch the admin user profile modal from view mode to edit mode.
+ * Replaces the read-only field grid with an inline form (firstName, lastName,
+ * displayName, email, role select, isActive checkbox), then toggles the
+ * Edit / Save / Cancel buttons in the footer. Cancel re-opens the modal in
+ * view mode (re-fetches + re-renders).
+ */
+function openAdminUserProfileEditForm(user) {
+  const fields = $("#admin-user-profile-fields");
+  const editBtn = $("#admin-user-profile-edit-btn");
+  const saveBtn = $("#admin-user-profile-save-btn");
+  const cancelBtn = $("#admin-user-profile-cancel-btn");
+  if (!fields || !editBtn || !saveBtn || !cancelBtn) return;
+  // Replace the read-only <dt>/<dd> grid with an inline form using the
+  // same field set the old inline admin-user-edit-form used (firstName,
+  // lastName, email, displayName, role, isActive).
+  const role = user.role || "member";
+  fields.innerHTML = `
+    <dt style="color:var(--muted);align-self:center;">First name</dt>
+    <dd style="margin:0;"><input type="text" id="admin-user-profile-edit-first" class="form-control" value="${escapeHtml(user.firstName || "")}" autocomplete="off" /></dd>
+    <dt style="color:var(--muted);align-self:center;">Last name</dt>
+    <dd style="margin:0;"><input type="text" id="admin-user-profile-edit-last" class="form-control" value="${escapeHtml(user.lastName || "")}" autocomplete="off" /></dd>
+    <dt style="color:var(--muted);align-self:center;">Display name</dt>
+    <dd style="margin:0;"><input type="text" id="admin-user-profile-edit-display" class="form-control" value="${escapeHtml(user.displayName || "")}" autocomplete="off" /></dd>
+    <dt style="color:var(--muted);align-self:center;">Email</dt>
+    <dd style="margin:0;"><input type="email" id="admin-user-profile-edit-email" class="form-control" value="${escapeHtml(user.email || "")}" autocomplete="off" /></dd>
+    <dt style="color:var(--muted);align-self:center;">Role</dt>
+    <dd style="margin:0;">
+      <select id="admin-user-profile-edit-role" class="form-control">
+        <option value="member" ${role === "member" ? "selected" : ""}>Member</option>
+        <option value="limited" ${role === "limited" ? "selected" : ""}>Limited</option>
+        <option value="manager" ${role === "manager" ? "selected" : ""}>Manager</option>
+        <option value="admin" ${role === "admin" ? "selected" : ""}>Admin</option>
+      </select>
+    </dd>
+    <dt style="color:var(--muted);align-self:center;">Active</dt>
+    <dd style="margin:0;align-self:center;">
+      <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.8rem;color:var(--muted);cursor:pointer;">
+        <input type="checkbox" id="admin-user-profile-edit-active" ${user.isActive !== false ? "checked" : ""} />
+        Account is active
+      </label>
+    </dd>
+  `;
+  // Toggle footer buttons: hide Edit, show Save + Cancel.
+  editBtn.classList.add("hidden");
+  saveBtn.classList.remove("hidden");
+  cancelBtn.classList.remove("hidden");
+  saveBtn.disabled = false;
+  // Focus the first input for keyboard users.
+  setTimeout(() => $("#admin-user-profile-edit-first")?.focus(), 0);
+}
+
+/**
  * Build the kebab dropdown menu for the admin user profile modal.
  * Each item is a button that runs the corresponding action on the user.
  */
@@ -33059,6 +33119,16 @@ function _renderAdminUserKebabMenu(user, opts = {}) {
   const isSelf = Number(user.id) === Number(state.currentUserId);
 
   const items = [];
+  // Edit user (open the modal in edit mode)
+  if (!isSelf) {
+    items.push({ icon: "ti-edit", label: "Edit", onClick: () => {
+      // Close the kebab + switch the modal to edit mode.
+      const pop = $("#admin-user-profile-kebab-popover");
+      if (pop) pop.classList.add("hidden");
+      openAdminUserProfileEditForm(user);
+    } });
+  }
+
   // Reset Password
   items.push({ icon: "ti-key", label: "Reset Password", onClick: async () => {
     const ok = await confirmDialog({

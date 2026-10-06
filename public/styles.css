@@ -18475,6 +18475,22 @@ select.form-control {
 }
 
 
+/* ── Generic modal footer (right-aligned action row at the bottom of a
+   modal — used by the admin user profile modal for the Edit / Save /
+   Cancel buttons. Reusable for any future modal that needs a footer
+   action row. */
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border, #2a2e3a);
+  background: var(--bg-elevated, #1f2128);
+  flex-shrink: 0;
+}
+.modal-footer.hidden { display: none; }
+
 /* ── Kebab menu (admin user profile + reusable) ──────────────────────────── */
 .kebab-menu {
   display: inline-block;
