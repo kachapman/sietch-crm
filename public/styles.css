@@ -1967,6 +1967,15 @@ body {
    often much taller than the previous `100vh - 280px` viewport cap).
    Keep horizontal scroll for column navigation. Padding-bottom keeps
    the horizontal scrollbar above the tile's rounded bottom corners. */
+.dashboard-tile.local-kanban-tile {
+  /* Cap the tile at a viewport-relative max so a column with many cards
+     doesn't drag the whole grid row (and every other tile in it) to
+     thousands of pixels tall. The .column-body inside still scrolls
+     when the column overflows the cap. The .dashboard-tile base rule
+     already sets min-height: 400px so the tile never shrinks to 0. */
+  max-height: min(70vh, 800px);
+  overflow: hidden; /* keep the columns + scroll inside the cap */
+}
 .dashboard-tile.local-kanban-tile .local-kanban-body {
   display: flex;
   flex-direction: column;

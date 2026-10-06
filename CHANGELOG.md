@@ -2,6 +2,54 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Kanban tile height cap — prevent many-card columns from blowing up the grid row (2026-10-06)
+
+User report (after the previous "kanban column fills tile height" fix):
+"the change you made now allows all columns to display every card in
+the list. Is that intentional? Is that going to cause slow downs as
+we get increasingly more projects? are the kanban columns unable to
+detect the height of the tile and cap height of the column there as
+well?"
+
+**Root cause:** the previous fix dropped the `max-height: calc(100vh -
+280px)` from `.column` so the column could fill whatever height the
+tile ended up being. The tile's height is set by the grid row sizing
+to the tallest content. So a single column with 50+ cards would drag
+the whole row (and every other tile in the same row) to thousands of
+pixels tall. The `min-height: 400px` floor on the tile wasn't enough.
+
+**Fix (public/styles.css):** added a new rule for
+`.dashboard-tile.local-kanban-tile` itself:
+- `max-height: min(70vh, 800px)` — caps the tile at the smaller of
+  70% of the viewport or 800px, so the tile never grows beyond a
+  reasonable reading-area size regardless of card count.
+- `overflow: hidden` — keeps the columns + the column-body scroll
+  inside the cap. The `.dashboard-tile` base rule still sets
+  `min-height: 400px` so the tile never shrinks to zero on a
+  nearly-empty kanban.
+
+**Result:** the column-body still scrolls inside the column (its
+existing `flex: 1; overflow-y: auto; min-height: 80px` rules
+are unchanged). The tile never grows past the cap, so the grid row
+stays a predictable height and other tiles in the same row aren't
+dragged down by one bloated column. The previous "fill tile height
+before scrolling" behavior is preserved: columns still fill the
+capped tile height, and the inner column-body scrolls when cards
+exceed that.
+
+**Cache buster bumped:** `styles.css?v=3.7.7`→`3.7.8`.
+
+**Verified:** `node --check public/app.js` passes (no JS change).
+1-file diff (`public/styles.css` +9, `public/index.html` +1/-1).
+
+**Browser-test:** open a local-kanban tile with 50+ cards → the
+tile caps at `min(70vh, 800px)`, the column-body inside the columns
+scrolls to show the additional cards. Open a tile with 3 cards →
+the tile still shows at the cap (with empty space below the cards,
+since the column-body takes the cap's height even when there's
+content to spare). The grid row containing this tile stays at the
+cap height, not pushed to thousands of px by one overstuffed column.
+
 ## Kanban column fills tile height before scrolling (2026-10-06)
 
 User report: "on the group tile kanban board, the card lists are
