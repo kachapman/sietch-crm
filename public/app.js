@@ -32744,96 +32744,108 @@ async function populateAdminUsersList() {
       });
     }
 
-    // Edit handler
+    // Click handler for the user list — covers View / Edit (open the
+    // admin user profile modal) and the inline action buttons
+    // (Reset PW / Sessions / Deactivate / Reactivate). Wrapped in a
+    // try/catch so any future bug in the modal render surfaces as a
+    // toast instead of silently doing nothing (a previous
+    // `ReferenceError: isSelf` shipped to production because the async
+    // function bailed before any toast fallback could fire).
     container.addEventListener("click", async (e) => {
-      // View — open the admin user profile modal (kebab dropdown with
-      // Reset PW / Sessions / Deactivate / Reactivate / Delete Personal Data).
-      const viewBtn = e.target.closest(".admin-user-view");
-      if (viewBtn) {
-        openAdminUserProfileModal(viewBtn.dataset.uid, { onChange: () => {
-          container.dataset.populated = "";
-          populateAdminUsersList();
-        } });
-        return;
-      }
-
-      const editBtn = e.target.closest(".admin-user-edit");
-      if (editBtn) {
-        const uid = editBtn.dataset.uid;
-        // Open the user profile modal directly in edit mode (the old
-        // inline-form-below-the-list UX is replaced by the modal-based one).
-        openAdminUserProfileModal(uid, {
-          onChange: () => {
+      try {
+        // View — open the admin user profile modal (kebab dropdown with
+        // Reset PW / Sessions / Deactivate / Reactivate / Delete Personal Data).
+        const viewBtn = e.target.closest(".admin-user-view");
+        if (viewBtn) {
+          openAdminUserProfileModal(viewBtn.dataset.uid, { onChange: () => {
             container.dataset.populated = "";
             populateAdminUsersList();
-          },
-          initialMode: "edit",
-        });
-        return;
-      }
-      // (Old inline form handler removed — editing now lives in the
-      // admin user profile modal.)
+          } });
+          return;
+        }
 
-      // Reset password
-      const resetBtn = e.target.closest(".admin-user-reset");
-      if (resetBtn) {
-        const uid = resetBtn.dataset.uid;
-        const ok = await confirmDialog({ title: "Reset Password", message: "Generate a temporary password for this user? You'll need to share it with them verbally.", confirmLabel: "Generate Temp Password" });
-        if (!ok) return;
-        try {
-          const email = resetBtn.dataset.email || "";
-          const result = await api(`/api/v2/users/${uid}/reset-password`, { method: "POST", body: JSON.stringify({ method: "temp" }) });
-          const pw = result.tempPassword || "";
-          if (pw) {
-            showTempPasswordDialog(pw, uid, email);
+        // Edit — open the modal directly in edit mode.
+        const editBtn = e.target.closest(".admin-user-edit");
+        if (editBtn) {
+          const uid = editBtn.dataset.uid;
+          openAdminUserProfileModal(uid, {
+            onChange: () => {
+              container.dataset.populated = "";
+              populateAdminUsersList();
+            },
+            initialMode: "edit",
+          });
+          return;
+        }
+
+        // Reset password
+        const resetBtn = e.target.closest(".admin-user-reset");
+        if (resetBtn) {
+          const uid = resetBtn.dataset.uid;
+          const ok = await confirmDialog({ title: "Reset Password", message: "Generate a temporary password for this user? You'll need to share it with them verbally.", confirmLabel: "Generate Temp Password" });
+          if (!ok) return;
+          try {
+            const email = resetBtn.dataset.email || "";
+            const result = await api(`/api/v2/users/${uid}/reset-password`, { method: "POST", body: JSON.stringify({ method: "temp" }) });
+            const pw = result.tempPassword || "";
+            if (pw) {
+              showTempPasswordDialog(pw, uid, email);
+            }
+          } catch (err) {
+            showToast(err.message || "Failed to reset password", true);
           }
-        } catch (err) {
-          showToast(err.message || "Failed to reset password", true);
+          return;
         }
-      }
 
-      // Revoke sessions
-      const sessionsBtn = e.target.closest(".admin-user-sessions");
-      if (sessionsBtn) {
-        const uid = sessionsBtn.dataset.uid;
-        const ok = await confirmDialog({ title: "Revoke Sessions", message: "Sign out this user from all devices?", confirmLabel: "Revoke" });
-        if (!ok) return;
-        try {
-          await api(`/api/v2/users/${uid}/sessions`, { method: "DELETE" });
-          showToast("Sessions revoked");
-        } catch (err) {
-          showToast(err.message || "Failed to revoke sessions", true);
+        // Revoke sessions
+        const sessionsBtn = e.target.closest(".admin-user-sessions");
+        if (sessionsBtn) {
+          const uid = sessionsBtn.dataset.uid;
+          const ok = await confirmDialog({ title: "Revoke Sessions", message: "Sign out this user from all devices?", confirmLabel: "Revoke" });
+          if (!ok) return;
+          try {
+            await api(`/api/v2/users/${uid}/sessions`, { method: "DELETE" });
+            showToast("Sessions revoked");
+          } catch (err) {
+            showToast(err.message || "Failed to revoke sessions", true);
+          }
+          return;
         }
-      }
 
-      // Deactivate
-      const deactivateBtn = e.target.closest(".admin-user-deactivate");
-      if (deactivateBtn) {
-        const uid = deactivateBtn.dataset.uid;
-        const ok = await confirmDialog({ title: "Deactivate User", message: "This user will be signed out and unable to log in.", confirmLabel: "Deactivate" });
-        if (!ok) return;
-        try {
-          await api(`/api/v2/users/${uid}`, { method: "DELETE" });
-          showToast("User deactivated");
-          container.dataset.populated = "";
-          populateAdminUsersList();
-        } catch (err) {
-          showToast(err.message || "Failed to deactivate user", true);
+        // Deactivate
+        const deactivateBtn = e.target.closest(".admin-user-deactivate");
+        if (deactivateBtn) {
+          const uid = deactivateBtn.dataset.uid;
+          const ok = await confirmDialog({ title: "Deactivate User", message: "This user will be signed out and unable to log in.", confirmLabel: "Deactivate" });
+          if (!ok) return;
+          try {
+            await api(`/api/v2/users/${uid}`, { method: "DELETE" });
+            showToast("User deactivated");
+            container.dataset.populated = "";
+            populateAdminUsersList();
+          } catch (err) {
+            showToast(err.message || "Failed to deactivate user", true);
+          }
+          return;
         }
-      }
 
-      // Reactivate
-      const reactivateBtn = e.target.closest(".admin-user-reactivate");
-      if (reactivateBtn) {
-        const uid = reactivateBtn.dataset.uid;
-        try {
-          await api(`/api/v2/users/${uid}/reactivate`, { method: "POST" });
-          showToast("User reactivated");
-          container.dataset.populated = "";
-          populateAdminUsersList();
-        } catch (err) {
-          showToast(err.message || "Failed to reactivate user", true);
+        // Reactivate
+        const reactivateBtn = e.target.closest(".admin-user-reactivate");
+        if (reactivateBtn) {
+          const uid = reactivateBtn.dataset.uid;
+          try {
+            await api(`/api/v2/users/${uid}/reactivate`, { method: "POST" });
+            showToast("User reactivated");
+            container.dataset.populated = "";
+            populateAdminUsersList();
+          } catch (err) {
+            showToast(err.message || "Failed to reactivate user", true);
+          }
+          return;
         }
+      } catch (err) {
+        console.error("[admin user click] handler error:", err);
+        showToast("Action failed: " + (err?.message || err), true);
       }
     });
 
@@ -32893,6 +32905,7 @@ async function openAdminUserProfileModal(userId, opts = {}) {
   const name = user.displayName || (user.firstName || user.lastName ? `${user.firstName || ""} ${user.lastName || ""}`.trim() : null) || user.email || `User #${user.id}`;
   const isActive = user.isActive !== false;
   const isAdmin = user.isAdmin === true;
+  const isSelf = Number(user.id) === Number(state.currentUserId);
 
   // Header
   const titleEl = $("#admin-user-profile-title");
