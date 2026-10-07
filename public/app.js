@@ -2,6 +2,45 @@
  * Sietch CRM — multi-group opportunity board (local test portal)
  */
 
+/**
+ * Auto-hide scrollbars: add `is-scrolling` to <body> for 1s after any
+ * scroll event. Combined with the CSS rules below, this makes the
+ * scrollbar fully hidden at rest, then visible while the user is
+ * actively scrolling (and for 1s after they stop). The CSS `:hover`
+ * selector also reveals the scrollbar on the hovered element
+ * independently — so users can see the scrollbar before they scroll.
+ *
+ * Why JS is needed: on WebKit/Blink (Chrome, Edge, Safari),
+ * `::-webkit-scrollbar { background: transparent }` does NOT actually
+ * hide the scrollbar — the browser still renders the thumb in a
+ * default color. The only way to truly hide it at rest is `width: 0`
+ * on the scrollbar, and the only way to bring it back is to set
+ * `width: 8px` again. Pure CSS `:hover` works for mouseover but
+ * doesn't catch the "user is actively scrolling with keyboard" case,
+ * so we use JS to detect scroll events globally.
+ *
+ * `capture: true` ensures we catch scroll events on every element
+ * (including shadow DOM, iframes, etc.) — not just on body.
+ * `passive: true` tells the browser we won't preventDefault, so
+ * scrolling stays smooth.
+ *
+ * The timer is module-level so rapid scroll events reset it instead
+ * of stacking up multiple class removals.
+ */
+(function setupAutoHideScrollbars() {
+  let scrollTimer = null;
+  const SCROLLBAR_FADE_MS = 1000;
+  const onScroll = () => {
+    document.body.classList.add("is-scrolling");
+    if (scrollTimer !== null) clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(() => {
+      document.body.classList.remove("is-scrolling");
+      scrollTimer = null;
+    }, SCROLLBAR_FADE_MS);
+  };
+  document.addEventListener("scroll", onScroll, { passive: true, capture: true });
+})();
+
 function getContrastText(hex) {
   try {
     let c = (hex || "").replace("#", "");
