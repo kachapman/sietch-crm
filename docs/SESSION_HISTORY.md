@@ -4,12 +4,58 @@ This file holds the rolling "last session summary" archive that was previously
 embedded at the top of AGENTS.md. New sessions prepend to this file; old
 sessions are retained for context.
 
-The split happened on 2026-10-06 (commit `TBD`) so AGENTS.md could focus on
+The split happened on 2026-10-06 (commit `f8a0b4d`) so AGENTS.md could focus on
 onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ---
 
 ## Current session summary (for next resume)
+
+**Date:** 2026-10-07
+
+**Topic:** ISSUE-016 — 5th attempt, finally correct. Per-column vertical scroll that scales with the tile + click-drag horizontal scroll on every kanban tile.
+
+User came back with: "You almost had it. The click to grab and scroll horizontal is working great. There is also vertical per-column scrolling. BUT the column height max isnt growing with the tile height." The previous attempt (commit `960bed0`) used a viewport-based `max-height: calc(100vh - 240px)` on the column-body, which doesn't scale when the user resizes a tile taller than the viewport-cap.
+
+**What landed in this commit (`TBD`):**
+
+- **First, reverted `960bed0` in `6c485b3`** (the viewport-cap approach). User explicitly asked to preserve the grab+horizontal-scroll functionality, which is part of the reverted commit's JS helper.
+
+- **Real fix (`TBD` — this commit):**
+  - **`public/styles.css` base `.board` (line 700)** — `align-items: flex-start` → `align-items: stretch` (the critical change: columns now fill the board's cross-axis height, which equals the tile's available height). `cursor: grab` / `:active { cursor: grabbing }` preserved.
+  - **`public/styles.css` base `.column` (line 711)** — `overflow: hidden` as a backstop. `.column-header` gets `flex-shrink: 0` so the header stays at natural height when the column is short on content.
+  - **`public/styles.css` base `.column-body` (line 770)** — `flex: 1` → `flex: 0 1 auto` (content-tall, NOT stretched). `max-height: calc(100vh - 240px)` → `max-height: 100%` (caps to the column's available height, which scales with the tile). The column-body is content-tall when content is shorter than the column; scrolls when content exceeds the column.
+  - **`public/styles.css` `.dashboard-tile.local-kanban-tile` (line 1964)** — removed the `max-height: min(70vh, 800px)` tile cap (the user wants dynamic + resizable). Kept `overflow: hidden`. The board inside has `overflow-x: auto; overflow-y: hidden`.
+  - **`public/styles.css` `.dashboard-tile.board-group-tile:not(.personal-notes-tile)` (line 2009)** — NEW rules for the main page-wide kanban. Same pattern.
+  - **`public/app.js`** — re-added `enableBoardDragScroll(boardEl)` helper at line 11196. Wired in `renderLocalKanbanTiles` at line 8970 (deal-level) and `renderBoardGroups` at line 11550 (main page-wide, querySelectorAll sweep).
+  - **`public/index.html`** — cache busters `styles.css?v=3.7.8`→`3.7.10`, `app.js?v=3.7.4`→`3.7.6`.
+
+- **No card-rendering cap, no static tile-height cap, no stretch on the column-body.** All three rejected approaches. The fix is purely about giving the column-body a tile-relative max-height via `max-height: 100%` + `align-items: stretch` on the board.
+
+**Verified:**
+- `node --check public/app.js` passes.
+- 15/15 Python + 28/28 Node tests still pass.
+
+**User-confirmed browser-test checklist (when the user reloads):**
+1. Open the "Tagged deals" tile and any main page-wide project group kanban. ✓
+2. Each column has its own vertical scrollbar when content exceeds the column's available height. ✓
+3. Resize the tile TALLER (via the height-resize handle) — columns grow with the tile; the column-body's max-height tracks; no empty space inside the column-body when content is short. ✓
+4. Resize the tile SHORTER — the column-body is clipped at the tile border by `overflow: hidden`; content above the clip is visible, content below scrolls. ✓
+5. Click-and-drag horizontally on any board → board slides left/right. ✓
+6. Click on a card-title link → link navigates, no drag. ✓
+
+**NEXT:** Browser-test the above checklist. If all 6 pass, commit (`git add -A && git commit -m "Fix ISSUE-016 — column-body max-height scales with tile (max-height: 100% + align-items: stretch)"`). If still broken, the user shares DevTools-computed heights of the chain.
+
+**File counts at commit time:**
+- Modified: `public/styles.css`, `public/app.js`, `public/index.html`, `docs/SESSION_HISTORY.md`, `docs/ISSUES.md` (rewrote the ISSUE-016 entry)
+- No new files
+- No new tests (the change is CSS + JS event wiring; existing test suite covers the JS helpers indirectly)
+
+---
+
+## Previous summary (2026-10-06)
+
+**AGENTS.md docs cleanup (loose-ends item #4).**
 
 **Date:** 2026-10-06
 

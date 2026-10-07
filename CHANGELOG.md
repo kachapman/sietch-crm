@@ -2,6 +2,53 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Kanban: per-column vertical scroll that scales with tile + click-drag horizontal scroll (2026-10-07)
+
+The 5th (and correct) attempt at ISSUE-016. The previous four attempts
+(commits `d9dbfae`, `512e8f6`, `357b23e` reverted in `f708cc1`,
+`960bed0` reverted in `6c485b3`) all failed because they either
+conflated "clip the column to the tile border" with "stretch the
+column to fill the tile," or used a viewport-based max-height that
+didn't scale with tile resize.
+
+**Scope:** applies to BOTH the main page-wide project group kanban
+(one per `state.groups[]` entry, rendered by `renderBoardGroups`)
+AND the deal-level local kanban (rendered by `renderLocalKanbanTiles`).
+
+**Fix:**
+
+- **`public/styles.css` base `.board` (line 700)** — `align-items:
+  flex-start` → `align-items: stretch` (columns now fill the board's
+  cross-axis height, which equals the tile's available height). Added
+  `cursor: grab` / `:active { cursor: grabbing }` for the drag
+  affordance.
+- **Base `.column` (line 711)** — `overflow: hidden` as a backstop.
+  `.column-header` gets `flex-shrink: 0` so the header stays at natural
+  height when the column is short on content.
+- **Base `.column-body` (line 770)** — `flex: 1` → `flex: 0 1 auto`
+  (content-tall, NOT stretched). `max-height: calc(100vh - 240px)` →
+  `max-height: 100%` (caps to the column's available height, which
+  scales with the tile).
+- **`.dashboard-tile.local-kanban-tile` (line 1964)** — removed the
+  `max-height: min(70vh, 800px)` tile cap (the user wants dynamic +
+  resizable). Kept `overflow: hidden`.
+- **`.dashboard-tile.board-group-tile:not(.personal-notes-tile)` (line
+  2009)** — NEW rules for the main page-wide kanban.
+
+**Click-and-drag horizontal scroll (mouse):**
+
+- **`public/app.js` `enableBoardDragScroll(boardEl)` helper (line
+  11196)** — re-added after the previous commit was reverted. ~50 lines.
+- **Wired in two places:** `renderLocalKanbanTiles` at line 8970
+  (deal-level, per-board) and `renderBoardGroups` at line 11550 (main
+  page-wide, querySelectorAll sweep).
+
+**Verified:** `node --check public/app.js` passes; 15/15 Python + 28/28
+Node tests still pass. Browser-test checklist in `docs/SESSION_HISTORY.md`
+(current session entry) and `docs/ISSUES.md` (ISSUE-016 entry).
+
+**Files:** `public/styles.css` (+57/-21), `public/app.js` (+82), `public/index.html` (+2/-2), `docs/ISSUES.md` (rewrote ISSUE-016 entry), `docs/SESSION_HISTORY.md` (new current-session entry), `CHANGELOG.md` (this entry).
+
 ## Kanban tile height cap — prevent many-card columns from blowing up the grid row (2026-10-06)
 
 User report (after the previous "kanban column fills tile height" fix):
