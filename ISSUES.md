@@ -652,51 +652,103 @@ Because the v2.0 token endpoint mints one access token with one audience, Graph 
 | Refresh token revocation | If the Graph token is revoked, falls back to SMTP and surfaces the error |
 
 
-## ISSUE-016 — Deal-level kanban column body doesn't scroll when content overflows (2026-10-06)
+## ISSUE-016 — Deal-level kanban: per-column vertical scroll + click-drag horizontal scroll (2026-10-06)
 
-**Status:** ❌ Documented; deferred (no code change applied after multiple attempts failed to satisfy user).  
+**Status:** ✅ Fixed 2026-10-06.  
 **Priority:** Medium (visual UX only; no data loss)  
-**Area:** `public/styles.css` (`.board`, `.column`, `.dashboard-tile.board-group-tile` rules at lines 700-770, 1942-1962)
+**Area:** `public/styles.css` (`.dashboard-tile.local-kanban-tile .*` rules at lines 1964-2025), `public/app.js` (new `enableBoardDragScroll` helper at line 8941, wired at line 9034), `public/index.html` (cache busters `styles.css?v=3.7.8`→`3.7.9`, `app.js?v=3.7.4`→`3.7.5`)
 
 ### Summary
 
-User expectation: when a column on the deal-level kanban (e.g. "Tagged deals") has more cards than fit in the visible area, the column body should scroll so the user can see the additional cards inside the column.
+User reported that on the deal-level kanban (e.g. "Tagged deals" tile, 148 cards across columns): (1) the entire board was scrolling vertically as a single unit instead of each column scrolling independently; (2) horizontal navigation required the user to grab the horizontal scrollbar — they wanted to click-and-drag the board left/right to scroll, like mobile touch-pan but with the mouse. Both were fixed in this commit.
 
-### What was tried
+### Root cause (what was actually wrong)
 
-- **Attempt 1:** Removed `.column { max-height: calc(100vh - 280px); }` and replaced with `max-height: none; min-height: 0;` so the column could fill the available tile height. Result: all cards visible in the DOM but only the top few rendered visibly; no clear scroll affordance.
-- **Attempt 2:** Added `flex: 1 1 auto; min-height: 0;` to `.dashboard-tile.local-kanban-tile .board` and `.dashboard-tile.local-kanban-tile .local-kanban-body` so the board fills the tile. Added `max-height: min(70vh, 800px); overflow: hidden;` on `.dashboard-tile.local-kanban-tile` to cap the tile and prevent one overstuffed column from blowing up the whole grid row. Result: tile is capped, but the user reports the columns STILL don't scroll to show the additional cards.
-- **Audit findings:** The deal-level kanban (`.board` rule at line 700) has `align-items: flex-start;` which prevents columns from stretching to the board's cross-axis height. Combined with no explicit `flex: 1; min-height: 0;` on `.dashboard-tile.board-group-tile .board`, the board doesn't fill the tile, and the columns don't fill the board. The natural fix would be: (a) change `.board { align-items: flex-start; }` to `align-items: stretch;` (or scope to the deal-kanban variant), (b) add `flex: 1 1 auto; min-height: 0;` to `.dashboard-tile.board-group-tile .board`, (c) keep the column at `max-height: none; min-height: 0;` so the column-body's `overflow-y: auto;` kicks in. **The user opted to defer this work after multiple attempts failed to satisfy the requirement.**
+The previous attempts addressed the height chain but missed the **double-overflow** bug:
 
-### Why it's deferred
+1. `.board` had `overflow: auto` → the **whole board** became the vertical scroll container. The browser scrolls the outermost overflow container first; the column-body's own `overflow-y: auto` was unused because the column never stretched to a constrained height (see point 2).
+2. `.board` had `align-items: flex-start` (the default) → columns were sized to their CONTENT height, not the board's cross-axis. So `.column-body { flex: 1; overflow-y: auto }` had nothing to scroll against — its parent wasn't height-constrained, so the column-body was content-tall (no overflow).
+3. No click-drag horizontal scroll existed for mouse. The native touch-pan worked because `overflow-x: auto` is pan-enabled on touch devices by default, but mouse users were stuck with the scrollbar.
 
-User explicitly requested leaving this bug for future investigation: "Leave it for now. Document this bug for future investigation." Per AGENTS.md guidance ("If the user has to argue 'where is the HTML?', the agent has failed the rule."), continuing to add speculative CSS without confirming the actual visual problem is wasteful.
+### Fix
 
-### Proposed fix (for when work resumes)
+**CSS (`public/styles.css`):** Three rule changes, all scoped to `.dashboard-tile.local-kanban-tile` so the main page-wide kanban is unaffected:
 
 ```css
-/* In .board or a deal-kanban-specific override: */
-align-items: stretch;  /* default for flex rows, but explicitly set */
-
-/* In .dashboard-tile.board-group-tile .board: */
-.dashboard-tile.board-group-tile .board {
+.dashboard-tile.local-kanban-tile .board {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;  /* already there */
+  align-items: stretch;        /* was: default flex-start — now columns fill board's height */
+  overflow-x: auto;            /* unchanged: keep horizontal scroll */
+  overflow-y: hidden;          /* was: overflow: auto (the bug) — board no longer scrolls vertically */
+  padding-bottom: 1rem;
+  cursor: grab;                /* click-drag horizontal scroll (see app.js) */
 }
-
-/* .column and .column-body are already correct (max-height: none + overflow-y: auto) */
+.dashboard-tile.local-kanban-tile .board:active {
+  cursor: grabbing;
+}
+.dashboard-tile.local-kanban-tile .column {
+  min-height: 0;               /* let flexbox compute from .board's cross-axis height */
+}
 ```
 
-This is **3 lines of CSS**. The risk is that the rule applies to the main page-wide kanban too (not just the deal-level tile), which may visually stretch columns in ways the user doesn't want. Scoping via `.dashboard-tile.board-group-tile .board` (line 1958-1960) would limit the change to the deal-tile case.
+The height chain after the fix is:
+```
+.dashboard-tile (max-height: min(70vh, 800px); overflow: hidden)
+  └─ .local-kanban-body (flex: 1; min-height: 0)
+       └─ .board (flex: 1; align-items: stretch; overflow-x: auto; overflow-y: hidden)
+            └─ .column (stretches to board's height; min-height: 0)
+                 └─ .column-header (sticky; natural height)
+                 └─ .column-body (flex: 1; min-height: 80px; overflow-y: auto)  ← ONLY vertical scroller
+```
 
-### Verification (when work resumes)
+`.column-body` was already correct from the earlier attempts (`overflow-y: auto; flex: 1; min-height: 80px`). Once the column stretches to the board's height, the column-body's overflow kicks in. Each column has its own scrollbar. Wheel events over a column scroll that column. The board's `overflow-y: hidden` means the board itself doesn't scroll vertically — columns are independent.
 
-- Open a deal-level kanban tile (e.g. "Tagged deals") with 35+ cards in one column.
-- Each column should stretch to fill the tile's height.
-- The column-body should scroll to show cards beyond the visible area.
-- The board itself should NOT scroll (its height is fixed by the tile).
-- Other tiles in the same grid row should NOT be dragged down by the overstuffed column.
+**JS (`public/app.js`):** New `enableBoardDragScroll(boardEl)` helper (~55 lines). Mirrors the touch-pan behavior for mouse:
 
-### Files (when fixed)
-- `public/styles.css` — 3-line edit to `.board` and `.dashboard-tile.board-group-tile .board`.
+- `mousedown` on the board (left or middle button) starts a drag, unless the click target is inside an `<a>` element (links navigate normally, per user instruction).
+- `mousemove` (on `document`, so the drag continues even if the cursor leaves the board) translates horizontal delta into `boardEl.scrollLeft`. 1.5× multiplier for feel.
+- `mouseup` ends the drag.
+- A synthetic `click` that fires after a drag is captured-and-suppressed, so cards don't accidentally fire `onclick` after a horizontal pan.
+- Cleanup: the board is destroyed and recreated on every `renderLocalKanbanTiles` call, so the listeners die with the node. No explicit teardown needed.
+- Guarded with `boardEl._dragScrollBound` so re-binding is a no-op (paranoia, since each render creates a fresh element).
+
+**Wired in** at the end of `renderLocalKanbanTiles`:
+```js
+const board = section.querySelector('.board');
+buildLocalKanbanBoard(board, kanban, section);
+enableBoardDragScroll(board);  // ← this commit
+```
+
+### Cursor hierarchy
+
+- `.board` → `cursor: grab` (and `grabbing` on `:active`)
+- `.column` (no rule) → inherits `grab` from `.board`
+- `.column-header` (no rule) → inherits `grab` from `.board`
+- `.column-body` (no rule) → inherits `grab` from `.board`
+- `.card` (line 780) → `cursor: default` — overrides so cards don't feel grabbable
+
+This is intentional: the user wants the whole board (including columns and column headers) to be draggable, except individual cards.
+
+### Verification
+
+- `node --check public/app.js` passes.
+- 15/15 Python tests + 28/28 Node tests pass (no helper changes, so they're not exercising this code, but they confirm no regressions in the existing logic).
+- **Browser test (manual):** open a deal-level kanban tile (e.g. "Tagged deals") with 30+ cards in one column:
+  - Wheel-scroll over the column → that column scrolls; other columns do not move.
+  - The column's own vertical scrollbar appears and works.
+  - Click-and-drag horizontally anywhere on the board (column header, column body, between cards, empty space) → the whole board slides left/right, revealing off-screen columns.
+  - Click on a card link (e.g. the title) → link navigates as before; no drag.
+  - Click on a card preview/edit button → button fires; no drag.
+  - The board itself does NOT scroll vertically — only columns do.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `public/styles.css` | 3 rule edits + 1 new rule + updated comment block (`.dashboard-tile.local-kanban-tile .board` and `.column`) |
+| `public/app.js` | New `enableBoardDragScroll` helper (~55 lines) + 1-line wire at end of `renderLocalKanbanTiles` |
+| `public/index.html` | Cache busters: `styles.css?v=3.7.8`→`3.7.9`, `app.js?v=3.7.4`→`3.7.5` |
+| `docs/ISSUES.md` | This entry (status updated to ✅ Fixed) |
+| `docs/SESSION_HISTORY.md` | New current-session summary entry |
+| `CHANGELOG.md` | Release note |

@@ -2,6 +2,51 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Deal-level kanban: per-column vertical scroll + click-drag horizontal scroll (2026-10-06)
+
+User came back to the deferred ISSUE-016 with a clearer description of the
+symptom: the entire board was scrolling vertically as one unit (one scrollbar
+on the right edge of the tile), and they wanted each column to have its own
+vertical scrollbar, plus click-and-drag horizontal navigation.
+
+**Root cause (the actual bug, not the previous attempt's height chain):**
+
+The `.board` element had `overflow: auto`, which made the whole board the
+vertical scroll container. The browser scrolls the outermost overflow
+container first; the column-body's own `overflow-y: auto` was unused because
+the column never stretched to the board's height (the default
+`align-items: flex-start` kept columns at content height), so the
+column-body had no overflow to show.
+
+**Fix (this commit):**
+
+- **`public/styles.css`** — three rule changes scoped to
+  `.dashboard-tile.local-kanban-tile`:
+  - `.board` now has `overflow-x: auto; overflow-y: hidden` (was
+    `overflow: auto`). The board no longer scrolls vertically; columns do.
+  - `.board` now has `align-items: stretch` (was default `flex-start`).
+    Columns fill the board's vertical height.
+  - `.column` now has `min-height: 0` so flexbox can compute its height
+    from the board's cross-axis.
+  - Added `cursor: grab` on `.board` and `cursor: grabbing` on
+    `.board:active` to signal the click-drag affordance.
+- **`public/app.js`** — new `enableBoardDragScroll(boardEl)` helper
+  (~55 lines) wired at the end of `renderLocalKanbanTiles`. Mirrors the
+  existing touch-pan behavior for mouse: mousedown on the board starts a
+  drag, mousemove translates horizontal delta into `scrollLeft` (1.5×
+  multiplier), mouseup ends, synthetic click after a drag is suppressed
+  so cards don't fire onclick. **Guard:** `e.target.closest("a")` skips
+  the drag entirely if the click started on a link, so card-title links
+  still navigate.
+- **`public/index.html`** — cache busters `styles.css?v=3.7.8`→`3.7.9`,
+  `app.js?v=3.7.4`→`3.7.5`.
+- **`docs/ISSUES.md`** — ISSUE-016 status updated to ✅ Fixed with the
+  full root-cause writeup.
+
+**Verified:** `node --check public/app.js` passes; 15/15 Python + 28/28
+Node tests still pass (no helper changes; sanity check only). Browser
+test checklist in `docs/SESSION_HISTORY.md` (current session entry).
+
 ## Kanban tile height cap — prevent many-card columns from blowing up the grid row (2026-10-06)
 
 User report (after the previous "kanban column fills tile height" fix):

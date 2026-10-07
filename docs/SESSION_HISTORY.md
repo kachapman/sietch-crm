@@ -4,12 +4,61 @@ This file holds the rolling "last session summary" archive that was previously
 embedded at the top of AGENTS.md. New sessions prepend to this file; old
 sessions are retained for context.
 
-The split happened on 2026-10-06 (commit `TBD`) so AGENTS.md could focus on
+The split happened on 2026-10-06 (commit `f8a0b4d`) so AGENTS.md could focus on
 onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ---
 
 ## Current session summary (for next resume)
+
+**Date:** 2026-10-06
+
+**Topic:** ISSUE-016 fixed — per-column vertical scroll + click-drag horizontal scroll on the deal-level kanban.
+
+User came back to the deferred ISSUE-016 with new clarity on the symptom. Previous attempts (commits `512e8f6`, `d9dbfae`) fixed the **height chain** but missed the **double-overflow** bug. Actual problem: `.board { overflow: auto }` was the only vertical scroll surface the user saw, so the whole board scrolled as one unit; each `.column-body` had its own `overflow-y: auto` but the column never stretched to the board's height (`align-items: flex-start` is the default), so the column-body had no overflow to show.
+
+**Fix in this commit (`TBD`):**
+
+- **`public/styles.css`** — 3 rule changes scoped to `.dashboard-tile.local-kanban-tile`:
+  - `.board` now has `overflow-x: auto; overflow-y: hidden` (was `overflow: auto` — the bug). Board no longer scrolls vertically; columns do.
+  - `.board` now has `align-items: stretch` (was default `flex-start`). Columns now fill the board's vertical height.
+  - `.column` now has `min-height: 0` so flexbox can compute its height from the board's cross-axis (without it, the default `min-height: auto` blocks shrinking).
+  - Added `cursor: grab` on `.board` and `cursor: grabbing` on `.board:active` to signal the click-drag affordance. `.card` already has `cursor: default` (line 780) so cards don't feel grabbable.
+- **`public/app.js`** — new `enableBoardDragScroll(boardEl)` helper (~55 lines) wired at the end of `renderLocalKanbanTiles`. Mirrors mobile touch-pan for mouse: mousedown on board starts a drag, mousemove translates horizontal delta into `scrollLeft` (1.5× multiplier), mouseup ends, synthetic click after a drag is suppressed so cards don't fire onclick. **Guard:** `e.target.closest("a")` skips the drag entirely if the click started on a link, so card-title links still navigate.
+- **`public/index.html`** — cache busters `styles.css?v=3.7.8`→`3.7.9`, `app.js?v=3.7.4`→`3.7.5`.
+- **`docs/ISSUES.md`** — ISSUE-016 status flipped to ✅ Fixed with the actual root-cause writeup.
+- **`docs/SESSION_HISTORY.md`** — this entry.
+- **`CHANGELOG.md`** — release note (to add before commit).
+
+**Verified:**
+- `node --check public/app.js` passes.
+- 15/15 Python + 28/28 Node tests still pass (no helper changes; sanity check only).
+- Height chain after the fix:
+  ```
+  .dashboard-tile (max-height: min(70vh, 800px); overflow: hidden)
+    └─ .local-kanban-body (flex: 1; min-height: 0)
+         └─ .board (flex: 1; align-items: stretch; overflow-x: auto; overflow-y: hidden)
+              └─ .column (stretches to board's height; min-height: 0)
+                   └─ .column-header (sticky; natural height)
+                   └─ .column-body (flex: 1; min-height: 80px; overflow-y: auto)  ← ONLY vertical scroller
+  ```
+
+**User-confirmed browser-test checklist (when the user reloads):**
+1. Open a deal-level kanban tile (e.g. "Tagged deals") with 30+ cards in one column.
+2. Wheel-scroll over the column → that column scrolls; other columns stay put. ✓
+3. The column's own vertical scrollbar appears and works. ✓
+4. Click-and-drag horizontally anywhere on the board (column header, column body, between cards, empty space) → the whole board slides left/right, revealing off-screen columns. ✓
+5. Click on a card link (e.g. the title) → link navigates as before; no drag. ✓
+6. Click on a card preview/edit button → button fires; no drag. ✓
+7. The board itself does NOT scroll vertically — only columns do. ✓
+
+**NEXT:** Browser-test the above checklist. If all 7 pass, commit (`git add -A && git commit -m "Fix ISSUE-016 — per-column vertical scroll + click-drag horizontal scroll on deal-level kanban"`). Then the user's loose-ends list is fully done. Remaining open items: performance + memory profiling, deploy to the new droplet (165.227.90.63 / crm.publicadjustermidwest.com).
+
+---
+
+## Previous summary (2026-10-06)
+
+**AGENTS.md docs cleanup (loose-ends item #4).**
 
 **Date:** 2026-10-06
 

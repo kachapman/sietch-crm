@@ -8938,6 +8938,71 @@ function renderNotesTiles(dash) {
   }
 }
 
+/**
+ * Click-and-drag horizontal scroll for the deal-level kanban board.
+ *
+ * Mirrors the native touch-pan behavior that's already on mobile, but
+ * for mouse. Mouse-down on the board (left or middle button) starts a
+ * drag; mouse-move translates horizontal delta into `scrollLeft`. A click
+ * that follows a drag is suppressed so cards don't accidentally fire
+ * onclick after a horizontal pan.
+ *
+ * Guards:
+ *   - `e.target.closest("a")` — links inside cards navigate normally
+ *     (the user explicitly wants drag to NOT hijack link clicks).
+ *   - Anything inside a card: dragged freely; cards don't have onclick
+ *     handlers of their own beyond the preview/edit buttons, and those
+ *     are only triggered by `click` (which we suppress on drag).
+ *
+ * Cleanup: the board element is destroyed and recreated on every
+ * `renderLocalKanbanTiles` call (see `dash.querySelectorAll(...).remove()`),
+ * so the document-level listeners attached here die with the node. No
+ * explicit teardown needed.
+ */
+function enableBoardDragScroll(boardEl) {
+  if (!boardEl || boardEl._dragScrollBound) return;
+  boardEl._dragScrollBound = true;
+
+  let isDown = false;
+  let startX = 0;
+  let scrollLeft = 0;
+  let dragged = false;
+  const DRAG_THRESHOLD_PX = 3;
+
+  const onMove = (e) => {
+    if (!isDown) return;
+    const x = e.pageX - boardEl.offsetLeft;
+    const walk = (x - startX) * 1.5;
+    if (Math.abs(walk) > DRAG_THRESHOLD_PX) dragged = true;
+    e.preventDefault();
+    boardEl.scrollLeft = scrollLeft - walk;
+  };
+  const onUp = () => {
+    if (!isDown) return;
+    isDown = false;
+  };
+  // Capture-phase: a synthetic click fires when the user releases after a
+  // drag, and we need to swallow it before any onclick handler runs.
+  const onClickCapture = (e) => {
+    if (!dragged) return;
+    dragged = false;
+    e.stopPropagation();
+    e.preventDefault();
+  };
+
+  boardEl.addEventListener("mousedown", (e) => {
+    if (e.button !== 0 && e.button !== 1) return; // left or middle only
+    if (e.target.closest("a")) return; // let link clicks navigate
+    isDown = true;
+    dragged = false;
+    startX = e.pageX - boardEl.offsetLeft;
+    scrollLeft = boardEl.scrollLeft;
+  });
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+  boardEl.addEventListener("click", onClickCapture, true);
+}
+
 function renderLocalKanbanTiles(dash) {
   if (!dash) return;
   // Clear any previous local kanban DOM elements (they share board-group styling but are not cleared by renderBoardGroups).
@@ -8966,6 +9031,7 @@ function renderLocalKanbanTiles(dash) {
 
     const board = section.querySelector('.board');
     buildLocalKanbanBoard(board, kanban, section);
+    enableBoardDragScroll(board);
 
     bindLocalKanbanTileChrome(section, kanban, tileId);
     applyTileLayoutClasses(section, tileId);

@@ -1961,12 +1961,30 @@ body {
   padding-bottom: 1rem;
 }
 
-/* Local kanban: fill the available tile height before scrolling.
-   The chain above .column needs flex: 1 + min-height: 0 so the column
-   can grow into the tile's actual height (the tile's natural height is
-   often much taller than the previous `100vh - 280px` viewport cap).
-   Keep horizontal scroll for column navigation. Padding-bottom keeps
-   the horizontal scrollbar above the tile's rounded bottom corners. */
+/* Local kanban: per-column vertical scroll + click-drag horizontal scroll.
+
+   Height chain (top → bottom):
+     .dashboard-tile (max-height cap, overflow: hidden)
+       └─ .local-kanban-body (flex column, fills tile)
+            └─ .board (flex row, NO vertical scroll — columns do it)
+                 └─ .column (stretches to board's cross-axis height)
+                      └─ .column-header (sticky, natural height)
+                      └─ .column-body (overflow-y: auto, scrolls per column)
+
+   The KEY change from before: .board used to have `overflow: auto` which
+   made the WHOLE board scroll as one unit (the user's report). Now .board
+   has `overflow-x: auto; overflow-y: hidden` so the board only scrolls
+   horizontally; each .column-body is the only vertical scroll surface.
+   `align-items: stretch` is required on .board so columns fill its
+   cross-axis (vertical) height — without it columns collapse to their
+   content height and the column-body's own overflow-y has nothing to
+   scroll against.
+
+   Click-and-drag horizontal scroll: enabled by `enableBoardDragScroll()`
+   in app.js. The cursor hints below signal grabbability on the empty
+   board area; .card / .column-header keep their natural cursors.
+   Padding-bottom keeps the horizontal scrollbar above the tile's
+   rounded bottom corners. */
 .dashboard-tile.local-kanban-tile {
   /* Cap the tile at a viewport-relative max so a column with many cards
      doesn't drag the whole grid row (and every other tile in it) to
@@ -1985,12 +2003,22 @@ body {
 .dashboard-tile.local-kanban-tile .board {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
+  align-items: stretch; /* make columns fill the board's vertical height */
+  overflow-x: auto;     /* keep horizontal scroll for columns off-screen */
+  overflow-y: hidden;   /* .board no longer scrolls vertically — columns do */
   padding-bottom: 1rem;
+  cursor: grab;         /* click-and-drag horizontal scroll (see app.js) */
+}
+.dashboard-tile.local-kanban-tile .board:active {
+  cursor: grabbing;
+}
+.dashboard-tile.local-kanban-tile .column {
+  min-height: 0; /* let flexbox compute from .board's cross-axis height */
 }
 .dashboard-tile.local-kanban-tile.tile-double .board {
   padding-bottom: 1rem;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 /* Top panels */
