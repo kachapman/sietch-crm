@@ -2,6 +2,58 @@
  * Sietch CRM — multi-group opportunity board (local test portal)
  */
 
+/**
+ * Auto-hide scrollbars: add `is-scrolling` to the SPECIFIC element
+ * being scrolled (not body) for 1s after a scroll event. Combined with
+ * the CSS rules below, this makes the scrollbar fully hidden at rest,
+ * then visible only on the element that's actually scrolling.
+ *
+ * Why per-element and not body: if we added the class to body, then
+ * ANY scroll on the page (e.g. scrolling inside a single column)
+ * would reveal scrollbars on EVERY scrollable element on the page.
+ * The user wants per-column scrollbars, so the class must be scoped
+ * to the specific scrolled element.
+ *
+ * How the scroll event is scoped: scroll events fire on the element
+ * being scrolled and bubble up. `e.target` (the original target) is
+ * the element that scrolled. For a wheel over a column-body, that's
+ * the column-body. For a page-level scroll, it's the document /
+ * documentElement / body — we coalesce those to `document.body` so the
+ * body scrollbar is still handled.
+ *
+ * Why we need this at all: on WebKit/Blink, `::-webkit-scrollbar { width: 0 }`
+ * is the only way to truly hide the scrollbar at rest. `background: transparent`
+ * on the thumb doesn't work (Chromium still paints the thumb). The
+ * `:hover` pseudo-class reveals it on mouseover, but it doesn't catch
+ * the "user is actively scrolling with the keyboard / has just stopped
+ * scrolling" case. The JS `is-scrolling` class bridges that gap.
+ *
+ * `capture: true` ensures we catch scroll events on every element
+ * (including iframes, shadow DOM boundaries, etc.) before the events
+ * bubble. `passive: true` tells the browser we won't preventDefault,
+ * so scrolling stays smooth.
+ */
+(function setupAutoHideScrollbars() {
+  const SCROLLBAR_FADE_MS = 1000;
+  function onScroll(e) {
+    const el = e.target;
+    if (!el) return;
+    // Coalesce document/documentElement scrolls to the body element so
+    // page-level scrolling still reveals the body scrollbar.
+    const target = (el === document || el === document.documentElement) ? document.body : el;
+    if (!target || !target.classList) return;
+    target.classList.add("is-scrolling");
+    if (target._scrollTimer !== null && target._scrollTimer !== undefined) {
+      clearTimeout(target._scrollTimer);
+    }
+    target._scrollTimer = setTimeout(() => {
+      target.classList.remove("is-scrolling");
+      target._scrollTimer = null;
+    }, SCROLLBAR_FADE_MS);
+  }
+  document.addEventListener("scroll", onScroll, { passive: true, capture: true });
+})();
+
 function getContrastText(hex) {
   try {
     let c = (hex || "").replace("#", "");

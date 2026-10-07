@@ -35,31 +35,66 @@ body {
   font-family: var(--font);
   font-size: 15px;
   line-height: 1.5;
-  scrollbar-color: #3d4659 var(--surface-2);
+  /* Subtle scrollbar: hidden at rest, visible on hover or while the
+     element is being scrolled. The `.is-scrolling` class is added to the
+     SPECIFIC element being scrolled (not body) by app.js's
+     setupAutoHideScrollbars listener, so each scrollable element
+     shows its own scrollbar independently. Firefox respects
+     scrollbar-color directly; WebKit/Blink need `::-webkit-scrollbar`
+     width toggling (background: transparent on the thumb doesn't
+     actually hide it in Chromium — only `width: 0` does). */
   scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.2s;
+}
+body:hover,
+body.is-scrolling {
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
 }
 
+/* WebKit/Blink (Chrome, Edge, Safari): scrollbar is `width: 0` at rest so
+   no space is taken and no thumb is rendered. Scrolling still works
+   via keyboard/touch, just no visible bar. On hover/focus OR when the
+   element has the `.is-scrolling` class (added by app.js on scroll
+   events for that specific element), the scrollbar expands to 8px
+   and the thumb becomes visible. */
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 0;
+  height: 0;
+  background: transparent;
 }
 
 *::-webkit-scrollbar-track {
-  background: var(--surface-2);
+  background: transparent;
 }
 
 *::-webkit-scrollbar-thumb {
-  background: #3d4659;
-  border: 2px solid var(--surface-2);
-  border-radius: 6px;
+  background: transparent;
+  border-radius: 4px;
+  transition: background 0.2s;
 }
 
-*::-webkit-scrollbar-thumb:hover {
-  background: var(--muted);
+*:hover::-webkit-scrollbar,
+*:focus-within::-webkit-scrollbar,
+.is-scrolling::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*:hover::-webkit-scrollbar-thumb,
+*:focus-within::-webkit-scrollbar-thumb,
+.is-scrolling::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.28);
+  border-radius: 4px;
+}
+
+*:hover::-webkit-scrollbar-thumb:hover,
+.is-scrolling::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.45);
 }
 
 *::-webkit-scrollbar-corner {
-  background: var(--surface-2);
+  background: transparent;
 }
 
 .hidden {
