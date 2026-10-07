@@ -2,6 +2,126 @@
  * Sietch CRM — multi-group opportunity board (local test portal)
  */
 
+/**
+ * Auto-hide scrollbars: add `is-scrolling` to the SPECIFIC element
+ * being scrolled, and `is-hovered` to the SPECIFIC scrollable element
+ * under the cursor. Combined with the CSS rules (scrollbar-color
+ * transparent by default, rgba(...) when the class is set), this
+ * gives a clean "scrollbar hidden at rest, visible only on the
+ * element you're interacting with" experience.
+ *
+ * Why per-element classes (and not `*:hover::-webkit-scrollbar`):
+ *   The `*` universal selector matches every ancestor of the cursor,
+ *   so `*:hover::-webkit-scrollbar` would make every scrollable
+ *   ancestor's scrollbar visible when you hover one element. The
+ *   JS class approach scopes the visibility to the one element that
+ *   is actually being scrolled or hovered, leaving all other
+ *   scrollbars hidden.
+ *
+ * Why not `::-webkit-scrollbar { width: 0 }` to hide at rest:
+ *   Per Chrome's scrollbar-styling docs, setting any `width` or
+ *   `height` on `::-webkit-scrollbar` forces the scrollbar from
+ *   overlay mode to classic mode. In classic mode, the scrollbar is
+ *   always painted — `width: 0` is not reliably respected. Using
+ *   `scrollbar-color: transparent transparent` instead makes the
+ *   thumb invisible in BOTH modes without forcing classic.
+ *
+ * Why per-element pointerover (not `mouseover` or `pointermove`):
+ *   `pointerover` fires only when the pointer enters a new element
+ *   (similar to `mouseover` but for pointer events). It does NOT
+ *   fire on every pixel of mouse movement, so it's cheap. We walk
+ *   up from the target to find the first scrollable ancestor and
+ *   add the class to that one element. We track the currently
+ *   hovered scrollable element so we can remove the class on
+ *   `pointerout`.
+ *
+ * For the scroll case: a scroll event fires on the element being
+ * scrolled (the one with `overflow: auto/scroll`). `e.target` is
+ * that element directly. We coalesce document-level scrolls to the
+ * body element so the body scrollbar is still handled.
+ */
+(function setupAutoHideScrollbars() {
+  const SCROLLBAR_FADE_MS = 1000;
+
+  function isScrollable(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const style = getComputedStyle(el);
+    return (
+      style.overflowY === "auto" ||
+      style.overflowY === "scroll" ||
+      style.overflowX === "auto" ||
+      style.overflowX === "scroll"
+    );
+  }
+
+  function findScrollableAncestor(el) {
+    let cur = el;
+    while (cur && cur !== document.body && cur !== document.documentElement) {
+      if (isScrollable(cur)) return cur;
+      cur = cur.parentElement;
+    }
+    return null;
+  }
+
+  // --- Scroll handling ---
+  function onScroll(e) {
+    const el = e.target;
+    if (!el) return;
+    const target = (el === document || el === document.documentElement) ? document.body : el;
+    if (!target || !target.classList) return;
+    target.classList.add("is-scrolling");
+    if (target._scrollFadeTimer !== null && target._scrollFadeTimer !== undefined) {
+      clearTimeout(target._scrollFadeTimer);
+    }
+    target._scrollFadeTimer = setTimeout(() => {
+      target.classList.remove("is-scrolling");
+      target._scrollFadeTimer = null;
+    }, SCROLLBAR_FADE_MS);
+  }
+  document.addEventListener("scroll", onScroll, { passive: true, capture: true });
+
+  // --- Hover handling ---
+  // Track the currently-hovered scrollable element so we can remove
+  // the class when the cursor leaves it (or moves to a different
+  // scrollable ancestor).
+  let currentlyHovered = null;
+  function clearHovered() {
+    if (currentlyHovered) {
+      currentlyHovered.classList.remove("is-hovered");
+      currentlyHovered = null;
+    }
+  }
+  function onPointerOver(e) {
+    const ancestor = findScrollableAncestor(e.target);
+    if (ancestor === currentlyHovered) return; // no change
+    clearHovered();
+    if (ancestor) {
+      ancestor.classList.add("is-hovered");
+      currentlyHovered = ancestor;
+    }
+  }
+  function onPointerOut(e) {
+    // pointerout fires when the pointer leaves an element. If the
+    // pointer moved to a different element that's also under our
+    // currentlyHovered ancestor, we don't want to clear yet. The
+    // relatedTarget check handles that.
+    const next = e.relatedTarget;
+    if (next && currentlyHovered && currentlyHovered.contains(next)) return;
+    // Otherwise clear (or let pointerover on the new element set the new one)
+    // We don't clear here blindly because pointerover for the new
+    // element will fire in the same event sequence. Letting it
+    // handle the transition avoids flicker.
+  }
+  // Use pointerleave on the body as the catch-all to clear when the
+  // cursor leaves all scrollable elements entirely.
+  function onBodyPointerLeave() {
+    clearHovered();
+  }
+  document.addEventListener("pointerover", onPointerOver, { passive: true });
+  document.addEventListener("pointerout", onPointerOut, { passive: true });
+  document.body.addEventListener("pointerleave", onBodyPointerLeave, { passive: true });
+})();
+
 function getContrastText(hex) {
   try {
     let c = (hex || "").replace("#", "");
