@@ -816,6 +816,17 @@ body {
   margin-bottom: 0.5rem;
   cursor: default;
   transition: box-shadow 0.15s, border-color 0.15s;
+  /* Wrap long words/URLs inside the card. Kanban card text (project
+     titles, descriptions, CRM URLs) often has no natural break points
+     and would otherwise overflow the card's right border. The
+     `overflow-wrap` property is inherited, so all child text
+     elements (.card-title, .card-meta, .card-details, .card-description,
+     .card-contact) get this wrap behavior too. `min-width: 0` is
+     defensive — the cards aren't flex items today, but if any future
+     flex/grid context wraps them, this lets them shrink below their
+     intrinsic content size so the wrap can actually take effect. */
+  overflow-wrap: break-word;
+  min-width: 0;
 }
 
 .card-actions {
