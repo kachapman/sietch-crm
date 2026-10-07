@@ -8966,7 +8966,6 @@ function renderLocalKanbanTiles(dash) {
 
     const board = section.querySelector('.board');
     buildLocalKanbanBoard(board, kanban, section);
-    enableBoardDragScroll(board);
 
     bindLocalKanbanTileChrome(section, kanban, tileId);
     applyTileLayoutClasses(section, tileId);
@@ -11194,78 +11193,6 @@ function bindContactField(group, wrap) {
   });
 }
 
-/**
- * Click-and-drag horizontal scroll for any kanban `.board` element.
- *
- * Mirrors the native touch-pan behavior that's already on mobile, but
- * for mouse. Mouse-down on the board (left or middle button) starts a
- * drag; mouse-move translates horizontal delta into `scrollLeft`. A
- * synthetic click that follows a drag is captured-and-suppressed so cards
- * don't accidentally fire onclick after a horizontal pan.
- *
- * **Wired in two places:**
- *   - `renderLocalKanbanTiles` (deal-level kanban tiles) — called per-board
- *     after the board DOM is built.
- *   - `renderBoardGroups` (main page-wide kanban, one per project group) —
- *     a single querySelectorAll sweep at the end of the function.
- *
- * **Guards:**
- *   - `e.target.closest("a")` — clicks on links inside cards skip the
- *     drag entirely so card-title links still navigate.
- *   - `boardEl._dragScrollBound` — the helper is idempotent; re-binding
- *     is a no-op (matters for the update path in `renderBoardGroups`
- *     where the same board element re-renders its columns in place).
- *
- * **Cleanup:** the board element is destroyed and recreated on every
- * `renderLocalKanbanTiles` call (see `dash.querySelectorAll(...).remove()`),
- * so the document-level listeners attached here die with the node. For
- * `renderBoardGroups` the board persists across update passes; the
- * `_dragScrollBound` guard prevents re-binding duplicates.
- */
-function enableBoardDragScroll(boardEl) {
-  if (!boardEl || boardEl._dragScrollBound) return;
-  boardEl._dragScrollBound = true;
-
-  let isDown = false;
-  let startX = 0;
-  let scrollLeft = 0;
-  let dragged = false;
-  const DRAG_THRESHOLD_PX = 3;
-
-  const onMove = (e) => {
-    if (!isDown) return;
-    const x = e.pageX - boardEl.offsetLeft;
-    const walk = (x - startX) * 1.5;
-    if (Math.abs(walk) > DRAG_THRESHOLD_PX) dragged = true;
-    e.preventDefault();
-    boardEl.scrollLeft = scrollLeft - walk;
-  };
-  const onUp = () => {
-    if (!isDown) return;
-    isDown = false;
-  };
-  // Capture-phase: a synthetic click fires when the user releases after
-  // a drag. We need to swallow it before any onclick handler runs.
-  const onClickCapture = (e) => {
-    if (!dragged) return;
-    dragged = false;
-    e.stopPropagation();
-    e.preventDefault();
-  };
-
-  boardEl.addEventListener("mousedown", (e) => {
-    if (e.button !== 0 && e.button !== 1) return; // left or middle only
-    if (e.target.closest("a")) return;            // let link clicks navigate
-    isDown = true;
-    dragged = false;
-    startX = e.pageX - boardEl.offsetLeft;
-    scrollLeft = boardEl.scrollLeft;
-  });
-  document.addEventListener("mousemove", onMove);
-  document.addEventListener("mouseup", onUp);
-  boardEl.addEventListener("click", onClickCapture, true);
-}
-
 function renderBoardGroups() {
   ensureTileLayout();
   renderTasksTile();
@@ -11545,17 +11472,6 @@ function renderBoardGroups() {
     }
     applyTileLayoutClasses(section, tileId);
     applyTileBodyCollapsed(section, tileId);
-  }
-
-  // Wire click-and-drag horizontal scroll on every main page-wide kanban
-  // board (one per project group). The helper is idempotent (guarded by
-  // `_dragScrollBound`) so re-binding on update paths is a no-op.
-  // Excludes .local-kanban-tile and .personal-notes-tile — they get
-  // their own wiring in renderLocalKanbanTiles (and notes has no board).
-  if (typeof enableBoardDragScroll === "function") {
-    dash.querySelectorAll(
-      ".board-group-tile:not(.local-kanban-tile):not(.personal-notes-tile) .board"
-    ).forEach((board) => enableBoardDragScroll(board));
   }
 
   renderCalendarTiles(dash);

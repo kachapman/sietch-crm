@@ -703,14 +703,9 @@ body {
   padding: 0 1rem 2rem;
   display: flex;
   gap: 1rem;
-  overflow-x: auto;        /* horizontal scroll for off-screen columns */
-  overflow-y: visible;     /* the board never scrolls vertically — columns do */
-  min-height: 420px;       /* visual floor so empty boards still show column outlines */
-  align-items: flex-start; /* columns are content-height, do not stretch (per user) */
-  cursor: grab;            /* click-and-drag horizontal scroll (see app.js) */
-}
-.board:active {
-  cursor: grabbing;
+  overflow-x: auto;
+  min-height: 420px;
+  align-items: flex-start;
 }
 
 .column {
@@ -720,14 +715,13 @@ body {
   border-radius: var(--radius);
   display: flex;
   flex-direction: column;
-  /* Column is content-height: the column-body inside has a viewport-capped
-     max-height (see .column-body below), so the column's total height
-     is `header + min(content, viewport-cap)`. When the content is shorter
-     than the cap, the column is just that tall — no wasted empty space
-     below. When the content exceeds the cap, the column-body scrolls. */
+  /* Was: max-height: calc(100vh - 280px) — caused the column to fall
+     short of the tile's actual height on tall tiles. Now the column
+     takes its full height from the .board (which is flex: 1 inside
+     .local-kanban-body). The inner .column-body scrolls when content
+     overflows. */
   max-height: none;
   min-height: 0;
-  overflow: hidden; /* backstop: never let column content escape the column */
 }
 
 .column-header {
@@ -769,12 +763,9 @@ body {
 
 .column-body {
   padding: 0.65rem;
-  overflow-y: auto;                       /* the only vertical scroll surface */
-  max-height: calc(100vh - 240px);        /* viewport-based cap; columns scroll when content exceeds */
+  overflow-y: auto;
+  flex: 1;
   min-height: 80px;
-  /* NOTE: no `flex: 1` here — we want the column-body to be its content
-     height (capped by max-height), not stretched to fill a flex parent.
-     This is the per-column scroll behavior the user asked for. */
 }
 
 
@@ -1970,57 +1961,36 @@ body {
   padding-bottom: 1rem;
 }
 
-/* Local kanban: deal-level kanban tile.
-   The base `.column-body { max-height: calc(100vh - 240px) }` rule
-   (set above on the shared .column-body class) provides the per-column
-   vertical scroll. We do NOT cap the tile height here — the tile is
-   whatever height it needs (including user-resized), and `overflow: hidden`
-   ensures the column-body never leaks past the tile border even when
-   the viewport-cap exceeds the tile height. The board's vertical
-   scroll is disabled (`overflow-y: hidden`) so the column-body is
-   the only vertical scroller. The board's horizontal scroll is kept
-   (`overflow-x: auto`) for columns off-screen. */
+/* Local kanban: fill the available tile height before scrolling.
+   The chain above .column needs flex: 1 + min-height: 0 so the column
+   can grow into the tile's actual height (the tile's natural height is
+   often much taller than the previous `100vh - 280px` viewport cap).
+   Keep horizontal scroll for column navigation. Padding-bottom keeps
+   the horizontal scrollbar above the tile's rounded bottom corners. */
 .dashboard-tile.local-kanban-tile {
-  overflow: hidden; /* clip the column-body to the tile border if needed */
+  /* Cap the tile at a viewport-relative max so a column with many cards
+     doesn't drag the whole grid row (and every other tile in it) to
+     thousands of pixels tall. The .column-body inside still scrolls
+     when the column overflows the cap. The .dashboard-tile base rule
+     already sets min-height: 400px so the tile never shrinks to 0. */
+  max-height: min(70vh, 800px);
+  overflow: hidden; /* keep the columns + scroll inside the cap */
 }
 .dashboard-tile.local-kanban-tile .local-kanban-body {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 0; /* critical: lets the children shrink + scroll */
 }
 .dashboard-tile.local-kanban-tile .board {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-x: auto;     /* keep horizontal scroll for off-screen columns */
-  overflow-y: hidden;   /* the board never scrolls vertically — columns do */
+  overflow: auto;
   padding-bottom: 1rem;
-  cursor: grab;          /* click-and-drag horizontal scroll (see app.js) */
-}
-.dashboard-tile.local-kanban-tile .board:active {
-  cursor: grabbing;
 }
 .dashboard-tile.local-kanban-tile.tile-double .board {
   padding-bottom: 1rem;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-/* Main page-wide kanban (the .board-group-tile in renderBoardGroups, one
-   per project group). Inherits the same per-column vertical scroll as
-   the deal-level kanban via the base `.column-body { max-height:
-   calc(100vh - 240px); overflow-y: auto }` rule. We don't cap the tile
-   height here either — the main kanban is dynamic and resizes with the
-   tile. The board's vertical scroll is explicitly disabled so the
-   column-body is the only vertical scroller. */
-.dashboard-tile.board-group-tile:not(.personal-notes-tile) {
-  overflow: hidden;
-}
-.dashboard-tile.board-group-tile:not(.personal-notes-tile) .board {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: auto;
 }
 
 /* Top panels */

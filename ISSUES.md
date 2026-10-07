@@ -652,76 +652,51 @@ Because the v2.0 token endpoint mints one access token with one audience, Graph 
 | Refresh token revocation | If the Graph token is revoked, falls back to SMTP and surfaces the error |
 
 
-## ISSUE-016 — Deal-level + main page-wide kanban: per-column vertical scroll + click-drag horizontal scroll (2026-10-07)
+## ISSUE-016 — Deal-level kanban column body doesn't scroll when content overflows (2026-10-06)
 
-**Status:** ✅ Fixed 2026-10-07.  
+**Status:** ❌ Documented; deferred (no code change applied after multiple attempts failed to satisfy user).  
 **Priority:** Medium (visual UX only; no data loss)  
-**Area:** `public/styles.css` (base `.board` / `.column` / `.column-body` rules at lines 700-775; `.dashboard-tile.local-kanban-tile` rules at 1964-2007; `.dashboard-tile.board-group-tile:not(.personal-notes-tile)` rules at 2016-2023), `public/app.js` (new `enableBoardDragScroll` helper at line 11196; wired in `renderLocalKanbanTiles` at line 8970 and `renderBoardGroups` at line 11286), `public/index.html` (cache busters `styles.css?v=3.7.8`→`3.7.9`, `app.js?v=3.7.4`→`3.7.5`)
+**Area:** `public/styles.css` (`.board`, `.column`, `.dashboard-tile.board-group-tile` rules at lines 700-770, 1942-1962)
 
 ### Summary
 
-User report: on every kanban tile (both deal-level like "Tagged deals" AND the main page-wide project group kanban with stages), the column body was rendering every card and overflowing the tile border vertically. The user wanted per-column vertical scroll, with the column clipped to the tile's bottom border, and click-and-drag horizontal scroll on the board (the touch-pan behavior they had on mobile, mirrored for mouse).
+User expectation: when a column on the deal-level kanban (e.g. "Tagged deals") has more cards than fit in the visible area, the column body should scroll so the user can see the additional cards inside the column.
 
-### History of attempts (4 total)
+### What was tried
 
-- **2026-10-06 attempt 1** (`d9dbfae`) — replaced `.column { max-height: calc(100vh - 280px) }` with `max-height: none; min-height: 0` to let the column fill the tile. Result: column content overflowed the tile border; no per-column scroll.
-- **2026-10-06 attempt 2** (`512e8f6`) — added `max-height: min(70vh, 800px); overflow: hidden` on `.dashboard-tile.local-kanban-tile` to cap the tile. Scoped only to deal-level kanban; main page-wide kanban was untouched. Result: deal-level tile was capped, but main page-wide kanban still had the same problem.
-- **2026-10-06 attempt 3** (`357b23e`, reverted in `f708cc1`) — added `align-items: stretch` and `overflow-y: hidden` on the board; added `min-height: 0` on the column. Scoped only to deal-level. Result: still didn't actually clip the column to the tile border because the column was content-tall (no flex chain forcing it). **User reported it was still broken.**
-- **2026-10-07 final fix** (this commit) — viewport-capped max-height on the column-body (not the column, not the tile). The column itself stays content-tall (no stretch). The column-body has `max-height: calc(100vh - 240px)`, so when content exceeds that, the column-body scrolls within the column; when content is shorter, the column-body is just that tall. The tile's `overflow: hidden` clips the column-body if the tile is shorter than the viewport-cap. **This applies to BOTH kanban variants via the shared base `.column-body` rule.**
+- **Attempt 1:** Removed `.column { max-height: calc(100vh - 280px); }` and replaced with `max-height: none; min-height: 0;` so the column could fill the available tile height. Result: all cards visible in the DOM but only the top few rendered visibly; no clear scroll affordance.
+- **Attempt 2:** Added `flex: 1 1 auto; min-height: 0;` to `.dashboard-tile.local-kanban-tile .board` and `.dashboard-tile.local-kanban-tile .local-kanban-body` so the board fills the tile. Added `max-height: min(70vh, 800px); overflow: hidden;` on `.dashboard-tile.local-kanban-tile` to cap the tile and prevent one overstuffed column from blowing up the whole grid row. Result: tile is capped, but the user reports the columns STILL don't scroll to show the additional cards.
+- **Audit findings:** The deal-level kanban (`.board` rule at line 700) has `align-items: flex-start;` which prevents columns from stretching to the board's cross-axis height. Combined with no explicit `flex: 1; min-height: 0;` on `.dashboard-tile.board-group-tile .board`, the board doesn't fill the tile, and the columns don't fill the board. The natural fix would be: (a) change `.board { align-items: flex-start; }` to `align-items: stretch;` (or scope to the deal-kanban variant), (b) add `flex: 1 1 auto; min-height: 0;` to `.dashboard-tile.board-group-tile .board`, (c) keep the column at `max-height: none; min-height: 0;` so the column-body's `overflow-y: auto;` kicks in. **The user opted to defer this work after multiple attempts failed to satisfy the requirement.**
 
-### Why previous attempts failed
+### Why it's deferred
 
-The fundamental mistake in attempts 1-3 was conflating "clip the column to the tile border" with "stretch the column to fill the tile." The user wanted the former but explicitly did NOT want the latter ("do not stretch. Its ok if there is empty space underneath the column if there is less cards"). The only way to get per-column scroll is to give the column-body a height constraint, but the constraint can be either:
-- Stretch the column to the board's height (forces `align-items: stretch`) — but then short columns show empty space at the bottom
-- Cap the column-body at a viewport-based max-height — short columns are content-tall (no empty space), tall columns scroll inside the column-body
+User explicitly requested leaving this bug for future investigation: "Leave it for now. Document this bug for future investigation." Per AGENTS.md guidance ("If the user has to argue 'where is the HTML?', the agent has failed the rule."), continuing to add speculative CSS without confirming the actual visual problem is wasteful.
 
-The user picked option 2. The cap is `calc(100vh - 240px)` — accounts for the tile toolbar (~50px) + tile padding + column header (~50px) + some margin (~140px).
+### Proposed fix (for when work resumes)
 
-Also: the previous attempts only modified the deal-level kanban. The main page-wide kanban (one per `state.groups[]` entry) was untouched. The user clarified they wanted EVERY project group kanban tile to have the fix.
+```css
+/* In .board or a deal-kanban-specific override: */
+align-items: stretch;  /* default for flex rows, but explicitly set */
 
-### Fix
+/* In .dashboard-tile.board-group-tile .board: */
+.dashboard-tile.board-group-tile .board {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;  /* already there */
+}
 
-**CSS (`public/styles.css`):**
+/* .column and .column-body are already correct (max-height: none + overflow-y: auto) */
+```
 
-- **Base `.board` (line 700):** changed `overflow-x: auto` to `overflow-x: auto; overflow-y: visible` (explicit). The board never scrolls vertically. Added `cursor: grab` and `.board:active { cursor: grabbing }` for the click-drag affordance.
-- **Base `.column` (line 711):** added `overflow: hidden` as a backstop so column content never escapes the column border.
-- **Base `.column-body` (line 770):** removed `flex: 1` (was forcing it to stretch), and added `max-height: calc(100vh - 240px)`. The column-body is content-tall by default; when content exceeds the viewport-cap, it scrolls.
-- **`.dashboard-tile.local-kanban-tile` (line 1964):** removed the `max-height: min(70vh, 800px)` cap (the user explicitly said the dashboard should be dynamic and resizable; the cap made it static). Kept `overflow: hidden`. The board inside now has `overflow-x: auto; overflow-y: hidden` (no vertical scroll on the board).
-- **`.dashboard-tile.board-group-tile:not(.personal-notes-tile)` (line 2016):** new rules for the main page-wide kanban — same pattern: `overflow: hidden` on the tile, `overflow-x: auto; overflow-y: hidden` on the board.
+This is **3 lines of CSS**. The risk is that the rule applies to the main page-wide kanban too (not just the deal-level tile), which may visually stretch columns in ways the user doesn't want. Scoping via `.dashboard-tile.board-group-tile .board` (line 1958-1960) would limit the change to the deal-tile case.
 
-**JS (`public/app.js`):**
+### Verification (when work resumes)
 
-- New `enableBoardDragScroll(boardEl)` helper at line 11196 (~50 lines). Mirrors the existing touch-pan behavior for mouse.
-- Wired in two places:
-  - `renderLocalKanbanTiles` at line 8970 (deal-level kanban, per-board)
-  - `renderBoardGroups` at line 11286 (main page-wide kanban, querySelectorAll sweep over every `.board-group-tile:not(.local-kanban-tile):not(.personal-notes-tile) .board`)
-- The helper is idempotent (`_dragScrollBound` guard) so re-binding on update paths is a no-op.
-- `e.target.closest("a")` guard: clicks on links inside cards skip the drag entirely, so card-title links still navigate.
-- Synthetic click after a drag is captured-and-suppressed so cards don't fire onclick after a horizontal pan.
+- Open a deal-level kanban tile (e.g. "Tagged deals") with 35+ cards in one column.
+- Each column should stretch to fill the tile's height.
+- The column-body should scroll to show cards beyond the visible area.
+- The board itself should NOT scroll (its height is fixed by the tile).
+- Other tiles in the same grid row should NOT be dragged down by the overstuffed column.
 
-**`public/index.html`:** cache busters `styles.css?v=3.7.8`→`3.7.9`, `app.js?v=3.7.4`→`3.7.5`.
-
-### Verification
-
-- `node --check public/app.js` passes.
-- 15/15 Python + 28/28 Node tests still pass (no helper changes; sanity check only).
-- **Browser test (manual, when user reloads):**
-  1. Open the main page-wide kanban (e.g. "Open pipeline" or any project group tile) and the deal-level kanban (e.g. "Tagged deals").
-  2. Each column should have its own vertical scrollbar when content exceeds the viewport-cap.
-  3. Short columns should be content-tall (no empty space below the last card).
-  4. The column body should be clipped to the tile border (not extend past it).
-  5. Resize a tile taller (via the height-resize handle) — the column should still be content-tall; no change.
-  6. Resize a tile shorter than the viewport-cap (e.g. a quarter-height tile on mobile) — the column-body should be clipped at the tile border by `overflow: hidden`.
-  7. Click-and-drag horizontally on any board → board slides left/right.
-  8. Click on a card-title link → link navigates, no drag.
-
-### Files changed
-
-| File | Change |
-|------|--------|
-| `public/styles.css` | Updated base `.board` / `.column` / `.column-body` rules; removed `max-height: min(70vh, 800px)` from `.dashboard-tile.local-kanban-tile`; added rules for `.dashboard-tile.board-group-tile:not(.personal-notes-tile)` |
-| `public/app.js` | New `enableBoardDragScroll` helper + 2 wire sites |
-| `public/index.html` | Cache busters: `styles.css?v=3.7.8`→`3.7.9`, `app.js?v=3.7.4`→`3.7.5` |
-| `docs/ISSUES.md` | This entry |
-| `docs/SESSION_HISTORY.md` | New current-session entry |
-| `CHANGELOG.md` | Release note |
+### Files (when fixed)
+- `public/styles.css` — 3-line edit to `.board` and `.dashboard-tile.board-group-tile .board`.
