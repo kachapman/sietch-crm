@@ -13,35 +13,6 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-07
 
-**Topic:** ISSUE-016 polish — subtle auto-hide scrollbar applied to ALL scrollable elements.
-
-User confirmed the per-column vertical scroll + click-drag horizontal scroll from the previous commit (`b9ef269`) is working great. Asked to hide the scrollbars when not in use.
-
-**What landed in this commit (`TBD`):**
-
-- **`public/styles.css`** — replaced the always-visible 10px `#3d4659` scrollbar (global `*::-webkit-scrollbar` rule) with a subtle 8px pattern: transparent thumb + transparent track at rest, fades to `rgba(255, 255, 255, 0.28)` on element hover, brighter `rgba(255, 255, 255, 0.45)` on thumb-hover, 0.2s transition. Applies to EVERY scrollable element on the page (body, kanban board, column-body, modals, etc.) via the universal `*::-webkit-scrollbar` selector. The body gets a `body:hover` rule for the page-level scroll. Firefox uses the same pattern via `scrollbar-width: thin` + `scrollbar-color: transparent transparent` with hover transitions.
-- **`public/index.html`** — cache buster `styles.css?v=3.7.10`→`3.7.11`. No JS changes.
-
-**Verified:**
-- `node --check public/app.js` passes (no JS changes).
-- 15/15 Python + 28/28 Node tests still pass.
-
-**Browser-test checklist:**
-1. Hard-refresh — scrollbars on all elements should be invisible at rest. ✓
-2. Hover over a column → vertical scrollbar fades in. ✓
-3. Hover over the kanban board (but not a column) → horizontal scrollbar fades in. ✓
-4. Scroll the page → page-level scrollbar fades in. ✓
-5. Click-and-drag still works. ✓
-6. Per-column vertical scroll still works. ✓
-
-**NEXT:** Browser-test the above. If 1-6 pass, commit. No further work on ISSUE-016 unless the user reports an issue.
-
----
-
-## Previous summary (2026-10-07)
-
-**ISSUE-016 — 5th attempt, finally correct. Per-column vertical scroll that scales with the tile + click-drag horizontal scroll on every kanban tile.**
-
 **Topic:** ISSUE-016 — 5th attempt, finally correct. Per-column vertical scroll that scales with the tile + click-drag horizontal scroll on every kanban tile.
 
 User came back with: "You almost had it. The click to grab and scroll horizontal is working great. There is also vertical per-column scrolling. BUT the column height max isnt growing with the tile height." The previous attempt (commit `960bed0`) used a viewport-based `max-height: calc(100vh - 240px)` on the column-body, which doesn't scale when the user resizes a tile taller than the viewport-cap.
