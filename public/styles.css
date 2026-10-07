@@ -35,31 +35,43 @@ body {
   font-family: var(--font);
   font-size: 15px;
   line-height: 1.5;
-  scrollbar-color: #3d4659 var(--surface-2);
+  /* Subtle scrollbar: invisible at rest, fades in on hover/focus/scroll.
+     The body uses the global rule too (inherits the same subtle pattern). */
+  scrollbar-color: transparent transparent;
   scrollbar-width: thin;
+  transition: scrollbar-color 0.2s;
+}
+body:hover {
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
 }
 
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
+  background: transparent;
 }
 
 *::-webkit-scrollbar-track {
-  background: var(--surface-2);
+  background: transparent;
 }
 
 *::-webkit-scrollbar-thumb {
-  background: #3d4659;
-  border: 2px solid var(--surface-2);
-  border-radius: 6px;
+  background: transparent;
+  border-radius: 4px;
+  transition: background 0.2s;
 }
 
-*::-webkit-scrollbar-thumb:hover {
-  background: var(--muted);
+*:hover::-webkit-scrollbar-thumb,
+*:focus-within::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+*:hover::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.45);
 }
 
 *::-webkit-scrollbar-corner {
-  background: var(--surface-2);
+  background: transparent;
 }
 
 .hidden {
