@@ -35,64 +35,31 @@ body {
   font-family: var(--font);
   font-size: 15px;
   line-height: 1.5;
-  /* Subtle scrollbar: hidden at rest, visible on hover or while scrolling.
-     The .is-scrolling class is added/removed by app.js (see
-     setupAutoHideScrollbars below). Firefox respects scrollbar-color
-     directly; WebKit/Blink need `::-webkit-scrollbar` width/height
-     toggling (since `background: transparent` on the thumb doesn't
-     actually hide it in Chromium). */
+  scrollbar-color: #3d4659 var(--surface-2);
   scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-  transition: scrollbar-color 0.2s;
-}
-body:hover,
-body.is-scrolling,
-body.is-scrolling * {
-  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
 }
 
-/* WebKit/Blink (Chrome, Edge, Safari): scrollbar is `width: 0` at rest so
-   no space is taken and no thumb is rendered. The browser still scrolls
-   via keyboard/touch, just no visible bar. On hover of any element OR
-   while the body has `.is-scrolling` (added by app.js on scroll events),
-   the scrollbar expands to 8px and the thumb becomes visible. */
 *::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-  background: transparent;
+  width: 10px;
+  height: 10px;
 }
 
 *::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--surface-2);
 }
 
 *::-webkit-scrollbar-thumb {
-  background: transparent;
-  border-radius: 4px;
-  transition: background 0.2s;
+  background: #3d4659;
+  border: 2px solid var(--surface-2);
+  border-radius: 6px;
 }
 
-*:hover::-webkit-scrollbar,
-body.is-scrolling ::-webkit-scrollbar,
-body.is-scrolling *::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-*:hover::-webkit-scrollbar-thumb,
-body.is-scrolling ::-webkit-scrollbar-thumb,
-body.is-scrolling *::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.28);
-  border-radius: 4px;
-}
-
-*:hover::-webkit-scrollbar-thumb:hover,
-body.is-scrolling *::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.45);
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
 }
 
 *::-webkit-scrollbar-corner {
-  background: transparent;
+  background: var(--surface-2);
 }
 
 .hidden {
