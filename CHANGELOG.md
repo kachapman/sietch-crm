@@ -2,6 +2,62 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Kanban: per-column vertical scroll + click-drag horizontal scroll (2026-10-07)
+
+The 4th (and correct) attempt at ISSUE-016. The previous attempts (commits
+`d9dbfae`, `512e8f6`, `357b23e` reverted in `f708cc1`) all failed because
+they conflated "clip the column to the tile border" with "stretch the
+column to fill the tile." The user explicitly said the dashboard must be
+dynamic and resizable, with no static caps. This commit gets the UX right
+without breaking resize.
+
+**Scope:** applies to BOTH the main page-wide project group kanban (one per
+`state.groups[]` entry, rendered by `renderBoardGroups`) AND the deal-level
+local kanban (rendered by `renderLocalKanbanTiles`). The main page-wide
+kanban was previously untouched by all three prior attempts — this commit
+fixes both.
+
+**Root cause (the actual bug):** the column-body had `overflow-y: auto` but
+no height constraint, so it was content-tall (no overflow ever) and the
+board, which had `overflow: auto`, became the de-facto vertical scroll
+container — the whole board scrolled as one unit.
+
+**Fix:**
+
+- **`public/styles.css` base `.column-body` (line 770)** — added
+  `max-height: calc(100vh - 240px)`. The column-body is now content-tall
+  by default; when content exceeds the viewport-cap, it scrolls within
+  the column. The single rule covers BOTH kanban variants because the
+  base `.column-body` applies to all of them.
+- **Base `.board` (line 700)** — explicit `overflow-x: auto; overflow-y:
+  visible` so the board never scrolls vertically.
+- **Base `.column` (line 711)** — added `overflow: hidden` as a backstop.
+- **`.dashboard-tile.local-kanban-tile` (line 1964)** — removed the
+  `max-height: min(70vh, 800px)` tile cap (the user said the dashboard
+  should be dynamic and resizable). Kept `overflow: hidden`.
+- **`.dashboard-tile.board-group-tile:not(.personal-notes-tile)` (line
+  2016)** — NEW rules for the main page-wide kanban. Same pattern.
+
+**Click-and-drag horizontal scroll (mouse):**
+
+- **`public/app.js` `enableBoardDragScroll(boardEl)` helper (line
+  11196)** — re-added after the previous commit was reverted. ~50 lines.
+  Mirrors the existing touch-pan behavior for mouse.
+- **Wired in two places:** `renderLocalKanbanTiles` at line 8970
+  (deal-level, per-board) and `renderBoardGroups` at line 11286 (main
+  page-wide, querySelectorAll sweep over every `.board-group-tile` board).
+- **Guard:** `e.target.closest("a")` skips the drag if the click started
+  on a link, so card-title links still navigate.
+- **Idempotent:** `_dragScrollBound` guard prevents re-binding on the
+  update path of `renderBoardGroups` (where the same board re-renders
+  columns in place).
+
+**Verified:** `node --check public/app.js` passes; 15/15 Python + 28/28
+Node tests still pass. Browser-test checklist in `docs/SESSION_HISTORY.md`
+(current session entry) and `docs/ISSUES.md` (ISSUE-016 entry).
+
+**Files:** `public/styles.css` (+30/-15), `public/app.js` (+68), `public/index.html` (+2/-2), `docs/ISSUES.md` (rewrote ISSUE-016 entry), `docs/SESSION_HISTORY.md` (new current-session entry), `CHANGELOG.md` (this entry).
+
 ## Kanban tile height cap — prevent many-card columns from blowing up the grid row (2026-10-06)
 
 User report (after the previous "kanban column fills tile height" fix):
