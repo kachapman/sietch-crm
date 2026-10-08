@@ -13,7 +13,19 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-08
 
-**Topic:** Notes tile grid-view regression — four-boxes tile view forced single-column on all widths.
+**Topic:** Backup audit — full-disaster-recovery coverage of the admin-console backup path (scheduled pg_dump + data tar, manual SQL/JSON export/import, remote copy, retention). Read-only; no dumps written, nothing restarted.
+
+**Verdict:** scheduled backup covers the full DB (pg_dump, no excludes — all 70 tables) and nearly all files, with 3 real bugs + 2 gaps. The manual export/import pair is NOT disaster-capable (drops 26 tables, all credentials, nearly all files). Full disaster today = pg_dump .sql.gz + data .tar.gz restored by hand; no one-click or verified restore.
+
+**Findings (docs/BACKUP_AUDIT.md):** [HIGH] data-tar recursively swallows prior backups (`BACKUP_DIR=data/backups` inside the archived tree, no `--exclude`); [HIGH] run lock released after pg_dump so archive/remote/rotation run unlocked (filename collisions on overlap); [HIGH] scheduler sleeps on import-time env interval, ignoring the admin-console setting; [MED] `scanner/data/` lives outside the archive (dedup keys + ML model lost); [MED] manual export/import gaps — 26/70 tables missing, credentials stripped w/o re-entry, file section points at nonexistent `documents/project_documents`, JSON import is merge-not-restore with no sequence resets, plus a zip-slip path traversal; [MED] SQL import treats psql exit 1 as success with `ON_ERROR_STOP=0`, no pre-restore snapshot, whole file decoded in RAM. Incremental evaluated: keep fulls + rsync remote (already branched, untested); true WAL-based incremental not recommended at this scale. **Files:** `docs/BACKUP_AUDIT.md` (new). **Verified:** code-read only; `python3 -m py_compile` on touch check — no source files changed.
+
+**NEXT:** Fix list is ordered by data-loss risk in docs/BACKUP_AUDIT.md §"Fix list" (items 1–9). Suggested first commit: tar exclusion + BACKUP_DIR move + hold-the-lock + scheduler interval (items 1–3, all in `backup_service.py`). Then manual-path hardening (item 5). User to direct.
+
+---
+
+## Previous summary (2026-10-08)
+
+**Notes tile grid-view regression — four-boxes tile view forced single-column on all widths.
 
 Grid view (`notes-grid-view`) used `repeat(auto-fit, minmax(120px, 1fr))` plus a `@container (max-width: 500px)` override forcing `grid-template-columns: 1fr`. On narrow/mobile tiles the override collapsed everything to one full-width vertical strip, and 120px minimums made wide-tile columns unreadably thin — the tile looked "squashed vertically no matter what shape it takes." Fix (Option A): removed the `@container` override entirely and raised the minimum to `minmax(200px, 1fr)`, so `auto-fit` naturally yields multi-column on wide tiles and collapses on its own when narrow. List view untouched. **Files:** `public/styles.css` (notes grid), `public/index.html` (`styles.css?v=3.7.15`→`3.7.16`). **Verified:** `node --check` passes; 15/15 Python + 28/28 Node tests pass.
 

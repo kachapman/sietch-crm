@@ -2,6 +2,10 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Backup audit: full-disaster-recovery coverage gaps (2026-10-08)
+
+Read-only audit of the admin-console backup path (no code changes). Scheduled `pg_dump` + `data/` tar covers the full DB and nearly all files, but: the data tar recursively embeds prior backups (`BACKUP_DIR` inside the tree, no `--exclude`); the run lock releases after `pg_dump`; the scheduler ignores the console interval setting; `scanner/data/` is outside the archive; the manual SQL/JSON export/import pair drops 26/70 tables, all credentials, and nearly all files and must not be treated as a restore path. Full report + ordered fix list: `docs/BACKUP_AUDIT.md`.
+
 ## Notes tile grid view: auto-fit columns without forced single-column override (2026-10-08)
 
 Grid view (`notes-grid-view`) used `repeat(auto-fit, minmax(120px, 1fr))` plus a `@container (max-width: 500px)` override forcing `grid-template-columns: 1fr`, so the four-boxes tile view collapsed to one full-width vertical strip and 120px minimums made wide-tile columns unreadably thin. Removed the `@container` override and raised the minimum to `minmax(200px, 1fr)` so `auto-fit` yields multi-column on wide tiles and collapses naturally when narrow. List view untouched. **Files:** `public/styles.css`, `public/index.html` (`styles.css?v=3.7.15`→`3.7.16`).
