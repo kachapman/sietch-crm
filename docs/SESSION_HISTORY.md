@@ -13,7 +13,17 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-08
 
-**Topic:** ISSUE-016 fully resolved + docs updated. Per-column vertical scroll + click-drag horizontal scroll + auto-hide scrollbars + card content wrap — all working on every kanban tile (deal-level and main page-wide).
+**Topic:** Notes tile grid-view regression — four-boxes tile view forced single-column on all widths.
+
+Grid view (`notes-grid-view`) used `repeat(auto-fit, minmax(120px, 1fr))` plus a `@container (max-width: 500px)` override forcing `grid-template-columns: 1fr`. On narrow/mobile tiles the override collapsed everything to one full-width vertical strip, and 120px minimums made wide-tile columns unreadably thin — the tile looked "squashed vertically no matter what shape it takes." Fix (Option A): removed the `@container` override entirely and raised the minimum to `minmax(200px, 1fr)`, so `auto-fit` naturally yields multi-column on wide tiles and collapses on its own when narrow. List view untouched. **Files:** `public/styles.css` (notes grid), `public/index.html` (`styles.css?v=3.7.15`→`3.7.16`). **Verified:** `node --check` passes; 15/15 Python + 28/28 Node tests pass.
+
+**NEXT:** Browser-test (desktop wide Notes tile → grid button shows 2+ readable columns; narrow/mobile → naturally collapses; list button still single-column strips), then commit.
+
+---
+
+## Previous summary (2026-10-08)
+
+**ISSUE-016 fully resolved + docs updated. Per-column vertical scroll + click-drag horizontal scroll + auto-hide scrollbars + card content wrap — all working on every kanban tile (deal-level and main page-wide).
 
 After 5 attempts over 2 days (commits `d9dbfae`, `512e8f6`, `357b23e`/reverted, `960bed0`/reverted, `b9ef269` = correct), the per-column vertical scroll finally works. After 3 more attempts (commits `2b21c7c`/reverted, `62e8ee8`/reverted, `9895916` = correct), the auto-hide scrollbars work. And in commit `98ad9e1`, the card-content wrap regression is fixed.
 

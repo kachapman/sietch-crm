@@ -2,6 +2,10 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Notes tile grid view: auto-fit columns without forced single-column override (2026-10-08)
+
+Grid view (`notes-grid-view`) used `repeat(auto-fit, minmax(120px, 1fr))` plus a `@container (max-width: 500px)` override forcing `grid-template-columns: 1fr`, so the four-boxes tile view collapsed to one full-width vertical strip and 120px minimums made wide-tile columns unreadably thin. Removed the `@container` override and raised the minimum to `minmax(200px, 1fr)` so `auto-fit` yields multi-column on wide tiles and collapses naturally when narrow. List view untouched. **Files:** `public/styles.css`, `public/index.html` (`styles.css?v=3.7.15`→`3.7.16`).
+
 ## Kanban: per-column vertical scroll + click-drag horizontal scroll + card content wrap + auto-hide scrollbars (2026-10-08)
 
 ISSUE-016 — fully resolved across 8 commits over 2 days. Three user-requested behaviors now work correctly on every kanban tile (both deal-level and main page-wide project group kanbans):

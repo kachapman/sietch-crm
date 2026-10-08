@@ -10557,17 +10557,11 @@ body {
 
 .notes-grid-view {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   grid-auto-rows: minmax(min-content, auto);
   gap: 0.5rem;
   align-content: start;
   height: 100%;
-}
-/* Narrow tile: stack cards in a single column so full body is always visible */
-@container (max-width: 500px) {
-  .notes-grid-view {
-    grid-template-columns: 1fr;
-  }
 }
 
 .notes-list-view {
