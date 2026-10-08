@@ -41,6 +41,12 @@ DB_NAME = os.getenv("DB_NAME", "sietch_crm")
 DB_USER = os.getenv("DB_USER", "sietch")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
+# NOTE: BACKUP_DIR defaults inside data/ on purpose — in Docker, /app/data
+# is the persistent volume, so backups survive container recreates. The tar
+# command in _build_data_tar_command() always excludes BACKUP_DIR from the
+# data archive (see fix for recursive-nesting audit finding), so keeping the
+# default here is safe.
+
 # ── State ────────────────────────────────────────────────────────────────────
 _backup_lock = threading.Lock()
 _last_backup: dict[str, Any] = {"status": "none", "ts": None, "size": None, "error": None}
@@ -246,7 +252,10 @@ def run_backup() -> dict:
 
     try:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-        ts_slug = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S")
+        # Unique per run: second-resolution slug + pid so overlapping or
+        # rapid-succession runs can never collide on filenames (the lock
+        # is now also held for the whole run — see below).
+        ts_slug = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S") + f"-p{os.getpid()}"
 
         # 1. pg_dump
         db_path = BACKUP_DIR / f"sietch-backup-{ts_slug}.sql.gz"
@@ -259,8 +268,8 @@ def run_backup() -> dict:
             _record_backup(entry)
             _notify_admins(False, f"Backup failed\n\nError: {e}\nDuration: {time.time() - start:.0f}s")
             return {"ok": False, "error": entry["error"]}
-        finally:
-            _backup_lock.release()
+        # NOTE: no early lock release here — the lock is held for the
+        # entire run and released once in the outer finally block.
 
         # 2. Data archive (photos, documents, profiles)
         data_path = BACKUP_DIR / f"sietch-data-{ts_slug}.tar.gz"
@@ -345,14 +354,46 @@ def _run_pg_dump(output_path: Path) -> None:
         f.write(proc.stdout)
 
 
+def _build_data_tar_command(
+    output_path: Path,
+    data_dir: Path,
+    backup_dir: Path,
+    extra_sources: list[tuple[str, str]] | None = None,
+) -> list[str]:
+    """Build the tar command for the data archive (pure helper, unit-tested).
+
+    Excludes ``backup_dir`` when it lives inside the archived tree so prior
+    artifacts are never nested into new archives (unbounded growth). Extra
+    ``(parent, name)`` sources (e.g. scanner state) are appended as
+    additional ``-C`` roots.
+    """
+    cmd = ["tar", "czf", str(output_path)]
+    try:
+        rel_backup = backup_dir.relative_to(data_dir.parent)
+        cmd.append(f"--exclude={rel_backup}")
+    except ValueError:
+        pass  # backup dir outside the archived tree — nothing to exclude
+    cmd += ["-C", str(data_dir.parent), data_dir.name]
+    for parent, name in extra_sources or []:
+        if (Path(parent) / name).exists():
+            cmd += ["-C", parent, name]
+    return cmd
+
+
 def _run_data_archive(output_path: Path) -> None:
-    """Archive the data/ directory (photos, documents, profiles)."""
+    """Archive the data/ directory (photos, documents, profiles, scanner state)."""
     data_dir = Path("data")
     if not data_dir.exists():
         return
 
+    cmd = _build_data_tar_command(
+        output_path,
+        data_dir,
+        BACKUP_DIR,
+        extra_sources=[("scanner", "data")],
+    )
     proc = subprocess.run(
-        ["tar", "czf", str(output_path), "-C", str(data_dir.parent), str(data_dir.name)],
+        cmd,
         capture_output=True,
         text=True,
         timeout=300,
@@ -429,7 +470,14 @@ def _backup_loop(stop_event: threading.Event) -> None:
                 logger.info("Scheduled backup: %s", result)
         except Exception as e:
             logger.error("Backup loop error: %s", e)
-        stop_event.wait(BACKUP_INTERVAL)
+        # Honor the admin-console interval (DB-backed), not the import-time
+        # env default — otherwise the console setting is display-only.
+        # Clamp to >=60s so a zero/negative value can't hot-loop.
+        try:
+            interval = int(config.get("interval", BACKUP_INTERVAL))
+        except (NameError, ValueError, TypeError, AttributeError):
+            interval = BACKUP_INTERVAL
+        stop_event.wait(max(60, interval))
 
 
 def start_backup_scheduler() -> threading.Event:

@@ -13,7 +13,20 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-08
 
-**Topic:** Backup audit — full-disaster-recovery coverage of the admin-console backup path (scheduled pg_dump + data tar, manual SQL/JSON export/import, remote copy, retention). Read-only; no dumps written, nothing restarted.
+**Topic:** Backup fixes 1–4 (from docs/BACKUP_AUDIT.md) — tar nesting, run lock, scheduler interval, scanner coverage. Plus tests + CI.
+
+**What landed:**
+- **`backup_service.py`:** (1) `_build_data_tar_command()` helper adds `--exclude=<backup-dir>` when BACKUP_DIR nests inside `data/` (default kept at `data/backups` deliberately — it's on the Docker `/app/data` volume, so moving it out would lose persistence; the exclude fixes the recursion); tar also appends `scanner/data` as a second `-C` root when present. (2) Lock now held for the whole run — removed the early `finally: release` after pg_dump; artifact names gain a `-p<pid>` suffix against same-second collisions. (3) Scheduler sleeps on the DB-backed console interval (re-read each loop, clamped ≥60s) instead of the import-time env var. (4) Covered by (1).
+- **`tests/test_backup.py` (new, 4 tests)** for the tar-command builder; **`.github/workflows/smoke.yml`** runs it + compile-checks `backup_service.py`; **AGENTS.md** Testing section updated.
+- **Verified:** `py_compile` clean; 4/4 backup + 15/15 event_bus + 28/28 node tests pass.
+
+**NEXT:** Audit items 5–6 (manual export/import hardening: zip-slip guard, 70-table + real file-layout coverage, sequence resets, credential re-entry docs; SQL import `ON_ERROR_STOP=1` + streaming + pre-restore snapshot) remain open. Then items 7–9 (remote pruning/host-key pinning, sha256 artifacts, disaster runbook). User to direct.
+
+---
+
+## Previous summary (2026-10-08)
+
+**Backup audit — full-disaster-recovery coverage of the admin-console backup path (scheduled pg_dump + data tar, manual SQL/JSON export/import, remote copy, retention). Read-only; no dumps written, nothing restarted.
 
 **Verdict:** scheduled backup covers the full DB (pg_dump, no excludes — all 70 tables) and nearly all files, with 3 real bugs + 2 gaps. The manual export/import pair is NOT disaster-capable (drops 26 tables, all credentials, nearly all files). Full disaster today = pg_dump .sql.gz + data .tar.gz restored by hand; no one-click or verified restore.
 

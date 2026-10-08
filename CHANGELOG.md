@@ -2,6 +2,10 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Backup fixes: tar nesting, run lock, scheduler interval, scanner coverage (2026-10-08)
+
+Fixes audit items 1–4 from `docs/BACKUP_AUDIT.md` (all in `backup_service.py`): the `data/` tar now excludes `BACKUP_DIR` when nested (recursive-growth fix; default stays at `data/backups` since it's on the persistent volume) and appends `scanner/data` as a second source; the run lock is held for the whole backup with pid-suffixed artifact names; the scheduler honors the admin-console interval (re-read each loop, ≥60s clamp). New `tests/test_backup.py` (4 tests), wired into CI. Audit items 5–9 remain open.
+
 ## Backup audit: full-disaster-recovery coverage gaps (2026-10-08)
 
 Read-only audit of the admin-console backup path (no code changes). Scheduled `pg_dump` + `data/` tar covers the full DB and nearly all files, but: the data tar recursively embeds prior backups (`BACKUP_DIR` inside the tree, no `--exclude`); the run lock releases after `pg_dump`; the scheduler ignores the console interval setting; `scanner/data/` is outside the archive; the manual SQL/JSON export/import pair drops 26/70 tables, all credentials, and nearly all files and must not be treated as a restore path. Full report + ordered fix list: `docs/BACKUP_AUDIT.md`.

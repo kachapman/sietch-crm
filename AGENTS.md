@@ -63,6 +63,7 @@ Three test surfaces, all run via CI (`.github/workflows/smoke.yml`):
 ```bash
 # Python unit tests (stdlib unittest)
 python3 tests/test_event_bus.py           # 15 tests — SSE leak fix, publish-drops, system subscribers
+python3 tests/test_backup.py              # 4 tests — tar excludes nested backup dir, scanner source
 python3 tests/test_onlyoffice_import.py   # 8 tests — type map, closure sentinel, safe filename
 
 # Node unit tests (node:test, no npm deps)

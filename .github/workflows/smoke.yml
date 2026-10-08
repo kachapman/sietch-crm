@@ -26,6 +26,9 @@ jobs:
       - name: Run event_bus tests
         run: python3 tests/test_event_bus.py -v
 
+      - name: Run backup tests
+        run: python3 tests/test_backup.py -v
+
       - name: Run onlyoffice import tests
         run: python3 tests/test_onlyoffice_import.py
 
@@ -58,6 +61,7 @@ jobs:
         run: |
           python -m py_compile server.py
           python -m py_compile event_bus.py
+          python -m py_compile backup_service.py
           python -m py_compile oauth_providers.py
           python -m py_compile smtp_client.py
           python -m py_compile telegram_bot.py
