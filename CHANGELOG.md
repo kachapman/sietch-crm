@@ -2,6 +2,25 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Kanban: per-column vertical scroll + click-drag horizontal scroll + card content wrap + auto-hide scrollbars (2026-10-08)
+
+ISSUE-016 — fully resolved across 8 commits over 2 days. Three user-requested behaviors now work correctly on every kanban tile (both deal-level and main page-wide project group kanbans):
+
+1. **Per-column vertical scroll** — each column has its own scrollbar, clipped to the tile border, with the column-body's max-height scaling with the tile when the user resizes.
+2. **Click-and-drag horizontal scroll** on the board for mouse (mirrors the existing mobile touch-pan). Link clicks inside cards still navigate normally via the `e.target.closest("a")` guard.
+3. **Card content stays inside the card border** — long URLs and long single words wrap via `overflow-wrap: break-word` on the base `.card` rule.
+
+Plus an auto-hide scrollbar pattern (Slack/Linear/GitHub style): the scrollbar thumb is invisible at rest (`scrollbar-color: transparent transparent`), and becomes visible only on the specific element being scrolled (via the `.is-scrolling` JS class) or hovered (via the `.is-hovered` JS class on the scrollable ancestor of the cursor).
+
+**Commits:**
+- `b9ef269` — attempt 5 (correct): `align-items: stretch` on `.board` + `max-height: 100%` on `.column-body` + `enableBoardDragScroll` helper
+- `9895916` — auto-hide scrollbars via standardized `scrollbar-color` + per-element `.is-scrolling` / `.is-hovered` JS classes
+- `98ad9e1` — `overflow-wrap: break-word` on `.card`
+
+(Intermediate attempts in commit history were reverted as part of the iteration; see `docs/ISSUES.md` for the full 8-attempt history with root-cause analysis.)
+
+**Files:** `public/styles.css` (per-column scroll chain + subtle scrollbar rules + `.card` overflow-wrap), `public/app.js` (`enableBoardDragScroll` helper at line 11196 + `setupAutoHideScrollbars` IIFE at line 5), `public/index.html` (cache busters through `styles.css?v=3.7.14`, `app.js?v=3.7.9`).
+
 ## Kanban: per-column vertical scroll that scales with tile + click-drag horizontal scroll (2026-10-07)
 
 The 5th (and correct) attempt at ISSUE-016. The previous four attempts

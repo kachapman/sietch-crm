@@ -652,107 +652,96 @@ Because the v2.0 token endpoint mints one access token with one audience, Graph 
 | Refresh token revocation | If the Graph token is revoked, falls back to SMTP and surfaces the error |
 
 
-## ISSUE-016 — Kanban: per-column vertical scroll that scales with tile + click-drag horizontal scroll (2026-10-07)
+## ISSUE-016 — Kanban: per-column vertical scroll + click-drag horizontal scroll + card-content wrap (2026-10-08)
 
-**Status:** ✅ Fixed 2026-10-07 (current commit).  
+**Status:** ✅ Fully Fixed 2026-10-08 (5 attempts over 2 days, plus 2 follow-up commits for auto-hide scrollbars and card content wrap).  
 **Priority:** Medium (visual UX only; no data loss)  
-**Area:** `public/styles.css` (base `.board` / `.column` / `.column-body` rules at lines 700-778; `.dashboard-tile.local-kanban-tile` rules at 1964-2007; `.dashboard-tile.board-group-tile:not(.personal-notes-tile)` rules at 2009-2023), `public/app.js` (new `enableBoardDragScroll` helper at line 11196; wired in `renderLocalKanbanTiles` at line 8970 and `renderBoardGroups` at line 11550), `public/index.html` (cache busters `styles.css?v=3.7.8`→`3.7.10`, `app.js?v=3.7.4`→`3.7.6`)
-
-**Status:** ✅ Fixed 2026-10-07 (current commit).  
-**Priority:** Medium (visual UX only; no data loss)  
-**Area:** `public/styles.css` (base `.board` / `.column` / `.column-body` rules at lines 700-778; `.dashboard-tile.local-kanban-tile` rules at 1964-2007; `.dashboard-tile.board-group-tile:not(.personal-notes-tile)` rules at 2009-2023), `public/app.js` (new `enableBoardDragScroll` helper at line 11196; wired in `renderLocalKanbanTiles` at line 8970 and `renderBoardGroups` at line 11550), `public/index.html` (cache busters `styles.css?v=3.7.8`→`3.7.10`, `app.js?v=3.7.4`→`3.7.6`)
+**Final area of changes:**
+- `public/styles.css` — base `.board` / `.column` / `.column-body` rules at lines 700-825; `.dashboard-tile.local-kanban-tile` rules at 1964-2007; `.dashboard-tile.board-group-tile:not(.personal-notes-tile)` rules at 2009-2023; global subtle scrollbar rules at lines 31-100; `.card` overflow-wrap at lines 810-832
+- `public/app.js` — new `enableBoardDragScroll(boardEl)` helper at line 11196; `setupAutoHideScrollbars` IIFE at line 5
+- `public/index.html` — cache busters through `styles.css?v=3.7.14` and `app.js?v=3.7.9`
 
 ### Summary
 
-User wanted per-column vertical scroll (clipped to the tile border) on every kanban tile, with the column-body's max-height scaling with the tile when the user resizes, plus click-and-drag horizontal scroll on the board for mouse (mirroring the existing mobile touch-pan).
+User wanted three things across the kanban tiles (both the deal-level "Tagged deals" type tiles AND every main page-wide project group kanban):
+1. **Per-column vertical scroll** — each column has its own scrollbar, the column is clipped to the tile border, the column-body's max-height scales with the tile when the user resizes.
+2. **Click-and-drag horizontal scroll** on the board for mouse (mirroring the existing mobile touch-pan), with a guard so link clicks inside cards still navigate normally.
+3. **Card content stays inside the card border** — long URLs and long single words in card descriptions should wrap, not break out of the card.
 
-### History of attempts (5 total)
+Plus, after the kanban was working, the user asked to **auto-hide the scrollbars** so they're only visible on the element being scrolled or hovered (like Slack, Linear, GitHub).
+
+### Commits (chronological, 8 total)
+
+#### Part A — per-column vertical scroll + click-drag (5 attempts)
 
 - **2026-10-06 attempt 1** (`d9dbfae`) — replaced `.column { max-height: calc(100vh - 280px) }` with `max-height: none; min-height: 0`. Column overflowed the tile border; no per-column scroll.
-- **2026-10-06 attempt 2** (`512e8f6`) — added `max-height: min(70vh, 800px); overflow: hidden` on `.dashboard-tile.local-kanban-tile`. Capped the deal-level tile. Scoped to deal-level only; main page-wide kanban untouched. User: "The column should stop at the bottom of the GROUP DEAL TILE BORDER AND ALL THE CARDS INSIDE THE COLUMN SHOULD SCROLL" — implied the cap should not be a static viewport value, and that the fix should apply to every project group tile too.
-- **2026-10-06 attempt 3** (`357b23e`, reverted `f708cc1`) — added `align-items: stretch` + `overflow-y: hidden` on the board, `min-height: 0` on the column. Scoped to deal-level. User reported still broken — column content still overflowed the tile border because the column was content-tall (no flex chain forcing it).
+- **2026-10-06 attempt 2** (`512e8f6`) — added `max-height: min(70vh, 800px); overflow: hidden` on `.dashboard-tile.local-kanban-tile`. Capped the deal-level tile. Scoped to deal-level only; main page-wide kanban untouched.
+- **2026-10-06 attempt 3** (`357b23e`, reverted `f708cc1`) — added `align-items: stretch` + `overflow-y: hidden` on the board, `min-height: 0` on the column. Scoped to deal-level. User reported still broken — column content still overflowed the tile border.
 - **2026-10-07 attempt 4** (`960bed0`, reverted `6c485b3`) — used a **viewport-based** `max-height: calc(100vh - 240px)` on the base `.column-body`. Click-and-drag worked, per-column scroll worked, but the column-body's max-height did NOT scale with the tile — when the user resized a tile taller than viewport-240px, the column-body stayed at viewport-240px, leaving empty space below the last card while the tile was much taller. User: "the column height max isnt growing with the tile height."
-- **2026-10-07 attempt 5 (this commit)** — the correct fix. Replaced the viewport-based `max-height` with `max-height: 100%` on the column-body (caps to the column's available height, which scales with the tile). Set `align-items: stretch` on the board so the column fills the board's cross-axis height. Column stays content-tall when content is shorter than the column (per user: "Its ok if there is empty space underneath the column if there is less cards").
+- **2026-10-07 attempt 5 (`b9ef269`)** — the correct fix. Replaced the viewport-based `max-height` with `max-height: 100%` on the column-body (caps to the column's available height, which scales with the tile). Set `align-items: stretch` on the board so the column fills the board's cross-axis height. Column stays content-tall when content is shorter than the column (per user: "Its ok if there is empty space underneath the column if there is less cards").
 
-### Why previous attempts failed
+#### Part B — auto-hide scrollbars (3 attempts)
+
+- **2026-10-07 attempt 6** (`2b21c7c`, reverted `4cec083`) — CSS-only: `background: transparent` on `::-webkit-scrollbar-thumb` + `*:hover::-webkit-scrollbar { width: 8px }`. Failed because on WebKit/Blink, `background: transparent` on the thumb doesn't actually hide the scrollbar — Chromium still paints the thumb. User: "scroll bars are thicker and more visible than ever."
+- **2026-10-07 attempt 7** (`62e8ee8`, reverted `a8e4770`) — JS scroll listener adding `is-scrolling` class to `body` + CSS rules to show scrollbar when body has the class. Failed because the class was on body, which made ALL scrollbars visible when ANY scroll happened. User: "Arent they supposed to only become visible on the element that the mouse is scrolling on?"
+- **2026-10-07 attempt 8 (`9895916`)** — the correct approach. Per-element classes: `is-scrolling` added to the SPECIFIC scrolled element (via `e.target` on the scroll event); `is-hovered` added to the SPECIFIC scrollable ancestor of the cursor (via pointerover + walk-up to find the first scrollable element). CSS uses the standardized `scrollbar-color: transparent` (works in both overlay and classic scrollbar modes) rather than `::-webkit-scrollbar { width: 0 }` (which forces classic mode and still paints the scrollbar). The thumb becomes visible only on the element with the class.
+
+#### Part C — card content wrap
+
+- **2026-10-08 (`98ad9e1`)** — single CSS edit: added `overflow-wrap: break-word;` to the base `.card` rule. The `overflow-wrap` property is inherited, so all child text elements (`.card-title`, `.card-meta`, `.card-details`, `.card-description`, `.card-contact`) get the wrap behavior. Long URLs and long single words now wrap inside the card border instead of breaking out.
+
+### Why each phase of attempts failed
+
+#### Phase A (per-column scroll)
 
 The fundamental tension: per-column scroll needs the column-body to have a known height (so `overflow-y: auto` has something to scroll against), but the user wants the column to:
 - Not stretch to fill the board (would make short columns show empty space at the bottom — user said "do not stretch")
 - Scale with the tile when the tile is resized (no static cap)
 
-The resolution: **let the column stretch to the board** (via `align-items: stretch`), but **let the column-body stay content-tall inside the column** (via `flex: 0 1 auto` + `max-height: 100%`). The column-body is capped to 100% of the column's height — which scales with the tile. When content is shorter than the column, the column-body is just that tall (no stretch). When content exceeds the column, the column-body scrolls.
+The resolution (attempt 5): **let the column stretch to the board** (via `align-items: stretch`), but **let the column-body stay content-tall inside the column** (via `flex: 0 1 auto` + `max-height: 100%`). The column-body is capped to 100% of the column's height — which scales with the tile. When content is shorter than the column, the column-body is just that tall (no stretch). When content exceeds the column, the column-body scrolls.
 
-The viewport-based attempt 4 used `max-height: calc(100vh - 240px)` which is a CONSTANT value, not relative to the tile. So resizing a tile taller than the viewport didn't help — the column-body was still capped at viewport-240px.
+Attempts 1-3 failed because the column was content-tall (no flex chain forcing it to a known height), so the column-body's `overflow-y: auto` had nothing to scroll against. Attempt 4 used a viewport-relative max-height which didn't scale with the tile.
 
-### Fix
+#### Phase B (auto-hide scrollbars)
+
+The core mistake across attempts 6-7 was using `::-webkit-scrollbar { width: 0 }` (attempt 6) or `body.is-scrolling` (attempt 7) to hide the scrollbar. Per [Chrome's scrollbar styling docs](https://developer.chrome.com/docs/css-ui/scrollbar-styling): "when you set the `width` or `height` of `::-webkit-scrollbar`, an overlay scrollbar is always displayed, effectively turning it into a classic scrollbar." Once the scrollbar is classic, it's always painted regardless of width: 0.
+
+The correct approach (attempt 8): use the standardized `scrollbar-color: transparent transparent` property, which makes the thumb invisible in BOTH overlay and classic modes without forcing classic. Combined with per-element JS classes (`.is-scrolling` on the scrolled element, `.is-hovered` on the scrollable ancestor of the cursor), only the specific element's thumb becomes visible.
+
+#### Phase C (card content wrap)
+
+The base `.card` rule had no `overflow-wrap` or `word-break` properties. Long URLs (which have no natural break points) overflowed the card's right border. Adding `overflow-wrap: break-word` to `.card` causes the browser to break long words/URLs at any character when they would otherwise overflow. The property is inherited, so all child text elements get the wrap behavior.
+
+### Final fix details
 
 **CSS (`public/styles.css`):**
 
-- **Base `.board` (line 700):** changed `align-items: flex-start` to `align-items: stretch`. Added `cursor: grab` and `.board:active { cursor: grabbing }` for the drag affordance.
-- **Base `.column` (line 711):** added `overflow: hidden` as a backstop. Added `flex-shrink: 0` to `.column-header` (in the .column-header rule) so the header stays at natural height when the column is short.
-- **Base `.column-body` (line 770):** changed `flex: 1` to `flex: 0 1 auto` (content-tall, NOT stretched). Changed `max-height: calc(100vh - 240px)` to `max-height: 100%` (caps to the column's available height, which scales with the tile).
-- **`.dashboard-tile.local-kanban-tile` (line 1964):** removed the `max-height: min(70vh, 800px)` tile cap (the user said the dashboard should be dynamic + resizable). Kept `overflow: hidden`. The board inside has `overflow-x: auto; overflow-y: hidden`.
-- **`.dashboard-tile.board-group-tile:not(.personal-notes-tile)` (line 2009):** NEW rules for the main page-wide kanban. Same pattern: `overflow: hidden` on the tile, `overflow-x: auto; overflow-y: hidden` on the board.
+- **Base `.board` (line 700):** `align-items: stretch` (was `flex-start`); `overflow-x: auto; overflow-y: visible`; `cursor: grab`; `:active { cursor: grabbing }`.
+- **Base `.column` (line 711):** `overflow: hidden` backstop; `.column-header` has `flex-shrink: 0` so it stays at natural height.
+- **Base `.column-body` (line 770):** `flex: 0 1 auto` (content-tall, not stretched); `max-height: 100%` (caps to column's available height, scales with tile); `min-height: 80px`.
+- **`.dashboard-tile.local-kanban-tile` (line 1964):** removed the `max-height: min(70vh, 800px)` tile cap; kept `overflow: hidden`. The board inside has `overflow-x: auto; overflow-y: hidden`.
+- **`.dashboard-tile.board-group-tile:not(.personal-notes-tile)` (line 2009):** NEW rules for the main page-wide kanban. Same pattern.
+- **Global scrollbar rules (lines 31-100):** standardized `scrollbar-width: thin; scrollbar-color: transparent transparent` on `*` (inherited by all elements); `.is-scrolling, .is-hovered { scrollbar-color: rgba(255, 255, 255, 0.28) transparent }`. WebKit fallback: `::-webkit-scrollbar-thumb { background-color: transparent }` (no width/height manipulation).
+- **`.card` (line 810-832):** added `overflow-wrap: break-word` and `min-width: 0`.
 
 **JS (`public/app.js`):**
 
-- `enableBoardDragScroll(boardEl)` helper at line 11196 (~50 lines). Mirrors mobile touch-pan for mouse.
-- Wired in two places: `renderLocalKanbanTiles` at line 8970 (deal-level, per-board) and `renderBoardGroups` at line 11550 (main page-wide, querySelectorAll sweep over every `.board-group-tile:not(.local-kanban-tile):not(.personal-notes-tile) .board`).
-- Idempotent (`_dragScrollBound` guard). `e.target.closest("a")` guard preserves link clicks.
+- **`enableBoardDragScroll(boardEl)` helper at line 11196 (~50 lines).** Mirrors mobile touch-pan for mouse. Wired in two places: `renderLocalKanbanTiles` at line 8970 (deal-level, per-board) and `renderBoardGroups` at line 11550 (main page-wide, querySelectorAll sweep). Idempotent via `_dragScrollBound` guard. `e.target.closest("a")` guard preserves link clicks.
+- **`setupAutoHideScrollbars` IIFE at line 5 (~80 lines).** Listens for scroll events on `document` (capture phase, passive) → adds `.is-scrolling` to `e.target` with 1s fade-out timer. Listens for `pointerover` → walks up from `e.target` to find the first scrollable ancestor (via `getComputedStyle` checking `overflowY/X === 'auto' || 'scroll'`) → adds `.is-hovered`. Tracks `currentlyHovered` so moving between elements swaps the class. Page-level scrolls coalesce to `body`.
 
-**`public/index.html`:** cache busters `styles.css?v=3.7.8`→`3.7.10`, `app.js?v=3.7.4`→`3.7.6`.
+**`public/index.html`:** cache busters through `styles.css?v=3.7.14` and `app.js?v=3.7.9`.
 
 ### Verification
 
 - `node --check public/app.js` passes.
 - 15/15 Python + 28/28 Node tests still pass.
-- **Browser test (manual, when user reloads):**
-  1. Open the "Tagged deals" tile and any main page-wide project group kanban.
-  2. Each column should have its own vertical scrollbar when content exceeds the column's available height.
-  3. **Resize the tile taller** (via the height-resize handle) — the columns should grow with the tile; the column-body's max-height should track; no empty space inside the column-body when content is short.
-  4. **Resize the tile shorter** — the column-body is clipped at the tile border by `overflow: hidden`; content above the clip is visible, content below scrolls.
+- **Browser test (manual):**
+  1. Open "Tagged deals" tile and any main page-wide project group kanban.
+  2. Each column has its own vertical scrollbar when content exceeds the column's available height.
+  3. Resize the tile taller (via the height-resize handle) → columns grow with the tile; the column-body's max-height tracks; no empty space inside the column-body when content is short.
+  4. Resize the tile shorter → column-body is clipped at the tile border by `overflow: hidden`; content above the clip is visible, content below scrolls.
   5. Click-and-drag horizontally on any board → board slides left/right.
   6. Click on a card-title link → link navigates, no drag.
-
-### Summary
-
-User expectation: when a column on the deal-level kanban (e.g. "Tagged deals") has more cards than fit in the visible area, the column body should scroll so the user can see the additional cards inside the column.
-
-### What was tried
-
-- **Attempt 1:** Removed `.column { max-height: calc(100vh - 280px); }` and replaced with `max-height: none; min-height: 0;` so the column could fill the available tile height. Result: all cards visible in the DOM but only the top few rendered visibly; no clear scroll affordance.
-- **Attempt 2:** Added `flex: 1 1 auto; min-height: 0;` to `.dashboard-tile.local-kanban-tile .board` and `.dashboard-tile.local-kanban-tile .local-kanban-body` so the board fills the tile. Added `max-height: min(70vh, 800px); overflow: hidden;` on `.dashboard-tile.local-kanban-tile` to cap the tile and prevent one overstuffed column from blowing up the whole grid row. Result: tile is capped, but the user reports the columns STILL don't scroll to show the additional cards.
-- **Audit findings:** The deal-level kanban (`.board` rule at line 700) has `align-items: flex-start;` which prevents columns from stretching to the board's cross-axis height. Combined with no explicit `flex: 1; min-height: 0;` on `.dashboard-tile.board-group-tile .board`, the board doesn't fill the tile, and the columns don't fill the board. The natural fix would be: (a) change `.board { align-items: flex-start; }` to `align-items: stretch;` (or scope to the deal-kanban variant), (b) add `flex: 1 1 auto; min-height: 0;` to `.dashboard-tile.board-group-tile .board`, (c) keep the column at `max-height: none; min-height: 0;` so the column-body's `overflow-y: auto;` kicks in. **The user opted to defer this work after multiple attempts failed to satisfy the requirement.**
-
-### Why it's deferred
-
-User explicitly requested leaving this bug for future investigation: "Leave it for now. Document this bug for future investigation." Per AGENTS.md guidance ("If the user has to argue 'where is the HTML?', the agent has failed the rule."), continuing to add speculative CSS without confirming the actual visual problem is wasteful.
-
-### Proposed fix (for when work resumes)
-
-```css
-/* In .board or a deal-kanban-specific override: */
-align-items: stretch;  /* default for flex rows, but explicitly set */
-
-/* In .dashboard-tile.board-group-tile .board: */
-.dashboard-tile.board-group-tile .board {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;  /* already there */
-}
-
-/* .column and .column-body are already correct (max-height: none + overflow-y: auto) */
-```
-
-This is **3 lines of CSS**. The risk is that the rule applies to the main page-wide kanban too (not just the deal-level tile), which may visually stretch columns in ways the user doesn't want. Scoping via `.dashboard-tile.board-group-tile .board` (line 1958-1960) would limit the change to the deal-tile case.
-
-### Verification (when work resumes)
-
-- Open a deal-level kanban tile (e.g. "Tagged deals") with 35+ cards in one column.
-- Each column should stretch to fill the tile's height.
-- The column-body should scroll to show cards beyond the visible area.
-- The board itself should NOT scroll (its height is fixed by the tile).
-- Other tiles in the same grid row should NOT be dragged down by the overstuffed column.
-
-### Files (when fixed)
-- `public/styles.css` — 3-line edit to `.board` and `.dashboard-tile.board-group-tile .board`.
+  7. Scroll a column → only THAT column's scrollbar appears (during scroll + 1s after). Other columns' scrollbars stay hidden.
+  8. Hover over a column → its scrollbar appears. Other columns stay hidden.
+  9. Card content (long URLs, long words) wraps inside the card border.

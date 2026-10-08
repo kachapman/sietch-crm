@@ -11,7 +11,45 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-07
+**Date:** 2026-10-08
+
+**Topic:** ISSUE-016 fully resolved + docs updated. Per-column vertical scroll + click-drag horizontal scroll + auto-hide scrollbars + card content wrap — all working on every kanban tile (deal-level and main page-wide).
+
+After 5 attempts over 2 days (commits `d9dbfae`, `512e8f6`, `357b23e`/reverted, `960bed0`/reverted, `b9ef269` = correct), the per-column vertical scroll finally works. After 3 more attempts (commits `2b21c7c`/reverted, `62e8ee8`/reverted, `9895916` = correct), the auto-hide scrollbars work. And in commit `98ad9e1`, the card-content wrap regression is fixed.
+
+**What landed in this session (3 final commits):**
+
+- **`b9ef269` — per-column vertical scroll + click-drag horizontal scroll (ISSUE-016 attempt 5, the correct one):**
+  - `.board { align-items: stretch; overflow-y: visible; cursor: grab; :active { cursor: grabbing } }` — columns fill the board's cross-axis height (required for the column-body's `max-height: 100%` to work)
+  - `.column-body { flex: 0 1 auto; max-height: 100%; min-height: 80px }` — caps to the column's available height, which scales with the tile. Content-tall when short, scrolls when long.
+  - Removed the `max-height: min(70vh, 800px)` tile cap from `.dashboard-tile.local-kanban-tile` (the user said the dashboard should be dynamic + resizable).
+  - Added new rules for `.dashboard-tile.board-group-tile:not(.personal-notes-tile)` (the main page-wide kanban, which was untouched by all 4 prior attempts).
+  - New `enableBoardDragScroll(boardEl)` JS helper (~50 lines) at line 11196. Wired in `renderLocalKanbanTiles` (line 8970) and `renderBoardGroups` (line 11550) for every project group kanban. Idempotent via `_dragScrollBound` guard. `e.target.closest("a")` guard preserves link clicks.
+
+- **`9895916` — auto-hide scrollbars:**
+  - Replaced the `::-webkit-scrollbar { width: 0 }` approach (which per [Chrome docs](https://developer.chrome.com/docs/css-ui/scrollbar-styling) forces classic mode and still paints the scrollbar) with the standardized `scrollbar-color: transparent transparent` on `*` (inherited by all elements, works in both overlay and classic modes).
+  - New `setupAutoHideScrollbars` IIFE at line 5 (~80 lines) that adds `.is-scrolling` to the SPECIFIC scrolled element (via `e.target` on scroll events) and `.is-hovered` to the SPECIFIC scrollable ancestor of the cursor (via pointerover + walk-up to find first scrollable element). Per-element classes — no more `body.is-scrolling` making every scrollbar on the page light up.
+
+- **`98ad9e1` — card content wrap:**
+  - Added `overflow-wrap: break-word;` and `min-width: 0;` to the base `.card` rule. The `overflow-wrap` property is inherited, so all child text elements get the wrap behavior. Long URLs (which have no natural break points) now wrap inside the card border instead of breaking out.
+
+**Verified:**
+- `node --check public/app.js` passes.
+- 15/15 Python + 28/28 Node tests still pass.
+- Browser-tested per-column scroll, click-drag, auto-hide (hover-show + scroll-show), and card wrap — all working as expected.
+
+**Docs updated:**
+- `ISSUES.md` — full ISSUE-016 entry rewritten with 8-attempt history, root-cause analysis for each phase (per-column scroll / auto-hide scrollbars / card wrap), final fix details, verification checklist. Status: ✅ Fully Fixed 2026-10-08.
+- `CHANGELOG.md` — new top entry summarizing the 3 final commits, the behaviors delivered, and the file areas touched.
+- `docs/SESSION_HISTORY.md` — this entry (the "current session" block).
+
+**NEXT:** None of the user's originally-pending items remain on the table. Open items from the original "loose-ends" plan: ISSUE-016 (now ✅), performance + memory profiling, deploy to the new droplet (165.227.90.63 / crm.publicadjustermidwest.com). User to direct next work.
+
+---
+
+## Previous summary (2026-10-07)
+
+**Auto-hide scrollbars via JS scroll listener + CSS `width: 0` → 8px on hover/scroll.**
 
 **Topic:** ISSUE-016 — 5th attempt, finally correct. Per-column vertical scroll that scales with the tile + click-drag horizontal scroll on every kanban tile.
 
