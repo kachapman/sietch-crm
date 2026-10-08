@@ -37274,8 +37274,12 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
   uploadInput.style.display = "none";
   const uploadBtn = document.createElement("button");
   uploadBtn.type = "button";
-  uploadBtn.className = "btn btn-primary btn-sm";
-  uploadBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`;
+  // Match the Create Document button next to it: same shape and size.
+  // Both are icon-only (btn-icon-only) so the 2.1rem × 2.1rem min-size in
+  // .opp-docs-toolbar .btn-icon-only makes them render identically. Also
+  // matches the standalone Documents modal's #documents-upload-btn.
+  uploadBtn.className = "btn btn-primary btn-icon-only btn-sm";
+  uploadBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`;
   uploadBtn.addEventListener("click", () => uploadInput.click());
   uploadInput.addEventListener("change", async () => {
     const files = Array.from(uploadInput.files).filter(f => f.size > 0);
@@ -37304,9 +37308,13 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
   createWrap.className = "documents-new-wrap opp-docs-new-wrap";
   const createBtn = document.createElement("button");
   createBtn.type = "button";
+  // btn-icon-only + 18×18 SVG matches the upload button next to it (and the
+  // standalone Documents modal's #documents-new-btn). The shared
+  // .opp-docs-toolbar .btn-icon-only rule sets min-width/height: 2.1rem
+  // so both render at the same size.
   createBtn.className = "btn btn-primary btn-icon-only btn-sm";
   createBtn.title = "Create document";
-  createBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z"/><path d="M12 8v8"/><path d="M8 12h8"/></svg>';
+  createBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z"/><path d="M12 8v8"/><path d="M8 12h8"/></svg>';
   const createMenu = document.createElement("div");
   createMenu.className = "documents-new-menu hidden";
   createMenu.innerHTML = `

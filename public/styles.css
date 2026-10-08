@@ -8019,6 +8019,13 @@ body {
   flex-shrink: 0;
   line-height: 1.4;
 }
+/* Collapse the empty activity row in the project modal preview pane.
+   Same intent as .documents-preview-activity:empty — the row's
+   min-height + border otherwise show a dark band when no activity
+   has been recorded yet. */
+.opp-preview-doc-activity:empty {
+  display: none;
+}
 
 .opp-preview-doc-activity-row {
   display: flex;
@@ -15229,6 +15236,13 @@ select.form-control {
   min-height: 1.5rem;
   flex-shrink: 0;
   line-height: 1.4;
+}
+/* Collapse the empty activity row so the preview pane doesn't show a dark
+   band between the file-name header and the iframe toolbar. When the JS
+   populates this div with activity rows, the :empty selector no longer
+   matches and the row displays normally. */
+.documents-preview-activity:empty {
+  display: none;
 }
 
 .documents-preview-activity-row {
