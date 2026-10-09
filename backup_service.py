@@ -10,6 +10,7 @@ import gzip
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -438,6 +439,23 @@ def _send_remote(db_path: Path, data_path: Path, config: dict) -> None:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if proc.returncode != 0:
             raise RuntimeError(f"Remote send failed ({remote_type}): {proc.stderr[:300]}")
+
+
+def sanitize_archive_member(name: str, prefix: str = "files/") -> str | None:
+    """Validate a zip/tar member path for extraction (zip-slip guard).
+
+    Returns the path relative to ``prefix``, or None if the member must
+    be skipped: absolute paths, ``..`` components, drive letters, and
+    empty remainders are all rejected. Pure helper, unit-tested.
+    """
+    if not name or not name.startswith(prefix):
+        return None
+    rel = name[len(prefix):]
+    if not rel or rel.startswith("/") or ".." in Path(rel).parts:
+        return None
+    if re.match(r"^[A-Za-z]:", rel):
+        return None
+    return rel
 
 
 def _cleanup_old_backups() -> None:

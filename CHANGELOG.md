@@ -2,6 +2,10 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Backup fix item 5: manual export/import hardening (2026-10-08)
+
+`_EXPORT_TABLES` now covers all 70 tables (26 added in FK-safe order; `password_reset_tokens` + `twofa_challenges` deliberately excluded as ephemeral secrets); sensitive-column stripping extended to Graph OAuth tokens, CalDAV password, and webhook secret. Universal export walks the real on-disk file layout (13 `data/` subdirs + `scanner/data` alias) instead of the nonexistent `documents/project_documents` path. JSON import gains a zip-slip guard, post-import serial sequence resets, and surfaces the export's credential re-entry notice as warnings. `tests/test_backup.py` grows 4 → 10 (sanitizer + AST-based coverage guards). Audit items 6–9 remain open.
+
 ## Backup fixes: tar nesting, run lock, scheduler interval, scanner coverage (2026-10-08)
 
 Fixes audit items 1–4 from `docs/BACKUP_AUDIT.md` (all in `backup_service.py`): the `data/` tar now excludes `BACKUP_DIR` when nested (recursive-growth fix; default stays at `data/backups` since it's on the persistent volume) and appends `scanner/data` as a second source; the run lock is held for the whole backup with pid-suffixed artifact names; the scheduler honors the admin-console interval (re-read each loop, ≥60s clamp). New `tests/test_backup.py` (4 tests), wired into CI. Audit items 5–9 remain open.

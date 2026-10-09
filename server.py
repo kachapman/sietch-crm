@@ -11617,15 +11617,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     # Tables to export (ordered by FK dependencies)
     _EXPORT_TABLES = [
         ("users", "SELECT * FROM users ORDER BY id"),
+        ("password_reset_tokens", None),  # deliberately excluded: short-lived secrets, restoring extends validity
+        ("twofa_challenges", None),  # deliberately excluded: ephemeral single-use challenges
+        ("user_roles", "SELECT * FROM user_roles"),
         ("stages", "SELECT * FROM stages ORDER BY id"),
         ("tag_definitions", "SELECT * FROM tag_definitions ORDER BY id"),
         ("task_labels", "SELECT * FROM task_labels ORDER BY id"),
         ("custom_field_definitions", "SELECT * FROM custom_field_definitions ORDER BY id"),
         ("custom_field_options", "SELECT * FROM custom_field_options ORDER BY id"),
+        ("custom_field_groups", "SELECT * FROM custom_field_groups ORDER BY id"),
         ("history_categories", "SELECT * FROM history_categories ORDER BY id"),
         ("branding", "SELECT * FROM branding ORDER BY id"),
         ("system_settings", "SELECT * FROM system_settings ORDER BY key"),
         ("contacts", "SELECT * FROM contacts ORDER BY id"),
+        ("contact_emails", "SELECT * FROM contact_emails ORDER BY id"),
+        ("contact_phones", "SELECT * FROM contact_phones ORDER BY id"),
+        ("contact_addresses", "SELECT * FROM contact_addresses ORDER BY id"),
         ("opportunities", "SELECT * FROM opportunities ORDER BY id"),
         ("opportunity_tags", "SELECT * FROM opportunity_tags"),
         ("opportunity_custom_field_values", "SELECT * FROM opportunity_custom_field_values ORDER BY id"),
@@ -11645,13 +11652,29 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         ("mail_tags", "SELECT * FROM mail_tags ORDER BY id"),
         ("mail_templates", "SELECT * FROM mail_templates ORDER BY id"),
         ("mail_contacts", "SELECT * FROM mail_contacts ORDER BY id"),
+        ("mail_contractors", "SELECT * FROM mail_contractors ORDER BY id"),
+        ("mail_classification_rules", "SELECT * FROM mail_classification_rules ORDER BY id"),
+        ("service_feeds", "SELECT * FROM service_feeds ORDER BY id"),
+        ("bot_config", "SELECT * FROM bot_config"),
+        ("bot_activity_log", "SELECT * FROM bot_activity_log ORDER BY id"),
         ("notifications", "SELECT * FROM notifications ORDER BY id"),
         ("notification_preferences", "SELECT * FROM notification_preferences"),
+        ("telegram_notification_log", "SELECT * FROM telegram_notification_log ORDER BY id"),
         ("document_folders", "SELECT * FROM document_folders ORDER BY id"),
         ("project_documents", "SELECT * FROM project_documents ORDER BY id"),
+        ("document_activity", "SELECT * FROM document_activity ORDER BY id"),
+        ("document_templates", "SELECT * FROM document_templates ORDER BY id"),
         ("project_photos", "SELECT * FROM project_photos ORDER BY id"),
         ("project_photo_folders", "SELECT * FROM project_photo_folders ORDER BY id"),
+        ("photo_exif_cache", "SELECT * FROM photo_exif_cache"),
+        ("photo_report_templates", "SELECT * FROM photo_report_templates ORDER BY id"),
         ("user_profiles", "SELECT * FROM user_profiles"),
+        ("personal_notes", "SELECT * FROM personal_notes ORDER BY id"),
+        ("personal_note_links", "SELECT * FROM personal_note_links"),
+        ("calendar_sources", "SELECT * FROM calendar_sources ORDER BY id"),
+        ("calendar_events", "SELECT * FROM calendar_events ORDER BY id"),
+        ("ics_feed_cache", "SELECT * FROM ics_feed_cache ORDER BY id"),
+        ("minimized_modal_state", "SELECT * FROM minimized_modal_state"),
         ("sessions", "SELECT * FROM sessions ORDER BY created_at DESC LIMIT 0"),
         ("mail_account_access", "SELECT * FROM mail_account_access"),
         ("mail_flag_queue", "SELECT * FROM mail_flag_queue"),
@@ -11660,14 +11683,46 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         ("sync_errors", "SELECT * FROM sync_errors ORDER BY id"),
         ("email_classifications", "SELECT * FROM email_classifications ORDER BY id"),
         ("classifier_training_data", "SELECT * FROM classifier_training_data ORDER BY id"),
+        ("automation_rules", "SELECT * FROM automation_rules ORDER BY id"),
+        ("automation_logs", "SELECT * FROM automation_logs ORDER BY id"),
+        ("time_entries", "SELECT * FROM time_entries ORDER BY id"),
     ]
+    # Tables mapped to None above are deliberately excluded from export
+    # (ephemeral secrets); the export/import loops skip None entries.
 
-    # Sensitive columns to exclude from universal export
+    # Sensitive columns to exclude from universal export.
+    # NOTE: exports therefore cannot fully restore authentication — see
+    # the credential_notice in the manifest; admins must re-enter mail
+    # account passwords/OAuth grants and user passwords after a restore.
     _SENSITIVE_COLUMNS = {
         "password_hash", "password_salt", "password_encrypted",
         "smtp_password_encrypted", "oauth_access_token", "oauth_refresh_token",
+        "oauth_graph_access_token", "oauth_graph_refresh_token",
+        "caldav_password_encrypted", "webhook_secret",
         "token",
     }
+
+    # File subdirs (under data/) captured by the universal export, mapped
+    # to their manifest key. Mirrors the real on-disk layout — do NOT
+    # point these at paths that don't exist (they would be silently
+    # skipped). data/backups is deliberately absent (never nest artifacts).
+    # scanner/data lives outside data/ and is archived under the
+    # __scanner_data__ alias, mapped back on import.
+    _EXPORT_FILE_DIRS = [
+        ("documents", "documents"),
+        ("photos", "photos"),
+        ("history-attachments", "history-attachments"),
+        ("avatars", "avatars"),
+        ("contact-avatars", "contact-avatars"),
+        ("branding", "branding"),
+        ("logos", "logos"),
+        ("user-profiles", "user-profiles"),
+        ("bot-customers", "bot-customers"),
+        ("presence-messages", "presence-messages"),
+        ("event-logs", "event-logs"),
+        ("dashboard-notes", "dashboard-notes"),
+        ("user-presence", "user-presence"),
+    ]
 
     def _handle_export_universal(self) -> None:
         """Export all database tables as a ZIP of JSON files + linked files."""
@@ -11677,12 +11732,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "version": "1.0",
                 "exported_at": datetime.now(timezone.utc).isoformat(),
                 "tables": {},
-                "files": {"documents": [], "photos": []},
+                "files": {},
+                "credential_notice": (
+                    "Sensitive credential columns were excluded from this export "
+                    f"({sorted(self._SENSITIVE_COLUMNS)}). After restoring, re-enter "
+                    "mail account passwords / OAuth grants and reset user passwords. "
+                    "Tables 'password_reset_tokens' and 'twofa_challenges' were not "
+                    "exported (ephemeral secrets). 'sessions' is exported empty."
+                ),
             }
 
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                # Export each table
+                # Export each table (None entries are deliberately excluded)
                 for table_name, sql in self._EXPORT_TABLES:
+                    if sql is None:
+                        manifest["tables"][table_name] = {"row_count": 0, "excluded": True}
+                        continue
                     try:
                         rows = db.query_dicts(sql)
                         # Strip sensitive columns
@@ -11699,10 +11764,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     except Exception as e:
                         manifest["tables"][table_name] = {"row_count": 0, "error": str(e)}
 
-                # Export linked files (documents + photos)
+                # Export linked files from the real on-disk layout.
+                # NOTE: this ZIP is built in RAM — for large installs (multi-GB
+                # history-attachments) prefer the scheduled backup artifacts
+                # (streamed tar.gz on disk) over a browser download.
                 data_dir = Path("data")
-                for subdir, file_list_key in [("documents/project_documents", "documents"), ("photos", "photos")]:
+                for subdir, file_list_key in self._EXPORT_FILE_DIRS:
                     src_dir = data_dir / subdir
+                    manifest["files"][file_list_key] = []
                     if not src_dir.exists():
                         continue
                     for fpath in src_dir.rglob("*"):
@@ -11712,6 +11781,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             # Find which project this belongs to
                             rel = str(fpath.relative_to(src_dir))
                             manifest["files"][file_list_key].append({
+                                "zip_path": arc_name,
+                                "filename": fpath.name,
+                                "size": fpath.stat().st_size,
+                            })
+                # Scanner state lives outside data/ — archive under an alias.
+                scanner_dir = Path("scanner/data")
+                if scanner_dir.exists():
+                    manifest["files"]["scanner_data"] = []
+                    for fpath in scanner_dir.rglob("*"):
+                        if fpath.is_file():
+                            arc_name = f"files/__scanner_data__/{fpath.relative_to(scanner_dir)}"
+                            zf.write(fpath, arc_name)
+                            manifest["files"]["scanner_data"].append({
                                 "zip_path": arc_name,
                                 "filename": fpath.name,
                                 "size": fpath.stat().st_size,
@@ -11799,8 +11881,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     return
                 manifest = json.loads(zf.read("manifest.json"))
 
-                # Import tables in order
-                for table_name, _ in self._EXPORT_TABLES:
+                # Import tables in order (None entries are deliberately excluded)
+                for table_name, sql in self._EXPORT_TABLES:
+                    if sql is None:
+                        continue
                     json_name = f"{table_name}.json"
                     if json_name not in zf.namelist():
                         continue
@@ -11829,15 +11913,46 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     except Exception as e:
                         results["errors"].append(f"{table_name}: {e}")
 
-                # Copy files
+                # Copy files (zip-slip guarded; scanner alias mapped back)
+                import backup_service
                 data_dir = Path("data")
                 for info in zf.infolist():
-                    if info.filename.startswith("files/"):
-                        target = data_dir / info.filename[6:]  # strip "files/"
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        with zf.open(info) as src, open(target, "wb") as dst:
-                            shutil.copyfileobj(src, dst)
-                        results["files_copied"] += 1
+                    if not info.filename.startswith("files/"):
+                        continue
+                    rel = backup_service.sanitize_archive_member(info.filename)
+                    if rel is None:
+                        results["errors"].append(f"skipped unsafe path: {info.filename[:120]}")
+                        continue
+                    if rel.startswith("__scanner_data__/"):
+                        target = Path("scanner/data") / rel[len("__scanner_data__/"):]
+                    else:
+                        target = data_dir / rel
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(info) as src, open(target, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    results["files_copied"] += 1
+
+                # Advance serial sequences past restored MAX(id) so new rows
+                # don't collide with imported keys. Tables without a serial
+                # id (uuid/composite/text PKs) raise here and are skipped.
+                sequences_reset = 0
+                for table_name, sql in self._EXPORT_TABLES:
+                    if sql is None:
+                        continue
+                    try:
+                        db.execute(
+                            f'SELECT setval(pg_get_serial_sequence(\'"{table_name}"\', \'id\'), '
+                            f'(SELECT COALESCE(MAX(id), 1) FROM "{table_name}"))'
+                        )
+                        sequences_reset += 1
+                    except Exception:
+                        pass
+                results["sequences_reset"] = sequences_reset
+
+                # Surface the export's credential notice so admins know auth
+                # secrets must be re-entered after a restore.
+                if isinstance(manifest, dict) and manifest.get("credential_notice"):
+                    results.setdefault("warnings", []).append(manifest["credential_notice"])
 
             _json_response(self, 200, {"ok": True, **results})
         except Exception as e:

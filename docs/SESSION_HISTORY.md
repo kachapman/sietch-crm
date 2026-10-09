@@ -13,14 +13,28 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-08
 
-**Topic:** Backup fixes 1–4 (from docs/BACKUP_AUDIT.md) — tar nesting, run lock, scheduler interval, scanner coverage. Plus tests + CI.
+**Topic:** Backup fix item 5 — manual export/import hardening (server.py + tests). Items 1–4 landed in the previous commit (`1be53d3`).
+
+**What landed:**
+- **`server.py` `_EXPORT_TABLES`:** all 70 tables now covered — added the 26 missing (contact emails/phones/addresses, custom_field_groups, personal_notes/links, calendar trio, automation pair, time_entries, mail_contractors, mail_classification_rules, service_feeds, bot pair, photo/document template + activity + exif, telegram log, minimized_modal_state, user_roles) in FK-safe positions; `password_reset_tokens` + `twofa_challenges` kept as explicit `None` (ephemeral secrets, restoring extends validity); export/import loops skip `None`.
+- **`_SENSITIVE_COLUMNS`:** added `oauth_graph_access_token/refresh_token`, `caldav_password_encrypted`, `webhook_secret` (were leaking plaintext while their siblings were stripped).
+- **Files:** export walks the real layout (13 `data/` subdirs via `_EXPORT_FILE_DIRS`) + `scanner/data` under a `__scanner_data__` alias mapped back on import; `data/backups` never listed (no nesting).
+- **Import:** zip-slip guard via `backup_service.sanitize_archive_member` (new pure helper); serial sequences reset past `MAX(id)` post-import (best-effort per table); manifest `credential_notice` surfaced as response warnings.
+- **`tests/test_backup.py`:** 4 → 10 tests (sanitizer cases + AST-based export-coverage + sensitive-column guards, no `server.py` import).
+- **Verified:** `py_compile` clean; 10/10 backup + 15/15 event_bus + 8/8 onlyoffice + 28/28 node pass.
+
+**NEXT:** Audit items 6–9 remain open (SQL import strictness + streaming + pre-restore snapshot; remote pruning/host-key pinning; sha256 artifacts; disaster runbook). Then: manual-path browser test (export ZIP → check manifest tables/files keys → import to staging → verify counts + sequences + warnings). User to direct.
+
+---
+
+## Previous summary (2026-10-08)
+
+**Backup fixes 1–4 (from docs/BACKUP_AUDIT.md) — tar nesting, run lock, scheduler interval, scanner coverage. Plus tests + CI.**
 
 **What landed:**
 - **`backup_service.py`:** (1) `_build_data_tar_command()` helper adds `--exclude=<backup-dir>` when BACKUP_DIR nests inside `data/` (default kept at `data/backups` deliberately — it's on the Docker `/app/data` volume, so moving it out would lose persistence; the exclude fixes the recursion); tar also appends `scanner/data` as a second `-C` root when present. (2) Lock now held for the whole run — removed the early `finally: release` after pg_dump; artifact names gain a `-p<pid>` suffix against same-second collisions. (3) Scheduler sleeps on the DB-backed console interval (re-read each loop, clamped ≥60s) instead of the import-time env var. (4) Covered by (1).
 - **`tests/test_backup.py` (new, 4 tests)** for the tar-command builder; **`.github/workflows/smoke.yml`** runs it + compile-checks `backup_service.py`; **AGENTS.md** Testing section updated.
 - **Verified:** `py_compile` clean; 4/4 backup + 15/15 event_bus + 28/28 node tests pass.
-
-**NEXT:** Audit items 5–6 (manual export/import hardening: zip-slip guard, 70-table + real file-layout coverage, sequence resets, credential re-entry docs; SQL import `ON_ERROR_STOP=1` + streaming + pre-restore snapshot) remain open. Then items 7–9 (remote pruning/host-key pinning, sha256 artifacts, disaster runbook). User to direct.
 
 ---
 
