@@ -2,6 +2,10 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Scheduled backups: per-bundle data archives (2026-10-08)
+
+The monolithic `sietch-data-<ts>.tar.gz` is replaced by three bundles mirroring the browser split 1:1 — `sietch-data-docs/history/state-<ts>.tar.gz` — so restores can pick areas without unpacking 33 GB. Remote send, retention, and history entries cover all artifacts (per-bundle sizes recorded). `tests/test_backup.py` 12 → 16.
+
 ## Backup split export/import: db-core / files-documents / files-state parts (2026-10-08)
 
 Universal export/import split into independently restorable parts (`?part=`; default = all servable parts). `files-history` (history-attachments, ~33 GB) is refused over HTTP with a pointer to the scheduled tar. Per-part manifests share a `backup_set_id`; imports record landed parts per set and report missing ones (db-only restore fully supported; dangling file refs banner until file parts land). Export ZIPs stream from temp files (bounds RAM). Console gains a part selector and missing-parts display. `tests/test_backup.py` 10 → 12. Audit items 6–9 remain open.

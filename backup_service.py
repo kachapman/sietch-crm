@@ -272,13 +272,22 @@ def run_backup() -> dict:
         # NOTE: no early lock release here — the lock is held for the
         # entire run and released once in the outer finally block.
 
-        # 2. Data archive (photos, documents, profiles)
-        data_path = BACKUP_DIR / f"sietch-data-{ts_slug}.tar.gz"
+        # 2. Data bundles (docs / history / state) — replaces the old
+        # monolithic data tar so restores can pick bundles selectively.
+        # Per-bundle failures are non-fatal (logged inside the helper).
+        data_paths: list[Path] = []
         try:
-            _run_data_archive(data_path)
-            entry["data_size"] = data_path.stat().st_size if data_path.exists() else 0
+            bundles = _run_data_bundles(BACKUP_DIR, ts_slug)
+            for bundle, path in bundles:
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    size = 0
+                entry.setdefault("bundles", {})[bundle] = size
+                data_paths.append(path)
+            entry["data_size"] = sum(entry["bundles"].values())
         except Exception as e:
-            logger.warning("Data archive failed (non-fatal): %s", e)
+            logger.warning("Data bundles failed (non-fatal): %s", e)
             entry["data_size"] = 0
 
         # 3. Remote send
@@ -286,7 +295,7 @@ def run_backup() -> dict:
         remote_type = config.get("remote_type", BACKUP_REMOTE_TYPE)
         if remote_type and remote_type != "none":
             try:
-                _send_remote(db_path, data_path, config)
+                _send_remote([db_path, *data_paths], config)
                 entry["remote_status"] = "sent"
             except Exception as e:
                 entry["remote_status"] = f"failed: {e}"
@@ -303,9 +312,12 @@ def run_backup() -> dict:
         total_mb = ((entry.get("db_size") or 0) + (entry.get("data_size") or 0)) / 1024 / 1024
         detail_lines = [
             f"Database: {entry.get('db_size', 0) / 1024 / 1024:.1f} MB",
-            f"Data archive: {entry.get('data_size', 0) / 1024 / 1024:.1f} MB",
-            f"Duration: {entry['duration']:.0f}s",
         ]
+        for bundle, size in (entry.get("bundles") or {}).items():
+            detail_lines.append(f"Data ({bundle}): {size / 1024 / 1024:.1f} MB")
+        if not entry.get("bundles"):
+            detail_lines.append(f"Data archive: {entry.get('data_size', 0) / 1024 / 1024:.1f} MB")
+        detail_lines.append(f"Duration: {entry['duration']:.0f}s")
         if entry.get("remote_status"):
             detail_lines.append(f"Remote: {entry['remote_status']}")
         details = "\n".join(detail_lines)
@@ -359,38 +371,97 @@ def _build_data_tar_command(
     output_path: Path,
     data_dir: Path,
     backup_dir: Path,
+    subdirs: list[str],
     extra_sources: list[tuple[str, str]] | None = None,
 ) -> list[str]:
-    """Build the tar command for the data archive (pure helper, unit-tested).
+    """Build the tar command for a data archive (pure helper, unit-tested).
 
     Excludes ``backup_dir`` when it lives inside the archived tree so prior
-    artifacts are never nested into new archives (unbounded growth). Extra
-    ``(parent, name)`` sources (e.g. scanner state) are appended as
-    additional ``-C`` roots.
+    artifacts are never nested into new archives (unbounded growth).
+    ``subdirs`` are archived as ``<data-name>/<sub>`` members under one
+    ``-C`` root; extra ``(parent, name)`` sources (e.g. scanner state)
+    are appended as additional ``-C`` roots (parent resolved absolute —
+    a relative second ``-C`` would resolve against the first one and
+    break when the data root is absolute).
     """
+    if backup_dir == data_dir:
+        raise ValueError("BACKUP_DIR cannot be the data directory itself")
     cmd = ["tar", "czf", str(output_path)]
     try:
-        rel_backup = backup_dir.relative_to(data_dir.parent)
-        cmd.append(f"--exclude={rel_backup}")
+        inner = backup_dir.relative_to(data_dir)
+        cmd.append(f"--exclude={data_dir.name}/{inner}")
     except ValueError:
         pass  # backup dir outside the archived tree — nothing to exclude
-    cmd += ["-C", str(data_dir.parent), data_dir.name]
+    cmd += ["-C", str(data_dir.parent)] + [f"{data_dir.name}/{s}" for s in subdirs]
     for parent, name in extra_sources or []:
-        if (Path(parent) / name).exists():
-            cmd += ["-C", parent, name]
+        p = Path(parent)
+        if (p / name).exists():
+            cmd += ["-C", str(p.resolve()), name]
     return cmd
 
 
+# Scheduled-archive bundles: (bundle-name, [data/ subdirs]). Mirrors the
+# browser split parts 1:1 (docs/state; history blobs stay on the scheduled
+# path only — never served over HTTP). scanner/data rides with "state".
+DATA_BUNDLES: list[tuple[str, list[str]]] = [
+    ("docs", ["documents", "photos", "avatars", "contact-avatars", "branding", "logos"]),
+    ("history", ["history-attachments"]),
+    ("state", ["user-profiles", "bot-customers", "presence-messages",
+               "user-presence", "event-logs", "dashboard-notes"]),
+]
+
+
+def _run_data_bundles(
+    backup_dir: Path,
+    ts_slug: str,
+    data_dir: Path = Path("data"),
+) -> list[tuple[str, Path]]:
+    """Write one tar.gz per bundle; return [(bundle-name, path)] successes.
+
+    Per-bundle failures are logged and skipped (non-fatal) so one bad
+    subtree can't sink the whole run. Missing subdirs are skipped silently.
+    """
+    done: list[tuple[str, Path]] = []
+    if not data_dir.exists():
+        return done
+    for bundle, subdirs in DATA_BUNDLES:
+        present = [s for s in subdirs if (data_dir / s).exists()]
+        extra = (
+            [("scanner", "data")]
+            if bundle == "state" and Path("scanner/data").exists()
+            else []
+        )
+        if not present and not extra:
+            continue
+        out = backup_dir / f"sietch-data-{bundle}-{ts_slug}.tar.gz"
+        try:
+            cmd = _build_data_tar_command(out, data_dir, backup_dir, present, extra)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if proc.returncode != 0:
+                raise RuntimeError(f"tar exited {proc.returncode}: {proc.stderr[:500]}")
+            done.append((bundle, out))
+        except Exception as e:
+            logger.warning("Data bundle %s failed (non-fatal): %s", bundle, e)
+    return done
+
+
 def _run_data_archive(output_path: Path) -> None:
-    """Archive the data/ directory (photos, documents, profiles, scanner state)."""
+    """Legacy single-tar entry point (kept for tests/callers).
+
+    Prefer _run_data_bundles for scheduled runs.
+    """
     data_dir = Path("data")
     if not data_dir.exists():
+        return
+    subdirs = [d for d in ("documents", "photos") if (data_dir / d).exists()]
+    if not subdirs:
         return
 
     cmd = _build_data_tar_command(
         output_path,
         data_dir,
         BACKUP_DIR,
+        subdirs,
         extra_sources=[("scanner", "data")],
     )
     proc = subprocess.run(
@@ -403,7 +474,7 @@ def _run_data_archive(output_path: Path) -> None:
         raise RuntimeError(f"tar exited {proc.returncode}: {proc.stderr[:500]}")
 
 
-def _send_remote(db_path: Path, data_path: Path, config: dict) -> None:
+def _send_remote(artifacts: list[Path], config: dict) -> None:
     """Send backup files to remote server."""
     remote_type = config.get("remote_type", "none")
     host = config.get("remote_host", "")
@@ -419,7 +490,7 @@ def _send_remote(db_path: Path, data_path: Path, config: dict) -> None:
     if key:
         ssh_opts.extend(["-i", key])
 
-    for fpath in [db_path, data_path]:
+    for fpath in artifacts:
         if not fpath.exists():
             continue
         remote_url = f"{user}@{host}:{path}/{fpath.name}"

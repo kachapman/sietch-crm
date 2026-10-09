@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
-"""Unit tests for backup_service tar-command builder (audit fix items 1+4).
+"""Unit tests for backup_service archive builders (audit fixes).
 
-Verifies the data archive excludes the backup dir when nested inside
-data/ (recursive-nesting fix) and includes scanner state as an extra
-source. Run as:  python3 tests/test_backup.py
+Verifies the data tar excludes the backup dir when nested inside data/
+(recursive-nesting fix), per-bundle splitting, and the zip-slip guard.
+Run as:  python3 tests/test_backup.py
 """
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
 
-from backup_service import _build_data_tar_command, sanitize_archive_member
+from backup_service import (
+    DATA_BUNDLES,
+    _build_data_tar_command,
+    _run_data_bundles,
+    sanitize_archive_member,
+)
 
 
 class TestSanitizeArchiveMember(unittest.TestCase):
@@ -166,6 +173,7 @@ class TestBuildDataTarCommand(unittest.TestCase):
             Path("data/backups/sietch-data-x.tar.gz"),
             Path("data"),
             Path("data/backups"),
+            ["documents"],
         )
         self.assertIn("--exclude=data/backups", cmd)
 
@@ -174,6 +182,7 @@ class TestBuildDataTarCommand(unittest.TestCase):
             Path("/backups/sietch-data-x.tar.gz"),
             Path("data"),
             Path("/backups"),
+            ["documents"],
         )
         self.assertFalse([a for a in cmd if a.startswith("--exclude=")])
 
@@ -182,16 +191,94 @@ class TestBuildDataTarCommand(unittest.TestCase):
             Path("out.tar.gz"),
             Path("data"),
             Path("/backups"),
+            ["documents"],
             extra_sources=[("scanner", "definitely-not-a-real-dir-xyz")],
         )
         self.assertNotIn("scanner", cmd)
 
     def test_archive_root_present(self):
         cmd = _build_data_tar_command(
-            Path("out.tar.gz"), Path("data"), Path("data/backups")
+            Path("out.tar.gz"), Path("data"), Path("data/backups"),
+            ["documents", "photos"],
         )
         self.assertEqual(cmd[0:3], ["tar", "czf", "out.tar.gz"])
-        self.assertIn("data", cmd)
+        self.assertIn("data/documents", cmd)
+        self.assertIn("data/photos", cmd)
+
+    def test_excludes_backup_dir_with_subdir_members(self):
+        cmd = _build_data_tar_command(
+            Path("data/backups/out.tar.gz"), Path("data"),
+            Path("data/backups"), ["documents"],
+        )
+        self.assertIn("--exclude=data/backups", cmd)
+        self.assertIn("data/documents", cmd)
+
+
+class TestDataBundles(unittest.TestCase):
+    def test_bundle_names(self):
+        self.assertEqual([b for b, _ in DATA_BUNDLES],
+                         ["docs", "history", "state"])
+
+    def test_bundles_cover_expected_dirs_and_skip_backups(self):
+        covered = {d for _, dirs in DATA_BUNDLES for d in dirs}
+        for d in ("documents", "photos", "history-attachments", "avatars",
+                  "user-profiles", "bot-customers", "logos", "branding"):
+            self.assertIn(d, covered, f"{d} must be in some bundle")
+        self.assertNotIn("backups", covered)
+
+    @unittest.skipUnless(shutil.which("tar"), "tar binary required")
+    def test_run_data_bundles_end_to_end(self):
+        import os
+        import tarfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Isolate CWD so the repo's real scanner/data isn't pulled in.
+            prev_cwd = os.getcwd()
+            os.chdir(root)
+            try:
+                self._run_bundles_in(root)
+            finally:
+                os.chdir(prev_cwd)
+
+    def _run_bundles_in(self, root):
+        import tarfile
+
+        data = root / "data"
+        (data / "documents" / "1").mkdir(parents=True)
+        (data / "documents" / "1" / "a.pdf").write_text("doc")
+        (data / "user-profiles" / "sietch").mkdir(parents=True)
+        (data / "user-profiles" / "sietch" / "u.json").write_text("{}")
+        (data / "backups").mkdir()
+        (data / "backups" / "old.tar.gz").write_text("stale")
+        outdir = root / "out"
+        outdir.mkdir()
+
+        done = _run_data_bundles(outdir, "ts", data_dir=data)
+        names = sorted(p.name for _, p in done)
+        self.assertEqual(names, [
+            "sietch-data-docs-ts.tar.gz",
+            "sietch-data-state-ts.tar.gz",
+        ])
+        # history bundle skipped (no history-attachments dir present)
+        with tarfile.open(outdir / "sietch-data-docs-ts.tar.gz") as tf:
+            members = tf.getnames()
+        self.assertIn("data/documents/1/a.pdf", members)
+        self.assertFalse([m for m in members if m.startswith("data/backups")])
+        with tarfile.open(outdir / "sietch-data-state-ts.tar.gz") as tf:
+            members = tf.getnames()
+        self.assertIn("data/user-profiles/sietch/u.json", members)
+
+        # backup_dir nested inside the tree (the production default):
+        # the --exclude keeps prior artifacts AND the outputs being
+        # written out of the new archives.
+        nested_out = data / "backups"
+        done3 = _run_data_bundles(nested_out, "ts3", data_dir=data)
+        self.assertTrue(all(p.exists() for _, p in done3))
+        with tarfile.open(nested_out / "sietch-data-docs-ts3.tar.gz") as tf:
+            members = tf.getnames()
+        self.assertIn("data/documents/1/a.pdf", members)
+        self.assertFalse([m for m in members if "backups" in m])
 
 
 if __name__ == "__main__":

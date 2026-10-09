@@ -22,7 +22,9 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 - **`tests/test_backup.py`:** 10 → 12 (expected-parts + part-coverage/exclusion guards).
 - **Verified:** `py_compile` clean; 12/12 backup + 15/15 event_bus + 8/8 onlyoffice + 28/28 node pass.
 
-**NEXT:** Audit items 6–9 remain open (SQL import strictness + streaming + pre-restore snapshot; remote pruning/host-key pinning; sha256 artifacts; disaster runbook). Then: split-path browser test (download each part → check filenames/manifests → import db-core alone → verify standalone + missing-parts warning → land file parts → banner clears). User to direct.
+**Follow-up (same session):** scheduled data tar replaced by three per-bundle archives (`sietch-data-docs/history/state-<ts>.tar.gz`, mirroring the browser split 1:1; replace, not alongside). `_build_data_tar_command()` generalized to multi-subdir members; also fixed two latent bugs the work exposed (relative second `-C` roots break against absolute data roots — parent now resolved absolute; `--exclude` fired for sibling dirs — now scoped to inside-the-tree only, raising on degenerate `BACKUP_DIR == data/`). `_send_remote()` takes an artifact list; retention globs already match the new names; history entries record per-bundle sizes. `tests/test_backup.py` 12 → 16 incl. a real end-to-end `_run_data_bundles` test (tmp tree, asserts member paths + backup exclusion on the nested-default path). **Verified:** 16/16 backup + full suite green.
+
+**NEXT:** Split-path browser test (download each part → check filenames/manifests → import db-core alone → verify standalone + missing-parts warning → land file parts). Then audit items 6–9 (SQL import strictness + streaming + pre-restore snapshot; remote pruning/host-key pinning; sha256 artifacts; disaster runbook). User to direct.
 
 ---
 
