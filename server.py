@@ -11702,112 +11702,157 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         "token",
     }
 
-    # File subdirs (under data/) captured by the universal export, mapped
-    # to their manifest key. Mirrors the real on-disk layout — do NOT
-    # point these at paths that don't exist (they would be silently
-    # skipped). data/backups is deliberately absent (never nest artifacts).
+    # Universal-export parts (?part= on the export endpoint). Each part is a
+    # self-describing ZIP with its own manifest + shared backup_set_id (UTC
+    # date), so parts are independently restorable in any order. history
+    # blobs (history-attachments/, ~33 GB) are NOT servable over HTTP —
+    # use the scheduled sietch-data-*.tar.gz artifact for those.
+    EXPECTED_EXPORT_PARTS = ["db-core", "files-documents", "files-state"]
+    _EXPORT_PART_FILES: dict[str, list[tuple[str, str]]] = {
+        "files-documents": [
+            ("documents", "documents"),
+            ("photos", "photos"),
+            ("avatars", "avatars"),
+            ("contact-avatars", "contact-avatars"),
+            ("branding", "branding"),
+            ("logos", "logos"),
+        ],
+        "files-state": [
+            ("user-profiles", "user-profiles"),
+            ("bot-customers", "bot-customers"),
+            ("presence-messages", "presence-messages"),
+            ("user-presence", "user-presence"),
+            ("event-logs", "event-logs"),
+            ("dashboard-notes", "dashboard-notes"),
+        ],
+    }
     # scanner/data lives outside data/ and is archived under the
-    # __scanner_data__ alias, mapped back on import.
-    _EXPORT_FILE_DIRS = [
-        ("documents", "documents"),
-        ("photos", "photos"),
-        ("history-attachments", "history-attachments"),
-        ("avatars", "avatars"),
-        ("contact-avatars", "contact-avatars"),
-        ("branding", "branding"),
-        ("logos", "logos"),
-        ("user-profiles", "user-profiles"),
-        ("bot-customers", "bot-customers"),
-        ("presence-messages", "presence-messages"),
-        ("event-logs", "event-logs"),
-        ("dashboard-notes", "dashboard-notes"),
-        ("user-presence", "user-presence"),
-    ]
+    # __scanner_data__ alias (files-state part only), mapped back on import.
+    # data/backups is deliberately absent everywhere (never nest artifacts).
 
     def _handle_export_universal(self) -> None:
-        """Export all database tables as a ZIP of JSON files + linked files."""
+        """Export a universal ZIP part (?part=db-core|files-documents|files-state|all).
+
+        Default (no/invalid part) = all servable parts. history-attachments
+        is never served here — use the scheduled sietch-data-*.tar.gz.
+        The ZIP streams from a temp file so large file parts don't OOM.
+        """
         try:
-            buf = io.BytesIO()
+            qs = parse_qs(urlparse(self.path).query)
+            part = (qs.get("part") or ["all"])[0]
+            if part == "files-history":
+                _json_response(self, 400, {
+                    "error": "history-attachments is too large to serve over HTTP — "
+                             "restore it from a scheduled sietch-data-*.tar.gz artifact.",
+                })
+                return
+            if part not in ("all", "db-core", "files-documents", "files-state"):
+                part = "all"
+            want_tables = part in ("all", "db-core")
+            want_files = (
+                list(self._EXPORT_PART_FILES.keys())
+                if part == "all"
+                else ([part] if part in self._EXPORT_PART_FILES else [])
+            )
+
+            set_id = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             manifest: dict[str, Any] = {
-                "version": "1.0",
+                "version": "1.1",
+                "part": part,
+                "backup_set_id": set_id,
                 "exported_at": datetime.now(timezone.utc).isoformat(),
                 "tables": {},
                 "files": {},
-                "credential_notice": (
+                "excluded_areas": [
+                    "files-history (history-attachments/): restore from a scheduled "
+                    "sietch-data-*.tar.gz artifact, not via browser download.",
+                ],
+            }
+            if want_tables:
+                manifest["credential_notice"] = (
                     "Sensitive credential columns were excluded from this export "
                     f"({sorted(self._SENSITIVE_COLUMNS)}). After restoring, re-enter "
                     "mail account passwords / OAuth grants and reset user passwords. "
                     "Tables 'password_reset_tokens' and 'twofa_challenges' were not "
                     "exported (ephemeral secrets). 'sessions' is exported empty."
-                ),
-            }
+                )
 
-            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                # Export each table (None entries are deliberately excluded)
-                for table_name, sql in self._EXPORT_TABLES:
-                    if sql is None:
-                        manifest["tables"][table_name] = {"row_count": 0, "excluded": True}
-                        continue
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
+                    tmp_path = tmp.name
+                with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                    # Export each table (None entries are deliberately excluded)
+                    if want_tables:
+                        for table_name, sql in self._EXPORT_TABLES:
+                            if sql is None:
+                                manifest["tables"][table_name] = {"row_count": 0, "excluded": True}
+                                continue
+                            try:
+                                rows = db.query_dicts(sql)
+                                # Strip sensitive columns
+                                clean_rows = []
+                                for row in rows:
+                                    clean = {k: v for k, v in row.items() if k not in self._SENSITIVE_COLUMNS}
+                                    # Convert datetime objects to strings for JSON serialization
+                                    for k, v in clean.items():
+                                        if isinstance(v, datetime):
+                                            clean[k] = v.isoformat()
+                                    clean_rows.append(clean)
+                                manifest["tables"][table_name] = {"row_count": len(clean_rows)}
+                                zf.writestr(f"{table_name}.json", json.dumps(clean_rows, default=str, ensure_ascii=False))
+                            except Exception as e:
+                                manifest["tables"][table_name] = {"row_count": 0, "error": str(e)}
+
+                    # Export linked files from the real on-disk layout.
+                    data_dir = Path("data")
+                    for file_part in want_files:
+                        for subdir, file_list_key in self._EXPORT_PART_FILES[file_part]:
+                            src_dir = data_dir / subdir
+                            manifest["files"].setdefault(file_list_key, [])
+                            if not src_dir.exists():
+                                continue
+                            for fpath in src_dir.rglob("*"):
+                                if fpath.is_file():
+                                    arc_name = f"files/{subdir}/{fpath.relative_to(src_dir)}"
+                                    zf.write(fpath, arc_name)
+                                    manifest["files"][file_list_key].append({
+                                        "zip_path": arc_name,
+                                        "filename": fpath.name,
+                                        "size": fpath.stat().st_size,
+                                    })
+                    # Scanner state lives outside data/ — archive under an alias
+                    # (files-state part only).
+                    if "files-state" in want_files:
+                        scanner_dir = Path("scanner/data")
+                        if scanner_dir.exists():
+                            manifest["files"].setdefault("scanner_data", [])
+                            for fpath in scanner_dir.rglob("*"):
+                                if fpath.is_file():
+                                    arc_name = f"files/__scanner_data__/{fpath.relative_to(scanner_dir)}"
+                                    zf.write(fpath, arc_name)
+                                    manifest["files"]["scanner_data"].append({
+                                        "zip_path": arc_name,
+                                        "filename": fpath.name,
+                                        "size": fpath.stat().st_size,
+                                    })
+
+                    zf.writestr("manifest.json", json.dumps(manifest, indent=2, default=str, ensure_ascii=False))
+
+                size = os.path.getsize(tmp_path)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Length", str(size))
+                self.send_header("Content-Disposition", f'attachment; filename="sietch-export-{part}-{datetime.now().strftime("%Y-%m-%d")}.zip"')
+                self.end_headers()
+                with open(tmp_path, "rb") as f:
+                    shutil.copyfileobj(f, self.wfile, length=1024 * 1024)
+            finally:
+                if tmp_path:
                     try:
-                        rows = db.query_dicts(sql)
-                        # Strip sensitive columns
-                        clean_rows = []
-                        for row in rows:
-                            clean = {k: v for k, v in row.items() if k not in self._SENSITIVE_COLUMNS}
-                            # Convert datetime objects to strings for JSON serialization
-                            for k, v in clean.items():
-                                if isinstance(v, datetime):
-                                    clean[k] = v.isoformat()
-                            clean_rows.append(clean)
-                        manifest["tables"][table_name] = {"row_count": len(clean_rows)}
-                        zf.writestr(f"{table_name}.json", json.dumps(clean_rows, default=str, ensure_ascii=False))
-                    except Exception as e:
-                        manifest["tables"][table_name] = {"row_count": 0, "error": str(e)}
-
-                # Export linked files from the real on-disk layout.
-                # NOTE: this ZIP is built in RAM — for large installs (multi-GB
-                # history-attachments) prefer the scheduled backup artifacts
-                # (streamed tar.gz on disk) over a browser download.
-                data_dir = Path("data")
-                for subdir, file_list_key in self._EXPORT_FILE_DIRS:
-                    src_dir = data_dir / subdir
-                    manifest["files"][file_list_key] = []
-                    if not src_dir.exists():
-                        continue
-                    for fpath in src_dir.rglob("*"):
-                        if fpath.is_file():
-                            arc_name = f"files/{subdir}/{fpath.relative_to(src_dir)}"
-                            zf.write(fpath, arc_name)
-                            # Find which project this belongs to
-                            rel = str(fpath.relative_to(src_dir))
-                            manifest["files"][file_list_key].append({
-                                "zip_path": arc_name,
-                                "filename": fpath.name,
-                                "size": fpath.stat().st_size,
-                            })
-                # Scanner state lives outside data/ — archive under an alias.
-                scanner_dir = Path("scanner/data")
-                if scanner_dir.exists():
-                    manifest["files"]["scanner_data"] = []
-                    for fpath in scanner_dir.rglob("*"):
-                        if fpath.is_file():
-                            arc_name = f"files/__scanner_data__/{fpath.relative_to(scanner_dir)}"
-                            zf.write(fpath, arc_name)
-                            manifest["files"]["scanner_data"].append({
-                                "zip_path": arc_name,
-                                "filename": fpath.name,
-                                "size": fpath.stat().st_size,
-                            })
-
-                zf.writestr("manifest.json", json.dumps(manifest, indent=2, default=str, ensure_ascii=False))
-
-            zip_data = buf.getvalue()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/zip")
-            self.send_header("Content-Length", str(len(zip_data)))
-            self.send_header("Content-Disposition", f'attachment; filename="sietch-export-{datetime.now().strftime("%Y-%m-%d")}.zip"')
-            self.end_headers()
-            self.wfile.write(zip_data)
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
         except Exception as e:
             logger.exception("Export failed")
             _json_response(self, 500, {"error": str(e)})
@@ -11953,6 +11998,28 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 # secrets must be re-entered after a restore.
                 if isinstance(manifest, dict) and manifest.get("credential_notice"):
                     results.setdefault("warnings", []).append(manifest["credential_notice"])
+
+                # Track landed parts per backup set so the console can show
+                # which parts of a set are still missing. A db-only restore
+                # is fully supported standalone — the missing list is purely
+                # informational (file rows will dangle until their parts land).
+                if isinstance(manifest, dict):
+                    set_id = manifest.get("backup_set_id")
+                    part = manifest.get("part", "all-legacy")
+                    if set_id:
+                        try:
+                            results["backup_set"] = backup_service.record_export_part(set_id, part)
+                            missing = results["backup_set"]["missing"]
+                            if missing:
+                                results.setdefault("warnings", []).append(
+                                    f"Backup set {set_id} is missing parts: {', '.join(missing)}. "
+                                    "File references from restored rows will dangle until those "
+                                    "parts are imported (or restore the scheduled data tar)."
+                                )
+                        except Exception as e:
+                            results.setdefault("warnings", []).append(
+                                f"Could not record landed part: {e}"
+                            )
 
             _json_response(self, 200, {"ok": True, **results})
         except Exception as e:

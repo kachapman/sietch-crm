@@ -458,6 +458,41 @@ def sanitize_archive_member(name: str, prefix: str = "files/") -> str | None:
     return rel
 
 
+# Parts servable over HTTP by the universal export (?part=). history blobs
+# stay on the scheduled tar path (see server._EXPORT_PART_FILES).
+EXPECTED_EXPORT_PARTS = ["db-core", "files-documents", "files-state"]
+
+
+def record_export_part(set_id: str, part: str) -> dict:
+    """Record a landed export part for a backup set; return set status."""
+    import db
+    key = f"backup_parts_{set_id}"
+    try:
+        row = db.query_one("SELECT value FROM system_settings WHERE key = %s", (key,))
+        landed = json.loads(row["value"]) if row and row.get("value") else {}
+    except Exception:
+        landed = {}
+    landed[part] = datetime.now(timezone.utc).isoformat()
+    db.execute(
+        """INSERT INTO system_settings (key, value) VALUES (%s, %s)
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+        (key, json.dumps(landed)),
+    )
+    # Prune part-tracking for old sets (keep last 10)
+    try:
+        db.execute(
+            """DELETE FROM system_settings WHERE key LIKE 'backup_parts_%'
+               AND key NOT IN (
+                   SELECT key FROM system_settings WHERE key LIKE 'backup_parts_%'
+                   ORDER BY key DESC LIMIT 10
+               )"""
+        )
+    except Exception:
+        pass
+    missing = [p for p in EXPECTED_EXPORT_PARTS if p not in landed]
+    return {"set_id": set_id, "landed": sorted(landed), "missing": missing}
+
+
 def _cleanup_old_backups() -> None:
     """Remove backup files older than retention period."""
     try:

@@ -2359,9 +2359,16 @@
             <h4 style="margin:1.5rem 0 0.3rem; border-bottom:1px solid var(--border); padding-bottom:0.3rem;">Export Sietch Data</h4>
             <p style="font-size:0.8rem; color:var(--muted); margin:0 0 0.5rem;">Download your CRM data for backup, migration, or portability. No credentials are included in exports.</p>
             <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+              <select id="export-json-part" title="Export part" style="max-width:12rem;">
+                <option value="all">All (DB + files, no history blobs)</option>
+                <option value="db-core">DB tables only</option>
+                <option value="files-documents">Files: documents/photos/avatars</option>
+                <option value="files-state">Files: profiles/state</option>
+              </select>
               <button id="export-json-btn" class="btn btn-primary">Export JSON (Universal)</button>
               <button id="export-sql-btn" class="btn btn-primary">Export SQL (Backup)</button>
             </div>
+            <p style="font-size:0.7rem; color:var(--muted); margin:0.3rem 0 0;">History attachments (~33 GB) are excluded from browser downloads — restore those from a scheduled <code>sietch-data-*.tar.gz</code> artifact. Each part is independently restorable; import them in any order.</p>
             <p style="font-size:0.7rem; color:var(--muted); margin:0.3rem 0 0;"><b>JSON</b>: ZIP with all tables as JSON + linked files. Human-readable, compatible with other CRMs.</p>
             <p style="font-size:0.7rem; color:var(--muted); margin:0.1rem 0 0;"><b>SQL</b>: PostgreSQL dump for fast restore. Requires pg_dump (postgresql-client).</p>
             <div id="export-status" style="margin-top:0.5rem; font-size:0.85rem; color:var(--muted);"></div>
@@ -3730,6 +3737,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3.7.10" type="module"></script>
+  <script src="app.js?v=3.7.11" type="module"></script>
 </body>
 </html>

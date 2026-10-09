@@ -13,7 +13,22 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-08
 
-**Topic:** Backup fix item 5 — manual export/import hardening (server.py + tests). Items 1–4 landed in the previous commit (`1be53d3`).
+**Topic:** Backup split export/import — db-core / files-documents / files-state parts (Option A) + temp-file streaming + set tracking.
+
+**What landed:**
+- **`server.py`:** `_handle_export_universal` takes `?part=` (`all` default = all servable parts; `files-history` → 400 pointing at scheduled tar). Per-part manifests with shared `backup_set_id` (UTC date) + `excluded_areas`; credential notice only on table-bearing parts. ZIP streams from a temp file (bounds RAM) instead of `BytesIO`. `_EXPORT_FILE_DIRS` replaced by `_EXPORT_PART_FILES` (files-documents: documents/photos/avatars/contact-avatars/branding/logos; files-state: user-profiles/bot-customers/presence-*/event-logs/dashboard-notes + scanner alias). Import records landed parts per set via `backup_service.record_export_part()` and reports `backup_set: {landed, missing}` + warnings (missing parts, credentials).
+- **`backup_service.py`:** `EXPECTED_EXPORT_PARTS` + `record_export_part()` (DB-backed, prunes to last 10 sets).
+- **Console:** part `<select>` next to Export JSON (per-part filenames); import status line shows landed/missing parts + warnings.
+- **`tests/test_backup.py`:** 10 → 12 (expected-parts + part-coverage/exclusion guards).
+- **Verified:** `py_compile` clean; 12/12 backup + 15/15 event_bus + 8/8 onlyoffice + 28/28 node pass.
+
+**NEXT:** Audit items 6–9 remain open (SQL import strictness + streaming + pre-restore snapshot; remote pruning/host-key pinning; sha256 artifacts; disaster runbook). Then: split-path browser test (download each part → check filenames/manifests → import db-core alone → verify standalone + missing-parts warning → land file parts → banner clears). User to direct.
+
+---
+
+## Previous summary (2026-10-08)
+
+**Backup fix item 5 — manual export/import hardening (server.py + tests).**
 
 **What landed:**
 - **`server.py` `_EXPORT_TABLES`:** all 70 tables now covered — added the 26 missing (contact emails/phones/addresses, custom_field_groups, personal_notes/links, calendar trio, automation pair, time_entries, mail_contractors, mail_classification_rules, service_feeds, bot pair, photo/document template + activity + exif, telegram log, minimized_modal_state, user_roles) in FK-safe positions; `password_reset_tokens` + `twofa_challenges` kept as explicit `None` (ephemeral secrets, restoring extends validity); export/import loops skip `None`.
@@ -22,8 +37,6 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 - **Import:** zip-slip guard via `backup_service.sanitize_archive_member` (new pure helper); serial sequences reset past `MAX(id)` post-import (best-effort per table); manifest `credential_notice` surfaced as response warnings.
 - **`tests/test_backup.py`:** 4 → 10 tests (sanitizer cases + AST-based export-coverage + sensitive-column guards, no `server.py` import).
 - **Verified:** `py_compile` clean; 10/10 backup + 15/15 event_bus + 8/8 onlyoffice + 28/28 node pass.
-
-**NEXT:** Audit items 6–9 remain open (SQL import strictness + streaming + pre-restore snapshot; remote pruning/host-key pinning; sha256 artifacts; disaster runbook). Then: manual-path browser test (export ZIP → check manifest tables/files keys → import to staging → verify counts + sequences + warnings). User to direct.
 
 ---
 

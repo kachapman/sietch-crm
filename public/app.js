@@ -30371,15 +30371,19 @@ function openAdminConsoleModal() {
     // Export JSON
     $("#export-json-btn")?.addEventListener("click", async () => {
       const el = $("#export-status");
+      const part = $("#export-json-part")?.value || "all";
       if (el) el.innerHTML = '<span style="color:var(--accent);">Generating JSON export…</span>';
       try {
-        const res = await fetch("/api/v2/admin/export/universal", { method: "POST", credentials: "same-origin" });
-        if (!res.ok) throw new Error(`Export failed: ${res.statusText}`);
+        const res = await fetch(`/api/v2/admin/export/universal?part=${encodeURIComponent(part)}`, { method: "POST", credentials: "same-origin" });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || `Export failed: ${res.statusText}`);
+        }
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `sietch-export-${new Date().toISOString().slice(0,10)}.zip`;
+        a.download = `sietch-export-${part}-${new Date().toISOString().slice(0,10)}.zip`;
         a.click();
         URL.revokeObjectURL(url);
         if (el) el.innerHTML = '<span style="color:#3fb950;">Export downloaded.</span>';
@@ -30427,7 +30431,10 @@ function openAdminConsoleModal() {
         const res = await fetch("/api/v2/admin/import/json", { method: "POST", body: form, credentials: "same-origin" });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.error || "Import failed");
-        if (el) el.innerHTML = `<span style="color:#3fb950;">Done: ${data.rows_imported || 0} rows imported, ${data.rows_skipped || 0} skipped, ${data.files_copied || 0} files copied.</span>`;
+        const bits = [`${data.rows_imported || 0} rows imported`, `${data.rows_skipped || 0} skipped`, `${data.files_copied || 0} files copied`];
+        if (data.backup_set) bits.push(`set ${escapeHtml(data.backup_set.set_id)}: landed [${(data.backup_set.landed || []).map(escapeHtml).join(", ")}]`);
+        if (data.backup_set?.missing?.length) bits.push(`<span style="color:var(--warn, #f0b429);">missing parts: ${data.backup_set.missing.map(escapeHtml).join(", ")}</span>`);
+        if (el) el.innerHTML = `<span style="color:#3fb950;">Done: ${bits.join(", ")}.</span>` + (data.warnings?.length ? `<br><span style="color:var(--warn, #f0b429);">${data.warnings.map(escapeHtml).join("<br>")}</span>` : "");
       } catch (e) {
         if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(e.message)}</span>`;
       }

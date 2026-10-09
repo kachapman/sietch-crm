@@ -117,6 +117,49 @@ class TestExportTableCoverage(unittest.TestCase):
         self.fail("_SENSITIVE_COLUMNS not found in server.py")
 
 
+class TestExportParts(unittest.TestCase):
+    """Split-export part mapping guards (parsed via ast, no server import)."""
+
+    def _load_assign(self, name):
+        import ast
+
+        src = Path("/home/chapman-server/Projects/new-crm/server.py").read_text()
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+                value = node.value
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                targets = [node.target]
+                value = node.value
+            else:
+                continue
+            for t in targets:
+                if isinstance(t, ast.Name) and t.id == name:
+                    return value
+        self.fail(f"{name} not found in server.py")
+
+    def test_expected_parts(self):
+        from backup_service import EXPECTED_EXPORT_PARTS
+        self.assertEqual(set(EXPECTED_EXPORT_PARTS),
+                         {"db-core", "files-documents", "files-state"})
+
+    def test_part_dirs_cover_real_layout_and_exclude_blobs(self):
+        mapping = {}
+        for key, val in zip(
+            [k.value for k in self._load_assign("_EXPORT_PART_FILES").keys],
+            self._load_assign("_EXPORT_PART_FILES").values,
+        ):
+            mapping[key] = [sub for sub, _ in
+                            [(e.elts[0].value, e.elts[1].value) for e in val.elts]]
+        covered = {d for dirs in mapping.values() for d in dirs}
+        for d in ("documents", "photos", "avatars", "user-profiles",
+                  "bot-customers", "logos", "branding"):
+            self.assertIn(d, covered, f"{d} must be in some part")
+        for d in ("history-attachments", "backups"):
+            self.assertNotIn(d, covered, f"{d} must never be browser-served")
+
+
 class TestBuildDataTarCommand(unittest.TestCase):
     def test_excludes_nested_backup_dir(self):
         cmd = _build_data_tar_command(
