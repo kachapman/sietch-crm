@@ -11,9 +11,24 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-08
+**Date:** 2026-10-09
 
-**Topic:** Backup split export/import — db-core / files-documents / files-state parts (Option A) + temp-file streaming + set tracking.
+**Topic:** Backup audit item 6 — SQL import strictness + spooling + pre-restore snapshot.
+
+**What landed (`server.py` `_handle_import_sql` + `tests/test_backup.py` 16 → 21):**
+- `psql -v ON_ERROR_STOP=1`, any nonzero exit = failure (was: `ON_ERROR_STOP=0`, exit 1 counted as success).
+- Upload spooled to temp file in 1 MB chunks, fed via `psql -f` — no more whole-dump `.decode()` into a Python string (peak RAM roughly halved; the HTTP body buffering in `_read_body` remains a deeper change, noted in-code).
+- Pre-restore `pg_dump` snapshot to `data/backups/sietch-backup-restore-snapshot-<ts>.sql.gz` (name matches retention globs); import aborts if the snapshot fails; snapshot path returned in both success and failure responses, with a rollback hint on failure. Temp upload always unlinked.
+- New `TestSqlImportStrictness` (5 text guards over the handler source).
+- **Verified:** `py_compile` clean; 21/21 backup + 15/15 event_bus + 8/8 onlyoffice + 28/28 node pass.
+
+**NEXT:** Audit items 7–9 (remote pruning/host-key pinning + drop dead `smtp` type; sha256 artifacts + anomaly alerts; disaster runbook). User to direct.
+
+---
+
+## Previous summary (2026-10-08)
+
+**Scheduled backups: per-bundle data archives replacing the monolith.**
 
 **What landed:**
 - **`server.py`:** `_handle_export_universal` takes `?part=` (`all` default = all servable parts; `files-history` → 400 pointing at scheduled tar). Per-part manifests with shared `backup_set_id` (UTC date) + `excluded_areas`; credential notice only on table-bearing parts. ZIP streams from a temp file (bounds RAM) instead of `BytesIO`. `_EXPORT_FILE_DIRS` replaced by `_EXPORT_PART_FILES` (files-documents: documents/photos/avatars/contact-avatars/branding/logos; files-state: user-profiles/bot-customers/presence-*/event-logs/dashboard-notes + scanner alias). Import records landed parts per set via `backup_service.record_export_part()` and reports `backup_set: {landed, missing}` + warnings (missing parts, credentials).

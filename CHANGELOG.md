@@ -2,6 +2,10 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Backup fix item 6: strict SQL restore with pre-restore snapshot (2026-10-09)
+
+SQL import now fails closed: `psql -v ON_ERROR_STOP=1`, any nonzero exit is an error (previously exit 1 counted as success). Uploads spool to a temp file fed via `psql -f` instead of decoding the whole dump into memory. A pre-restore `pg_dump` snapshot (`sietch-backup-restore-snapshot-*`, retention-covered) is taken first — import aborts if it fails — and its path is returned for rollback. `tests/test_backup.py` 16 → 21.
+
 ## Scheduled backups: per-bundle data archives (2026-10-08)
 
 The monolithic `sietch-data-<ts>.tar.gz` is replaced by three bundles mirroring the browser split 1:1 — `sietch-data-docs/history/state-<ts>.tar.gz` — so restores can pick areas without unpacking 33 GB. Remote send, retention, and history entries cover all artifacts (per-bundle sizes recorded). `tests/test_backup.py` 12 → 16.

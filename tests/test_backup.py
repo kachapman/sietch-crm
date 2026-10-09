@@ -281,5 +281,40 @@ class TestDataBundles(unittest.TestCase):
         self.assertFalse([m for m in members if "backups" in m])
 
 
+class TestSqlImportStrictness(unittest.TestCase):
+    """SQL restore must fail closed: strict psql, spooled upload, snapshot.
+
+    Text guards over server.py (no server import — module has import-time
+    side effects). If the handler is restructured, update these alongside.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.src = Path("/home/chapman-server/Projects/new-crm/server.py").read_text()
+        start = cls.src.index("def _handle_import_sql")
+        # handler ends at the next def at the same indent
+        nxt = cls.src.index("\n    def ", start + 10)
+        cls.body = cls.src[start:nxt]
+
+    def test_strict_error_stop(self):
+        self.assertIn("ON_ERROR_STOP=1", self.body)
+        self.assertNotIn("ON_ERROR_STOP=0", self.body)
+
+    def test_any_nonzero_exit_is_failure(self):
+        self.assertIn("if proc.returncode != 0:", self.body)
+        self.assertNotIn("proc.returncode != 1", self.body)
+
+    def test_spooled_upload_via_psql_file(self):
+        self.assertIn('"-f", upload_path', self.body)
+        self.assertNotIn("input=file_data", self.body)
+
+    def test_pre_restore_snapshot(self):
+        self.assertIn("sietch-backup-restore-snapshot-", self.body)
+        self.assertIn("_run_pg_dump(snapshot_path)", self.body)
+
+    def test_temp_upload_cleaned_up(self):
+        self.assertIn("os.unlink(upload_path)", self.body)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

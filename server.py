@@ -12027,7 +12027,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_import_sql(self) -> None:
-        """Import from a SQL backup file."""
+        """Import from a SQL backup file.
+
+        Strictness: psql runs with ON_ERROR_STOP=1 and any nonzero exit
+        is a failure (a half-applied dump must never report success).
+        A pre-restore pg_dump snapshot is taken first so a bad import is
+        reversible; its path is returned in the response. The upload is
+        spooled to a temp file and fed via `psql -f` instead of decoding
+        the whole dump into a Python string (bounds peak RAM — the HTTP
+        request body itself is still buffered by _read_body, which is a
+        deeper change tracked separately).
+        """
+        upload_path = None
         try:
             content_type = self.headers.get("Content-Type", "")
             if "multipart/form-data" not in content_type:
@@ -12048,7 +12059,30 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 400, {"error": "No file uploaded"})
                 return
 
-            # Execute SQL via psql
+            import backup_service
+
+            # Spool upload to disk in chunks instead of decoding it all.
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".sql") as tmp:
+                upload_path = tmp.name
+                for off in range(0, len(file_data), 1024 * 1024):
+                    tmp.write(file_data[off:off + 1024 * 1024])
+            file_data = None  # release the upload bytes ASAP
+
+            # Pre-restore snapshot — abort rather than run destructive SQL
+            # with no way back. Named sietch-backup-* so the normal
+            # retention rotation covers it.
+            snap_slug = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S")
+            snapshot_path = Path("data/backups") / f"sietch-backup-restore-snapshot-{snap_slug}.sql.gz"
+            try:
+                snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+                backup_service._run_pg_dump(snapshot_path)
+            except Exception as e:
+                _json_response(self, 500, {
+                    "error": f"Pre-restore snapshot failed, import aborted (DB untouched): {e}",
+                })
+                return
+
+            # Execute SQL via psql from the spooled file.
             env = {**os.environ, "PGPASSWORD": os.getenv("DB_PASSWORD", "")}
             proc = subprocess.run(
                 [
@@ -12057,25 +12091,35 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     "-p", os.getenv("DB_PORT", "5432"),
                     "-U", os.getenv("DB_USER", "sietch"),
                     "-d", os.getenv("DB_NAME", "sietch_crm"),
-                    "-v", "ON_ERROR_STOP=0",
+                    "-v", "ON_ERROR_STOP=1",
+                    "-f", upload_path,
                 ],
-                input=file_data.decode("utf-8", errors="replace"),
                 capture_output=True,
                 text=True,
                 timeout=600,
                 env=env,
             )
 
-            if proc.returncode != 0 and proc.returncode != 1:
-                _json_response(self, 500, {"error": f"psql failed (exit {proc.returncode}): {proc.stderr[:500]}"})
+            if proc.returncode != 0:
+                _json_response(self, 500, {
+                    "error": f"psql failed (exit {proc.returncode}): {proc.stderr[:500]}",
+                    "snapshot": str(snapshot_path),
+                    "hint": "Database may be partially modified — restore the snapshot to roll back.",
+                })
                 return
 
-            _json_response(self, 200, {"ok": True, "output": proc.stdout[-2000:] if proc.stdout else "", "errors": proc.stderr[-1000:] if proc.stderr else ""})
+            _json_response(self, 200, {"ok": True, "output": proc.stdout[-2000:] if proc.stdout else "", "errors": proc.stderr[-1000:] if proc.stderr else "", "snapshot": str(snapshot_path)})
         except FileNotFoundError:
             _json_response(self, 500, {"error": "psql not found. Install postgresql-client."})
         except Exception as e:
             logger.exception("SQL import failed")
             _json_response(self, 500, {"error": str(e)})
+        finally:
+            if upload_path:
+                try:
+                    os.unlink(upload_path)
+                except OSError:
+                    pass
 
     def _handle_backup_status(self) -> None:
         """GET backup status."""
