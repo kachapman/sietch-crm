@@ -2,6 +2,10 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Backup fix item 7: remote prune + SSH host-key pinning (2026-10-09)
+
+Remote artifacts now honor the same retention as local rotation (`ssh ... find <path> -name 'sietch-*' -mtime +<retention_days> -delete` after each successful send; failures surface in history + notifications). `StrictHostKeyChecking=no` → `accept-new` on send, prune, and remote-test. Dead `BACKUP_REMOTE_TYPE=smtp` option removed from env docs and the UI dropdown. Remote paths quoted via `shlex.quote`. `tests/test_backup.py` 21 → 25 — the audit fix list is now complete.
+
 ## Backup fix item 6: strict SQL restore with pre-restore snapshot (2026-10-09)
 
 SQL import now fails closed: `psql -v ON_ERROR_STOP=1`, any nonzero exit is an error (previously exit 1 counted as success). Uploads spool to a temp file fed via `psql -f` instead of decoding the whole dump into memory. A pre-restore `pg_dump` snapshot (`sietch-backup-restore-snapshot-*`, retention-covered) is taken first — import aborts if it fails — and its path is returned for rollback. `tests/test_backup.py` 16 → 21.

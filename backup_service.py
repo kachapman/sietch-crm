@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import threading
@@ -297,6 +298,12 @@ def run_backup() -> dict:
             try:
                 _send_remote([db_path, *data_paths], config)
                 entry["remote_status"] = "sent"
+                try:
+                    _prune_remote(config, config.get("retention_days", BACKUP_RETENTION_DAYS))
+                    entry["remote_prune"] = "ok"
+                except Exception as e:
+                    entry["remote_prune"] = f"failed: {e}"
+                    logger.warning("Remote prune failed: %s", e)
             except Exception as e:
                 entry["remote_status"] = f"failed: {e}"
                 logger.warning("Remote send failed: %s", e)
@@ -320,6 +327,8 @@ def run_backup() -> dict:
         detail_lines.append(f"Duration: {entry['duration']:.0f}s")
         if entry.get("remote_status"):
             detail_lines.append(f"Remote: {entry['remote_status']}")
+        if entry.get("remote_prune", "").startswith("failed"):
+            detail_lines.append(f"Remote prune: {entry['remote_prune']}")
         details = "\n".join(detail_lines)
 
         if entry.get("remote_status", "").startswith("failed"):
@@ -486,7 +495,7 @@ def _send_remote(artifacts: list[Path], config: dict) -> None:
     if not host or not user:
         raise ValueError("Remote host and user are required")
 
-    ssh_opts = ["-o", "StrictHostKeyChecking=no"]
+    ssh_opts = ["-o", "StrictHostKeyChecking=accept-new"]
     if key:
         ssh_opts.extend(["-i", key])
 
@@ -510,6 +519,39 @@ def _send_remote(artifacts: list[Path], config: dict) -> None:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if proc.returncode != 0:
             raise RuntimeError(f"Remote send failed ({remote_type}): {proc.stderr[:300]}")
+
+
+def _build_remote_prune_command(config: dict, days: int) -> list[str]:
+    """Build the remote-prune ssh command (pure helper, unit-tested).
+
+    Deletes sietch-* artifacts older than ``days`` in the remote dir so
+    the remote side honors the same retention as local rotation.
+    """
+    host = config.get("remote_host", "")
+    port = str(config.get("remote_port", 22))
+    user = config.get("remote_user", "")
+    path = config.get("remote_path", "")
+    key = config.get("remote_key", "")
+    if not host or not user or not path:
+        raise ValueError("Remote host, user, and path are required for pruning")
+    ssh_opts = ["-o", "StrictHostKeyChecking=accept-new"]
+    if key:
+        ssh_opts.extend(["-i", key])
+    find_expr = (
+        f"find {shlex.quote(path)} -maxdepth 1 -name 'sietch-*' "
+        f"-mtime +{int(days)} -delete"
+    )
+    return ["ssh", "-p", port] + ssh_opts + [f"{user}@{host}", find_expr]
+
+
+def _prune_remote(config: dict, days: int) -> None:
+    """Prune remote artifacts past retention. Raises on failure."""
+    proc = subprocess.run(
+        _build_remote_prune_command(config, days),
+        capture_output=True, text=True, timeout=120,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"Remote prune failed: {proc.stderr[:300]}")
 
 
 def sanitize_archive_member(name: str, prefix: str = "files/") -> str | None:

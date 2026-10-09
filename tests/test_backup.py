@@ -16,6 +16,7 @@ sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
 from backup_service import (
     DATA_BUNDLES,
     _build_data_tar_command,
+    _build_remote_prune_command,
     _run_data_bundles,
     sanitize_archive_member,
 )
@@ -314,6 +315,40 @@ class TestSqlImportStrictness(unittest.TestCase):
 
     def test_temp_upload_cleaned_up(self):
         self.assertIn("os.unlink(upload_path)", self.body)
+
+
+class TestRemotePruneCommand(unittest.TestCase):
+    CFG = {
+        "remote_host": "backup.example.com",
+        "remote_port": 2222,
+        "remote_user": "deploy",
+        "remote_path": "/srv/backups/sietch",
+        "remote_key": "/run/secrets/k",
+    }
+
+    def test_command_shape(self):
+        cmd = _build_remote_prune_command(self.CFG, 30)
+        self.assertEqual(cmd[0:3], ["ssh", "-p", "2222"])
+        self.assertIn("StrictHostKeyChecking=accept-new", cmd)
+        self.assertIn("-i", cmd)
+        self.assertIn("/run/secrets/k", cmd)
+        self.assertIn("deploy@backup.example.com", cmd)
+
+    def test_retention_days_in_find(self):
+        cmd = _build_remote_prune_command(self.CFG, 14)
+        self.assertIn("-mtime +14", " ".join(cmd))
+
+    def test_path_quoted(self):
+        cfg = dict(self.CFG, remote_path="/srv/back ups/sie;tch")
+        joined = " ".join(_build_remote_prune_command(cfg, 30))
+        self.assertIn("/srv/back ups/sie;tch", joined)
+
+    def test_requires_host_user_path(self):
+        for missing in ("remote_host", "remote_user", "remote_path"):
+            cfg = dict(self.CFG)
+            cfg[missing] = ""
+            with self.assertRaises(ValueError):
+                _build_remote_prune_command(cfg, 30)
 
 
 if __name__ == "__main__":

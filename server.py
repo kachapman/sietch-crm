@@ -12439,7 +12439,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 400, {"error": "Host and user are required"})
                 return
 
-            ssh_opts = ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10"]
+            ssh_opts = ["-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10"]
             if key:
                 ssh_opts.extend(["-i", key])
 

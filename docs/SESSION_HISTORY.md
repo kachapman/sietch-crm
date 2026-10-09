@@ -13,7 +13,23 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-09
 
-**Topic:** Backup audit item 6 — SQL import strictness + spooling + pre-restore snapshot.
+**Topic:** Backup audit item 7 — remote prune + host-key pinning + drop dead `smtp` type. (Completes the audit fix list; item 6 was the previous commit `8c36562`.)
+
+**What landed (`backup_service.py`, `server.py`, `config.example.env`, `public/index.html`, `tests/test_backup.py` 21 → 25):**
+- `StrictHostKeyChecking=no` → `accept-new` everywhere (`_send_remote`, `_build_remote_prune_command`, server remote-test) — keys still can't silently rotate, but a new key isn't auto-accepted with a MITM window as wide as before.
+- `_build_remote_prune_command()` + `_prune_remote()`: after a successful remote send, `ssh ... find <path> -maxdepth 1 -name 'sietch-*' -mtime +<retention_days> -delete` prunes the remote side to the same retention as local rotation (was: local-only cleanup, remote grew forever). Failures recorded as `remote_prune` in the history entry + surfaced in the failure notification.
+- Dead `BACKUP_REMOTE_TYPE=smtp` option dropped (`_send_remote` raised `ValueError` on it) from env doc + UI dropdown.
+- Remote path interpolated via `shlex.quote` — paths with spaces/`;` are safe.
+- New `TestRemotePruneCommand` (4 guards: command shape, `-mtime +N`, quoted path, required-config errors).
+- **Verified:** `py_compile` clean; 25/25 backup + 15/15 event_bus + 8/8 onlyoffice + 28/28 node pass.
+
+**NEXT (post-audit backlog, in priority order):** (a) SQL export still buffers the whole dump in RAM (`_handle_export_backup` holds `proc.stdout` then sends — same class item 6 fixed on import); (b) browser-test the split paths end-to-end (download each part → check filenames/manifests → import db-core alone → verify standalone + missing-parts warning → land file parts); (c) item 8 sha256 artifacts + anomaly alerts; (d) item 9 disaster runbook. User to direct.
+
+---
+
+## Previous summary (2026-10-09)
+
+**Backup audit item 6 — strict SQL restore with pre-restore snapshot.**
 
 **What landed (`server.py` `_handle_import_sql` + `tests/test_backup.py` 16 → 21):**
 - `psql -v ON_ERROR_STOP=1`, any nonzero exit = failure (was: `ON_ERROR_STOP=0`, exit 1 counted as success).
