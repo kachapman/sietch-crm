@@ -11858,10 +11858,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_export_backup(self) -> None:
-        """Export database as SQL dump via pg_dump."""
+        """Export database as SQL dump via pg_dump, streamed with chunked encoding.
+
+        The whole dump is never buffered in RAM: pg_dump's stdout is read
+        in 1 MB chunks and written straight to the response as
+        `Transfer-Encoding: chunked` (a 1 MB initial buffer holds errors
+        until the first chunk is read, so a 500 is still reachable if
+        pg_dump dies before producing any output). Symmetric to the import
+        side which already spools to a temp file then `psql -f`s.
+        """
         try:
             env = {**os.environ, "PGPASSWORD": os.getenv("DB_PASSWORD", "")}
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 [
                     "pg_dump",
                     "-h", os.getenv("DB_HOST", "db"),
@@ -11870,27 +11878,73 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     "-d", os.getenv("DB_NAME", "sietch_crm"),
                     "--no-owner", "--no-privileges", "-Fp",
                 ],
-                capture_output=True,
-                text=True,
-                timeout=600,
                 env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
             )
-            if proc.returncode != 0:
-                _json_response(self, 500, {"error": f"pg_dump failed: {proc.stderr[:500]}"})
-                return
-
-            sql_bytes = proc.stdout.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/sql")
-            self.send_header("Content-Length", str(len(sql_bytes)))
-            self.send_header("Content-Disposition", f'attachment; filename="sietch-backup-{datetime.now().strftime("%Y-%m-%d")}.sql"')
-            self.end_headers()
-            self.wfile.write(sql_bytes)
         except FileNotFoundError:
             _json_response(self, 500, {"error": "pg_dump not found. Install postgresql-client."})
+            return
         except Exception as e:
-            logger.exception("SQL export failed")
+            logger.exception("SQL export setup failed")
             _json_response(self, 500, {"error": str(e)})
+            return
+
+        assert proc.stdout is not None and proc.stderr is not None
+        try:
+            # Read the first chunk before committing to 200, so a pg_dump
+            # failure that produces no output still surfaces as 500.
+            READ_CHUNK = 1024 * 1024
+            first_chunk = proc.stdout.read(READ_CHUNK)
+            if proc.poll() is not None and not first_chunk:
+                # pg_dump died and produced nothing — drain stderr and fail.
+                err = proc.stderr.read().decode("utf-8", errors="replace")
+                _json_response(self, 500, {"error": f"pg_dump failed (exit {proc.returncode}): {err[:500]}"})
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/sql")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.send_header("Content-Disposition", f'attachment; filename="sietch-backup-{datetime.now().strftime("%Y-%m-%d")}.sql"')
+            self.end_headers()
+
+            def _send_chunk(data: bytes) -> None:
+                if not data:
+                    return
+                self.wfile.write(f"{len(data):X}\r\n".encode("ascii"))
+                self.wfile.write(data)
+                self.wfile.write(b"\r\n")
+                self.wfile.flush()
+
+            _send_chunk(first_chunk)
+            while True:
+                nxt = proc.stdout.read(READ_CHUNK)
+                if not nxt:
+                    break
+                _send_chunk(nxt)
+            proc.stdout.close()
+            # Final 0-length chunk to terminate chunked encoding.
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+            # Drain stderr in the background; surface only if pg_dump
+            # exited non-zero (the caller has already got the body, so we
+            # can only log).
+            err_remaining = proc.stderr.read()
+            rc = proc.wait(timeout=10)
+            if rc != 0 and err_remaining:
+                logger.warning("pg_dump exit %s stderr: %s", rc, err_remaining[:500])
+        except BrokenPipeError:
+            # Client disconnected mid-stream — kill pg_dump and bail.
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+        except Exception:
+            logger.exception("SQL export failed")
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
 
     def _handle_import_json(self) -> None:
         """Import from a JSON export ZIP."""

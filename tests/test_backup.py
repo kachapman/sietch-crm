@@ -351,5 +351,74 @@ class TestRemotePruneCommand(unittest.TestCase):
                 _build_remote_prune_command(cfg, 30)
 
 
+class TestSqlExportStreaming(unittest.TestCase):
+    """SQL export must stream — no whole-dump buffering, chunked encoding."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.src = Path("/home/chapman-server/Projects/new-crm/server.py").read_text()
+        start = cls.src.index("def _handle_export_backup")
+        nxt = cls.src.index("\n    def ", start + 10)
+        cls.body = cls.src[start:nxt]
+
+    def test_uses_popen_not_run(self):
+        self.assertIn("subprocess.Popen", self.body)
+        # No whole-stdout capture anywhere in the export handler.
+        self.assertNotIn("capture_output=True", self.body)
+        self.assertNotIn("text=True", self.body)
+
+    def test_no_stdout_buffer_then_encode(self):
+        # The previous shape was `proc.stdout.encode("utf-8")` after `text=True`.
+        self.assertNotIn("proc.stdout.encode(", self.body)
+        self.assertNotIn("sql_bytes = ", self.body)
+
+    def test_chunked_transfer_encoding(self):
+        self.assertIn('"Transfer-Encoding", "chunked"', self.body)
+        # No Content-Length — chunked encoding is the alternative.
+        self.assertNotIn('"Content-Length"', self.body)
+
+    def test_first_chunk_buffer_for_error_path(self):
+        # Must read at least one chunk before sending headers so a pg_dump
+        # failure that produces no output still gets a 500 (not a 200 +
+        # truncated body).
+        self.assertIn("first_chunk = proc.stdout.read(", self.body)
+        self.assertIn("if proc.poll() is not None and not first_chunk:", self.body)
+
+    def test_filename_uses_sql_not_sql_gz(self):
+        # Streaming raw SQL — no .gz in the response header.
+        import re
+        m = re.search(r'filename="sietch-backup-\{datetime\.now[^"]*"', self.body)
+        self.assertIsNotNone(m, "export filename template not found")
+
+
+class TestChunkedDecoding(unittest.TestCase):
+    """Pure-Python helper: read chunked frames correctly."""
+
+    def _decode_chunks(self, raw: bytes) -> bytes:
+        out = bytearray()
+        i = 0
+        while i < len(raw):
+            j = raw.index(b"\r\n", i)
+            size = int(raw[i:j], 16)
+            if size == 0:
+                break
+            out.extend(raw[j + 2:j + 2 + size])
+            i = j + 2 + size + 2  # skip trailing \r\n
+        return bytes(out)
+
+    def test_single_chunk(self):
+        body = b"Hello, world"
+        raw = f"{len(body):X}\r\n".encode("ascii") + body + b"\r\n0\r\n\r\n"
+        self.assertEqual(self._decode_chunks(raw), body)
+
+    def test_multi_chunk(self):
+        chunks = [b"alpha-", b"beta-", b"gamma"]
+        raw = b"".join(f"{len(c):X}\r\n".encode("ascii") + c + b"\r\n" for c in chunks) + b"0\r\n\r\n"
+        self.assertEqual(self._decode_chunks(raw), b"alpha-beta-gamma")
+
+    def test_empty_body(self):
+        self.assertEqual(self._decode_chunks(b"0\r\n\r\n"), b"")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

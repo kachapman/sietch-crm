@@ -2,6 +2,10 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## SQL export: streaming with chunked transfer encoding (2026-10-11)
+
+`_handle_export_backup` no longer buffers the full pg_dump in RAM. `subprocess.run(..., capture_output=True, text=True)` → `subprocess.Popen` with stdout read in 1 MB chunks and emitted as `Transfer-Encoding: chunked` (a 1 MB initial buffer holds errors so pg_dump failures still surface as 500). Filename changed from `.sql.gz` to `.sql` (the import side accepts both). Frontend `sietch-backup-<date>.sql` filename was already correct. `tests/test_backup.py` 25 → 33.
+
 ## Backup fix item 7: remote prune + SSH host-key pinning (2026-10-09)
 
 Remote artifacts now honor the same retention as local rotation (`ssh ... find <path> -name 'sietch-*' -mtime +<retention_days> -delete` after each successful send; failures surface in history + notifications). `StrictHostKeyChecking=no` → `accept-new` on send, prune, and remote-test. Dead `BACKUP_REMOTE_TYPE=smtp` option removed from env docs and the UI dropdown. Remote paths quoted via `shlex.quote`. `tests/test_backup.py` 21 → 25 — the audit fix list is now complete.

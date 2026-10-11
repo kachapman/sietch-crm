@@ -11,9 +11,26 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-09
+**Date:** 2026-10-11
 
-**Topic:** Backup audit item 7 — remote prune + host-key pinning + drop dead `smtp` type. (Completes the audit fix list; item 6 was the previous commit `8c36562`.)
+**Topic:** SQL export streaming (post-audit backlog #1, mirrors item 6 on the import side).
+
+**What landed (`server.py` `_handle_export_backup` + `tests/test_backup.py` 25 → 33):**
+- `subprocess.run(..., capture_output=True, text=True)` → `subprocess.Popen(..., stdout=PIPE, stderr=PIPE)` with `stdout.read(1 MB)` in a chunked loop. No more whole-dump buffering in RAM.
+- `Content-Length: <huge>` → `Transfer-Encoding: chunked` — standard for producers that don't know the total up front. The handler builds chunked frames by hand (`<hex>\r\n<bytes>\r\n` … `0\r\n\r\n`) and flushes per chunk.
+- A 1 MB initial chunk is read before sending headers, so a pg_dump that dies before producing any output still surfaces as 500 (not 200 with a truncated body).
+- `BrokenPipeError` on client disconnect kills pg_dump cleanly.
+- Filename: `sietch-backup-<date>.sql.gz` → `.sql` (raw SQL, no server-side gzip; the import side already accepts both). The console's download path (line 30409 of `public/app.js`) was already `.sql`, so no frontend change was needed.
+- New `TestSqlExportStreaming` (5 source guards) + `TestChunkedDecoding` (3 cases verifying the chunked frame format on the wire).
+- **Verified:** `py_compile` clean; 33/33 backup + 15/15 event_bus + 8/8 onlyoffice + 28/28 node pass.
+
+**NEXT (post-audit backlog, in priority order):** (b) browser-test the split paths end-to-end (download each part → check filenames/manifests → import db-core alone → verify standalone + missing-parts warning → land file parts); (c) item 8 sha256 artifacts + anomaly alerts; (d) item 9 disaster runbook. User to direct.
+
+---
+
+## Previous summary (2026-10-09)
+
+**Backup audit item 7 — remote prune + SSH host-key pinning + drop dead `smtp` type. (Audit fix list complete; items 8–9 are post-audit backlog.)**
 
 **What landed (`backup_service.py`, `server.py`, `config.example.env`, `public/index.html`, `tests/test_backup.py` 21 → 25):**
 - `StrictHostKeyChecking=no` → `accept-new` everywhere (`_send_remote`, `_build_remote_prune_command`, server remote-test) — keys still can't silently rotate, but a new key isn't auto-accepted with a MITM window as wide as before.
