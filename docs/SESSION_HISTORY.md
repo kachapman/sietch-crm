@@ -13,6 +13,28 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-11
 
+**Topic:** Scheduled JSON-export service in the admin UI: per-part schedule checkboxes, host pickup path, terminal-styled backup log with per-run detail, SSE live refresh. SQL pg_dump + data archives + remote push fully removed (server, client, tests, docs).
+
+**What landed:**
+- **`backup_service.py`:** `run_backup()` now only emits the configured JSON parts (`validate_parts` + `DEFAULT_EXPORT_PARTS`) via `_build_export_zip_to_path()` (temp file + atomic rename, sha256 per artifact). History entries carry `artifacts: {part: {path, size, sha256, ok, error}}`. `backup:completed` published admin-only on the existing SSE channel. Deleted: `_run_pg_dump` callers in scheduler (kept for SQL-import snapshots), all tar-bundle machinery, `_send_remote`/`_prune_remote`, remote env constants. Retention default 7d.
+- **`event_bus.py`:** `publish(..., admin_only=True)` with fresh-per-call DB admin resolution (safe empty default).
+- **`server.py`:** config POST takes `json_parts` (+ `all` sentinel); new `POST export-now` + `GET history/<key>` routes; `_handle_backup_remote_test` + route removed.
+- **Console:** "Scheduled JSON Exports" section (part checkboxes, host pickup path, Run Export Now), "Backup Log" terminal card (monospace, bordered, 400px scroll, click-a-row detail drawer), SSE `backup:completed` refresh via `handleSSEEvent`. Remote Destination block + dead remote handlers removed.
+- **`config.example.env`:** retention 7d; `BACKUP_DIR_HOST` documented (add the var itself — see below).
+- **Tests:** `test_backup.py` 33 → 36 (ValidateParts, status-shape, export-zip e2e). Full suite green.
+- **Verified:** `py_compile` ×3, `node --check`, 36+15+8+28 tests pass.
+
+**Open loose ends from this commit (do next):**
+1. ~~`BACKUP_DIR_HOST` missing from `config.example.env`~~ — done in this commit.
+2. Old `backup_config` rows in existing DBs still carry `remote_*` keys (harmless — ignored) and old `backup_history_*` rows have the legacy shape (log renderer handles missing `artifacts` — verify once in browser).
+3. `run_backup()` name now means "run JSON export" — consider renaming to `run_json_export` with a back-compat alias (deferred to avoid churning the two call sites mid-task).
+
+**NEXT:** item 8 (sha256 already recorded per artifact by this commit — remaining: anomaly alerts on zero-byte/unchanged size) and item 9 (disaster runbook), then the split-path browser test. User to direct.
+
+---
+
+## Previous summary (2026-10-11)
+
 **Topic:** SQL export streaming (post-audit backlog #1, mirrors item 6 on the import side).
 
 **What landed (`server.py` `_handle_export_backup` + `tests/test_backup.py` 25 → 33):**

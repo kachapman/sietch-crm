@@ -2,6 +2,10 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Scheduled JSON-export service in the admin console (2026-10-11)
+
+The admin Backup tab is now a JSON-export scheduler with a terminal-styled live log. Scheduled SQL dumps, data archives, and remote push are removed everywhere (server, client, tests, env docs) — restore comes from the per-part JSON bundles. Scheduler emits configured parts to `BACKUP_DIR` (temp file + atomic rename, sha256 per artifact) for Proton Drive / rclone pickup (host path surfaced via `BACKUP_DIR_HOST`); retention default 7 days. New `POST export-now` + `GET history/<key>` routes; `backup:completed` published admin-only on the existing SSE channel refreshes the log. `tests/test_backup.py` 33 → 36. Full suite green (36+15+8+28).
+
 ## SQL export: streaming with chunked transfer encoding (2026-10-11)
 
 `_handle_export_backup` no longer buffers the full pg_dump in RAM. `subprocess.run(..., capture_output=True, text=True)` → `subprocess.Popen` with stdout read in 1 MB chunks and emitted as `Transfer-Encoding: chunked` (a 1 MB initial buffer holds errors so pg_dump failures still surface as 500). Filename changed from `.sql.gz` to `.sql` (the import side accepts both). Frontend `sietch-backup-<date>.sql` filename was already correct. `tests/test_backup.py` 25 → 33.

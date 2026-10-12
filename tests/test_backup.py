@@ -13,13 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
 
-from backup_service import (
-    DATA_BUNDLES,
-    _build_data_tar_command,
-    _build_remote_prune_command,
-    _run_data_bundles,
-    sanitize_archive_member,
-)
+from backup_service import sanitize_archive_member
 
 
 class TestSanitizeArchiveMember(unittest.TestCase):
@@ -168,120 +162,6 @@ class TestExportParts(unittest.TestCase):
             self.assertNotIn(d, covered, f"{d} must never be browser-served")
 
 
-class TestBuildDataTarCommand(unittest.TestCase):
-    def test_excludes_nested_backup_dir(self):
-        cmd = _build_data_tar_command(
-            Path("data/backups/sietch-data-x.tar.gz"),
-            Path("data"),
-            Path("data/backups"),
-            ["documents"],
-        )
-        self.assertIn("--exclude=data/backups", cmd)
-
-    def test_no_exclude_when_backup_dir_outside(self):
-        cmd = _build_data_tar_command(
-            Path("/backups/sietch-data-x.tar.gz"),
-            Path("data"),
-            Path("/backups"),
-            ["documents"],
-        )
-        self.assertFalse([a for a in cmd if a.startswith("--exclude=")])
-
-    def test_extra_sources_appended_only_when_present(self):
-        cmd = _build_data_tar_command(
-            Path("out.tar.gz"),
-            Path("data"),
-            Path("/backups"),
-            ["documents"],
-            extra_sources=[("scanner", "definitely-not-a-real-dir-xyz")],
-        )
-        self.assertNotIn("scanner", cmd)
-
-    def test_archive_root_present(self):
-        cmd = _build_data_tar_command(
-            Path("out.tar.gz"), Path("data"), Path("data/backups"),
-            ["documents", "photos"],
-        )
-        self.assertEqual(cmd[0:3], ["tar", "czf", "out.tar.gz"])
-        self.assertIn("data/documents", cmd)
-        self.assertIn("data/photos", cmd)
-
-    def test_excludes_backup_dir_with_subdir_members(self):
-        cmd = _build_data_tar_command(
-            Path("data/backups/out.tar.gz"), Path("data"),
-            Path("data/backups"), ["documents"],
-        )
-        self.assertIn("--exclude=data/backups", cmd)
-        self.assertIn("data/documents", cmd)
-
-
-class TestDataBundles(unittest.TestCase):
-    def test_bundle_names(self):
-        self.assertEqual([b for b, _ in DATA_BUNDLES],
-                         ["docs", "history", "state"])
-
-    def test_bundles_cover_expected_dirs_and_skip_backups(self):
-        covered = {d for _, dirs in DATA_BUNDLES for d in dirs}
-        for d in ("documents", "photos", "history-attachments", "avatars",
-                  "user-profiles", "bot-customers", "logos", "branding"):
-            self.assertIn(d, covered, f"{d} must be in some bundle")
-        self.assertNotIn("backups", covered)
-
-    @unittest.skipUnless(shutil.which("tar"), "tar binary required")
-    def test_run_data_bundles_end_to_end(self):
-        import os
-        import tarfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            # Isolate CWD so the repo's real scanner/data isn't pulled in.
-            prev_cwd = os.getcwd()
-            os.chdir(root)
-            try:
-                self._run_bundles_in(root)
-            finally:
-                os.chdir(prev_cwd)
-
-    def _run_bundles_in(self, root):
-        import tarfile
-
-        data = root / "data"
-        (data / "documents" / "1").mkdir(parents=True)
-        (data / "documents" / "1" / "a.pdf").write_text("doc")
-        (data / "user-profiles" / "sietch").mkdir(parents=True)
-        (data / "user-profiles" / "sietch" / "u.json").write_text("{}")
-        (data / "backups").mkdir()
-        (data / "backups" / "old.tar.gz").write_text("stale")
-        outdir = root / "out"
-        outdir.mkdir()
-
-        done = _run_data_bundles(outdir, "ts", data_dir=data)
-        names = sorted(p.name for _, p in done)
-        self.assertEqual(names, [
-            "sietch-data-docs-ts.tar.gz",
-            "sietch-data-state-ts.tar.gz",
-        ])
-        # history bundle skipped (no history-attachments dir present)
-        with tarfile.open(outdir / "sietch-data-docs-ts.tar.gz") as tf:
-            members = tf.getnames()
-        self.assertIn("data/documents/1/a.pdf", members)
-        self.assertFalse([m for m in members if m.startswith("data/backups")])
-        with tarfile.open(outdir / "sietch-data-state-ts.tar.gz") as tf:
-            members = tf.getnames()
-        self.assertIn("data/user-profiles/sietch/u.json", members)
-
-        # backup_dir nested inside the tree (the production default):
-        # the --exclude keeps prior artifacts AND the outputs being
-        # written out of the new archives.
-        nested_out = data / "backups"
-        done3 = _run_data_bundles(nested_out, "ts3", data_dir=data)
-        self.assertTrue(all(p.exists() for _, p in done3))
-        with tarfile.open(nested_out / "sietch-data-docs-ts3.tar.gz") as tf:
-            members = tf.getnames()
-        self.assertIn("data/documents/1/a.pdf", members)
-        self.assertFalse([m for m in members if "backups" in m])
-
-
 class TestSqlImportStrictness(unittest.TestCase):
     """SQL restore must fail closed: strict psql, spooled upload, snapshot.
 
@@ -315,40 +195,6 @@ class TestSqlImportStrictness(unittest.TestCase):
 
     def test_temp_upload_cleaned_up(self):
         self.assertIn("os.unlink(upload_path)", self.body)
-
-
-class TestRemotePruneCommand(unittest.TestCase):
-    CFG = {
-        "remote_host": "backup.example.com",
-        "remote_port": 2222,
-        "remote_user": "deploy",
-        "remote_path": "/srv/backups/sietch",
-        "remote_key": "/run/secrets/k",
-    }
-
-    def test_command_shape(self):
-        cmd = _build_remote_prune_command(self.CFG, 30)
-        self.assertEqual(cmd[0:3], ["ssh", "-p", "2222"])
-        self.assertIn("StrictHostKeyChecking=accept-new", cmd)
-        self.assertIn("-i", cmd)
-        self.assertIn("/run/secrets/k", cmd)
-        self.assertIn("deploy@backup.example.com", cmd)
-
-    def test_retention_days_in_find(self):
-        cmd = _build_remote_prune_command(self.CFG, 14)
-        self.assertIn("-mtime +14", " ".join(cmd))
-
-    def test_path_quoted(self):
-        cfg = dict(self.CFG, remote_path="/srv/back ups/sie;tch")
-        joined = " ".join(_build_remote_prune_command(cfg, 30))
-        self.assertIn("/srv/back ups/sie;tch", joined)
-
-    def test_requires_host_user_path(self):
-        for missing in ("remote_host", "remote_user", "remote_path"):
-            cfg = dict(self.CFG)
-            cfg[missing] = ""
-            with self.assertRaises(ValueError):
-                _build_remote_prune_command(cfg, 30)
 
 
 class TestSqlExportStreaming(unittest.TestCase):
@@ -391,6 +237,90 @@ class TestSqlExportStreaming(unittest.TestCase):
         self.assertIsNotNone(m, "export filename template not found")
 
 
+class TestValidateParts(unittest.TestCase):
+    """validate_parts() is the single source of truth for which parts
+    the scheduler will write. Lives in backup_service to keep server.py
+    import-clean."""
+
+    def setUp(self):
+        from backup_service import validate_parts
+
+        self.vp = validate_parts
+
+    def test_none_and_empty(self):
+        self.assertEqual(self.vp(None), [])
+        self.assertEqual(self.vp(""), [])
+        self.assertEqual(self.vp([]), [])
+
+    def test_csv_string_normalized(self):
+        self.assertEqual(
+            self.vp("db-core, files-state"),
+            ["db-core", "files-state"],
+        )
+
+    def test_list_input(self):
+        self.assertEqual(
+            self.vp(["db-core", "files-state"]),
+            ["db-core", "files-state"],
+        )
+
+    def test_dedup(self):
+        self.assertEqual(
+            self.vp(["db-core", "db-core", "files-state"]),
+            ["db-core", "files-state"],
+        )
+
+    def test_unknown_entries_dropped(self):
+        self.assertEqual(
+            self.vp(["db-core", "bogus", "files-history"]),
+            ["db-core"],
+        )
+
+    def test_all_sentinel_expands(self):
+        self.assertEqual(
+            self.vp("all"),
+            ["db-core", "files-documents", "files-state"],
+        )
+
+    def test_all_does_not_dup(self):
+        self.assertEqual(
+            self.vp(["db-core", "all"]),
+            ["db-core", "files-documents", "files-state"],
+        )
+
+
+class TestBackupStatusShape(unittest.TestCase):
+    """get_backup_status() must surface the host path and per-part
+    config so the console can render the Proton pickup hint + checkboxes."""
+
+    def setUp(self):
+        self.src = Path("/home/chapman-server/Projects/new-crm/backup_service.py").read_text()
+
+    def test_host_path_surfaced(self):
+        self.assertIn("BACKUP_DIR_HOST", self.src)
+        self.assertIn("backup_dir_host", self.src)
+
+    def test_expected_parts_in_status(self):
+        self.assertIn("expected_export_parts", self.src)
+        self.assertIn("EXPECTED_EXPORT_PARTS", self.src)
+
+    def test_json_parts_in_status(self):
+        self.assertIn("json_parts", self.src)
+
+    def test_remote_and_data_fields_removed(self):
+        # Old fields are gone from the *status payload* (they remain as
+        # env-var constants for back-compat). The guard scopes the check
+        # to the get_backup_status dict only.
+        import re
+        # Snip out the function body of get_backup_status and assert the
+        # dead keys are absent.
+        m = re.search(r"def get_backup_status.*?return \{[^}]*\}", self.src, re.S)
+        self.assertIsNotNone(m)
+        body = m.group(0)
+        self.assertNotIn("remote_type", body)
+        self.assertNotIn("data_size", body)
+
+
 class TestChunkedDecoding(unittest.TestCase):
     """Pure-Python helper: read chunked frames correctly."""
 
@@ -418,6 +348,118 @@ class TestChunkedDecoding(unittest.TestCase):
 
     def test_empty_body(self):
         self.assertEqual(self._decode_chunks(b"0\r\n\r\n"), b"")
+
+
+class TestBuildExportZipToPath(unittest.TestCase):
+    """End-to-end: build each part against a fake tree + stubbed db."""
+
+    def _tree(self, root):
+        import backup_service
+        data = root / "data"
+        (data / "documents" / "1").mkdir(parents=True)
+        (data / "documents" / "1" / "a.pdf").write_text("doc")
+        (data / "user-profiles" / "sietch").mkdir(parents=True)
+        (data / "user-profiles" / "sietch" / "u.json").write_text("{}")
+        backup_service.DB_HOST = "unused-in-stub"
+        return data
+
+    def _run(self, root, part):
+        import os
+        import sys
+        import tempfile
+        import zipfile
+        import backup_service
+
+        rows = [
+            {"id": 1, "title": "t", "password_hash": "SECRET",
+             "created_at": __import__("datetime").datetime(2026, 1, 1)},
+        ]
+
+        class FakeDB:
+            @staticmethod
+            def query_dicts(sql):
+                return [dict(r) for r in rows]
+
+        sys.modules.setdefault("db", FakeDB())
+        # Patch the lazy `import db` inside the helper by pre-seeding it.
+        prev_cwd = os.getcwd()
+        os.chdir(root)
+        try:
+            out = root / f"out-{part}.zip"
+            size, sha = backup_service._build_export_zip_to_path(
+                part, "2026-10-11T00:00:00", out)
+        finally:
+            os.chdir(prev_cwd)
+        self.assertTrue(out.exists())
+        self.assertEqual(size, out.stat().st_size)
+        self.assertEqual(len(sha), 64)
+        with zipfile.ZipFile(out) as zf:
+            return zf, {i.filename: zf.read(i.filename) for i in zf.infolist()}
+
+    def test_db_core_part(self):
+        import json
+        import tempfile
+        from pathlib import Path as _P
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _P(tmp)
+            self._tree(root)
+            zf, blobs = self._run(root, "db-core")
+            manifest = json.loads(blobs["manifest.json"])
+            self.assertEqual(manifest["part"], "db-core")
+            self.assertIn("credential_notice", manifest)
+            users = json.loads(blobs["users.json"])
+            self.assertEqual(users[0]["title"], "t")
+            self.assertNotIn("password_hash", users[0])
+            self.assertEqual(users[0]["created_at"], "2026-01-01T00:00:00")
+            # file parts must not appear in db-core
+            self.assertFalse([n for n in blobs if n.startswith("files/")])
+
+    def test_files_documents_part(self):
+        import json
+        import tempfile
+        from pathlib import Path as _P
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _P(tmp)
+            self._tree(root)
+            zf, blobs = self._run(root, "files-documents")
+            manifest = json.loads(blobs["manifest.json"])
+            self.assertEqual(manifest["part"], "files-documents")
+            self.assertNotIn("credential_notice", manifest)
+            self.assertIn("files/documents/1/a.pdf", blobs)
+            # no tables in a file part
+            self.assertFalse([n for n in blobs if n.endswith(".json") and n != "manifest.json"])
+
+    def test_files_state_part(self):
+        import json
+        import tempfile
+        from pathlib import Path as _P
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _P(tmp)
+            self._tree(root)
+            zf, blobs = self._run(root, "files-state")
+            manifest = json.loads(blobs["manifest.json"])
+            self.assertIn("files/user-profiles/sietch/u.json", blobs)
+            self.assertIn("user-profiles", manifest["files"])
+
+    def test_unknown_part_builds_empty_manifest(self):
+        import json
+        import tempfile
+        from pathlib import Path as _P
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _P(tmp)
+            self._tree(root)
+            zf, blobs = self._run(root, "bogus-part")
+            manifest = json.loads(blobs["manifest.json"])
+            # Only the two deliberately-excluded markers; no rows, no files.
+            self.assertEqual(
+                set(manifest["tables"]),
+                {"password_reset_tokens", "twofa_challenges"},
+            )
+            self.assertEqual(manifest["files"], {})
 
 
 if __name__ == "__main__":

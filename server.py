@@ -2891,6 +2891,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             self._handle_backup_history()
             return
+        m = re.match(r"^/api/v2/admin/backup/history/(backup_history_\d+)$", api_path)
+        if m:
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_backup_history_one(m.group(1))
+            return
+        if api_path == "/api/v2/admin/backup/export-now" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_backup_export_now()
+            return
 
         # ── Presence / Team (local store, unchanged) ──
         if api_path.startswith("/api/presence"):
@@ -3789,12 +3802,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not user:
                 return
             self._handle_backup_notify_prefs_post()
-            return
-        if api_path == "/api/v2/admin/backup/remote-test" and method == "POST":
-            user = _require_admin(self)
-            if not user:
-                return
-            self._handle_backup_remote_test()
             return
 
         # ── Bot customers (admin) ──
@@ -12181,9 +12188,39 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         _json_response(self, 200, backup_service.get_backup_status())
 
     def _handle_backup_history(self) -> None:
-        """GET backup history."""
+        """GET backup history (newest first)."""
         import backup_service
-        _json_response(self, 200, {"history": backup_service.get_backup_history()})
+        qs = parse_qs(urlparse(self.path).query)
+        limit = int(qs.get("limit", ["50"])[0] or 50)
+        _json_response(self, 200, {"history": backup_service.get_backup_history(limit=limit)})
+
+    def _handle_backup_history_one(self, key: str) -> None:
+        """GET one history entry (for the per-run detail drawer)."""
+        import backup_service
+        # key shape: "backup_history_YYYYMMDDHHMMSS" — raw stored value is JSON.
+        try:
+            row = db.query_one(
+                "SELECT value FROM system_settings WHERE key = %s", (key,)
+            )
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
+            return
+        if not row or not row.get("value"):
+            _json_response(self, 404, {"error": "Not found"})
+            return
+        try:
+            _json_response(self, 200, {"key": key, "entry": json.loads(row["value"])})
+        except Exception as e:
+            _json_response(self, 500, {"error": f"malformed entry: {e}"})
+
+    def _handle_backup_export_now(self) -> None:
+        """POST trigger a JSON export run right now."""
+        import backup_service
+        try:
+            result = backup_service.run_backup()
+            _json_response(self, 200, result)
+        except Exception as e:
+            _json_response(self, 500, {"error": str(e)})
 
     def _handle_backup_config_get(self) -> None:
         """GET backup config."""
@@ -12195,19 +12232,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         try:
             payload = json.loads(_read_body(self) or b"{}")
             import backup_service
+            # Allow either a list of parts or a comma-separated string.
+            raw_parts = payload.get("json_parts")
+            if isinstance(raw_parts, str):
+                parts = [p.strip() for p in raw_parts.split(",") if p.strip()]
+            elif isinstance(raw_parts, list):
+                parts = [str(p).strip() for p in raw_parts if str(p).strip()]
+            else:
+                parts = []
             config = {
-                "enabled": bool(payload.get("enabled")),
+                "enabled": bool(payload.get("enabled", True)),
                 "interval": int(payload.get("interval", 86400)),
-                "retention_days": int(payload.get("retention_days", 30)),
-                "remote_type": str(payload.get("remote_type", "none")),
-                "remote_host": str(payload.get("remote_host", "")),
-                "remote_port": int(payload.get("remote_port", 22)),
-                "remote_user": str(payload.get("remote_user", "")),
-                "remote_path": str(payload.get("remote_path", "")),
-                "remote_key": str(payload.get("remote_key", "")),
+                "retention_days": int(payload.get("retention_days", 7)),
+                "json_parts": backup_service.validate_parts(parts),
             }
             backup_service._save_config_to_db(config)
-            _json_response(self, 200, {"ok": True})
+            _json_response(self, 200, {"ok": True, "config": config})
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 
@@ -12476,35 +12516,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             }
             backup_service._save_notify_prefs(prefs)
             _json_response(self, 200, {"ok": True})
-        except Exception as e:
-            _json_response(self, 500, {"error": str(e)})
-
-    def _handle_backup_remote_test(self) -> None:
-        """POST test remote connection."""
-        try:
-            payload = json.loads(_read_body(self) or b"{}")
-            remote_type = payload.get("remote_type", "none")
-            host = payload.get("remote_host", "")
-            port = str(payload.get("remote_port", 22))
-            user = payload.get("remote_user", "")
-            key = payload.get("remote_key", "")
-
-            if not host or not user:
-                _json_response(self, 400, {"error": "Host and user are required"})
-                return
-
-            ssh_opts = ["-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10"]
-            if key:
-                ssh_opts.extend(["-i", key])
-
-            cmd = ["ssh", "-p", port] + ssh_opts + [f"{user}@{host}", "echo ok"]
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-            if proc.returncode == 0:
-                _json_response(self, 200, {"ok": True, "message": "Connection successful"})
-            else:
-                _json_response(self, 400, {"error": f"SSH failed: {proc.stderr[:300]}"})
-        except FileNotFoundError:
-            _json_response(self, 500, {"error": "ssh not found. Install openssh-client."})
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 

@@ -259,6 +259,13 @@ function handleSSEEvent(type, data) {
   switch (type) {
     case "dm:new": handleNewDM(data); break;
     case "dm:read": handleDMRead(data); break;
+    case "backup:completed":
+      // Scheduled JSON export finished (success, partial, or failed).
+      // Refresh the admin backup log if the console is open.
+      if (!$("#admin-console-modal")?.classList.contains("hidden")) {
+        loadBackupHistory();
+      }
+      break;
     case "presence:update": handlePresenceUpdate(data); break;
     case "task:created":
     case "task:updated":
@@ -30463,54 +30470,19 @@ function openAdminConsoleModal() {
       }
     });
 
-    // Backup config save
+    // Backup config save (scheduled JSON exports: parts + hours + 7d retention)
     $("#backup-config-save")?.addEventListener("click", async () => {
       const el = $("#backup-run-status");
       try {
+        const parts = [...document.querySelectorAll(".backup-part-cb")]
+          .filter(cb => cb.checked).map(cb => cb.value);
         await api("/api/v2/admin/backup/config", { method: "POST", body: JSON.stringify({
           enabled: $("#backup-enabled")?.checked || false,
-          interval: parseInt($("#backup-interval")?.value || "86400"),
-          retention_days: parseInt($("#backup-retention")?.value || "30"),
+          interval: (parseInt($("#backup-interval")?.value || "24") || 24) * 3600,
+          retention_days: parseInt($("#backup-retention")?.value || "7") || 7,
+          json_parts: parts,
         })});
-        if (el) el.innerHTML = '<span style="color:#3fb950;">Backup config saved.</span>';
-      } catch (e) {
-        if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(e.message)}</span>`;
-      }
-    });
-
-    // Backup remote save
-    $("#backup-remote-save")?.addEventListener("click", async () => {
-      const el = $("#backup-remote-status");
-      try {
-        const config = await api("/api/v2/admin/backup/config");
-        await api("/api/v2/admin/backup/config", { method: "POST", body: JSON.stringify({
-          ...config,
-          remote_type: $("#backup-remote-type")?.value || "none",
-          remote_host: $("#backup-remote-host")?.value || "",
-          remote_port: parseInt($("#backup-remote-port")?.value || "22"),
-          remote_user: $("#backup-remote-user")?.value || "",
-          remote_path: $("#backup-remote-path")?.value || "",
-          remote_key: $("#backup-remote-key")?.value || "",
-        })});
-        if (el) el.innerHTML = '<span style="color:#3fb950;">Remote config saved.</span>';
-      } catch (e) {
-        if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(e.message)}</span>`;
-      }
-    });
-
-    // Backup remote test
-    $("#backup-remote-test")?.addEventListener("click", async () => {
-      const el = $("#backup-remote-status");
-      if (el) el.innerHTML = '<span style="color:var(--accent);">Testing…</span>';
-      try {
-        const res = await api("/api/v2/admin/backup/remote-test", { method: "POST", body: JSON.stringify({
-          remote_type: $("#backup-remote-type")?.value || "none",
-          remote_host: $("#backup-remote-host")?.value || "",
-          remote_port: parseInt($("#backup-remote-port")?.value || "22"),
-          remote_user: $("#backup-remote-user")?.value || "",
-          remote_key: $("#backup-remote-key")?.value || "",
-        })});
-        if (el) el.innerHTML = `<span style="color:#3fb950;">${escapeHtml(res.message || "Connection successful")}</span>`;
+        if (el) el.innerHTML = '<span style="color:#3fb950;">Export schedule saved.</span>';
       } catch (e) {
         if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(e.message)}</span>`;
       }
@@ -30532,18 +30504,20 @@ function openAdminConsoleModal() {
       }
     });
 
-    // Backup run now
+    // Backup export-now (runs the configured JSON parts immediately)
     $("#backup-run-now")?.addEventListener("click", async () => {
       const el = $("#backup-run-status");
-      if (el) el.innerHTML = '<span style="color:var(--accent);">Running backup…</span>';
+      if (el) el.innerHTML = '<span style="color:var(--accent);">Running export…</span>';
       try {
-        const res = await api("/api/v2/admin/backup/run", { method: "POST" });
+        const res = await api("/api/v2/admin/backup/export-now", { method: "POST" });
         if (res.ok) {
-          if (el) el.innerHTML = `<span style="color:#3fb950;">Backup completed (${((res.size||0)/1024/1024).toFixed(1)} MB, ${res.duration||0}s).</span>`;
+          const arts = Object.entries(res.artifacts || {})
+            .map(([p, a]) => `${p} (${((a.size||0)/1024/1024).toFixed(1)} MB)`).join(", ");
+          if (el) el.innerHTML = `<span style="color:#3fb950;">Export completed (${arts || "no artifacts"}, ${res.duration||0}s).</span>`;
         } else {
-          if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(res.error || "Backup failed")}</span>`;
+          if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(res.error || "Export failed")}</span>`;
         }
-        // Refresh history
+        // Refresh log (the backup:completed SSE event will also refresh it)
         loadBackupHistory();
       } catch (e) {
         if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(e.message)}</span>`;
@@ -30552,6 +30526,46 @@ function openAdminConsoleModal() {
 
     loadBackupHistory();
   }
+
+  function backupLogLine(h, key) {
+    const ts = h.ts ? new Date(h.ts).toLocaleString() : "?";
+    const icon = h.status === "success" ? "✅" : h.status === "partial" ? "⚠️" : "❌";
+    const arts = h.artifacts ? Object.entries(h.artifacts)
+      .map(([p, a]) => `${p}:${a.ok ? ((a.size||0)/1024/1024).toFixed(1)+"MB" : "FAIL"}`).join(" ") : "";
+    const err = h.error ? ` <span style="color:#f07178;">${escapeHtml(h.error.slice(0, 160))}</span>` : "";
+    const keyAttr = key ? ` data-hkey="${escapeHtml(key)}" style="cursor:pointer;" title="Click for details"` : "";
+    return `<div class="backup-log-row"${keyAttr}><span style="color:#8b95a8;">${ts}</span> ${icon} <span style="color:#e8ecf4;">${h.status||"?"}</span> ${arts}${err}</div>`;
+  }
+
+  async function showBackupDetail(key) {
+    const listEl = $("#backup-history-list");
+    try {
+      const data = await api(`/api/v2/admin/backup/history/${encodeURIComponent(key)}`);
+      const e = data.entry || {};
+      const arts = e.artifacts ? Object.entries(e.artifacts).map(([p, a]) =>
+        `<div>&nbsp;&nbsp;${escapeHtml(p)}: ${a.ok ? "ok" : "FAILED"} ${((a.size||0)/1024/1024).toFixed(1)} MB <span style="color:#8b95a8;">${escapeHtml(a.path||"")}</span>${a.sha256 ? ` <span style="color:#8b95a8;">sha256:${escapeHtml(a.sha256.slice(0,12))}…</span>` : ""}${a.error ? ` <span style="color:#f07178;">${escapeHtml(a.error.slice(0,200))}</span>` : ""}</div>`
+      ).join("") : "<div>&nbsp;&nbsp;(no artifacts)</div>";
+      if (listEl) {
+        const detail = document.createElement("div");
+        detail.id = "backup-detail-drawer";
+        detail.style.cssText = "border:1px solid var(--border); border-radius:6px; padding:0.6rem 0.75rem; margin:0.4rem 0; background:#11151d;";
+        detail.innerHTML = `<div><b>${escapeHtml(key)}</b> <button id="backup-detail-close" class="btn btn-ghost btn-small" style="float:right;">Close</button></div>`
+          + `<div>Status: ${escapeHtml(e.status||"?")} · Duration: ${e.duration||0}s · Total: ${(((e.size||0)/1024/1024)).toFixed(1)} MB</div>`
+          + (e.error ? `<div style="color:#f07178;">Error: ${escapeHtml(e.error.slice(0,500))}</div>` : "")
+          + arts;
+        listEl.prepend(detail);
+        detail.querySelector("#backup-detail-close")?.addEventListener("click", () => detail.remove());
+      }
+    } catch (e) {
+      console.error("Backup detail load error:", e);
+    }
+  }
+
+  // Detail drawer: rows carry data-hkey; delegate one listener.
+  $("#backup-history-list")?.addEventListener("click", (e) => {
+    const row = e.target.closest?.(".backup-log-row[data-hkey]");
+    if (row && !$("#backup-detail-drawer")) showBackupDetail(row.dataset.hkey);
+  });
 
   // Bind branding save (content moved to admin tab, no separate modal)
   $("#branding-save")?.addEventListener("click", saveBranding);
@@ -30569,39 +30583,30 @@ async function loadBackupHistory() {
     const iv = $("#backup-interval");
     if (iv) iv.value = Math.round((status.interval || 86400) / 3600);
     const ret = $("#backup-retention");
-    if (ret) ret.value = status.retention_days || 30;
-    const rt = $("#backup-remote-type");
-    if (rt) rt.value = status.remote_type || "none";
-    const rh = $("#backup-remote-host");
-    if (rh) rh.value = status.remote_host || "";
-    const rp = $("#backup-remote-port");
-    if (rp) rp.value = status.remote_port || 22;
-    const ru = $("#backup-remote-user");
-    if (ru) ru.value = status.remote_user || "";
-    const rpath = $("#backup-remote-path");
-    if (rpath) rpath.value = status.remote_path || "";
-    const rk = $("#backup-remote-key");
-    if (rk) rk.value = status.remote_key || "";
+    if (ret) ret.value = status.retention_days ?? 7;
+    const parts = new Set(status.json_parts || status.expected_export_parts || ["db-core", "files-documents", "files-state"]);
+    document.querySelectorAll(".backup-part-cb").forEach(c => { c.checked = parts.has(c.value); });
+    const dirEl = $("#backup-dir-host");
+    if (dirEl) dirEl.textContent = status.backup_dir_host || status.backup_dir || "";
 
-    const hist = await api("/api/v2/admin/backup/history");
+    const hist = await api("/api/v2/admin/backup/history?limit=50");
     const infoEl = $("#backup-history-info");
     const listEl = $("#backup-history-list");
     const last = status.last_backup || {};
     if (infoEl) {
       const lastTs = last.ts ? new Date(last.ts).toLocaleString() : "never";
-      const lastStatus = last.status === "success" ? "✅" : last.status === "failed" ? "❌" : "—";
-      infoEl.innerHTML = `Last backup: ${lastTs} ${lastStatus} ${last.size ? `(${((last.size||0)/1024/1024).toFixed(1)} MB)` : ""}`;
+      const lastStatus = last.status === "success" ? "✅" : last.status === "partial" ? "⚠️" : last.status === "failed" ? "❌" : "—";
+      infoEl.innerHTML = `Last export: ${lastTs} ${lastStatus} ${last.size ? `(${((last.size||0)/1024/1024).toFixed(1)} MB)` : ""}`;
     }
-    if (listEl && hist.history?.length) {
-      listEl.innerHTML = hist.history.map(h => {
-        const ts = h.ts ? new Date(h.ts).toLocaleString() : "?";
-        const icon = h.status === "success" ? "✅" : "❌";
-        const size = h.db_size ? ` ${(h.db_size/1024/1024).toFixed(1)} MB` : "";
-        const remote = h.remote_status ? ` ${h.remote_status}` : "";
-        return `<div style="padding:0.15rem 0; border-bottom:1px solid var(--border);">${ts} ${icon}${size}${remote}</div>`;
-      }).join("");
-    } else if (listEl) {
-      listEl.innerHTML = '<div style="color:var(--muted);">No backups yet.</div>';
+    if (listEl) {
+      // History endpoint returns newest-first already; keep the click
+      // delegation for the detail drawer on re-render.
+      if (hist.history?.length) {
+        listEl.innerHTML = hist.history.map(h =>
+          backupLogLine(h, h.key || h.ts)).join("");
+      } else {
+        listEl.innerHTML = '<div style="color:var(--muted);">$ no exports yet — configure parts above and Run Export Now.</div>';
+      }
     }
   } catch (e) {
     console.error("Backup history load error:", e);

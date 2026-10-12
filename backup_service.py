@@ -1,21 +1,25 @@
 """Scheduled backup service for Sietch CRM.
 
 Follows the notification_dispatcher.py pattern: threading.Thread + Event.
-Handles pg_dump, data archival, remote transfer, rotation, and notifications.
+Emits per-part JSON export bundles on a schedule, records run history,
+and notifies admins. Proton Drive / rclone picks artifacts up from
+BACKUP_DIR externally.
 """
 
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import logging
 import os
 import re
-import shlex
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,20 +27,21 @@ from typing import Any
 logger = logging.getLogger("sietch.backup")
 
 # ── Configuration from env vars ──────────────────────────────────────────────
-BACKUP_ENABLED = os.getenv("BACKUP_ENABLED", "false").lower() == "true"
+BACKUP_ENABLED = os.getenv("BACKUP_ENABLED", "true").lower() == "true"
 BACKUP_INTERVAL = int(os.getenv("BACKUP_INTERVAL", "86400"))  # seconds (24h)
-BACKUP_RETENTION_DAYS = int(os.getenv("BACKUP_RETENTION_DAYS", "30"))
+BACKUP_RETENTION_DAYS = int(os.getenv("BACKUP_RETENTION_DAYS", "7"))
 BACKUP_DIR = Path(os.getenv("BACKUP_DIR", "data/backups"))
+# Host-side path Proton Drive / rclone scans (defaults to the
+# in-container path; set on the host to surface the bind-mounted
+# absolute path in the UI). Falls back to BACKUP_DIR for non-Docker runs.
+BACKUP_DIR_HOST = os.getenv("BACKUP_DIR_HOST", "") or str(BACKUP_DIR)
 
-# Remote config defaults (overridden by DB system_settings)
-BACKUP_REMOTE_TYPE = os.getenv("BACKUP_REMOTE_TYPE", "none")
-BACKUP_REMOTE_HOST = os.getenv("BACKUP_REMOTE_HOST", "")
-BACKUP_REMOTE_PORT = int(os.getenv("BACKUP_REMOTE_PORT", "22"))
-BACKUP_REMOTE_USER = os.getenv("BACKUP_REMOTE_USER", "")
-BACKUP_REMOTE_PATH = os.getenv("BACKUP_REMOTE_PATH", "")
-BACKUP_REMOTE_KEY_FILE = os.getenv("BACKUP_REMOTE_KEY_FILE", "")
-
-# Database connection (from env, same as db.py)
+# Database connection (from env, same as db.py). Only used to read
+# `backup_config` from system_settings (admin-console settings) and to
+# record history + push backup events. Restore comes from the per-part
+# JSON bundles emitted by this scheduler (see run_backup). The only
+# pg_dump left is the pre-restore snapshot in _run_pg_dump, called from
+# the SQL import handler.
 DB_HOST = os.getenv("DB_HOST", "db")
 DB_PORT = os.getenv("DB_PORT", "5432")
 DB_NAME = os.getenv("DB_NAME", "sietch_crm")
@@ -44,10 +49,9 @@ DB_USER = os.getenv("DB_USER", "sietch")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
 # NOTE: BACKUP_DIR defaults inside data/ on purpose — in Docker, /app/data
-# is the persistent volume, so backups survive container recreates. The tar
-# command in _build_data_tar_command() always excludes BACKUP_DIR from the
-# data archive (see fix for recursive-nesting audit finding), so keeping the
-# default here is safe.
+# is the persistent volume, so backups survive container recreates. The
+# `_build_export_zip_to_path` helper writes via temp file + atomic rename
+# so partially-written artifacts are never visible to Proton/rclone pickup.
 
 # ── State ────────────────────────────────────────────────────────────────────
 _backup_lock = threading.Lock()
@@ -114,12 +118,10 @@ def get_backup_status() -> dict:
         "enabled": config.get("enabled", BACKUP_ENABLED),
         "interval": config.get("interval", BACKUP_INTERVAL),
         "retention_days": config.get("retention_days", BACKUP_RETENTION_DAYS),
-        "remote_type": config.get("remote_type", BACKUP_REMOTE_TYPE),
-        "remote_host": config.get("remote_host", BACKUP_REMOTE_HOST),
-        "remote_port": config.get("remote_port", BACKUP_REMOTE_PORT),
-        "remote_user": config.get("remote_user", BACKUP_REMOTE_USER),
-        "remote_path": config.get("remote_path", BACKUP_REMOTE_PATH),
-        "remote_key": config.get("remote_key", BACKUP_REMOTE_KEY_FILE),
+        "json_parts": config.get("json_parts", DEFAULT_EXPORT_PARTS),
+        "backup_dir": str(BACKUP_DIR),
+        "backup_dir_host": BACKUP_DIR_HOST,
+        "expected_export_parts": EXPECTED_EXPORT_PARTS,
         "last_backup": last,
         "next_backup_ts": next_ts,
     }
@@ -238,7 +240,14 @@ def _send_tg(chat_id: int, text: str, success: bool) -> None:
 # ── Backup execution ─────────────────────────────────────────────────────────
 
 def run_backup() -> dict:
-    """Execute a full backup: pg_dump + data archive + remote send + notifications."""
+    """Execute one scheduled JSON export run: write the configured parts to disk,
+    record history, push the admin-channel event for the live log, and notify.
+
+    This is the **only** scheduled run. SQL pg_dump + data archives were
+    removed — restore comes from the per-part JSON bundles emitted here.
+    Proton Drive / rclone is expected to pick artifacts up from
+    BACKUP_DIR externally (host-side path surfaced via BACKUP_DIR_HOST).
+    """
     if not _backup_lock.acquire(blocking=False):
         return {"ok": False, "error": "Backup already running"}
 
@@ -246,97 +255,83 @@ def run_backup() -> dict:
     entry: dict[str, Any] = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "status": "running",
-        "db_size": None,
-        "data_size": None,
-        "remote_status": None,
+        "artifacts": {},       # {part: {path, size, sha256, ok, error}}
+        "size": 0,             # total bytes across all artifacts
+        "duration": None,
         "error": None,
     }
 
     try:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         # Unique per run: second-resolution slug + pid so overlapping or
-        # rapid-succession runs can never collide on filenames (the lock
-        # is now also held for the whole run — see below).
+        # rapid-succession runs can never collide on filenames.
         ts_slug = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S") + f"-p{os.getpid()}"
 
-        # 1. pg_dump
-        db_path = BACKUP_DIR / f"sietch-backup-{ts_slug}.sql.gz"
-        try:
-            _run_pg_dump(db_path)
-            entry["db_size"] = db_path.stat().st_size
-        except Exception as e:
-            entry["status"] = "failed"
-            entry["error"] = f"pg_dump failed: {e}"
-            _record_backup(entry)
-            _notify_admins(False, f"Backup failed\n\nError: {e}\nDuration: {time.time() - start:.0f}s")
-            return {"ok": False, "error": entry["error"]}
-        # NOTE: no early lock release here — the lock is held for the
-        # entire run and released once in the outer finally block.
-
-        # 2. Data bundles (docs / history / state) — replaces the old
-        # monolithic data tar so restores can pick bundles selectively.
-        # Per-bundle failures are non-fatal (logged inside the helper).
-        data_paths: list[Path] = []
-        try:
-            bundles = _run_data_bundles(BACKUP_DIR, ts_slug)
-            for bundle, path in bundles:
-                try:
-                    size = path.stat().st_size
-                except OSError:
-                    size = 0
-                entry.setdefault("bundles", {})[bundle] = size
-                data_paths.append(path)
-            entry["data_size"] = sum(entry["bundles"].values())
-        except Exception as e:
-            logger.warning("Data bundles failed (non-fatal): %s", e)
-            entry["data_size"] = 0
-
-        # 3. Remote send
+        # Read the part list from the admin console config (DB), with a
+        # safe default. validate() below is the single source of truth for
+        # which parts are allowed.
         config = _load_config_from_db()
-        remote_type = config.get("remote_type", BACKUP_REMOTE_TYPE)
-        if remote_type and remote_type != "none":
+        parts = validate_parts(config.get("json_parts") or DEFAULT_EXPORT_PARTS)
+        if not parts:
+            entry["status"] = "failed"
+            entry["error"] = "no export parts selected in backup config"
+            _record_backup(entry)
+            _notify_admins(False, "Backup failed\n\nError: no export parts selected")
+            return {"ok": False, "error": entry["error"]}
+
+        any_failed = False
+        for part in parts:
+            out_path = BACKUP_DIR / f"sietch-export-{part}-{ts_slug}.zip"
             try:
-                _send_remote([db_path, *data_paths], config)
-                entry["remote_status"] = "sent"
-                try:
-                    _prune_remote(config, config.get("retention_days", BACKUP_RETENTION_DAYS))
-                    entry["remote_prune"] = "ok"
-                except Exception as e:
-                    entry["remote_prune"] = f"failed: {e}"
-                    logger.warning("Remote prune failed: %s", e)
+                size, sha = _build_export_zip_to_path(part, ts_slug, out_path)
+                entry["artifacts"][part] = {
+                    "path": str(out_path),
+                    "size": size,
+                    "sha256": sha,
+                    "ok": True,
+                    "error": None,
+                }
             except Exception as e:
-                entry["remote_status"] = f"failed: {e}"
-                logger.warning("Remote send failed: %s", e)
+                any_failed = True
+                entry["artifacts"][part] = {
+                    "path": str(out_path),
+                    "size": 0,
+                    "sha256": None,
+                    "ok": False,
+                    "error": str(e),
+                }
+                logger.warning("JSON export part %s failed (non-fatal): %s", part, e)
+            entry["size"] += entry["artifacts"][part]["size"]
 
-        # 4. Rotation
-        _cleanup_old_backups()
+        # Rotation: keep the most-recent N-day window on disk.
+        try:
+            _cleanup_old_backups(config.get("retention_days", BACKUP_RETENTION_DAYS))
+        except Exception as e:
+            logger.warning("Backup cleanup failed: %s", e)
 
-        # 5. Record + notify
-        entry["status"] = "success"
+        # Publish a "back-up completed" event on the admin channel for the
+        # live log in the console. Only admins connect to this channel.
+        try:
+            from event_bus import event_bus
+            event_bus.publish("backup:completed", entry, user_ids=None,
+                              admin_only=True)
+        except Exception as e:
+            logger.debug("backup event publish failed: %s", e)
+
+        entry["status"] = "success" if not any_failed else "partial"
         entry["duration"] = time.time() - start
         _record_backup(entry)
+        _notify_admins(
+            not any_failed,
+            _summary_for(entry, ts_slug, parts),
+        )
 
-        total_mb = ((entry.get("db_size") or 0) + (entry.get("data_size") or 0)) / 1024 / 1024
-        detail_lines = [
-            f"Database: {entry.get('db_size', 0) / 1024 / 1024:.1f} MB",
-        ]
-        for bundle, size in (entry.get("bundles") or {}).items():
-            detail_lines.append(f"Data ({bundle}): {size / 1024 / 1024:.1f} MB")
-        if not entry.get("bundles"):
-            detail_lines.append(f"Data archive: {entry.get('data_size', 0) / 1024 / 1024:.1f} MB")
-        detail_lines.append(f"Duration: {entry['duration']:.0f}s")
-        if entry.get("remote_status"):
-            detail_lines.append(f"Remote: {entry['remote_status']}")
-        if entry.get("remote_prune", "").startswith("failed"):
-            detail_lines.append(f"Remote prune: {entry['remote_prune']}")
-        details = "\n".join(detail_lines)
-
-        if entry.get("remote_status", "").startswith("failed"):
-            _notify_admins(False, f"Backup OK but remote send failed\n\n{details}")
-        else:
-            _notify_admins(True, f"Backup completed successfully\n\n{details}")
-
-        return {"ok": True, "size": entry.get("db_size", 0), "duration": entry["duration"]}
+        return {
+            "ok": not any_failed,
+            "size": entry["size"],
+            "duration": entry["duration"],
+            "artifacts": entry["artifacts"],
+        }
 
     except Exception as e:
         entry["status"] = "failed"
@@ -348,6 +343,23 @@ def run_backup() -> dict:
     finally:
         if _backup_lock.locked():
             _backup_lock.release()
+
+
+def _summary_for(entry: dict, ts_slug: str, parts: list[str]) -> str:
+    """Format the admin email/Telegram summary from a run entry."""
+    failed = [p for p, a in entry.get("artifacts", {}).items() if not a.get("ok")]
+    size_mb = entry.get("size", 0) / 1024 / 1024
+    lines = [
+        f"Run: {ts_slug}",
+        f"Parts: {', '.join(parts)}",
+        f"Total: {size_mb:.1f} MB",
+        f"Duration: {entry.get('duration', 0):.0f}s",
+    ]
+    if failed:
+        lines.append(f"Failed: {', '.join(failed)}")
+    if entry.get("error"):
+        lines.append(f"Error: {entry['error']}")
+    return "\n".join(lines)
 
 
 def _run_pg_dump(output_path: Path) -> None:
@@ -376,184 +388,6 @@ def _run_pg_dump(output_path: Path) -> None:
         f.write(proc.stdout)
 
 
-def _build_data_tar_command(
-    output_path: Path,
-    data_dir: Path,
-    backup_dir: Path,
-    subdirs: list[str],
-    extra_sources: list[tuple[str, str]] | None = None,
-) -> list[str]:
-    """Build the tar command for a data archive (pure helper, unit-tested).
-
-    Excludes ``backup_dir`` when it lives inside the archived tree so prior
-    artifacts are never nested into new archives (unbounded growth).
-    ``subdirs`` are archived as ``<data-name>/<sub>`` members under one
-    ``-C`` root; extra ``(parent, name)`` sources (e.g. scanner state)
-    are appended as additional ``-C`` roots (parent resolved absolute —
-    a relative second ``-C`` would resolve against the first one and
-    break when the data root is absolute).
-    """
-    if backup_dir == data_dir:
-        raise ValueError("BACKUP_DIR cannot be the data directory itself")
-    cmd = ["tar", "czf", str(output_path)]
-    try:
-        inner = backup_dir.relative_to(data_dir)
-        cmd.append(f"--exclude={data_dir.name}/{inner}")
-    except ValueError:
-        pass  # backup dir outside the archived tree — nothing to exclude
-    cmd += ["-C", str(data_dir.parent)] + [f"{data_dir.name}/{s}" for s in subdirs]
-    for parent, name in extra_sources or []:
-        p = Path(parent)
-        if (p / name).exists():
-            cmd += ["-C", str(p.resolve()), name]
-    return cmd
-
-
-# Scheduled-archive bundles: (bundle-name, [data/ subdirs]). Mirrors the
-# browser split parts 1:1 (docs/state; history blobs stay on the scheduled
-# path only — never served over HTTP). scanner/data rides with "state".
-DATA_BUNDLES: list[tuple[str, list[str]]] = [
-    ("docs", ["documents", "photos", "avatars", "contact-avatars", "branding", "logos"]),
-    ("history", ["history-attachments"]),
-    ("state", ["user-profiles", "bot-customers", "presence-messages",
-               "user-presence", "event-logs", "dashboard-notes"]),
-]
-
-
-def _run_data_bundles(
-    backup_dir: Path,
-    ts_slug: str,
-    data_dir: Path = Path("data"),
-) -> list[tuple[str, Path]]:
-    """Write one tar.gz per bundle; return [(bundle-name, path)] successes.
-
-    Per-bundle failures are logged and skipped (non-fatal) so one bad
-    subtree can't sink the whole run. Missing subdirs are skipped silently.
-    """
-    done: list[tuple[str, Path]] = []
-    if not data_dir.exists():
-        return done
-    for bundle, subdirs in DATA_BUNDLES:
-        present = [s for s in subdirs if (data_dir / s).exists()]
-        extra = (
-            [("scanner", "data")]
-            if bundle == "state" and Path("scanner/data").exists()
-            else []
-        )
-        if not present and not extra:
-            continue
-        out = backup_dir / f"sietch-data-{bundle}-{ts_slug}.tar.gz"
-        try:
-            cmd = _build_data_tar_command(out, data_dir, backup_dir, present, extra)
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            if proc.returncode != 0:
-                raise RuntimeError(f"tar exited {proc.returncode}: {proc.stderr[:500]}")
-            done.append((bundle, out))
-        except Exception as e:
-            logger.warning("Data bundle %s failed (non-fatal): %s", bundle, e)
-    return done
-
-
-def _run_data_archive(output_path: Path) -> None:
-    """Legacy single-tar entry point (kept for tests/callers).
-
-    Prefer _run_data_bundles for scheduled runs.
-    """
-    data_dir = Path("data")
-    if not data_dir.exists():
-        return
-    subdirs = [d for d in ("documents", "photos") if (data_dir / d).exists()]
-    if not subdirs:
-        return
-
-    cmd = _build_data_tar_command(
-        output_path,
-        data_dir,
-        BACKUP_DIR,
-        subdirs,
-        extra_sources=[("scanner", "data")],
-    )
-    proc = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"tar exited {proc.returncode}: {proc.stderr[:500]}")
-
-
-def _send_remote(artifacts: list[Path], config: dict) -> None:
-    """Send backup files to remote server."""
-    remote_type = config.get("remote_type", "none")
-    host = config.get("remote_host", "")
-    port = str(config.get("remote_port", 22))
-    user = config.get("remote_user", "")
-    path = config.get("remote_path", "")
-    key = config.get("remote_key", "")
-
-    if not host or not user:
-        raise ValueError("Remote host and user are required")
-
-    ssh_opts = ["-o", "StrictHostKeyChecking=accept-new"]
-    if key:
-        ssh_opts.extend(["-i", key])
-
-    for fpath in artifacts:
-        if not fpath.exists():
-            continue
-        remote_url = f"{user}@{host}:{path}/{fpath.name}"
-
-        if remote_type == "scp":
-            cmd = ["scp", "-P", port] + ssh_opts + [str(fpath), remote_url]
-        elif remote_type == "sftp":
-            # Use sftp with batch mode
-            cmd = ["sftp", "-P", port] + ssh_opts + ["-b", "-", user + "@" + host]
-            # Would need stdin piping; fall back to scp
-            cmd = ["scp", "-P", port] + ssh_opts + [str(fpath), remote_url]
-        elif remote_type == "rsync":
-            cmd = ["rsync", "-avz", "-e", f"ssh -p {port} " + " ".join(ssh_opts), str(fpath), remote_url]
-        else:
-            raise ValueError(f"Unsupported remote type: {remote_type}")
-
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if proc.returncode != 0:
-            raise RuntimeError(f"Remote send failed ({remote_type}): {proc.stderr[:300]}")
-
-
-def _build_remote_prune_command(config: dict, days: int) -> list[str]:
-    """Build the remote-prune ssh command (pure helper, unit-tested).
-
-    Deletes sietch-* artifacts older than ``days`` in the remote dir so
-    the remote side honors the same retention as local rotation.
-    """
-    host = config.get("remote_host", "")
-    port = str(config.get("remote_port", 22))
-    user = config.get("remote_user", "")
-    path = config.get("remote_path", "")
-    key = config.get("remote_key", "")
-    if not host or not user or not path:
-        raise ValueError("Remote host, user, and path are required for pruning")
-    ssh_opts = ["-o", "StrictHostKeyChecking=accept-new"]
-    if key:
-        ssh_opts.extend(["-i", key])
-    find_expr = (
-        f"find {shlex.quote(path)} -maxdepth 1 -name 'sietch-*' "
-        f"-mtime +{int(days)} -delete"
-    )
-    return ["ssh", "-p", port] + ssh_opts + [f"{user}@{host}", find_expr]
-
-
-def _prune_remote(config: dict, days: int) -> None:
-    """Prune remote artifacts past retention. Raises on failure."""
-    proc = subprocess.run(
-        _build_remote_prune_command(config, days),
-        capture_output=True, text=True, timeout=120,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"Remote prune failed: {proc.stderr[:300]}")
-
-
 def sanitize_archive_member(name: str, prefix: str = "files/") -> str | None:
     """Validate a zip/tar member path for extraction (zip-slip guard).
 
@@ -574,6 +408,258 @@ def sanitize_archive_member(name: str, prefix: str = "files/") -> str | None:
 # Parts servable over HTTP by the universal export (?part=). history blobs
 # stay on the scheduled tar path (see server._EXPORT_PART_FILES).
 EXPECTED_EXPORT_PARTS = ["db-core", "files-documents", "files-state"]
+
+
+def validate_parts(raw) -> list[str]:
+    """Sanitize a configured part list. Returns a clean list, dropping
+    unknown entries and the legacy "all" sentinel. Empty list = no parts.
+    """
+    if raw is None:
+        return []
+    items: list[str]
+    if isinstance(raw, str):
+        items = [p.strip() for p in raw.split(",") if p.strip()]
+    elif isinstance(raw, list):
+        items = [str(p).strip() for p in raw if str(p).strip()]
+    else:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in items:
+        if p == "all":
+            for allowed in EXPECTED_EXPORT_PARTS:
+                if allowed not in seen:
+                    seen.add(allowed)
+                    out.append(allowed)
+        elif p in EXPECTED_EXPORT_PARTS and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+# Mirror of the per-part subdir map in server.py (kept here so the
+# scheduler doesn't have to import the whole server module — the file
+# lists are the public contract for the JSON export layout).
+_PART_FILE_DIRS: dict[str, list[tuple[str, str]]] = {
+    "files-documents": [
+        ("documents", "documents"),
+        ("photos", "photos"),
+        ("avatars", "avatars"),
+        ("contact-avatars", "contact-avatars"),
+        ("branding", "branding"),
+        ("logos", "logos"),
+    ],
+    "files-state": [
+        ("user-profiles", "user-profiles"),
+        ("bot-customers", "bot-customers"),
+        ("presence-messages", "presence-messages"),
+        ("user-presence", "user-presence"),
+        ("event-logs", "event-logs"),
+        ("dashboard-notes", "dashboard-notes"),
+    ],
+}
+
+
+def _build_export_zip_to_path(part: str, ts_slug: str, out_path: Path) -> tuple[int, str]:
+    """Build a single export ZIP for ``part`` straight to disk. Returns (size, sha256).
+
+    Mirrors `_handle_export_universal` in server.py: emits a manifest.json,
+    sensitive-column stripping on every table, zip-slip guard, scanner
+    alias for files-state. Streams via a temp file and `shutil.move`s into
+    place so the artifact is never partially visible to Proton/rclone
+    pickup (atomic rename).
+    """
+    # Table list + per-part sensitive stripping: same shape the browser
+    # export uses. Duplicated rather than imported to keep this module
+    # importable from anywhere (server.py has import-time side effects).
+    _EXPORT_TABLES = _get_export_tables()
+    _SENSITIVE = {
+        "password_hash", "password_salt", "password_encrypted",
+        "smtp_password_encrypted", "oauth_access_token", "oauth_refresh_token",
+        "oauth_graph_access_token", "oauth_graph_refresh_token",
+        "caldav_password_encrypted", "webhook_secret", "token",
+    }
+
+    set_id = ts_slug.split("T")[0]  # YYYY-MM-DD
+    manifest = {
+        "version": "1.1",
+        "part": part,
+        "backup_set_id": set_id,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "tables": {},
+        "files": {},
+    }
+    if part == "db-core":
+        manifest["credential_notice"] = (
+            f"Sensitive credential columns were excluded from this export "
+            f"({sorted(_SENSITIVE)}). After restoring, re-enter mail account "
+            "passwords / OAuth grants and reset user passwords. Tables "
+            "'password_reset_tokens' and 'twofa_challenges' were not "
+            "exported (ephemeral secrets). 'sessions' is exported empty."
+        )
+
+    import db
+    data_dir = Path("data")
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            # Tables
+            for table_name, sql in _EXPORT_TABLES:
+                if sql is None:
+                    manifest["tables"][table_name] = {"row_count": 0, "excluded": True}
+                    continue
+                if part != "db-core":
+                    continue  # only db-core carries tables
+                try:
+                    rows = db.query_dicts(sql)
+                    clean_rows = []
+                    for row in rows:
+                        clean = {k: v for k, v in row.items() if k not in _SENSITIVE}
+                        for k, v in clean.items():
+                            if hasattr(v, "isoformat"):
+                                clean[k] = v.isoformat()
+                        clean_rows.append(clean)
+                    manifest["tables"][table_name] = {"row_count": len(clean_rows)}
+                    zf.writestr(f"{table_name}.json",
+                                json.dumps(clean_rows, default=str, ensure_ascii=False))
+                except Exception as e:
+                    manifest["tables"][table_name] = {"row_count": 0, "error": str(e)}
+
+            # Files (per-part)
+            for subdir, file_list_key in _PART_FILE_DIRS.get(part, []):
+                src_dir = data_dir / subdir
+                manifest["files"].setdefault(file_list_key, [])
+                if not src_dir.exists():
+                    continue
+                for fpath in src_dir.rglob("*"):
+                    if fpath.is_file():
+                        arc_name = f"files/{subdir}/{fpath.relative_to(src_dir)}"
+                        zf.write(fpath, arc_name)
+                        manifest["files"][file_list_key].append({
+                            "zip_path": arc_name,
+                            "filename": fpath.name,
+                            "size": fpath.stat().st_size,
+                        })
+            # Scanner state (files-state only) under the alias
+            if part == "files-state":
+                scanner_dir = Path("scanner/data")
+                if scanner_dir.exists():
+                    manifest["files"].setdefault("scanner_data", [])
+                    for fpath in scanner_dir.rglob("*"):
+                        if fpath.is_file():
+                            arc_name = f"files/__scanner_data__/{fpath.relative_to(scanner_dir)}"
+                            zf.write(fpath, arc_name)
+                            manifest["files"]["scanner_data"].append({
+                                "zip_path": arc_name,
+                                "filename": fpath.name,
+                                "size": fpath.stat().st_size,
+                            })
+
+            zf.writestr("manifest.json",
+                        json.dumps(manifest, indent=2, default=str, ensure_ascii=False))
+
+        size = tmp_path.stat().st_size
+        h = hashlib.sha256()
+        with open(tmp_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        sha = h.hexdigest()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(tmp_path), str(out_path))
+        return size, sha
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _get_export_tables() -> list[tuple[str, str | None]]:
+    """Return the canonical (table_name, sql_or_None) list.
+
+    Kept here so backup_service doesn't import server.py. Update this in
+    lockstep with server.py:RequestHandler._EXPORT_TABLES.
+    """
+    return [
+        ("users", "SELECT * FROM users ORDER BY id"),
+        ("password_reset_tokens", None),  # ephemeral
+        ("twofa_challenges", None),       # ephemeral
+        ("user_roles", "SELECT * FROM user_roles"),
+        ("stages", "SELECT * FROM stages ORDER BY id"),
+        ("tag_definitions", "SELECT * FROM tag_definitions ORDER BY id"),
+        ("task_labels", "SELECT * FROM task_labels ORDER BY id"),
+        ("custom_field_definitions", "SELECT * FROM custom_field_definitions ORDER BY id"),
+        ("custom_field_options", "SELECT * FROM custom_field_options ORDER BY id"),
+        ("custom_field_groups", "SELECT * FROM custom_field_groups ORDER BY id"),
+        ("history_categories", "SELECT * FROM history_categories ORDER BY id"),
+        ("branding", "SELECT * FROM branding ORDER BY id"),
+        ("system_settings", "SELECT * FROM system_settings ORDER BY key"),
+        ("contacts", "SELECT * FROM contacts ORDER BY id"),
+        ("contact_emails", "SELECT * FROM contact_emails ORDER BY id"),
+        ("contact_phones", "SELECT * FROM contact_phones ORDER BY id"),
+        ("contact_addresses", "SELECT * FROM contact_addresses ORDER BY id"),
+        ("opportunities", "SELECT * FROM opportunities ORDER BY id"),
+        ("opportunity_tags", "SELECT * FROM opportunity_tags"),
+        ("opportunity_custom_field_values",
+         "SELECT * FROM opportunity_custom_field_values ORDER BY id"),
+        ("tasks", "SELECT * FROM tasks ORDER BY id"),
+        ("history_events", "SELECT * FROM history_events ORDER BY id"),
+        ("history_replies", "SELECT * FROM history_replies ORDER BY id"),
+        ("history_attachments", "SELECT * FROM history_attachments ORDER BY id"),
+        ("history_notify_users", "SELECT * FROM history_notify_users"),
+        ("history_reply_notify_users", "SELECT * FROM history_reply_notify_users"),
+        ("mail_accounts", "SELECT * FROM mail_accounts ORDER BY id"),
+        ("mail_messages", "SELECT * FROM mail_messages ORDER BY id"),
+        ("mail_deal_links", "SELECT * FROM mail_deal_links ORDER BY id"),
+        ("mail_tag_assignments", "SELECT * FROM mail_tag_assignments ORDER BY id"),
+        ("mail_outgoing", "SELECT * FROM mail_outgoing ORDER BY id"),
+        ("mail_folders", "SELECT * FROM mail_folders ORDER BY id"),
+        ("mail_attachments", "SELECT * FROM mail_attachments ORDER BY id"),
+        ("mail_tags", "SELECT * FROM mail_tags ORDER BY id"),
+        ("mail_templates", "SELECT * FROM mail_templates ORDER BY id"),
+        ("mail_contacts", "SELECT * FROM mail_contacts ORDER BY id"),
+        ("mail_contractors", "SELECT * FROM mail_contractors ORDER BY id"),
+        ("mail_classification_rules",
+         "SELECT * FROM mail_classification_rules ORDER BY id"),
+        ("service_feeds", "SELECT * FROM service_feeds ORDER BY id"),
+        ("bot_config", "SELECT * FROM bot_config"),
+        ("bot_activity_log", "SELECT * FROM bot_activity_log ORDER BY id"),
+        ("notifications", "SELECT * FROM notifications ORDER BY id"),
+        ("notification_preferences", "SELECT * FROM notification_preferences"),
+        ("telegram_notification_log",
+         "SELECT * FROM telegram_notification_log ORDER BY id"),
+        ("document_folders", "SELECT * FROM document_folders ORDER BY id"),
+        ("project_documents", "SELECT * FROM project_documents ORDER BY id"),
+        ("document_activity", "SELECT * FROM document_activity ORDER BY id"),
+        ("document_templates", "SELECT * FROM document_templates ORDER BY id"),
+        ("project_photos", "SELECT * FROM project_photos ORDER BY id"),
+        ("project_photo_folders", "SELECT * FROM project_photo_folders ORDER BY id"),
+        ("photo_exif_cache", "SELECT * FROM photo_exif_cache"),
+        ("photo_report_templates",
+         "SELECT * FROM photo_report_templates ORDER BY id"),
+        ("user_profiles", "SELECT * FROM user_profiles"),
+        ("personal_notes", "SELECT * FROM personal_notes ORDER BY id"),
+        ("personal_note_links", "SELECT * FROM personal_note_links"),
+        ("calendar_sources", "SELECT * FROM calendar_sources ORDER BY id"),
+        ("calendar_events", "SELECT * FROM calendar_events ORDER BY id"),
+        ("ics_feed_cache", "SELECT * FROM ics_feed_cache ORDER BY id"),
+        ("minimized_modal_state", "SELECT * FROM minimized_modal_state"),
+        ("sessions", "SELECT * FROM sessions ORDER BY created_at DESC LIMIT 0"),
+        ("mail_account_access", "SELECT * FROM mail_account_access"),
+        ("mail_flag_queue", "SELECT * FROM mail_flag_queue"),
+        ("opportunity_changes", "SELECT * FROM opportunity_changes ORDER BY id"),
+        ("sync_watermarks", "SELECT * FROM sync_watermarks"),
+        ("sync_errors", "SELECT * FROM sync_errors ORDER BY id"),
+        ("email_classifications", "SELECT * FROM email_classifications ORDER BY id"),
+        ("classifier_training_data",
+         "SELECT * FROM classifier_training_data ORDER BY id"),
+        ("automation_rules", "SELECT * FROM automation_rules ORDER BY id"),
+        ("automation_logs", "SELECT * FROM automation_logs ORDER BY id"),
+        ("time_entries", "SELECT * FROM time_entries ORDER BY id"),
+    ]
 
 
 def record_export_part(set_id: str, part: str) -> dict:
@@ -613,14 +699,18 @@ def _cleanup_old_backups() -> None:
         config = _load_config_from_db()
         days = config.get("retention_days", BACKUP_RETENTION_DAYS)
         cutoff = time.time() - (days * 86400)
-        for fpath in BACKUP_DIR.glob("sietch-backup-*"):
+        # Per-part export zips are the only thing we keep on disk now.
+        for fpath in BACKUP_DIR.glob("sietch-export-*-*.zip"):
             if fpath.stat().st_mtime < cutoff:
                 fpath.unlink()
-        for fpath in BACKUP_DIR.glob("sietch-data-*"):
-            if fpath.stat().st_mtime < cutoff:
-                fpath.unlink()
+        # Stale legacy artifacts (older code may have produced these) —
+        # clean them up too so they don't accumulate.
+        for pattern in ("sietch-backup-*", "sietch-data-*"):
+            for fpath in BACKUP_DIR.glob(pattern):
+                if fpath.stat().st_mtime < cutoff:
+                    fpath.unlink()
     except Exception as e:
-        logger.warning("Backup cleanup failed: %s", e)
+        logger.warning("Backup cleanup failed: %s}", e)
 
 
 # ── Scheduler ────────────────────────────────────────────────────────────────

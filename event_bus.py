@@ -58,12 +58,22 @@ class EventBus:
                     return
             self._subscribers.pop(user_id, None)
 
-    def publish(self, event_type: str, data: dict, user_ids: list[str] = None):
-        """Publish an event. If user_ids is None, broadcasts to all subscribers."""
+    def publish(self, event_type: str, data: dict, user_ids: list[str] = None,
+                admin_only: bool = False):
+        """Publish an event. If user_ids is None, broadcasts to all subscribers.
+
+        ``admin_only=True`` restricts delivery to subscribers whose owner is
+        currently an active admin (resolved fresh from the DB on each call —
+        admin status can change between publishes). Falls back to no-op
+        delivery if the DB is unavailable.
+        """
         msg = json.dumps({"type": event_type, "data": data, "ts": time.time()})
         dropped_per_sub = 0
         with self._lock:
-            targets = list(self._subscribers.keys()) if user_ids is None else user_ids
+            if admin_only:
+                targets = self._admin_user_ids()
+            else:
+                targets = list(self._subscribers.keys()) if user_ids is None else user_ids
             for uid in targets:
                 q = self._subscribers.get(uid)
                 if q:
@@ -84,6 +94,22 @@ class EventBus:
         if dropped_per_sub:
             import sys as _sys
             print(f"[event_bus] dropped {dropped_per_sub} events for type={event_type} (slow consumers)", file=_sys.stderr)
+
+    def _admin_user_ids(self) -> list[str]:
+        """Resolve the current set of active admin user ids for admin-only fanout.
+
+        Reads from the DB on each call; a cheap SELECT. Returns an empty
+        list if the DB is unavailable — admin-only events are then silently
+        dropped, which is the safe default.
+        """
+        try:
+            import db
+            rows = db.query_dicts(
+                "SELECT id::text AS uid FROM users WHERE is_admin = TRUE AND is_active = TRUE"
+            )
+            return [r["uid"] for r in rows]
+        except Exception:
+            return []
 
     def subscribe_system(self) -> queue.Queue:
         """Subscribe to all events (for system components like automation engine)."""
