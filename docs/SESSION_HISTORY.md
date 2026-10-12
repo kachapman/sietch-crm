@@ -11,9 +11,21 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-11
+**Date:** 2026-10-11 (late)
 
-**Topic:** Scheduled JSON-export service in the admin UI: per-part schedule checkboxes, host pickup path, terminal-styled backup log with per-run detail, SSE live refresh. SQL pg_dump + data archives + remote push fully removed (server, client, tests, docs).
+**Topic:** "Run Export Now" 404 — `export-now` dispatch was in the GET router; moved to the POST router. Plus a latent cleanup-arg crash found in the same log window.
+
+**What landed:**
+- **`server.py`:** `POST /api/v2/admin/backup/export-now` dispatch moved from `_handle_api_get` (POSTs never reach it → guaranteed 404) to `_handle_api_post_put` next to `/backup/run`. Verified live against a fresh restart: unauthenticated POST now 401s (registered + auth-gated) instead of 404.
+- **`backup_service.py`:** fixed `_cleanup_old_backups(config.get(...))` → `_cleanup_old_backups()` (takes no args — every scheduled run logged `takes 0 positional arguments` and skipped rotation); fixed stray `}` in that warning's format string.
+- **`tests/test_backup.py` 36 → 39:** new `TestBackupRoutePlacement` (export-now + backup/run must be in POST router, history reads in GET router).
+- **Verified live:** fresh `setsid` restart, `/api/config` 200, export-now 401, scheduled run completed all 3 parts (268 MB, sha256s) with **no** cleanup warning. Static: `py_compile` ×3, `node --check`, 39+15+8+28 tests pass.
+
+---
+
+## Previous summary (2026-10-11)
+
+**Scheduled JSON-export service in the admin UI: per-part schedule checkboxes, host pickup path, terminal-styled backup log with per-run detail, SSE live refresh. SQL pg_dump + data archives + remote push fully removed (server, client, tests, docs).**
 
 **What landed:**
 - **`backup_service.py`:** `run_backup()` now only emits the configured JSON parts (`validate_parts` + `DEFAULT_EXPORT_PARTS`) via `_build_export_zip_to_path()` (temp file + atomic rename, sha256 per artifact). History entries carry `artifacts: {part: {path, size, sha256, ok, error}}`. `backup:completed` published admin-only on the existing SSE channel. Deleted: `_run_pg_dump` callers in scheduler (kept for SQL-import snapshots), all tar-bundle machinery, `_send_remote`/`_prune_remote`, remote env constants. Retention default 7d.

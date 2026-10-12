@@ -2898,12 +2898,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             self._handle_backup_history_one(m.group(1))
             return
-        if api_path == "/api/v2/admin/backup/export-now" and method == "POST":
-            user = _require_admin(self)
-            if not user:
-                return
-            self._handle_backup_export_now()
-            return
 
         # ── Presence / Team (local store, unchanged) ──
         if api_path.startswith("/api/presence"):
@@ -3772,6 +3766,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not user:
                 return
             self._handle_backup_run()
+            return
+        if api_path == "/api/v2/admin/backup/export-now" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_backup_export_now()
             return
         if api_path == "/api/v2/admin/backup/config" and method == "POST":
             user = _require_admin(self)

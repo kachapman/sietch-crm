@@ -304,8 +304,9 @@ def run_backup() -> dict:
             entry["size"] += entry["artifacts"][part]["size"]
 
         # Rotation: keep the most-recent N-day window on disk.
+        # (_cleanup_old_backups reads retention from DB config itself.)
         try:
-            _cleanup_old_backups(config.get("retention_days", BACKUP_RETENTION_DAYS))
+            _cleanup_old_backups()
         except Exception as e:
             logger.warning("Backup cleanup failed: %s", e)
 
@@ -408,6 +409,11 @@ def sanitize_archive_member(name: str, prefix: str = "files/") -> str | None:
 # Parts servable over HTTP by the universal export (?part=). history blobs
 # stay on the scheduled tar path (see server._EXPORT_PART_FILES).
 EXPECTED_EXPORT_PARTS = ["db-core", "files-documents", "files-state"]
+
+# Default parts the scheduler writes when the admin console has none
+# configured. Kept separate from EXPECTED_EXPORT_PARTS so the default
+# set can change without widening what the API accepts.
+DEFAULT_EXPORT_PARTS = list(EXPECTED_EXPORT_PARTS)
 
 
 def validate_parts(raw) -> list[str]:
@@ -710,7 +716,7 @@ def _cleanup_old_backups() -> None:
                 if fpath.stat().st_mtime < cutoff:
                     fpath.unlink()
     except Exception as e:
-        logger.warning("Backup cleanup failed: %s}", e)
+        logger.warning("Backup cleanup failed: %s", e)
 
 
 # ── Scheduler ────────────────────────────────────────────────────────────────

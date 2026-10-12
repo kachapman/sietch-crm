@@ -2,6 +2,10 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Fix: Run Export Now 404 + silent rotation skip (2026-10-11)
+
+`POST /api/v2/admin/backup/export-now` was dispatched in the GET router, so every click 404'd — moved to the POST router next to `/backup/run`, with a `TestBackupRoutePlacement` regression guard. Same log window revealed `_cleanup_old_backups()` called with an arg it doesn't take, so rotation never ran — fixed, plus a stray `}` in that warning. Verified live: fresh restart, route 401s correctly, scheduled run clean.
+
 ## Scheduled JSON-export service in the admin console (2026-10-11)
 
 The admin Backup tab is now a JSON-export scheduler with a terminal-styled live log. Scheduled SQL dumps, data archives, and remote push are removed everywhere (server, client, tests, env docs) — restore comes from the per-part JSON bundles. Scheduler emits configured parts to `BACKUP_DIR` (temp file + atomic rename, sha256 per artifact) for Proton Drive / rclone pickup (host path surfaced via `BACKUP_DIR_HOST`); retention default 7 days. New `POST export-now` + `GET history/<key>` routes; `backup:completed` published admin-only on the existing SSE channel refreshes the log. `tests/test_backup.py` 33 → 36. Full suite green (36+15+8+28).

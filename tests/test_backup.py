@@ -462,5 +462,32 @@ class TestBuildExportZipToPath(unittest.TestCase):
             self.assertEqual(manifest["files"], {})
 
 
+class TestBackupRoutePlacement(unittest.TestCase):
+    """POST-only backup routes must live in the POST router.
+
+    Regression guard: export-now once landed in _handle_api_get, where
+    POST requests never reach it — every click 404'd. The GET history
+    routes are the exception and must stay in the GET router.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.src = Path("/home/chapman-server/Projects/new-crm/server.py").read_text()
+        get_start = cls.src.index("def _handle_api_get")
+        post_start = cls.src.index("def _handle_api_post_put")
+        cls.get_body = cls.src[get_start:post_start]
+        cls.post_body = cls.src[post_start:]
+
+    def test_export_now_in_post_router(self):
+        self.assertIn("/api/v2/admin/backup/export-now", self.post_body)
+        self.assertNotIn("/api/v2/admin/backup/export-now", self.get_body)
+
+    def test_backup_run_in_post_router(self):
+        self.assertIn("/api/v2/admin/backup/run", self.post_body)
+
+    def test_history_reads_in_get_router(self):
+        self.assertIn("/api/v2/admin/backup/history", self.get_body)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
