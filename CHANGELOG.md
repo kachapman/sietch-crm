@@ -2,6 +2,10 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Grey-out disabled schedule + include-history guard + history dir-size hint (2026-10-13)
+
+The console schedule form now greys out until first-time config save (a `configured` flag is returned in `/backup/config` and the JS reads it to disable the fieldset and show a "Not configured yet" notice). New 4th checkbox "include history-attachments" with a ~30 GB / ~20 min warning gates the 30 GB tar.gz so an operator can opt out. The empty-log message now distinguishes "no parts selected" from "Save the schedule and click Run Export Now." New `/api/v2/admin/backup/history-dir-size` endpoint surfaces the history dir size for the warning hint. Cleanup glob now catches `*.tmp` from interrupted history-attachments writes. Tests 41 → 46 (status-shape, route-placement, log-variants, 4th-checkbox, tmp-cleanup).
+
 ## Restore history-attachments bundle + fix log refresh + placeholder typo (2026-10-12)
 
 The 33 GB `history-attachments/` blob was silently dropped from the scheduled path in `d908f75` — restored as a streamed tar.gz (`sietch-data-history-<ts>.tar.gz`, atomic rename, sha256'd) emitted next to the three JSON parts. Also: removed a stray `$ ` in the empty-state log placeholder, and `switchAdminTab` now re-fetches `loadBackupHistory()` so the log updates on every tab open (was: only on initial bind). Tests 39 → 41; `py_compile` ×2, `node --check`, 41+15+8+28 tests pass.

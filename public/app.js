@@ -30476,13 +30476,20 @@ function openAdminConsoleModal() {
       try {
         const parts = [...document.querySelectorAll(".backup-part-cb")]
           .filter(cb => cb.checked).map(cb => cb.value);
+        const includeHistory = $("#backup-include-history")?.checked ?? true;
         await api("/api/v2/admin/backup/config", { method: "POST", body: JSON.stringify({
           enabled: $("#backup-enabled")?.checked || false,
           interval: (parseInt($("#backup-interval")?.value || "24") || 24) * 3600,
           retention_days: parseInt($("#backup-retention")?.value || "7") || 7,
           json_parts: parts,
+          include_history: includeHistory,
         })});
         if (el) el.innerHTML = '<span style="color:#3fb950;">Export schedule saved.</span>';
+        // Grey-out state updates immediately (without waiting for next
+        // loadBackupHistory() tick).
+        $("#backup-not-configured-msg")?.style.setProperty("display", "none");
+        $("#backup-schedule-fs")?.style.setProperty("opacity", "1");
+        $("#backup-schedule-fs")?.style.removeAttribute("disabled");
       } catch (e) {
         if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(e.message)}</span>`;
       }
@@ -30586,8 +30593,50 @@ async function loadBackupHistory() {
     if (ret) ret.value = status.retention_days ?? 7;
     const parts = new Set(status.json_parts || status.expected_export_parts || ["db-core", "files-documents", "files-state"]);
     document.querySelectorAll(".backup-part-cb").forEach(c => { c.checked = parts.has(c.value); });
+    const inclHist = $("#backup-include-history");
+    if (inclHist) inclHist.checked = status.include_history !== false;
     const dirEl = $("#backup-dir-host");
     if (dirEl) dirEl.textContent = status.backup_dir_host || status.backup_dir || "";
+
+    // Grey-out the schedule form when no DB config has been saved yet.
+    // "configured" comes from the server; an empty payload falls back
+    // to the env-var default of BACKUP_ENABLED, which is intentionally
+    // not enough to make the form look fully live.
+    const notCfg = $("#backup-not-configured-msg");
+    const fs = $("#backup-schedule-fs");
+    if (status.configured) {
+      if (notCfg) notCfg.style.display = "none";
+      if (fs) {
+        fs.style.opacity = "1";
+        fs.querySelectorAll("input, button").forEach(el => el.removeAttribute("disabled"));
+      }
+    } else {
+      if (notCfg) notCfg.style.display = "";
+      if (fs) {
+        fs.style.opacity = "0.55";
+        fs.querySelectorAll("input, button").forEach(el => el.setAttribute("disabled", ""));
+      }
+    }
+
+    // Cheap best-effort size hint for the history-attachments dir, so
+    // the user sees "history-attachments: ~30 GB" before clicking Run
+    // Export Now on a fresh install. Best-effort: any I/O error is
+    // swallowed and the hint is left blank.
+    try {
+      const sizeEl = $("#backup-history-size");
+      if (sizeEl) {
+        const dirResp = await fetch("/api/v2/admin/backup/history-dir-size",
+                                    { credentials: "same-origin" });
+        if (dirResp.ok) {
+          const d = await dirResp.json();
+          if (d.size > 0) {
+            sizeEl.textContent = `data/history-attachments/ size: ${(d.size/1024/1024).toFixed(0)} MB (history-attachments toggle above decides if it's included)`;
+          } else {
+            sizeEl.textContent = `data/history-attachments/ is empty or missing — toggle is a no-op until files land there`;
+          }
+        }
+      }
+    } catch { /* ignore */ }
 
     const hist = await api("/api/v2/admin/backup/history?limit=50");
     const infoEl = $("#backup-history-info");
@@ -30605,7 +30654,12 @@ async function loadBackupHistory() {
         listEl.innerHTML = hist.history.map(h =>
           backupLogLine(h, h.key || h.ts)).join("");
       } else {
-        listEl.innerHTML = '<div style="color:var(--muted);">no exports yet — configure parts above and Run Export Now.</div>';
+        const total = (parts.size + (inclHist?.checked ? 1 : 0));
+        if (total === 0) {
+          listEl.innerHTML = '<div style="color:var(--muted);">No parts selected — enable at least one in the form above and Save.</div>';
+        } else {
+          listEl.innerHTML = '<div style="color:var(--muted);">no exports yet — Save the schedule, then click Run Export Now.</div>';
+        }
       }
     }
   } catch (e) {

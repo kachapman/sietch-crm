@@ -503,6 +503,49 @@ class TestBackupRoutePlacement(unittest.TestCase):
                          Path("/home/chapman-server/Projects/new-crm/backup_service.py").read_text(),
                          re.S).group(0)
         self.assertIn("history_attachments_subdir", body)
+        self.assertIn("include_history", body)
+
+    def test_console_greyout_when_unconfigured(self):
+        # The UI greys out the schedule form when no DB config exists;
+        # JS reads status.configured to decide. Guard that the field
+        # is in the status payload.
+        import re
+        body = re.search(r"def get_backup_status.*?return \{[^}]*\}",
+                         Path("/home/chapman-server/Projects/new-crm/backup_service.py").read_text(),
+                         re.S).group(0)
+        self.assertIn('"configured"', body)
+
+    def test_history_dir_size_endpoint_registered(self):
+        # /api/v2/admin/backup/history-dir-size must be wired so the
+        # console's large-file warning has something to fetch.
+        body = Path("/home/chapman-server/Projects/new-crm/server.py").read_text()
+        self.assertIn("/api/v2/admin/backup/history-dir-size", body)
+        self.assertIn("_handle_backup_history_dir_size", body)
+
+    def test_loadBackupHistory_differs_unconfigured_states(self):
+        # The two empty-log messages must differ: "Save the schedule
+        # and click Run Export Now" (operator never saved) vs "No
+        # parts selected — enable at least one and Save" (operator
+        # saved but disabled everything). Both must be present in the
+        # client bundle as a regression guard.
+        from pathlib import Path as _P
+        body = _P("public/app.js").read_text()
+        self.assertIn("Save the schedule, then click Run Export Now.", body)
+        self.assertIn("No parts selected — enable at least one", body)
+
+    def test_run_export_now_4th_checkbox(self):
+        # The 4th checkbox is the include_history guard — must be wired
+        # into the config POST body the client sends.
+        from pathlib import Path as _P
+        body = _P("public/app.js").read_text()
+        self.assertIn("include_history", body)
+        self.assertIn("backup-include-history", body)
+
+    def test_history_tmp_cleanup_glob(self):
+        # Cleanup must not leave orphan .history-*.tmp files behind
+        # when a partial tar write gets interrupted.
+        body = Path("/home/chapman-server/Projects/new-crm/backup_service.py").read_text()
+        self.assertIn(".history-*.tmp", body)
 
 
 if __name__ == "__main__":

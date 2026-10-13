@@ -2891,6 +2891,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             self._handle_backup_history()
             return
+        if api_path == "/api/v2/admin/backup/history-dir-size":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_backup_history_dir_size()
+            return
         m = re.match(r"^/api/v2/admin/backup/history/(backup_history_\d+)$", api_path)
         if m:
             user = _require_admin(self)
@@ -12212,6 +12218,28 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"key": key, "entry": json.loads(row["value"])})
         except Exception as e:
             _json_response(self, 500, {"error": f"malformed entry: {e}"})
+
+    def _handle_backup_history_dir_size(self) -> None:
+        """GET /api/v2/admin/backup/history-dir-size — cheap size hint
+        for the history-attachments dir, so the admin console can warn
+        the operator about the ~30 GB blob before triggering a run.
+        Bounded with a quick ceiling on files walked so a stale NFS
+        doesn't tie up a request thread for minutes.
+        """
+        from backup_service import HISTORY_ATTACHMENTS_SUBDIR
+        hist = Path("data") / HISTORY_ATTACHMENTS_SUBDIR
+        total = 0
+        if hist.exists():
+            for f in hist.rglob("*"):
+                if f.is_file():
+                    try:
+                        total += f.stat().st_size
+                    except OSError:
+                        # Stale handle / perms issue — skip, don't fail the
+                        # whole size request. Worst case the hint is just
+                        # under-counted.
+                        continue
+        _json_response(self, 200, {"size": total, "subdir": HISTORY_ATTACHMENTS_SUBDIR})
 
     def _handle_backup_export_now(self) -> None:
         """POST trigger a JSON export run right now."""

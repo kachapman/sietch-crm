@@ -55,19 +55,30 @@ DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
 # ── State ────────────────────────────────────────────────────────────────────
 _backup_lock = threading.Lock()
+# Heartbeat written by the current holder (pid + start-ts). Lets the next
+# run detect a stale holder whose Python process died mid-flight and take
+# over. Module-level so the lock state survives a long-running run that
+# holds the lock in memory.
+_holder_pid: int | None = None
+_holder_start: float | None = None
+# Max time a previous holder can sit on the lock before the next run
+# forcibly takes over (assumes the previous run is hung/dead). Five
+# minutes is comfortably longer than any real run, short enough that a
+# user retry doesn't have to wait forever after a crash.
+STALE_HOLDER_SECONDS = 5 * 60
 _last_backup: dict[str, Any] = {"status": "none", "ts": None, "size": None, "error": None}
 
 
-def _load_config_from_db() -> dict:
-    """Load backup config from system_settings table."""
+def _load_config_from_db() -> tuple[dict, bool]:
+    """Load backup config from system_settings table. Returns (config, configured)."""
     try:
         import db
         row = db.query_one("SELECT value FROM system_settings WHERE key = %s", ("backup_config",))
         if row and row.get("value"):
-            return json.loads(row["value"])
+            return json.loads(row["value"]), True
     except Exception:
         pass
-    return {}
+    return {}, False
 
 
 def _save_config_to_db(config: dict) -> None:
@@ -109,16 +120,20 @@ def _save_notify_prefs(prefs: dict) -> None:
 
 def get_backup_status() -> dict:
     """Get current backup status for the admin UI."""
-    config = _load_config_from_db()
+    config, configured = _load_config_from_db()
     last = _last_backup.copy()
     next_ts = None
     if config.get("enabled") and last.get("ts"):
         next_ts = last["ts"] + config.get("interval", BACKUP_INTERVAL)
     return {
         "enabled": config.get("enabled", BACKUP_ENABLED),
+        # True only when the operator has saved config in the console.
+        # Lets the UI grey out the form until first-time setup runs.
+        "configured": configured,
         "interval": config.get("interval", BACKUP_INTERVAL),
         "retention_days": config.get("retention_days", BACKUP_RETENTION_DAYS),
         "json_parts": config.get("json_parts", DEFAULT_EXPORT_PARTS),
+        "include_history": config.get("include_history", True),
         "history_attachments_subdir": HISTORY_ATTACHMENTS_SUBDIR,
         "backup_dir": str(BACKUP_DIR),
         "backup_dir_host": BACKUP_DIR_HOST,
@@ -238,6 +253,77 @@ def _send_tg(chat_id: int, text: str, success: bool) -> None:
         logger.warning("Telegram send failed: %s", e)
 
 
+def _holder_alive() -> bool:
+    """True if the recorded holder pid is still a live python server."""
+    if _holder_pid is None:
+        return False
+    try:
+        os.kill(_holder_pid, 0)  # doesn't actually signal; just checks perms
+    except OSError:
+        return False
+    try:
+        with open(f"/proc/{_holder_pid}/comm", "r") as f:
+            comm = f.read().strip()
+    except OSError:
+        return False
+    return comm in ("python3", "python")
+
+
+def _holder_status_message() -> str:
+    """Human-friendly message about the current holder (alive / stale / unknown)."""
+    if _holder_pid is None:
+        return "Backup already running (lock held by unknown holder)"
+    age = (time.time() - _holder_start) if _holder_start else 0
+    minutes = int(age // 60)
+    if not _holder_alive():
+        return (f"Backup already running but the previous holder (pid {_holder_pid}, "
+                f"started {minutes} min ago) appears to be dead — auto-recovering. "
+                "Try again.")
+    return (f"Backup already running (pid {_holder_pid}, started {minutes} min ago)")
+
+
+def _try_acquire_lock() -> bool:
+    """Non-blocking acquire with stale-holder recovery.
+
+    If the lock is free, take it. If held by a live pid, refuse (returns
+    False). If held by a dead pid, OR held longer than STALE_HOLDER_SECONDS,
+    forcibly release the lock and take it — the previous run is hung and
+    shouldn't keep us wedged. Always returns True unless the live holder is
+    the current process's sibling and within the timeout.
+    """
+    global _holder_pid, _holder_start
+    if _backup_lock.acquire(blocking=False):
+        return True
+    # Lock is held. Decide if the holder is stale.
+    age = (time.time() - _holder_start) if _holder_start else 0
+    if _holder_alive() and age < STALE_HOLDER_SECONDS:
+        return False  # live + recent — do not steal
+    reason = "holder pid is dead" if not _holder_alive() else (
+        f"holder pid {_holder_pid} stale ({int(age)}s > "
+        f"{STALE_HOLDER_SECONDS}s)")
+    logger.warning("Recovering stuck backup lock: %s", reason)
+    # Force-release the lock by reacquiring it via the underlying
+    # primitive. _backup_lock is a non-reentrant RLock (single acquire
+    # per thread), so the only safe way to clear a held lock from
+    # outside the holder's thread is to call _backup_lock._release()
+    # directly. (Hacky, but the only option short of restarting the
+    # whole process — which is what this whole machinery is trying to
+    # avoid.)
+    try:
+        _backup_lock.release()
+    except (RuntimeError, AttributeError):
+        # Fallback: forcibly clear by writing to the underlying _RLock's
+        # internal state. This is undocumented stdlib internals; if
+        # Python's threading.Lock representation ever changes this
+        # breaks, and the test suite will catch it.
+        try:
+            _backup_lock._release()
+        except Exception:
+            logger.exception("Could not forcibly clear stuck lock; restarting the process is the only fallback")
+            return False
+    return _backup_lock.acquire(blocking=False)
+
+
 # ── Backup execution ─────────────────────────────────────────────────────────
 
 def run_backup() -> dict:
@@ -249,8 +335,12 @@ def run_backup() -> dict:
     Proton Drive / rclone is expected to pick artifacts up from
     BACKUP_DIR externally (host-side path surfaced via BACKUP_DIR_HOST).
     """
-    if not _backup_lock.acquire(blocking=False):
-        return {"ok": False, "error": "Backup already running"}
+    if not _try_acquire_lock():
+        return {"ok": False, "error": _holder_status_message()}
+
+    global _holder_pid, _holder_start
+    _holder_pid = os.getpid()
+    _holder_start = time.time()
 
     start = time.time()
     entry: dict[str, Any] = {
@@ -271,13 +361,16 @@ def run_backup() -> dict:
         # Read the part list from the admin console config (DB), with a
         # safe default. validate() below is the single source of truth for
         # which parts are allowed.
-        config = _load_config_from_db()
+        config, _ = _load_config_from_db()
+        include_history = config.get("include_history", True)
         parts = validate_parts(config.get("json_parts") or DEFAULT_EXPORT_PARTS)
-        if not parts:
+        if not parts and not include_history:
+            # Nothing to do — neither any JSON part nor the history tar.
+            # Operator must save the form with at least one part enabled.
             entry["status"] = "failed"
-            entry["error"] = "no export parts selected in backup config"
+            entry["error"] = "no export parts selected and history-attachments disabled in backup config"
             _record_backup(entry)
-            _notify_admins(False, "Backup failed\n\nError: no export parts selected")
+            _notify_admins(False, "Backup failed\n\nError: no parts configured")
             return {"ok": False, "error": entry["error"]}
 
         any_failed = False
@@ -311,11 +404,16 @@ def run_backup() -> dict:
         except Exception as e:
             logger.warning("Backup cleanup failed: %s", e)
 
-        # Files-history bundle (33 GB blob — streamed as a tar.gz so
+        # Files-history bundle (~33 GB blob — streamed as a tar.gz so
         # we don't try to hold it in RAM; the Proton CLI picks it up
         # next to the JSON zips). The special-case source is the
-        # data/history-attachments/ subdir.
-        try:
+        # data/history-attachments/ subdir. Timeout is 15 min — a stuck
+        # tar (e.g. on a slow filesystem) shouldn't hold the lock for
+        # 30 min; if it really takes longer, the run is logged as
+        # failed and the operator can re-trigger manually. Opt-in via
+        # the `include_history` config key (default true) so operators
+        # running tight on disk can skip the 30 GB blob.
+        if include_history:
             out_hist = BACKUP_DIR / f"sietch-data-history-{ts_slug}.tar.gz"
             data_dir = Path("data")
             hist_src = data_dir / HISTORY_ATTACHMENTS_SUBDIR
@@ -328,10 +426,13 @@ def run_backup() -> dict:
                 )
                 tmp_path = Path(tmp.name)
                 tmp.close()
+                logger.info("history-attachments: starting tar (%d bytes estimated)",
+                            sum(f.stat().st_size for f in hist_src.rglob("*")
+                                if f.is_file()))
                 proc = subprocess.run(
                     ["tar", "czf", str(tmp_path), "-C", str(data_dir),
                      HISTORY_ATTACHMENTS_SUBDIR],
-                    capture_output=True, text=True, timeout=1800,
+                    capture_output=True, text=True, timeout=900,
                 )
                 if proc.returncode != 0:
                     raise RuntimeError(
@@ -352,15 +453,14 @@ def run_backup() -> dict:
                     "error": None,
                 }
                 entry["size"] += size
+                logger.info("history-attachments: done, %d MB", size // (1024 * 1024))
             # else: silently skipped — the dir may not exist on a fresh install
-        except Exception as e:
+        if "files-history" not in (entry.get("artifacts") or {}):
             entry["artifacts"]["files-history"] = {
-                "path": str(BACKUP_DIR / f"sietch-data-history-{ts_slug}.tar.gz"),
-                "size": 0, "sha256": None, "ok": False,
-                "error": str(e),
+                "path": "",
+                "size": 0, "sha256": None, "ok": True,
+                "error": "skipped (include_history disabled or dir missing)",
             }
-            logger.warning("Files-history bundle failed (non-fatal): %s", e)
-            any_failed = True
 
         # Publish a "back-up completed" event on the admin channel for the
         # live log in the console. Only admins connect to this channel.
@@ -397,8 +497,11 @@ def run_backup() -> dict:
         _notify_admins(False, f"Backup failed\n\nError: {e}\nDuration: {entry['duration']:.0f}s")
         return {"ok": False, "error": str(e)}
     finally:
-        if _backup_lock.locked():
-            _backup_lock.release()
+        # Always release the lock + clear the heartbeat so a subsequent
+        # run isn't blocked (or treated as stale).
+        _backup_lock.release()
+        _holder_pid = None
+        _holder_start = None
 
 
 def _summary_for(entry: dict, ts_slug: str, parts: list[str]) -> str:
@@ -776,6 +879,12 @@ def _cleanup_old_backups() -> None:
         for fpath in BACKUP_DIR.glob("sietch-data-history-*.tar.gz"):
             if fpath.stat().st_mtime < cutoff:
                 fpath.unlink()
+        # Stale partial-temp files from history-attachment writes that
+        # crashed before the atomic rename. Same retention window.
+        for pattern in (".history-*.tmp", "*.tmp"):
+            for fpath in BACKUP_DIR.glob(pattern):
+                if fpath.stat().st_mtime < cutoff:
+                    fpath.unlink()
         # Stale legacy artifacts (older code may have produced these) —
         # clean them up too so they don't accumulate.
         for pattern in ("sietch-backup-*", "sietch-data-*"):

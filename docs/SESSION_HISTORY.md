@@ -11,7 +11,22 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-12
+**Date:** 2026-10-13
+
+**Topic:** Grey out the unconfigured schedule form + add an include-history toggle + history-dir size hint.
+
+**What landed:**
+- **`backup_service.py`:** `_load_config_from_db()` now returns `(config, configured)` so the UI knows whether the operator has ever saved config. `get_backup_status()` adds a `configured` field and surfaces `include_history` (default true) — operator can opt out of the 30 GB tar.gz.
+- **`run_backup()`:** now honors `include_history` — skips the history-attachments tar when the operator has unset the toggle. If both no JSON parts are checked AND include_history is off, returns a clear "no parts configured" error. `_cleanup_old_backups` glob now catches `*.tmp` and `.history-*.tmp` so partial writes don't accumulate.
+- **Server** (`server.py`): new `GET /api/v2/admin/backup/history-dir-size` endpoint for the console's "30 GB blob ahead" hint. Cheap walk over `data/history-attachments/`, swallows stale-FS errors so a hung NFS mount doesn't tie up the request thread.
+- **Console** (`public/index.html` + `public/app.js`): new 4th checkbox "include history-attachments (~30 GB tar.gz, ~20 min — make sure Proton Drive has space)" next to the JSON parts. The whole schedule fieldset greys out via `fieldset#backup-schedule-fs` (opacity 0.55, disabled) when no DB config has been saved, with a clear "Not configured yet. Fill in the fields below and click Save to enable the schedule" notice. The empty-log message now distinguishes "No parts selected — enable at least one in the form above and Save" (operator saved but disabled everything) from "no exports yet — Save the schedule, then click Run Export Now" (operator never saved).
+- **Verified live:** fresh `setsid` restart → `/api/config` 200, `export-now` 401 (auth-gated as expected). Static: `py_compile` ×2, `node --check`, 46+15+8+28 tests pass.
+
+**Phase A complete.** Next: Proton Drive CLI setup on the droplet. The Proton docs page linked in your message gives the auth model — I'll plan the install + one-time interactive login + systemd timer + failure notification as a separate turn so you can sign in interactively.
+
+---
+
+## Previous summary (2026-10-12)
 
 **Topic:** Restored the scheduled history-attachments bundle + fixed the `"$ "` log placeholder + log-not-refreshing-on-tab-switch.
 

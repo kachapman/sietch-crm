@@ -2390,26 +2390,33 @@
 
             <!-- ── Scheduled Backups ── -->
             <h4 style="margin:1.5rem 0 0.3rem; border-bottom:1px solid var(--border); padding-bottom:0.3rem;">Scheduled JSON Exports</h4>
+            <p id="backup-not-configured-msg" style="font-size:0.85rem; color:var(--accent); margin:0 0 0.5rem; display:none;">
+              Not configured yet. Fill in the fields below and click <b>Save</b> to enable the schedule. Until then, <b>Run Export Now</b> still works for ad-hoc exports.
+            </p>
             <p style="font-size:0.8rem; color:var(--muted); margin:0 0 0.5rem;">Automatic per-part JSON exports on a recurring schedule. Zips land in the local export dir below, where Proton Drive / rclone picks them up. No SQL dumps, no remote push — restore comes from these bundles.</p>
-            <div style="display:flex; gap:1rem; flex-wrap:wrap; align-items:end;">
-              <label style="font-size:0.85rem;">
-                <input type="checkbox" id="backup-enabled"> Enabled
-              </label>
-              <label style="font-size:0.85rem;">
-                Interval (hours)<br><input id="backup-interval" type="number" min="1" max="720" value="24" style="width:5rem; padding:0.3rem;">
-              </label>
-              <label style="font-size:0.85rem;">
-                Retention (days)<br><input id="backup-retention" type="number" min="1" max="365" value="7" style="width:5rem; padding:0.3rem;">
-              </label>
-              <button id="backup-config-save" class="btn btn-secondary btn-small">Save</button>
-            </div>
-            <div style="margin-top:0.5rem; font-size:0.85rem;" id="backup-parts-wrap">
-              <span style="color:var(--muted);">Parts:</span>
-              <label style="margin-left:0.75rem;"><input type="checkbox" class="backup-part-cb" value="db-core" checked> db-core <span style="color:var(--muted);">(tables)</span></label>
-              <label style="margin-left:0.75rem;"><input type="checkbox" class="backup-part-cb" value="files-documents" checked> files-documents <span style="color:var(--muted);">(docs/photos/avatars)</span></label>
-              <label style="margin-left:0.75rem;"><input type="checkbox" class="backup-part-cb" value="files-state" checked> files-state <span style="color:var(--muted);">(profiles/state)</span></label>
-            </div>
-            <p style="font-size:0.8rem; color:var(--muted); margin:0.5rem 0 0;">Export dir (Proton pickup): <code id="backup-dir-host" style="user-select:all;">…</code></p>
+            <fieldset id="backup-schedule-fs" style="border:none; padding:0; margin:0;">
+              <div style="display:flex; gap:1rem; flex-wrap:wrap; align-items:end;">
+                <label style="font-size:0.85rem;">
+                  <input type="checkbox" id="backup-enabled"> Enabled
+                </label>
+                <label style="font-size:0.85rem;">
+                  Interval (hours)<br><input id="backup-interval" type="number" min="1" max="720" value="24" style="width:5rem; padding:0.3rem;">
+                </label>
+                <label style="font-size:0.85rem;">
+                  Retention (days)<br><input id="backup-retention" type="number" min="1" max="365" value="7" style="width:5rem; padding:0.3rem;">
+                </label>
+                <button id="backup-config-save" class="btn btn-secondary btn-small">Save</button>
+              </div>
+              <div style="margin-top:0.5rem; font-size:0.85rem;" id="backup-parts-wrap">
+                <span style="color:var(--muted);">Parts:</span>
+                <label style="margin-left:0.75rem;"><input type="checkbox" class="backup-part-cb" value="db-core" checked> db-core <span style="color:var(--muted);">(tables)</span></label>
+                <label style="margin-left:0.75rem;"><input type="checkbox" class="backup-part-cb" value="files-documents" checked> files-documents <span style="color:var(--muted);">(docs/photos/avatars)</span></label>
+                <label style="margin-left:0.75rem;"><input type="checkbox" class="backup-part-cb" value="files-state" checked> files-state <span style="color:var(--muted);">(profiles/state)</span></label>
+                <label style="margin-left:0.75rem;"><input type="checkbox" id="backup-include-history" checked> <b>include history-attachments</b> <span style="color:var(--muted);">(~30&nbsp;GB tar.gz, ~20&nbsp;min — make sure Proton Drive has space)</span></label>
+              </div>
+              <p style="font-size:0.8rem; color:var(--muted); margin:0.5rem 0 0;">Export dir (Proton pickup): <code id="backup-dir-host" style="user-select:all;">…</code></p>
+              <p id="backup-history-size" style="font-size:0.75rem; color:var(--muted); margin:0.2rem 0 0;"></p>
+            </fieldset>
 
             <!-- Backup Notifications -->
             <p style="font-size:0.8rem; color:var(--muted); margin:1rem 0 0.3rem;"><b>Backup Notifications</b> — Get notified when backups succeed or fail. Uses your account email and linked Telegram chat.</p>
