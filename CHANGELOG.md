@@ -2,6 +2,10 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Restore history-attachments bundle + fix log refresh + placeholder typo (2026-10-12)
+
+The 33 GB `history-attachments/` blob was silently dropped from the scheduled path in `d908f75` — restored as a streamed tar.gz (`sietch-data-history-<ts>.tar.gz`, atomic rename, sha256'd) emitted next to the three JSON parts. Also: removed a stray `$ ` in the empty-state log placeholder, and `switchAdminTab` now re-fetches `loadBackupHistory()` so the log updates on every tab open (was: only on initial bind). Tests 39 → 41; `py_compile` ×2, `node --check`, 41+15+8+28 tests pass.
+
 ## Fix: Run Export Now 404 + silent rotation skip (2026-10-11)
 
 `POST /api/v2/admin/backup/export-now` was dispatched in the GET router, so every click 404'd — moved to the POST router next to `/backup/run`, with a `TestBackupRoutePlacement` regression guard. Same log window revealed `_cleanup_old_backups()` called with an arg it doesn't take, so rotation never ran — fixed, plus a stray `}` in that warning. Verified live: fresh restart, route 401s correctly, scheduled run clean.

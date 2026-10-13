@@ -488,6 +488,22 @@ class TestBackupRoutePlacement(unittest.TestCase):
     def test_history_reads_in_get_router(self):
         self.assertIn("/api/v2/admin/backup/history", self.get_body)
 
+    def test_history_attachments_dir_constant(self):
+        # The 33 GB blob lives in HISTORY_ATTACHMENTS_SUBDIR — assert the
+        # default path the scheduler tars from is the on-disk layout.
+        from backup_service import HISTORY_ATTACHMENTS_SUBDIR
+        self.assertEqual(HISTORY_ATTACHMENTS_SUBDIR, "history-attachments")
+
+    def test_status_payload_surfaces_history_subdir(self):
+        # Backup log UI needs the subdir name to display the Proton
+        # pickup hint ("Files-history: ..."); guard that the status
+        # endpoint includes it.
+        import re
+        body = re.search(r"def get_backup_status.*?return \{[^}]*\}",
+                         Path("/home/chapman-server/Projects/new-crm/backup_service.py").read_text(),
+                         re.S).group(0)
+        self.assertIn("history_attachments_subdir", body)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

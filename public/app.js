@@ -30605,7 +30605,7 @@ async function loadBackupHistory() {
         listEl.innerHTML = hist.history.map(h =>
           backupLogLine(h, h.key || h.ts)).join("");
       } else {
-        listEl.innerHTML = '<div style="color:var(--muted);">$ no exports yet — configure parts above and Run Export Now.</div>';
+        listEl.innerHTML = '<div style="color:var(--muted);">no exports yet — configure parts above and Run Export Now.</div>';
       }
     }
   } catch (e) {
@@ -30636,6 +30636,10 @@ function switchAdminTab(tab) {
     loadHistoryCats().then(() => renderHistoryCatsList($("#admin-history-cat-search")?.value.trim() || ""));
     loadTaskLabels().then(() => renderTaskLabelsList($("#admin-task-label-search")?.value.trim() || ""));
   }
+  // Always refresh the backup log on tab-switch so the user sees a fresh
+  // list (re-opens the admin console, jumps between tabs) — the SSE event
+  // handles within-tab refresh, this handles between-tab.
+  if (tab === "backup" || tab === "general") loadBackupHistory();
   if (tab === "logs") {
     loadEventLogFromServer().then(async () => {
       // Populate user dropdown from all portal users

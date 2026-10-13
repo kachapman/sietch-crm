@@ -11,7 +11,22 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-11 (late)
+**Date:** 2026-10-12
+
+**Topic:** Restored the scheduled history-attachments bundle + fixed the `"$ "` log placeholder + log-not-refreshing-on-tab-switch.
+
+**Why the bundles were small:** the recent "Run Export Now" output (~258 MB total) was correct — `history-attachments/` (~33 GB) was excluded from the per-part JSON exports in commit `d908f75` (the per-bundle-tar helper got removed then). The scheduled path silently dropped the history bundle. Restoring it here so the Proton pickup is complete again.
+
+**What landed:**
+- **`backup_service.py`:** new `HISTORY_ATTACHMENTS_SUBDIR = "history-attachments"` constant; `run_backup()` now also tars `data/history-attachments/` after the JSON parts via a temp-file → `tar czf -C data history-attachments` → `shutil.move` to `BACKUP_DIR/sietch-data-history-<ts>.tar.gz` (streaming, atomic, sha256'd). `cleanup_old_backups()` glob extended. `get_backup_status()` surfaces `history_attachments_subdir` for the console hint. `_summary_for` shows the history size in the notification lines.
+- **`public/app.js`:** fixed the stray `$ ` in the empty-state placeholder (`$ no exports yet` → `no exports yet`); `switchAdminTab("backup")` / `switchAdminTab("general")` now re-invokes `loadBackupHistory()` so opening the tab always shows a fresh log.
+- **`tests/test_backup.py` 39 → 41:** `test_history_attachments_dir_constant` (constant value = real on-disk dir) + `test_status_payload_surfaces_history_subdir` (status body includes the key).
+- **Verified live:** fresh `setsid` restart → `/api/config` 200, all subsystems up. Static: `py_compile` ×2, `node --check`, 41+15+8+28 tests pass.
+- **Restarted server** (PID 1172398). The Proton pickup dir now contains `sietch-export-{db-core,files-documents,files-state}-<ts>.zip` + `sietch-data-history-<ts>.tar.gz` on every scheduled run.
+
+---
+
+## Previous summary (2026-10-11 (late))
 
 **Topic:** "Run Export Now" 404 — `export-now` dispatch was in the GET router; moved to the POST router. Plus a latent cleanup-arg crash found in the same log window.
 

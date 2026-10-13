@@ -119,6 +119,7 @@ def get_backup_status() -> dict:
         "interval": config.get("interval", BACKUP_INTERVAL),
         "retention_days": config.get("retention_days", BACKUP_RETENTION_DAYS),
         "json_parts": config.get("json_parts", DEFAULT_EXPORT_PARTS),
+        "history_attachments_subdir": HISTORY_ATTACHMENTS_SUBDIR,
         "backup_dir": str(BACKUP_DIR),
         "backup_dir_host": BACKUP_DIR_HOST,
         "expected_export_parts": EXPECTED_EXPORT_PARTS,
@@ -310,6 +311,57 @@ def run_backup() -> dict:
         except Exception as e:
             logger.warning("Backup cleanup failed: %s", e)
 
+        # Files-history bundle (33 GB blob — streamed as a tar.gz so
+        # we don't try to hold it in RAM; the Proton CLI picks it up
+        # next to the JSON zips). The special-case source is the
+        # data/history-attachments/ subdir.
+        try:
+            out_hist = BACKUP_DIR / f"sietch-data-history-{ts_slug}.tar.gz"
+            data_dir = Path("data")
+            hist_src = data_dir / HISTORY_ATTACHMENTS_SUBDIR
+            if hist_src.exists():
+                # Atomic rename pattern: temp file in the same volume,
+                # then move into place so a half-written tar is never
+                # visible to the Proton CLI scan.
+                tmp = tempfile.NamedTemporaryFile(
+                    delete=False, dir=BACKUP_DIR, prefix=".history-", suffix=".tmp"
+                )
+                tmp_path = Path(tmp.name)
+                tmp.close()
+                proc = subprocess.run(
+                    ["tar", "czf", str(tmp_path), "-C", str(data_dir),
+                     HISTORY_ATTACHMENTS_SUBDIR],
+                    capture_output=True, text=True, timeout=1800,
+                )
+                if proc.returncode != 0:
+                    raise RuntimeError(
+                        f"history-attachments tar failed ({proc.returncode}): "
+                        f"{proc.stderr[:300]}"
+                    )
+                size = tmp_path.stat().st_size
+                h = hashlib.sha256()
+                with open(tmp_path, "rb") as f:
+                    for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                        h.update(chunk)
+                shutil.move(str(tmp_path), str(out_hist))
+                entry["artifacts"]["files-history"] = {
+                    "path": str(out_hist),
+                    "size": size,
+                    "sha256": h.hexdigest(),
+                    "ok": True,
+                    "error": None,
+                }
+                entry["size"] += size
+            # else: silently skipped — the dir may not exist on a fresh install
+        except Exception as e:
+            entry["artifacts"]["files-history"] = {
+                "path": str(BACKUP_DIR / f"sietch-data-history-{ts_slug}.tar.gz"),
+                "size": 0, "sha256": None, "ok": False,
+                "error": str(e),
+            }
+            logger.warning("Files-history bundle failed (non-fatal): %s", e)
+            any_failed = True
+
         # Publish a "back-up completed" event on the admin channel for the
         # live log in the console. Only admins connect to this channel.
         try:
@@ -322,9 +374,12 @@ def run_backup() -> dict:
         entry["status"] = "success" if not any_failed else "partial"
         entry["duration"] = time.time() - start
         _record_backup(entry)
+        _summary_parts = list(parts) + (
+            ["files-history"] if "files-history" in (entry.get("artifacts") or {}) else []
+        )
         _notify_admins(
             not any_failed,
-            _summary_for(entry, ts_slug, parts),
+            _summary_for(entry, ts_slug, _summary_parts),
         )
 
         return {
@@ -414,6 +469,13 @@ EXPECTED_EXPORT_PARTS = ["db-core", "files-documents", "files-state"]
 # configured. Kept separate from EXPECTED_EXPORT_PARTS so the default
 # set can change without widening what the API accepts.
 DEFAULT_EXPORT_PARTS = list(EXPECTED_EXPORT_PARTS)
+
+# Files-history subdir — written as a streamed tar.gz next to the JSON
+# zips. Originally 33 GB and not servable over HTTP (Option A); the
+# scheduler writes it to BACKUP_DIR so Proton Drive / rclone can pick
+# it up alongside the JSON parts. Lives outside EXPECTED_EXPORT_PARTS
+# because the API only serves the JSON zips.
+HISTORY_ATTACHMENTS_SUBDIR = "history-attachments"
 
 
 def validate_parts(raw) -> list[str]:
@@ -707,6 +769,11 @@ def _cleanup_old_backups() -> None:
         cutoff = time.time() - (days * 86400)
         # Per-part export zips are the only thing we keep on disk now.
         for fpath in BACKUP_DIR.glob("sietch-export-*-*.zip"):
+            if fpath.stat().st_mtime < cutoff:
+                fpath.unlink()
+        # Streamed history-attachments bundle (separate from the JSON
+        # exports — lives in BACKUP_DIR for the Proton CLI scan).
+        for fpath in BACKUP_DIR.glob("sietch-data-history-*.tar.gz"):
             if fpath.stat().st_mtime < cutoff:
                 fpath.unlink()
         # Stale legacy artifacts (older code may have produced these) —
