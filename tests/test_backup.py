@@ -548,5 +548,60 @@ class TestBackupRoutePlacement(unittest.TestCase):
         self.assertIn(".history-*.tmp", body)
 
 
+
+class TestHardeningCoverage(unittest.TestCase):
+    """Locks in the audit's item 8 (hardening notes).
+
+    The two sensitive-column sets (one in server.py for the universal
+    export, one in backup_service.py for the per-bundle scheduler) MUST
+    stay aligned. If a new credential column is added to one but not the
+    other, this test will catch it before it leaks plaintext into a
+    Proton Drive bundle.
+    """
+
+    REQUIRED = {
+        "password_hash", "password_salt", "password_encrypted",
+        "smtp_password_encrypted",
+        "oauth_access_token", "oauth_refresh_token",
+        "oauth_graph_access_token", "oauth_graph_refresh_token",
+        "caldav_password_encrypted", "webhook_secret", "token",
+    }
+
+    def _load_set(self, relpath: str, attr: str) -> set:
+        import ast
+        src = Path(relpath).read_text()
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for t in node.targets:
+                    if isinstance(t, ast.Name) and t.id == attr:
+                        return {e.value for e in node.value.elts
+                                if isinstance(e, ast.Constant)}
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                if (isinstance(node.target, ast.Name)
+                        and node.target.id == attr):
+                    return {e.value for e in node.value.elts
+                            if isinstance(e, ast.Constant)}
+        return set()
+
+    def test_server_export_strips_full_set(self):
+        s = self._load_set("backup_service.py", "_SENSITIVE")
+        missing = self.REQUIRED - s
+        self.assertFalse(missing, f"_SENSITIVE in backup_service.py is missing {missing}")
+
+    def test_server_universal_export_strips_full_set(self):
+        s = self._load_set("server.py", "_SENSITIVE_COLUMNS")
+        missing = self.REQUIRED - s
+        self.assertFalse(missing, f"_SENSITIVE_COLUMNS in server.py is missing {missing}")
+
+    def test_universal_export_body_calls_scrub(self):
+        src = Path("server.py").read_text()
+        start = src.index("def _handle_export_universal")
+        end = src.index("def _handle_export_backup", start)
+        body = src[start:end]
+        self.assertIn("if k not in self._SENSITIVE_COLUMNS", body)
+        self.assertIn('f"({sorted(self._SENSITIVE_COLUMNS)})', body)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
