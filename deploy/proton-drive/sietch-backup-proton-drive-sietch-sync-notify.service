@@ -1,0 +1,14 @@
+[Unit]
+Description=Notify on Proton Drive sync failure (Sietch CRM)
+# Triggered by the .service's OnFailure=sietch-backup-proton-drive-sietch-sync-notify.service
+After=sietch-backup-proton-drive-sietch-sync.service sietch-backup-proton-drive-sietch-sync.timer
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/proton-drive-failure-notify.sh sietch-backup-proton-drive-sietch-sync.service
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=Proton Drive sync — Sietch CRM (timer)
+Documentation=https://proton.me/support/drive-cli
+
+[Timer]
+# First fire 10 min after the export scheduler typically completes
+# (the Sietch export default is 24h starting at 00:00 UTC, so 00:10 UTC
+# catches the next day; adjust OnCalendar if your export runs at a
+# different wall-clock time).
+OnCalendar=*-*-* 00:10:00 UTC
+# Re-run 6 h after each successful fire (safety net for missed windows).
+OnUnitActiveSec=6h
+AccuracySec=5min
+Persistent=false
+Unit=sietch-backup-proton-drive-sietch-sync.service
+
+[Install]
+WantedBy=timers.target

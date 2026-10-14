@@ -1,0 +1,37 @@
+[Unit]
+Description=Proton Drive sync — Sietch CRM backups to /Sietch/Backups/<hostname>
+Documentation=https://proton.me/support/drive-cli
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=900
+StartLimitBurst=3
+OnFailure=sietch-backup-proton-drive-sietch-sync-notify.service
+
+[Service]
+Type=oneshot
+User=sietch-backup
+Group=sietch-backup
+EnvironmentFile=/etc/proton-drive/sietch-sync.env
+ExecStart=/usr/local/bin/proton-drive-sync.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=4
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+SuccessExitStatus=0
+TimeoutStartSec=10min
+TimeoutStopSec=30min
+
+[Install]
+WantedBy=multi-user.target
