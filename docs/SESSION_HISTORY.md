@@ -13,6 +13,28 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-14
 
+**Topic:** Email template pipeline + `[#PROJECTID]` standardization audit. **No code changes this session — audit only.**
+
+**What landed:**
+- **`docs/EMAIL_TEMPLATE_AUDIT.md` (new, 487 lines).** Full audit of the email template pipeline, signature flow, and `[#PROJECTID]` subject auto-link mechanism. 15 findings (2 critical, 3 high, 4 medium, 6 low/nit).
+  - **🔴 #1** — `mail_templates.body_html` and `signature_html` injected raw into the compose modal's `contenteditable` via `innerHTML` at `app.js:20460, 20091, 22173-22176` (no sanitization, unlike the email-preview iframe from EMAIL_AUDIT #1). Anyone with template-write or signature-write access can inject `<script>` into every email sent from that account and run code in the dashboard origin.
+  - **🔴 #2** — `mail_templates` CRUD has no auth on 4 of 5 endpoints, no `is_admin` check, no `_is_limited` check, and no `created_by == user["id"]` enforcement. Any user can overwrite/delete any other user's templates.
+  - **🟠 #3** — No size caps on `subject` or `body_html` (a 100 MB template would break the dashboard for everyone).
+  - **🟠 #4** — `mail_outgoing.template_id` FK is dead — never populated by `_handle_mail_send`. No audit trail of which template produced which email.
+  - **🟠 #5** — **The headline problem**: there is no structured `[#PROJECTID]` placeholder for *outgoing* mail. The scanner's `DEAL_LINK_RE` / `DEAL_ID_RE` only operate on incoming mail subjects. Two formats (`[#NNN]` and `[#DEAL-NNN]`) are both documented and both matched, leading to operator confusion. **Recommended fix:** pick `[#NNN]` as canonical, deprecate `[#DEAL-NNN]`, add a per-account `auto_tag_outgoing_subject` toggle, expand `{project_id}` / `{project_id_tag}` placeholders in `mail_templates` server-side at send time.
+  - **🟠 #6** — Inconsistent naming: docs say "PROJECTID" and "DEAL-NNN" and "DEAL-ID", code says `DEAL_LINK_RE` and `DEAL_ID_RE`. Confusing for new operators.
+  - **🟡 #7-10** — Placeholder engine has undocumented variables (`{claim_number}`, `{date}`, `{body_preview}`); signature doesn't flow into scanner auto-reply; reply doesn't propagate `[#NNN]` to subject; signature ownership path unclear.
+  - **⚪ #11-15** — `mail_templates` is global not per-account; no preview before template insert; PUT-empty bug foot-gun; no standard `[#NNN]` position (start vs end of subject).
+- **Recommended fix order** (in the doc): (1) sanitize innerHTML injection via existing `sanitizeHistoryHtml` (1–2 hrs), (2) add auth/admin/limited checks to template handlers (15 min), (3) standardize on `[#NNN]` with auto-tag toggle and structured `{project_id}` placeholder (1–2 hrs), (4) populate `template_id` on send (30 min), (5) auto-append signature to scanner replies + auto-propagate tag on reply (next sprint).
+
+**Verified live:** `git status --short` shows only the new doc; no code changed. Audit is advisory and ready for review. No commit yet — waiting for you to pick which fix(es) to implement next.
+
+**Next:** If you want to act on the audit, the highest-ROI first step is **fix #1** (sanitize template/signature innerHTML injection) — same `sanitizeHistoryHtml` call already used by the email preview, ~3 lines of code. Let me know which to take.
+
+---
+
+## Previous summary (2026-10-14)
+
 **Topic:** Email audit fix #6 — feedback + scanner log file locking.
 
 **What landed:**

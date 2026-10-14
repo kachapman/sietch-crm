@@ -2,6 +2,21 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Email template + `[#PROJECTID]` standardization audit (2026-10-14)
+
+`docs/EMAIL_TEMPLATE_AUDIT.md` (new, 15 findings: 2 critical, 3 high, 4 medium, 6 low/nit). Audit of the email template pipeline, signature flow, and `[#PROJECTID]` subject auto-link mechanism.
+
+Headline finding: **there is no structured `[#PROJECTID]` placeholder for outgoing mail.** The scanner's `DEAL_LINK_RE` (`[#NNN]`) and `DEAL_ID_RE` (`[#DEAL-NNN]`) only operate on incoming mail subjects, and two formats are both documented and both matched. Recommended fix: pick `[#NNN]` as canonical, deprecate the legacy format, add a per-account `auto_tag_outgoing_subject` toggle, and expand `{project_id}` / `{project_id_tag}` placeholders server-side in `_handle_mail_send` so the tag is always current even if the deal changes between template insert and send.
+
+Top three security issues:
+- **🔴 #1** — `mail_templates.body_html` and `signature_html` injected raw into the compose modal's `contenteditable` via `innerHTML` at `app.js:20460`, `app.js:20091`, `app.js:22173-22176`. No sanitization, unlike the email-preview iframe. Anyone with template-write or signature-write access can inject `<script>` into every email sent from that account.
+- **🔴 #2** — `mail_templates` CRUD has no auth on 4 of 5 endpoints, no `is_admin` check, no `_is_limited` check, no `created_by == user["id"]` enforcement. Any user can overwrite/delete any other user's templates.
+- **🟠 #3** — No size caps on `subject` or `body_html`. A 100 MB template would break the dashboard for everyone.
+
+Other findings: `mail_outgoing.template_id` is a dead FK never populated by `_handle_mail_send` (#4); `signature_html` doesn't flow into scanner auto-reply (#9); reply doesn't propagate `[#NNN]` to subject when the operator replies to a linked email (#10); placeholder engine has undocumented variables (#7).
+
+**No code changes this session** — audit only. Full recommended fix order is in the doc; let me know which to take next.
+
 ## Email audit fix #6: feedback + scanner log file locking (2026-10-14)
 
 `record_feedback_candidate` (writes `feedback.jsonl`) and `_append_log` (writes `log.jsonl`) were both unprotected `with open(..., "a"): f.write(...)` patterns with `except Exception: pass`. The reader (`get_feedback_entries`, `get_scanner_log`) could see a half-written line if a writer was mid-flush, and disk-full / permission errors were silently swallowed — meaning the operator would never know training data was being lost.
