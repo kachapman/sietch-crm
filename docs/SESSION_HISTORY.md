@@ -13,6 +13,21 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-14
 
+**Topic:** Email audit fix #6 — feedback + scanner log file locking.
+
+**What landed:**
+- **`scanner/mail_scanner.py`:** Both `record_feedback_candidate` (writes `feedback.jsonl`) and `_append_log` (writes `log.jsonl`) now use a `threading.Lock` to serialize within the dashboard process, `fcntl.flock` (`LOCK_EX` for writers, `LOCK_SH` for readers) for cross-process safety (POSIX only, behind a try/except for portability — covers the case where the scanner runs as its own container per `scanner/docker-compose.scanner.yml`), and `flush()`+`os.fsync()` so a sudden process kill doesn't lose the entry. The previous `except Exception: pass` is replaced with `logger.exception(...)` so disk-full / permission-denied errors are visible instead of silently dropping training samples. Both `get_feedback_entries` and `get_scanner_log` take the same lock during the `readlines()` call so they never see a torn line. `hasattr(f, "fileno")` guard keeps the code test-friendly (test fakes that don't expose fileno skip the cross-process lock cleanly; the in-process lock still serializes them).
+- **`tests/test_mail_scanner_locking.py` (new, 4 tests):** 8 threads × 50 writes to `feedback.jsonl` (every line must parse, count must match); concurrent writer+reader (reader must never see a torn entry); read-only-directory I/O failure (`logger.exception` is now called instead of swallowed); 8 threads × 50 writes to `log.jsonl` (same guarantees).
+- Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 = **140 tests, 0 failures**. `py_compile` ×2, `node --check` clean.
+
+**Verified live:** `git status --short` matches the 3 expected files (`scanner/mail_scanner.py`, `tests/test_mail_scanner_locking.py`, plus `CHANGELOG.md`/`docs/SESSION_HISTORY.md`/`docs/EMAIL_AUDIT.md` doc updates). Server not yet restarted — these are scanner-thread-only changes and safe to deploy with the next `git pull && docker compose up -d`.
+
+**Next:** Audit #11 (outbound send rate limit), #12 (admin endpoint guards), #13 (password form clear), #15 (`position:fixed` / `z-index` strip in `sanitizeHistoryHtml`), #17 (apply same listener pattern to `openComposeModal`). All medium or low severity.
+
+---
+
+## Previous summary (2026-10-14)
+
 **Topic:** Email audit fixes #3 + #4 + #5 — modal listener pattern + create-handler hardening + bonus XSS fix in reply/forward quotes.
 
 **What landed:**

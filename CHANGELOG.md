@@ -2,6 +2,26 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Email audit fix #6: feedback + scanner log file locking (2026-10-14)
+
+`record_feedback_candidate` (writes `feedback.jsonl`) and `_append_log` (writes `log.jsonl`) were both unprotected `with open(..., "a"): f.write(...)` patterns with `except Exception: pass`. The reader (`get_feedback_entries`, `get_scanner_log`) could see a half-written line if a writer was mid-flush, and disk-full / permission errors were silently swallowed — meaning the operator would never know training data was being lost.
+
+Now:
+- `threading.Lock` serializes within the dashboard process.
+- `fcntl.flock` (POSIX, behind a try/except for portability) serializes across processes — covers the case where the scanner runs as its own container (`scanner/docker-compose.scanner.yml`) while the dashboard reads the same file.
+- `flush()` + `os.fsync()` so a sudden process kill doesn't lose the entry.
+- `logger.exception(...)` instead of bare `pass` so real I/O failures are visible.
+- `hasattr(f, "fileno")` guard so test fakes that don't expose `fileno()` skip the cross-process lock cleanly (in-process lock still serializes them).
+- Same `threading.Lock` taken inside the readers (`get_feedback_entries` shared lock, `get_scanner_log` shared lock) so they don't read mid-write.
+
+New tests: `tests/test_mail_scanner_locking.py` (4 tests):
+- 8 threads × 50 writes each to `feedback.jsonl` — every line must parse, count must match.
+- 1 writer + 1 reader running concurrently — reader must never see a torn entry.
+- Read-only-directory I/O failure — `logger.exception` is now called instead of swallowing.
+- 8 threads × 50 writes each to `log.jsonl` — same guarantees.
+
+Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 = **140 tests, 0 failures**. `py_compile` ×2, `node --check` clean.
+
 ## Email audit fixes #3 + #4 + #5: modal listener pattern + create-handler hardening (2026-10-14)
 
 Third pass on the email audit (`docs/EMAIL_AUDIT.md`):

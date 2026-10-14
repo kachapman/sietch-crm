@@ -142,14 +142,22 @@ allowlist.
 ---
 
 ### 🟠 6. `record_feedback_candidate` writes to `FEEDBACK_FILE` without locking
-**File:** `scanner/mail_scanner.py:1957–1962`
+**File:** `scanner/mail_scanner.py:1957–1962` (original)
 
 CPython `with open(..., "a")` flushes on `__exit__`, so single-line
 atomicity holds, but the reader `get_feedback_entries` (line 1970) can
 see a half-written line during training.
 
-**Fix:** Wrap parse in `try/except json.JSONDecodeError` in the reader and
-skip malformed lines. Optional: `threading.Lock` for cross-process safety.
+**Fix:** `threading.Lock` to serialize within the dashboard process,
+`fcntl.flock(LOCK_EX)` for cross-process safety, `flush()`+`fsync()` so
+a kill doesn't lose the entry, `logger.exception` instead of bare
+`pass`. Applied to both `record_feedback_candidate` and the
+neighboring `_append_log` (which has the same race against
+`get_scanner_log`). The corresponding readers
+(`get_feedback_entries`, `get_scanner_log`) take the same lock with
+`flock(LOCK_SH)` so they don't see a torn line.
+
+**Status: Fixed in this session** (see SESSION_HISTORY 2026-10-14, third entry).
 
 ---
 

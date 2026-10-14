@@ -22,6 +22,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    import fcntl  # POSIX-only cross-process file lock
+    _HAVE_FCNTL = True
+except ImportError:
+    _HAVE_FCNTL = False  # Windows: in-process lock only
+
 from imap_tools import A, MailBox, MailMessage, MailBoxFolderManager
 
 import sys
@@ -800,12 +806,37 @@ def _write_json(path: Path, data: Any) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2, default=str)
 
 
+# Audit #6: same locking pattern as record_feedback_candidate. The scanner
+# log is appended from the scanner background thread and read by
+# get_scanner_log (admin UI + scanner_service admin endpoint).
+_LOG_LOCK = threading.Lock()
+
+
 def _append_log(entry: dict[str, Any]) -> None:
+    line = json.dumps(entry, default=str) + "\n"
     try:
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, default=str) + "\n")
+        with _LOG_LOCK:
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                # fileno() may not exist on test fakes; skip flock cleanly.
+                if _HAVE_FCNTL and hasattr(f, "fileno"):
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                    except (OSError, ValueError):
+                        pass
+                f.write(line)
+                f.flush()
+                if hasattr(f, "fileno"):
+                    try:
+                        os.fsync(f.fileno())
+                    except (OSError, AttributeError):
+                        pass
+                if _HAVE_FCNTL and hasattr(f, "fileno"):
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    except (OSError, ValueError):
+                        pass
     except Exception:
-        pass
+        logger.exception("Failed to append scanner log entry to %s", LOG_FILE)
 
 
 def _now_et() -> str:
@@ -1925,9 +1956,23 @@ def get_scanner_log(limit: int = 200, account_id: str | None = None) -> list[dic
     if not limit or limit <= 0:
         limit = 200
     try:
-        with open(LOG_FILE, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        # Skip malformed lines (partial writes from record_feedback_candidate).
+        # Audit #6: take the same lock as _append_log so we don't read
+        # a half-written line. Use shared (read) flock so multiple
+        # readers can proceed in parallel; writers take exclusive.
+        with _LOG_LOCK:
+            with open(LOG_FILE, "r", encoding="utf-8") as f:
+                if _HAVE_FCNTL and hasattr(f, "fileno"):
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                    except (OSError, ValueError):
+                        pass
+                lines = f.readlines()
+                if _HAVE_FCNTL and hasattr(f, "fileno"):
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    except (OSError, ValueError):
+                        pass
+        # Skip malformed lines (defense-in-depth even with locking).
         entries: list[dict[str, Any]] = []
         for l in lines:
             l = l.strip()
@@ -1946,6 +1991,7 @@ def get_scanner_log(limit: int = 200, account_id: str | None = None) -> list[dic
                 entries = [e for e in entries if str(e.get("account_id")) == str(account_id)]
         return entries[-limit:]
     except Exception:
+        logger.exception("Failed to read scanner log from %s", LOG_FILE)
         return []
 
 
@@ -1984,12 +2030,55 @@ def update_contractors(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+# Audit #6: feedback file locking.
+#
+# FEEDBACK_FILE is written from two contexts:
+#  1. The scanner background thread (auto-logging "did the rule fire?" entries)
+#  2. The dashboard request thread (user clicks "correct" in the admin tab)
+# and read concurrently by:
+#  3. get_feedback_entries (admin UI loads the feedback list)
+#  4. train_ml_head.train (the ML retrain job)
+#
+# CPython's GIL + buffered I/O mean a single `write()` is usually atomic
+# within a process, but the reader can still see a half-written line if
+# the writer is mid-flush. The previous `except Exception: pass` also
+# silently swallowed disk-full / permission errors. Fix both:
+#  - threading.Lock to serialize within the dashboard process
+#  - fcntl.flock for cross-process safety (scanner container + in-process)
+#  - flush + fsync so a sudden kill doesn't lose the entry
+#  - logger.exception instead of bare pass
+
+_FEEDBACK_LOCK = threading.Lock()
+
+
 def record_feedback_candidate(log_entry: dict[str, Any]) -> None:
+    line = json.dumps(log_entry, default=str) + "\n"
     try:
-        with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(log_entry, default=str) + "\n")
+        with _FEEDBACK_LOCK:
+            with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
+                # fileno() may not exist on test fakes; skip flock cleanly.
+                if _HAVE_FCNTL and hasattr(f, "fileno"):
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                    except (OSError, ValueError):
+                        pass
+                f.write(line)
+                f.flush()
+                if hasattr(f, "fileno"):
+                    try:
+                        os.fsync(f.fileno())
+                    except (OSError, AttributeError):
+                        pass
+                if _HAVE_FCNTL and hasattr(f, "fileno"):
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    except (OSError, ValueError):
+                        pass
     except Exception:
-        pass
+        # Audit #6: was `except Exception: pass`. Now we surface real I/O
+        # errors (disk full, permission denied) so the operator knows the
+        # training set is incomplete instead of silently losing samples.
+        logger.exception("Failed to append feedback candidate to %s", FEEDBACK_FILE)
 
 
 def store_user_feedback(payload: dict[str, Any]) -> dict[str, Any]:
@@ -2003,10 +2092,24 @@ def get_feedback_entries(limit: int = 200) -> list[dict[str, Any]]:
     # Defensive default (matches get_scanner_log).
     if not limit or limit <= 0:
         limit = 200
+    # Audit #6: take the same lock as the writer so we don't read a
+    # half-written line. Holding it during readlines() is fine — the
+    # critical section is short and writes are infrequent.
     try:
-        with open(FEEDBACK_FILE, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        # Skip malformed lines (partial writes).
+        with _FEEDBACK_LOCK:
+            with open(FEEDBACK_FILE, "r", encoding="utf-8") as f:
+                if _HAVE_FCNTL and hasattr(f, "fileno"):
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                    except (OSError, ValueError):
+                        pass
+                lines = f.readlines()
+                if _HAVE_FCNTL and hasattr(f, "fileno"):
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    except (OSError, ValueError):
+                        pass
+        # Skip malformed lines (defense-in-depth even with locking).
         out: list[dict[str, Any]] = []
         for l in lines:
             l = l.strip()
@@ -2018,6 +2121,7 @@ def get_feedback_entries(limit: int = 200) -> list[dict[str, Any]]:
                 continue
         return out[-limit:]
     except Exception:
+        logger.exception("Failed to read feedback entries from %s", FEEDBACK_FILE)
         return []
 
 
