@@ -25074,7 +25074,11 @@ function mailBodyIframeSrcdoc(htmlContent) {
     }
   });
   const cleaned = temp.innerHTML;
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><base target="_blank"><style>
+  // CSP meta + locked-down body prevent script execution, exfil, and full-viewport
+  // phishing overlays even if a future regression lets something through sanitizeHistoryHtml.
+  // html,body{position:static !important} blocks position:fixed/z-index overlays.
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; style-src 'unsafe-inline'; font-src data:; form-action 'none'; base-uri 'none';"><base target="_blank"><style>
+html,body{position:static !important;margin:0;padding:0;}
 body{margin:0.65rem;font:13px/1.45 system-ui,-apple-system,sans-serif;background:#181b24 !important;color:#ccc !important;line-height:1.45;word-break:break-word;}
 *{color:inherit !important;}
 body{color:#ccc !important;}
@@ -25304,7 +25308,12 @@ function openEmailPreviewModal(messageId) {
         bodyEl.innerHTML = '';
         const iframe = document.createElement('iframe');
         iframe.className = 'opp-preview-mail-iframe';
-        iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts');
+        // Email bodies never legitimately need JS. The body is pre-sanitized by
+        // sanitizeHistoryHtml (script, on*, javascript: URLs, iframes all stripped),
+        // but we still drop script + same-origin from the sandbox as defense-in-depth
+        // against sanitizer regressions and CSS exfil via url() refs.
+        // allow-popups keeps <a target="_blank"> working for links in the email.
+        iframe.setAttribute('sandbox', 'allow-popups');
         iframe.setAttribute('title', 'Email body');
         iframe.srcdoc = mailBodyIframeSrcdoc(htmlBody);
         bodyEl.appendChild(iframe);

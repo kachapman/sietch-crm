@@ -11,7 +11,23 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-13
+**Date:** 2026-10-14
+
+**Topic:** Email modal + scanner audit + landed fixes #1 (iframe sandbox) and #2 (ReDoS / regex cache).
+
+**What landed:**
+- **`docs/EMAIL_AUDIT.md` (new).** Quick-scan audit of the email modal and scanner with 17 findings tagged by severity (1 critical, 4 high, 7 medium, 5 low/nit). Each finding has a fix suggestion. All 17 also listed at the bottom of the doc.
+- **Fix #1 critical — iframe sandbox (`public/app.js:25307`).** Email bodies were rendered in an iframe with `sandbox="allow-same-origin allow-scripts"`. The body is pre-sanitized by `sanitizeHistoryHtml`, but the sandbox still permitted script execution. Changed to `sandbox="allow-popups"` (sufficient for `<a target="_blank">`; never legitimately needs JS). Also added a strict CSP meta inside the iframe srcdoc (`default-src 'none'; img-src https: data:; style-src 'unsafe-inline'; ...`) and a `html,body{position:static !important}` rule in the iframe CSS to defang any `position:fixed; z-index:9999` phishing overlay.
+- **Fix #2 high — ReDoS / unbounded regex cache (`scanner/mail_scanner.py:512`).** `_get_regex` was a plain `dict` with no eviction, and `_evaluate_condition` had a per-call `try/except re.error` for `subject_regex` / `body_regex` — so an admin-supplied `((a+)+)+b` pattern would catastrophically backtrack on every poll, forever. Replaced with `@functools.lru_cache(maxsize=1024)` and a never-match sentinel on compile failure. Added `_is_valid_regex` helper, wired into `_handle_mail_classification_rule_create` and `_handle_mail_classification_rule_update` so the rule-save endpoints now 400 on bad regex instead of silently storing a never-matching rule.
+- **Bonus fix #16 — log/feedback default limit.** `get_scanner_log` and `get_feedback_entries` now default `limit` to 200 when 0/None is passed (previously returned the entire log file, unbounded in production). Both also now skip malformed JSON lines so a partial write from `record_feedback_candidate` can't crash the reader.
+- **`tests/test_mail_scanner_regex.py` (new, 14 tests).** Covers the regex-cache behavior, bad-pattern safety in `_evaluate_condition` hot path, cache bound (lru_cache ≤ 1024 after 2000 inserts), and the log/feedback helper defaults + malformed-line resilience. Full suite: **15 + 49 + 8 + 14 + 28 = 114 tests, 0 failures**. `py_compile` ×2, `node --check` clean.
+- **Audit report:** `docs/EMAIL_AUDIT.md` is the source of truth for the remaining 15 findings (#3 modal listener leaks, #5 message-create access check, #6 feedback file locking, #7 send error messages, #11 send rate limits, #12 admin endpoint guards, #13 password form clear, #15 phishing overlay, #17 compose modal listener pattern, etc.). None are urgent enough to block the v2.0.x line.
+
+**Verified live:** `git status --short` matches the 5 expected files (`public/app.js`, `scanner/mail_scanner.py`, `server.py`, `docs/EMAIL_AUDIT.md`, `tests/test_mail_scanner_regex.py`); `git diff --stat` = `+94 −19` across the 3 modified files. Server not yet restarted — this is a frontend-iframe + scanner-config-only change, so it's safe to deploy with the next `git pull && docker compose up -d`.
+
+---
+
+## Previous summary (2026-10-12)
 
 **Topic:** Grey out the unconfigured schedule form + add an include-history toggle + history-dir size hint.
 

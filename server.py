@@ -18611,6 +18611,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not rule_name or not rule_type or not pattern:
                 _json_response(self, 400, {"error": "rule_name, rule_type, and pattern required"})
                 return
+            # Validate regex patterns at save time so admins see a clear error
+            # instead of the rule silently never matching at scan time.
+            if rule_type in ("subject_regex", "body_regex") and not mail_scanner._is_valid_regex(pattern):
+                _json_response(self, 400, {"error": f"Invalid regex pattern for rule type {rule_type!r}"})
+                return
             result = db.query_one(
                 "INSERT INTO mail_classification_rules (rule_name, rule_type, pattern, action, action_target, priority, enabled) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
@@ -18628,6 +18633,24 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not existing:
                 _json_response(self, 404, {"error": "Rule not found"})
                 return
+            # If the update touches both rule_type and pattern, validate the
+            # resulting combination. If only one of them is being changed, look
+            # up the other from the existing row to validate the pair.
+            if "pattern" in payload or "rule_type" in payload:
+                rule_type = (payload.get("rule_type") or "").strip()
+                pattern = (payload.get("pattern") or "").strip()
+                if not rule_type or not pattern:
+                    # Fetch the missing field from DB to do full validation.
+                    full = db.query_one(
+                        "SELECT rule_type, pattern FROM mail_classification_rules WHERE id = %s",
+                        (rule_id,),
+                    )
+                    if full:
+                        rule_type = rule_type or full.get("rule_type") or ""
+                        pattern = pattern or full.get("pattern") or ""
+                if rule_type in ("subject_regex", "body_regex") and pattern and not mail_scanner._is_valid_regex(pattern):
+                    _json_response(self, 400, {"error": f"Invalid regex pattern for rule type {rule_type!r}"})
+                    return
             sets, params_list = [], []
             for field in ("rule_name", "rule_type", "pattern", "action", "action_target", "priority", "enabled"):
                 if field in payload:

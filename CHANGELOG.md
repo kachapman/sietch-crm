@@ -2,6 +2,17 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Email audit fixes #1 + #2: iframe sandbox hardened, regex cache bounded (2026-10-14)
+
+Audit of the email modal + scanner (`docs/EMAIL_AUDIT.md`) found 1 critical, 4 high, 7 medium, and 5 low-severity issues. The two top items are fixed in this commit:
+
+- **#1 critical — iframe sandbox (`public/app.js:25307`).** Email bodies were rendered inside an iframe with `sandbox="allow-same-origin allow-scripts"`, which let any future sanitizer regression execute JS in the viewer. Changed to `sandbox="allow-popups"` (sufficient for `<a target="_blank">` to open in a new tab; never legitimately needs JS). Added a strict CSP meta (`default-src 'none'; img-src https: data:; style-src 'unsafe-inline'; ...`) inside the iframe srcdoc, and a `html,body{position:static !important}` rule to defang phishing overlays that use `position:fixed; z-index:9999` with a near-white background.
+- **#2 high — ReDoS / unbounded regex cache (`scanner/mail_scanner.py:512`).** The trigger engine's `_get_regex` cache was a plain `dict` with no eviction, and `_evaluate_condition` did a per-call `try/except re.error` for `subject_regex` / `body_regex` conditions — meaning an admin-supplied pattern like `((a+)+)+b` would catastrophically backtrack on every email poll forever. Replaced with `@functools.lru_cache(maxsize=1024)` and a never-match sentinel on compile failure (so callers never need their own try/except). Added `_is_valid_regex` helper and wired it into `_handle_mail_classification_rule_create` and `_handle_mail_classification_rule_update` so the rule-save endpoints now 400 with a clear "Invalid regex pattern" error instead of silently storing a never-matching rule.
+
+Bonus adjacent fix (#16 from the audit): `get_scanner_log` and `get_feedback_entries` now default `limit` to 200 when 0/None is passed (previously returned the entire log/feedback file — unbounded in production). Both also now skip malformed JSON lines so a partial write from `record_feedback_candidate` can't crash the reader.
+
+New tests: `tests/test_mail_scanner_regex.py` (14 tests) covers the regex-cache behavior, bad-pattern safety in `_evaluate_condition`, and the log/feedback helper defaults. Full suite: 15 + 49 + 8 + 14 + 28 = 114 tests, 0 failures. `py_compile` ×2, `node --check` clean.
+
 ## Grey-out disabled schedule + include-history guard + history dir-size hint (2026-10-13)
 
 The console schedule form now greys out until first-time config save (a `configured` flag is returned in `/backup/config` and the JS reads it to disable the fieldset and show a "Not configured yet" notice). New 4th checkbox "include history-attachments" with a ~30 GB / ~20 min warning gates the 30 GB tar.gz so an operator can opt out. The empty-log message now distinguishes "no parts selected" from "Save the schedule and click Run Export Now." New `/api/v2/admin/backup/history-dir-size` endpoint surfaces the history dir size for the warning hint. Cleanup glob now catches `*.tmp` from interrupted history-attachments writes. Tests 41 → 46 (status-shape, route-placement, log-variants, 4th-checkbox, tmp-cleanup).

@@ -9,6 +9,7 @@ Sietch CRM PostgreSQL database via db.py.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import html
 import json
@@ -509,14 +510,33 @@ def _execute_custom_behaviors(
 
 # ── Trigger Evaluation Engine ────────────────────────────────────────────────
 
-_regex_cache: dict[str, re.Pattern] = {}
+# Sentinel pattern returned for bad regex (compile failure). Matches nothing,
+# so _evaluate_condition treats it as "no match" instead of raising every poll.
+_NEVER_MATCH_RE: re.Pattern = re.compile(r"(?!)")
 
-
+# Bounded regex cache. Bounded so admin-supplied classification rules can't
+# grow memory unboundedly across the lifetime of the process. lru_cache also
+# makes bad-regex patterns safe to look up — the first call captures the
+# failure and every subsequent call is O(1) and never raises.
+@functools.lru_cache(maxsize=1024)
 def _get_regex(pattern: str) -> re.Pattern:
-    """Cache compiled regex patterns for performance."""
-    if pattern not in _regex_cache:
-        _regex_cache[pattern] = re.compile(pattern, re.IGNORECASE)
-    return _regex_cache[pattern]
+    """Compile and cache a regex pattern. Returns a never-match sentinel on
+    compile failure so callers can treat bad patterns as 'no match' without
+    needing their own try/except."""
+    try:
+        return re.compile(pattern, re.IGNORECASE)
+    except re.error:
+        return _NEVER_MATCH_RE
+
+
+def _is_valid_regex(pattern: str) -> bool:
+    """Used by the rule-save endpoints to reject malformed patterns at write
+    time (instead of silently no-matching at scan time)."""
+    try:
+        re.compile(pattern, re.IGNORECASE)
+        return True
+    except re.error:
+        return False
 
 
 def _evaluate_triggers(triggers: list, msg: dict, classification: dict) -> bool:
@@ -562,17 +582,13 @@ def _evaluate_condition(condition: dict, msg: dict, classification: dict) -> boo
     if ctype == "subject_contains":
         result = value.lower() in subject if value else False
     elif ctype == "subject_regex":
-        try:
-            result = bool(_get_regex(value).search(subject)) if value else False
-        except re.error:
-            result = False
+        # _get_regex returns a never-match sentinel on re.error, so this is safe
+        # without a try/except (and a try/except per call would be expensive on hot path).
+        result = bool(_get_regex(value).search(subject)) if value else False
     elif ctype == "body_contains":
         result = value.lower() in body if value else False
     elif ctype == "body_regex":
-        try:
-            result = bool(_get_regex(value).search(body)) if value else False
-        except re.error:
-            result = False
+        result = bool(_get_regex(value).search(body)) if value else False
     elif ctype == "sender_email":
         result = value.lower() == sender if value else False
     elif ctype == "sender_domain":
@@ -1903,10 +1919,24 @@ def get_scanner_status() -> dict[str, Any]:
 def get_scanner_log(limit: int = 200, account_id: str | None = None) -> list[dict[str, Any]]:
     if not LOG_FILE.exists():
         return []
+    # Defensive default: 0/None used to return the entire log, which is unbounded
+    # in production. Cap to 200 (or a caller-supplied positive value) at the
+    # helper level so the handler can be sloppy safely.
+    if not limit or limit <= 0:
+        limit = 200
     try:
         with open(LOG_FILE, "r", encoding="utf-8") as f:
             lines = f.readlines()
-        entries = [json.loads(l) for l in lines if l.strip()]
+        # Skip malformed lines (partial writes from record_feedback_candidate).
+        entries: list[dict[str, Any]] = []
+        for l in lines:
+            l = l.strip()
+            if not l:
+                continue
+            try:
+                entries.append(json.loads(l))
+            except json.JSONDecodeError:
+                continue
         if account_id:
             # Support "crm" sentinel for all CRM-only accounts or a numeric ID.
             if str(account_id).lower() == "crm":
@@ -1914,7 +1944,7 @@ def get_scanner_log(limit: int = 200, account_id: str | None = None) -> list[dic
                 entries = [e for e in entries if e.get("account_id") in crm_ids]
             else:
                 entries = [e for e in entries if str(e.get("account_id")) == str(account_id)]
-        return entries[-limit:] if limit else entries
+        return entries[-limit:]
     except Exception:
         return []
 
@@ -1970,10 +2000,23 @@ def store_user_feedback(payload: dict[str, Any]) -> dict[str, Any]:
 def get_feedback_entries(limit: int = 200) -> list[dict[str, Any]]:
     if not FEEDBACK_FILE.exists():
         return []
+    # Defensive default (matches get_scanner_log).
+    if not limit or limit <= 0:
+        limit = 200
     try:
         with open(FEEDBACK_FILE, "r", encoding="utf-8") as f:
             lines = f.readlines()
-        return [json.loads(l) for l in lines[-limit:] if l.strip()]
+        # Skip malformed lines (partial writes).
+        out: list[dict[str, Any]] = []
+        for l in lines:
+            l = l.strip()
+            if not l:
+                continue
+            try:
+                out.append(json.loads(l))
+            except json.JSONDecodeError:
+                continue
+        return out[-limit:]
     except Exception:
         return []
 
