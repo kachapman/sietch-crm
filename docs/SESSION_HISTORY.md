@@ -13,6 +13,22 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-14
 
+**Topic:** Email audit fixes #3 + #4 + #5 — modal listener pattern + create-handler hardening + bonus XSS fix in reply/forward quotes.
+
+**What landed:**
+- **Fix #5 high — `_handle_mail_message_create` access + size + auth (`server.py:17016`).** Previously had no auth check, no `_mail_account_accessible` check, no size cap, no folder allowlist, and no boolean coercion. Scanner doesn't call this endpoint (uses `db.execute` directly), so this was a hardening pass for any future caller or hand-rolled request. Added `_require_auth`, integer-typed `account_id` with `_mail_account_accessible` check, 5 MB per-field body cap (10 MB combined), folder allowlist (INBOX/Sent/Drafts/Spam/Trash/Archive/Junk/Outbox + any folder that exists in `mail_folders` for the account), and defensive `bool()` coercion of `is_read`/`is_flagged`.
+- **Fix #3 + #4 high — `openEmailPreviewModal` listener pattern (`public/app.js:25236`).** Replaced ad-hoc listener binding with a single `AbortController` per open. All listeners (dismiss, ESC, action buttons, link-deal search, attachment links) now register with `{ signal: ctrl.signal }` and are removed atomically on close. Extracted the data-render logic into 5 small helpers (`renderEmailPreviewHead`, `renderEmailPreviewBody`, `renderEmailPreviewAttachments`, `renderEmailPreviewLinkedDeals`, `bindEmailPreviewActionButtons`) so the soft-refresh path (re-opening the modal for the same message) only re-renders the data and keeps the listeners. The "link to deal" sub-form previously re-`innerHTML`'d the entire `linkedEl` after every successful link, which destroyed and recreated its event listeners — fixed by splitting it into a badges container and a search container that survive across updates.
+- **Bonus XSS fix in reply/forward quotes.** Reply and forward actions built a `quotedBody` by interpolating `${bodyText}` (plain-text email content) directly into HTML. Plain-text content can contain `<script>`, which would have been injected into the compose modal's contenteditable and sent to the recipient. Now `escapeHtml(bodyText)` is applied. Same code path; not in the original audit.
+- **Tests:** `tests/test_email_audit_345.py` (17 Python tests covering auth/payload/size/folder/boolean-coercion paths) + `tests/test_email_audit_345.mjs` (5 JS tests covering the AbortController listener pattern via a minimal DOM mock that respects signal-abort semantics). Full suite: 15 + 49 + 8 + 14 + 17 + 28 + 5 = **136 tests, 0 failures**. `py_compile` ×2, `node --check` clean.
+
+**Verified live:** `git status --short` matches the 4 expected files (`public/app.js`, `server.py`, `tests/test_email_audit_345.py`, `tests/test_email_audit_345.mjs`); `git diff --stat` = `+406 −225` in `public/app.js` (large because the modal function was split into 5 helpers) and `+67` in `server.py`. Server not yet restarted — the modal and handler changes are safe to deploy with the next `git pull && docker compose up -d`.
+
+**Next:** Audit #6 (feedback file locking), #11 (outbound send rate limit), #12 (admin endpoint guards) — all medium severity. None are urgent enough to block the v2.0.x line.
+
+---
+
+## Previous summary (2026-10-14)
+
 **Topic:** Email modal + scanner audit + landed fixes #1 (iframe sandbox) and #2 (ReDoS / regex cache).
 
 **What landed:**
@@ -24,10 +40,6 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 - **Audit report:** `docs/EMAIL_AUDIT.md` is the source of truth for the remaining 15 findings (#3 modal listener leaks, #5 message-create access check, #6 feedback file locking, #7 send error messages, #11 send rate limits, #12 admin endpoint guards, #13 password form clear, #15 phishing overlay, #17 compose modal listener pattern, etc.). None are urgent enough to block the v2.0.x line.
 
 **Verified live:** `git status --short` matches the 5 expected files (`public/app.js`, `scanner/mail_scanner.py`, `server.py`, `docs/EMAIL_AUDIT.md`, `tests/test_mail_scanner_regex.py`); `git diff --stat` = `+94 −19` across the 3 modified files. Server not yet restarted — this is a frontend-iframe + scanner-config-only change, so it's safe to deploy with the next `git pull && docker compose up -d`.
-
----
-
-## Previous summary (2026-10-12)
 
 **Topic:** Grey out the unconfigured schedule form + add an include-history toggle + history-dir size hint.
 

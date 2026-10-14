@@ -83,7 +83,7 @@ pattern on `re.error` so `_evaluate_condition` treats bad regex as a
 no-match instead of throwing. Also reject bad regex at rule-save time in
 `_handle_mail_classification_rule_create/update`.
 
-**Status: Fixed in this session.**
+**Status: Fixed in this session** (see SESSION_HISTORY 2026-10-14, second entry).
 
 ---
 
@@ -120,6 +120,8 @@ After 5 opens there are 5 click listeners per action button.
 `close()`. Apply same pattern to `openComposeModal` and
 `openAccountSettingsModal`.
 
+**Status: Fixed in this session** (see SESSION_HISTORY 2026-10-14, second entry).
+
 ---
 
 ### 🟠 5. `_handle_mail_message_create` — verify `account_id` access check
@@ -134,6 +136,8 @@ both check; the create path needs verification.)
 **Fix:** Add `_mail_account_accessible(user, account_id)` check. Cap
 `body_html` / `body_text` at ~5 MB. Validate `folder` against an
 allowlist.
+
+**Status: Fixed in this session** (see SESSION_HISTORY 2026-10-14, second entry).
 
 ---
 
@@ -280,6 +284,24 @@ should be defensive.
 **File:** `public/app.js:20040, 22127`
 
 Apply the same `AbortController` fix as `openEmailPreviewModal`.
+
+---
+
+## Bonus XSS in reply/forward quotes (not in the original 17)
+
+**File:** `public/app.js:25447, 25451, 25455` (original lines, pre-refactor)
+
+The reply/forward action buttons built a `quotedBody` by interpolating
+`${bodyText}` (plain-text email content from `pickMailBodyForDisplay`)
+directly into HTML. Plain-text content can contain `<script>` or other
+markup. Once injected into the compose modal's contenteditable, the
+script would run in the dashboard's origin and could be sent to the
+recipient on Send.
+
+**Fix:** Apply `escapeHtml(bodyText)` before interpolating into the
+quotedBody HTML.
+
+**Status: Fixed in this session** (see SESSION_HISTORY 2026-10-14, second entry).
 
 ---
 

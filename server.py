@@ -17014,8 +17014,63 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_message_create(self) -> None:
+        # Audit #5: previously had no auth, no access check, no size cap, no
+        # folder allowlist. The scanner doesn't actually call this endpoint
+        # (it inserts via db.execute), so this is a hardening pass for any
+        # future caller (or hand-rolled request). All real client calls go
+        # through the GET inbox / mark-read / etc endpoints.
         try:
+            user = _require_auth(self)
+            if not user:
+                return
             payload = json.loads(_read_body(self) or b"{}")
+            account_id_raw = payload.get("account_id")
+            if account_id_raw is None:
+                _json_response(self, 400, {"error": "account_id required"})
+                return
+            try:
+                account_id = int(account_id_raw)
+            except (ValueError, TypeError):
+                _json_response(self, 400, {"error": "account_id must be an integer"})
+                return
+            if not _mail_account_accessible(user, account_id):
+                _json_response(self, 403, {"error": "You don't have access to this account"})
+                return
+
+            # Cap payload sizes so a single request can't insert a 1 GB body
+            # and OOM the row. 5 MB per text/html field, 10 MB combined.
+            body_text = payload.get("body_text") or ""
+            body_html = payload.get("body_html") or ""
+            MAX_BODY_FIELD = 5 * 1024 * 1024
+            if len(body_text) > MAX_BODY_FIELD:
+                _json_response(self, 413, {"error": f"body_text exceeds {MAX_BODY_FIELD} bytes"})
+                return
+            if len(body_html) > MAX_BODY_FIELD:
+                _json_response(self, 413, {"error": f"body_html exceeds {MAX_BODY_FIELD} bytes"})
+                return
+            if len(body_text) + len(body_html) > 10 * 1024 * 1024:
+                _json_response(self, 413, {"error": "combined body exceeds 10 MB"})
+                return
+
+            # Folder allowlist — reject anything not in this set. Custom user
+            # folders are also accepted if the user owns the account (handled
+            # below via the mail_folders table lookup).
+            folder = (payload.get("folder") or "INBOX").strip()
+            builtin_folders = {"INBOX", "Sent", "Drafts", "Spam", "Trash", "Archive", "Junk", "Outbox"}
+            if folder not in builtin_folders:
+                # Allow custom folders for this account if the row exists.
+                custom = db.query_one(
+                    "SELECT id FROM mail_folders WHERE imap_account_id = %s AND (name = %s OR imap_path = %s) LIMIT 1",
+                    (account_id, folder, folder),
+                )
+                if not custom:
+                    _json_response(self, 400, {"error": f"Invalid folder {folder!r}"})
+                    return
+
+            # Coerce boolean fields defensively.
+            is_read = bool(payload.get("is_read", False))
+            is_flagged = bool(payload.get("is_flagged", False))
+
             imap_uid = payload.get("imap_uid") or str(int(time.time() * 1000))
             result = db.query_one(
                 """INSERT INTO mail_messages
@@ -17024,19 +17079,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
-                    payload.get("account_id"),
+                    account_id,
                     imap_uid,
                     payload.get("message_id"),
                     payload.get("from_addr"),
                     payload.get("to_addr"),
                     payload.get("cc_addr"),
                     payload.get("subject"),
-                    payload.get("body_text"),
-                    payload.get("body_html"),
+                    body_text,
+                    body_html,
                     payload.get("date_received"),
-                    payload.get("folder", "INBOX"),
-                    payload.get("is_read", False),
-                    payload.get("is_flagged", False),
+                    folder,
+                    is_read,
+                    is_flagged,
                 ),
             )
             _json_response(self, 201, {"id": result["id"]})

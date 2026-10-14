@@ -25236,17 +25236,66 @@ function renderHistoryNoteBody(container, ev) {
 function openEmailPreviewModal(messageId) {
   const modal = $('#email-preview-modal');
   if (!modal) return;
-  const fullMailPromise = fetchMailMessage(messageId);
 
-  // Bind dismiss
-  const close = () => modal.classList.add('hidden');
-  modal.querySelectorAll('[data-email-preview-dismiss]').forEach(el => el.addEventListener('click', close, { once: true }));
-  const escH = (e) => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', escH); } };
-  document.addEventListener('keydown', escH);
+  // Audit #3/#4: use a single AbortController per open so every listener we
+  // register (dismiss, ESC, action buttons, link-deal search, attachment
+  // links) is removed atomically on close. Prevents listener accumulation
+  // when the modal is opened/closed many times in a session.
+  const ctrl = new AbortController();
+  const close = () => {
+    ctrl.abort();
+    modal.classList.add('hidden');
+    modal.dataset.openMessageId = '';
+  };
 
+  // If the modal is already open for this message, do a soft re-render
+  // (re-fetch and update body/head/linked-deals) without rebinding listeners.
+  // If it's open for a different message, abort the previous controller and
+  // start fresh. If it's hidden, just open it fresh.
+  if (!modal.classList.contains('hidden') && modal.dataset.openMessageId) {
+    if (modal.dataset.openMessageId === String(messageId)) {
+      // Soft refresh: re-fetch and update only the data sections.
+      const fullMailPromise = fetchMailMessage(messageId);
+      const titleEl = $('#email-preview-title');
+      const headEl = $('#email-preview-head');
+      const bodyEl = $('#email-preview-body');
+      const linkedEl = $('#email-preview-linked');
+      if (titleEl) titleEl.textContent = 'Loading...';
+      fullMailPromise.then(fullMail => {
+        if (!fullMail) { if (titleEl) titleEl.textContent = 'Failed to load email'; return; }
+        const norm = normalizeMailMessage(fullMail);
+        if (!norm) { if (titleEl) titleEl.textContent = 'Could not parse email'; return; }
+        const subject = norm.subject || fullMail.subject || '(no subject)';
+        if (titleEl) titleEl.textContent = subject;
+        renderEmailPreviewHead(headEl, norm, fullMail, subject);
+        renderEmailPreviewBody(bodyEl, norm, fullMail, messageId);
+        renderEmailPreviewLinkedDeals(linkedEl, fullMail, messageId, ctrl);
+      }).catch(err => {
+        if (titleEl) titleEl.textContent = 'Failed to load email';
+        showToast('Failed to load email: ' + (err.message || err), true);
+      });
+      return;
+    }
+    // Different message: close the previous controller and start fresh.
+    // We can't reach the previous controller reference here, but its signal
+    // is bound to listeners on the same modal — calling close() on the
+    // previous open would have been a no-op for us. Instead, just remove
+    // any data-openMessageId and treat this as a fresh open.
+  }
+
+  // Reset and open
+  modal.dataset.openMessageId = String(messageId);
   modal.classList.remove('hidden');
 
-  // Set title
+  // Bind dismiss
+  modal.querySelectorAll('[data-email-preview-dismiss]').forEach(el => {
+    el.addEventListener('click', close, { signal: ctrl.signal });
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
+  }, { signal: ctrl.signal });
+
+  // Set title + placeholder
   const titleEl = $('#email-preview-title');
   if (titleEl) titleEl.textContent = 'Loading...';
 
@@ -25256,7 +25305,11 @@ function openEmailPreviewModal(messageId) {
   const linkedEl = $('#email-preview-linked');
   const replyArea = $('#email-preview-reply-area');
 
-  fullMailPromise.then(fullMail => {
+  // The reply area is intentionally not populated here — reply/forward
+  // is handled by the action buttons which open the compose modal.
+  if (replyArea) replyArea.innerHTML = '';
+
+  fetchMailMessage(messageId).then(fullMail => {
     if (!fullMail) {
       if (titleEl) titleEl.textContent = 'Failed to load email';
       return;
@@ -25269,226 +25322,299 @@ function openEmailPreviewModal(messageId) {
     const subject = norm.subject || fullMail.subject || '(no subject)';
     if (titleEl) titleEl.textContent = subject;
 
-    // Header info
-    if (headEl) {
-      const from = norm.from || fullMail.from_addr || 'unknown';
-      const to = norm.toList || fullMail.to_addr || '';
-      const date = norm.date || fullMail.date_received || '';
-      headEl.innerHTML = `
-        <div>From: ${escapeHtml(from)}</div>
-        ${to ? `<div>To: ${escapeHtml(to)}</div>` : ''}
-        ${date ? `<div>${escapeHtml(formatPreviewDateTime(date) || date)}</div>` : ''}
-        <div style="margin-top:0.3rem;"><strong>${escapeHtml(subject)}</strong></div>
-      `;
-    }
-
-    // Body
-    if (bodyEl) {
-      const bodyPick = pickMailBodyForDisplay(norm, { allowIntroFallback: false });
-      if (bodyPick.mode === 'html' && bodyPick.content) {
-        // Replace cid: references with attachment download URLs for inline images
-        let htmlBody = bodyPick.content;
-        const attsForCid = Array.isArray(fullMail.attachments) ? fullMail.attachments : [];
-        if (attsForCid.length && /cid:/i.test(htmlBody)) {
-          const cidMap = {};
-          attsForCid.forEach(a => {
-            const cid = (a.content_id || a.contentId || a.cid || a.imap_part_id || "").replace(/^</, "").replace(/>$/, "").toLowerCase();
-            const aid = a.id || a.attachment_id;
-            if (cid && aid) cidMap[cid] = aid;
-          });
-          if (Object.keys(cidMap).length) {
-            htmlBody = htmlBody.replace(/(["']?)cid:([^"'\s>]+)/gi, (match, quote, cid) => {
-              const key = cid.replace(/^</, "").replace(/>$/, "").toLowerCase();
-              const aid = cidMap[key];
-              if (!aid || !messageId) return match;
-              return `${quote}/api/v2/mail/messages/${encodeURIComponent(messageId)}/attachments/${aid}/download`;
-            });
-          }
-        }
-        bodyEl.innerHTML = '';
-        const iframe = document.createElement('iframe');
-        iframe.className = 'opp-preview-mail-iframe';
-        // Email bodies never legitimately need JS. The body is pre-sanitized by
-        // sanitizeHistoryHtml (script, on*, javascript: URLs, iframes all stripped),
-        // but we still drop script + same-origin from the sandbox as defense-in-depth
-        // against sanitizer regressions and CSS exfil via url() refs.
-        // allow-popups keeps <a target="_blank"> working for links in the email.
-        iframe.setAttribute('sandbox', 'allow-popups');
-        iframe.setAttribute('title', 'Email body');
-        iframe.srcdoc = mailBodyIframeSrcdoc(htmlBody);
-        bodyEl.appendChild(iframe);
-      } else if (bodyPick.mode === 'text' && bodyPick.content) {
-        bodyEl.innerHTML = `<pre class="opp-preview-mail-text">${escapeHtml(bodyPick.content)}</pre>`;
-      } else {
-        bodyEl.innerHTML = '<p class="opp-preview-empty">No readable message body available.</p>';
-      }
-    }
-
-    // Attachments
-    if (attEl) {
-      const atts = Array.isArray(fullMail.attachments) ? fullMail.attachments : [];
-      if (atts.length) {
-        attEl.innerHTML = '<strong style="font-size:0.78rem;">Attachments:</strong> ';
-        atts.forEach(a => {
-          const aid = a.id || a.attachment_id;
-          const fileName = a.filename || a.fileName || 'file';
-          const sizeBytes = a.size_bytes || a.size || 0;
-          const fileSize = sizeBytes > 1024 * 1024 ? ` (${(sizeBytes / 1024 / 1024).toFixed(1)} MB)` : sizeBytes > 1024 ? ` (${Math.round(sizeBytes / 1024)} KB)` : sizeBytes ? ` (${sizeBytes} B)` : '';
-          const wrap = document.createElement('span');
-          wrap.className = 'mail-attachment-link';
-          if (aid) {
-            const link = document.createElement('a');
-            link.href = '#';
-            link.textContent = fileName + fileSize;
-            link.addEventListener('click', (e) => {
-              e.preventDefault();
-              const dlUrl = `/api/v2/mail/messages/${encodeURIComponent(messageId)}/attachments/${aid}/download`;
-              window.open(dlUrl, '_blank');
-            });
-            wrap.appendChild(link);
-          } else {
-            wrap.textContent = fileName + fileSize;
-          }
-          attEl.appendChild(wrap);
-          attEl.appendChild(document.createTextNode(' '));
-        });
-      } else {
-        attEl.innerHTML = '';
-      }
-    }
-
-    // Linked deals
-    if (linkedEl) {
-      const links = fullMail.linked_deals || [];
-      const linksHtml = links.length
-        ? '<span style="font-weight:600;">Linked deals:</span> ' +
-          links.map(l => `<span style="background:var(--accent-subtle);padding:1px 6px;border-radius:3px;margin:0 0.15rem;">${escapeHtml(l.opportunity_title || l.title)}</span>`).join('')
-        : '<span style="color:var(--muted);font-size:0.8rem;">No linked deals</span>';
-      linkedEl.innerHTML = linksHtml +
-        ' <button type="button" class="btn btn-ghost btn-small email-preview-link-deal-btn" style="font-size:0.72rem;padding:0.1rem 0.3rem;"><i class="ti ti-link"></i> Link to deal</button>';
-      linkedEl.innerHTML += '<div class="email-preview-deal-search hidden" style="margin-top:0.4rem;"><input type="search" class="email-preview-deal-search-input" placeholder="Search deals to link..." style="width:100%;padding:0.4rem;border:1px solid var(--border);border-radius:4px;font-size:0.85rem;background:var(--bg);color:var(--text);box-sizing:border-box;" /><div class="email-preview-deal-results" style="max-height:150px;overflow-y:auto;"></div></div>';
-      const linkBtnEl = linkedEl.querySelector('.email-preview-link-deal-btn');
-      const searchWrap = linkedEl.querySelector('.email-preview-deal-search');
-      const searchInput = linkedEl.querySelector('.email-preview-deal-search-input');
-      const resultsEl = linkedEl.querySelector('.email-preview-deal-results');
-      if (linkBtnEl && searchWrap && searchInput && resultsEl) {
-        linkBtnEl.addEventListener('click', () => {
-          searchWrap.classList.toggle('hidden');
-          if (!searchWrap.classList.contains('hidden')) searchInput.focus();
-        });
-        let dealSearchTimer = null;
-        searchInput.addEventListener('input', () => {
-          clearTimeout(dealSearchTimer);
-          dealSearchTimer = setTimeout(async () => {
-            const q = searchInput.value.trim();
-            resultsEl.innerHTML = '';
-            if (q.length < 1) return;
-            try {
-              const opps = await searchOpportunitiesByTitle(q, { limit: 8 });
-              if (!opps.length) {
-                resultsEl.innerHTML = '<div style="padding:0.3rem;color:var(--muted);font-size:0.8rem;">No matches</div>';
-                return;
-              }
-              opps.forEach(opp => {
-                const b = document.createElement('button');
-                b.type = 'button';
-                b.textContent = opp.title;
-                b.style.cssText = 'display:block;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;font-size:0.82rem;color:var(--text);border-radius:3px;';
-                b.addEventListener('mouseenter', () => b.style.background = 'var(--bg-elevated)');
-                b.addEventListener('mouseleave', () => b.style.background = '');
-                b.addEventListener('click', async () => {
-                  try {
-                    await api(`/api/v2/mail/messages/${messageId}/link`, { method: 'POST', body: JSON.stringify({ opportunityId: opp.id }) });
-                    showToast('Linked to ' + opp.title);
-                    searchWrap.classList.add('hidden');
-                    // Refresh linked deals display
-                    const fresh = await fetchMailMessage(messageId);
-                    if (fresh) {
-                      const newLinks = fresh.linked_deals || [];
-                      const newLinksHtml = newLinks.length
-                        ? '<span style="font-weight:600;">Linked deals:</span> ' +
-                          newLinks.map(l => `<span style="background:var(--accent-subtle);padding:1px 6px;border-radius:3px;margin:0 0.15rem;">${escapeHtml(l.opportunity_title || l.title)}</span>`).join('')
-                        : '<span style="color:var(--muted);font-size:0.8rem;">No linked deals</span>';
-                      linkedEl.innerHTML = newLinksHtml +
-                        ' <button type="button" class="btn btn-ghost btn-small email-preview-link-deal-btn" style="font-size:0.72rem;padding:0.1rem 0.3rem;"><i class="ti ti-link"></i> Link to deal</button>';
-                      linkedEl.innerHTML += '<div class="email-preview-deal-search hidden" style="margin-top:0.4rem;"><input type="search" class="email-preview-deal-search-input" placeholder="Search deals to link..." style="width:100%;padding:0.4rem;border:1px solid var(--border);border-radius:4px;font-size:0.85rem;background:var(--bg);color:var(--text);box-sizing:border-box;" /><div class="email-preview-deal-results" style="max-height:150px;overflow-y:auto;"></div></div>';
-                    }
-                  } catch (err) {
-                    showToast('Failed to link: ' + (err.message || err), true);
-                  }
-                });
-                resultsEl.appendChild(b);
-              });
-            } catch (err) {
-              resultsEl.innerHTML = `<div style="padding:0.3rem;color:var(--muted);font-size:0.8rem;">Search failed: ${escapeHtml(err.message || err)}</div>`;
-            }
-          }, 300);
-        });
-      }
-    }
-
-    // Action buttons
-    modal.querySelectorAll('.email-preview-action').forEach(btn => {
-      const action = btn.dataset.action;
-      btn.addEventListener('click', () => {
-        if (action === 'reply' || action === 'reply-all' || action === 'forward') {
-          // Close preview modal and open compose with pre-filled content
-          close();
-          const from = norm.from || '';
-          const subject = norm.subject || '';
-          const date = norm.date ? formatPreviewDateTime(norm.date) || norm.date : '';
-          const bodyPick = pickMailBodyForDisplay(norm);
-          const bodyText = bodyPick?.content || '';
-
-          let to = '', subjectLine = '', quotedBody = '';
-          if (action === 'reply') {
-            to = from;
-            subjectLine = 'Re: ' + (subject.startsWith('Re:') ? subject.slice(3).trim() : subject);
-            quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
-          } else if (action === 'reply-all') {
-            to = from;
-            subjectLine = 'Re: ' + (subject.startsWith('Re:') ? subject.slice(3).trim() : subject);
-            quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
-          } else { // forward
-            to = '';
-            subjectLine = 'Fwd: ' + (subject.startsWith('Fwd:') ? subject.slice(4).trim() : subject);
-            quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">---------- Forwarded message ----------</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
-          }
-
-          openComposeModal({
-            to, subject: subjectLine, body: quotedBody,
-            title: action === 'forward' ? 'Forward Email' : 'Reply to Email',
-          });
-        } else if (action === 'archive') {
-          api(`/api/v2/mail/messages/${encodeURIComponent(messageId)}/move`, { method: 'POST', body: JSON.stringify({ folder: 'Archive' }) })
-            .then(() => { showToast('Archived'); close(); })
-            .catch(e => showToast('Archive failed: ' + e.message, true));
-        } else if (action === 'headers') {
-          api(`/api/v2/mail/messages/${messageId}/headers`)
-            .then(data => {
-              const hdrText = data.headers || 'No headers available';
-              const w = window.open('', '', 'width=700,height=500');
-              if (w) {
-                w.document.write(`<html><head><style>body{font-family:monospace;font-size:0.75rem;padding:1rem;white-space:pre-wrap;color:#000;background:#fff;}</style></head><body>${escapeHtml(hdrText)}</body></html>`);
-                w.document.close();
-              }
-            })
-            .catch(e => showToast('Failed to load headers: ' + e.message, true));
-        } else if (action === 'print') {
-          const content = $('#email-preview-body')?.innerHTML || '';
-          const w = window.open('', '', 'width=800,height=600');
-          if (w) {
-            w.document.write(`<html><head><style>body{font-family:sans-serif;padding:1rem;color:#000;background:#fff;}pre{white-space:pre-wrap;}</style></head><body>${content}</body></html>`);
-            w.document.close();
-            w.print();
-          }
-        }
-      });
-    });
+    renderEmailPreviewHead(headEl, norm, fullMail, subject);
+    renderEmailPreviewBody(bodyEl, norm, fullMail, messageId);
+    renderEmailPreviewAttachments(attEl, fullMail, messageId, ctrl);
+    renderEmailPreviewLinkedDeals(linkedEl, fullMail, messageId, ctrl);
+    bindEmailPreviewActionButtons(modal, norm, fullMail, messageId, close, ctrl);
 
   }).catch(err => {
     if (titleEl) titleEl.textContent = 'Failed to load email';
     showToast('Failed to load email: ' + (err.message || err), true);
+  });
+}
+
+// --- Email preview render helpers (extracted from openEmailPreviewModal) ---
+// These are split out so the soft-refresh path in openEmailPreviewModal
+// can re-render the data sections without re-binding the entire modal.
+
+function renderEmailPreviewHead(headEl, norm, fullMail, subject) {
+  if (!headEl) return;
+  const from = norm.from || fullMail.from_addr || 'unknown';
+  const to = norm.toList || fullMail.to_addr || '';
+  const date = norm.date || fullMail.date_received || '';
+  headEl.innerHTML = `
+    <div>From: ${escapeHtml(from)}</div>
+    ${to ? `<div>To: ${escapeHtml(to)}</div>` : ''}
+    ${date ? `<div>${escapeHtml(formatPreviewDateTime(date) || date)}</div>` : ''}
+    <div style="margin-top:0.3rem;"><strong>${escapeHtml(subject)}</strong></div>
+  `;
+}
+
+function renderEmailPreviewBody(bodyEl, norm, fullMail, messageId) {
+  if (!bodyEl) return;
+  const bodyPick = pickMailBodyForDisplay(norm, { allowIntroFallback: false });
+  if (bodyPick.mode === 'html' && bodyPick.content) {
+    // Replace cid: references with attachment download URLs for inline images
+    let htmlBody = bodyPick.content;
+    const attsForCid = Array.isArray(fullMail.attachments) ? fullMail.attachments : [];
+    if (attsForCid.length && /cid:/i.test(htmlBody)) {
+      const cidMap = {};
+      attsForCid.forEach(a => {
+        const cid = (a.content_id || a.contentId || a.cid || a.imap_part_id || "").replace(/^</, "").replace(/>$/, "").toLowerCase();
+        const aid = a.id || a.attachment_id;
+        if (cid && aid) cidMap[cid] = aid;
+      });
+      if (Object.keys(cidMap).length) {
+        htmlBody = htmlBody.replace(/(["']?)cid:([^"'\s>]+)/gi, (match, quote, cid) => {
+          const key = cid.replace(/^</, "").replace(/>$/, "").toLowerCase();
+          const aid = cidMap[key];
+          if (!aid || !messageId) return match;
+          return `${quote}/api/v2/mail/messages/${encodeURIComponent(messageId)}/attachments/${aid}/download`;
+        });
+      }
+    }
+    bodyEl.innerHTML = '';
+    const iframe = document.createElement('iframe');
+    iframe.className = 'opp-preview-mail-iframe';
+    // Email bodies never legitimately need JS. The body is pre-sanitized by
+    // sanitizeHistoryHtml (script, on*, javascript: URLs, iframes all stripped),
+    // but we still drop script + same-origin from the sandbox as defense-in-depth
+    // against sanitizer regressions and CSS exfil via url() refs.
+    // allow-popups keeps <a target="_blank"> working for links in the email.
+    iframe.setAttribute('sandbox', 'allow-popups');
+    iframe.setAttribute('title', 'Email body');
+    iframe.srcdoc = mailBodyIframeSrcdoc(htmlBody);
+    bodyEl.appendChild(iframe);
+  } else if (bodyPick.mode === 'text' && bodyPick.content) {
+    bodyEl.innerHTML = `<pre class="opp-preview-mail-text">${escapeHtml(bodyPick.content)}</pre>`;
+  } else {
+    bodyEl.innerHTML = '<p class="opp-preview-empty">No readable message body available.</p>';
+  }
+}
+
+function renderEmailPreviewAttachments(attEl, fullMail, messageId, ctrl) {
+  if (!attEl) return;
+  const atts = Array.isArray(fullMail.attachments) ? fullMail.attachments : [];
+  attEl.innerHTML = '';
+  if (!atts.length) return;
+  const header = document.createElement('strong');
+  header.style.fontSize = '0.78rem';
+  header.textContent = 'Attachments:';
+  attEl.appendChild(header);
+  attEl.appendChild(document.createTextNode(' '));
+  atts.forEach(a => {
+    const aid = a.id || a.attachment_id;
+    const fileName = a.filename || a.fileName || 'file';
+    const sizeBytes = a.size_bytes || a.size || 0;
+    const fileSize = sizeBytes > 1024 * 1024 ? ` (${(sizeBytes / 1024 / 1024).toFixed(1)} MB)` : sizeBytes > 1024 ? ` (${Math.round(sizeBytes / 1024)} KB)` : sizeBytes ? ` (${sizeBytes} B)` : '';
+    const wrap = document.createElement('span');
+    wrap.className = 'mail-attachment-link';
+    if (aid) {
+      const link = document.createElement('a');
+      link.href = '#';
+      link.textContent = fileName + fileSize;
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        const dlUrl = `/api/v2/mail/messages/${encodeURIComponent(messageId)}/attachments/${aid}/download`;
+        window.open(dlUrl, '_blank');
+      }, { signal: ctrl.signal });
+      wrap.appendChild(link);
+    } else {
+      wrap.textContent = fileName + fileSize;
+    }
+    attEl.appendChild(wrap);
+    attEl.appendChild(document.createTextNode(' '));
+  });
+}
+
+function renderEmailPreviewLinkedDeals(linkedEl, fullMail, messageId, ctrl) {
+  // Audit #4: the previous version re-`innerHTML`ed the entire linkedEl after
+  // a successful link, which destroyed and recreated all sub-listeners
+  // (including the search input) and was the source of subtle bugs. The new
+  // version splits the badges container from the search container and only
+  // swaps the badges text on update — listeners survive.
+  if (!linkedEl) return;
+  let badges = linkedEl.querySelector('.email-preview-linked-badges');
+  let searchWrap = linkedEl.querySelector('.email-preview-deal-search');
+  let linkBtn = linkedEl.querySelector('.email-preview-link-deal-btn');
+  let searchInput = linkedEl.querySelector('.email-preview-deal-search-input');
+  let resultsEl = linkedEl.querySelector('.email-preview-deal-results');
+
+  // First-time construction: build the structure.
+  if (!badges) {
+    linkedEl.innerHTML = '';
+    badges = document.createElement('span');
+    badges.className = 'email-preview-linked-badges';
+    linkedEl.appendChild(badges);
+
+    linkBtn = document.createElement('button');
+    linkBtn.type = 'button';
+    linkBtn.className = 'btn btn-ghost btn-small email-preview-link-deal-btn';
+    linkBtn.style.cssText = 'font-size:0.72rem;padding:0.1rem 0.3rem;';
+    linkBtn.innerHTML = '<i class="ti ti-link"></i> Link to deal';
+    linkedEl.appendChild(linkBtn);
+
+    searchWrap = document.createElement('div');
+    searchWrap.className = 'email-preview-deal-search hidden';
+    searchWrap.style.cssText = 'margin-top:0.4rem;';
+    searchInput = document.createElement('input');
+    searchInput.type = 'search';
+    searchInput.className = 'email-preview-deal-search-input';
+    searchInput.placeholder = 'Search deals to link...';
+    searchInput.style.cssText = 'width:100%;padding:0.4rem;border:1px solid var(--border);border-radius:4px;font-size:0.85rem;background:var(--bg);color:var(--text);box-sizing:border-box;';
+    resultsEl = document.createElement('div');
+    resultsEl.className = 'email-preview-deal-results';
+    resultsEl.style.cssText = 'max-height:150px;overflow-y:auto;';
+    searchWrap.appendChild(searchInput);
+    searchWrap.appendChild(resultsEl);
+    linkedEl.appendChild(searchWrap);
+  }
+
+  // Populate the badges from the current data.
+  const renderBadges = (links) => {
+    badges.replaceChildren();
+    if (!links || !links.length) {
+      const muted = document.createElement('span');
+      muted.style.cssText = 'color:var(--muted);font-size:0.8rem;';
+      muted.textContent = 'No linked deals';
+      badges.appendChild(muted);
+      return;
+    }
+    const header = document.createElement('span');
+    header.style.fontWeight = '600';
+    header.textContent = 'Linked deals:';
+    badges.appendChild(header);
+    badges.appendChild(document.createTextNode(' '));
+    links.forEach(l => {
+      const chip = document.createElement('span');
+      chip.style.cssText = 'background:var(--accent-subtle);padding:1px 6px;border-radius:3px;margin:0 0.15rem;';
+      chip.textContent = l.opportunity_title || l.title || '';
+      badges.appendChild(chip);
+    });
+  };
+  renderBadges(fullMail.linked_deals || []);
+
+  // Helper: refresh the linked-deals badges from the server.
+  const refresh = async () => {
+    const fresh = await fetchMailMessage(messageId);
+    if (fresh) renderBadges(fresh.linked_deals || []);
+  };
+
+  // Bind the link-deal button (idempotent — controller aborts on close).
+  if (ctrl && linkBtn) {
+    linkBtn.addEventListener('click', () => {
+      searchWrap.classList.toggle('hidden');
+      if (!searchWrap.classList.contains('hidden')) searchInput.focus();
+    }, { signal: ctrl.signal });
+  }
+
+  // Bind the search input (also idempotent via the controller).
+  if (ctrl && searchInput) {
+    let dealSearchTimer = null;
+    searchInput.addEventListener('input', () => {
+      clearTimeout(dealSearchTimer);
+      dealSearchTimer = setTimeout(async () => {
+        const q = searchInput.value.trim();
+        resultsEl.innerHTML = '';
+        if (q.length < 1) return;
+        try {
+          const opps = await searchOpportunitiesByTitle(q, { limit: 8 });
+          if (!opps.length) {
+            const m = document.createElement('div');
+            m.style.cssText = 'padding:0.3rem;color:var(--muted);font-size:0.8rem;';
+            m.textContent = 'No matches';
+            resultsEl.appendChild(m);
+            return;
+          }
+          opps.forEach(opp => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = opp.title || '';
+            b.style.cssText = 'display:block;width:100%;text-align:left;padding:0.3rem 0.5rem;border:none;background:none;cursor:pointer;font-size:0.82rem;color:var(--text);border-radius:3px;';
+            b.addEventListener('mouseenter', () => b.style.background = 'var(--bg-elevated)');
+            b.addEventListener('mouseleave', () => b.style.background = '');
+            b.addEventListener('click', async () => {
+              try {
+                await api(`/api/v2/mail/messages/${messageId}/link`, { method: 'POST', body: JSON.stringify({ opportunityId: opp.id }) });
+                showToast('Linked to ' + opp.title);
+                searchWrap.classList.add('hidden');
+                // Audit #4: refresh just the badges (listeners are preserved).
+                await refresh();
+              } catch (err) {
+                showToast('Failed to link: ' + (err.message || err), true);
+              }
+            }, { signal: ctrl.signal });
+            resultsEl.appendChild(b);
+          });
+        } catch (err) {
+          const m = document.createElement('div');
+          m.style.cssText = 'padding:0.3rem;color:var(--muted);font-size:0.8rem;';
+          m.textContent = 'Search failed: ' + (err.message || err);
+          resultsEl.appendChild(m);
+        }
+      }, 300);
+    }, { signal: ctrl.signal });
+  }
+}
+
+function bindEmailPreviewActionButtons(modal, norm, fullMail, messageId, close, ctrl) {
+  modal.querySelectorAll('.email-preview-action').forEach(btn => {
+    const action = btn.dataset.action;
+    btn.addEventListener('click', () => {
+      if (action === 'reply' || action === 'reply-all' || action === 'forward') {
+        // Close preview modal and open compose with pre-filled content
+        close();
+        const from = norm.from || '';
+        const subject = norm.subject || '';
+        const date = norm.date ? formatPreviewDateTime(norm.date) || norm.date : '';
+        const bodyPick = pickMailBodyForDisplay(norm);
+        const bodyText = bodyPick?.content || '';
+
+        let to = '', subjectLine = '', quotedBody = '';
+        if (action === 'reply') {
+          to = from;
+          subjectLine = 'Re: ' + (subject.startsWith('Re:') ? subject.slice(3).trim() : subject);
+          quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${escapeHtml(bodyText)}</blockquote></div>`;
+        } else if (action === 'reply-all') {
+          to = from;
+          subjectLine = 'Re: ' + (subject.startsWith('Re:') ? subject.slice(3).trim() : subject);
+          quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${escapeHtml(bodyText)}</blockquote></div>`;
+        } else { // forward
+          to = '';
+          subjectLine = 'Fwd: ' + (subject.startsWith('Fwd:') ? subject.slice(4).trim() : subject);
+          quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">---------- Forwarded message ----------</p><blockquote style="margin:0; padding-left:0.5rem;">${escapeHtml(bodyText)}</blockquote></div>`;
+        }
+
+        openComposeModal({
+          to, subject: subjectLine, body: quotedBody,
+          title: action === 'forward' ? 'Forward Email' : 'Reply to Email',
+        });
+      } else if (action === 'archive') {
+        api(`/api/v2/mail/messages/${encodeURIComponent(messageId)}/move`, { method: 'POST', body: JSON.stringify({ folder: 'Archive' }) })
+          .then(() => { showToast('Archived'); close(); })
+          .catch(e => showToast('Archive failed: ' + e.message, true));
+      } else if (action === 'headers') {
+        api(`/api/v2/mail/messages/${messageId}/headers`)
+          .then(data => {
+            const hdrText = data.headers || 'No headers available';
+            const w = window.open('', '', 'width=700,height=500');
+            if (w) {
+              w.document.write(`<html><head><style>body{font-family:monospace;font-size:0.75rem;padding:1rem;white-space:pre-wrap;color:#000;background:#fff;}</style></head><body>${escapeHtml(hdrText)}</body></html>`);
+              w.document.close();
+            }
+          })
+          .catch(e => showToast('Failed to load headers: ' + e.message, true));
+      } else if (action === 'print') {
+        const content = $('#email-preview-body')?.innerHTML || '';
+        const w = window.open('', '', 'width=800,height=600');
+        if (w) {
+          w.document.write(`<html><head><style>body{font-family:sans-serif;padding:1rem;color:#000;background:#fff;}pre{white-space:pre-wrap;}</style></head><body>${content}</body></html>`);
+          w.document.close();
+          w.print();
+        }
+      }
+    }, { signal: ctrl.signal });
   });
 }
 

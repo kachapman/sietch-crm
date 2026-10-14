@@ -2,6 +2,16 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Email audit fixes #3 + #4 + #5: modal listener pattern + create-handler hardening (2026-10-14)
+
+Third pass on the email audit (`docs/EMAIL_AUDIT.md`):
+
+- **Fix #5 high — `_handle_mail_message_create` access + size + auth (`server.py:17016`).** Previously had no auth check, no `_mail_account_accessible` check, no size cap, no folder allowlist, and no boolean coercion. The scanner doesn't call this endpoint (it uses `db.execute` directly), so this was a hardening pass for any future caller or hand-rolled request. Added `_require_auth`, integer-typed `account_id` with `_mail_account_accessible` check, 5 MB per-field body cap (10 MB combined), folder allowlist (INBOX/Sent/Drafts/Spam/Trash/Archive/Junk/Outbox + any folder that exists in `mail_folders` for the account), and defensive `bool()` coercion of `is_read`/`is_flagged`.
+- **Fix #3 + #4 high — `openEmailPreviewModal` listener pattern (`public/app.js:25236`).** Replaced ad-hoc listener binding with a single `AbortController` per open. All listeners (dismiss, ESC, action buttons, link-deal search, attachment links) now register with `{ signal: ctrl.signal }` and are removed atomically on close. Extracted the data-render logic into four small helpers (`renderEmailPreviewHead`, `renderEmailPreviewBody`, `renderEmailPreviewAttachments`, `renderEmailPreviewLinkedDeals`, `bindEmailPreviewActionButtons`) so the soft-refresh path (re-opening the modal for the same message) only re-renders the data and keeps the listeners. The "link to deal" sub-form previously re-`innerHTML`'d the entire `linkedEl` after every successful link, which destroyed and recreated its event listeners — fixed by splitting it into a badges container and a search container that survive across updates.
+- **Bonus XSS fix in reply/forward quotes.** The reply and forward actions built a `quotedBody` by interpolating `${bodyText}` (plain-text email content) directly into HTML. Plain-text content can contain `<script>`, which would have been injected into the compose modal's contenteditable and sent to the recipient. Now `escapeHtml(bodyText)` is applied. This was not in the original audit but is in the same code path.
+
+New tests: `tests/test_email_audit_345.py` (17 Python tests covering auth/payload/size/folder/boolean-coercion paths) + `tests/test_email_audit_345.mjs` (5 JS tests covering the AbortController listener pattern via a minimal DOM mock). Full suite: 15 + 49 + 8 + 14 + 17 + 28 + 5 = **136 tests, 0 failures**. `py_compile` ×2, `node --check` clean.
+
 ## Email audit fixes #1 + #2: iframe sandbox hardened, regex cache bounded (2026-10-14)
 
 Audit of the email modal + scanner (`docs/EMAIL_AUDIT.md`) found 1 critical, 4 high, 7 medium, and 5 low-severity issues. The two top items are fixed in this commit:
