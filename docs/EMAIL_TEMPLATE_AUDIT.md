@@ -119,6 +119,8 @@ access to function.
   origin as defense-in-depth (won't help with `<img onerror>` but
   blocks external script loads).
 
+**Status: Fixed in this session** (see SESSION_HISTORY 2026-10-14, fourth entry).
+
 ### 🔴 2. `mail_templates` CRUD has no admin / ownership check
 **File:** `server.py:17190-17267`
 

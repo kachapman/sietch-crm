@@ -2,6 +2,22 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Email template audit fix #1: compose modal sanitizes template + signature HTML (2026-10-14)
+
+`docs/EMAIL_TEMPLATE_AUDIT.md` flagged 🔴 #1: `mail_templates.body_html` and `signature_html` were injected raw into the compose modal's `#compose-body` `contenteditable` via `innerHTML`, with no sanitization (unlike the email-preview iframe fixed in EMAIL_AUDIT #1, which is sandboxed). Anyone with template-write or signature-write access could inject `<script>` / `onerror` / `javascript:` URLs into every email sent from that account, executing code in the dashboard origin.
+
+Fix:
+- `openComposeModal` (`public/app.js:20083`) — `opts.body` now passes through `sanitizeHistoryHtml` before `innerHTML` assignment.
+- `openComposeModal` signature block (`public/app.js:20099`) — `sig.signature_html` is now sanitized.
+- Template picker "Insert template" click (`public/app.js:20472`) — `tpl.body_html` is now sanitized.
+- From-account signature swap (`public/app.js:22184`) — `sig.signature_html` is now sanitized via a `safeSig` local before either the `outerHTML` swap or the `innerHTML +=` append.
+
+All four sites use the same `sanitizeHistoryHtml` helper that already protects the email preview iframe (strips `<script>`, `<style>`, `<iframe>`, `<object>`, `<embed>`, `<link>`, `<meta>`, `<base>`, all `on*` event handlers, `javascript:`/`data:`/`vbscript:` URLs).
+
+New tests: `tests/test_email_template_sanitize.mjs` (7 source-grep regression tests). They verify the four injection sites route through `sanitizeHistoryHtml`, no remaining raw `body_html`/`signature_html` into `innerHTML`, and at least 3 `TEMPLATE_AUDIT #1` markers exist in the source. Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 = **147 tests, 0 failures**. `py_compile` ×2, `node --check` clean.
+
+Remaining audit findings (`docs/EMAIL_TEMPLATE_AUDIT.md`): 🔴 #2 missing auth/ownership on template CRUD; 🟠 #3 no size cap; 🟠 #4 dead `template_id` FK; 🟠 #5 no `[#PROJECTID]` outgoing standardization; 🟠 #6 inconsistent naming; 🟡 #7–10 placeholder + signature issues; ⚪ #11–15. None of the remaining findings are as severe as #1.
+
 ## Email template + `[#PROJECTID]` standardization audit (2026-10-14)
 
 `docs/EMAIL_TEMPLATE_AUDIT.md` (new, 15 findings: 2 critical, 3 high, 4 medium, 6 low/nit). Audit of the email template pipeline, signature flow, and `[#PROJECTID]` subject auto-link mechanism.

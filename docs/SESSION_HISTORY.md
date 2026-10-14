@@ -13,6 +13,25 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-14
 
+**Topic:** Email template audit fix #1 — compose modal sanitizes template + signature HTML before innerHTML.
+
+**What landed:**
+- **Fix for 🔴 #1 from `docs/EMAIL_TEMPLATE_AUDIT.md`.** `mail_templates.body_html` and `signature_html` were injected raw into the compose modal's `#compose-body` contenteditable via `innerHTML` — no sanitization, unlike the email-preview iframe which is sandboxed. The compose modal lives in the dashboard origin (full DOM access needed for contenteditable), so anyone with template-write or signature-write access could inject `<script>` / `onerror` / `javascript:` URLs into every email sent from that account.
+- **Four injection sites fixed, all using the existing `sanitizeHistoryHtml` helper** (the same one that protects the email preview iframe):
+  - `public/app.js:20083` — `openComposeModal` now does `bodyDiv.innerHTML = sanitizeHistoryHtml(opts.body)`.
+  - `public/app.js:20099` — signature block in `openComposeModal` now does `bodyDiv.innerHTML = ...${sanitizeHistoryHtml(sig.signature_html)}...`.
+  - `public/app.js:20472` — template picker "Insert template" click now does `$('#compose-body').innerHTML = sanitizeHistoryHtml(tpl.body_html)`.
+  - `public/app.js:22184` — from-account signature swap now computes `safeSig = sanitizeHistoryHtml(sig.signature_html)` and uses it in both the `outerHTML` swap and the `innerHTML +=` append.
+- **Tests:** `tests/test_email_template_sanitize.mjs` (new, 7 source-grep regression tests). They verify each of the 4 sites routes through `sanitizeHistoryHtml`, no remaining raw `body_html`/`signature_html` into `innerHTML`, and the `TEMPLATE_AUDIT #1` markers are still in the source. Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 = **147 tests, 0 failures**. `py_compile` ×2, `node --check` clean.
+
+**Verified live:** `git status --short` matches the 3 expected files (`public/app.js`, `tests/test_email_template_sanitize.mjs`, plus CHANGELOG/SESSION_HISTORY). `git diff --stat` = `+23 −5` in `public/app.js`. Server not yet restarted — this is a pure frontend change; safe to deploy with the next `git pull && docker compose up -d`.
+
+**Next:** Remaining audit findings from `docs/EMAIL_TEMPLATE_AUDIT.md`: 🔴 #2 (template CRUD auth/ownership), 🟠 #3 (size cap), 🟠 #4 (dead `template_id` FK), 🟠 #5 (no `[#PROJECTID]` outgoing standardization), 🟠 #6 (inconsistent naming), 🟡 #7–10, ⚪ #11–15. None are as severe as #1; #2 is the next-most-impactful.
+
+---
+
+## Previous summary (2026-10-14)
+
 **Topic:** Email template pipeline + `[#PROJECTID]` standardization audit. **No code changes this session — audit only.**
 
 **What landed:**

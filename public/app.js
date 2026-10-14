@@ -20080,7 +20080,13 @@ async function openComposeModal(opts = {}) {
   if (opts.cc && ccInput) ccInput.value = opts.cc;
   if (opts.bcc && bccInput) bccInput.value = opts.bcc;
   if (opts.subject && subjectInput) subjectInput.value = opts.subject;
-  if (opts.body && bodyDiv) bodyDiv.innerHTML = opts.body;
+  // TEMPLATE_AUDIT #1: sanitize template/signature HTML before assigning to
+  // innerHTML. The compose modal's #compose-body is a contenteditable in
+  // the dashboard origin (no sandbox, no CSP), so unsanitized HTML would
+  // let a malicious template/signature execute <script> / onerror / etc.
+  // sanitizeHistoryHtml is the same sanitizer used by the email preview
+  // iframe (which IS sandboxed) and is the existing defense-in-depth.
+  if (opts.body && bodyDiv) bodyDiv.innerHTML = sanitizeHistoryHtml(opts.body);
   if (opts.title && titleEl) titleEl.textContent = opts.title;
 
   // Load signature if available (not for reply/forward which already have body)
@@ -20088,7 +20094,9 @@ async function openComposeModal(opts = {}) {
     try {
       const sig = await api(`/api/v2/mail/accounts/${fromSelect.value}/signature`);
       if (sig.signature_html && bodyDiv) {
-        bodyDiv.innerHTML = `<br><br><div class="compose-signature-block" style="border-top:1px solid var(--border); padding-top:0.5rem; color:var(--muted); font-size:0.85rem;">${sig.signature_html}</div>`;
+        // Sanitize the inner signature HTML; the outer wrapper <div> is
+        // trusted (we built it) so we sanitize just the untrusted part.
+        bodyDiv.innerHTML = `<br><br><div class="compose-signature-block" style="border-top:1px solid var(--border); padding-top:0.5rem; color:var(--muted); font-size:0.85rem;">${sanitizeHistoryHtml(sig.signature_html)}</div>`;
       }
     } catch { /* no signature */ }
   }
@@ -20457,7 +20465,11 @@ async function openComposeModal(opts = {}) {
             const tpl = templates.find(t => t.id === tid);
             if (tpl) {
               if (tpl.subject) $('#compose-subject').value = tpl.subject;
-              if (tpl.body_html) $('#compose-body').innerHTML = tpl.body_html;
+              // TEMPLATE_AUDIT #1: sanitize template body_html before innerHTML
+              // assignment. The compose modal is a contenteditable in the
+              // dashboard origin — unsanitized template HTML would let a
+              // malicious template execute script on insert and on send.
+              if (tpl.body_html) $('#compose-body').innerHTML = sanitizeHistoryHtml(tpl.body_html);
             }
             picker.remove();
           });
@@ -22169,11 +22181,17 @@ function bindComposeEmailModal() {
       try {
         const sig = await api(`/api/v2/mail/accounts/${fromSelect.value}/signature`);
         if (sig.signature_html) {
+          // TEMPLATE_AUDIT #1: sanitize signature_html before insertion.
+          // Old behavior trusted the account owner / admin who set the
+          // signature, but that trust boundary breaks as soon as multiple
+          // users share an account or an admin role is compromised. Run
+          // the same sanitizer the email preview uses.
+          const safeSig = sanitizeHistoryHtml(sig.signature_html);
           if (oldSig) {
-            oldSig.outerHTML = `<br><br><div class="compose-signature-block" style="border-top:1px solid var(--border); padding-top:0.5rem; color:var(--muted); font-size:0.85rem;">${sig.signature_html}</div>`;
+            oldSig.outerHTML = `<br><br><div class="compose-signature-block" style="border-top:1px solid var(--border); padding-top:0.5rem; color:var(--muted); font-size:0.85rem;">${safeSig}</div>`;
           } else {
             const hasBodyText = bodyDiv.textContent.trim().length > 0;
-            bodyDiv.innerHTML += `<br><br><div class="compose-signature-block" style="border-top:1px solid var(--border); padding-top:0.5rem; color:var(--muted); font-size:0.85rem;">${sig.signature_html}</div>`;
+            bodyDiv.innerHTML += `<br><br><div class="compose-signature-block" style="border-top:1px solid var(--border); padding-top:0.5rem; color:var(--muted); font-size:0.85rem;">${safeSig}</div>`;
             if (!hasBodyText) {
               // Clean up the leading empty lines when body is otherwise empty
               bodyDiv.innerHTML = bodyDiv.innerHTML.replace(/^<br><br>/, '');
