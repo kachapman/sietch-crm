@@ -2,6 +2,36 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Fix: compose email modal X / Cancel / Escape buttons not working (2026-10-14)
+
+The compose email modal's X close button, Cancel button, and Escape key
+handler silently did nothing. Root cause: `bindComposeEmailModal` in
+`public/app.js` declared `const fromSelect = $('#compose-from-account')`
+on line 22174, but used `fromSelect` on line 22168 (in the graph-banner
+section that was inserted earlier in commit `31d2214`). That's a
+**temporal-dead-zone ReferenceError**: the function aborted at line 22168
+on every call, so every line after it — including the dismiss handler
+binding at line 22207, the Escape handler at line 22221, and the
+auto-save timer at line 22238 — never ran. The user could still close
+the modal only by reloading the page or via an unrelated escape hatch.
+
+Fix: hoist `const fromSelect` to the top of `bindComposeEmailModal`
+(right after `modal.dataset.bound = '1'`), and remove the now-redundant
+later declaration. Also rewrote the graph-banner click handler to use
+the hoisted `fromSelect` instead of re-querying the DOM.
+
+**New regression test** (`tests/test_compose_modal_tdz.mjs`, 5 tests):
+- Walks the function body, tracks `fromSelect` declarations vs uses,
+  and fails on any use-before-declaration (the TDZ class of bug).
+- Verified to catch the bug: temporarily reintroduced the regression,
+  test failed; restored the fix, test passed.
+- Also asserts the dismiss handler, Escape handler, and auto-save
+  timer are all present in the function body (catches future
+  regressions where the function structure changes).
+
+Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 = **152 tests,
+0 failures**. `py_compile` ×2, `node --check` clean.
+
 ## Email template audit fix #1: compose modal sanitizes template + signature HTML (2026-10-14)
 
 `docs/EMAIL_TEMPLATE_AUDIT.md` flagged 🔴 #1: `mail_templates.body_html` and `signature_html` were injected raw into the compose modal's `#compose-body` `contenteditable` via `innerHTML`, with no sanitization (unlike the email-preview iframe fixed in EMAIL_AUDIT #1, which is sandboxed). Anyone with template-write or signature-write access could inject `<script>` / `onerror` / `javascript:` URLs into every email sent from that account, executing code in the dashboard origin.

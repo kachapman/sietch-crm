@@ -13,6 +13,27 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-14
 
+**Topic:** Fix compose email modal — X / Cancel / Escape buttons silently did nothing.
+
+**Bug:** User reported that the close button (X) and Cancel button in the compose email modal did nothing when clicked. Root cause: `bindComposeEmailModal` in `public/app.js:22139` had a **temporal-dead-zone ReferenceError** on the local `fromSelect` variable — declared at line 22174 (`const fromSelect = ...`) but used at line 22168 (in the graph-banner section inserted by an earlier commit, `31d2214`). The function aborted at line 22168 on every call, so every line after it — dismiss handler binding (line 22207), Escape key handler (line 22221), auto-save timer (line 22238) — never ran. (My own bug from a previous session; the refactor that introduced the Graph sendMail feature inserted new code above an existing `const` declaration and the TDZ wasn't caught at review or build time.)
+
+**Fix:**
+- `public/app.js:22143` — hoisted `const fromSelect = $('#compose-from-account')` to the top of `bindComposeEmailModal`, right after the early-return guard. Added a comment block explaining the TDZ and why the declaration must stay up here.
+- `public/app.js:22164` — rewrote the graph-banner click handler to use the hoisted `fromSelect` instead of re-querying the DOM (small cleanup while I was in there).
+- `public/app.js:22204` — removed the now-redundant later declaration of `const fromSelect`.
+
+**Tests:** `tests/test_compose_modal_tdz.mjs` (new, 5 tests). Walks the `bindComposeEmailModal` function body, tracks `fromSelect` declarations vs uses, and fails on any use-before-declaration. Also asserts the dismiss handler, Escape handler, and auto-save timer are all present in the function body. **Verified to catch the bug**: temporarily reintroduced the regression, the test failed with a clear "TDZ ReferenceError that silently aborts bindComposeEmailModal — breaking the close button, Cancel, Escape key, and auto-save timer" message; restored the fix, test passed.
+
+Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 = **152 tests, 0 failures**. `py_compile` ×2, `node --check` clean.
+
+**Verified live:** `git status --short` matches the 3 expected files (`public/app.js`, `tests/test_compose_modal_tdz.mjs`, plus CHANGELOG/SESSION_HISTORY). `git diff --stat` = `+9 −3` in `public/app.js`. **Server restart recommended for the fix to take effect** — until the user reloads the page, the bug is still in their browser.
+
+**Next:** Remaining audit findings from `docs/EMAIL_TEMPLATE_AUDIT.md`: 🔴 #2 (template CRUD auth/ownership), 🟠 #3 (size cap), 🟠 #4 (dead `template_id` FK), 🟠 #5 (no `[#PROJECTID]` outgoing standardization), 🟠 #6 (inconsistent naming), 🟡 #7–10, ⚪ #11–15.
+
+---
+
+## Previous summary (2026-10-14)
+
 **Topic:** Email template audit fix #1 — compose modal sanitizes template + signature HTML before innerHTML.
 
 **What landed:**

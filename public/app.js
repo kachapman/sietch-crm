@@ -22141,6 +22141,14 @@ function bindComposeEmailModal() {
   if (!modal || modal.dataset.bound) return;
   modal.dataset.bound = '1';
 
+  // The From-account select is referenced in multiple sections below
+  // (graph banner, signature reload, etc.). Declared up here so every
+  // subsequent use is past the temporal dead zone — a previous refactor
+  // introduced a TDZ ReferenceError on this variable that silently
+  // aborted the function mid-way, breaking the modal close / Cancel
+  // buttons and the Escape key handler.
+  const fromSelect = $('#compose-from-account');
+
   // Move to tab button
   const moveToTabBtn = $('#compose-move-to-tab');
   if (moveToTabBtn) {
@@ -22154,8 +22162,7 @@ function bindComposeEmailModal() {
   if (graphBannerBtn && !graphBannerBtn.dataset.bound) {
     graphBannerBtn.dataset.bound = '1';
     graphBannerBtn.addEventListener('click', async () => {
-      const select = $('#compose-from-account');
-      const accountId = select ? parseInt(select.value) : null;
+      const accountId = fromSelect ? parseInt(fromSelect.value) : null;
       if (accountId) await connectGraphSend(accountId);
     });
   }
@@ -22171,7 +22178,6 @@ function bindComposeEmailModal() {
   }
 
   // Reload signature when the From account changes
-  const fromSelect = $('#compose-from-account');
   if (fromSelect && !fromSelect.dataset.sigBound) {
     fromSelect.dataset.sigBound = '1';
     fromSelect.addEventListener('change', async () => {
