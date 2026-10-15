@@ -36621,11 +36621,24 @@ async function saveAutomationRule() {
   }
   const triggerType = $("#automation-trigger-type").value;
   const actionType = $("#automation-action-type").value;
+  const cooldownMode = document.querySelector('input[name="automation-cooldown-mode"]:checked')?.value || "recurring";
+  // Cooldown validation: recurring mode requires a positive cooldown
+  // (otherwise the rule fires on every poll cycle, which is a footgun).
+  // If the user left the input empty we fall back to days*24 on line
+  // 36691 below, but only after this check confirms we have a valid
+  // positive value (or "once" mode which doesn't need a cooldown).
+  const rawCooldown = parseInt($("#automation-trigger-cooldown").value);
+  if (cooldownMode === "recurring" && (!Number.isFinite(rawCooldown) || rawCooldown <= 0)) {
+    showToast("Recurring mode requires a positive cooldown (in hours). Use 'Once only' for one-shot rules.", true);
+    const cd = $("#automation-trigger-cooldown");
+    if (cd) cd.focus();
+    return;
+  }
   const triggerConfig = {
     stage_id: $("#automation-trigger-stage").value ? parseInt($("#automation-trigger-stage").value) : null,
     days: parseInt($("#automation-trigger-days").value) || 2,
-    cooldown_mode: document.querySelector('input[name="automation-cooldown-mode"]:checked')?.value || "recurring",
-    cooldown_hours: parseInt($("#automation-trigger-cooldown").value) || 0,
+    cooldown_mode: cooldownMode,
+    cooldown_hours: rawCooldown || 0,
     to_stage_id: $("#automation-trigger-to-stage").value ? parseInt($("#automation-trigger-to-stage").value) : null,
     tag_id: $("#automation-trigger-tag").value ? parseInt($("#automation-trigger-tag").value) : null,
     tag_days: parseInt($("#automation-trigger-tag-days").value) || 7,
@@ -36642,8 +36655,18 @@ async function saveAutomationRule() {
   if (triggerType === "tag_added") {
     triggerConfig.tag_id = triggerConfig.tag_added_id;
   }
-  if (!triggerConfig.cooldown_hours) {
-    triggerConfig.cooldown_hours = triggerConfig.days * 24;
+  // Same validation for tag_duration + tag_added (both use recurring
+  // by default). The poll-interval-style fallback below still works
+  // for tag_added since it can be "once" mode and never have a cooldown.
+  if (triggerConfig.cooldown_mode === "recurring" && (!triggerConfig.cooldown_hours || triggerConfig.cooldown_hours <= 0)) {
+    // Default the cooldown to days*24 (for tag_duration) or 24h
+    // (for tag_added where there's no days) so the rule has a sane
+    // recurring window. The user can still edit it after save.
+    triggerConfig.cooldown_hours = (triggerConfig.days || 1) * 24;
+  } else if (!triggerConfig.cooldown_hours) {
+    // "once" mode with no cooldown: keep 0 (the backend's
+    // _already_fired_once() is what governs the once-only path).
+    triggerConfig.cooldown_hours = 0;
   }
   const actionConfig = {
     title: $("#automation-action-title").value,
