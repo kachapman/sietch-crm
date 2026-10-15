@@ -306,50 +306,128 @@ function handleNewDM(data) {
   const d = data.data || data;
   const selectedUser = state.presenceSelectedUserId;
   if (selectedUser && String(selectedUser) === String(d.from)) {
-    // Refresh the DM popup thread for this user
+    // The recipient has a thread open with the sender. Refresh whichever
+    // container is currently showing the thread (modal, inline tile, or
+    // popup) so the new message appears without waiting for the next poll.
     presenceFetch(`/api/presence/dm?with=${encodeURIComponent(d.from)}`)
       .then(res => res.json())
       .then(d2 => {
-        const log = $("#dm-popup-log");
-        if (log) {
-          const msgs = (d2 && d2.messages) || [];
-          renderDMLog(log, msgs);
+        const msgs = (d2 && d2.messages) || [];
+        const hasMore = d2.has_more || false;
+        const modalLog = $("#presence-dm-log");
+        const tileLog = $("#presence-tile-dm-log");
+        const popupLog = $("#dm-popup-log");
+        if (modalLog) {
+          renderDMLog(modalLog, msgs, undefined, {
+            hasMore,
+            onLoadMore: hasMore ? () => loadMoreDMs(d.from, modalLog, setPresenceReplyTo) : null,
+          });
+        }
+        if (tileLog) {
+          renderDMLog(tileLog, msgs, setPresenceInlineReplyTo);
+        }
+        if (popupLog) {
+          renderDMLog(popupLog, msgs, undefined, {
+            hasMore,
+            onLoadMore: hasMore ? () => loadMoreDMs(d.from, popupLog, setPresenceReplyTo) : null,
+          });
         }
       })
       .catch(() => {});
   }
-  renderPresenceTileCompact(state.presenceData);
-  updateUnreadBadge();
+  // Always update the inbox + tile so the new message shows in the
+  // "Recent messages" list (even if no thread is open). We re-fetch the
+  // full snapshot so the myRecentDms list is sorted by recency.
+  if (typeof fetchPresenceSnapshot === "function") {
+    fetchPresenceSnapshot().then(s => {
+      state.presenceData = s;
+      if (state.hasPresenceTile) renderPresenceTileCompact(s);
+      if (state.presenceModalOpen) renderPresenceModal(s);
+      updatePresenceHeaderIndicators(s);
+    }).catch(() => {});
+  }
+  // Desktop notification for new DMs (only when the tab is in the
+  // background — the SSE event itself is the in-app signal otherwise).
   if (document.hidden && Notification.permission === "granted") {
-    new Notification(d.fromName || "New message", { body: d.text, tag: `dm-${d.from}` });
+    try {
+      new Notification(d.fromName || "New message", {
+        body: (d.text || "").slice(0, 120),
+        tag: `dm-${d.from}`,
+      });
+    } catch (_) {}
   }
 }
 
 function handleDMRead(data) {
   const d = data.data || data;
   const selectedUser = state.presenceSelectedUserId;
-  if (selectedUser && String(selectedUser) === String(d.with_user)) {
-    presenceFetch(`/api/presence/dm?with=${encodeURIComponent(d.with_user)}`)
-      .then(res => res.json())
-      .then(d2 => {
-        const log = $("#dm-popup-log");
-        if (log) {
-          const msgs = (d2 && d2.messages) || [];
-          renderDMLog(log, msgs);
-        }
-      })
-      .catch(() => {});
-  }
+  if (!selectedUser || String(selectedUser) !== String(d.with_user)) return;
+  // The SENDER's open thread (modal, tile, or popup) needs the read
+  // receipt reflected. Refresh whichever container is currently showing
+  // the thread. We re-fetch the conversation so the per-message
+  // "read/read_at" fields are accurate (the SSE payload doesn't carry
+  // the per-message state).
+  presenceFetch(`/api/presence/dm?with=${encodeURIComponent(d.with_user)}`)
+    .then(res => res.json())
+    .then(d2 => {
+      const msgs = (d2 && d2.messages) || [];
+      const hasMore = d2.has_more || false;
+      // The three possible DM-thread containers (in priority order:
+      // modal, inline tile, popup). Each one has its own log element.
+      const modalLog = $("#presence-dm-log");
+      const tileLog = $("#presence-tile-dm-log");
+      const popupLog = $("#dm-popup-log");
+      if (modalLog) {
+        renderDMLog(modalLog, msgs, undefined, {
+          hasMore,
+          onLoadMore: hasMore ? () => loadMoreDMs(d.with_user, modalLog, setPresenceReplyTo) : null,
+        });
+      }
+      if (tileLog) {
+        renderDMLog(tileLog, msgs, setPresenceInlineReplyTo);
+      }
+      if (popupLog) {
+        renderDMLog(popupLog, msgs, undefined, {
+          hasMore,
+          onLoadMore: hasMore ? () => loadMoreDMs(d.with_user, popupLog, setPresenceReplyTo) : null,
+        });
+      }
+      // Update the inbox row + badge so the message state stays in sync.
+      if (typeof fetchPresenceSnapshot === "function") {
+        fetchPresenceSnapshot().then(s => {
+          state.presenceData = s;
+          updatePresenceHeaderIndicators(s);
+          if (state.hasPresenceTile) updatePresenceTileBadge();
+        }).catch(() => {});
+      }
+    })
+    .catch(() => {});
 }
 
 function handlePresenceUpdate(data) {
   const d = data.data || data;
-  if (state.presenceData) {
-    const idx = state.presenceData.findIndex(u => String(u.id) === String(d.user_id));
-    if (idx >= 0) Object.assign(state.presenceData[idx], d);
-    if (state.presenceModalOpen) renderPresenceModal(state.presenceData);
-    if (state.hasPresenceTile) renderPresenceTileCompact(state.presenceData);
+  if (!state.presenceData) return;
+  // state.presenceData is the {users: [...], me, ...} envelope, not the
+  // users array itself. The original code called findIndex on the
+  // envelope (always returned -1) and never applied the update. The
+  // render path still ran, so the badge/row looked right for a moment,
+  // but the next poll would revert. Fix: look inside the .users array.
+  const users = Array.isArray(state.presenceData.users) ? state.presenceData.users : null;
+  if (users) {
+    const idx = users.findIndex(u => String(u.id) === String(d.user_id));
+    if (idx >= 0) {
+      // Only overwrite the fields the SSE payload actually carries;
+      // don't clobber fields the frontend has but the server doesn't
+      // re-broadcast (avatar, lastSeen, etc.).
+      Object.assign(users[idx], {
+        status: d.status,
+        inferred: d.inferred,
+        autoStatus: d.autoStatus,
+      });
+    }
   }
+  if (state.presenceModalOpen) renderPresenceModal(state.presenceData);
+  if (state.hasPresenceTile) renderPresenceTileCompact(state.presenceData);
 }
 
 function newId() {

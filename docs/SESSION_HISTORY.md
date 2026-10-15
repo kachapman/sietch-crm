@@ -13,6 +13,37 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-15
 
+**Topic:** Presence/DM audit round 6 (part 1) — wire up the dead SSE handlers.
+
+**What landed:**
+
+- **The `dm:new` / `dm:read` / `presence:update` SSE events are now actually published.** The frontend's SSE handlers at `public/app.js:260-353` were fully implemented (they subscribed to `case "dm:new":` / `case "dm:read":` / `case "presence:update":` and did sensible things on each), but **no `event_bus.publish(...)` call existed anywhere in the codebase** for these event types. Grepped `server.py` and `event_bus.py` exhaustively. So all three handlers were dead code, and DMs surfaced only via polling. This commit lights them up.
+
+- **Server changes (`server.py`):**
+  - `_handle_presence_dm_post` publishes `dm:new` to `user_ids=[to_id]` after `append_dm`. The recipient's open thread (modal, tile inline, or popup) will refresh without waiting for the next poll.
+  - `_handle_presence_dm_get` publishes `dm:read` to `user_ids=[with_id]` after `mark_messages_read`. The sender's open thread updates its read receipts without waiting for the next poll.
+  - `_handle_presence_status` broadcasts `presence:update` (no `user_ids` filter — fans out to all subscribers). Payload: `user_id`, `status`, `inferred`, `autoStatus`. The frontend merges these into the existing `clientPresenceCache` and re-renders.
+  - All three publishes are wrapped in `try/except` so a failure cannot break the originating HTTP response.
+
+- **Frontend handler fixes (`public/app.js`):**
+  - `handleNewDM`: now refreshes **all three** DM containers (modal, inline tile, popup) when the recipient has a thread open with the sender. Was previously popup-only. Also calls `fetchPresenceSnapshot` so the inbox `myRecentDms` list stays current.
+  - `handleDMRead`: same three-container refresh. Was previously popup-only.
+  - `handlePresenceUpdate`: **fixed a latent bug.** The original code called `state.presenceData.findIndex(...)` on the **envelope** (`{users: [...], me, ...}`), not the users array. `findIndex` on the envelope always returned -1, so `Object.assign` never ran. The render path still fired, so the badge looked right for a moment, but the next poll would revert to the old values. Now looks inside `state.presenceData.users` and only merges the fields the SSE payload actually carries (`status`, `inferred`, `autoStatus`) — doesn't clobber `avatarUrl`, `lastSeen`, etc. that the server doesn't re-broadcast.
+
+- **Tests:** new `tests/test_presence_sse_wireup.mjs` (6 source-grep tests). Full suite: 12 JS files (122 tests) + 4 Python files (28 tests) = **216 tests, 0 failures**. `py_compile` ×2, `node --check public/app.js` clean.
+
+- **Live verification (end-to-end through real HTTP/SSE):** created two test users, opened real SSE streams for both via raw socket against `/api/events`:
+  - Sender `POST /api/presence/dm` → recipient's SSE delivered `dm:new` with `{from, fromName, to, text, ts, message}`.
+  - Recipient `GET /api/presence/dm?with=...` → sender's SSE delivered `dm:read` with `{by_user, with_user, at}`.
+  - Recipient `POST /api/presence/status` → sender's SSE delivered `presence:update` with `{user_id, status, inferred, autoStatus}`.
+  - Test data cleaned up. Server restarted (PID 2440356, port 8766).
+
+**Next:** Round 6 part 2 — fix the "mark-as-read on every Load-More" bug. The recipient's `GET /api/presence/dm?with=X&offset=N` currently calls `mark_messages_read` even when loading older messages. This means a user who clicks "Load Earlier Messages" 5 times will see all 100 unread messages get marked as read on the first call (the GET returns the most recent page, which the auto-mark applies to). The fix: only auto-mark on the first page (offset=0), or move the mark-as-read into a separate POST endpoint that the frontend calls only when the thread is actually opened. Round 6 part 2 will implement whichever is cleaner.
+
+---
+
+## Previous summary (2026-10-15)
+
 **Topic:** Timesheet audit round 5 (closing) — modal "● Live" badge + ISSUE-017 doc close-out.
 
 **What landed:**

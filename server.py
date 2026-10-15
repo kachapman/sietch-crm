@@ -15626,6 +15626,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         auto_status = payload.get("autoStatus")
         inferred = bool(payload.get("inferred"))
         rec = set_status("sietch", str(user["id"]), status_text, inferred=inferred, autoStatus=auto_status)
+        # Real-time fanout: tell the other open tabs/users that this
+        # user's status changed so the team modal and tile update
+        # without waiting for the next poll. We only publish the
+        # minimum the frontend needs to update the row in-place; the
+        # frontend's handlePresenceUpdate merges these into the
+        # existing clientPresenceCache + re-renders.
+        try:
+            event_bus.publish("presence:update", {
+                "user_id": str(user["id"]),
+                "status": rec.get("status", ""),
+                "inferred": rec.get("inferred", False),
+                "autoStatus": rec.get("autoStatus", ""),
+            })
+        except Exception:
+            pass
         _json_response(self, 200, {"ok": True, "status": rec.get("status", ""), "inferred": rec.get("inferred", False)})
 
     def _handle_presence_last_read(self) -> None:
@@ -15656,6 +15671,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         mark_messages_read("sietch", str(user["id"]), with_id)
         msgs, has_more = get_conversation("sietch", str(user["id"]), with_id)
+        # Real-time fanout: notify the OTHER party (the sender) that the
+        # reader has just marked their messages as read, so the read
+        # receipt updates in their open thread without waiting for the
+        # next poll. We pass with_user as the other party's id (the
+        # recipient of this dm:read event); the frontend handler will
+        # use that to decide whether to refresh the matching thread.
+        try:
+            event_bus.publish("dm:read", {
+                "with_user": with_id,
+                "by_user": str(user["id"]),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }, user_ids=[with_id])
+        except Exception:
+            # A failed publish must not break the GET response.
+            pass
         _json_response(self, 200, {"messages": msgs, "has_more": has_more})
 
     def _handle_presence_dm_post(self) -> None:
@@ -15673,6 +15703,24 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "to and text are required"})
             return
         msg = append_dm("sietch", str(user["id"]), to_id, text, payload.get("reply_to"), payload.get("reply_text"))
+        # Real-time fanout: notify the recipient via SSE so the new DM
+        # appears in their inbox / thread without waiting for the next
+        # poll. The sender's UI updates locally from the POST response.
+        # We only publish to the recipient; the sender's frontend already
+        # knows the message was sent (response.ok, no need to round-trip).
+        try:
+            from_name = user.get("display_name") or user.get("email") or ""
+            event_bus.publish("dm:new", {
+                "from": str(user["id"]),
+                "fromName": from_name,
+                "to": to_id,
+                "text": msg.get("text", ""),
+                "ts": msg.get("ts", ""),
+                "message": msg,
+            }, user_ids=[to_id])
+        except Exception:
+            # A failed publish must not roll back the message save.
+            pass
         _json_response(self, 200, {"ok": True, "message": msg})
 
     def _handle_presence_dm_clear(self) -> None:

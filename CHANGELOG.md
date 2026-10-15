@@ -2,6 +2,33 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Presence/DM SSE wire-up (audit round 6 part 1) (2026-10-15)
+
+The frontend's SSE handlers for `dm:new`, `dm:read`, and `presence:update` were fully implemented but **nothing on the server ever published those event types**, so the handlers were dead code and DMs surfaced only via polling. This commit lights up all three.
+
+**Server-side publishes (`server.py`):**
+
+- `_handle_presence_dm_post` now publishes `dm:new` to `user_ids=[to_id]` after `append_dm` succeeds. The publish is wrapped in a try/except so a failure cannot break the POST response.
+- `_handle_presence_dm_get` now publishes `dm:read` to `user_ids=[with_id]` after `mark_messages_read` so the sender's open thread updates its read receipts without waiting for the next poll.
+- `_handle_presence_status` now broadcasts `presence:update` (no `user_ids` filter — fans out to everyone with a team modal/tile open). Payload: `user_id`, `status`, `inferred`, `autoStatus`.
+
+**Frontend handler fixes (`public/app.js`):**
+
+- `handleNewDM`: now refreshes all three DM containers (modal, inline tile, popup) when the recipient has a thread open with the sender, not just the popup. Also calls `fetchPresenceSnapshot` so the inbox `myRecentDms` list stays current. Desktop notification still only fires when the tab is hidden.
+- `handleDMRead`: same three-container refresh. The original handler was popup-only; the sender with the modal open would not have seen the receipt update.
+- `handlePresenceUpdate`: **fixed a latent bug.** The original code called `state.presenceData.findIndex(...)` on the **envelope** (`{users: [...], me, ...}`), not the users array. `findIndex` always returned -1, so `Object.assign` never ran. The render path still fired, so the badge looked right for a moment, but the next poll would revert. Now looks inside `state.presenceData.users` and only merges `status` / `inferred` / `autoStatus` (avoids clobbering fields the SSE payload doesn't carry, like `avatarUrl` or `lastSeen`).
+
+**Tests:** new `tests/test_presence_sse_wireup.mjs` (6 source-grep tests covering all three publish points in `server.py`, all three container refreshes in the frontend handlers, and the envelope-bug fix in `handlePresenceUpdate`). All pass.
+
+**Live verification (end-to-end through real HTTP/SSE):**
+
+- Created two test users (sender + recipient), opened real SSE streams for both via raw socket against `/api/events`.
+- Sender `POST /api/presence/dm` → recipient's SSE delivered `dm:new` with `{from, fromName, to, text, ts, message}`.
+- Recipient `GET /api/presence/dm?with=...` → sender's SSE delivered `dm:read` with `{by_user, with_user, at}`.
+- Recipient `POST /api/presence/status` → sender's SSE delivered `presence:update` with `{user_id, status, inferred, autoStatus}`.
+
+Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 + 5 + 7 + 5 + 5 + 6 = **216 tests, 0 failures**. `py_compile` ×2, `node --check public/app.js` clean. Server restarted (PID 2440356).
+
 ## Timesheet audit round 5 (closing) — modal "● Live" badge + ISSUE-017 (2026-10-15)
 
 The last two items from the timesheet audit queue: a small UX polish on the modal's entries list, and a doc-hygiene close-out of all 9 audit findings into a single ISSUE-017 entry.
