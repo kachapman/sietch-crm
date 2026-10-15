@@ -13,6 +13,29 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-15
 
+**Topic:** Schedule fields always editable — fix the chicken-and-egg from the previous round.
+
+**What landed:**
+
+- **Bug:** commit 951f5dc added a "grey-out" treatment to the backup schedule fieldset — when `status.configured === false`, the fieldset got `opacity: 0.55` and every child input/button got `disabled=""`. The intent was to make the form visually distinct, but the side effect was: the user couldn't click Save to create the initial config because Save itself was disabled.
+- **Fix in `public/app.js` `loadBackupHistory`:** collapsed the if/else into a single branch. The form is now always opacity 1, all child inputs/buttons have `disabled` removed. The "Not configured yet" notice is the only signal that the config hasn't been saved.
+- **Fix in the save handler** (line ~30715): the previous version only set `fs.style.opacity = 1` and `fs.removeAttribute("disabled")` — but the fieldset itself never had `disabled`, only the children did. So after a save, the form's opacity was 1 but the inputs were still disabled (a no-op fieldset toggle). Now the save handler also does `fs.querySelectorAll("input, button").forEach(el => el.removeAttribute("disabled"))` so the children are guaranteed editable after every save.
+
+**Tests:** `tests/test_backup_schedule_editable.mjs` (new, 3 source-grep tests):
+1. `loadBackupHistory` does not call `setAttribute("disabled", ...)` anywhere.
+2. `loadBackupHistory` sets `fs.style.opacity = 1` and removes `disabled` from children.
+3. The save handler also re-enables child inputs after a successful save.
+
+Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 + 16 + 3 = **206 tests, 0 failures**. `py_compile` ×2, `node --check` clean.
+
+**Verified live:** 2 files modified (`public/app.js` + 1 new test file). `git diff --stat` = `+20 −15`. **Server restarted** (PID 2231506, port 8766).
+
+**Next:** No urgent follow-ups. The remaining audit findings from `docs/EMAIL_TEMPLATE_AUDIT.md` (template CRUD auth, size caps, `[#PROJECTID]` outgoing standardization, etc.) are still queued.
+
+---
+
+## Previous summary (2026-10-15)
+
 **Topic:** Documents modal projects-scope pagination — server-side fix for the search endpoint.
 
 **What landed:**

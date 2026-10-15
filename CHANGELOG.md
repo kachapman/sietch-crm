@@ -2,6 +2,16 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Schedule fields always editable (2026-10-15)
+
+The previous round (commit 951f5dc) added a "grey-out" treatment to the backup schedule fieldset — when `status.configured === false`, the fieldset got `opacity: 0.55` and every child input/button got `disabled=""`. The intent was to make the form visually distinct from a saved/working config, but the side effect was a chicken-and-egg: the user couldn't click **Save** to create the initial config because Save itself was disabled.
+
+Fix in `public/app.js`:
+- `loadBackupHistory` — collapsed the if/else into a single branch: the form is always opacity 1, all child inputs/buttons have `disabled` removed. The "Not configured yet" notice is the only signal that the config hasn't been saved.
+- Backup config save handler — also removes `disabled` from every child input/button after a successful save (the previous version only set fieldset opacity + removed the fieldset's own `disabled`, which was a no-op since the fieldset never had `disabled` to begin with).
+
+Tests: `tests/test_backup_schedule_editable.mjs` (new, 3 source-grep tests). Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 + 16 + 3 = **206 tests, 0 failures**. `py_compile` ×2, `node --check` clean.
+
 ## Documents modal projects-scope pagination (2026-10-15)
 
 The previous pagination fix (round on 2026-10-14) added `limit`/`offset` support to the personal and company document scopes but missed the **projects scope** (`/api/v2/documents/search`). The frontend was already sending `limit=200&offset=0` and reading `data.total`, but the server ignored the params and returned every matching row — so the projects scope scrolled infinitely with no pager.

@@ -30728,10 +30728,17 @@ function openAdminConsoleModal() {
         })});
         if (el) el.innerHTML = '<span style="color:#3fb950;">Export schedule saved.</span>';
         // Grey-out state updates immediately (without waiting for next
-        // loadBackupHistory() tick).
+        // loadBackupHistory() tick). Audit 2026-10-15: also remove
+        // the disabled attribute from every child input/button — the
+        // fieldset itself never had `disabled`, only the children did,
+        // and without this the Save button stays disabled after the
+        // first loadBackupHistory() tick if the user hasn't saved yet.
         $("#backup-not-configured-msg")?.style.setProperty("display", "none");
-        $("#backup-schedule-fs")?.style.setProperty("opacity", "1");
-        $("#backup-schedule-fs")?.style.removeAttribute("disabled");
+        const fs = $("#backup-schedule-fs");
+        if (fs) {
+          fs.style.opacity = "1";
+          fs.querySelectorAll("input, button").forEach(el => el.removeAttribute("disabled"));
+        }
       } catch (e) {
         if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(e.message)}</span>`;
       }
@@ -30844,20 +30851,18 @@ async function loadBackupHistory() {
     // "configured" comes from the server; an empty payload falls back
     // to the env-var default of BACKUP_ENABLED, which is intentionally
     // not enough to make the form look fully live.
+    // Audit 2026-10-15: the previous version disabled the form when
+    // status.configured was false, which created a chicken-and-egg —
+    // the user couldn't click Save to create the initial config because
+    // Save itself was disabled. Now the form is always interactive;
+    // the "Not configured yet" notice above tells the user what to do
+    // and the save handler flips the notice off after a successful save.
     const notCfg = $("#backup-not-configured-msg");
     const fs = $("#backup-schedule-fs");
-    if (status.configured) {
-      if (notCfg) notCfg.style.display = "none";
-      if (fs) {
-        fs.style.opacity = "1";
-        fs.querySelectorAll("input, button").forEach(el => el.removeAttribute("disabled"));
-      }
-    } else {
-      if (notCfg) notCfg.style.display = "";
-      if (fs) {
-        fs.style.opacity = "0.55";
-        fs.querySelectorAll("input, button").forEach(el => el.setAttribute("disabled", ""));
-      }
+    if (notCfg) notCfg.style.display = status.configured ? "none" : "";
+    if (fs) {
+      fs.style.opacity = "1";
+      fs.querySelectorAll("input, button").forEach(el => el.removeAttribute("disabled"));
     }
 
     // Cheap best-effort size hint for the history-attachments dir, so
