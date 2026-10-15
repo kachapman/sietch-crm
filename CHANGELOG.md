@@ -2,6 +2,40 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Timesheet audit round 4 (part 2) — "clocked in for 10+ hours" reminder (2026-10-15)
+
+When a user has been continuously clocked in for ≥10 hours without clocking out, they now get a gentle reminder. At 14 hours, a second escalation reminder fires. The same row is delivered through two channels: Telegram (via the existing `notification_dispatcher` pipeline) and the CRM notification drawer (the bell-icon dropdown).
+
+User-pinned design (round 4): 10h + 14h, no per-type opt-out (existing global Telegram opt-out still respected), 60s polling interval, INSERT-IGNORE-style unique guard. Drawer row format: headline = time, snippet = question (per round 4 design feedback).
+
+**Files:**
+
+- `migrations/032_timesheet_overdue_unique_index.sql` (new) — partial unique index `uq_notifications_timesheet_overdue ON notifications (user_id, type, (payload->>'entry_id'), (payload->>'threshold_hours')) WHERE type = 'timesheet_overdue'`. Makes the INSERT idempotent: the same (user, entry, threshold) tuple can only exist once in the table, no matter how many times the checker runs or how many server instances are alive.
+- `timesheet_overdue_checker.py` (new) — background thread. Polls every 60s, pulls every open shift past 10h, computes per-row elapsed time, INSERTs a `notifications` row with `ON CONFLICT DO NOTHING`. Exposes `start_checker()` / `stop_checker()` / `scan_once()` (the last for tests). The elapsed calculation explicitly tags naive datetimes as UTC so the math is correct on non-UTC servers (the dev environment is on CDT; the prod server is on UTC; both work).
+- `server.py` — imports + starts + stops the checker in the existing subsystem block (alongside `service_feed_poller`, `task_reminders`, `calendar_sync`, `automation_engine`, etc.). Adds `ts_overdue` to the READY subsystem status dict so ops can grep for it in the boot log.
+- `notification_dispatcher.py` — new `_format_timesheet_overdue()` + `elif ntype == "timesheet_overdue":` branch in `_format_notification()`. Uses `_build_tg()` so the visual style matches every other Telegram notification (emoji header, separator lines, project link if any, "View dashboard" link). 10h body: gentle nudge. 14h body: escalation. Email formatter also gets a matching branch.
+- `public/app.js` — `_notifTypeIcon()` gets a `timesheet_overdue` branch with the Tabler alarm SVG (the icon the user provided, scaled to 16×16 to match the other drawer icons). `_renderNotificationDrawerItem` click handler branches on `n.type === 'timesheet_overdue'` and calls `openActivityModal()` so the user can immediately clock out. No new rendering code — uses the existing `message` (headline) + `payload.snippet` (second line) pattern.
+
+**Drawer row format (per the round 4 design feedback — no repetition):**
+
+- 10h: headline `"Clocked in for 10h 23m"`, snippet `"Did you forget to log out?"`
+- 14h: headline `"Clocked in for 14h 02m"`, snippet `"Please verify your timesheet."`
+- With a project: headline `"Clocked in for 10h 23m on Roof repair — Vance St"`, snippet unchanged.
+
+**Telegram format** (via the existing `_build_tg` helper):
+
+- 10h: `⏰ Forgotten clock-out?` header, body `"You've been clocked in for {elapsed}. If you meant to clock out, please do so from the dashboard. If you're still working, no action needed — this is just a friendly reminder."`, `🔗 View dashboard` link.
+- 14h: `⚠️ Still clocked in` header, body `"You've been clocked in for {elapsed}. This is a second reminder. Please verify your timesheet and clock out if you forgot."`
+
+**Tests:** new `tests/test_timesheet_overdue_notifications.mjs` (5 source-grep tests covering the migration, the checker's INSERT-IGNORE SQL, the 60s poll, the (10, 14) thresholds, the headline-vs-snippet split, the dispatcher's formatter, and the drawer's icon + click handler) + `tests/test_timesheet_overdue_checker.py` (5 Python unit tests for `scan_once()`: 11h → 1 insert at threshold 10, 15h → 2 inserts at thresholds 10+14, 5h → 0 inserts, project-title-in-headline, and idempotent SQL with `ON CONFLICT DO NOTHING`). Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 + 5 + 7 + 5 + 5 = **210 tests, 0 failures**. `py_compile` ×3, `node --check public/app.js` clean. Server restarted (PID 2299347) with `ts_overdue=ok` in the READY status.
+
+**Bugs caught during smoke (both fixed before commit):**
+
+- **Query threshold off-by-one:** initial SELECT filter used `max(thresholds)` (14h), so a shift at 11h never appeared in the result set and never got the 10h notification. Fix: use `min(thresholds)` (10h) in the SELECT, then filter per-row by the per-threshold loop.
+- **Naive datetime TZ bug:** `clock_in` from `query_dicts` is a naive Python `datetime` (PostgreSQL `TIMESTAMP` without TZ info). Calling `.timestamp()` on a naive datetime interprets it as **local time** — wrong on non-UTC servers. The elapsed calc was off by the local TZ offset, so an "11h" shift was computed as "6h" on the dev environment (CDT, UTC-5) and never crossed 10h. Fix: tag naive datetimes as UTC before calling `.timestamp()`. The prod server is on UTC so this wouldn't have bitten prod, but it would have bitten the dev environment.
+
+**Live smoke (cleaned up after):** created a test user with an 11h24m open shift, called `scan_once()` → `{'scanned': 1, 'inserted_10h': 1, 'inserted_14h': 0}`; DB showed the right row with `message='Clocked in for 11h 24m'`, `payload={'snippet': 'Did you forget to log out?', 'threshold_hours': 10, ...}`; second call was idempotent (no duplicate row); opened a second 15h5m shift, three rows total (10h for 11h shift, 10h + 14h for 15h shift); logged in as the test user, `GET /api/v2/notifications` returned all three with the right structure.
+
 ## Timesheet audit round 4 (part 1) — admin "Open Shifts" tab (Option C) (2026-10-15)
 
 User explicitly chose Option C for the open-shift handling: soft warning only, with an admin-only bulk-close tab. No automated data change for end users. This commit ships the admin half.

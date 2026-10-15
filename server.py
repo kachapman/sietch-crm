@@ -19192,6 +19192,13 @@ def main() -> None:
         print("Automation engine started")
     except Exception as e:
         print(f"Automation engine not started: {e}")
+    ts_overdue_stop = None
+    try:
+        from timesheet_overdue_checker import start_checker as start_ts_overdue_checker
+        ts_overdue_stop = start_ts_overdue_checker()
+        print("Timesheet overdue checker started")
+    except Exception as e:
+        print(f"Timesheet overdue checker not started: {e}")
     # READY — log a single line that ops can grep for to confirm all
     # background subsystems are up before the server starts accepting
     # requests. Each subsystem's status is included so a partial start
@@ -19205,6 +19212,7 @@ def main() -> None:
         "task_reminders": "ok" if reminders_stop else "disabled",
         "calendar_sync": "ok" if calendar_sync_stop else "disabled",
         "automation": "ok" if automation_stop else "disabled",
+        "ts_overdue": "ok" if ts_overdue_stop else "disabled",
     }
     print(f"[READY {int(_time.time())}] sietch-crm ready on port {PORT} pid {os.getpid()} subsystems=" + ",".join(f"{k}={v}" for k, v in _subsystem_status.items()), flush=True)
     try:
@@ -19223,6 +19231,9 @@ def main() -> None:
         if automation_stop:
             from automation_engine import stop_automation_engine
             stop_automation_engine(automation_stop)
+        if ts_overdue_stop:
+            from timesheet_overdue_checker import stop_checker as stop_ts_overdue_checker
+            stop_ts_overdue_checker(ts_overdue_stop)
         server.shutdown()
 
 

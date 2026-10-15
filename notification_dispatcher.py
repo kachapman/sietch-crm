@@ -189,6 +189,38 @@ def _format_project_created(notification: dict, project_title: str, actor_name: 
     ])
 
 
+def _format_timesheet_overdue(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
+    """Telegram message for the "you've been clocked in for 10+ hours" reminder.
+    Two thresholds: 10h (gentle nudge) and 14h (escalation). The drawer
+    message is built by the timesheet_overdue_checker (stored in the
+    `message` column); the Telegram body just mirrors it with a separator
+    + a 'View dashboard' link via the existing _build_tg helper."""
+    payload = notification.get("payload") or {}
+    threshold = payload.get("threshold_hours", 10)
+    elapsed = payload.get("elapsed") or ""
+    headline = notification.get("message") or "You may have forgotten to clock out."
+    if threshold >= 14:
+        header_emoji = "⚠️"
+        header_text = "Still clocked in"
+        body_lines = [
+            f"You've been clocked in for {elapsed}.",
+            "This is a second reminder. Please verify your timesheet and clock out if you forgot.",
+        ]
+    else:
+        header_emoji = "⏰"
+        header_text = "Forgotten clock-out?"
+        body_lines = [
+            f"You've been clocked in for {elapsed}.",
+            "If you meant to clock out, please do so from the dashboard.",
+            "If you're still working, no action needed — this is just a friendly reminder.",
+        ]
+    # The notification row's `message` column already says
+    # "Clocked in for 10h 23m" (or "on <project>"). Use it as the first
+    # body line so the Telegram content matches the drawer headline.
+    body_lines.insert(0, headline)
+    return _build_tg(header_emoji, header_text, project_title, project_id, project_number, body_lines)
+
+
 def _format_notification(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str | None:
     ntype = notification.get("type")
     if ntype == "note_tagged":
@@ -211,6 +243,8 @@ def _format_notification(notification: dict, project_title: str, actor_name: str
         return _format_project_updated(notification, project_title, actor_name, project_id, project_number)
     elif ntype in ("project_created", "project.created"):
         return _format_project_created(notification, project_title, actor_name, project_id, project_number)
+    elif ntype == "timesheet_overdue":
+        return _format_timesheet_overdue(notification, project_title, actor_name, project_id, project_number)
     return None
 
 
@@ -301,6 +335,15 @@ def _format_email_notification(notification: dict, project_title: str, actor_nam
     elif ntype in ("project_created", "project.created"):
         subject = f"New project: {project_title}"
         body = f"{actor} created a new project: {project_title}."
+    elif ntype == "timesheet_overdue":
+        threshold = (notification.get("payload") or {}).get("threshold_hours", 10)
+        elapsed = (notification.get("payload") or {}).get("elapsed") or "many hours"
+        if threshold >= 14:
+            subject = f"Still clocked in ({elapsed}) — please verify your timesheet"
+            body = f"You've been clocked in for {elapsed}. This is a second reminder. Please verify your timesheet and clock out if you forgot."
+        else:
+            subject = f"Clocked in for {elapsed} — did you forget to log out?"
+            body = f"You've been clocked in for {elapsed}. If you meant to clock out, please do so from the dashboard. If you're still working, no action needed — this is just a friendly reminder."
     else:
         return None, None
 

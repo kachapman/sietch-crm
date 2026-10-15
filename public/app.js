@@ -42608,6 +42608,11 @@ function _notifTypeIcon(type) {
     // Cloud icon for third-party service status notifications.
     return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M17.5 19a4.5 4.5 0 1 0 0 -9a4.5 4.5 0 0 0 -8.5 -2a4.5 4.5 0 0 0 -4 11h12.5z"/></svg>`;
   }
+  if (type === "timesheet_overdue") {
+    // Alarm clock — same Tabler icon used in the admin Open Shifts tab
+    // so the visual identity is consistent across the dashboard.
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-alarm" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M5 13a7 7 0 1 0 14 0a7 7 0 1 0 -14 0"/><path d="M12 10l0 3l2 0"/><path d="M7 4l-2.75 2"/><path d="M17 4l2.75 2"/></svg>`;
+  }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M8 9l3 3l-2 1"/><path d="M10.5 17.5l-3.5 -2l-2 1"/><path d="M17 3l4 4"/><path d="M21 7l-6 6"/><path d="M16 3l0 5l5 0"/></svg>`;
 }
 
@@ -42656,6 +42661,17 @@ function _renderNotificationDrawerItem(n) {
     // Service-feed notifications: if the payload includes a URL, open it in a new tab.
     if (n.type === "service_feed" && n.payload && n.payload.url) {
       try { window.open(n.payload.url, "_blank", "noopener,noreferrer"); } catch (e) {}
+    }
+    // Timesheet-overdue notifications: open the Activity / Time Sheet
+    // modal so the user can immediately clock out. We close the
+    // notifications drawer first so the modal isn't stacked on top of
+    // a half-faded overlay.
+    if (n.type === "timesheet_overdue") {
+      try {
+        const drawer = $("#notification-drawer");
+        if (drawer) drawer.classList.add("hidden");
+        openActivityModal();
+      } catch (err) { /* swallow */ }
     }
     if (!n.isRead) {
       n.isRead = true;

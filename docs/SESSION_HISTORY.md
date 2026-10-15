@@ -13,6 +13,55 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-15
 
+**Topic:** Timesheet audit round 4 (part 2) — timesheet-overdue Telegram + drawer notification (10h + 14h).
+
+**What landed:**
+
+- **Behavior:** When a user has been continuously clocked in for ≥10 hours, a reminder notification is fired. At 14 hours, a second escalation reminder is fired. Each (user, entry, threshold) tuple produces at most one notification — server restarts and double-instances are safe. The same row is delivered through two channels: (a) **Telegram** (via the existing `notification_dispatcher` pipeline that all other notification types use), and (b) the **CRM notification drawer** (the bell-icon dropdown, which already reads from the `notifications` table via `/api/v2/notifications`). No email channel — Telegram and drawer only.
+- **Architecture:** Pure addition, no changes to existing notification types or the dispatcher. Three new pieces:
+  1. **Migration 032** (`migrations/032_timesheet_overdue_unique_index.sql`): `CREATE UNIQUE INDEX uq_notifications_timesheet_overdue ON notifications (user_id, type, (payload->>'entry_id'), (payload->>'threshold_hours')) WHERE type = 'timesheet_overdue'`. The partial WHERE clause keeps other notification types unconstrained. The JSONB expressions let us de-duplicate by data, not schema.
+  2. **Background thread** (`timesheet_overdue_checker.py`): polls every 60s (`POLL_INTERVAL_SEC=60`), pulls every open shift past 10h, computes per-row elapsed time, INSERTs a `notifications` row with `type='timesheet_overdue'` and `ON CONFLICT DO NOTHING`. `start_checker()` / `stop_checker()` mirror the existing `service_feed_poller` pattern; `server.py` wires them into the subsystem block.
+  3. **Telegram formatter** (`notification_dispatcher.py`): new `_format_timesheet_overdue()` + `elif ntype == "timesheet_overdue":` branch in `_format_notification()`. Uses the existing `_build_tg()` helper so the visual style matches every other notification. 10h = "⏰ Forgotten clock-out?" / 14h = "⚠️ Still clocked in". Email formatter also gets a matching branch.
+- **Frontend drawer:** `_notifTypeIcon()` gets a `timesheet_overdue` branch with the Tabler alarm SVG (the icon you provided, scaled to 16×16 to match the other drawer icons). `_renderNotificationDrawerItem` click handler branches on `n.type === 'timesheet_overdue'` and calls `openActivityModal()` so the user can immediately clock out. The drawer row uses the standard `message` (headline) + `payload.snippet` (second line) pattern — exactly like every other notification type, no new rendering code needed.
+- **Drawer format** (per your round 4 design feedback): headline = time, snippet = question. Examples:
+  - 10h: headline `"Clocked in for 10h 23m"`, snippet `"Did you forget to log out?"`
+  - 14h: headline `"Clocked in for 14h 02m"`, snippet `"Please verify your timesheet."`
+  - With a project: headline `"Clocked in for 10h 23m on Roof repair — Vance St"`, snippet `"Did you forget to log out?"`
+- **Telegram format:** uses `_build_tg()` so it has the same emoji header, separator lines, and "View dashboard" link as every other Telegram notification. 10h body: "You've been clocked in for {elapsed}. If you meant to clock out, please do so from the dashboard. If you're still working, no action needed — this is just a friendly reminder." 14h body: "You've been clocked in for {elapsed}. This is a second reminder. Please verify your timesheet and clock out if you forgot."
+- **De-duplication:** the unique index makes the INSERT idempotent. `INSERT ... ON CONFLICT DO NOTHING` turns the second/third/Nth insert into a no-op. Two admins won't see duplicates; the server restarting mid-shift won't see duplicates; two server instances won't see duplicates.
+- **Opt-out:** none at the per-type level (per your "always send, no opt-out" answer). The existing global `notification_preferences WHERE notification_type='telegram' AND enabled=false` opt-out still works — users with global Telegram off don't get the message, and the dispatcher marks it sent (no error).
+- **Files:** `migrations/032_timesheet_overdue_unique_index.sql` (new, 18 lines), `timesheet_overdue_checker.py` (new, 215 lines), `server.py` (+1 start/stop pair + 1 subsystem-status entry, ~12 lines), `notification_dispatcher.py` (2 new formatters, ~35 lines), `public/app.js` (icon + click handler, ~20 lines), `tests/test_timesheet_overdue_notifications.mjs` (new, 5 source-grep tests), `tests/test_timesheet_overdue_checker.py` (new, 5 Python unit tests for `scan_once()`).
+
+**Bugs caught during smoke (both fixed before commit):**
+
+- **Query threshold:** initial code filtered the SELECT with `te.clock_in < NOW() - max(thresholds)` hours. That meant a shift at 11h never got the 10h notification because the query only picked up shifts > 14h. Fix: use `min(thresholds)` (10h) in the SELECT, then filter per-row by the per-threshold loop.
+- **Naive datetime TZ bug:** `clock_in` from `query_dicts` is a naive Python `datetime` (PostgreSQL `TIMESTAMP` without TZ info). Calling `.timestamp()` on a naive datetime interprets it as **local time** — wrong on non-UTC servers (the dev server is on CDT/UTC-5). The elapsed calc was off by 5h, so an "11h" shift was computed as "6h" and never crossed 10h. Fix: tag naive datetimes as UTC before calling `.timestamp()`. The production server is on UTC so this wouldn't have bitten prod, but it would have bitten the dev environment.
+
+**Verification:**
+
+- Live smoke (cleaned up after):
+  - Created test user `overdue-test@sietch.local`, opened an 11h24m shift.
+  - Called `scan_once()` manually → `{'scanned': 1, 'inserted_10h': 1, 'inserted_14h': 0, 'skipped': 0}`.
+  - DB: 1 row, `message='Clocked in for 11h 24m'`, `payload={'elapsed': '11h 24m', 'snippet': 'Did you forget to log out?', 'entry_id': '6', 'threshold_hours': 10}`.
+  - Called `scan_once()` again → still 1 row (idempotent).
+  - Opened a second 15h5m shift → 3 rows total (10h for the 11h shift, 10h for the 15h shift, 14h for the 15h shift).
+  - Logged in as the test user, hit `GET /api/v2/notifications` → 3 rows returned with the right structure (`type`, `message`, `payload.snippet`, `payload.threshold_hours`).
+  - Migration 032 applied; the partial unique index is present (`uq_notifications_timesheet_overdue`).
+  - Server restarted (PID 2299347) with both fixes; subsystem status includes `ts_overdue=ok`.
+- Tests: 5/5 source-grep tests in `test_timesheet_overdue_notifications.mjs` + 5/5 Python tests in `test_timesheet_overdue_checker.py` pass.
+- Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 + 5 + 7 + 5 + 5 = **210 tests, 0 failures**. `py_compile` ×3, `node --check public/app.js` clean.
+
+**To verify in the browser:**
+
+- Open any user's open shift. The next time the 60s poll runs after the shift crosses 10h, a row will appear in `notifications` with `type='timesheet_overdue'`. The drawer will show the new row within 5s of that (the existing SSE sweep picks it up). Click the row → the activity modal opens. The Tabler alarm icon shows in the leftmost cell of the row.
+- If the user has a Telegram chat_id mapped, the dispatcher sends the formatted message on its next 5s poll. (The dev environment may not have a mapping for new test users — that's fine, the row is marked sent and no error is logged.)
+
+**Next:** No urgent follow-ups. The remaining queue: clock-out-while-on-break / 403 cross-user / disable-delete-on-active-shift / click-listener-leak from the original audit (all still deferred from the round 3 commit if you want to clear them). Beyond that, the timesheet functionality is now complete: live timer, masked range-nav fix, dead code removal, security hardening, admin tab, and the overdue notification.
+
+---
+
+## Previous summary (2026-10-15)
+
 **Topic:** Timesheet audit round 4 — admin "Open Shifts" tab (Option C) and the timesheet-overdue Telegram + drawer notification.
 
 **What landed (commit 1, admin tab):**
