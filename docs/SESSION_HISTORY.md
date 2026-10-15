@@ -13,6 +13,49 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-15
 
+**Topic:** Timesheet/activity audit — removed dead "tile-version" code path; also fixed a masked live bug.
+
+**What landed:**
+
+- **Audit scope:** all timesheet/activity code — backend (`server.py` routes `_handle_timesheet_*`, `migrations/009`), frontend (`public/app.js`, `public/index.html`, `public/styles.css`). The `bot_activity_log` table is a separate Telegram-bot concern and was confirmed unrelated.
+- **Bug 1 (dead code, ~254 lines):** the presence tile used to have a tabbed UI with a Timesheet tab. The original implementation (`renderPresenceTimesheetTab` / `tsToggleClock` / `tsUpdateClockUI` / `tsStartTimer` / `tsStopTimer` / `tsUpdateTimerDisplay` / `tsRefreshEntries` / `tsRenderEntries` / `tsWireExportDropdowns`) was deleted from `index.html` at some point — but a copy of the JS still lived in `public/app.js` and tried to wire up `#presence-tile-timesheet-body`, `#ts-clock-btn`, `#ts-break-btn`, `#ts-entries-list`, `#ts-daily-total`, `#ts-prev-day`, `#ts-next-day`, `#ts-range-week`, `#ts-range-month`, `#ts-project-search`, `#ts-csv-from`, `#ts-pdf-from`, etc. None of those IDs exist in the current HTML. The only live timesheet UI is the modal opened from the settings dropdown (`#activity-modal` with `#activity-tabs` → `renderActivityTimesheet` / `renderPresenceTimesheetModal` / `modalRefreshEntries` / `modalToggleClock` / `modalToggleBreak` / `updateModalClockUI`).
+- **Fix:** deleted the entire dead block from `public/app.js`:
+  - `renderTimesheetTab` (28 lines)
+  - `tsToggleClock` / `tsToggleBreak` / `tsUpdateClockUI` / `tsStartTimer` / `tsStopTimer` / `tsUpdateTimerDisplay` (90 lines)
+  - `tsRefreshEntries` / `tsRenderEntries` (60 lines)
+  - `tsWireExportDropdowns` (52 lines)
+  - `tsSyncDateInputs` trimmed to modal IDs only (4 lines)
+  - Dead call site at `ensurePresenceOnLogin` (3 lines)
+  - Net: `−254 / +7` lines, `git diff --stat` shows `1 file changed, 7 insertions(+), 254 deletions(-)`.
+- **Bug 2 (live, masked by the dead code):** `tsShiftRange` and `tsSetRange` were shared between the dead tile path AND the live modal path (the modal binds them at lines 18740-18743 and 29967-29970). Both functions called `tsRefreshEntries()` at the end — which is now deleted. So **the modal's day/week/month range navigation was broken** in the live UI too (range label updated, but the entries list never refreshed). Repointed both to `modalRefreshEntries()`. Same for `tsEditEntry` / `tsAssignProject` / `tsDeleteEntry` (right-click context menu handlers) — they were calling `tsRefreshEntries` after PUT/DELETE, now call `modalRefreshEntries`.
+- **Live functions kept intact:** `bindTimesheetProjectSearch`, `renderPresenceTimesheetModal`, `updateModalRangeLabel`, `updateModalClockUI`, `modalToggleClock`, `modalToggleBreak`, `modalRefreshEntries`, `tsRenderAdminSummary`, `tsRenderAdminWeeklyView`, `tsEditEntry`, `tsEntryContextMenu`, `tsAssignProject`, `tsDeleteEntry`, `tsShiftRange`, `tsSetRange`, `tsUpdateDateLabel`, `tsWireModalExportDropdowns`, `tsSyncDateInputs`, `renderActivityTimesheet`.
+
+**Other findings (queued, not done in this session — see next-session note):**
+
+- 🟠 `_handle_timesheet_clock_out` silently adds the in-progress break interval to `break_minutes` and closes the shift when the user clocks out while still on break. Should reject with 400 or warn.
+- 🟠 `time_entries_daily` view `COALESCE(clock_out, NOW())` makes open shifts count as "today's hours" and grow unbounded — no auto-close job exists even though `auto_closed BOOLEAN` is in the schema. **Needs user-facing surfacing** (badge in the modal + maybe a "Looks like you forgot to clock out yesterday" toast) before any auto-close behavior is added. Discuss with user before implementing.
+- 🟠 Non-admin `user_id` query string on `/api/timesheet/{history,daily,export,export-pdf}` is silently coerced to the caller's own ID instead of 403.
+- 🟡 Right-click "Delete" on entries is enabled for the active shift (`clock_out IS NULL`); should be disabled or confirmed.
+- 🟡 Document-level click listener leak in `tsEditEntry` / `tsAssignProject` (not removed on Save).
+
+**Tests:** No new test files (pure deletion, no behavior change for the live modal). All existing tests still pass:
+- `node --test tests/test_pure_helpers.mjs` → 28/28 ✓
+- `node --check public/app.js` → PARSE OK
+- `node --check` on the **served** `/app.js` (PID 2263040, port 8766) → PARSE OK
+- `grep -c -E "renderTimesheetTab|tsToggleClock|tsRefreshEntries|tsRenderEntries|tsWireExportDropdowns|#presence-tile-timesheet-body" served app.js` → 0
+- `grep -c -E "modalToggleClock|modalToggleBreak|modalRefreshEntries|updateModalClockUI|renderActivityTimesheet|tsEditEntry|tsEntryContextMenu|tsAssignProject|tsDeleteEntry|tsShiftRange|tsSetRange|tsWireModalExportDropdowns|tsSyncDateInputs|tsRenderAdminSummary" served app.js` → 53 (all live wiring intact)
+- `python3 -c "import ast; ast.parse(open('server.py').read())"` → SERVER PARSE OK (no server-side changes, just confirming)
+
+**Verified live:** 1 file modified (`public/app.js`). `git diff --stat` = `+7 −254`. **Server restarted** (PID 2263040, port 8766) and serving the new `app.js` (size 1,867,233 bytes, 200 OK).
+
+**To verify in the browser:** open Settings → Activity / Time Sheet. Clock in/out, start/end break, change day/week/month, right-click an entry to add a note / assign to a project / delete. The previously-broken range navigation (day/week/month buttons) should now correctly refresh the entries list.
+
+**Next:** Discuss the open-shift auto-close behavior with the user (item #2 above — it affects hours that have already been recorded, so we need to decide: surface-and-confirm vs. auto-close-with-undo). After that, the remaining audit items are quick to clear (clock-out-while-on-break, 403 for non-admin `user_id`, disable delete on active shift, click-listener leak).
+
+---
+
+## Previous summary (2026-10-15)
+
 **Topic:** Schedule fields always editable — fix the chicken-and-egg from the previous round.
 
 **What landed:**
@@ -35,6 +78,8 @@ Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 + 16 + 3 = **20
 ---
 
 ## Previous summary (2026-10-15)
+
+**Topic:** Documents modal projects-scope pagination — server-side fix for the search endpoint.
 
 **Topic:** Documents modal projects-scope pagination — server-side fix for the search endpoint.
 

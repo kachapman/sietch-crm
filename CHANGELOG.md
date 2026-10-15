@@ -2,6 +2,39 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Timesheet/activity audit — dead code removal + masked range-nav fix (2026-10-15)
+
+Audited the full timesheet/activity surface (backend routes, frontend UI, `migrations/009`) and found two related issues.
+
+**Dead code path (the "Timesheet tab inside the presence tile")**
+
+The presence tile used to host a tabbed UI with a Timesheet tab. The HTML for that tab was removed at some point, but ~254 lines of the original JS stayed in `public/app.js` and tried to wire up DOM IDs that no longer exist (`#presence-tile-timesheet-body`, `#ts-clock-btn`, `#ts-break-btn`, `#ts-entries-list`, `#ts-daily-total`, `#ts-prev-day`, `#ts-next-day`, `#ts-range-week`, `#ts-range-month`, `#ts-project-search`, `#ts-csv-from`, `#ts-pdf-from`, etc.). The only live timesheet UI is the modal opened from the settings dropdown (`#activity-modal` with `#activity-tabs` → `renderActivityTimesheet` / `renderPresenceTimesheetModal` / `modalRefreshEntries` / `modalToggleClock` / `modalToggleBreak` / `updateModalClockUI`).
+
+Deleted the entire dead block from `public/app.js`:
+
+- `renderTimesheetTab` (28 lines)
+- `tsToggleClock` / `tsToggleBreak` / `tsUpdateClockUI` / `tsStartTimer` / `tsStopTimer` / `tsUpdateTimerDisplay` (90 lines)
+- `tsRefreshEntries` / `tsRenderEntries` (60 lines)
+- `tsWireExportDropdowns` (52 lines)
+- `tsSyncDateInputs` trimmed to modal IDs only (4 lines)
+- Dead call site at `ensurePresenceOnLogin` (3 lines)
+
+Net: `−254 / +7` lines in `public/app.js`. No behavior change for the live modal path.
+
+**Masked live bug — range navigation in the modal**
+
+`tsShiftRange` and `tsSetRange` were shared between the dead tile path AND the live modal path (the modal binds them at lines 18740-18743 and 29967-29970). Both functions called `tsRefreshEntries()` at the end — which is now deleted. So the modal's day/week/month buttons were updating the range label but never refreshing the entries list. Repointed both to `modalRefreshEntries()`. Same for `tsEditEntry` / `tsAssignProject` / `tsDeleteEntry` (right-click context menu handlers) — they were calling `tsRefreshEntries` after PUT/DELETE, now call `modalRefreshEntries`.
+
+**Other audit findings (queued for next session):**
+
+- `_handle_timesheet_clock_out` silently adds in-progress break minutes to `break_minutes` and closes the shift when the user clocks out while still on break. Should reject with 400 or warn.
+- `time_entries_daily` view `COALESCE(clock_out, NOW())` makes open shifts count as "today's hours" and grow unbounded — no auto-close job exists even though `auto_closed BOOLEAN` is in the schema. Needs user-facing surfacing (badge / warning) before any auto-close behavior is added — see session history.
+- Non-admin `user_id` query string on `/api/timesheet/{history,daily,export,export-pdf}` is silently coerced to the caller's own ID instead of returning 403.
+- Right-click "Delete" on entries is enabled for the active shift (`clock_out IS NULL`); should be disabled or confirmed.
+- Document-level click listener leak in `tsEditEntry` / `tsAssignProject` (not removed on Save).
+
+Tests: no new test files (pure deletion, no behavior change for the live modal). All existing tests still pass: `node --test tests/test_pure_helpers.mjs` → 28/28. `node --check public/app.js` clean. `node --check` on the served `/app.js` (PID 2263040) clean. `grep -c` on the served file confirms 0 dead identifiers and 53 live function references.
+
 ## Schedule fields always editable (2026-10-15)
 
 The previous round (commit 951f5dc) added a "grey-out" treatment to the backup schedule fieldset — when `status.configured === false`, the fieldset got `opacity: 0.55` and every child input/button got `disabled=""`. The intent was to make the form visually distinct from a saved/working config, but the side effect was a chicken-and-egg: the user couldn't click **Save** to create the initial config because Save itself was disabled.

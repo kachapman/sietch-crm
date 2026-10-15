@@ -18562,9 +18562,6 @@ function ensurePresenceOnLogin() {
     showToast("Back online");
     startPresenceHeartbeats();
     fetchPresenceSnapshot();
-    if ($("#presence-tile-timesheet-body")?.style.display !== "none") {
-      renderTimesheetTab();
-    }
     // Retry SSE connection
     if (!_evtSource) connectSSE();
   });
@@ -18872,34 +18869,6 @@ function modalRefreshEntries() {
   }).catch(() => {});
 }
 
-function renderTimesheetTab() {
-  const body = $("#presence-tile-timesheet-body");
-  if (!body) return;
-  api("/api/timesheet/active").then(data => {
-    _tsActiveEntry = data.entry;
-    tsUpdateClockUI();
-    tsRefreshEntries();
-  }).catch(() => {});
-  const clockBtn = $("#ts-clock-btn");
-  const breakBtn = $("#ts-break-btn");
-  const prevDay = $("#ts-prev-day");
-  const nextDay = $("#ts-next-day");
-  const rangeWeek = $("#ts-range-week");
-  const rangeMonth = $("#ts-range-month");
-  bindTimesheetProjectSearch("ts-project-search", "ts-project-results");
-  
-  clockBtn?.addEventListener("click", tsToggleClock);
-  breakBtn?.addEventListener("click", tsToggleBreak);
-  prevDay?.addEventListener("click", () => tsShiftRange(-1));
-  nextDay?.addEventListener("click", () => tsShiftRange(1));
-  rangeWeek?.addEventListener("click", () => tsSetRange("week"));
-  rangeMonth?.addEventListener("click", () => tsSetRange("month"));
-  
-  tsUpdateDateLabel();
-  tsSyncDateInputs();
-  tsWireExportDropdowns();
-}
-
 function tsRenderAdminSummary(container) {
   if (!container) return;
   container.innerHTML = '<div style="color:var(--muted);font-size:0.78rem;">Loading team summary...</div>';
@@ -18999,168 +18968,6 @@ function tsRenderAdminWeeklyView(container) {
   });
 }
 
-function tsToggleClock() {
-  if (_tsActiveEntry) {
-    api("/api/timesheet/clock-out", { method: "POST" }).then(data => {
-      _tsActiveEntry = null;
-      tsStopTimer();
-      tsUpdateClockUI();
-      tsRefreshEntries();
-    }).catch(err => showToast(err.message || "Failed to clock out", true));
-  } else {
-    const opportunityId = tsSelectedProject?.id || null;
-    api("/api/timesheet/clock-in", { method: "POST", body: JSON.stringify({ notes: "", opportunity_id: opportunityId || undefined }) }).then(data => {
-      _tsActiveEntry = data.entry;
-      tsStartTimer();
-      tsUpdateClockUI();
-    }).catch(err => showToast(err.message || "Failed to clock in", true));
-  }
-}
-
-function tsToggleBreak() {
-  if (!_tsActiveEntry) return;
-  if (_tsActiveEntry.break_start) {
-    api("/api/timesheet/break/end", { method: "POST" }).then(() => {
-      _tsActiveEntry.break_start = null;
-      tsUpdateClockUI();
-    });
-  } else {
-    api("/api/timesheet/break/start", { method: "POST" }).then(() => {
-      _tsActiveEntry.break_start = new Date().toISOString();
-      tsUpdateClockUI();
-    });
-  }
-}
-
-function tsUpdateClockUI() {
-  const clockBtn = $("#ts-clock-btn");
-  const breakBtn = $("#ts-break-btn");
-  const timerDisplay = $("#ts-timer-display");
-  if (!clockBtn) return;
-  
-  if (_tsActiveEntry) {
-    clockBtn.textContent = "Clock Out";
-    clockBtn.className = "ts-clock-btn clock-out";
-    breakBtn?.classList.remove("hidden");
-    if (_tsActiveEntry.break_start) {
-      breakBtn.textContent = "End Break";
-      breakBtn.className = "ts-break-btn on-break";
-    } else {
-      breakBtn.textContent = "Start Break";
-      breakBtn.className = "ts-break-btn";
-    }
-    tsStartTimer();
-  } else {
-    clockBtn.textContent = "Clock In";
-    clockBtn.className = "ts-clock-btn clock-in";
-    breakBtn?.classList.add("hidden");
-    tsStopTimer();
-    if (timerDisplay) timerDisplay.textContent = "00:00:00";
-  }
-}
-
-function tsStartTimer() {
-  tsStopTimer();
-  _tsTimerInterval = setInterval(tsUpdateTimerDisplay, 1000);
-  tsUpdateTimerDisplay();
-}
-
-function tsStopTimer() {
-  if (_tsTimerInterval) {
-    clearInterval(_tsTimerInterval);
-    _tsTimerInterval = null;
-  }
-}
-
-function tsUpdateTimerDisplay() {
-  const timerDisplay = $("#ts-timer-display");
-  if (!timerDisplay || !_tsActiveEntry) return;
-  const clockIn = new Date(_tsActiveEntry.clock_in);
-  const now = new Date();
-  let elapsed = (now - clockIn) / 1000;
-  if (_tsActiveEntry.break_start) {
-    const breakStart = new Date(_tsActiveEntry.break_start);
-    elapsed -= (now - breakStart) / 1000;
-  }
-  elapsed -= (_tsActiveEntry.break_minutes || 0) * 60;
-  if (elapsed < 0) elapsed = 0;
-  const h = Math.floor(elapsed / 3600);
-  const m = Math.floor((elapsed % 3600) / 60);
-  const s = Math.floor(elapsed % 60);
-  timerDisplay.textContent = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-}
-
-function tsRefreshEntries() {
-  const from = _tsRange.from || "";
-  const to = _tsRange.to || "";
-  let url = "/api/timesheet/history?";
-  if (from) url += `from=${from}&`;
-  if (to) url += `to=${to}&`;
-  api(url).then(data => {
-    tsRenderEntries(data.entries || []);
-  }).catch(() => {});
-}
-
-function tsRenderEntries(entries) {
-  const list = $("#ts-entries-list");
-  const totalEl = $("#ts-daily-total");
-  if (!list) return;
-  list.innerHTML = "";
-  
-  if (!entries.length) {
-    list.innerHTML = '<div class="ts-empty">No time entries for this period</div>';
-    if (totalEl) totalEl.textContent = "";
-    return;
-  }
-  
-  let totalSeconds = 0;
-  entries.forEach(entry => {
-    const ci = entry.clock_in ? new Date(entry.clock_in) : null;
-    const co = entry.clock_out ? new Date(entry.clock_out) : null;
-    const row = document.createElement("div");
-    row.className = "ts-entry-row";
-    
-    const times = document.createElement("div");
-    times.className = "ts-entry-times";
-    const dateStr = ci ? ci.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "\u2014";
-    const inStr = ci ? ci.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "\u2014";
-    const outStr = co ? co.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "\u2014";
-    times.textContent = `${dateStr}  ${inStr} \u2014 ${outStr}`;
-    
-    const dur = document.createElement("div");
-    dur.className = "ts-entry-duration";
-    let durSec = 0;
-    if (ci && co) {
-      durSec = (co - ci) / 1000 - (entry.break_minutes || 0) * 60;
-      totalSeconds += durSec;
-    }
-    const dh = Math.floor(durSec / 3600);
-    const dm = Math.floor((durSec % 3600) / 60);
-    dur.textContent = `${dh}h ${dm}m`;
-    
-    const proj = document.createElement("div");
-    proj.className = "ts-entry-project";
-    proj.textContent = entry.opportunity_title || "";
-    proj.title = entry.opportunity_title || "";
-    
-    // Tooltip: show note on hover
-    if (entry.notes) {
-      row.title = entry.notes;
-    }
-    
-    row.addEventListener("contextmenu", (ev) => tsEntryContextMenu(ev, entry));
-    const rightGroup = document.createElement("div");
-    rightGroup.className = "ts-entry-right";
-    rightGroup.append(dur);
-    row.append(times, proj, rightGroup);
-    list.appendChild(row);
-  });
-  
-  const th = Math.floor(totalSeconds / 3600);
-  const tm = Math.floor((totalSeconds % 3600) / 60);
-  if (totalEl) totalEl.textContent = `Total: ${th}h ${tm}m`;
-}
-
 function tsEditEntry(entry) {
   // Close any existing popup
   document.querySelectorAll(".ts-note-popup").forEach(m => m.remove());
@@ -19194,7 +19001,7 @@ function tsEditEntry(entry) {
     api(`/api/timesheet/entries/${entry.id}`, {
       method: "PUT",
       body: JSON.stringify({ notes }),
-    }).then(() => tsRefreshEntries());
+    }).then(() => modalRefreshEntries());
   };
   const cancel = () => popup.remove();
   
@@ -19288,7 +19095,7 @@ function tsAssignProject(entry, mouseEvent) {
           api(`/api/timesheet/entries/${entry.id}`, {
             method: "PUT",
             body: JSON.stringify({ opportunity_id: opp.id }),
-          }).then(() => tsRefreshEntries());
+          }).then(() => modalRefreshEntries());
         });
         results.appendChild(btn);
       });
@@ -19312,7 +19119,7 @@ function tsAssignProject(entry, mouseEvent) {
 function tsDeleteEntry(entry) {
   if (!confirm("Delete this time entry?")) return;
   api(`/api/timesheet/entries/${entry.id}`, { method: "DELETE" })
-    .then(() => tsRefreshEntries())
+    .then(() => modalRefreshEntries())
     .catch(err => showToast(err.message || "Failed to delete", true));
 }
 
@@ -19336,7 +19143,7 @@ function tsShiftRange(dir) {
     _tsRange.to = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10);
   }
   tsUpdateDateLabel();
-  tsRefreshEntries();
+  modalRefreshEntries();
   tsSyncDateInputs();
 }
 
@@ -19356,7 +19163,7 @@ function tsSetRange(mode) {
   }
   _tsRange.mode = mode;
   tsUpdateDateLabel();
-  tsRefreshEntries();
+  modalRefreshEntries();
   tsSyncDateInputs();
 }
 
@@ -19370,60 +19177,6 @@ function tsUpdateDateLabel() {
   } else {
     label.textContent = "All time";
   }
-}
-
-function tsWireExportDropdowns() {
-  const csvBtn = document.getElementById("ts-export-csv");
-  const csvDrop = document.getElementById("ts-csv-dropdown");
-  const csvWrap = csvBtn?.closest(".ts-export-wrap");
-  if (csvBtn && csvDrop) {
-    csvBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      document.getElementById("ts-pdf-dropdown")?.classList.add("hidden");
-      csvDrop.classList.toggle("hidden");
-      if (!csvDrop.classList.contains("hidden")) {
-        const fromEl = document.getElementById("ts-csv-from");
-        const toEl = document.getElementById("ts-csv-to");
-        if (fromEl && !fromEl.value) fromEl.value = _tsRange.from || "";
-        if (toEl && !toEl.value) toEl.value = _tsRange.to || "";
-      }
-    });
-  }
-  const pdfBtn = document.getElementById("ts-export-pdf");
-  const pdfDrop = document.getElementById("ts-pdf-dropdown");
-  const pdfWrap = pdfBtn?.closest(".ts-export-wrap");
-  if (pdfBtn && pdfDrop) {
-    pdfBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      document.getElementById("ts-csv-dropdown")?.classList.add("hidden");
-      pdfDrop.classList.toggle("hidden");
-      if (!pdfDrop.classList.contains("hidden")) {
-        const fromEl = document.getElementById("ts-pdf-from");
-        const toEl = document.getElementById("ts-pdf-to");
-        if (fromEl && !fromEl.value) fromEl.value = _tsRange.from || "";
-        if (toEl && !toEl.value) toEl.value = _tsRange.to || "";
-      }
-    });
-  }
-  document.getElementById("ts-csv-go")?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const from = document.getElementById("ts-csv-from")?.value || "";
-    const to = document.getElementById("ts-csv-to")?.value || "";
-    window.open(`/api/timesheet/export?from=${from}&to=${to}`, "_blank");
-    csvDrop?.classList.add("hidden");
-  });
-  document.getElementById("ts-pdf-go")?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const from = document.getElementById("ts-pdf-from")?.value || "";
-    const to = document.getElementById("ts-pdf-to")?.value || "";
-    window.open(`/api/timesheet/export-pdf?from=${from}&to=${to}`, "_blank");
-    pdfDrop?.classList.add("hidden");
-  });
-  // Close dropdowns when clicking outside
-  document.addEventListener("click", (e) => {
-    if (csvWrap && !csvWrap.contains(e.target)) csvDrop?.classList.add("hidden");
-    if (pdfWrap && !pdfWrap.contains(e.target)) pdfDrop?.classList.add("hidden");
-  });
 }
 
 function tsWireModalExportDropdowns() {
@@ -19472,8 +19225,8 @@ function tsWireModalExportDropdowns() {
 }
 
 function tsSyncDateInputs() {
-  const ids = ["ts-csv-from", "ts-csv-to", "ts-pdf-from", "ts-pdf-to",
-    "modal-ts-csv-from", "modal-ts-csv-to", "modal-ts-pdf-from", "modal-ts-pdf-to"];
+  // Sync the modal export dropdowns' date inputs from the current _tsRange.
+  const ids = ["modal-ts-csv-from", "modal-ts-csv-to", "modal-ts-pdf-from", "modal-ts-pdf-to"];
   ids.forEach(id => {
     const el = document.getElementById(id);
     if (el) {
