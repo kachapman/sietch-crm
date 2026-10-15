@@ -47,8 +47,30 @@ TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 PORTAL = os.environ.get("ONLYOFFICE_PORTAL_URL", "")
 
 def _get_dashboard_url() -> str:
-    """Read DASHBOARD_URL lazily to pick up .env changes."""
+    """Internal API base — the URL the BOT uses to reach the CRM.
+
+    Read lazily so .env changes are picked up without a code change.
+
+    The bot and the CRM normally run on the same host, so this should be the
+    loopback address (http://127.0.0.1:8766). Pointing it at a tunnel or a
+    public URL makes every CRM call depend on third-party infrastructure: when
+    the tunnel is down the endpoints return HTTP 200 with an HTML error page,
+    the bot can't parse it, and users get told their invite code is invalid
+    when it is perfectly valid. See `_get_public_dashboard_url()` for the
+    user-facing base, which is a different thing entirely.
+    """
     return os.getenv("DASHBOARD_URL", _DASHBOARD_URL_DEFAULT)
+
+
+def _get_public_dashboard_url() -> str:
+    """Public base for links the RECIPIENT clicks (e.g. "View project").
+
+    These are opened in a customer's browser, so this must be reachable by
+    them and can never be 127.0.0.1. Falls back to the internal URL when
+    DASHBOARD_PUBLIC_URL is unset, which preserves the historical behaviour
+    for existing single-host deployments.
+    """
+    return (os.getenv("DASHBOARD_PUBLIC_URL") or _get_dashboard_url()).rstrip("/")
 
 # Last search results per chat, used to interpret "1", "2", ... replies.
 _last_search: dict[int, str] = {}
@@ -840,7 +862,7 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
     d = deals[index]
     amt = _fmt_money(d.get("amount", 0), d.get("currency", ""))
     deal_id = d.get("id", "")
-    project_url = f"{_get_dashboard_url()}/project/{d.get('project_number', deal_id)}" if deal_id else ""
+    project_url = f"{_get_public_dashboard_url()}/project/{d.get('project_number', deal_id)}" if deal_id else ""
     lines = [
         _esc(d["title"]),
         "─" * 30,
@@ -946,7 +968,7 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
 def format_project_info(deal: dict) -> str:
     """Format all deal fields and user fields for employee Project Info view."""
     deal_id = deal.get("id", "")
-    project_url = f"{_get_dashboard_url()}/project/{deal.get('project_number', deal_id)}" if deal_id else ""
+    project_url = f"{_get_public_dashboard_url()}/project/{deal.get('project_number', deal_id)}" if deal_id else ""
     lines = [
         f"<b>{_esc(deal.get('title', 'Deal'))}</b> — Project Info",
         "─" * 30,
@@ -1055,7 +1077,7 @@ def main() -> None:
             if action_row:
                 rows.append(action_row)
         if deal_id:
-            project_url = f"{_get_dashboard_url()}/project/{project_number or deal_id}"
+            project_url = f"{_get_public_dashboard_url()}/project/{project_number or deal_id}"
             rows.append([
                 InlineKeyboardButton("🔗", url=project_url),
                 InlineKeyboardButton("🔍 New Search", callback_data="act:home"),
