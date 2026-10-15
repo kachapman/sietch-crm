@@ -2,6 +2,17 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Timesheet modal: live timer fix (2026-10-15)
+
+The previous commit (`48e29df`) removed ~254 lines of dead "tile-version" timesheet code from `public/app.js`, but in the process exposed a latent timer bug: the live modal's `updateModalClockUI()` had never called `tsStartTimer()` on its own — it relied on the dead `tsUpdateClockUI` (now deleted) to start the interval. The result was a frozen `00:00:00` display even when clocked in (the entry existed in the DB and the Clock Out button showed, but the elapsed time never ticked). Pre-existing, the dead `tsUpdateTimerDisplay` was also looking up the dead `#ts-timer-display` instead of the live `#modal-ts-timer`, so the timer would have ticked but updated nothing.
+
+Fix in `public/app.js`:
+
+- Re-added `tsStartTimer()` / `tsStopTimer()` / `tsUpdateTimerDisplay()` (~25 lines), this time targeting the **live** `#modal-ts-timer` element. Same `_tsTimerInterval` module-level state, so the header dropdown's clock button and the modal share the interval.
+- Added `tsStartTimer()` in the `_tsActiveEntry` branch of `updateModalClockUI()` and `tsStopTimer()` in the cleared branch. The modal is now self-contained — `updateModalClockUI` is the single source of truth for clock button + break button + live timer.
+
+No backend, CSS, or HTML changes. The server returns the correct `clock_in` via `/api/timesheet/active`; the bug was purely in the frontend tick loop. Tests: no new test files (timer is straightforward). Existing tests pass: 28/28 pure-helpers. `node --check` clean. Server restarted (PID 2273905, port 8766).
+
 ## Timesheet/activity audit — dead code removal + masked range-nav fix (2026-10-15)
 
 Audited the full timesheet/activity surface (backend routes, frontend UI, `migrations/009`) and found two related issues.

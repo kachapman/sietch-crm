@@ -18770,12 +18770,49 @@ function updateModalClockUI() {
       breakBtn.textContent = 'Start Break';
       breakBtn.className = 'ts-break-btn';
     }
+    tsStartTimer();
   } else {
     clockBtn.textContent = 'Clock In';
     clockBtn.className = 'ts-clock-btn clock-in';
     breakBtn?.classList.add('hidden');
+    tsStopTimer();
     if (timerDisplay) timerDisplay.textContent = '00:00:00';
   }
+}
+
+// Live elapsed-time ticker for the modal's #modal-ts-timer element.
+// Drives off _tsActiveEntry (set by /api/timesheet/active, mutated by
+// clock-in/clock-out/break start/break end handlers). Pauses while on
+// break and subtracts accumulated break_minutes.
+function tsStartTimer() {
+  tsStopTimer();
+  _tsTimerInterval = setInterval(tsUpdateTimerDisplay, 1000);
+  tsUpdateTimerDisplay();
+}
+
+function tsStopTimer() {
+  if (_tsTimerInterval) {
+    clearInterval(_tsTimerInterval);
+    _tsTimerInterval = null;
+  }
+}
+
+function tsUpdateTimerDisplay() {
+  const timerDisplay = document.getElementById('modal-ts-timer');
+  if (!timerDisplay || !_tsActiveEntry) return;
+  const clockIn = new Date(_tsActiveEntry.clock_in);
+  const now = new Date();
+  let elapsed = (now - clockIn) / 1000;
+  if (_tsActiveEntry.break_start) {
+    const breakStart = new Date(_tsActiveEntry.break_start);
+    elapsed -= (now - breakStart) / 1000;
+  }
+  elapsed -= (_tsActiveEntry.break_minutes || 0) * 60;
+  if (elapsed < 0) elapsed = 0;
+  const h = Math.floor(elapsed / 3600);
+  const m = Math.floor((elapsed % 3600) / 60);
+  const s = Math.floor(elapsed % 60);
+  timerDisplay.textContent = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
 function modalToggleClock() {

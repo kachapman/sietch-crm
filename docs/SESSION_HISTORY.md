@@ -13,6 +13,35 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-15
 
+**Topic:** Timesheet modal live timer — fix frozen `00:00:00` after dead-code deletion.
+
+**What landed:**
+
+- **Bug:** After commit 48e29df (the dead-code removal), users reported the elapsed-time display in the Activity / Time Sheet modal was stuck at `00:00:00` even when clocked in. The active entry existed in the DB (e.g. `Oct 4 11:42 PM — 11:42 PM` with `0h 0m`), the Clock Out button was visible, but the timer never ticked.
+- **Root cause:** The dead `tsUpdateClockUI` that I deleted was the **only** code path that called `tsStartTimer()` when `_tsActiveEntry` became truthy. The live `updateModalClockUI()` (modal-only) had never called the timer starter — it relied on the dead code's side effect through the shared `_tsTimerInterval` module-level state. Once I removed the dead `tsStartTimer`/`tsStopTimer`/`tsUpdateTimerDisplay`, no code ever started the interval. (Pre-existing latent issue: even before my last commit, the dead `tsUpdateTimerDisplay` was looking up the dead `#ts-timer-display` element instead of the live `#modal-ts-timer`, so the timer would have ticked but updated nothing — also broken, just invisibly.)
+- **Fix in `public/app.js`:**
+  1. Re-added `tsStartTimer()` / `tsStopTimer()` / `tsUpdateTimerDisplay()` (3 small functions, ~25 lines), this time targeting the **live** `#modal-ts-timer` element instead of the dead `#ts-timer-display`. Same `_tsTimerInterval` module-level state so the header dropdown's clock button and the modal share the same interval.
+  2. Added two lines inside `updateModalClockUI()`: `tsStartTimer()` in the `_tsActiveEntry` branch, `tsStopTimer()` in the cleared branch. This makes the modal self-contained — `updateModalClockUI` is now the single source of truth for clock button + break button + live timer.
+- **No backend, CSS, or HTML changes.** Server returns the correct `clock_in` via `/api/timesheet/active`; the bug was purely in the frontend tick loop.
+
+**Tests:** No new test files (timer is straightforward, no business logic). All existing tests still pass: `node --test tests/test_pure_helpers.mjs` → 28/28 ✓. `node --check public/app.js` clean. Server restarted (PID 2273905, port 8766), serving the new `app.js` (1,868,538 bytes). Verified the live file: `curl -s /app.js | grep -c "tsStartTimer|tsStopTimer|tsUpdateTimerDisplay"` → 8 (3 defs + 1 setInterval + 2 call sites in `updateModalClockUI` + 2 references inside `tsStartTimer` itself).
+
+**Verified live (manual, when you reload):** Settings → Activity / Time Sheet. Clock In. Timer should start ticking at `00:00:01`, `00:00:02`, etc. Start Break → timer freezes. End Break → resumes. Clock Out → resets to `00:00:00` and entry appears in the list with the correct duration. Header dropdown clock button (from the team panel) also starts/stops the modal's timer correctly because `modalToggleClock` calls `updateModalClockUI()`.
+
+**Audit follow-ups (still queued from the previous round):**
+
+- 🟠 `_handle_timesheet_clock_out` silently adds in-progress break minutes and closes the shift when clocking out while still on break. Should reject with 400 or warn.
+- 🟠 `time_entries_daily` view `COALESCE(clock_out, NOW())` makes open shifts count as "today's hours" and grow unbounded. **User chose Option C** for fix #2: soft warning (badge in modal + admin summary) with admin-only bulk close from a new admin tab. No automated data change for end users. Plan the admin tab when ready.
+- 🟠 Non-admin `user_id` query string on `/api/timesheet/{history,daily,export,export-pdf}` silently coerced to caller's own ID instead of 403.
+- 🟡 Right-click "Delete" on entries is enabled for the active shift; should be disabled or confirmed.
+- 🟡 Document-level click listener leak in `tsEditEntry` / `tsAssignProject` (not removed on Save).
+
+**Next:** Plan the Option C open-shift admin tab (badge in modal + admin-only bulk close). The other three items are quick and can be bundled with it.
+
+---
+
+## Previous summary (2026-10-15)
+
 **Topic:** Timesheet/activity audit — removed dead "tile-version" code path; also fixed a masked live bug.
 
 **What landed:**
