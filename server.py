@@ -15557,6 +15557,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         clean_stale_presence_records(portal)
         now = datetime.now(timezone.utc)
 
+        # Online / AFD thresholds (audit round 6 item #7):
+        # The previous values (10 min / 3 h) were too generous — a user
+        # who closed their laptop on Friday at 6pm would still show
+        # as "AFD" with a stale "Reviewing: Project X" auto-status on
+        # Monday at 9am. The new values match the heartbeat cadence:
+        # visible = every 30s, background-tick = every 2 min. If a tab
+        # hasn't checked in for 3 minutes, it's almost certainly dead.
+        # AFD = 15 minutes catches the laptop-sleep / overnight case
+        # without leaving stale "Reviewing" statuses on the team modal
+        # all weekend.
+        PRESENCE_ONLINE_SECONDS = 180      # was 600
+        PRESENCE_AFD_SECONDS = 900         # was 10800
         rows = db.query(
             "SELECT id, email, display_name, first_name, last_name, avatar_icon FROM users WHERE is_active = TRUE"
         )
@@ -15565,8 +15577,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             uid = str(r[0])
             ov = overlays.get(uid) or {}
             hb = _parse_iso_datetime(ov.get("lastHeartbeat") or "")
-            online = bool(hb and (now - hb).total_seconds() < 600)
-            afd = bool(hb and not online and (now - hb).total_seconds() < 10800)
+            tab_count = int(ov.get("lastTabCount") or 0)
+            # Cross-tab close handling (audit round 6 item #7): if no
+            # tabs are open, the user is offline regardless of how
+            # recently a heartbeat landed. This prevents the "closed
+            # one of two tabs → user appears offline to everyone for
+            # 30s" UX bug from the original implementation, where the
+            # lastHeartbeat field was shared across all of the user's
+            # tabs and the offline beacon from tab A blanked the
+            # heartbeat that tab B was keeping alive.
+            tabs_open = tab_count > 0
+            online = tabs_open and bool(hb and (now - hb).total_seconds() < PRESENCE_ONLINE_SECONDS)
+            afd = tabs_open and bool(hb and not online and (now - hb).total_seconds() < PRESENCE_AFD_SECONDS)
             auto_status = ov.get("autoStatus") or ""
             if auto_status and not online:
                 auto_status = ""
@@ -15601,15 +15623,31 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not user:
             return
         offline, visible = False, False
+        # tabs is an integer (>= 1) representing how many of this user's
+        # dashboard tabs are currently open. Each tab increments on load
+        # and decrements on beforeunload. When tabs drops to 0 the user
+        # is treated as offline regardless of how recently a heartbeat
+        # landed — this fixes the cross-tab close UX (closing one of two
+        # tabs previously blanked the shared lastHeartbeat for up to 30s,
+        # making the user appear offline to everyone even though the
+        # other tab was still alive).
+        tabs = None
         try:
             body = _read_body(self)
             if body:
                 payload = json.loads(body)
                 offline = bool(payload.get("offline"))
                 visible = bool(payload.get("visible"))
+                if "tabs" in payload:
+                    try:
+                        tabs_candidate = int(payload.get("tabs") or 0)
+                        if tabs_candidate >= 0:
+                            tabs = tabs_candidate
+                    except (TypeError, ValueError):
+                        tabs = None
         except (json.JSONDecodeError, ValueError):
             pass
-        touch_heartbeat("sietch", str(user["id"]), offline=offline, visible=visible)
+        touch_heartbeat("sietch", str(user["id"]), offline=offline, visible=visible, tabs=tabs)
         _json_response(self, 200, {"ok": True})
 
     def _handle_presence_status(self) -> None:

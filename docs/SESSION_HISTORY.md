@@ -13,6 +13,52 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-15
 
+**Topic:** Presence audit round 6 item #7 — tightened windows + cross-tab close fix.
+
+**What landed:**
+
+The original audit's defensive item #7 had three real issues. This commit addresses all three.
+
+**1. Tighter online / AFD windows (`server.py`):**
+
+The old thresholds (online = 10 min, AFD = 3 hours) were too generous. A user who closed their laptop on Friday at 6 pm would still show as "AFD" with a stale "Reviewing: Project X" auto-status on Monday at 9 am. The new thresholds match the heartbeat cadence (visible = 30 s, background = 2 min):
+- Online: 600 s → **180 s** (3 min)
+- AFD: 10 800 s → **900 s** (15 min)
+
+**2. Cross-tab close fix:**
+
+The previous implementation had a real UX bug: closing one of two tabs blanked the shared `lastHeartbeat` field via the `beforeunload` offline beacon. The other tab was still alive and still beaconing, but the user appeared offline to everyone for up to 30 s on every tab close. Fix:
+
+- **New `lastTabCount` field** in the presence JSON, persisted + round-tripped across all four functions (`load`, `save`, `get_portal_presence_snapshot`, `touch_heartbeat`).
+- **New server-side check** in `_handle_presence_get`: `online = tabs_open AND (now - hb) < 180`. If `lastTabCount === 0` the user is offline regardless of heartbeat recency.
+- **New frontend tab registry** (`oo_board_presence_tabs_v1` in localStorage): each tab picks a random UUID at module load, writes it with the current timestamp, and removes itself on `beforeunload`. `_liveTabCount()` returns `1 + count of other tabs whose heartbeat was within 5 minutes` (matches the new AFD window).
+- **All heartbeats now include `tabs: _liveTabCount()`** — initial, periodic visible, background sendBeacon, and offline. The offline beacon calls `_unregisterThisTab()` FIRST so the count reflects the post-unload state.
+
+If two tabs are open and the user closes one: closing tab sends `tabs: 1` (itself removed, just the other tab remaining), other tab's next heartbeat sends `tabs: 2`, user stays online. If both close: last one sends `tabs: 0`, user immediately transitions to offline.
+
+**3. Edge case — crashed tab leaves stale registry entry:**
+
+If `beforeunload` doesn't fire (force-kill, OS kill, crash), the tab remains in the registry. The 5-minute expiry in `_liveTabCount` cleans those up. After 5 min, the crashed tab is pruned and the next heartbeat reports the corrected count. Combined with the tightened 3-min online window, the worst-case "dead tab" window is now 5-8 minutes instead of 10-30 minutes.
+
+**Tests:** new `tests/test_presence_audit_round7.mjs` (8 source-grep tests). Full suite: 15 JS files (134 tests) + 5 Python files (64 tests) = **247 tests, 0 failures**. `py_compile` ×2, `node --check public/app.js` clean. Server restarted (PID 2467125, port 8766).
+
+**Live verification (5 scenarios, end-to-end):**
+
+- Fresh heartbeat + tabs=1 → online=True, afd=False. (Happy path.)
+- Heartbeat 600 s old + tabs=1 → online=False, afd=True. (New 180 s window correctly drops "online" at 600 s; new 900 s window correctly catches "afd".)
+- Heartbeat 2 h old + tabs=1 → online=False, afd=False. (New 15 min AFD window correctly moves past "afd" to "offline" by 2 h. Old window would have kept "afd" for 3 h.)
+- Fresh heartbeat + tabs=0 → offline. (Cross-tab close fix: previous implementation would have shown "online" because the heartbeat just landed. New `lastTabCount=0` correctly forces offline.)
+- Fresh heartbeat + tabs=1 → online=True. (Recovery.)
+
+**Audit chain complete:** all 8 original findings from the timesheet + presence/DM audits are now shipped. The remaining queue is:
+- **Round 5 item B** (`_tsActiveEntry` periodic refresh) — theoretical, not a bug today.
+- **Round 5 item C** (open-shift auto-close job) — deferred by user choice; the admin tab is the action path.
+- **New work** — anything the user wants next.
+
+---
+
+## Previous summary (2026-10-15)
+
 **Topic:** Presence/DM audit round 6 (part 8) — `presence_store` test coverage.
 
 **What landed:**

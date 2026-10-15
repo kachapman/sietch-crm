@@ -2,6 +2,49 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Presence windows + cross-tab close (audit round 6 item #7) (2026-10-15)
+
+Three improvements to the presence system that were deferred from the original audit.
+
+**Tighter online / AFD windows (`server.py`):**
+
+The old thresholds (online = 10 min, AFD = 3 hours) were too generous. A user who closed their laptop on Friday at 6 pm would still show as "AFD" with a stale "Reviewing: Project X" auto-status on Monday at 9 am. The new thresholds match the heartbeat cadence (visible = 30 s, background = 2 min):
+
+- Online: 600 s → **180 s** (3 min). If a tab hasn't checked in for 3 minutes, it's almost certainly dead.
+- AFD: 10 800 s → **900 s** (15 min). AFD used to last 3 hours; now it transitions to offline after 15 minutes.
+
+**Cross-tab close fix (`server.py` + `presence_store.py` + `public/app.js`):**
+
+The previous implementation had a real UX bug: closing one of two tabs blanked the shared `lastHeartbeat` field via the `beforeunload` offline beacon. Even though the other tab was still alive and still beaconing, the user appeared offline to everyone for up to 30 s (the visible-tab heartbeat cadence) on every tab close. The fix:
+
+1. **New `lastTabCount` field** in the presence JSON, persisted via `save_user_presence` and round-tripped via `load_user_presence` and `get_portal_presence_snapshot`.
+2. **New server-side check** in `_handle_presence_get`: `online = tabs_open AND (now - hb) < 180`. If `lastTabCount === 0` the user is offline regardless of how recent the heartbeat is.
+3. **New frontend tab registry** (`oo_board_presence_tabs_v1` in `localStorage`): each tab picks a random UUID at module load, writes it to the registry with the current timestamp, and removes itself on `beforeunload`. `_liveTabCount()` returns `1 + count of other tabs whose heartbeat was within 5 minutes` (matches the new AFD window).
+4. **All heartbeats now include `tabs: _liveTabCount()`** — the initial visible heartbeat, the periodic visible heartbeat, the background sendBeacon, and the offline beacon. The offline beacon calls `_unregisterThisTab()` FIRST so the count reflects the post-unload state.
+
+If two tabs are open and the user closes one, the closing tab sends `tabs: 1` (itself removed, just the other tab remaining). The other tab's next 30-s heartbeat sends `tabs: 2` and the user stays online. If both tabs are closed, the last one sends `tabs: 0` and the user immediately transitions to offline.
+
+**Edge case:** if `beforeunload` doesn't fire (force-kill, OS kill, crash), the tab remains in the registry. The 5-minute expiry in `_liveTabCount` cleans those up. After 5 min, the crashed tab is pruned and the next heartbeat reports the corrected count. Combined with the tightened 3-min online window, the worst-case "dead tab" window is now 5-8 minutes instead of 10-30 minutes.
+
+**Tests:** new `tests/test_presence_audit_round7.mjs` (8 source-grep tests covering the new windows, the `tabs` field plumbing, the `lastTabCount` round-trip, the cross-tab registry helpers, and the heartbeat payload composition). Full suite: 15 JS files (134 tests) + 5 Python files (64 tests) = **247 tests, 0 failures**. `py_compile` ×2, `node --check public/app.js` clean. Server restarted.
+
+**Live verification (5 scenarios):**
+
+```
+After heartbeat tabs=1: online=True afd=False
+  ✓ online=True with tabs=1 + recent heartbeat
+After 600s old + tabs=1: online=False afd=True
+  ✓ online=False afd=True at 600s (new thresholds)
+After 2h old + tabs=1: online=False afd=False
+  ✓ offline at 2h (was 3h before; new AFD window is 15 min)
+After fresh heartbeat + tabs=0: online=False afd=False
+  ✓ offline with tabs=0 even after fresh heartbeat (cross-tab close fix)
+After fresh heartbeat + tabs=1: online=True afd=False
+  ✓ online again with tabs=1
+```
+
+Test data cleaned up.
+
 ## Presence/DM test coverage (audit round 6 part 8) (2026-10-15)
 
 The presence/DM persistence layer (`presence_store.py`, 430 lines) had **zero test coverage** before this commit. Added `tests/test_presence_store.py` with 36 tests covering:

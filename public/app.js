@@ -15902,18 +15902,22 @@ function stopPresencePolling() {
 
 function startPresenceHeartbeats() {
   stopPresenceHeartbeats();
-  // Send a heartbeat on visibility + periodic when the dashboard is visible
+  // Send a heartbeat on visibility + periodic when the dashboard is visible.
+  // The `tabs` field reports the live tab count (this tab + other tabs
+  // that have registered in the last 5 min) so the server can
+  // distinguish "no tabs open" from "tab is alive but didn't check in".
   const send = () => {
     presenceFetch(`/api/presence/heartbeat`, {
       method: "POST",
-      body: JSON.stringify({visible: true}),
+      body: JSON.stringify({visible: true, tabs: _liveTabCount()}),
     }).catch(() => {});
     noteDashboardActivity();
   };
   // Fire-and-forget heartbeat for background tabs (not throttled by browsers)
   const sendBeacon = () => {
     if (navigator.sendBeacon) {
-      navigator.sendBeacon("/api/presence/heartbeat", new Blob(['{"visible":false}'], {type:"application/json"}));
+      const payload = JSON.stringify({visible: false, tabs: _liveTabCount()});
+      navigator.sendBeacon("/api/presence/heartbeat", new Blob([payload], {type:"application/json"}));
       noteDashboardActivity();
     } else {
       send();
@@ -15922,7 +15926,7 @@ function startPresenceHeartbeats() {
   // Initial heartbeat → then snapshot (sequential to ensure online status immediately)
   presenceFetch(`/api/presence/heartbeat`, {
     method: "POST",
-    body: JSON.stringify({visible: true}),
+    body: JSON.stringify({visible: true, tabs: _liveTabCount()}),
   })
     .then(() => fetchPresenceSnapshot())
     .then(s => {
@@ -15964,7 +15968,12 @@ function startPresenceHeartbeats() {
   };
   state._presenceVisHandler = onVis;
   document.addEventListener("visibilitychange", onVis, { once: false });
-  // On tab/window close — flush pending profile saves and send offline signal
+  // On tab/window close — flush pending profile saves and send offline signal.
+  // The offline beacon reports `tabs: 0` because this tab is about to
+  // unregister itself from the cross-tab registry. The remaining tabs
+  // (if any) re-register on their next heartbeat with their own count.
+  // If this is the LAST tab the user has open, lastTabCount goes to
+  // 0 and the user is treated as offline immediately.
   const onUnload = () => {
     // Flush any pending profile save immediately
     if (userProfileReady && profileSaveTimer) {
@@ -15976,8 +15985,14 @@ function startPresenceHeartbeats() {
         navigator.sendBeacon("/api/user-profile", new Blob([payload], { type: "application/json" }));
       } catch { /* ignore */ }
     }
+    // Remove this tab from the registry FIRST so _liveTabCount()
+    // reflects the post-unload state (i.e. this tab is gone, only
+    // sibling tabs remain). The offline beacon then reports that
+    // remaining count (which is 0 if this was the last tab).
+    _unregisterThisTab();
     if (navigator.sendBeacon) {
-      navigator.sendBeacon("/api/presence/heartbeat", new Blob(['{"offline":true}'], {type:"application/json"}));
+      const payload = JSON.stringify({offline: true, tabs: _liveTabCount()});
+      navigator.sendBeacon("/api/presence/heartbeat", new Blob([payload], {type:"application/json"}));
     }
   };
   window.addEventListener("beforeunload", onUnload);
@@ -16810,6 +16825,61 @@ const _lastNotifiedDmTs = {};  // { [userId]: latestTs } — persisted in localS
 //                                 of desktop notifications for DMs that arrived
 //                                 in the polling gap (audit round 6 item #4).
 const _LAST_NOTIFIED_DM_TS_KEY = "oo_board_presence_dm_notified_v1";
+
+// Cross-tab presence tracking (audit round 6 item #7).
+// Each tab registers a random ID in a localStorage "tab registry" on
+// load and removes itself on beforeunload. Heartbeats report the
+// current count so the server can distinguish "no tabs open" from
+// "tab is alive but didn't check in". The previous implementation
+// blanked the shared lastHeartbeat field on any tab close, which
+// made the user appear offline to everyone for up to 30s even
+// though another tab was still alive.
+const _TAB_REGISTRY_KEY = "oo_board_presence_tabs_v1";
+let _thisTabId = null;
+function _registerThisTab() {
+  try {
+    _thisTabId = (crypto && crypto.randomUUID && crypto.randomUUID())
+      || ("t" + Date.now() + "-" + Math.random().toString(36).slice(2, 10));
+    const raw = localStorage.getItem(_TAB_REGISTRY_KEY);
+    let registry = {};
+    if (raw) {
+      try { registry = JSON.parse(raw) || {}; } catch { registry = {}; }
+    }
+    registry[_thisTabId] = Date.now();
+    localStorage.setItem(_TAB_REGISTRY_KEY, JSON.stringify(registry));
+  } catch { /* localStorage unavailable → fall back to count = 1 */ }
+}
+function _unregisterThisTab() {
+  if (!_thisTabId) return;
+  try {
+    const raw = localStorage.getItem(_TAB_REGISTRY_KEY);
+    if (!raw) return;
+    const registry = JSON.parse(raw) || {};
+    delete registry[_thisTabId];
+    localStorage.setItem(_TAB_REGISTRY_KEY, JSON.stringify(registry));
+  } catch { /* ignore */ }
+}
+function _liveTabCount() {
+  // The "live" count is "this tab + the number of OTHER tabs that have
+  // checked in within the last 5 minutes". Older entries are pruned
+  // here so a crashed tab whose beforeunload never fired eventually
+  // drops out. The 5-min window matches the new AFD threshold.
+  try {
+    const raw = localStorage.getItem(_TAB_REGISTRY_KEY);
+    if (!raw) return 1;
+    const registry = JSON.parse(raw) || {};
+    const cutoff = Date.now() - 5 * 60 * 1000;
+    let count = 1; // this tab is alive (we're running this code)
+    for (const [k, ts] of Object.entries(registry)) {
+      if (k === _thisTabId) continue;
+      if (typeof ts === "number" && ts >= cutoff) count++;
+    }
+    return count;
+  } catch {
+    return 1;
+  }
+}
+_registerThisTab();
 
 // Hydrate the notified-timestamps map from localStorage on module load.
 // This makes the desktop notification behavior survive a hard reload:

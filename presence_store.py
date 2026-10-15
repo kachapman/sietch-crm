@@ -56,6 +56,7 @@ def _empty_presence() -> dict[str, Any]:
         "lastHeartbeat": "",  # last client heartbeat (for online / idle calc)
         "lastCrmActivity": "",  # last time a CRM-ish request was proxied for this user
         "lastDashboardActivity": "",  # last explicit dashboard activity / heartbeat
+        "lastTabCount": 0,  # number of open dashboard tabs (for cross-tab close handling)
         "lastReadDms": {},  # { other_user_id: iso_or_ms_last_read_time, ... } for cross-device DM read state
     }
 
@@ -97,6 +98,7 @@ def load_user_presence(portal: str, user_id: str) -> dict[str, Any]:
     presence["lastHeartbeat"] = str(data.get("lastHeartbeat") or "")[:80]
     presence["lastCrmActivity"] = str(data.get("lastCrmActivity") or "")[:80]
     presence["lastDashboardActivity"] = str(data.get("lastDashboardActivity") or "")[:80]
+    presence["lastTabCount"] = int(data.get("lastTabCount") or 0)
     presence["updatedAt"] = str(data.get("updatedAt") or "")
     lrd = data.get("lastReadDms") or {}
     presence["lastReadDms"] = lrd if isinstance(lrd, dict) else {}
@@ -120,6 +122,7 @@ def save_user_presence(portal: str, user_id: str, payload: dict[str, Any]) -> di
         "lastHeartbeat": str(payload.get("lastHeartbeat") or "")[:80],
         "lastCrmActivity": str(payload.get("lastCrmActivity") or "")[:80],
         "lastDashboardActivity": str(payload.get("lastDashboardActivity") or "")[:80],
+        "lastTabCount": max(0, int(payload.get("lastTabCount") or 0)),
     }
     lrd = payload.get("lastReadDms") or {}
     if isinstance(lrd, dict):
@@ -130,11 +133,14 @@ def save_user_presence(portal: str, user_id: str, payload: dict[str, Any]) -> di
     return cleaned
 
 
-def touch_heartbeat(portal: str, user_id: str, offline: bool = False, visible: bool = False) -> dict[str, Any]:
+def touch_heartbeat(portal: str, user_id: str, offline: bool = False, visible: bool = False, tabs: int | None = None) -> dict[str, Any]:
     """Update lastHeartbeat for the user. Called on client heartbeats.
     Only bumps lastDashboardActivity when visible=True (tab is focused),
     so auto-status expires naturally during background tab inactivity.
-    Pass offline=True to clear the heartbeat (tab/window closed)."""
+    Pass offline=True to clear the heartbeat (tab/window closed).
+    Pass tabs (int >= 0) to track the open-tab count for cross-tab
+    close handling — when tabs drops to 0 the user is treated as
+    offline regardless of how recently a heartbeat landed."""
     existing = load_user_presence(portal, user_id)
     now = _now_iso()
     if offline:
@@ -143,6 +149,8 @@ def touch_heartbeat(portal: str, user_id: str, offline: bool = False, visible: b
         existing["lastHeartbeat"] = now
         if visible:
             existing["lastDashboardActivity"] = now
+    if tabs is not None:
+        existing["lastTabCount"] = max(0, int(tabs))
     return save_user_presence(portal, user_id, existing)
 
 
@@ -236,6 +244,7 @@ def get_portal_presence_snapshot(portal: str) -> dict[str, dict[str, Any]]:
                     "lastHeartbeat": str(data.get("lastHeartbeat") or "")[:80],
                     "lastCrmActivity": str(data.get("lastCrmActivity") or "")[:80],
                     "lastDashboardActivity": str(data.get("lastDashboardActivity") or "")[:80],
+                    "lastTabCount": max(0, int(data.get("lastTabCount") or 0)),
                     "updatedAt": str(data.get("updatedAt") or ""),
                 }
         except (json.JSONDecodeError, OSError):
