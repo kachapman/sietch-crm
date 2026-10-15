@@ -23,7 +23,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
@@ -456,7 +456,7 @@ class TestFormatProjectInfo(unittest.TestCase):
         self.assertIn("View project in CRM", out)
 
 
-class TestGetProjectLabel(unittest.TestCase):
+class TestGetProjectLabel(unittest.IsolatedAsyncioTestCase):
     """Audit round 8 fix #4: _get_project_label uses narrowed
     exception handling, falls back to '#<id>' gracefully."""
 
@@ -507,7 +507,7 @@ class TestGetProjectLabel(unittest.TestCase):
         self.assertEqual(result, "#9")
 
 
-class TestConfigPollLoop(unittest.TestCase):
+class TestConfigPollLoop(unittest.IsolatedAsyncioTestCase):
     """Audit round 8 fix #5: _config_poll_loop polls immediately
     on startup, not after 60s."""
 
@@ -569,6 +569,7 @@ class TestSharedHttpClient(unittest.TestCase):
                 self.get_calls += 1
                 resp = MagicMock()
                 resp.status_code = 200
+                resp.headers = {"content-type": "application/json"}
                 resp.json.return_value = {"_marker": "get"}
                 return resp
 
@@ -576,8 +577,15 @@ class TestSharedHttpClient(unittest.TestCase):
                 self.post_calls += 1
                 resp = MagicMock()
                 resp.status_code = 200
+                resp.headers = {"content-type": "application/json"}
                 resp.json.return_value = {"_marker": "post"}
                 return resp
+
+            async def request(self, method, url, **kwargs):
+                # _request() is the single entry point used by _get/_post.
+                if method.upper() == "POST":
+                    return await self.post(url, **kwargs)
+                return await self.get(url, **kwargs)
 
             async def aclose(self):
                 pass
@@ -623,15 +631,30 @@ class TestSharedHttpClient(unittest.TestCase):
             self.assertEqual(second.get_calls, 1)
 
 
-class TestGetPostErrorHandling(unittest.TestCase):
-    """Audit round 8 fix #3: _get/_post catch httpx.HTTPError
-    (broader than RequestError) and JSONDecodeError."""
+class TestGetPostErrorHandling(unittest.IsolatedAsyncioTestCase):
+    """_get/_post catch httpx.HTTPError (broader than RequestError) and
+    JSONDecodeError, and route through _request()."""
+
+    @staticmethod
+    def _client_with_response(resp):
+        # AsyncMock is required: _request does `await client.request(...)`,
+        # and a plain MagicMock returns a non-awaitable.
+        return MagicMock(request=AsyncMock(return_value=resp))
+
+    @staticmethod
+    def _resp(status=200, json_body=None, ctype="application/json", text=""):
+        resp = MagicMock()
+        resp.status_code = status
+        resp.headers = {"content-type": ctype} if ctype else {}
+        resp.text = text
+        resp.json.return_value = json_body if json_body is not None else {}
+        return resp
 
     async def test_get_returns_none_on_timeout(self):
         # TimeoutException extends HTTPError. The old code only
         # caught RequestError, so this would have propagated up.
         with patch("telegram_bot._get_http_client") as get_client:
-            get_client.return_value.get.side_effect = (
+            get_client.return_value.request.side_effect = (
                 __import__("httpx").TimeoutException("read timeout")
             )
             result = await telegram_bot._get("/foo")
@@ -639,31 +662,314 @@ class TestGetPostErrorHandling(unittest.TestCase):
 
     async def test_post_returns_none_on_invalid_json(self):
         with patch("telegram_bot._get_http_client") as get_client:
-            mock_resp = MagicMock()
-            mock_resp.status_code = 200
-            mock_resp.json.side_effect = json.JSONDecodeError("x", "y", 0)
-            get_client.return_value.post.return_value = mock_resp
+            resp = self._resp(json_body=None, ctype=None)
+            resp.json.side_effect = json.JSONDecodeError("x", "y", 0)
+            get_client.return_value = self._client_with_response(resp)
             result = await telegram_bot._post("/foo", {})
         self.assertIsNone(result)
 
     async def test_get_returns_none_on_500(self):
-        # 500 with non-200 status returns None (existing behavior).
         with patch("telegram_bot._get_http_client") as get_client:
-            mock_resp = MagicMock()
-            mock_resp.status_code = 500
-            mock_resp.text = "internal error"
-            get_client.return_value.get.return_value = mock_resp
+            get_client.return_value = self._client_with_response(
+                self._resp(status=500, text="internal error"))
             result = await telegram_bot._get("/foo")
         self.assertIsNone(result)
 
     async def test_get_returns_dict_on_200_json(self):
         with patch("telegram_bot._get_http_client") as get_client:
-            mock_resp = MagicMock()
-            mock_resp.status_code = 200
-            mock_resp.json.return_value = {"ok": True}
-            get_client.return_value.get.return_value = mock_resp
+            get_client.return_value = self._client_with_response(
+                self._resp(json_body={"ok": True}))
             result = await telegram_bot._get("/foo")
         self.assertEqual(result, {"ok": True})
+
+    async def test_get_accepts_missing_content_type_header(self):
+        # Some proxies strip content-type; don't hard-fail a valid JSON body.
+        with patch("telegram_bot._get_http_client") as get_client:
+            get_client.return_value = self._client_with_response(
+                self._resp(json_body={"ok": 1}, ctype=None))
+            result = await telegram_bot._get("/foo")
+        self.assertEqual(result, {"ok": 1})
+
+
+# ── Failure-kind discrimination (the "stopped tunnel" bug) ────────────────────
+
+class TestRequestFailureKinds(unittest.IsolatedAsyncioTestCase):
+    """_request must separate 'the code is wrong' from 'we are broken'."""
+
+    @staticmethod
+    def _client_with_response(resp):
+        # AsyncMock is required: _request does `await client.request(...)`,
+        # and a plain MagicMock returns a non-awaitable.
+        return MagicMock(request=AsyncMock(return_value=resp))
+
+    @staticmethod
+    def _resp(status=200, ctype="application/json", text="", json_body=None):
+        resp = MagicMock()
+        resp.status_code = status
+        resp.headers = {"content-type": ctype} if ctype else {}
+        resp.text = text
+        resp.json.return_value = json_body if json_body is not None else {}
+        return resp
+
+    async def test_200_json_is_success(self):
+        with patch("telegram_bot._get_http_client") as gc:
+            gc.return_value = self._client_with_response(
+                self._resp(json_body={"contactId": 7}))
+            status, body, err = await telegram_bot._request("POST", "/x", data={})
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"contactId": 7})
+        self.assertIsNone(err)
+
+    async def test_200_html_is_a_gateway_failure_not_success(self):
+        """Regression: a stopped tunnel answers 200 + text/html. Parsing that
+        is what made a valid invite code report as 'unrecognized'."""
+        with patch("telegram_bot._get_http_client") as gc:
+            gc.return_value = self._client_with_response(self._resp(
+                status=200, ctype="text/html", text="<title>Tunnel Stopped</title>"))
+            status, body, err = await telegram_bot._request("POST", "/x", data={})
+        self.assertIsNone(status)
+        self.assertIsNone(body)
+        self.assertIn("text/html", err)
+
+    async def test_200_json_content_type_with_charset(self):
+        with patch("telegram_bot._get_http_client") as gc:
+            resp = self._resp(json_body={"a": 1})
+            resp.headers = {"content-type": "application/json; charset=utf-8"}
+            gc.return_value = self._client_with_response(resp)
+            status, body, _err = await telegram_bot._request("GET", "/x")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"a": 1})
+
+    async def test_404_reports_status_404(self):
+        with patch("telegram_bot._get_http_client") as gc:
+            gc.return_value = self._client_with_response(
+                self._resp(status=404, ctype="application/json", text="nope"))
+            status, body, err = await telegram_bot._request("POST", "/x", data={})
+        self.assertEqual(status, 404)
+        self.assertIsNone(body)
+        self.assertIn("404", err)
+
+    async def test_403_reports_status_403(self):
+        with patch("telegram_bot._get_http_client") as gc:
+            gc.return_value = self._client_with_response(
+                self._resp(status=403, text="Forbidden"))
+            status, _body, err = await telegram_bot._request("POST", "/x", data={})
+        self.assertEqual(status, 403)
+        self.assertIn("403", err)
+
+    async def test_connection_error_reports_none_status(self):
+        with patch("telegram_bot._get_http_client") as gc:
+            gc.return_value.request.side_effect = \
+                __import__("httpx").ConnectError("refused")
+            status, body, err = await telegram_bot._request("GET", "/x")
+        self.assertIsNone(status)
+        self.assertIsNone(body)
+        self.assertIn("cannot reach CRM", err)
+
+    async def test_error_message_names_the_configured_url(self):
+        """The whole point: the operator must be told WHICH URL failed."""
+        with patch("telegram_bot._get_http_client") as gc:
+            gc.return_value.request.side_effect = \
+                __import__("httpx").ConnectError("refused")
+            with patch.dict(os.environ, {"DASHBOARD_URL": "http://127.0.0.1:9999"}):
+                _status, _body, err = await telegram_bot._request("GET", "/x")
+        self.assertIn("127.0.0.1:9999", err)
+
+
+class TestVerifyCodeSemantics(unittest.IsolatedAsyncioTestCase):
+    """verify_code: mapping on 200, None ONLY on 404, raise otherwise."""
+
+    @staticmethod
+    def _client_with_response(resp):
+        # AsyncMock is required: _request does `await client.request(...)`,
+        # and a plain MagicMock returns a non-awaitable.
+        return MagicMock(request=AsyncMock(return_value=resp))
+
+    @staticmethod
+    def _resp(status=200, ctype="application/json", text="", json_body=None):
+        resp = MagicMock()
+        resp.status_code = status
+        resp.headers = {"content-type": ctype} if ctype else {}
+        resp.text = text
+        resp.json.return_value = json_body if json_body is not None else {}
+        return resp
+
+    async def test_valid_code_returns_mapping(self):
+        mapping = {"contactId": 5, "employee": True}
+        with patch("telegram_bot._get_http_client") as gc:
+            gc.return_value = self._client_with_response(self._resp(json_body=mapping))
+            result = await telegram_bot.verify_code("ABC12345", 42)
+        self.assertEqual(result, mapping)
+        self.assertTrue(result)
+
+    async def test_unknown_code_returns_none_not_raise(self):
+        with patch("telegram_bot._get_http_client") as gc:
+            gc.return_value = self._client_with_response(
+                self._resp(status=404, text="Invalid or expired code"))
+            result = await telegram_bot.verify_code("NOPE0000", 42)
+        self.assertIsNone(result)
+
+    async def test_html_response_raises_rather_than_claiming_bad_code(self):
+        """The exact production bug: valid code + dead tunnel."""
+        with patch("telegram_bot._get_http_client") as gc:
+            gc.return_value = self._client_with_response(self._resp(
+                status=200, ctype="text/html", text="<title>Tunnel Stopped</title>"))
+            with self.assertRaises(telegram_bot.BotUnreachable):
+                await telegram_bot.verify_code("1CG37WJR", 42)
+
+    async def test_403_raises(self):
+        with patch("telegram_bot._get_http_client") as gc:
+            gc.return_value = self._client_with_response(self._resp(status=403))
+            with self.assertRaises(telegram_bot.BotUnreachable):
+                await telegram_bot.verify_code("1CG37WJR", 42)
+
+    async def test_500_raises(self):
+        with patch("telegram_bot._get_http_client") as gc:
+            gc.return_value = self._client_with_response(self._resp(status=500))
+            with self.assertRaises(telegram_bot.BotUnreachable):
+                await telegram_bot.verify_code("1CG37WJR", 42)
+
+    async def test_connect_error_raises(self):
+        with patch("telegram_bot._get_http_client") as gc:
+            gc.return_value.request.side_effect = \
+                __import__("httpx").ConnectError("refused")
+            with self.assertRaises(telegram_bot.BotUnreachable):
+                await telegram_bot.verify_code("1CG37WJR", 42)
+
+
+# ── URL role split ───────────────────────────────────────────────────────────
+
+class TestDashboardUrlRoles(unittest.IsolatedAsyncioTestCase):
+    """API calls use the internal URL; customer links use the public one."""
+
+    def test_internal_url_used_for_api_calls(self):
+        with patch.dict(os.environ,
+                        {"DASHBOARD_URL": "http://127.0.0.1:8766",
+                         "DASHBOARD_PUBLIC_URL": "https://crm.example.com"}):
+            self.assertEqual(telegram_bot._get_dashboard_url(), "http://127.0.0.1:8766")
+
+    def test_public_url_is_distinct_when_set(self):
+        with patch.dict(os.environ,
+                        {"DASHBOARD_URL": "http://127.0.0.1:8766",
+                         "DASHBOARD_PUBLIC_URL": "https://crm.example.com"}):
+            self.assertEqual(telegram_bot._get_public_dashboard_url(),
+                             "https://crm.example.com")
+
+    def test_public_falls_back_to_internal_when_blank(self):
+        with patch.dict(os.environ,
+                        {"DASHBOARD_URL": "http://127.0.0.1:8766",
+                         "DASHBOARD_PUBLIC_URL": ""}):
+            self.assertEqual(telegram_bot._get_public_dashboard_url(),
+                             "http://127.0.0.1:8766")
+
+    def test_public_falls_back_when_absent(self):
+        # clear=True so a DASHBOARD_PUBLIC_URL already present in the ambient
+        # environment (this repo's .env sets one) is genuinely absent.
+        with patch.dict(os.environ, {"DASHBOARD_URL": "http://127.0.0.1:8766"},
+                        clear=True):
+            self.assertNotIn("DASHBOARD_PUBLIC_URL", os.environ)
+            self.assertEqual(telegram_bot._get_public_dashboard_url(),
+                             "http://127.0.0.1:8766")
+
+    def test_public_url_has_no_trailing_slash(self):
+        with patch.dict(os.environ,
+                        {"DASHBOARD_URL": "http://127.0.0.1:8766",
+                         "DASHBOARD_PUBLIC_URL": "https://crm.example.com/"}):
+            self.assertEqual(telegram_bot._get_public_dashboard_url(),
+                             "https://crm.example.com")
+
+    async def test_project_link_uses_public_url_not_internal(self):
+        with patch.dict(os.environ,
+                        {"DASHBOARD_URL": "http://127.0.0.1:8766",
+                         "DASHBOARD_PUBLIC_URL": "https://crm.example.com"}):
+            deal = {"id": 1, "title": "P", "project_number": 42,
+                    "amount": 0, "currency": ""}
+            out = telegram_bot.format_project_info(deal)
+        self.assertIn("https://crm.example.com/project/42", out)
+        self.assertNotIn("127.0.0.1", out)
+
+    def test_bot_never_calls_admin_settings_endpoint(self):
+        """Regression: /api/v2/admin/bot-settings needs an admin session, so
+        the bot always got 401 and could never read its own config."""
+        src = Path(telegram_bot.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("/api/v2/admin/bot-settings", src)
+        self.assertIn("/api/bot/settings", src)
+
+
+# ── Startup connectivity + throttling ────────────────────────────────────────
+
+class TestConnectivityCheck(unittest.IsolatedAsyncioTestCase):
+
+    @staticmethod
+    def _client_with_response(resp):
+        # AsyncMock is required: _request does `await client.request(...)`,
+        # and a plain MagicMock returns a non-awaitable.
+        return MagicMock(request=AsyncMock(return_value=resp))
+
+    @staticmethod
+    def _resp(status=200, ctype="application/json", text=""):
+        resp = MagicMock()
+        resp.status_code = status
+        resp.headers = {"content-type": ctype}
+        resp.text = text
+        resp.json.return_value = {"version": "3.0"}
+        return resp
+
+    async def test_healthy_crm_returns_true(self):
+        with patch("telegram_bot._get_http_client") as gc:
+            gc.return_value = self._client_with_response(self._resp())
+            ok = await telegram_bot._check_crm_connectivity()
+        self.assertTrue(ok)
+
+    async def test_unreachable_crm_returns_false_and_names_url(self):
+        with patch("telegram_bot._get_http_client") as gc:
+            gc.return_value.request.side_effect = \
+                __import__("httpx").ConnectError("refused")
+            with patch.dict(os.environ, {"DASHBOARD_URL": "http://127.0.0.1:8766"}):
+                with self.assertLogs("crm_bot", level="WARNING") as logs:
+                    ok = await telegram_bot._check_crm_connectivity()
+        self.assertFalse(ok)
+        joined = "\n".join(logs.output)
+        self.assertIn("127.0.0.1:8766", joined)
+
+    async def test_html_healthcheck_returns_false(self):
+        """A gateway HTML page is not a healthy CRM."""
+        with patch("telegram_bot._get_http_client") as gc:
+            gc.return_value = self._client_with_response(
+                self._resp(status=200, ctype="text/html", text="Tunnel Stopped"))
+            with self.assertLogs("crm_bot", level="WARNING"):
+                ok = await telegram_bot._check_crm_connectivity()
+        self.assertFalse(ok)
+
+
+class TestLogThrottled(unittest.TestCase):
+
+    def setUp(self):
+        telegram_bot._throttle_state.clear()
+
+    def test_first_failure_logs(self):
+        with self.assertLogs("crm_bot", level="WARNING") as logs:
+            telegram_bot._log_throttled("k", "boom %s", "one")
+        self.assertEqual(len(logs.output), 1)
+
+    def test_repeated_failures_are_suppressed_then_eventually_logged(self):
+        with self.assertLogs("crm_bot", level="WARNING") as logs:
+            for _ in range(10):
+                telegram_bot._log_throttled("k", "boom")
+        # first + every 10th == 2 lines for 10 failures
+        self.assertEqual(len(logs.output), 2)
+
+    def test_long_sustained_outage_does_not_flood(self):
+        with self.assertLogs("crm_bot", level="WARNING") as logs:
+            for _ in range(60):
+                telegram_bot._log_throttled("k", "boom")
+        self.assertLessEqual(len(logs.output), 8)
+
+    def test_separate_keys_track_independently(self):
+        with self.assertLogs("crm_bot", level="WARNING") as logs:
+            telegram_bot._log_throttled("a", "boom")
+            telegram_bot._log_throttled("b", "boom")
+        self.assertEqual(len(logs.output), 2)
 
 
 if __name__ == "__main__":
