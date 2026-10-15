@@ -2,6 +2,18 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Round 2 fixes: checkbox icon, contact edit button, contact history sync, contact photos, dark-mode highlight (2026-10-14)
+
+Five user-reported regressions from the previous commit, all fixed:
+
+- **Issue 1 — Checkbox fields render as the text "Yes".** The previous fix normalized `"true"` → `"Yes"` / `"false"` → `"No"` in `formatCustomFieldValueForDisplay`, then `buildFieldElement` drew a dark "Yes" / "No" text pill instead of the checkbox icon. Fix: the formatter no longer pre-normalizes boolean-looking values for non-code-3 fields (that change is reverted); instead `buildFieldElement` detects boolean-like values itself and always draws the checkbox SVG icon. Now synced contacts with legacy / misclassified fields show a proper checkbox, never the literal "Yes" / "No" text.
+- **Issue 2 — Edit button removed from the contacts tab (search modal).** Clicking the ✎ on a contact preview called `openAdminConsoleModal("contacts")` which always opened the **general** tab of the admin console (the function ignored its argument). Per user request, the button is gone — both the markup (`<button class="search-popup-preview-contact-edit">`) and the click handler are removed. The contacts tab no longer has any action buttons.
+- **Issue 3 — Contact history missing from sync.** `_handle_sync_pull_contacts` previously only created/updated contact rows + downloaded avatars; it never pulled history events. The deal sync already does this via `/api/2.0/crm/history/filter?entityType=opportunity&entityId={id}`. Added a third pass to the contact sync that mirrors the deal-sync pattern for `entityType=contact`: fetch history, dedup by `crm_event_id` (with content/created-at fallback), map the category, map the author, and INSERT into `history_events` with `contact_id` set. The schema already supported this (`init.sql:1142-1143` adds `history_events.contact_id`).
+- **Issue 4 — Contact pictures not coming over in the sync.** `_handle_contact_photo_get` derived the file path from `avatar_url`, which for synced contacts is the **remote** OnlyOffice URL — so 404'd every time, even when the avatar was successfully downloaded to `data/contact-avatars/{oo_id}.{ext}` and `avatar_local_path` was set. Fix: the handler now reads `avatar_local_path` first (with a path-traversal guard that ensures the file stays under `data/contact-avatars/`), falls back to the legacy `avatar_url`-based behavior for non-synced contacts, and uses the file extension to pick the right Content-Type (jpg / png / gif / webp).
+- **Issue 5 — Project page highlighted text not respecting dark mode.** `.event-reply-body mark` (and the inline `background-color` rules) were forced to `background-color: rgba(34, 197, 94, 0.65) !important; color: #000 !important;` for all color schemes. In dark mode the dark text on a green background was unreadable. Fix: the default rule now uses a soft `rgba(34, 197, 94, 0.35)` background with `color: inherit`; the strong-contrast `#000`-on-green variant is moved inside an `@media (prefers-color-scheme: light)` block so it only applies in light mode.
+
+New tests: `tests/test_user_round2_fixes.mjs` (9 source-grep tests). The prior `test_project_modal_fixes.mjs` was also updated to reflect that the formatter no longer pre-normalizes booleans. Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 9 = **185 tests, 0 failures**. `py_compile` ×2, `node --check` clean.
+
 ## Project modal fixes: edit/quick-note auto-close, X button, checkbox icons, add-tile cleanup (2026-10-14)
 
 Six user-reported issues across the project edit / quick-note / bookmark / search-popup modals, plus the project page reply toolbar and the add-tile modal:

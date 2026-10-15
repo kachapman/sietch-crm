@@ -200,13 +200,27 @@ test('Fix D: closeBookmarkPreview closes deal-edit + quick-note when same oppId'
 
 // --- Fix F: checkbox rendering ---
 
-test('Fix F: formatCustomFieldValueForDisplay normalizes legacy true/false', () => {
+test('Fix F: formatCustomFieldValueForDisplay no longer pre-normalizes booleans', () => {
+  // Audit 2026-10-14: the prior version normalized "true" -> "Yes" /
+  // "false" -> "No" inside the formatter, which then made the
+  // renderer display the literal "Yes" / "No" text pill instead of
+  // drawing a checkbox icon. The fix is to let the raw value pass
+  // through; the renderer (buildFieldElement) detects boolean-like
+  // values and draws the icon. This test guards against regressing
+  // back to pre-normalization.
   const fnStart = appJs.indexOf('function formatCustomFieldValueForDisplay(');
   const fnEnd = appJs.indexOf('\n}\n', fnStart);
   const body = appJs.slice(fnStart, fnEnd);
   assert.ok(
-    /_looksLikeCheckboxValue\(rawValue\)/.test(body),
-    'formatCustomFieldValueForDisplay does not call _looksLikeCheckboxValue fallback'
+    !/_looksLikeCheckboxValue/.test(body),
+    'formatCustomFieldValueForDisplay should NOT call _looksLikeCheckboxValue (renderer handles it)'
+  );
+  // The formatter should still translate proper code-3 "true"/"1" to
+  // "Yes" (the existing behavior) — but it should NOT do that for
+  // non-code-3 fields.
+  assert.ok(
+    /code === 3/.test(body),
+    'formatCustomFieldValueForDisplay should still handle code === 3 (the standard checkbox type)'
   );
 });
 

@@ -26532,17 +26532,6 @@ function formatMembersLabel(opp) {
     .join(", ");
 }
 
-// True for any string that looks like a boolean value (checkbox-style
-// true/false, yes/no, 1/0, on/off). Audit: legacy or misclassified
-// checkbox fields can leak the raw string "true" or "false" into the
-// preview body if the field type code isn't 3. The renderer also uses
-// this to decide whether to draw a checkbox icon vs. plain text.
-function _looksLikeCheckboxValue(v) {
-  const s = String(v ?? "").toLowerCase().trim();
-  return s === "true" || s === "false" || s === "yes" || s === "no"
-    || s === "1" || s === "0" || s === "on" || s === "off";
-}
-
 function formatCustomFieldValueForDisplay(def, rawValue) {
   const code = customFieldTypeCode(def);
   if (code === 3) {
@@ -26551,15 +26540,6 @@ function formatCustomFieldValueForDisplay(def, rawValue) {
     return "Yes";
   }
   if (code === 4) return "";
-  // Audit: if the value looks like a boolean (e.g. "true") but the
-  // field's stored type code isn't 3 (legacy data, misclassified def),
-  // normalize it to "Yes"/"No" so the preview doesn't render literal
-  // "true" text.
-  if (_looksLikeCheckboxValue(rawValue)) {
-    const t = String(rawValue ?? "").trim().toLowerCase();
-    if (t === "false" || t === "0" || t === "no" || t === "off") return "No";
-    return "Yes";
-  }
   return formatCustomFieldValueForApi(def, rawValue) || "—";
 }
 
@@ -28128,9 +28108,6 @@ async function openSearchContactTab(contactId, titleHint) {
     <div class="search-popup-preview-container">
       <div class="search-popup-preview-head">
         <h3 class="search-popup-preview-title">${escapeHtml(titleHint)}</h3>
-        <div class="search-popup-preview-actions">
-          <button type="button" class="search-popup-preview-contact-edit" data-contact-id="${id}" title="Edit contact" style="${state.currentUserIsAdmin ? '' : 'display:none;'}">✎</button>
-        </div>
       </div>
       <div class="search-popup-preview-body" data-contact-preview-body="${id}">
         <p class="opp-preview-loading">Loading contact…</p>
@@ -28138,17 +28115,6 @@ async function openSearchContactTab(contactId, titleHint) {
     </div>
   `;
   containers.appendChild(container);
-
-  // Edit button
-  const editBtn = container.querySelector(".search-popup-preview-contact-edit");
-  if (editBtn) {
-    editBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      openAdminConsoleModal("contacts");
-      setTimeout(() => openAdminContactDetail(id), 300);
-    });
-  }
 
   // Close button
   const closeBtn = container.querySelector(".search-popup-tab-close");
@@ -37118,24 +37084,34 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
 
   // Audit: legacy / misclassified checkbox fields can have a value
   // of raw "true" / "false" (or "yes" / "no" / "1" / "0") — detect
-  // them in the renderer too so the checkbox icon shows even when
+  // them in the renderer so the checkbox icon shows even when
   // row._isCheckbox is false (the field def was lost or never set).
-  const _valueIsCheckboxLike = (v) => {
+  // Same logic as _looksLikeCheckboxValue below; declared as a
+  // function (not const) so the closure buildFieldElement can hoist it.
+  function _looksLikeCheckboxValue(v) {
     const s = String(v ?? "").toLowerCase().trim();
     return s === "true" || s === "false" || s === "yes" || s === "no"
       || s === "1" || s === "0" || s === "on" || s === "off";
-  };
-  const _valueIsChecked = (v) => {
+  }
+  function _checkboxChecked(v) {
     const s = String(v ?? "").toLowerCase().trim();
     return s === "true" || s === "yes" || s === "1" || s === "on";
-  };
+  }
 
   function buildFieldElement(row) {
-    // Checkbox fields: simple icon + label, no card
-    if (row._isCheckbox) {
+    const isCheckboxRow = !!row._isCheckbox;
+    // Audit: legacy / misclassified fields can have a raw boolean
+    // string ("true" / "false" / "yes" / ...) even when row._isCheckbox
+    // is false. Detect that here too so the icon shows either way.
+    const isCheckboxLikeValue = !isCheckboxRow && _looksLikeCheckboxValue(row.value);
+
+    // Inline checkboxes (the field grid's top row) — icon + label,
+    // no <dt>/<dd> card. Used when buildOpportunityPreviewUserFields
+    // tags the row as a checkbox.
+    if (isCheckboxRow) {
       const field = document.createElement("div");
       field.className = "opp-preview-field-chk-inline";
-      const checked = row.value === "Yes" || _valueIsChecked(row.value);
+      const checked = _checkboxChecked(row.value);
       field.appendChild(_checkboxIcon(checked));
       const lbl = document.createElement("span");
       lbl.textContent = row.label;
@@ -37156,24 +37132,14 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     dt.textContent = row.label;
     const dd = document.createElement("dd");
 
-    if (row.value === "Yes" || row.value === "No" || _valueIsCheckboxLike(row.value)) {
-      if (fieldNameMatches(row.label, ["PA CONTRACT"])) {
-        dd.appendChild(_checkboxIcon(_valueIsChecked(row.value)));
-      } else {
-        // For non-PA-CONTRACT checkboxes, fall back to the text tag
-        // ("Yes" / "No") only if the value is the post-formatter
-        // string; otherwise (raw "true" etc.) draw the icon.
-        if (row.value === "Yes" || row.value === "No") {
-          const tag = document.createElement("span");
-          tag.className = "field-value-tag";
-          tag.textContent = row.value;
-          dd.appendChild(tag);
-        } else {
-          dd.appendChild(_checkboxIcon(_valueIsChecked(row.value)));
-        }
-      }
+    if (isCheckboxLikeValue) {
+      // Legacy / misclassified field with a boolean value but no
+      // _isCheckbox flag. Draw the icon (same as the PA-CONTRACT path
+      // below) so the user sees a real checkbox, never the literal
+      // "true" text.
+      dd.appendChild(_checkboxIcon(_checkboxChecked(row.value)));
     } else if (fieldNameMatches(row.label, ["PA CONTRACT"])) {
-      dd.appendChild(_checkboxIcon(_valueIsChecked(row.value)));
+      dd.appendChild(_checkboxIcon(_checkboxChecked(row.value)));
     } else {
       dd.textContent = row.value;
     }

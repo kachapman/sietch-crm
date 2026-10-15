@@ -132,16 +132,31 @@
     .event-reply-body u { text-decoration: underline; }
     /* Dark-mode-aware highlighter for reply bodies (same rule as the
        .opp-preview-history-reply-body rule in styles.css). Without this
-       <mark> + inline background-color highlights are invisible. */
+       <mark> + inline background-color highlights are invisible.
+       Audit 2026-10-14: split into light / dark variants so the
+       green-on-black text in dark mode becomes legible — previously
+       forced #000 text on a green background was unreadable in dark
+       mode. Default (dark) uses the soft tinted background with
+       inherited text color; light mode gets the strong contrast. */
     .event-reply-body mark,
     .event-reply-body span[style*="background-color"],
     .event-reply-body span[style*="background:"],
     .event-reply-body b[style*="background-color"],
     .event-reply-body b[style*="background:"] {
-      background-color: rgba(34, 197, 94, 0.65) !important;
-      color: #000 !important;
+      background-color: rgba(34, 197, 94, 0.35);
+      color: inherit;
       padding: 0 2px;
       border-radius: 2px;
+    }
+    @media (prefers-color-scheme: light) {
+      .event-reply-body mark,
+      .event-reply-body span[style*="background-color"],
+      .event-reply-body span[style*="background:"],
+      .event-reply-body b[style*="background-color"],
+      .event-reply-body b[style*="background:"] {
+        background-color: rgba(34, 197, 94, 0.65) !important;
+        color: #000 !important;
+      }
     }
     .event-reply-body.deleted { font-style: italic; color: var(--muted); }
     .event-reply-editor { margin-top: 0.3rem; }

@@ -13,6 +13,26 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-14
 
+**Topic:** Round 2 fixes — checkbox icon (no more "Yes" text), contact edit button removed, contact history sync, contact photos, dark-mode highlight.
+
+**What landed (5 user-reported regressions from the previous commit):**
+
+- **Issue 1 — Checkbox fields render as the text "Yes" (regression).** The prior fix normalized "true" → "Yes" / "false" → "No" in `formatCustomFieldValueForDisplay`, then `buildFieldElement` drew a dark text pill instead of the checkbox icon. Fix: the formatter no longer pre-normalizes boolean-looking values (that change is reverted); `buildFieldElement` detects boolean-like values itself and always draws the checkbox SVG icon. Net: clean separation — formatter is a value-to-string helper, renderer is what decides how to display.
+- **Issue 2 — Edit button on contacts tab opens the wrong page.** The ✎ button on a contact preview called `openAdminConsoleModal("contacts")` but that function ignores its argument and always switches to `"general"`. Per user request, the button is gone (markup + click handler both removed).
+- **Issue 3 — Contact history missing from sync.** `_handle_sync_pull_contacts` now has a third pass that fetches history via `/api/2.0/crm/history/filter?entityType=contact&entityId={crm_id}&count=500` and inserts into `history_events` with `contact_id` set. Mirrors the deal-sync pattern (crm_event_id-based dedup with content/created-at fallback). The schema already supported this.
+- **Issue 4 — Contact pictures not coming over in the sync.** `_handle_contact_photo_get` previously derived the file path from `avatar_url` (the remote OnlyOffice URL) so 404'd every time. Now reads `avatar_local_path` first (with a path-traversal guard), falls back to `avatar_url` for non-synced contacts, and uses the file extension for the right Content-Type.
+- **Issue 5 — Project page highlighted text not respecting dark mode.** The `.event-reply-body mark` rule was forced to dark-text-on-green for all color schemes. Split into a default (soft-tint + `color: inherit`) rule + an `@media (prefers-color-scheme: light)` block that applies the strong contrast.
+
+**Tests:** `tests/test_user_round2_fixes.mjs` (new, 9 source-grep tests). Updated `tests/test_project_modal_fixes.mjs` to assert the formatter no longer pre-normalizes (replacing the old assertion that it did). Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 9 = **185 tests, 0 failures**. `py_compile` ×2, `node --check` clean.
+
+**Verified live:** 4 files modified (`public/app.js`, `public/project.html`, `server.py`, `tests/test_project_modal_fixes.mjs`) + 1 new test file. `git diff --stat` = `+197 −76`. **Server restart + browser refresh required** for the changes to take effect.
+
+**Next:** For Issue 3 to work in production, the operator must run a fresh contact sync (the existing contacts need to be re-fetched so their history events are populated). No code-only follow-ups are urgent.
+
+---
+
+## Previous summary (2026-10-14)
+
 **Topic:** Project modal fixes — edit/quick-note auto-close, X close button, checkbox icons, side-by-side layout, add-tile cleanup, project-page reply toolbar.
 
 **What landed (6 fixes from the user's report + 2 from the prior turn):**

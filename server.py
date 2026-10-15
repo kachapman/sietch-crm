@@ -6390,24 +6390,56 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_auth(self)
         if not user:
             return
-        row = db.query_one("SELECT avatar_url FROM contacts WHERE id = %s", (contact_id,))
-        if not row or not row["avatar_url"]:
+        # Audit 2026-10-14: prefer the locally-downloaded avatar at
+        # avatar_local_path (set by _handle_sync_pull_contacts after
+        # downloading the OnlyOffice avatar to data/contact-avatars/).
+        # The previous code derived the path from avatar_url — which for
+        # synced contacts points at the remote OnlyOffice URL, not a
+        # local file — so 404'd every time.
+        row = db.query_one(
+            "SELECT avatar_url, avatar_local_path FROM contacts WHERE id = %s",
+            (contact_id,),
+        )
+        if not row:
             self.send_response(404)
             self.end_headers()
             return
-        base = Path(row["avatar_url"]).parent
         is_thumb = qs.get("thumbnail", ["0"])[0] == "1"
-        filename = "thumb_photo.jpg" if is_thumb else "photo.jpg"
-        photo_path = base / filename
-        if not photo_path.exists():
-            # Fallback to full-size
-            photo_path = base / "photo.jpg"
-        if not photo_path.exists():
+        photo_path = None
+        if row.get("avatar_local_path"):
+            local = (Path(__file__).resolve().parent / row["avatar_local_path"]).resolve()
+            # Path traversal guard: must stay under data/contact-avatars/
+            try:
+                local.relative_to((Path(__file__).resolve().parent / "data" / "contact-avatars").resolve())
+            except ValueError:
+                local = None
+            if local and local.exists() and local.is_file():
+                photo_path = local
+        if not photo_path and row.get("avatar_url"):
+            base = Path(row["avatar_url"]).parent
+            filename = "thumb_photo.jpg" if is_thumb else "photo.jpg"
+            candidate = base / filename
+            if candidate.exists():
+                photo_path = candidate
+            else:
+                candidate = base / "photo.jpg"
+                if candidate.exists():
+                    photo_path = candidate
+        if not photo_path:
             self.send_response(404)
             self.end_headers()
             return
+        # Guess content type by extension.
+        ext = photo_path.suffix.lower()
+        ctype = "image/jpeg"
+        if ext == ".png":
+            ctype = "image/png"
+        elif ext == ".gif":
+            ctype = "image/gif"
+        elif ext == ".webp":
+            ctype = "image/webp"
         self.send_response(200)
-        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Type", ctype)
         self.send_header("Cache-Control", "private, max-age=86400")
         self.end_headers()
         self.wfile.write(photo_path.read_bytes())
@@ -6838,8 +6870,102 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         db.execute("UPDATE contacts SET company_id = %s, company = COALESCE(company, %s) WHERE id = %s",
                                    (comp_local_id, str(company_obj.get("displayName") or "").strip() or None, local_id))
 
+            # Third pass: pull contact history events from OnlyOffice.
+            # Audit 2026-10-14: the contact sync previously created/updated
+            # contacts but never fetched their history events, so synced
+            # contacts always showed "No history yet." in the search
+            # modal. The deal sync already does this via
+            # `/api/2.0/crm/history/filter?entityType=opportunity&entityId=...`
+            # — mirror that pattern for contacts (entityType=contact).
+            history_count = 0
+            history_errors = 0
+            try:
+                user_id_map = _crm_fetch_user_id_map(portal, token)
+                for oo_id, local_id in oo_id_to_local.items():
+                    try:
+                        hist_data = _unwrap(_crm_api_get(
+                            portal, token,
+                            f"/api/2.0/crm/history/filter?entityType=contact&entityId={oo_id}&count=500",
+                        ))
+                        hist_list = hist_data if isinstance(hist_data, list) else []
+                        if not hist_list:
+                            continue
+
+                        # Dedup: crm_event_id-based when present (faster, exact).
+                        existing_event_ids = set()
+                        for row in db.query_dicts(
+                            "SELECT crm_event_id FROM history_events WHERE contact_id = %s AND crm_event_id IS NOT NULL",
+                            (local_id,),
+                        ):
+                            if row.get("crm_event_id") is not None:
+                                existing_event_ids.add(int(row["crm_event_id"]))
+                        # Fallback dedup for events without crm_event_id.
+                        existing_keys = set()
+                        if not existing_event_ids:
+                            for ev in db.query_dicts(
+                                "SELECT category_id, content, created_at FROM history_events WHERE contact_id = %s",
+                                (local_id,),
+                            ):
+                                content_prefix = (ev.get("content") or "")[:200]
+                                created_key = str(ev.get("created_at") or "")[:19]
+                                existing_keys.add((ev.get("category_id"), content_prefix, created_key))
+
+                        for h in hist_list:
+                            if not isinstance(h, dict):
+                                continue
+                            cat_data = h.get("category") or h.get("Category") or {}
+                            if isinstance(cat_data, dict):
+                                cat_title = str(cat_data.get("title") or cat_data.get("Title") or "Note").strip() or "Note"
+                            else:
+                                cat_title = "Note"
+                            cat_row = db.query_one("SELECT id FROM history_categories WHERE title = %s", (cat_title,))
+                            if not cat_row:
+                                db.execute(
+                                    "INSERT INTO history_categories (title, is_system) VALUES (%s, TRUE) RETURNING id",
+                                    (cat_title,),
+                                )
+                                cat_row = db.query_one("SELECT id FROM history_categories WHERE title = %s", (cat_title,))
+                            cat_id = cat_row["id"]
+
+                            event_content = str(h.get("content") or h.get("Content") or "").strip() or None
+                            event_created = h.get("created") or h.get("Created") or h.get("date") or None
+                            create_by = h.get("createBy") or h.get("CreateBy") or h.get("createdBy") or {}
+                            crm_author_id = str(create_by.get("id") or create_by.get("ID") or "") if isinstance(create_by, dict) else ""
+                            v3_author_id = user_id_map.get(crm_author_id)
+
+                            crm_event_id = int(h.get("id") or 0) or None
+
+                            if crm_event_id and crm_event_id in existing_event_ids:
+                                continue
+                            if not crm_event_id:
+                                content_prefix = (event_content or "")[:200]
+                                created_key = str(event_created)[:19] if event_created else ""
+                                if (cat_id, content_prefix, created_key) in existing_keys:
+                                    continue
+
+                            db.execute(
+                                """INSERT INTO history_events
+                                       (contact_id, category_id, content, created_by, created_at,
+                                        backdated_created_at, crm_event_id, crm_entity_id)
+                                   VALUES (%s,%s,%s,%s,COALESCE(%s,NOW()),%s,%s,%s)""",
+                                (local_id, cat_id, event_content, v3_author_id, event_created, event_created,
+                                 crm_event_id, int(h.get("entityId") or 0) or None),
+                            )
+                            history_count += 1
+                            if crm_event_id:
+                                existing_event_ids.add(crm_event_id)
+                            if not crm_event_id:
+                                existing_keys.add((cat_id, (event_content or "")[:200],
+                                                   str(event_created)[:19] if event_created else ""))
+                    except Exception as he:
+                        history_errors += 1
+                        _append_sync_log("error", f"Contact history sync failed for {oo_id}: {he}")
+                        continue
+            except Exception as e:
+                _append_sync_log("error", f"Contact history sync pass failed: {e}")
+
             elapsed = round(time.time() - start_time, 1)
-            _append_sync_log("info", f"Contacts sync complete: {created} created, {skipped} updated, {errors} errors, {multi_emails} emails, {multi_phones} phones, {multi_addrs} addresses in {elapsed}s")
+            _append_sync_log("info", f"Contacts sync complete: {created} created, {skipped} updated, {errors} errors, {multi_emails} emails, {multi_phones} phones, {multi_addrs} addresses, {history_count} history events in {elapsed}s")
             _json_response(self, 200, {"created": created, "updated": skipped, "errors": errors,
                                        "multi_emails": multi_emails, "multi_phones": multi_phones,
                                        "multi_addresses": multi_addrs, "elapsed": elapsed})
