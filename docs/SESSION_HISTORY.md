@@ -13,6 +13,23 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-14
 
+**Topic:** Documents modal pagination + sidebar tree "Company bumped into child area" fix.
+
+**What landed:**
+
+- **Issue 1: documents modal pagination.** Server-side pagination on `/api/v2/documents/personal` and `/api/v2/documents/company` (default `limit=200`, max 500, `offset` based). Both endpoints now return `{documents, folders, total, limit, offset}` so the frontend can paginate. The frontend (`loadDocumentsList` in `public/app.js`) sends `limit` + `offset` for all 3 scopes (personal, company, search) and captures `total` from the response. New `docsState` fields: `page`, `pageSize` (200), `total`. New pager UI rendered at the bottom of the documents list (`.documents-pager` with Prev/Next buttons + "N–M of T" / "Page X / Y" label). `docsState.page` resets to 0 on scope change, folder navigation, breadcrumb click, tree-row click, search input, and modal open. New CSS in `public/styles.css` for the pager. Toolbar/scope HTML unchanged — the pager is appended to `#documents-list` by the renderer.
+- **Issue 2: sidebar tree visual fix.** The `.documents-folder-tree` was a sibling of the 3 scope buttons inside `.documents-scope-list`. With only a top border, the empty "No folders yet" message sat between the active scope and the next scope, looking like a child row of the active scope. Added a bottom border + slight inner background (`var(--surface-2)`) so the tree is a self-contained panel between the active scope and the next one. Also: the scope click handler now clears the previous tree's `innerHTML` synchronously so the user doesn't see stale Company data during the new fetch round-trip.
+
+**Tests:** `tests/test_documents_pagination.mjs` (new, 13 source-grep tests): backend limit/offset + total field, frontend sends them + captures total, pager UI only shows when total > pageSize, pager prev/next buttons wired, docsState.page resets on every state change (open, scope, search, folder nav × 3, tree-row click), sidebar tree has bottom border + background, scope click clears the previous tree innerHTML. Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 + 13 = **200 tests, 0 failures**. `py_compile` ×2, `node --check` clean.
+
+**Verified live:** 4 files modified (`public/app.js`, `public/styles.css`, `server.py`, `CHANGELOG.md`/`docs/SESSION_HISTORY.md`) + 1 new test file. `git diff --stat` = `+185 −14`. **Server restarted** (PID 2179386, port 8766) — the new endpoints are live.
+
+**Next:** No urgent follow-ups. The remaining audit findings from `docs/EMAIL_TEMPLATE_AUDIT.md` (template CRUD auth, size caps, etc.) are still queued.
+
+---
+
+## Previous summary (2026-10-14)
+
 **Topic:** Round 4 — project page highlight fix (the one I kept getting wrong in rounds 2 + 3).
 
 **What landed:**

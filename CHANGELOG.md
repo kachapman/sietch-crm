@@ -2,6 +2,15 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Documents modal pagination + sidebar tree fix (2026-10-14)
+
+Two user-reported issues with the documents modal:
+
+- **Documents modal dumped every single document.** `_handle_documents_personal` and `_handle_documents_company` in `server.py` now accept `limit` and `offset` query parameters (default `limit=200`, max 500) and return a `total` count. The frontend `loadDocumentsList` (in `public/app.js`) sends `limit` + `offset` on all 3 fetch paths (personal, company, search), captures the `total`, and renders a `documents-pager` footer with Prev / Next buttons and a "N–M of T" / "Page X / Y" label. `docsState.page` / `docsState.pageSize` / `docsState.total` are new state fields. `docsState.page` resets to 0 on scope change, folder navigation, breadcrumb click, tree-row click, search, and modal open. New CSS in `public/styles.css` for the pager.
+- **Sidebar tree "Company gets bumped into the child directory area."** The `.documents-folder-tree` was a sibling of the 3 scope buttons inside `.documents-scope-list` with only a top border, so the empty "No folders yet" message sat between the active scope and the next scope — looking like a child row of the active scope. Added a bottom border + slight inner background so the tree is clearly its own panel. The scope click handler now also clears the previous tree's `innerHTML` so the user doesn't see stale Company data during the new fetch round-trip.
+
+New tests: `tests/test_documents_pagination.mjs` (13 source-grep tests). Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 + 13 = **200 tests, 0 failures**. `py_compile` ×2, `node --check` clean.
+
 ## Round 4: project page highlight fix — covered .event-body (2026-10-14)
 
 The previous round (round 3) added the subtle highlight tint rule to the project page but only scoped it to `.event-reply-body`. The user's screenshot showed the highlight still rendering with the un-overridden inline style — because the highlight markup was actually inside `.event-body` (the main history event content, rendered at `project.html:611`), not inside a reply. The `.event-reply-body` rule never matched.

@@ -12972,6 +12972,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             folder_id = qs.get("folder_id", [None])[0]
             if folder_id:
                 folder_id = int(folder_id)
+            # Audit 2026-10-14: added limit/offset pagination (default
+            # limit=200) so the documents modal doesn't dump every
+            # document in the CRM at once. Page is offset-based to
+            # match the rest of the app's pagination.
+            try:
+                limit = int(qs.get("limit", ["200"])[0])
+            except (TypeError, ValueError):
+                limit = 200
+            try:
+                offset = int(qs.get("offset", ["0"])[0])
+            except (TypeError, ValueError):
+                offset = 0
+            limit = max(1, min(limit, 500))
+            offset = max(0, offset)
             # List folders at this level
             if folder_id:
                 folder_rows = db.query(
@@ -12988,25 +13002,48 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     (user["id"],),
                 )
             folders = [{"id": r[0], "name": r[1]} for r in folder_rows]
-            # List documents at this level
+            # List documents at this level — total first (for the
+            # pager), then the page.
+            count_params = ()
+            if folder_id:
+                count_params = (user["id"], folder_id)
+                count_row = db.query_one(
+                    """SELECT COUNT(*) AS cnt FROM project_documents
+                       WHERE uploaded_by = %s AND is_deleted = FALSE AND opportunity_id IS NULL AND company_scope = FALSE AND folder_id = %s""",
+                    count_params,
+                )
+            else:
+                count_params = (user["id"],)
+                count_row = db.query_one(
+                    """SELECT COUNT(*) AS cnt FROM project_documents
+                       WHERE uploaded_by = %s AND is_deleted = FALSE AND opportunity_id IS NULL AND company_scope = FALSE AND folder_id IS NULL""",
+                    count_params,
+                )
+            total = int(count_row["cnt"]) if count_row else 0
             if folder_id:
                 rows = db.query(
                     """SELECT id, title, file_path, file_size, mime_type, uploaded_at, opportunity_id, company_scope, folder_id
                        FROM project_documents
                        WHERE uploaded_by = %s AND is_deleted = FALSE AND opportunity_id IS NULL AND company_scope = FALSE AND folder_id = %s
-                       ORDER BY uploaded_at DESC""",
-                    (user["id"], folder_id),
+                       ORDER BY uploaded_at DESC LIMIT %s OFFSET %s""",
+                    (user["id"], folder_id, limit, offset),
                 )
             else:
                 rows = db.query(
                     """SELECT id, title, file_path, file_size, mime_type, uploaded_at, opportunity_id, company_scope, folder_id
                        FROM project_documents
                        WHERE uploaded_by = %s AND is_deleted = FALSE AND opportunity_id IS NULL AND company_scope = FALSE AND folder_id IS NULL
-                       ORDER BY uploaded_at DESC""",
-                    (user["id"],),
+                       ORDER BY uploaded_at DESC LIMIT %s OFFSET %s""",
+                    (user["id"], limit, offset),
                 )
             docs = [self._doc_row(r) for r in rows]
-            _json_response(self, 200, {"documents": docs, "folders": folders})
+            _json_response(self, 200, {
+                "documents": docs,
+                "folders": folders,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+            })
         except Exception as exc:
             logger.exception("documents/personal failed")
             log_infra_event("error", f"documents/personal failed: {exc}", source="documents", method=self.command, path=api_path)
@@ -13022,6 +13059,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             folder_id = qs.get("folder_id", [None])[0]
             if folder_id:
                 folder_id = int(folder_id)
+            # Audit 2026-10-14: limit/offset pagination (default 200).
+            try:
+                limit = int(qs.get("limit", ["200"])[0])
+            except (TypeError, ValueError):
+                limit = 200
+            try:
+                offset = int(qs.get("offset", ["0"])[0])
+            except (TypeError, ValueError):
+                offset = 0
+            limit = max(1, min(limit, 500))
+            offset = max(0, offset)
             # List folders at this level
             if folder_id:
                 folder_rows = db.query(
@@ -13037,24 +13085,43 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                        ORDER BY name""",
                 )
             folders = [{"id": r[0], "name": r[1]} for r in folder_rows]
-            # List documents at this level
+            # Total first, then the page.
+            if folder_id:
+                count_row = db.query_one(
+                    """SELECT COUNT(*) AS cnt FROM project_documents
+                       WHERE company_scope = TRUE AND is_deleted = FALSE AND folder_id = %s""",
+                    (folder_id,),
+                )
+            else:
+                count_row = db.query_one(
+                    """SELECT COUNT(*) AS cnt FROM project_documents
+                       WHERE company_scope = TRUE AND is_deleted = FALSE AND folder_id IS NULL""",
+                )
+            total = int(count_row["cnt"]) if count_row else 0
             if folder_id:
                 rows = db.query(
                     """SELECT id, title, file_path, file_size, mime_type, uploaded_at, opportunity_id, company_scope, folder_id
                        FROM project_documents
                        WHERE company_scope = TRUE AND is_deleted = FALSE AND folder_id = %s
-                       ORDER BY uploaded_at DESC""",
-                    (folder_id,),
+                       ORDER BY uploaded_at DESC LIMIT %s OFFSET %s""",
+                    (folder_id, limit, offset),
                 )
             else:
                 rows = db.query(
                     """SELECT id, title, file_path, file_size, mime_type, uploaded_at, opportunity_id, company_scope, folder_id
                        FROM project_documents
                        WHERE company_scope = TRUE AND is_deleted = FALSE AND folder_id IS NULL
-                       ORDER BY uploaded_at DESC""",
+                       ORDER BY uploaded_at DESC LIMIT %s OFFSET %s""",
+                    (limit, offset),
                 )
             docs = [self._doc_row(r) for r in rows]
-            _json_response(self, 200, {"documents": docs, "folders": folders})
+            _json_response(self, 200, {
+                "documents": docs,
+                "folders": folders,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+            })
         except Exception as exc:
             logger.exception("documents/company failed")
             log_infra_event("error", f"documents/company failed: {exc}", source="documents", method=self.command, path=api_path)

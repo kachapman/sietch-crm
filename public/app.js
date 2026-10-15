@@ -3745,6 +3745,12 @@ const docsState = {
   sort: "recent",
   folderTree: [],        // flat list of {id, name, parentId} from /documents/folders/tree
   expandedFolders: new Set(), // expanded folder IDs in sidebar tree
+  // Pagination — Audit 2026-10-14: the documents modal used to dump
+  // every document in the CRM. Now the backend paginates with
+  // limit/offset and the frontend tracks page state.
+  page: 0,
+  pageSize: 200,
+  total: 0,
   // Preview pane state — survives minimize/restore so the same doc is still
   // visible when the user re-opens the modal.
   previewOpen: false,
@@ -3791,6 +3797,7 @@ function openDocumentsModal() {
     docsState.searchQuery = "";
     docsState.documents = [];
     docsState.loading = false;
+    docsState.page = 0;  // Audit 2026-10-14: reset pager on open
     const searchInput = $("#documents-search-input");
     if (searchInput) searchInput.value = "";
     document.querySelectorAll(".documents-scope-btn").forEach(b => b.classList.toggle("active", b.dataset.scope === "projects"));
@@ -3850,20 +3857,27 @@ async function loadDocumentsList() {
   updateDocsToolbar();
   try {
     let data;
+    const offset = docsState.page * docsState.pageSize;
     if (docsState.scope === "mydocs") {
       const qs = new URLSearchParams();
       if (docsState.currentFolderId) qs.set("folder_id", String(docsState.currentFolderId));
+      qs.set("limit", String(docsState.pageSize));
+      qs.set("offset", String(offset));
       const path = "/api/v2/documents/personal" + (qs.toString() ? "?" + qs.toString() : "");
       data = await api(path);
       docsState.documents = data.documents || [];
       docsState.folders = data.folders || [];
+      docsState.total = typeof data.total === "number" ? data.total : docsState.documents.length;
     } else if (docsState.scope === "company") {
       const qs = new URLSearchParams();
       if (docsState.currentFolderId) qs.set("folder_id", String(docsState.currentFolderId));
+      qs.set("limit", String(docsState.pageSize));
+      qs.set("offset", String(offset));
       const path = "/api/v2/documents/company" + (qs.toString() ? "?" + qs.toString() : "");
       data = await api(path);
       docsState.documents = data.documents || [];
       docsState.folders = data.folders || [];
+      docsState.total = typeof data.total === "number" ? data.total : docsState.documents.length;
     } else {
       docsState.folders = [];
       const qs = new URLSearchParams();
@@ -3873,6 +3887,8 @@ async function loadDocumentsList() {
       if (docsState.searchQuery) {
         qs.set("q", docsState.searchQuery);
       }
+      qs.set("limit", String(docsState.pageSize));
+      qs.set("offset", String(offset));
       const path = "/api/v2/documents/search" + (qs.toString() ? "?" + qs.toString() : "");
       data = await api(path);
       docsState.documents = [];
@@ -3883,6 +3899,8 @@ async function loadDocumentsList() {
           docsState.documents.push(d);
         });
       });
+      // search endpoint already returns total at top level
+      docsState.total = typeof data.total === "number" ? data.total : docsState.documents.length;
     }
     renderDocumentsList();
   } catch (err) {
@@ -4038,6 +4056,24 @@ function renderDocumentsList() {
     }).join("");
   } else {
     html += docs.map(d => renderDocumentRow(d)).join("");
+  }
+
+  // Pagination footer — only show when there's more than one page.
+  const total = docsState.total || 0;
+  const pageSize = docsState.pageSize || 200;
+  const page = docsState.page || 0;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  if (total > pageSize) {
+    const start = page * pageSize + 1;
+    const end = Math.min(total, (page + 1) * pageSize);
+    const hasPrev = page > 0;
+    const hasNext = page + 1 < pageCount;
+    html += `<div class="documents-pager" data-pager-page="${page}">
+      <button type="button" class="btn btn-ghost btn-sm documents-pager-prev" ${hasPrev ? "" : "disabled"} title="Previous">‹</button>
+      <span class="documents-pager-info">${start.toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()}</span>
+      <button type="button" class="btn btn-ghost btn-sm documents-pager-next" ${hasNext ? "" : "disabled"} title="Next">›</button>
+      <span class="documents-pager-pages">Page ${page + 1} / ${pageCount}</span>
+    </div>`;
   }
 
   list.innerHTML = html;
@@ -4206,6 +4242,24 @@ function bindDocumentsListEvents(list) {
     });
     input.addEventListener("click", e => e.stopPropagation());
   });
+  // Pager buttons — Audit 2026-10-14: pagination for the documents
+  // modal. Prev/Next adjust docsState.page and re-fetch.
+  list.querySelectorAll(".documents-pager-prev").forEach(btn => {
+    if (btn.disabled) return;
+    btn.addEventListener("click", () => {
+      if (docsState.page > 0) {
+        docsState.page -= 1;
+        loadDocumentsList();
+      }
+    });
+  });
+  list.querySelectorAll(".documents-pager-next").forEach(btn => {
+    if (btn.disabled) return;
+    btn.addEventListener("click", () => {
+      docsState.page += 1;
+      loadDocumentsList();
+    });
+  });
   updateDocsToolbar();
 }
 
@@ -4215,6 +4269,7 @@ function navigateToFolder(folderId, folderName) {
   docsState.currentFolderId = folderId;
   docsState.currentFolderPath.push({ id: folderId, name: folderName });
   docsState.selected.clear();
+  docsState.page = 0;  // Audit 2026-10-14: reset pager on folder nav
   loadDocumentsList();
   renderFolderTree();
 }
@@ -4223,6 +4278,7 @@ function navigateToRoot() {
   docsState.currentFolderId = null;
   docsState.currentFolderPath = [];
   docsState.selected.clear();
+  docsState.page = 0;  // Audit 2026-10-14: reset pager on folder nav
   loadDocumentsList();
   renderFolderTree();
 }
@@ -4231,6 +4287,7 @@ function navigateToBreadcrumb(idx) {
   docsState.currentFolderPath = docsState.currentFolderPath.slice(0, idx);
   docsState.currentFolderId = docsState.currentFolderPath.length > 0 ? docsState.currentFolderPath[docsState.currentFolderPath.length - 1].id : null;
   docsState.selected.clear();
+  docsState.page = 0;  // Audit 2026-10-14: reset pager on breadcrumb nav
   loadDocumentsList();
   renderFolderTree();
 }
@@ -4344,6 +4401,7 @@ function renderFolderTree() {
       docsState.currentFolderPath = path;
       docsState.currentFolderId = folderId;
       docsState.selected.clear();
+      docsState.page = 0;  // Audit 2026-10-14: reset pager on tree-row click
       loadDocumentsList();
     });
   });
@@ -5026,10 +5084,18 @@ function bindDocumentsModal() {
       docsState.folders = [];
       docsState.selected.clear();
       docsState.searchQuery = "";
+      docsState.page = 0;  // Audit 2026-10-14: reset pager on scope change
       const searchInput = $("#documents-search-input");
       if (searchInput) searchInput.value = "";
       document.querySelectorAll(".documents-scope-btn").forEach(b => b.classList.toggle("active", b === btn));
       updateDocsToolbarForScope();
+      // Audit 2026-10-14: clear the previous tree container so the
+      // user doesn't see stale Company folders in the "My Documents"
+      // tree area during the fetch round-trip. The new tree is
+      // rendered by loadFolderTree's .then().
+      const sidebar = $("#documents-sidebar");
+      const oldTree = sidebar && sidebar.querySelector(".documents-folder-tree");
+      if (oldTree) oldTree.innerHTML = "";
       loadDocumentsList();
       loadFolderTree();
     });
@@ -5055,6 +5121,7 @@ function bindDocumentsModal() {
       clearTimeout(t);
       t = setTimeout(() => {
         docsState.searchQuery = searchInput.value.trim();
+        docsState.page = 0;  // Audit 2026-10-14: reset pager on search
         loadDocumentsList();
       }, 300);
     });

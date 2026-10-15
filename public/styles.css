@@ -14551,11 +14551,22 @@ select.form-control {
   border-right: 1px solid var(--border);
 }
 
-/* Folder tree in sidebar */
+/* Folder tree in sidebar.
+   Audit 2026-10-14: the tree container is a sibling of the 3 scope
+   buttons inside .documents-scope-list. With only a top border it
+   looked like a child row of the active scope (especially when
+   empty — "No folders yet" sat between the active scope button and
+   the next scope button). Added a bottom border + slight inner
+   background so the tree is clearly its own panel, distinct from
+   the scope buttons above and below. */
 .documents-folder-tree {
-  margin-top: 0.5rem;
-  padding-top: 0.5rem;
+  margin: 0.5rem 0;
+  padding: 0.4rem 0.3rem 0.4rem;
   border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 4px;
+  min-height: 1.5rem;
 }
 .documents-folder-tree-list {
   list-style: none;
@@ -14804,6 +14815,32 @@ select.form-control {
   padding: 3rem 1rem;
   color: var(--muted);
   font-size: 0.85rem;
+}
+
+/* Pagination footer for the documents list (Audit 2026-10-14). */
+.documents-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 0.75rem 0.5rem 0.4rem;
+  border-top: 1px solid var(--border);
+  margin-top: 0.5rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.documents-pager button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.documents-pager-info {
+  min-width: 7rem;
+  text-align: center;
+}
+.documents-pager-pages {
+  color: var(--muted);
+  font-size: 0.72rem;
+  margin-left: 0.25rem;
 }
 
 .documents-empty-icon {
