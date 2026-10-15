@@ -13,6 +13,51 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-15
 
+**Topic:** Automation audit round 8 — 4 SSE/cooldown fixes + 45 new tests.
+
+**What landed:**
+
+Full audit of the admin console automation functionality (`automation_engine.py` 903 lines, `server.py` route handlers, `migrations/013_add_automation_rules.sql` schema, `public/index.html` rule form, `public/app.js` render/save/load). Found 11 issues across severity levels; fixed the 4 most impactful and added 45 new unit tests.
+
+**Server-side fixes:**
+
+- **Fix #1 — `project_updated` SSE event was never published** (commit `c0c06db`). The trigger type was registered in `_EVENT_TRIGGER_MAP` and the evaluator function `_evaluate_project_updated_rules` existed, but no code ever called `event_bus.publish("project_updated", ...)`. Project update rules only fired via the polling sweep — much weaker than the SSE-driven design intended. Fix: publish from `_handle_project_update` after every successful UPDATE.
+
+- **Fix #2 — `task:created` → `project_created` SSE mapping was wrong** (commit `f4297e4`). A task being created on an existing project incorrectly fired any `project_created` rule for that project. Removed the bad mapping; added a comment explaining the rationale. Also cleaned up the stale module docstring (it listed `notify_users` as an action type, which doesn't exist).
+
+- **Fix #3 — `_action_change_stage` was silent** (commit `f4297e4`). Moving a project to a new stage via automation didn't publish `stage_changed`, so chained rules didn't work in real time. Fix: publish after the UPDATE; chain is bounded by per-rule `cooldown_hours`.
+
+**Frontend fix:**
+
+- **Fix #5 — `cooldown_hours = 0` with `recurring` mode = fire on every poll** (commit `436f2d3`). The frontend parsed an empty cooldown input as `0` via `|| 0`, and `_should_skip()` short-circuits to "fire now" for `<= 0`. A user who saved a recurring rule with an empty cooldown would spam it on every poll cycle. Fix: reject the save with a toast error, tell the user to enter a positive cooldown or use "Once only".
+
+**Test coverage (new file `tests/test_automation_engine.py`, 45 tests):**
+
+Covers the four action types (`create_task`, `send_email`, `change_stage`, `add_tag`), the six trigger evaluators (smoke), the two cooldown helpers, the two email recipient resolvers, the three SMTP config paths, the `_handle_sse_event` SSE mapping (with explicit regression tests for fixes #1 and #2), the `_execute_action` dispatch, the `_action_change_stage` SSE publish (with explicit regression test for fix #3), and the module docstring/structure.
+
+The tests use MagicMock for the `db` module and patch `automation_engine.event_bus` so they don't touch the real event bus. They run in ~25ms.
+
+**Verification:**
+
+- All 45 new tests pass.
+- Full suite: 15 JS files (134 tests) + 6 Python files (64 + 45 = 109 tests) = **269 tests, 0 failures**. `py_compile` ×3, `node --check public/app.js` clean. Server restarted.
+- Live end-to-end: opened raw socket SSE for an admin, `PUT /api/v2/projects/{id}` → the `project_updated` event arrived with `data.opportunity_id: <id>`. Created a `project_created` automation rule, then created a task on an existing project via `/api/v2/tasks` → the rule did NOT fire (0 rows in `automation_logs` for the rule). Both regressions verified.
+
+**Items still open from the original audit (deliberately deferred):**
+
+- 🟡 #4 — `_action_send_email` body is HTML but contains user-supplied template content. Need `html.escape()` on the rendered output. ~10 lines.
+- 🟡 #7 — `_handle_automation_rule_test` runs all 6 evaluators then filters by id (wasteful). ~20 lines.
+- 🟡 #8 — Test endpoint never labels the response as "dry run" in the UI. ~5 lines.
+- 🟡 #9 — `alert()` instead of `showToast()` in 2 places. 2 lines.
+- 🟡 #10 — `loadAutomationLogs` doesn't show email subject. ~3 lines.
+- 🟡 #11 — Stale module docstring entry (already partially cleaned up).
+
+**Next:** open question for the user — these are all low-priority cosmetic items; pick a feature work or new audit to tackle next.
+
+---
+
+## Previous summary (2026-10-15)
+
 **Topic:** Presence audit round 6 item #7 — tightened windows + cross-tab close fix.
 
 **What landed:**

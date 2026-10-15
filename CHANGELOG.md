@@ -2,6 +2,56 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Automation SSE wiring + cooldown validation + test coverage (audit round 8) (2026-10-15)
+
+Full audit of the admin console automation functionality (`automation_engine.py` 903 lines, `server.py` route handlers, `migrations/013_add_automation_rules.sql` schema, `public/index.html` rule form, `public/app.js` render/save/load). Found 11 issues, fixed the 4 most impactful across 4 commits + 1 test commit.
+
+**Server-side fixes (`server.py` + `automation_engine.py`):**
+
+- **`project_updated` SSE event was never published** (commit `c0c06db`). The automation engine had a registered SSE trigger type `project_updated` in `_EVENT_TRIGGER_MAP` and a corresponding evaluator function `_evaluate_project_updated_rules`, but nothing in the codebase ever published the event. Project update rules only ever fired via the polling sweep's `last_run_at` cutoff — much weaker than the SSE-driven design intended. Fix: publish `project_updated` from `_handle_project_update` in `server.py` after every successful UPDATE. The publish is wrapped in try/except so a broken bus doesn't break the response.
+
+- **`task:created` → `project_created` SSE mapping was wrong** (commit `f4297e4`). The `_EVENT_TRIGGER_MAP` in `automation_engine.py` had `{"task:created": "project_created"}` which fired every `project_created` rule any time a task was created on an existing project. Two sites publish `task:created` with payload `{task_id, title, opportunity_id}`; the SSE handler fetched the parent opportunity and ran the project_created rule on it. Effect: a rule like "When a new project is created, send a welcome email to the owner" would fire on every task creation. Fix: removed the bad mapping. Added a comment explaining the rationale and what to do if a "create_task" trigger is ever added (own SSE event or its own evaluator; don't reuse `project_created`). Also fixed the stale docstring (it listed `notify_users` as an action type, which doesn't exist).
+
+- **`_action_change_stage` was silent** (commit `f4297e4`, same commit as the trigger map fix). The action moved a project to a new stage in the DB but never published `stage_changed` on the event bus, so any `stage_changed` rule with `to_stage_id` matching the new stage would only fire on the next poll cycle. SSE-driven chains (e.g. "When stage is Won, also send an email") didn't work. Fix: publish `stage_changed` with the new `stage_id` after the UPDATE. The chain is bounded by the per-rule `cooldown_hours` (set in `trigger_config`); a runaway rule cycle requires the admin to set `cooldown_hours=0` explicitly.
+
+**Frontend fix (`public/app.js`):**
+
+- **Recurring mode with no cooldown fires on every poll** (commit `436f2d3`). `cooldown_hours = 0` with `cooldown_mode = "recurring"` was an unhandled footgun: `_should_skip()` short-circuits to "fire now" for `cooldown_hours <= 0`, so a recurring rule with no cooldown fires on every poll cycle for every matching project. The frontend parsed an empty cooldown input as `0` via `|| 0`, so the default state in the form (no cooldown entered) was the worst case. Fix: in `saveAutomationRule`, reject the save with a toast error if `cooldown_mode='recurring'` and `cooldown_hours` is empty or `<= 0`. The user is told to use "Once only" for one-shot rules or enter a positive cooldown for recurring ones. The default fallback (when the user later types a valid value) still works the same way: empty input falls back to `days*24`. Same validation applied to `tag_duration` / `tag_added`.
+
+**Test coverage (new file `tests/test_automation_engine.py`, 45 tests):**
+
+- `_render_template`: placeholder substitution, `None` handling, missing placeholders.
+- `_build_template_context`: all expected keys present, dates correct.
+- `_should_skip`: cooldown logic, DB error tolerance (returns `False`, never freezes the rule).
+- `_already_fired_once`: once-only mode detection.
+- `_action_create_task`: dry_run vs real, one task per assignee, notification publishing (4 events for 2 assignees: 2 `task_assigned` notifications + 2 `task:created` dashboard refresh events).
+- `_action_send_email`: dry_run + missing recipient + missing SMTP paths.
+- `_action_change_stage`: dry_run + missing target + real move + **publishes `stage_changed` on the event bus (audit round 8 fix #3 regression test)** + publish failure does not break the action.
+- `_action_add_tag`: dry_run + `ON CONFLICT DO NOTHING` SQL check.
+- `_resolve_email_recipient`: project_owner / contact / custom / unknown paths.
+- `_get_smtp_config`: crm_mail / alternate_smtp (disabled returns None) / alternate_smtp (enabled) / custom / unknown.
+- `_EVENT_TRIGGER_MAP` regression: `task:created` is NOT in the map (audit round 8 fix #2).
+- `_handle_sse_event`: unknown event ignored, no-opp-id ignored, nonexistent opp ignored, **task:created does NOT trigger project_created rule (fix #2 regression)**, **project_updated event fires (fix #1 regression)**.
+- `_sweep_once`: smoke that the polling sweep runs without crashing.
+- `_execute_action` dispatch: unknown action type returns empty, all 4 action types dispatch correctly.
+
+The tests use a tmpdir + MagicMock for the `db` module (no real PostgreSQL connection). They run in ~25ms.
+
+**Verification:**
+
+- All 45 new tests pass.
+- Full suite: 15 JS files (134 tests) + 6 Python files (64 + 45 = 109 tests) = **269 tests, 0 failures**. `py_compile` ×3, `node --check public/app.js` clean. Server restarted.
+- Live end-to-end: opened raw socket SSE for an admin, did a `PUT /api/v2/projects/{id}` → the `project_updated` event arrived with `data.opportunity_id: <id>`. Created a `project_created` automation rule, then created a task on an existing project via `/api/v2/tasks` → the rule did NOT fire (0 rows in `automation_logs` for the rule). Both regressions verified.
+
+**Items from the original audit still open (deliberately deferred):**
+
+- 🟡 #4 — `_action_send_email` body is HTML but contains user-supplied template content. Need `html.escape()` on the rendered output. ~10 line fix.
+- 🟡 #7 — `_handle_automation_rule_test` runs all 6 evaluators then filters by id (wasteful). ~20 line refactor.
+- 🟡 #8 — Test endpoint never labels the response as "dry run" in the UI. ~5 line frontend fix.
+- 🟡 #9 — `alert()` instead of `showToast()` in `saveAutomationRule`/`testAutomationRule`. 2 line fix.
+- 🟡 #10 — `loadAutomationLogs` doesn't show the email subject in the rendered row. ~3 line fix.
+- 🟡 #11 — Stale docstring entry `notify_users` (already partially fixed in the trigger map commit, but the module docstring was cleaned up too).
+
 ## Presence windows + cross-tab close (audit round 6 item #7) (2026-10-15)
 
 Three improvements to the presence system that were deferred from the original audit.
