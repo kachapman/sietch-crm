@@ -2,6 +2,34 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Infrastructure test coverage + CI gap (2026-10-15)
+
+New `tests/test_infrastructure.py` (64 tests) covering the admin Infrastructure tab, the restart endpoints, and the probe helpers.
+
+**Why it can test the real code:** `server.py` only binds its socket inside `main()` (which the tests never call), so `import server` is side-effect-free apart from the DB connection pool. That means the tests exercise the actual functions rather than AST-extracted copies.
+
+**Coverage:**
+
+- **`infra_log` ring buffer** (6 tests) — append/read-back, event shape (all 7 documented keys), tz-aware `ts`, 500-event bound, monotonic uptime, and that `infra_events()` returns a copy (caller mutation must not affect the buffer).
+- **`_mem_usage`** (7 tests) — `MemAvailable` used when present; **pre-3.14 fallback does not report 100% used** (the audit #5 regression); `available` clamped to `total`; malformed lines skipped not fatal; unreadable `/proc/meminfo` → `{}`; real-host smoke.
+- **`_disk_usage`** (4 tests) — dedupes by filesystem (`st_dev`), entry shape and percentage bounds, missing dirs skipped, `shutil` failure → `[]`.
+- **`_detect_container_runtime`** (9 tests) — `/.dockerenv` → docker, `/run/.containerenv` → podman, `KUBERNETES_SERVICE_HOST` → kubernetes, bare host → `""`, cgroup v1 docker/kubepods/podman paths, and **cgroup v2's bare `0::/` line correctly yields no runtime**. Plus wrapper consistency between `_is_running_in_docker` and the detector.
+- **`_bind_server_with_retry`** (4 tests) — binds immediately on a free port; **retries until the holder releases the port** (the exact restart race); raises `EADDRINUSE` after exhausting attempts rather than hanging; **`EACCES` raises after exactly one attempt** (non-address errors must not be retried for 30s).
+- **`_infra_error_stats`** (7 tests) — error/warn counts, 1h/24h windows, top-error grouping and ordering, **long messages truncated to exactly 120 chars ending in `…`** (the audit #7 regression), short messages untouched, unparseable timestamps skipped, empty ring.
+- **`_docker_containers` parsing** (7 tests) — normal output, **`N/A` RestartCount doesn't abort the list** (the audit #8 regression), missing field → 0, container absent skipped, `TimeoutExpired` handled, and a mixed valid/`N/A`/zero run where healthy siblings must still appear.
+- **`_docker_status`** (5 tests) — payload shape includes `runtime`, `runtime: None` on bare host, container name set inside a container, note names the actual runtime (Kubernetes/Podman), no containers when the CLI is missing.
+- **`_effective_docs_internal_url`** (6 tests) — internal URL wins, `http://docserver*` placeholder rejected on any port, real service hostname (`https://onlyoffice-docserver:443`) honoured, public-URL fallback, both-empty.
+- **Source-level guards** (8 tests) — `_handle_infrastructure` runs `_require_admin` before every probe; probes run in a `ThreadPoolExecutor` with ≥3 submissions; restart-server flushes before arming the exit timer and returns (stays alive) on a failed spawn; `main()` uses the bind retry; the dead double-`f.read()` cgroup check is gone; `_handle_docker_health` delegates to the shared detector.
+- **`public/app.js` guards** (2 tests) — `startInfraPolling` handles a missing checkbox and still starts the timer after warning; uses exactly two `setInterval` sites and clears the prior timer first.
+
+**Mutation-verified.** Eight deliberate regressions were injected one at a time and each was caught: removing the bind retry (1 fail), reverting the meminfo fallback (2), restoring the double-`f.read()` cgroup bug (1), removing the authz gate (1), removing `wfile.flush()` (1), restoring `...` truncation (1), un-guarding `int(RestartCount)` (2), reverting the polling fallback (2).
+
+**CI gap closed.** `.github/workflows/smoke.yml` only ran 3 of the 8 Python test files — `test_presence_store.py`, `test_automation_engine.py`, `test_telegram_bot.py`, `test_timesheet_overdue_checker.py` and now `test_infrastructure.py` were never executed in CI despite passing locally. Added a `postgres:16-alpine` service (needed because `import server` opens the psycopg2 pool eagerly) plus all five missing test files, and extended the `py_compile` list with `infra_log.py`, `presence_store.py`, and `timesheet_overdue_checker.py`.
+
+**Graceful skip.** `tests/test_infrastructure.py` exits 0 with a `SKIP:` line when no database is reachable, so it never breaks a bare checkout or a DB-less CI runner.
+
+**Verification:** 64/64 pass. Full suite: 134 JS + 283 Python = **417 tests, 0 failures**.
+
 ## Infrastructure audit fixes (admin console) (2026-10-15)
 
 Eight fixes across `server.py` and `public/app.js`, covering the admin Infrastructure tab, the three restart endpoints, and the probe helpers behind them.

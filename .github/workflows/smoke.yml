@@ -10,6 +10,32 @@ jobs:
   python:
     name: Python unit tests
     runs-on: ubuntu-latest
+
+    # `import server` eagerly opens the psycopg2 pool, so tests that import
+    # it (infrastructure) need a real database. Presence/automation/
+    # timesheet/telegram suites run against mocked layers and don't.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: sietch_crm
+          POSTGRES_USER: sietch
+          POSTGRES_PASSWORD: ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      DB_NAME: sietch_crm
+      DB_USER: sietch
+      DB_PASSWORD: ci_password
+
     steps:
       - uses: actions/checkout@v4
 
@@ -31,6 +57,21 @@ jobs:
 
       - name: Run onlyoffice import tests
         run: python3 tests/test_onlyoffice_import.py
+
+      - name: Run presence store tests
+        run: python3 tests/test_presence_store.py
+
+      - name: Run automation engine tests
+        run: python3 tests/test_automation_engine.py
+
+      - name: Run timesheet overdue checker tests
+        run: python3 tests/test_timesheet_overdue_checker.py
+
+      - name: Run telegram bot tests
+        run: python3 tests/test_telegram_bot.py
+
+      - name: Run infrastructure tests
+        run: python3 tests/test_infrastructure.py
 
   node:
     name: JavaScript unit tests
@@ -66,6 +107,9 @@ jobs:
           python -m py_compile smtp_client.py
           python -m py_compile telegram_bot.py
           python -m py_compile automation_engine.py
+          python -m py_compile infra_log.py
+          python -m py_compile presence_store.py
+          python -m py_compile timesheet_overdue_checker.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
