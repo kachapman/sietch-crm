@@ -364,6 +364,8 @@ async def verify_code(code: str, chat_id: int) -> dict | None:
 # ── Message Formatting ──
 
 def _esc(text: str) -> str:
+    if text is None:
+        return ""
     return html.escape(str(text), quote=False)
 
 

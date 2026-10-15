@@ -2,6 +2,30 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Telegram bot test coverage (2026-10-15)
+
+New `tests/test_telegram_bot.py` (64 tests, all pass) covering the helpers and formatters touched by the round 8 audit:
+
+- **`_esc`** (4 tests): ampersand/lt/gt escape, quote handling (`quote=False` so `"` and `'` pass through, which Telegram accepts), None → empty string (fixed in this commit), int coercion.
+- **`_truncate`** (4 tests): under-limit returns unchanged, empty/None → empty, over-limit appends ellipsis, just-over-limit truncates.
+- **`_truncate_html`** (4 tests): under-limit returns unchanged, drops partial tag at end, closes unclosed tags, ignores self-closing tags like `<br>`.
+- **`_fmt_date`** (5 tests): ISO with `Z`, with offset, with microseconds, empty input, invalid input fallback.
+- **`_extract_mail_fields`** (5 tests): basic extraction, escaped strings (`\"` inside a JSON value), missing fields, no fields → `None`, multiline subject via `\n` in JSON.
+- **`_html_to_text`** (4 tests): strips block tags, `<br>` becomes space, table flattens to text, unescapes entities.
+- **`_sanitize_html` (audit #6 XSS fix)** (8 tests): `javascript:`, `vbscript:`, `data:text/html`, `data:application/` hrefs are all dropped; `http:`, `https:`, `mailto:`, `tg:` hrefs are preserved; leading whitespace + case-insensitive scheme check works; plain text passes through.
+- **`_format_event_body`** (3 tests): short event unchanged, long event capped with `…`, `Email` category routes to mail format.
+- **`format_search_result` (audit #8 fix)** (4 tests): single deal routes to deal detail, no deals returns "no match" message, multiple deals under limit, **huge list preserves the footer** (header + footer always survive the 4000-char truncation, body gets the ellipsis).
+- **`format_deal_detail` (audit #1, #7)** (6 tests): customer view excludes amount, employee view shows amount, long description gets ellipsis (not silent), short description no ellipsis, invalid index returns error, no truncation when under limit.
+- **`format_project_info` (audit #1)** (4 tests): short fields pass through, long description capped with `…` at 1000 chars, user-fields key (60) and value (500) both capped, includes view-project-in-CRM link.
+- **`_get_project_label` (audit #4 fix)** (5 tests): cache hit, cache miss + server fail → `#<id>` fallback, server response with name + number, server response with only number, empty server response.
+- **`_config_poll_loop` (audit #5 fix)** (1 test): the first sleep comes after the first poll (verified by call ordering).
+- **Shared HTTP client (audit #2 fix)** (2 tests): `_get` reuses the same client across calls, `_close_http_client` resets the global so the next `_get` creates a fresh one.
+- **Broader exception handling (audit #3 fix)** (4 tests): `_get` returns None on `httpx.TimeoutException`, `_post` returns None on `JSONDecodeError`, `_get` returns None on 500, `_get` returns the parsed dict on 200.
+
+The tests use a `MagicMock` for the `telegram` and `telegram.ext` imports at the top of the file so the test file can run on machines without the bot dependency installed.
+
+**Verification:** 64/64 tests pass. Full suite: 15 JS files (134 tests) + 7 Python files (28 + 50 + 64 = 142 tests) = **276 tests, 0 failures**. `python3 -c "import ast; ast.parse(...)"` clean. Bot running (PID 2574956).
+
 ## Telegram bot audit fixes (2026-10-15)
 
 Audited `telegram_bot.py` (2130 lines). Found 8 issues, fixed all of them in one commit. Live-verified the bot starts and polls correctly.
