@@ -13137,49 +13137,62 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             project_id = qs.get("project_id", [None])[0]
             if project_id:
                 project_id = int(project_id)
-            if q:
-                if project_id:
-                    rows = db.query(
-                        """SELECT d.id, d.title, d.file_path, d.file_size, d.mime_type, d.uploaded_at,
-                                  d.opportunity_id, d.company_scope, o.title AS opp_title
-                           FROM project_documents d
-                           JOIN opportunities o ON o.id = d.opportunity_id
-                           WHERE d.opportunity_id = %s AND d.is_deleted = FALSE
-                             AND LOWER(d.title) LIKE %s
-                           ORDER BY d.uploaded_at DESC""",
-                        (project_id, f"%{q}%"),
-                    )
-                else:
-                    rows = db.query(
-                        """SELECT d.id, d.title, d.file_path, d.file_size, d.mime_type, d.uploaded_at,
-                                  d.opportunity_id, d.company_scope, o.title AS opp_title
-                           FROM project_documents d
-                           JOIN opportunities o ON o.id = d.opportunity_id
-                           WHERE d.opportunity_id IS NOT NULL AND d.is_deleted = FALSE
-                             AND LOWER(d.title) LIKE %s
-                           ORDER BY o.title, d.uploaded_at DESC""",
-                        (f"%{q}%",),
-                    )
+            # Audit 2026-10-15: added limit/offset pagination. The frontend
+            # already sends them and reads `data.total` (matches the
+            # personal/company scope pagination in 12965/13015). The
+            # previous version ignored them and returned every matching
+            # row, so the projects scope "scrolled infinitely" while
+            # the pager never triggered.
+            try:
+                limit = int(qs.get("limit", ["200"])[0])
+            except (TypeError, ValueError):
+                limit = 200
+            try:
+                offset = int(qs.get("offset", ["0"])[0])
+            except (TypeError, ValueError):
+                offset = 0
+            limit = max(1, min(limit, 500))
+            offset = max(0, offset)
+
+            # ── WHERE / ORDER BY / params for each of the 4 branches ──
+            if q and project_id:
+                where_clause = "d.opportunity_id = %s AND d.is_deleted = FALSE AND LOWER(d.title) LIKE %s"
+                order_clause = "d.uploaded_at DESC"
+                base_params = (project_id, f"%{q}%")
+            elif q and not project_id:
+                where_clause = "d.opportunity_id IS NOT NULL AND d.is_deleted = FALSE AND LOWER(d.title) LIKE %s"
+                order_clause = "o.title, d.uploaded_at DESC"
+                base_params = (f"%{q}%",)
+            elif not q and project_id:
+                where_clause = "d.opportunity_id = %s AND d.is_deleted = FALSE"
+                order_clause = "d.uploaded_at DESC"
+                base_params = (project_id,)
             else:
-                if project_id:
-                    rows = db.query(
-                        """SELECT d.id, d.title, d.file_path, d.file_size, d.mime_type, d.uploaded_at,
-                                  d.opportunity_id, d.company_scope, o.title AS opp_title
-                           FROM project_documents d
-                           JOIN opportunities o ON o.id = d.opportunity_id
-                           WHERE d.opportunity_id = %s AND d.is_deleted = FALSE
-                           ORDER BY d.uploaded_at DESC""",
-                        (project_id,),
-                    )
-                else:
-                    rows = db.query(
-                        """SELECT d.id, d.title, d.file_path, d.file_size, d.mime_type, d.uploaded_at,
-                                  d.opportunity_id, d.company_scope, o.title AS opp_title
-                           FROM project_documents d
-                           JOIN opportunities o ON o.id = d.opportunity_id
-                           WHERE d.opportunity_id IS NOT NULL AND d.is_deleted = FALSE
-                           ORDER BY o.title, d.uploaded_at DESC""",
-                    )
+                where_clause = "d.opportunity_id IS NOT NULL AND d.is_deleted = FALSE"
+                order_clause = "o.title, d.uploaded_at DESC"
+                base_params = ()
+
+            # ── Total count (unfiltered by pagination) for the pager ──
+            count_row = db.query_one(
+                f"""SELECT COUNT(*) AS cnt
+                      FROM project_documents d
+                      JOIN opportunities o ON o.id = d.opportunity_id
+                     WHERE {where_clause}""",
+                base_params,
+            )
+            total = int(count_row["cnt"]) if count_row else 0
+
+            # ── Page of rows with LIMIT/OFFSET applied ──
+            rows = db.query(
+                f"""SELECT d.id, d.title, d.file_path, d.file_size, d.mime_type, d.uploaded_at,
+                          d.opportunity_id, d.company_scope, o.title AS opp_title
+                     FROM project_documents d
+                     JOIN opportunities o ON o.id = d.opportunity_id
+                     WHERE {where_clause}
+                     ORDER BY {order_clause}
+                     LIMIT %s OFFSET %s""",
+                tuple(list(base_params) + [limit, offset]),
+            )
             # Group by project
             grouped = {}
             for r in rows:
@@ -13187,7 +13200,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 if opp_title not in grouped:
                     grouped[opp_title] = {"project": opp_title, "projectId": r[7], "documents": []}
                 grouped[opp_title]["documents"].append(self._doc_row(r[:-1]))
-            _json_response(self, 200, {"results": list(grouped.values()), "total": len(rows)})
+            _json_response(self, 200, {
+                "results": list(grouped.values()),
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+            })
         except Exception as exc:
             logger.exception("documents/search failed")
             log_infra_event("error", f"documents/search failed: {exc}", source="documents", method=self.command, path=api_path)

@@ -11,7 +11,31 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-14
+**Date:** 2026-10-15
+
+**Topic:** Documents modal projects-scope pagination — server-side fix for the search endpoint.
+
+**What landed:**
+
+- **Bug:** Last round added pagination to the personal and company scopes, but the **projects scope** (`/api/v2/documents/search`) was missed. The frontend was correctly sending `limit=200&offset=0` and reading `data.total`, but the server ignored the params and returned every matching row. Result: the user saw every project document in one scrolling list with no pager.
+- **Fix in `server.py` `_handle_documents_search`:** refactored to build the WHERE clause + base params once (one for each of the 4 branches), then run a `COUNT(*)` against the unfiltered WHERE for the total, then run a paged SELECT with `LIMIT %s OFFSET %s` appended. The response now echoes `limit` + `offset` + `total` so the frontend can confirm the page window. Same pattern as the personal/company handlers.
+- **Frontend:** no change. The existing `.documents-pager` (Prev/Next + "N–M of T" + "Page X / Y") from the previous round now works in the projects scope automatically — the condition `total > pageSize` is now true when there are >200 project docs.
+- **Tests:** 3 new source-grep tests in `tests/test_documents_pagination.mjs`:
+  1. `_handle_documents_search` reads `limit` and `offset` from the query string.
+  2. The paged SELECT has `LIMIT %s OFFSET %s`; the COUNT query does NOT.
+  3. The response includes `total` + `limit` + `offset`.
+
+**Verified live:** 2 files modified (`server.py`, `tests/test_documents_pagination.mjs`). `git diff --stat` = `+112 −43`. **Server restarted** (PID 2228749, port 8766) so the fixed endpoint is live.
+
+Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 + 16 = **203 tests, 0 failures**. `py_compile` clean.
+
+**To see the change:** open the Documents modal, click "Projects" in the sidebar, and the list should now show at most 200 documents per page with the pager at the bottom. Click `Next` to load more.
+
+**Next:** The earlier "schedule fields greyed out" issue from this session — the form's `else` branch in `loadBackupHistory` greys out the fieldset when `status.configured === false`, which prevents the user from clicking Save to create the initial config. That fix is the same pattern (flip the logic so the form is always interactive, with a notice explaining the state). Ready to do that next if you want.
+
+---
+
+## Previous summary (2026-10-14
 
 **Topic:** Documents modal pagination + sidebar tree "Company bumped into child area" fix.
 

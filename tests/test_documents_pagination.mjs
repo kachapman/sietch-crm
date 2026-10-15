@@ -72,6 +72,57 @@ test('Issue 1: _handle_documents_company accepts limit and offset', () => {
   );
 });
 
+// Audit 2026-10-15: the projects-scope search endpoint
+// (/api/v2/documents/search) previously ignored limit/offset and
+// returned every matching row, so the pager never appeared.
+test('Audit 2026-10-15: _handle_documents_search accepts limit and offset', () => {
+  const fnStart = serverPy.indexOf('def _handle_documents_search(');
+  const fnEnd = serverPy.indexOf('\n    def ', fnStart);
+  const body = serverPy.slice(fnStart, fnEnd);
+  assert.ok(
+    /qs\.get\(["']limit["']/.test(body),
+    '_handle_documents_search does not read limit query param'
+  );
+  assert.ok(
+    /qs\.get\(["']offset["']/.test(body),
+    '_handle_documents_search does not read offset query param'
+  );
+});
+
+test('Audit 2026-10-15: _handle_documents_search SQL applies LIMIT/OFFSET', () => {
+  const fnStart = serverPy.indexOf('def _handle_documents_search(');
+  const fnEnd = serverPy.indexOf('\n    def ', fnStart);
+  const body = serverPy.slice(fnStart, fnEnd);
+  // The paged SELECT statement must end with LIMIT %s OFFSET %s.
+  // (The COUNT(*) above it should NOT have LIMIT/OFFSET.)
+  const pagedQuery = body.match(
+    /SELECT d\.id[\s\S]*?LIMIT %s OFFSET %s/
+  );
+  assert.ok(pagedQuery, '_handle_documents_search paged SELECT does not have LIMIT/OFFSET');
+  // The COUNT query must NOT have LIMIT/OFFSET (otherwise total is wrong).
+  const countQuery = body.match(/SELECT COUNT\(\*\)[\s\S]*?FROM project_documents/);
+  assert.ok(countQuery, '_handle_documents_search is missing a COUNT(*) for total');
+  assert.ok(
+    !/LIMIT %s OFFSET %s/.test(countQuery[0]),
+    '_handle_documents_search COUNT query must not have LIMIT/OFFSET'
+  );
+});
+
+test('Audit 2026-10-15: _handle_documents_search response includes total', () => {
+  const fnStart = serverPy.indexOf('def _handle_documents_search(');
+  const fnEnd = serverPy.indexOf('\n    def ', fnStart);
+  const body = serverPy.slice(fnStart, fnEnd);
+  assert.ok(
+    /["']total["']\s*[:,]\s*total/.test(body),
+    '_handle_documents_search response does not include total'
+  );
+  // Also return limit + offset so the frontend can confirm the page.
+  assert.ok(
+    /["']limit["']\s*[:,]\s*limit/.test(body) && /["']offset["']\s*[:,]\s*offset/.test(body),
+    '_handle_documents_search response should echo limit + offset for client confirmation'
+  );
+});
+
 // --- Issue 1: frontend sends limit + offset ---
 
 test('Issue 1: loadDocumentsList sends limit + offset for personal', () => {

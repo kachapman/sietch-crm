@@ -2,6 +2,18 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Documents modal projects-scope pagination (2026-10-15)
+
+The previous pagination fix (round on 2026-10-14) added `limit`/`offset` support to the personal and company document scopes but missed the **projects scope** (`/api/v2/documents/search`). The frontend was already sending `limit=200&offset=0` and reading `data.total`, but the server ignored the params and returned every matching row — so the projects scope scrolled infinitely with no pager.
+
+Fix: refactored `_handle_documents_search` in `server.py` to:
+- Parse `limit` (default 200, max 500) and `offset` (default 0) from the query string.
+- Run a `COUNT(*)` first against the same WHERE clause for the unfiltered total.
+- Apply `LIMIT %s OFFSET %s` to the paged SELECT.
+- Echo `limit` + `offset` + `total` in the response so the frontend can confirm the page.
+
+The frontend (`.documents-pager` from the previous round) now works in the projects scope without any change. Tests: 3 new source-grep tests in `tests/test_documents_pagination.mjs`. Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 + 16 = **203 tests, 0 failures**. `py_compile` clean.
+
 ## Documents modal pagination + sidebar tree fix (2026-10-14)
 
 Two user-reported issues with the documents modal:
