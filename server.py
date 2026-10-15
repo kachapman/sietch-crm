@@ -15,6 +15,7 @@ import tempfile
 import subprocess
 import sys
 import threading
+import errno
 import traceback
 import hashlib
 import hmac
@@ -1661,13 +1662,55 @@ def _verify_jwt(token: str, secret: str) -> dict | None:
         return None
 
 
+def _detect_container_runtime() -> str:
+    """Best-effort detection of the container runtime we're running inside.
+
+    Returns one of "docker", "kubernetes", "podman", or "" (host / unknown).
+
+    Checks several signals because no single one is reliable:
+      - `/.dockerenv` is present inside Docker containers (not on bare hosts).
+      - `/run/.containerenv` is the Podman equivalent.
+      - `KUBERNETES_SERVICE_HOST` is injected into every pod.
+      - cgroup paths: v1 lines look like `12:memory:/docker/<id>`; cgroup v2
+        collapses to a single `0::/` line on many hosts, so a substring match
+        on "docker" alone is not sufficient. We look for the path segments
+        that runtimes actually use.
+
+    The previous implementation checked only /proc/1/cgroup for the literal
+    substring "docker", and (because it called f.read() twice on the same
+    handle) never matched "kubepods" at all — the second read returned "".
+    """
+    if os.path.exists("/.dockerenv"):
+        return "docker"
+    if os.path.exists("/run/.containerenv"):
+        return "podman"
+    if os.environ.get("KUBERNETES_SERVICE_HOST"):
+        return "kubernetes"
+    # cgroup inspection as a fallback. Read each candidate file ONCE — a
+    # second read on the same handle returns "" at EOF.
+    for cgroup_path in ("/proc/1/cgroup", "/proc/self/cgroup"):
+        try:
+            with open(cgroup_path, "r") as f:
+                content = f.read()
+        except OSError:
+            continue
+        if not content:
+            continue
+        if "kubepods" in content:
+            return "kubernetes"
+        # cgroup v1 exposes the runtime as a path segment; v2 does not, so
+        # these substrings only fire on hosts that still use v1 — which is
+        # exactly the fallback we want.
+        if "/docker/" in content or "docker-" in content:
+            return "docker"
+        if "libpod" in content or "/podman/" in content:
+            return "podman"
+    return ""
+
+
 def _is_running_in_docker() -> bool:
-    """Best-effort detection of whether we are inside a Docker container."""
-    try:
-        with open("/proc/1/cgroup", "r") as f:
-            return "docker" in f.read() or "kubepods" in f.read()
-    except Exception:
-        return False
+    """True when running inside any container runtime (docker/k8s/podman)."""
+    return _detect_container_runtime() != ""
 
 
 def _effective_docs_internal_url() -> str:
@@ -1803,21 +1846,54 @@ def _docker_containers() -> list[dict]:
         if result.returncode != 0:
             continue  # container not present on this host
         parts = result.stdout.strip().split()
+        # RestartCount renders as "N/A" for containers running under a
+        # non-Docker runtime (Podman/K8s via the docker shim), which would
+        # raise ValueError and take out the whole container list.
+        try:
+            restart_count = int(parts[1]) if len(parts) > 1 else 0
+        except (ValueError, IndexError):
+            restart_count = None
         out.append({
             "name": name,
             "label": label,
             "status": parts[0] if parts else "unknown",
-            "restartCount": int(parts[1]) if len(parts) > 1 else 0,
+            "restartCount": restart_count,
         })
     return out
 
 
 def _disk_usage() -> list[dict]:
-    """Disk usage for the app's data/upload directories plus cwd (via shutil, no deps)."""
-    paths = []
-    for p in (os.getcwd(), "/app/data", "/app/uploads"):
-        if p and os.path.isdir(p) and p not in paths:
-            paths.append(p)
+    """Disk usage for the app's data/upload directories (via shutil, no deps).
+
+    Entries are deduplicated by *filesystem*, not by path string. In Docker
+    the app root, data dir and uploads dir are typically the same overlay/volume,
+    so reporting all three shows the same numbers three times. Previously the
+    cwd was also included, which in a host-run deployment is wherever the
+    process happened to be launched from — a meaningless entry.
+    """
+    candidates = [
+        os.environ.get("DATA_DIR", ""),
+        os.environ.get("UPLOAD_DIR", ""),
+        "/app/data",
+        "/app/uploads",
+        # Host-run dev: data lives next to the repo rather than under /app.
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"),
+    ]
+    paths: list[str] = []
+    seen_fs: set[tuple] = set()
+    for p in candidates:
+        if not p or not os.path.isdir(p):
+            continue
+        p = os.path.abspath(p)
+        try:
+            st = os.stat(p)
+        except OSError:
+            continue
+        key = (st.st_dev,)
+        if key in seen_fs:
+            continue
+        seen_fs.add(key)
+        paths.append(p)
     out = []
     for p in paths:
         try:
@@ -1835,16 +1911,41 @@ def _disk_usage() -> list[dict]:
 
 
 def _mem_usage() -> dict:
+    """Parse /proc/meminfo into {total, available, used} in bytes.
+
+    MemAvailable only exists on Linux 3.14+. On an older kernel it is
+    absent, so the previous code's `data.get("MemAvailable", 0)` returned 0
+    and reported used == total (100%) for a perfectly healthy box. Fall
+    back to the classic MemFree + Buffers + Cached approximation, which is
+    available on every kernel.
+    """
     try:
         with open("/proc/meminfo") as f:
-            data = {}
+            data: dict[str, int] = {}
             for line in f:
                 key, _, val = line.partition(":")
-                data[key.strip()] = int(val.strip().split()[0]) * 1024  # kB → bytes
+                parts = val.split()
+                if not parts:
+                    continue
+                try:
+                    data[key.strip()] = int(parts[0]) * 1024  # kB → bytes
+                except ValueError:
+                    continue
+        total = data.get("MemTotal", 0)
+        available = data.get("MemAvailable", 0)
+        if available == 0:
+            # Pre-3.14 approximation: reclaimable = free + buffers + cache.
+            available = (
+                data.get("MemFree", 0)
+                + data.get("Buffers", 0)
+                + data.get("Cached", 0)
+                + data.get("SReclaimable", 0)
+            )
+        available = min(available, total) if total else available
         return {
-            "total": data.get("MemTotal", 0),
-            "available": data.get("MemAvailable", 0),
-            "used": max(data.get("MemTotal", 0) - data.get("MemAvailable", 0), 0),
+            "total": total,
+            "available": available,
+            "used": max(total - available, 0),
         }
     except Exception:
         return {}
@@ -1882,7 +1983,10 @@ def _infra_error_stats() -> dict:
                 last24h += 1
                 msg = e.get("msg", "")
                 if len(msg) > 120:
-                    msg = msg[:117] + "..."
+                    # Use the same ellipsis character as the rest of the app
+                    # (the bot formatters, the task list, the changelog) rather
+                    # than three dots.
+                    msg = msg[:119] + "…"
                 recent_msgs[msg] = recent_msgs.get(msg, 0) + 1
     top = sorted(recent_msgs.items(), key=lambda kv: kv[1], reverse=True)[:5]
     return {
@@ -1914,23 +2018,28 @@ def _backup_summary() -> dict:
 def _docker_status() -> dict:
     """Combined Docker access + container status. Falls back to probes when no CLI."""
     accessible = shutil.which("docker") is not None
-    in_docker = _is_running_in_docker()
+    runtime = _detect_container_runtime()
+    in_docker = bool(runtime)
     containers = _docker_containers() if accessible else []
-    if in_docker and not accessible:
-        return {
-            "accessible": False,
-            "inDocker": True,
-            "containerName": socket.gethostname(),
-            "containers": [],
-            "note": "Docker CLI/socket not available inside this container. Install the docker CLI and mount /var/run/docker.sock to see container status and use restart controls.",
-        }
-    return {
+    base = {
         "accessible": accessible,
         "inDocker": in_docker,
+        "runtime": runtime or None,
         "containerName": socket.gethostname() if in_docker else None,
         "containers": containers,
-        "note": "",
     }
+    if in_docker and not accessible:
+        # We ARE in a container but can't reach the Docker socket. Surface a
+        # runtime-accurate note so the admin UI doesn't claim we're on a
+        # bare host when we're actually in Kubernetes or Podman.
+        runtime_label = {"kubernetes": "Kubernetes", "podman": "Podman"}.get(runtime, "Docker")
+        base["note"] = (
+            f"{runtime_label} CLI/socket not available inside this container. "
+            "Install the docker CLI and mount /var/run/docker.sock to see "
+            "container status and use restart controls."
+        )
+        return base
+    return {**base, "note": ""}
 
 
 _EXT_TO_MIME = {
@@ -3631,16 +3740,29 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             log_infra_event("info", f"Server restart requested by {user.get('email', 'unknown')}", source="admin", method="POST", path=api_path)
             _json_response(self, 200, {"ok": True, "message": "Server restarting…"})
+            # Push the 200 out to the wire NOW. Without this the body can
+            # still be sitting in the socket buffer when we os._exit() a
+            # moment later, and the admin's browser sees a truncated
+            # response instead of "Restarting…".
+            try:
+                self.wfile.flush()
+            except Exception:
+                pass
             import subprocess
             import threading
             def _respawn():
                 try:
-                    # Spawn a new server process detached from this one, then exit.
-                    subprocess.Popen([sys.executable] + sys.argv, start_new_session=True)
+                    # Spawn a replacement process detached from this one, then
+                    # exit. The replacement retries its bind (see main()), so
+                    # it doesn't matter whether it wins the race for the
+                    # listening socket against this process.
+                    proc = subprocess.Popen([sys.executable] + sys.argv, start_new_session=True)
+                    log_infra_event("info", f"Replacement server spawned (pid {proc.pid}); old process exiting", source="admin")
                 except Exception:
                     logger.exception("Failed to spawn replacement server process")
-                finally:
-                    os._exit(0)
+                    log_infra_event("error", "Failed to spawn replacement server process; original process staying alive", source="admin")
+                    return  # stay alive — better a stale process than none
+                os._exit(0)
             threading.Timer(1.0, _respawn).start()
             return
         if api_path == "/api/v2/admin/restart-container" and method == "POST":
@@ -10462,14 +10584,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     def _handle_docker_health(self) -> None:
         """Return Docker container status if running inside Docker."""
         info = {"containerName": None, "status": "unknown", "restartCount": None, "inDocker": False}
-        try:
-            with open("/proc/1/cgroup", "r") as f:
-                content = f.read()
-                if "docker" in content or "kubepods" in content:
-                    info["inDocker"] = True
-        except Exception:
-            pass
-        if not info["inDocker"]:
+        runtime = _detect_container_runtime()
+        info["runtime"] = runtime or None
+        info["inDocker"] = bool(runtime)
+        if not runtime:
             _json_response(self, 200, info)
             return
         try:
@@ -10482,7 +10600,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if result.returncode == 0:
                 parts = result.stdout.strip().split()
                 info["status"] = parts[0] if parts else "unknown"
-                info["restartCount"] = int(parts[1]) if len(parts) > 1 else 0
+                try:
+                    info["restartCount"] = int(parts[1]) if len(parts) > 1 else 0
+                except (ValueError, IndexError):
+                    info["restartCount"] = None
             else:
                 info["status"] = "inspect-failed"
         except Exception as exc:
@@ -10499,23 +10620,44 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_admin(self)
         if not user:
             return
-        # Database
-        db_ok = False
-        db_err = None
-        try:
-            db_ok = bool(db.query("SELECT 1", fetch="one"))
-        except Exception as exc:
-            db_err = str(exc)
-        # Document Server
-        ds_ok, ds_latency, ds_err = _probe_docserver()
-        # Docker
-        docker = _docker_status()
-        # Resources
-        resources = {
-            "disk": _disk_usage(),
-            "memory": _mem_usage(),
-            "loadavg": _load_avg(),
-        }
+        # The probes below are independent and several of them can block:
+        # _probe_docserver has a 5s HTTP timeout, _docker_status shells out
+        # to the docker CLI (5s per container), and the DB query can stall on
+        # a saturated connection pool. Run them concurrently so a single slow
+        # probe can't stall the whole response — the admin tab polls this
+        # endpoint every 15s, so serial probes pile up.
+        import concurrent.futures
+
+        def _probe_db() -> tuple[bool, str | None]:
+            try:
+                return bool(db.query("SELECT 1", fetch="one")), None
+            except Exception as exc:
+                return False, str(exc)
+
+        def _probe_docker() -> dict:
+            try:
+                return _docker_status()
+            except Exception as exc:
+                return {"accessible": False, "inDocker": False, "containerName": None,
+                        "containers": [], "note": f"docker probe failed: {exc}"}
+
+        def _probe_resources() -> dict:
+            return {
+                "disk": _disk_usage(),
+                "memory": _mem_usage(),
+                "loadavg": _load_avg(),
+            }
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="infra") as pool:
+            fut_db = pool.submit(_probe_db)
+            fut_docker = pool.submit(_probe_docker)
+            fut_resources = pool.submit(_probe_resources)
+            # Docserver is probed on the calling thread so its own 5s timeout
+            # bounds the wait; the pool still runs the rest concurrently.
+            ds_ok, ds_latency, ds_err = _probe_docserver()
+            db_ok, db_err = fut_db.result()
+            docker = fut_docker.result()
+            resources = fut_resources.result()
         payload = {
             "server": {
                 "version": APP_VERSION,
@@ -19273,8 +19415,38 @@ def _sse_publish_recent_notifications(user_id: str, since_ts: float) -> None:
         pass  # non-fatal — will retry on next sweep
 
 
+def _bind_server_with_retry(port: int, attempts: int = 60, delay: float = 0.5) -> ThreadingHTTPServer:
+    """Bind the HTTP server, retrying while the port is still held.
+
+    The admin "Restart Server" button spawns a replacement process and then
+    os._exit()s. Whichever process wins the race, the loser finds the port
+    still bound — SO_REUSEADDR (HTTPServer.allow_reuse_address = 1) only
+    covers TIME_WAIT, not an active listener. Without this retry the
+    replacement dies with EADDRINUSE while the original has already exited,
+    and since the container's restart policy is `on-failure:5` an exit-0
+    container is never restarted — leaving the CRM down with no supervisor.
+
+    Retrying also makes the server survive any transient port conflict at
+    boot (e.g. a previous instance still shutting down).
+
+    Non-EADDRINUSE errors (bad address, permission denied) raise immediately.
+    """
+    last_exc: OSError | None = None
+    for attempt in range(attempts):
+        try:
+            return ThreadingHTTPServer(("0.0.0.0", port), KanbanHandler)
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE:
+                raise
+            last_exc = exc
+            if attempt == 0:
+                print(f"Port {port} still in use (restart race or stale instance); retrying for up to {attempts * delay:.0f}s…", flush=True)
+            time.sleep(delay)
+    raise last_exc if last_exc else OSError(f"Could not bind port {port}")
+
+
 def main() -> None:
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), KanbanHandler)
+    server = _bind_server_with_retry(PORT)
     print(f"Sietch CRM v3.0 starting on port {PORT}")
     for u in _lan_urls(PORT):
         print(f"Open: {u}")

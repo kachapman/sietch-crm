@@ -31780,7 +31780,15 @@ function stopInfraPolling() {
 function startInfraPolling() {
   stopInfraPolling();
   const auto = $("#infra-log-auto-refresh");
-  if (auto && auto.checked) {
+  if (!auto) {
+    // The checkbox is missing from the DOM (refactor accident, or the admin
+    // markup hasn't loaded yet). Start polling anyway so the tab doesn't
+    // silently go stale, and warn so the regression is visible.
+    console.warn("[infra] auto-refresh checkbox #infra-log-auto-refresh not found; polling unconditionally");
+    _infraPollTimer = setInterval(() => { refreshInfraData(); }, 15000);
+    return;
+  }
+  if (auto.checked) {
     _infraPollTimer = setInterval(() => { refreshInfraData(); }, 15000);
   }
 }

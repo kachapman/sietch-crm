@@ -2,6 +2,35 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Infrastructure audit fixes (admin console) (2026-10-15)
+
+Eight fixes across `server.py` and `public/app.js`, covering the admin Infrastructure tab, the three restart endpoints, and the probe helpers behind them.
+
+**#1 — Restart response could be lost (high).** `/api/v2/admin/restart-server` responded 200 then scheduled `threading.Timer(1.0, _respawn)` which calls `os._exit(0)`. `_json_response` writes to `self.wfile` but never flushes, so on a slow client the body can still be buffered when the process exits — the admin sees a truncated response or a network error instead of "Restarting…". Fix: `self.wfile.flush()` immediately after `_json_response`, wrapped in try/except so a broken socket can't block the restart.
+
+**#2 — `restart-server` could take the CRM down permanently (critical).** `_respawn` spawned the replacement with `subprocess.Popen` and the original called `os._exit(0)` one second later. The replacement binds the same port, but `HTTPServer.allow_reuse_address = 1` (SO_REUSEADDR) only covers TIME_WAIT — **not** an active listener. `main()` had no bind retry, so a replacement that reached its bind before the original released the socket died with `EADDRINUSE`, and because `docker-compose.yml` uses `restart: on-failure:5`, an exit-0 container is never restarted. Result: the container stops and nothing brings it back. Fix: new `_bind_server_with_retry(port, attempts=60, delay=0.5)` in `main()`, retrying `EADDRINUSE` for up to 30s. Any other `OSError` (bad address, permission denied) still raises immediately. This also makes boot resilient to a previous instance still shutting down. Also added `import errno`. Verified live: with the port held for 2s, `_bind_server_with_retry` acquires it after exactly 2.0s.
+
+**#3 — Container-runtime detection was incomplete and duplicated (medium).** Two copies of the same check existed. `_handle_docker_health` looked for `"docker"`/`"kubepods"` in `/proc/1/cgroup` only. `_is_running_in_docker` was worse:
+
+```python
+with open("/proc/1/cgroup", "r") as f:
+    return "docker" in f.read() or "kubepods" in f.read()
+```
+
+The second `f.read()` on an already-EOF handle returns `""`, so the `kubepods` branch was dead code. Neither copy handled cgroup v2, Podman, or `KUBERNETES_SERVICE_HOST`. On those hosts the admin UI reported "not running in Docker" and the restart controls were disabled even though they'd work. Fix: single `_detect_container_runtime()` returning `"docker" | "kubernetes" | "podman" | ""`, checking `/.dockerenv`, `/run/.containerenv`, `KUBERNETES_SERVICE_HOST`, then both cgroup files (each read exactly once). `_is_running_in_docker()` is now a thin wrapper. Both the docker-health handler and `_docker_status` use it, and the docker payload gained a `runtime` field. The "no socket mounted" note now names the actual runtime.
+
+**#4 — `_disk_usage` reported duplicate filesystems (low).** It probed `os.getcwd()`, `/app/data`, and `/app/uploads`. In Docker those are nearly always the same overlay/volume, so the panel showed the same numbers up to three times; on a host-run deploy the cwd is wherever the process happened to be launched from, which is meaningless. Fix: probe `DATA_DIR`/`UPLOAD_DIR` env vars, `/app/data`, `/app/uploads`, and `<repo>/data` for host-run dev, then **dedupe by `st_dev`** so each filesystem appears once. Verified: 3 entries → 1.
+
+**#5 — `_mem_usage` reported 100% used on pre-3.14 kernels (low).** It read `data.get("MemAvailable", 0)` — that field only exists on Linux 3.14+. On an older kernel it defaulted to 0, making `used = MemTotal - 0 = MemTotal`, i.e. "100% memory used" on a healthy box. Fix: fall back to the classic `MemFree + Buffers + Cached + SReclaimable` approximation and clamp `available` to `total`. Also made the per-line `int()` parse tolerant of malformed lines. Verified live: 14.6 GB total / 7.4 GB used (51%), previously would have reported 0 available on an old kernel.
+
+**#6 — Probes ran serially behind each other (low).** `_handle_infrastructure` ran DB query → docserver probe (5s timeout) → docker status (5s *per container*, 4 containers) → disk/mem/load → backup, all in sequence. One slow probe stalled the whole response, and the tab polls every 15s. Fix: DB, docker, and resources probes now run on a `ThreadPoolExecutor(max_workers=4)` while the docserver probe (which has its own 5s timeout) runs on the calling thread. The docker probe is additionally wrapped so an exception returns a structured fallback instead of failing the whole payload.
+
+**#7 — Truncation used `...` instead of `…` (cosmetic).** `_infra_error_stats` truncated long messages with `msg[:117] + "..."` while the rest of the app (bot formatters, task list) uses the ellipsis character. Fix: `msg[:119] + "…"` — 120 chars total, verified.
+
+**#8 — `int()` on docker's `RestartCount` could raise (low).** Both `_docker_containers` and `_handle_docker_health` did `int(parts[1])` on the output of `docker inspect --format "{{.State.Status}} {{.RestartCount}}"`. Under a non-Docker runtime shim that renders `N/A`, which raises `ValueError` and aborts the entire container list. Fix: guarded with `try/except (ValueError, IndexError)` → `None`.
+
+**Also:** `startInfraPolling()` in `public/app.js` silently started no polling if `#infra-log-auto-refresh` was missing from the DOM — a checkbox removal during a refactor would quietly freeze the tab with no error. It now warns to the console and polls anyway.
+
 ## Infrastructure: authz fix on `/api/v2/admin/infrastructure` (2026-10-15)
 
 `_handle_infrastructure` did NOT call `_require_admin(self)` before running the probe sequence. Every other admin endpoint (`/api/v2/admin/infra-log`, `/docker-health`, `/restart-server`, `/restart-container`, `/restart-docserver`) already gated on admin; this one was missed. An unauthenticated request to `/api/v2/admin/infrastructure` would receive the full consolidated probe: DB reachability + error, docserver reachability + latency + internal/public URLs, docker status + container list, disk/mem/load, backup status, error ring stats. This is real authz + information-disclosure — the response reveals server version, uptime, PID, internal Docker URLs, and the existence of the data dir.
