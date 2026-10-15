@@ -304,13 +304,11 @@ async def _config_poll_loop() -> None:
                 new_ver = resp.get("configVersion", 0)
                 logger.info("Config changed (v%d → v%d), reloading…", _bg_config_version, new_ver)
                 _bg_config_version = new_ver
-                cfg = await _get("/api/v2/admin/bot-settings")
+                cfg = await _get("/api/bot/settings")
                 if cfg:
-                    new_token = cfg.get("botToken", "")
-                    if new_token and new_token != TOKEN:
-                        logger.info("Bot token changed — restarting process to apply")
-                        import sys, os
-                        os.execv(sys.executable, [sys.executable] + sys.argv)
+                    # NOTE: /api/bot/settings deliberately never returns the
+                    # token, so token rotation is handled by restarting the
+                    # service (or editing .env), not by polling here.
                     _bg_bot_name = cfg.get("botName", _bg_bot_name)
                     logger.info("Config reloaded: botName=%s", _bg_bot_name)
         except Exception as e:
@@ -387,7 +385,7 @@ async def _startup_init(application) -> None:
 
     reachable = await _check_crm_connectivity()
     try:
-        cfg = await _get("/api/v2/admin/bot-settings")
+        cfg = await _get("/api/bot/settings")
         if cfg:
             _bg_config_version = cfg.get("configVersion", 0)
             _bg_bot_name = cfg.get("botName", "")
@@ -404,7 +402,7 @@ async def _startup_init(application) -> None:
                         me = resp.json().get("result", {})
                     username = me.get("username", "")
                     if username:
-                        await _post("/api/v2/admin/bot-settings", {
+                        await _post("/api/bot/settings", {
                             "botUsername": f"@{username}",
                             "botLink": f"https://t.me/{username}",
                         })
@@ -1976,7 +1974,7 @@ def main() -> None:
         in_note_flow = _pending_note.get(chat_id, {}).get("step") == "awaiting_text"
 
         # Check file size
-        cfg_resp = await _get("/api/v2/admin/bot-settings")
+        cfg_resp = await _get("/api/bot/settings")
         max_mb = 20
         if cfg_resp:
             max_mb = cfg_resp.get("maxFileSizeMb", 20)

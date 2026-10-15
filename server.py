@@ -3087,6 +3087,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/admin/bot-settings":
             self._handle_admin_bot_settings_get()
             return
+        # The bot authenticates with `Authorization: Bearer <token>` but the
+        # admin settings endpoint above requires an admin SESSION, so the bot
+        # could never read its own config — every call returned 401 and
+        # botUsername/botLink auto-population silently never worked (the admin
+        # console showed empty fields). This endpoint speaks the bot's auth
+        # and deliberately omits the token.
+        if api_path == "/api/bot/settings":
+            bt = _get_bot_token()
+            if not bt or self.headers.get("Authorization", "").strip() != f"Bearer {bt}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            cfg = {k: v for k, v in _get_bot_config().items() if k != "token"}
+            cfg["configVersion"] = cfg.get("configVersion", 0)
+            _json_response(self, 200, cfg)
+            return
         if api_path == "/api/v2/admin/bot-status":
             self._handle_admin_bot_status_get()
             return
@@ -15512,6 +15527,43 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 pass
             cfg = _get_bot_config()
             _json_response(self, 200, {"ok": True, "configVersion": cfg.get("configVersion", 0)})
+            return
+
+        # ── Bot: publish its own identity ───────────────────────────────
+        # POST accepts ONLY botUsername/botLink — the bot cannot rewrite the
+        # token, the enabled flag or anything else, so this grants no
+        # privilege beyond letting the bot publish its own name. The GET
+        # counterpart lives in do_GET.
+        if api_path == "/api/bot/settings" and method == "POST":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            cfg = dict(_get_bot_config())
+            # Whitelist: identity fields only. Everything else the caller
+            # sends is ignored, including any attempt to set `token`.
+            for key in ("botUsername", "botLink"):
+                if key in payload:
+                    cfg[key] = str(payload.get(key) or "")[:200]
+            cfg["configVersion"] = int(cfg.get("configVersion", 0) or 0) + 1
+            cfg["updatedAt"] = datetime.now(timezone.utc).isoformat()
+            try:
+                db.execute(
+                    """INSERT INTO bot_config (key, value, updated_at, updated_by)
+                       VALUES ('settings', %s, NOW(), NULL)
+                       ON CONFLICT (key) DO UPDATE
+                       SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at""",
+                    (json.dumps(cfg),),
+                )
+                _invalidate_bot_config_cache()
+                _json_response(self, 200, {"ok": True, "configVersion": cfg["configVersion"]})
+            except Exception:
+                logger.exception("Failed to save bot identity settings")
+                _json_response(self, 500, {"error": "Failed to save bot settings"})
             return
 
         # ── Bot: config check ────────────────────────────────────────────
