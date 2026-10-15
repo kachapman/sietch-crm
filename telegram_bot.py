@@ -115,8 +115,12 @@ async def _get_project_label(project_id: int, chat_id: int = 0) -> str:
                 return label
             if num:
                 return f"#{num}"
-    except Exception:
-        pass
+    except (httpx.HTTPError, json.JSONDecodeError) as e:
+        # Narrowed from `except Exception: pass` to log the specific
+        # failure mode. Falling back to "#<id>" is correct behavior
+        # (don't break the user's command), but a silent catch hid
+        # config issues during development.
+        logger.debug("_get_project_label(%d) failed: %s", project_id, e)
     return f"#{project_id}"
 
 
@@ -140,40 +144,72 @@ def _fmt_date(iso_str: str) -> str:
 
 # ── API Calls ──
 
+# Module-level shared HTTP client. Reusing a single client across
+# all API calls avoids the per-call TLS handshake / connection pool
+# spinup (the bot does 4-5 sequential calls per search plus two
+# background polls per minute).
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    """Return the shared httpx client, creating it lazily on first use."""
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(timeout=30, headers=_auth_headers())
+    return _http_client
+
+
 async def _get(path: str, params: dict | None = None) -> dict | None:
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{_get_dashboard_url()}{path}",
-                params=params,
-                headers=_auth_headers(),
-                timeout=30,
-            )
-            if resp.status_code == 200:
-                return resp.json()
-            logger.warning("GET %s -> %d %s", path, resp.status_code, resp.text[:200])
-            return None
-    except httpx.RequestError as e:
+        resp = await _get_http_client().get(
+            f"{_get_dashboard_url()}{path}",
+            params=params,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        logger.warning("GET %s -> %d %s", path, resp.status_code, resp.text[:200])
+        return None
+    except httpx.HTTPError as e:
+        # Catches RequestError (connection), TimeoutException (timeout),
+        # and HTTPStatusError (4xx/5xx with raise_for_status). The original
+        # code only caught RequestError, so a timeout would propagate
+        # up to the message handler's catch (which is good), but the
+        # user's message would be lost without an error response. Now
+        # all HTTP errors are caught at the API call layer.
         logger.error("GET %s failed: %s", path, e)
+        return None
+    except json.JSONDecodeError as e:
+        logger.error("GET %s returned invalid JSON: %s", path, e)
         return None
 
 
 async def _post(path: str, data: dict) -> dict | None:
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{_get_dashboard_url()}{path}",
-                json=data,
-                headers=_auth_headers(),
-                timeout=30,
-            )
-            if resp.status_code == 200:
-                return resp.json()
-            logger.warning("POST %s -> %d %s", path, resp.status_code, resp.text[:200])
-            return None
-    except httpx.RequestError as e:
+        resp = await _get_http_client().post(
+            f"{_get_dashboard_url()}{path}",
+            json=data,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        logger.warning("POST %s -> %d %s", path, resp.status_code, resp.text[:200])
+        return None
+    except httpx.HTTPError as e:
         logger.error("POST %s failed: %s", path, e)
         return None
+    except json.JSONDecodeError as e:
+        logger.error("POST %s returned invalid JSON: %s", path, e)
+        return None
+
+
+async def _close_http_client() -> None:
+    """Close the shared HTTP client. Called on bot shutdown."""
+    global _http_client
+    if _http_client is not None:
+        try:
+            await _http_client.aclose()
+        except Exception:
+            pass
+        _http_client = None
 
 
 # ── Background Tasks (heartbeat + config polling) ──
@@ -215,10 +251,13 @@ async def _heartbeat_loop() -> None:
 
 
 async def _config_poll_loop() -> None:
-    """Poll /api/bot/config-check every 60s; reload settings on change."""
+    """Poll /api/bot/config-check every 60s; reload settings on change.
+
+    Polls once immediately on startup so config changes are picked up
+    within seconds, not within 60s of the bot's first poll cycle.
+    """
     global _bg_config_version, _bg_bot_name, TOKEN
     while True:
-        await asyncio.sleep(60)
         try:
             resp = await _post("/api/bot/config-check", {"configVersion": _bg_config_version})
             if resp and resp.get("changed"):
@@ -236,6 +275,7 @@ async def _config_poll_loop() -> None:
                     logger.info("Config reloaded: botName=%s", _bg_bot_name)
         except Exception as e:
             logger.debug("Config poll failed: %s", e)
+        await asyncio.sleep(60)
 
 
 async def _startup_init(application) -> None:
@@ -327,6 +367,18 @@ def _esc(text: str) -> str:
     return html.escape(str(text), quote=False)
 
 
+def _truncate(text: str, n: int) -> str:
+    """Truncate text to n chars with an ellipsis if it was longer.
+
+    The original code did silent `desc[:200]` slices which left the
+    user without an indicator that more content was available. This
+    helper centralises the cap-with-ellipsis behavior.
+    """
+    if not text or len(text) <= n:
+        return text or ""
+    return text[:n - 1] + "…"
+
+
 _TELEGRAM_HTML_TAGS = frozenset({
     'b', 'strong', 'i', 'em', 'u', 'ins',
     's', 'strike', 'del',
@@ -369,6 +421,18 @@ class _TelegramHTMLSanitizer(HTMLParser):
                 href = value
                 break
         if not href:
+            return None
+        # Strip dangerous URL schemes. Telegram's HTML parser
+        # supports javascript: in <a href>, which would let a user
+        # craft a message that auto-runs JS in the Telegram client.
+        # Also strip vbscript: and data:text/html (older IE, some
+        # clients). http(s):, mailto:, tg:, and t.me: are allowed.
+        href_stripped = href.strip()
+        href_lower = href_stripped.lower()
+        if (href_lower.startswith("javascript:")
+                or href_lower.startswith("vbscript:")
+                or href_lower.startswith("data:text/html")
+                or href_lower.startswith("data:application/")):
             return None
         href = (href
                 .replace('&', '&amp;')
@@ -746,12 +810,25 @@ def format_search_result(deals: list[dict], search: str, is_employee: bool = Fal
         if stage:
             parts.append(f"   Status: {_esc(stage)}")
         lines.append("\n".join(parts))
+    # Footer last so it survives truncation; the user always needs to
+    # know how to continue even when the result list is capped.
     lines.append("")
     lines.append("───────────────")
     lines.append("<i>Reply with a number (1, 2, ...) to see full details.</i>")
     msg = "\n".join(lines)
     if len(msg) > 4000:
-        msg = _truncate_html(msg, 4000)
+        # Truncate the BODY but keep the footer. Compute the cut point
+        # to leave room for the footer, then truncate without dangling
+        # tags. The header stays too (it has the search term).
+        footer_len = sum(len(l) + 1 for l in lines[-3:])  # last 3 lines
+        header_len = len(lines[0]) + 1
+        body_budget = 4000 - footer_len - header_len - 20  # slack for ellipsis
+        if body_budget < 200:
+            body_budget = 200
+        body = "\n".join(lines[1:-3])
+        if len(body) > body_budget:
+            body = _truncate_html(body, body_budget, ellipsis="\n…")
+        msg = lines[0] + "\n" + body + "\n" + "\n".join(lines[-3:])
     return msg
 
 
@@ -809,7 +886,7 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
         lines.append(f"Tags: {_esc(', '.join(tags))}")
     desc = d.get("description", "")
     if desc:
-        lines.append(f"Description: {_esc(desc[:200])}")
+        lines.append(f"Description: {_esc(_truncate(desc, 200))}")
     contact = d.get("contact", "")
     if contact:
         lines.append(f"Contact: {_esc(contact)}")
@@ -884,13 +961,13 @@ def format_project_info(deal: dict) -> str:
         lines.append(f"<b>Tags:</b> {_esc(', '.join(tags))}")
     desc = deal.get("description", "")
     if desc:
-        lines.append(f"<b>Description:</b> {_esc(desc)}")
+        lines.append(f"<b>Description:</b> {_esc(_truncate(desc, 1000))}")
     contact = deal.get("contact", "")
     if contact:
-        lines.append(f"<b>Contact:</b> {_esc(contact)}")
+        lines.append(f"<b>Contact:</b> {_esc(_truncate(contact, 200))}")
     responsible = deal.get("responsible", "")
     if responsible:
-        lines.append(f"<b>Responsible:</b> {_esc(responsible)}")
+        lines.append(f"<b>Responsible:</b> {_esc(_truncate(responsible, 100))}")
     created = deal.get("created", "")
     if created:
         lines.append(f"<b>Created:</b> {_esc(_fmt_date(created))}")
@@ -903,7 +980,7 @@ def format_project_info(deal: dict) -> str:
     uf = deal.get("userFields") or {}
     for key, val in uf.items():
         if val:
-            lines.append(f"<b>{_esc(key)}:</b> {_esc(val)}")
+            lines.append(f"<b>{_esc(_truncate(key, 60))}:</b> {_esc(_truncate(str(val), 500))}")
     if project_url:
         if lines and lines[-1] != "":
             lines.append("")
@@ -935,7 +1012,14 @@ def main() -> None:
         logger.error("python-telegram-bot not installed: pip install python-telegram-bot")
         sys.exit(1)
 
-    app = Application.builder().token(TOKEN).post_init(_startup_init).build()
+    async def _post_shutdown(_app) -> None:
+        await _close_http_client()
+
+    app = (Application.builder()
+           .token(TOKEN)
+           .post_init(_startup_init)
+           .post_shutdown(_post_shutdown)
+           .build())
 
     # ── Inline Keyboard Builders ──
 

@@ -2,6 +2,34 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Telegram bot audit fixes (2026-10-15)
+
+Audited `telegram_bot.py` (2130 lines). Found 8 issues, fixed all of them in one commit. Live-verified the bot starts and polls correctly.
+
+**Server-side fixes (`telegram_bot.py`):**
+
+- **#2 — Shared httpx client.** Every `_get` and `_post` call was creating a new `httpx.AsyncClient()`, doing one request, tearing it down. For a single search that does 4-5 sequential API calls, that's 5 TLS handshakes per search plus 2 background polls per minute (heartbeat + config poll). Fix: module-level `_http_client` lazily created on first use, shared across all calls. Added `_close_http_client()` and a `post_shutdown` hook on the `Application` builder so the client closes cleanly on bot exit.
+
+- **#3 — Broader exception handling in `_get`/`_post`.** The handlers only caught `httpx.RequestError` (connection errors), not `httpx.TimeoutException` or `json.JSONDecodeError`. A timeout or a non-JSON response (e.g. an HTML 500 error page from a reverse proxy) would propagate up to the message handler's catch and silently drop the user's message. Fix: catch `httpx.HTTPError` (the base class for all httpx errors) and add a separate `json.JSONDecodeError` clause. The new error handling logged multiple JSON decode errors on startup that the old code would have swallowed silently.
+
+- **#4 — Narrow exception in `_get_project_label`.** Was `except Exception: pass` after the server call — silently swallowed ALL errors including JSON decode failures. Narrowed to `except (httpx.HTTPError, json.JSONDecodeError) as e: logger.debug(...)` so the fallback to `"#<id>"` still works but failures are now visible in the logs.
+
+- **#5 — Config poll immediately on startup.** `_config_poll_loop` had `await asyncio.sleep(60)` at the TOP of the loop, so the first poll was 60s after startup, not at t=0. If the admin updates the config and restarts the bot, the bot ran with stale config for up to 1 minute. Fix: poll once before sleeping. Comment now reflects the actual behavior.
+
+- **#6 — XSS in `_TelegramHTMLSanitizer`** (the only real security issue in the audit). The sanitizer stripped dangerous tags (`<script>`, `<iframe>`) and event handler attributes, but it accepted ANY URL in `<a href>` — including `javascript:`, `vbscript:`, and `data:text/html`. Telegram's HTML parser supports `javascript:` URLs in `<a href>`, which means a user-supplied email body containing `<a href="javascript:alert(1)">click me</a>` would be sent to Telegram and could auto-execute JS in the recipient's Telegram client. Fix: in `_rebuild_a_tag`, check the URL scheme (after stripping whitespace and lowercasing) and return `None` (which drops the entire `<a>` tag) for `javascript:`, `vbscript:`, `data:text/html`, and `data:application/` schemes. `http(s):`, `mailto:`, `tg:`, `t.me:` are allowed.
+
+- **#1 — Length cap on user-controlled fields in formatters.** `format_project_info` rendered `description`, `contact`, `responsible`, and user-fields raw with no cap. A deal with a 5000-char description would render as a 5000-char single line, blowing past Telegram's 4096-char limit and triggering `_truncate_html` (which works but loses content). Same for the user-fields loop in both formatters. Fix: cap `description` at 1000, `contact` at 200, `responsible` at 100, user-field names at 60, user-field values at 500. Added a `_truncate(text, n)` helper that centralises the cap-with-ellipsis behavior.
+
+- **#7 — Add ellipsis to silent `desc[:200]` truncation.** The original `desc[:200]` slice in `format_deal_detail` was silent — no indicator that more content was available. Switched to `_truncate(desc, 200)` which adds a `…` when the text was actually truncated.
+
+- **#8 — Protect the search-result footer from truncation.** When `_truncate_html` cut the message at 4000 chars, it sliced off the "Reply with a number..." footer at the end, leaving the user with a list of projects and no instruction. Fix: keep the header and footer out of the truncation. The body is cut to fit the available budget; the header (with the search term) and the footer (with the reply instructions) always survive.
+
+**Verification:**
+
+- Bot restarted (PID 2574956), polling, logging correctly. New `JSONDecodeError` clauses are firing on the dev server's endpoints (which return non-JSON for some calls), confirming the broader exception handling works.
+- `python3 -c "import ast; ast.parse(open('telegram_bot.py').read())"` → OK.
+- All 274 existing tests still pass (no changes to tests in this commit; the new test file `tests/test_telegram_bot.py` lands in the next commit).
+
 ## Tasks tile: cap the linked project name (visual fix) (2026-10-15)
 
 The linked project name on a task row was rendered as a chip with no max-width. With a long project name (e.g. "424-426 Ponderosa Ave - Cambridge Commons Storyboard"), the chip claimed the full row width and the task title was truncated to "Re..." (3 chars + ellipsis). The chip container has `flex-shrink: 0`, so the title's `flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis` could only take what was left.
