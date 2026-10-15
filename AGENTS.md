@@ -58,23 +58,40 @@
 
 ## Testing
 
-Three test surfaces, all run via CI (`.github/workflows/smoke.yml`):
+All test surfaces run via CI (`.github/workflows/smoke.yml`). **417 tests total: 134 JS + 283 Python, 0 failures.**
 
 ```bash
 # Python unit tests (stdlib unittest)
-python3 tests/test_event_bus.py           # 15 tests — SSE leak fix, publish-drops, system subscribers
-python3 tests/test_backup.py              # 4 tests — tar excludes nested backup dir, scanner source
-python3 tests/test_onlyoffice_import.py   # 8 tests — type map, closure sentinel, safe filename
+python3 tests/test_event_bus.py              # SSE leak fix, publish-drops, system subscribers
+python3 tests/test_backup.py                 # tar excludes nested backup dir, scanner source
+python3 tests/test_onlyoffice_import.py      # type map, closure sentinel, safe filename
+python3 tests/test_presence_store.py         # presence/DM persistence, cross-tab close
+python3 tests/test_automation_engine.py      # rule evaluation, actions, SSE trigger map
+python3 tests/test_timesheet_overdue_checker.py  # 10h/14h reminder thresholds
+python3 tests/test_telegram_bot.py           # formatters, XSS sanitizer, shared httpx client
+python3 tests/test_infrastructure.py         # infra probes, restart safety, authz guards
+                                           # ⚠ needs a live PostgreSQL; exits 0 with a SKIP: line otherwise
 
-# Node unit tests (node:test, no npm deps)
-node --test tests/test_pure_helpers.mjs   # 28 tests — userInitials, contactInitials, isAudioUrl,
-                                          #            isAudioLinkArgs, collectNumericIdsFromValue
+# Node unit tests (node:test, no npm deps) — run all *.mjs
+for t in tests/test_*.mjs; do node --test "$t"; done
+node --test tests/test_pure_helpers.mjs      # userInitials, contactInitials, isAudioUrl,
+                                             #            isAudioLinkArgs, collectNumericIdsFromValue
 ```
+
+**Important:** `import server` eagerly opens the psycopg2 connection pool, so any test file that
+imports `server` needs a reachable DB. That's why CI runs a `postgres:16-alpine` service. Files that
+stub the DB layer (`test_automation_engine.py`, `test_presence_store.py`, `test_telegram_bot.py`)
+run anywhere.
 
 `tests/test_pure_helpers.mjs` mirrors pure-JS helpers from `public/app.js`
 (`userInitials`, `contactInitials`, `isAudioUrl`, `isAudioLinkArgs`,
 `collectNumericIdsFromValue`). If a helper drifts in `app.js`, the test
 fails loudly.
+
+Several suites use **source-level guards** (assert on the text of `server.py` / `app.js`) for changes
+that need a live socket or an admin session to exercise end-to-end — e.g. that `_require_admin`
+precedes the probes, or that `main()` uses `_bind_server_with_retry`. When editing those handlers,
+keep the ordering assertions honest or they'll give false confidence.
 
 For functional / integration testing, see "How to Run / Test / Deploy" below.
 

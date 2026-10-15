@@ -13,6 +13,83 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-15
 
+**Topic:** Telegram bot audit + tasks-tile visual fix + infrastructure (admin console) audit.
+
+**Audit chain status:** timesheet (rounds 1-5) ✅ · presence/DM (round 6-7) ✅ · automation (round 8) ✅ · telegram bot ✅ · **infrastructure/admin console ✅ (this session)**.
+
+### Part 1 — Tasks tile visual fix (`bf8b9f9`)
+
+`.task-chip-project-text` had no max-width, and its container `.task-row-chips` has `flex-shrink: 0`, so a long linked-project name claimed the whole row and squeezed the task title to "Re...". Added `max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap`. The full name was already in the `title=` tooltip, so truncation is non-destructive. **CSS-only, 4 lines.**
+
+### Part 2 — Telegram bot audit (`ab5148f`, `b5febb3`)
+
+Audited `telegram_bot.py` (2130 lines). 8 fixes + 64 new tests.
+
+| # | Fix | Severity |
+|---|-----|----------|
+| 1 | Length caps on user-controlled fields (description 1000, contact 200, responsible 100, user-field name 60 / value 500) + new `_truncate(text, n)` helper | 🟠 |
+| 2 | Shared `httpx.AsyncClient` (was a new client per `_get`/`_post` = 5 TLS handshakes per search) + `post_shutdown` builder hook + `_close_http_client()` | 🟠 |
+| 3 | Catch `httpx.HTTPError` (was only `RequestError`, so timeouts escaped) + separate `json.JSONDecodeError` clause | 🟡 |
+| 4 | `_get_project_label` narrowed from `except Exception: pass` to `(httpx.HTTPError, JSONDecodeError)` + `logger.debug` | 🟡 |
+| 5 | `_config_poll_loop` polls immediately on startup (the `sleep(60)` was at the top of the loop, delaying the first poll to t=60s) | 🟡 |
+| 6 | **XSS:** `_TelegramHTMLSanitizer` accepted any `<a href>` scheme incl. `javascript:`, `vbscript:`, `data:text/html`, `data:application/`. Now dropped. The only real security issue found in this audit. | 🟡 |
+| 7 | Silent `desc[:200]` → `_truncate(desc, 200)` with `…` | 🟡 |
+| 8 | Search-result footer ("Reply with a number…") no longer sliced off by `_truncate_html`; header + footer now survive truncation, only the body is cut | 🟡 |
+
+Plus: `_esc(None)` returned the literal string `'None'` (via `str(None)`) — now returns `""`.
+
+**Gotcha learned:** `app.post_shutdown(...)` **cannot** be called after `.build()` — the attribute is `None` until initialization, so `TypeError: 'NoneType' object is not callable`. Must use `Application.builder().post_shutdown(fn)` *at builder time*.
+
+### Part 3 — Infrastructure (admin console) audit (`5316f40`, `662080e`, `44af2cf`)
+
+Audited the admin Infrastructure tab, its 6 endpoints, and the probe helpers in `server.py` + the rendering in `public/app.js`.
+
+**`5316f40` — authz gap (separate commit because it stands alone).** `_handle_infrastructure` never called `_require_admin(self)` while *every other* admin endpoint did. An anonymous GET returned the whole consolidated payload: DB reachability + error, docserver latency + internal/public URLs, docker container list, disk/mem/load, backup status, error stats, server version/uptime/PID. Verified: anon curl now returns 401 (was 200).
+
+**`662080e` — 8 audit fixes:**
+
+- **#2 (CRITICAL) — `restart-server` could leave the CRM down permanently.** `_respawn` spawned a replacement via `Popen` then the original called `os._exit(0)` 1s later. `HTTPServer.allow_reuse_address = 1` (SO_REUSEADDR) only covers **TIME_WAIT, not an active listener**, and `main()` had no bind retry — so a replacement that reached bind first died with `EADDRINUSE`, and because `docker-compose.yml` uses `restart: on-failure:5`, an **exit-0 container is never restarted**. Fix: new `_bind_server_with_retry(port, attempts=60, delay=0.5)` in `main()` (retries `EADDRINUSE` for up to 30s; all other `OSError` raise immediately). Also made `_respawn` *stay alive* if `Popen` itself fails. **Verified live: with the port held 2s, retry acquires it at exactly 2.0s.**
+- **#1 (high) — restart response could be lost.** `_json_response` writes to `self.wfile` but never flushes; the body could still be buffered at `os._exit`. Added `wfile.flush()` before arming the exit timer.
+- **#3 (medium) — container-runtime detection was duplicated *and* buggy.** `_is_running_in_docker` read the cgroup file **twice**: `"docker" in f.read() or "kubepods" in f.read()` — the 2nd read returns `""` at EOF, so the `kubepods` branch was **dead code**. Neither copy handled cgroup v2, Podman, or `KUBERNETES_SERVICE_HOST`. Fix: one `_detect_container_runtime()` → `docker|kubernetes|podman|""` checking `/.dockerenv`, `/run/.containerenv`, the k8s env var, then both cgroup files (each read exactly once). Both call sites now share it; payload gained a `runtime` field.
+- **#4 (low) — `_disk_usage` reported the same filesystem up to 3×** (cwd + `/app/data` + `/app/uploads`, usually one overlay). Now probes `DATA_DIR`/`UPLOAD_DIR`/paths and **dedupes by `st_dev`**. Verified 3 entries → 1.
+- **#5 (low) — `_mem_usage` reported 100% used on pre-3.14 kernels.** `data.get("MemAvailable", 0)` returns 0 when the field is absent (Linux < 3.14) → `used = MemTotal`. Now falls back to `MemFree + Buffers + Cached + SReclaimable` and clamps `available` to `total`. Verified live: 14.6 GB / 7.4 GB used (51%).
+- **#6 (low) — probes ran serially.** DB → docserver (5s timeout) → docker (**5s per container × 4**) → resources, in sequence, on a tab that polls every 15s. Now DB/docker/resources run on a `ThreadPoolExecutor(max_workers=4)` while the docserver probe (own 5s timeout) runs on the calling thread.
+- **#7 (cosmetic)** — `msg[:117] + "..."` → `msg[:119] + "…"` (matches the rest of the app; still exactly 120 chars).
+- **#8 (low)** — `int(parts[1])` on `docker inspect --format "{{.State.Status}} {{.RestartCount}}"` raised `ValueError` on `N/A` (non-Docker runtime shims), aborting the **entire** container list. Guarded → `None`.
+- **`public/app.js`** — `startInfraPolling()` silently started **no polling** if `#infra-log-auto-refresh` was absent from the DOM. Now warns + polls anyway.
+
+**`44af2cf` — 64 tests + CI gap closed.** New `tests/test_infrastructure.py`.
+
+- **Key enabler:** `server.py` only binds its socket inside `main()` (never called by tests), so `import server` is side-effect-free apart from the DB pool → tests exercise the **real** functions, not AST-extracted copies.
+- **Mutation-verified:** injected 8 deliberate regressions one at a time (removed bind retry, reverted meminfo fallback, restored the double-`f.read()` cgroup bug, removed the authz gate, removed `wfile.flush()`, restored `...`, un-guarded `int(RestartCount)`, reverted the polling fallback) — **every one was caught**.
+- **CI gap:** `smoke.yml` ran only **3 of 8** Python test files; presence_store / automation_engine / telegram_bot / timesheet_overdue_checker / infrastructure were never executed in CI despite passing locally. Added a `postgres:16-alpine` service (needed because `import server` opens the psycopg2 pool eagerly) + all 5 missing files, and extended `py_compile` with `infra_log.py`, `presence_store.py`, `timesheet_overdue_checker.py`.
+- **Graceful skip:** the new file exits 0 with a `SKIP:` line when no DB is reachable, so it can't break a bare checkout.
+
+**Verification:** 134 JS + 283 Python = **417 tests, 0 failures**. Server restarted and serving on port 8766 (pid 2613420). Telegram bot restarted (pid 2574956).
+
+**Notes for next resume:**
+- The new `JSONDecodeError` clauses in the bot immediately surfaced several `/api/bot/*` dev endpoints returning non-JSON — previously swallowed silently. **Worth checking on production** that these endpoints really do return JSON for a valid bot token.
+- `tests/test_infrastructure.py` needs a live DB; if it ever prints `SKIP:` in CI, the postgres service isn't reachable.
+
+```
+44af2cf        Infra tests (64) + close the CI test gap
+662080e        Infra audit: restart safety, runtime detection, probes
+5316f40        Infra: gate /api/v2/admin/infrastructure behind _require_admin
+b5febb3        Telegram bot: test coverage + _esc None check
+ab5148f        Telegram bot: 8 audit fixes
+bf8b9f9        Tasks tile: cap the linked project name
+3ede06c        Automation: remaining 5 polish items (round 8 part 2)
+... (18 more commits)
+```
+
+**Next:** all audit rounds are now complete (timesheet, presence/DM, automation, telegram, infrastructure). Open items are the deferred timesheet B/C items (`_tsActiveEntry` periodic refresh, open-shift auto-close job) and the bot JSON-response question above.
+
+---
+
+## Previous summary (for next resume)
+
+**Date:** 2026-10-15
+
 **Topic:** Automation audit round 8 part 2 — remaining 5 polish items.
 
 **What landed:**
