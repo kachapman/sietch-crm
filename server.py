@@ -10491,6 +10491,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_infrastructure(self) -> None:
         """GET consolidated infrastructure status for the admin Infrastructure tab."""
+        # Authz first. The handler runs expensive probes (DB query,
+        # docserver HTTP request, docker subprocess × N containers,
+        # disk stat) — unauthenticated callers must not reach them.
+        # Other infra endpoints (infra-log, docker-health, restart-*)
+        # already check _require_admin; this one was missing it.
+        user = _require_admin(self)
+        if not user:
+            return
         # Database
         db_ok = False
         db_err = None

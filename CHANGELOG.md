@@ -2,6 +2,14 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Infrastructure: authz fix on `/api/v2/admin/infrastructure` (2026-10-15)
+
+`_handle_infrastructure` did NOT call `_require_admin(self)` before running the probe sequence. Every other admin endpoint (`/api/v2/admin/infra-log`, `/docker-health`, `/restart-server`, `/restart-container`, `/restart-docserver`) already gated on admin; this one was missed. An unauthenticated request to `/api/v2/admin/infrastructure` would receive the full consolidated probe: DB reachability + error, docserver reachability + latency + internal/public URLs, docker status + container list, disk/mem/load, backup status, error ring stats. This is real authz + information-disclosure — the response reveals server version, uptime, PID, internal Docker URLs, and the existence of the data dir.
+
+Fix: add `_require_admin(self)` as the very first line in `_handle_infrastructure`, return early if not admin. Matches the pattern in every other admin endpoint in the file.
+
+**Live verified:** `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8766/api/v2/admin/infrastructure` → `401` (was 200 before the fix).
+
 ## Telegram bot test coverage (2026-10-15)
 
 New `tests/test_telegram_bot.py` (64 tests, all pass) covering the helpers and formatters touched by the round 8 audit:
