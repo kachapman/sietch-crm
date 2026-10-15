@@ -13,6 +13,38 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-15
 
+**Topic:** Presence/DM audit round 6 (parts 3 + 4) — debounce + persist + presence_store tests.
+
+**What landed:**
+
+- **Item #3 — debounce `updateInferredStatus`:** trailing-edge debounce at 800ms. Each call in a burst replaces the pending `(action, detail)`; only the latest actually hits the server. "idle" and "available" actions bypass the debounce (tab-return should set Idle immediately). Refactored the body into `_doInferredStatusPost()` so both the debounce-flush path and the immediate path share the same network + render code. The setTimeout for the 5-min auto-clear is unchanged.
+
+- **Item #4 — persist `_lastNotifiedDmTs`:** the desktop-notification guard was a plain in-memory map that reset on every page reload, so a DM that arrived in the polling gap was never notified. Now hydrated from `localStorage["oo_board_presence_dm_notified_v1"]` on module load and persisted via `_persistLastNotifiedDmTs()` on every update. The `isFirstRun` short-circuit is gone — the persisted baseline makes the first poll correctly notify on any DMs newer than the previous run's last-notified ts. Mirrors the existing `presenceLastRead` hydration pattern.
+
+- **Item #8 — `presence_store` tests (new file `tests/test_presence_store.py`, 36 tests):**
+  - `_safe_segment` collision semantics (whitespace → underscore, dots/hyphens kept, special chars replaced, Unicode kept, empty falls back, length cap at 120).
+  - `load` / `save` round-trip preserves every schema field; corrupt file returns empty.
+  - `touch_heartbeat` sets `lastHeartbeat`; `visible=True` also bumps `lastDashboardActivity`; `offline=True` clears `lastHeartbeat` but preserves `lastDashboardActivity`.
+  - `set_status` — `status=None` leaves existing manual status, `status=""` clears, `autoStatus` updates independently.
+  - `clean_stale_presence_records` — clears `lastHeartbeat` + `autoStatus` for records older than 3h; preserves `status` (manual).
+  - `get_portal_presence_snapshot` returns all per-user presences for the portal; isolates by portal name.
+  - `append_dm` round-trip; `reply_to` resolves `reply_text` from recent history; caps at `DM_HISTORY_LIMIT`; truncates `text` to 2000; rejects self-DM.
+  - `mark_messages_read` flips `read=True` + sets `read_at`; idempotent.
+  - `clear_conversation` deletes the file AND clears the `lastReadDms` marker for that peer.
+  - `set_last_read_dm` is per-user isolated; idempotent overwrite.
+  - `get_conversation` pagination respects `offset=N` (the audit round 6 part 2 fix is exercised here).
+  - `get_recent_dms_for_user` returns one latest message per conversation partner, includes outgoing messages (the inbox is a recent activity feed, not an inbox-of-incoming).
+
+  Uses `tmp_path`-style isolation: a tmpdir is created at module load, `presence_store.DATA_DIR` and `presence_store.MESSAGES_DIR` are monkey-patched to point at the tmpdir, so the tests don't touch the real `data/` tree. The tmpdir is left in place after the test run (cheap on /tmp; the next test run reuses or overwrites it).
+
+- **All existing tests still pass:** 14 JS files (130 tests) + 5 Python files (28 + 36 = 64 tests) = **194 tests, 0 failures**. `py_compile` ×2, `node --check public/app.js` clean.
+
+**Next:** Round 6 is complete. The remaining queue from the original presence/DM audit was the defensive items (5: `_safe_segment` collision, 6: `innerHTML` clone, 7: 10-min online-after-close window by design) — all skipped by design. The next broader feature work is whatever the user wants next; the timesheet/presence/DM audit chains are now complete.
+
+---
+
+## Previous summary (2026-10-15)
+
 **Topic:** Presence/DM audit round 6 (part 2) — fix the "mark-as-read on every Load-More" bug.
 
 **What landed:**

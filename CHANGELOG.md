@@ -2,6 +2,27 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Presence/DM UX polish (audit round 6 part 3 + 4) (2026-10-15)
+
+Two small UX/notification fixes from the original presence audit.
+
+**`updateInferredStatus` debounce (item #3):**
+
+The function was being called on every kanban card click, every preview open, every search-result open — without any debounce. An active user clicking 10 cards in 5 seconds fired 10 `POST /api/presence/status` requests + 10 `fetchPresenceSnapshot()` calls. The status field is bounded to 200 chars so each write is small, but it's still chatty. Fix: trailing-edge debounce at 800ms. Each call in a burst replaces the pending `(action, detail)`; only the latest actually hits the server. The "idle" and "available" actions bypass the debounce (tab returning from background should set Idle right now, not in 800ms). The `setTimeout` for the auto-status timeout (clears the status if no new deal activity for 5 min) is unchanged.
+
+**Persist `_lastNotifiedDmTs` in localStorage (item #4):**
+
+The desktop-notification guard `_lastNotifiedDmTs` was a plain in-memory map that reset to empty on every page reload. The first poll after reload seeded the map from the current snapshot and skipped notifications via the `isFirstRun` short-circuit, so **a DM that arrived in the polling gap was never notified**. The user would see it in the inbox normally but would get no desktop notification.
+
+Fix: hydrate the map from `localStorage["oo_board_presence_dm_notified_v1"]` on module load; persist via `_persistLastNotifiedDmTs()` on every update. The `isFirstRun` short-circuit is gone — the persisted baseline makes the first poll correctly notify on any DMs newer than the previous run's last-notified ts. The pattern matches the existing `presenceLastRead` localStorage hydration.
+
+**Verification:**
+
+- All existing tests pass.
+- `node --check public/app.js` clean.
+- Server restarted (PID 2449243, port 8766), serving the new `app.js` (size: 1,878,113 bytes).
+- Served file contains the three new symbols: `_inferredStatusDebounceMs`, `_LAST_NOTIFIED_DM_TS_KEY`, `_persistLastNotifiedDmTs`.
+
 ## Presence/DM read-mark fix (audit round 6 part 2) (2026-10-15)
 
 The DM thread had a subtle bug: a user with 100 unread messages who clicked "Load Earlier Messages" would see all 100 get marked as read on the first call. The reason: `_handle_presence_dm_get` called `mark_messages_read()` on every GET, including the Load-More GETs (`?offset=N`). The most-recent page came back, the auto-mark applied, and the sender saw "read 2m ago" on messages the recipient had only ever scrolled past.

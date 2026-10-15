@@ -16045,6 +16045,26 @@ function setupPresenceIdleAndAutoLogout() {
   state.presenceIdleStatusTimer = setTimeout(checkIdleStatus, PRESENCE_IDLE_15M_MS);
 }
 
+// Trailing-edge debounce for updateInferredStatus. Without it, an
+// active user clicking 10 cards in 5 seconds fires 10 status writes
+// + 10 snapshot fetches (chatty). With the debounce, only the final
+// state of the burst is sent.
+const _inferredStatusDebounceMs = 800;
+let _inferredStatusDebounceTimer = null;
+let _inferredStatusPending = null; // { action, detail } waiting to fire
+
+function flushInferredStatusDebounce() {
+  if (_inferredStatusDebounceTimer) {
+    clearTimeout(_inferredStatusDebounceTimer);
+    _inferredStatusDebounceTimer = null;
+  }
+  if (_inferredStatusPending) {
+    const { action, detail } = _inferredStatusPending;
+    _inferredStatusPending = null;
+    _doInferredStatusPost(action, detail);
+  }
+}
+
 function updateInferredStatus(action, detail) {
   let text = "";
   switch (action) {
@@ -16056,6 +16076,35 @@ function updateInferredStatus(action, detail) {
   }
   if (text === undefined) return;
   if (state._suppressAutoStatus) return;
+  // The "idle" and "available" actions are simple state changes —
+  // bypass the debounce so they take effect immediately (e.g. tab
+  // returning from background should set Idle right now, not in 800ms).
+  if (action === "idle" || action === "available") {
+    flushInferredStatusDebounce();
+    _doInferredStatusPost(action, detail);
+    return;
+  }
+  // Debounce everything else: each call replaces the pending action,
+  // so only the latest (action, detail) in a burst actually hits the
+  // server. 800ms is short enough to feel instant for a deliberate
+  // click but long enough to collapse a rapid click-through.
+  _inferredStatusPending = { action, detail };
+  if (_inferredStatusDebounceTimer) clearTimeout(_inferredStatusDebounceTimer);
+  _inferredStatusDebounceTimer = setTimeout(() => {
+    _inferredStatusDebounceTimer = null;
+    flushInferredStatusDebounce();
+  }, _inferredStatusDebounceMs);
+}
+
+function _doInferredStatusPost(action, detail) {
+  let text = "";
+  switch (action) {
+    case "edit": text = `Working on: ${detail}`; break;
+    case "preview": text = `Reviewing: ${detail}`; break;
+    case "note": text = `Just noted: ${detail}`; break;
+    case "idle": text = "Idle"; break;
+    case "available": text = ""; break;
+  }
   presenceFetch("/api/presence/status", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -16756,7 +16805,37 @@ function renderPresenceInbox(container, recentDms, cache, snap) {
 // ---------- DM pagination, reactions, and module-level state ----------
 
 const _dmLoadState = {};       // { [userId]: { offset, hasMore, replyHandler } }
-const _lastNotifiedDmTs = {};  // { [userId]: latestTs }
+const _lastNotifiedDmTs = {};  // { [userId]: latestTs } — persisted in localStorage
+//                                 so a hard reload doesn't suppress the first batch
+//                                 of desktop notifications for DMs that arrived
+//                                 in the polling gap (audit round 6 item #4).
+const _LAST_NOTIFIED_DM_TS_KEY = "oo_board_presence_dm_notified_v1";
+
+// Hydrate the notified-timestamps map from localStorage on module load.
+// This makes the desktop notification behavior survive a hard reload:
+//   - Without persistence: the first poll after reload seeds the map
+//     from the current snapshot and `isFirstRun` suppresses notifications,
+//     so a DM that arrived in the polling gap is never notified.
+//   - With persistence: the map already has the previous run's latest
+//     ts, so the first poll correctly notifies on any DMs newer than
+//     the persisted baseline.
+try {
+  const raw = localStorage.getItem(_LAST_NOTIFIED_DM_TS_KEY);
+  if (raw) {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      for (const [k, v] of Object.entries(parsed)) {
+        if (k && v) _lastNotifiedDmTs[String(k)] = String(v);
+      }
+    }
+  }
+} catch { /* corrupt entry → start fresh */ }
+
+function _persistLastNotifiedDmTs() {
+  try {
+    localStorage.setItem(_LAST_NOTIFIED_DM_TS_KEY, JSON.stringify(_lastNotifiedDmTs));
+  } catch { /* localStorage full or unavailable */ }
+}
 
 async function loadMoreDMs(userId, logEl, replyHandler) {
   const st = _dmLoadState[userId];
@@ -16895,7 +16974,11 @@ function checkAndNotifyNewDms(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.myRecentDms)) return;
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   if (document.visibilityState === "visible") return;
-  const isFirstRun = Object.keys(_lastNotifiedDmTs).length === 0;
+  // isFirstRun is no longer needed — _lastNotifiedDmTs is hydrated
+  // from localStorage on module load (see _LAST_NOTIFIED_DM_TS_KEY
+  // above), so a hard reload preserves the previous run's baseline.
+  // The first poll after reload correctly notifies on any DMs newer
+  // than the persisted ts.
   for (const m of snapshot.myRecentDms) {
     if (!m || !m.from || !m.ts) continue;
     const fromId = String(m.from);
@@ -16904,7 +16987,7 @@ function checkAndNotifyNewDms(snapshot) {
     if (!_lastNotifiedDmTs[fromId]) { _lastNotifiedDmTs[fromId] = ts; continue; }
     if (ts > _lastNotifiedDmTs[fromId]) {
       _lastNotifiedDmTs[fromId] = ts;
-      if (isFirstRun) continue;
+      _persistLastNotifiedDmTs();
       let displayName = fromId;
       if (state.presenceData && Array.isArray(state.presenceData.users)) {
         const user = state.presenceData.users.find(u => String(u.id) === fromId);
