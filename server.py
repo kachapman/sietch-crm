@@ -15657,7 +15657,30 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not other:
             _json_response(self, 400, {"error": "with=<userId> is required"})
             return
+        # Two side-effects on read:
+        #   1) set_last_read_dm: stores the per-user last-read timestamp
+        #      in the user's presence file. Powers the inbox unread
+        #      badge and the "Recent messages" ordering across devices.
+        #   2) mark_messages_read: flips the per-message `read` flag in
+        #      the conversation file. Powers the read receipts the
+        #      sender sees on their sent messages ("read 2m ago").
+        # Both are now explicit (the implicit mark-on-GET was removed
+        # because it over-marked on Load-More clicks).
         set_last_read_dm("sietch", str(user["id"]), other, at or None)
+        mark_messages_read("sietch", str(user["id"]), other)
+        # Now that the read-marker is explicit, the dm:read SSE fanout
+        # also needs to be explicit. We publish here, not on the GET,
+        # so the sender's thread only updates its read receipt when
+        # the recipient actually saw the thread. Not on every page load.
+        try:
+            event_bus.publish("dm:read", {
+                "with_user": other,
+                "by_user": str(user["id"]),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }, user_ids=[other])
+        except Exception:
+            # A failed publish must not break the response.
+            pass
         _json_response(self, 200, {"ok": True})
 
     def _handle_presence_dm_get(self) -> None:
@@ -15669,23 +15692,26 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not with_id:
             _json_response(self, 400, {"error": "with=<userId> is required"})
             return
-        mark_messages_read("sietch", str(user["id"]), with_id)
-        msgs, has_more = get_conversation("sietch", str(user["id"]), with_id)
-        # Real-time fanout: notify the OTHER party (the sender) that the
-        # reader has just marked their messages as read, so the read
-        # receipt updates in their open thread without waiting for the
-        # next poll. We pass with_user as the other party's id (the
-        # recipient of this dm:read event); the frontend handler will
-        # use that to decide whether to refresh the matching thread.
+        # offset=0 (default) returns the most recent page. offset=N
+        # skips the N newest messages and returns the next page (used
+        # by the "Load Earlier Messages" button in the DM thread).
+        # We pass it through to get_conversation so Load-More works.
+        offset_raw = (qs.get("offset") or ["0"])[0]
         try:
-            event_bus.publish("dm:read", {
-                "with_user": with_id,
-                "by_user": str(user["id"]),
-                "at": datetime.now(timezone.utc).isoformat(),
-            }, user_ids=[with_id])
-        except Exception:
-            # A failed publish must not break the GET response.
-            pass
+            offset = max(0, int(offset_raw))
+        except (TypeError, ValueError):
+            offset = 0
+        # Note: the previous version of this handler called
+        # mark_messages_read() here, on every GET. That meant a user
+        # who clicked "Load Earlier Messages" would mark ALL unread
+        # messages as read on the first call (because the GET returns
+        # the most recent page, which the auto-mark applied to). The
+        # read-marker is now explicit: the frontend calls
+        # POST /api/presence/last-read when it actually wants to mark
+        # the thread as read (in openPresenceDMThread, openDMPopup, and
+        # openDMInline). Load-More calls are now pure reads with no
+        # side effects on the other party.
+        msgs, has_more = get_conversation("sietch", str(user["id"]), with_id, offset=offset)
         _json_response(self, 200, {"messages": msgs, "has_more": has_more})
 
     def _handle_presence_dm_post(self) -> None:

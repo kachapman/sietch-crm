@@ -46,20 +46,36 @@ test('Audit 2026-10-15 (presence SSE): server publishes dm:new from _handle_pres
   );
 });
 
-test('Audit 2026-10-15 (presence SSE): server publishes dm:read from _handle_presence_dm_get', () => {
-  const fnStart = serverPy.indexOf('def _handle_presence_dm_get(self) -> None:');
-  assert.ok(fnStart > 0, '_handle_presence_dm_get not found');
-  const fnEnd = serverPy.indexOf('\n    def _handle_presence_', fnStart + 1);
-  const fn = serverPy.slice(fnStart, fnEnd);
+test('Audit 2026-10-15 (presence SSE): server publishes dm:read from _handle_presence_last_read (explicit mark, not implicit GET)', () => {
+  // After the audit round 6 part 2 fix, the implicit mark-on-GET
+  // was removed (it was over-marking on Load-More clicks). The
+  // dm:read SSE publish now fires from the explicit mark endpoint
+  // (_handle_presence_last_read), not from the GET. The
+  // _handle_presence_dm_get should NOT publish dm:read anymore.
+  const getFnStart = serverPy.indexOf('def _handle_presence_dm_get(self) -> None:');
+  assert.ok(getFnStart > 0, '_handle_presence_dm_get not found');
+  const getFnEnd = serverPy.indexOf('\n    def _handle_presence_', getFnStart + 1);
+  const getFnCode = serverPy.slice(getFnStart, getFnEnd)
+    .split("\n").filter(l => !l.trim().startsWith("#")).join("\n");
   assert.ok(
-    /event_bus\.publish\(\s*["']dm:read["']/.test(fn),
-    '_handle_presence_dm_get should call event_bus.publish("dm:read", ...) after mark_messages_read'
+    !/event_bus\.publish\(\s*["']dm:read["']/.test(getFnCode),
+    '_handle_presence_dm_get should NOT publish dm:read anymore (it was the implicit mark that over-marked on Load-More)'
   );
-  // The recipient of the dm:read event is the OTHER party (the sender
-  // of the messages that just got marked read), not the current user.
+  // And the publish IS in the explicit mark endpoint.
+  const lastReadFnStart = serverPy.indexOf('def _handle_presence_last_read(self) -> None:');
+  assert.ok(lastReadFnStart > 0, '_handle_presence_last_read not found');
+  const lastReadFnEnd = serverPy.indexOf('\n    def _handle_presence_', lastReadFnStart + 1);
+  const lastReadFn = serverPy.slice(lastReadFnStart, lastReadFnEnd)
+    .split("\n").filter(l => !l.trim().startsWith("#")).join("\n");
   assert.ok(
-    /event_bus\.publish\(\s*["']dm:read["'][\s\S]{0,400}?user_ids=\[with_id\]/.test(fn),
-    '_handle_presence_dm_get should publish dm:read with user_ids=[with_id] (notify the other party)'
+    /event_bus\.publish\(\s*["']dm:read["']/.test(lastReadFn),
+    '_handle_presence_last_read should call event_bus.publish("dm:read", ...) after the explicit mark'
+  );
+  // The recipient is the OTHER party (the sender of the messages that
+  // just got marked read), not the current user.
+  assert.ok(
+    /event_bus\.publish\(\s*["']dm:read["'][\s\S]{0,400}?user_ids=\[other\]/.test(lastReadFn),
+    '_handle_presence_last_read should publish dm:read with user_ids=[other] (notify the other party)'
   );
 });
 

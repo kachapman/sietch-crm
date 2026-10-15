@@ -13,6 +13,34 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-15
 
+**Topic:** Presence/DM audit round 6 (part 2) — fix the "mark-as-read on every Load-More" bug.
+
+**What landed:**
+
+- **The implicit mark-on-GET is gone.** `_handle_presence_dm_get` used to call `mark_messages_read()` on every GET, including Load-More clicks (`GET ?with=X&offset=N`). A user with 100 unread messages who clicked "Load Earlier Messages" would see all 100 marked as read on the first call — because the GET returns the most recent page, and the auto-mark applied to the entire conversation. The sender then saw "read 2m ago" on messages the recipient had only ever scrolled past.
+
+- **Server changes (`server.py`):**
+  - `_handle_presence_dm_get` is now a **pure read**. The `mark_messages_read()` call is gone. The handler also reads `offset` from the query string and passes it to `get_conversation` (this part was previously broken — Load-More was a no-op because offset was never plumbed through, so clicking it always returned the same first page).
+  - `_handle_presence_last_read` is now the **explicit mark** endpoint. It calls both `set_last_read_dm` (cross-device inbox badge) AND `mark_messages_read` (sender-side read receipts) in one shot. The frontend already calls this from `markPresenceDMRead()` on every `openPresenceDMThread` / `openDMPopup` / `openDMInline` / `handleNewDM` / `handleDMRead` — i.e. on actual thread open or SSE update, never on Load-More.
+  - The `dm:read` SSE fanout moved from the GET to `_handle_presence_last_read` for the same reason: the sender's thread only updates its read receipt when the recipient actually saw the thread, not on every page load. (Updated `tests/test_presence_sse_wireup.mjs` to match.)
+
+- **Why the explicit endpoint instead of `if offset == 0`:** the offset heuristic was tempting (cheap to add), but it has the same race-condition surface — a user who opens a DM on device A then opens it on device B before the first poll runs both would not trigger offset=0 to mark. The explicit `POST /api/presence/last-read` is intent-driven: "the user is looking at this thread right now." The frontend already had the right call sites wired; the server just needed to make them authoritative.
+
+- **Tests:** new `tests/test_presence_dm_read_mark.mjs` (4 source-grep tests covering the pure-GET invariant, the offset pass-through, the explicit-mark double side effect, and a defensive line-count bound to catch a future regression that re-introduces side effects in the GET). Full suite: 14 JS files (130 tests) + 4 Python files (28 tests) = **158 tests, 0 failures**. `py_compile` ×2, `node --check public/app.js` clean.
+
+- **Live verification (end-to-end):** created two test users, sent 5 DMs.
+  - `GET /api/presence/dm?with=X` (offset=0) → returned 5 messages, all still `read: false`. **No implicit mark.**
+  - `GET /api/presence/dm?with=X&offset=3` (Load-More) → returned 2 older messages, all still `read: false`. **No implicit mark on Load-More.**
+  - `POST /api/presence/last-read` (explicit mark) → returned 200, all 5 messages now `read: true`. **Explicit mark works.**
+
+  Test data cleaned up. No frontend changes (the explicit-mark call sites were already correct).
+
+**Next:** Round 6 part 3 — items #3 (debounce `updateInferredStatus`) and #4 (persist `_lastNotifiedDmTs` in localStorage so desktop notifications fire correctly after a hard reload). Both are quick UX/notification fixes. Round 6 part 4 would be the persistence test file for `presence_store.py` (no tests today, item #8 from the original audit).
+
+---
+
+## Previous summary (2026-10-15)
+
 **Topic:** Presence/DM audit round 6 (part 1) — wire up the dead SSE handlers.
 
 **What landed:**
