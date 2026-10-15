@@ -16,7 +16,6 @@ Trigger types:
 
 Action types:
     create_task    — insert a task assigned to specified users
-    notify_users   — insert notifications for specified users
     send_email     — send email to customer/contact/project owner
     change_stage   — move project to a target stage
     add_tag        — add tags to the project
@@ -267,6 +266,19 @@ def _action_change_stage(config: dict, opp: dict, ctx: TemplateVars, dry_run: bo
         "UPDATE opportunities SET stage_id = %s, stage_entered_at = NOW(), updated_at = NOW() WHERE id = %s",
         (target_stage_id, opp_id),
     )
+    # Publish stage_changed so SSE-driven stage_changed rules can chain
+    # off this move, and so the team modal/tile update in real time.
+    # The chain is bounded by the per-rule cooldown_hours (set in
+    # trigger_config); a runaway rule cycle requires the admin to set
+    # cooldown_hours=0 explicitly.
+    try:
+        event_bus.publish("stage_changed", {
+            "opportunity_id": opp_id,
+            "stage_id": target_stage_id,
+        })
+    except Exception:
+        # A failed publish must not break the action.
+        pass
     return {"moved_to_stage": target_stage_id, "stage_title": target_stage_title}
 
 
@@ -669,13 +681,18 @@ def _evaluate_tag_added_rules() -> list[dict]:
 # SSE event-driven evaluation
 # ---------------------------------------------------------------------------
 
-# Map SSE event types to automation trigger types
+# Map SSE event types to automation trigger types.
+# Note: "task:created" is intentionally NOT mapped. A task being created
+# is not the same event as a project being created; mapping task:created
+# → project_created would cause every "Welcome the owner on new project"
+# rule to fire any time a task was created on an existing project.
+# If a future "create_task" trigger type is added, it should have its
+# own SSE event (or reuse task:created with its own evaluator).
 _EVENT_TRIGGER_MAP = {
     "project_created": "project_created",
     "stage_changed": "stage_changed",
     "project_updated": "project_updated",
     "tag_added": "tag_added",
-    "task:created": "project_created",
 }
 
 
