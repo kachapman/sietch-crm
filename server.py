@@ -3399,6 +3399,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/timesheet/admin/summary":
             self._handle_timesheet_admin_summary(qs)
             return
+        if api_path == "/api/timesheet/admin/open-shifts":
+            self._handle_timesheet_admin_open_shifts()
+            return
         if api_path == "/api/timesheet/export":
             self._handle_timesheet_export_csv(qs)
             return
@@ -4499,6 +4502,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if m and method == "DELETE":
             self._handle_timesheet_entry_delete(int(m.group(1)))
+            return
+        m = re.match(r"^/api/timesheet/admin/close/(\d+)$", api_path)
+        if m and method == "POST":
+            self._handle_timesheet_admin_close_entry(int(m.group(1)))
             return
 
         # ── Calendar v2 API (DB-backed) ──
@@ -15873,6 +15880,126 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             tuple(params),
         )
         _json_response(self, 200, {"summary": rows})
+
+    def _handle_timesheet_admin_open_shifts(self) -> None:
+        """GET /api/timesheet/admin/open-shifts — list all currently-open
+        (clock_out IS NULL) shifts across all users. Admin only. Used by
+        the "Open Shifts (admin)" tab in the activity modal to let admins
+        see forgotten clock-outs and close them."""
+        user = _require_auth(self)
+        if not user: return
+        if not user.get("is_admin"):
+            _json_response(self, 403, {"error": "Admin required"})
+            return
+        rows = db.query_dicts(
+            """SELECT te.id, te.user_id, te.clock_in, te.break_minutes,
+                      te.break_start, te.opportunity_id, te.notes,
+                      te.auto_closed, te.created_at,
+                      u.display_name AS user_name, u.email AS user_email,
+                      o.title AS opportunity_title
+               FROM time_entries te
+               JOIN users u ON u.id = te.user_id
+               LEFT JOIN opportunities o ON o.id = te.opportunity_id
+               WHERE te.clock_out IS NULL
+               ORDER BY te.clock_in ASC""",
+        )
+        _json_response(self, 200, {"shifts": rows})
+
+    def _handle_timesheet_admin_close_entry(self, entry_id: int) -> None:
+        """POST /api/timesheet/admin/close/{id} — admin-only close of an
+        open shift. Body: { clock_out: ISO timestamp, break_minutes?: int }.
+        Sets auto_closed=TRUE and writes a bot_activity_log row."""
+        user = _require_auth(self)
+        if not user: return
+        if not user.get("is_admin"):
+            _json_response(self, 403, {"error": "Admin required"})
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        entries = db.query_dicts(
+            "SELECT id, user_id, clock_in, break_minutes, break_start, opportunity_id "
+            "FROM time_entries WHERE id = %s",
+            (entry_id,),
+        )
+        if not entries:
+            _json_response(self, 404, {"error": "Entry not found"})
+            return
+        entry = entries[0]
+        # Reject if the entry is already closed. The `AND clock_out IS NULL`
+        # guard in the UPDATE handles the race when two admins act at the
+        # same time, but checking here first gives a friendlier 409.
+        if entry.get("clock_in") is None:
+            _json_response(self, 400, {"error": "Entry has no clock_in"})
+            return
+        clock_out_str = payload.get("clock_out")
+        if not clock_out_str:
+            _json_response(self, 400, {"error": "clock_out is required (ISO timestamp)"})
+            return
+        # Validate the timestamp parses.
+        try:
+            clock_out_dt = _parse_iso_datetime(str(clock_out_str))
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid clock_out timestamp"})
+            return
+        if clock_out_dt is None:
+            _json_response(self, 400, {"error": "Invalid clock_out timestamp"})
+            return
+
+        # If the entry has an active break, fold the elapsed break time
+        # into break_minutes. Mirrors the original _handle_timesheet_clock_out
+        # behavior the user explicitly asked us to preserve (Q3 answer).
+        extra_break = 0
+        if entry.get("break_start"):
+            try:
+                bs = _parse_iso_datetime(str(entry["break_start"]))
+                if bs:
+                    # Use the admin-supplied clock_out (not NOW()) so the
+                    # math matches the timestamp the admin confirmed.
+                    delta = (clock_out_dt - bs).total_seconds()
+                    if delta > 0:
+                        extra_break = int(delta / 60)
+            except Exception:
+                pass
+
+        # Atomic close: only update if still open. 0 rows affected = race lost.
+        rows = db.query_dicts(
+            """UPDATE time_entries
+               SET clock_out = %s,
+                   break_minutes = break_minutes + %s,
+                   break_start = NULL,
+                   auto_closed = TRUE,
+                   updated_at = NOW()
+               WHERE id = %s AND clock_out IS NULL
+               RETURNING id, user_id, clock_in, clock_out, break_minutes,
+                         break_start, opportunity_id, notes, auto_closed""",
+            (clock_out_dt, extra_break, entry_id),
+        )
+        if not rows:
+            _json_response(self, 409, {"error": "Entry was already closed by another admin"})
+            return
+        updated = rows[0]
+
+        # Audit trail: log the close to bot_activity_log so it shows up in
+        # the existing admin bot-activity viewer.
+        try:
+            db.execute(
+                """INSERT INTO bot_activity_log (chat_id, user_name, action, detail, project_id)
+                   VALUES (%s, %s, 'timesheet_auto_closed', %s, %s)""",
+                (
+                    0,
+                    user.get("display_name") or user.get("email") or "admin",
+                    f"Closed open shift for user {updated['user_id']} from {updated['clock_in']} to {updated['clock_out']}",
+                    updated.get("opportunity_id"),
+                ),
+            )
+        except Exception:
+            # Audit failure must not roll back the close.
+            pass
+
+        _json_response(self, 200, {"ok": True, "entry": updated})
 
     def _handle_timesheet_entry_update(self, entry_id: int) -> None:
         user = _require_auth(self)

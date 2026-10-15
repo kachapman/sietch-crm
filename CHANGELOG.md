@@ -2,6 +2,39 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Timesheet audit round 4 (part 1) — admin "Open Shifts" tab (Option C) (2026-10-15)
+
+User explicitly chose Option C for the open-shift handling: soft warning only, with an admin-only bulk-close tab. No automated data change for end users. This commit ships the admin half.
+
+**New admin tab in the Activity / Time Sheet modal:** "Open Shifts". Visible only to admins (`state.currentUser.isAdmin`); the button is `hidden` by default in the HTML and toggled on modal open. Renders a table of every currently-open shift across the company (User, Project, Clocked-in, Elapsed, Break, Notes, Actions). Each row has "Close now" (sets `clock_out = NOW()`) and "Set time…" (inline datetime-local picker). The table auto-refreshes every 30s while the tab is active. The tab button shows a badge with the current open-shift count.
+
+**New server endpoints in `server.py`:**
+
+- `GET /api/timesheet/admin/open-shifts` — admin-only. Returns every `time_entries` row with `clock_out IS NULL`, joined with `users` and `opportunities`. Returns 403 for non-admins.
+- `POST /api/timesheet/admin/close/{id}` — admin-only. Body: `{ "clock_out": "ISO timestamp" }`. Atomic `UPDATE ... WHERE id = %s AND clock_out IS NULL RETURNING ...`. Sets `auto_closed = TRUE`. Folds any in-progress `break_start` into `break_minutes` (preserves break math per the user's Q3 answer). Writes a `bot_activity_log` row with `action='timesheet_auto_closed'`, the admin's display name, and a detail string showing the original clock_in and the new clock_out. Returns 200 with the updated entry, 409 if already closed (race lost), 404 if nonexistent.
+
+**Frontend in `public/app.js` + `public/index.html` + `public/styles.css`:**
+
+- `switchActivityTab('open-shifts')` routes to the new `renderAdminOpenShifts` function.
+- `openActivityModal` toggles `#activity-tab-open-shifts.hidden` based on `state.currentUser.isAdmin` (defense in depth on top of the server-side `is_admin` check).
+- `renderAdminOpenShifts` fetches the open-shifts list, renders the table, and sets a 30s auto-refresh interval that clears itself when the tab loses focus.
+- Per-row elapsed time is computed in JS from `Date.now() - clock_in - break_minutes - in_progress_break` and updates on each refresh.
+- `_adminOpenShiftTimePicker` shows a centered datetime-local popover; default value is NOW; on confirm, posts the ISO timestamp to the close endpoint.
+- `_adminCloseShift` POSTs to `/api/timesheet/admin/close/{id}`, shows a toast on success/failure, and re-renders the table.
+
+**Tests:** new `tests/test_timesheet_audit_admin_tab.mjs` (7 source-grep tests covering route registration, admin gating, atomic UPDATE with `clock_out IS NULL` guard, `auto_closed = TRUE`, `bot_activity_log` insert, break-folding SQL, 409 race response, the tab button being `hidden` by default, the JS un-hide-on-admin logic, the renderer fetching the right endpoint, and the close action re-rendering on success). Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 + 5 + 7 = **198 tests, 0 failures**. `py_compile` ×2, `node --check public/app.js` clean. Server restarted (PID 2295686, port 8766), serving the new `app.js` (1,882,147 bytes).
+
+**Live verification (with temp non-admin user, then cleaned up):**
+
+- Non-admin `GET /api/timesheet/admin/open-shifts` → **403** "Admin required".
+- Non-admin `POST /api/timesheet/admin/close/1` → **403** "Admin required".
+- Admin `GET /api/timesheet/admin/open-shifts` → **200** with the open shift listed.
+- Admin `POST /api/timesheet/admin/close/4` (NOW) → **200**, `auto_closed: true`.
+- Admin `POST /api/timesheet/admin/close/4` again → **409** "Entry was already closed by another admin".
+- Admin `POST /api/timesheet/admin/close/99999` → **404** "Entry not found".
+- Break-folding: shift with `break_start` 20 min ago, closed via admin → response shows `break_minutes: 19`, `break_start: null`.
+- `bot_activity_log` row: `('timesheet_auto_closed', 'Breanna Chapman', 'Closed open shift for user 109 from ... to ...')`.
+
 ## Timesheet audit round 3 — security + UX hardening (2026-10-15)
 
 Four follow-up fixes from the original timesheet audit. End-to-end verified with a temp non-admin user.

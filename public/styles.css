@@ -5963,6 +5963,21 @@ body {
   font-weight: 600;
   font-size: 0.72rem;
 }
+
+/* Open Shifts (admin) table — slightly larger than the summary tables
+   because the action buttons need room. */
+.ts-admin-shifts-table th,
+.ts-admin-shifts-table td {
+  vertical-align: middle;
+}
+.ts-admin-shifts-table tr:hover {
+  background: var(--surface-2);
+}
+.ts-admin-shifts-table .btn-sm {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.74rem;
+  margin-left: 0.25rem;
+}
 .ts-entry-project {
   font-size: 0.72rem;
   color: var(--accent);

@@ -13,6 +13,43 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-15
 
+**Topic:** Timesheet audit round 4 — admin "Open Shifts" tab (Option C) and the timesheet-overdue Telegram + drawer notification.
+
+**What landed (commit 1, admin tab):**
+
+- **New admin tab in the Activity / Time Sheet modal: "Open Shifts".** Visible only to admins (`state.currentUser.isAdmin`); hidden by default in the HTML and toggled on modal open. Renders a table of every open shift across the company (User, Project, Clocked-in, Elapsed, Break status, Notes, Actions). Each row has a "Close now" button (sets `clock_out = NOW()`) and a "Set time…" button (inline datetime-local picker, pre-fills with NOW).
+- **New server endpoints:** `GET /api/timesheet/admin/open-shifts` (returns every `clock_out IS NULL` row joined with user + project) and `POST /api/timesheet/admin/close/{id}` (admin-only, atomic `UPDATE ... WHERE id = %s AND clock_out IS NULL RETURNING ...`, sets `auto_closed = TRUE`, writes a `bot_activity_log` row, folds any in-progress `break_start` into `break_minutes` per the user's Q3 answer).
+- **Race-safe close:** two admins acting simultaneously → only one wins; the other gets 409 "Entry was already closed by another admin". Already-closed entries also 409. Nonexistent entry → 404.
+- **Auto-refresh:** while the Open Shifts tab is active, the table re-fetches every 30s. The "Online" badge on the tab button shows the current open-shift count and updates with the table.
+- **Per-row elapsed time** is computed in JS from `Date.now() - clock_in` minus `break_minutes` and any in-progress `break_start`. The "On break" cell shows amber for active breaks and grey for accumulated minutes.
+- **No automated data change for end users.** End users still see the existing modal with the existing Clock In / Clock Out / Break buttons. The Open Shifts tab doesn't exist for them.
+- **Files:** `server.py` (+2 new handlers + 2 route registrations), `public/app.js` (1 new renderer + tab visibility toggle + click actions), `public/index.html` (1 new tab button), `public/styles.css` (~15 lines for table styling), `tests/test_timesheet_audit_admin_tab.mjs` (new, 7 source-grep tests).
+
+**Verification (commit 1, admin tab):**
+
+- Live smoke (cleaned up after):
+  - Non-admin user → `GET /api/timesheet/admin/open-shifts` → **403** "Admin required".
+  - Non-admin user → `POST /api/timesheet/admin/close/1` → **403** "Admin required".
+  - Admin user → `GET /api/timesheet/admin/open-shifts` → **200** with the open shift listed.
+  - Admin user → `POST /api/timesheet/admin/close/4` (NOW) → **200**, `auto_closed: true`.
+  - Admin user → second `POST /api/timesheet/admin/close/4` → **409** "Entry was already closed by another admin".
+  - Admin user → `POST /api/timesheet/admin/close/99999` → **404** "Entry not found".
+  - Break-folding: inserted an open shift with `break_start` 20 min ago, closed via the admin endpoint → response shows `break_minutes: 19` (integer division of 20 elapsed minutes) and `break_start: null`.
+  - `bot_activity_log` row written: `('timesheet_auto_closed', 'Breanna Chapman', 'Closed open shift for user 109 from ... to ...')` — visible in the existing admin bot-activity viewer.
+- 7/7 source-grep tests in `tests/test_timesheet_audit_admin_tab.mjs` pass.
+- Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 + 5 + 7 = **198 tests, 0 failures**. `py_compile` ×2, `node --check public/app.js` clean. Server restarted (PID 2295686, port 8766), serving the new `app.js` (1,882,147 bytes).
+
+**To verify in the browser:**
+
+- As a non-admin: Settings → Activity / Time Sheet → only two tabs visible (Timesheet, Activity). No "Open Shifts" tab.
+- As an admin: Settings → Activity / Time Sheet → third tab "Open Shifts" visible (with a clock icon). Click it → table of every open shift across the company. Click "Close now" on any row → confirm dialog (or instant close per the current implementation) → row disappears, entry appears in the user's modal entries list with `clock_out` set and `auto_closed = true`. Check the admin bot-activity viewer → new `timesheet_auto_closed` row appears.
+
+**Next:** Commit 2 (next file change) implements the timesheet-overdue notification: 10h + 14h Telegram reminders with the same message in the CRM drawer. Migration adds a unique index, new background thread polls every 60s, drawer shows the new notification type with a clock icon. Same user-pinned design (10h + 14h, no per-type opt-out, 60s poll, INSERT-IGNORE-style unique guard, drawer headline = time, drawer snippet = question). Switch agents to proceed with commit 2.
+
+---
+
+## Previous summary (2026-10-15)
+
 **Topic:** Timesheet audit round 3 — clear the remaining 4 low/medium findings (#2-#5 from the audit).
 
 **What landed:**

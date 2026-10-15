@@ -29674,6 +29674,14 @@ async function openActivityModal() {
   const modal = $("#activity-modal");
   if (!modal) return;
   modal.classList.remove("hidden");
+  // Show the admin-only "Open Shifts" tab if the current user is an admin.
+  // Defense in depth: the server enforces is_admin on the endpoint too;
+  // this just hides the tab from non-admin users.
+  const adminTab = $("#activity-tab-open-shifts");
+  if (adminTab) {
+    const isAdmin = !!(state.currentUser && state.currentUser.isAdmin);
+    adminTab.classList.toggle("hidden", !isAdmin);
+  }
   switchActivityTab("timesheet");
 }
 
@@ -29690,6 +29698,8 @@ function switchActivityTab(tabName) {
     renderActivityTimesheet(content);
   } else if (tabName === "activity") {
     renderActivityLog(content);
+  } else if (tabName === "open-shifts") {
+    renderAdminOpenShifts(content);
   }
 }
 
@@ -29809,6 +29819,244 @@ async function renderActivityLog(container) {
   container.innerHTML = "";
   container.appendChild(wrapper);
   renderEventLogEntries(events, wrapper);
+}
+
+/* ── Admin: Open Shifts tab (forgotten clock-outs) ──────────────────────── */
+
+let _adminOpenShiftsInterval = null;
+
+async function renderAdminOpenShifts(container) {
+  if (!container) return;
+  // Defense in depth: even if the tab button is somehow shown, the server
+  // rejects non-admin requests. Refuse to render for non-admins.
+  if (!state.currentUser || !state.currentUser.isAdmin) {
+    container.innerHTML = '<div style="color:var(--muted);font-size:0.82rem;padding:0.5rem;">Admin only.</div>';
+    return;
+  }
+  container.innerHTML = '<div class="ts-empty" style="padding:1rem;">Loading open shifts\u2026</div>';
+  try {
+    const data = await api("/api/timesheet/admin/open-shifts");
+    const shifts = data.shifts || [];
+    _renderAdminOpenShiftsTable(container, shifts);
+    _updateAdminOpenShiftsBadge(shifts.length);
+    // Refresh the open-shifts table every 30s while the tab is open so
+    // newly-forgotten shifts show up without a manual reload.
+    if (_adminOpenShiftsInterval) clearInterval(_adminOpenShiftsInterval);
+    _adminOpenShiftsInterval = setInterval(async () => {
+      // Re-render only if the tab is still active.
+      const active = document.querySelector("#activity-tabs .presence-tab.active");
+      if (!active || active.dataset.tab !== "open-shifts") {
+        clearInterval(_adminOpenShiftsInterval);
+        _adminOpenShiftsInterval = null;
+        return;
+      }
+      try {
+        const fresh = await api("/api/timesheet/admin/open-shifts");
+        const list = document.getElementById("admin-open-shifts-tbody");
+        if (list) {
+          const newTbody = document.createElement("tbody");
+          newTbody.id = "admin-open-shifts-tbody";
+          _renderAdminOpenShiftsRows(newTbody, fresh.shifts || []);
+          const oldRows = list.querySelectorAll("tr");
+          oldRows.forEach(r => r.remove());
+          list.appendChild(newTbody);
+          _updateAdminOpenShiftsBadge((fresh.shifts || []).length);
+        }
+      } catch {
+        /* swallow — next interval will retry */
+      }
+    }, 30000);
+  } catch (err) {
+    container.innerHTML = `<div style="color:var(--danger);font-size:0.82rem;padding:0.5rem;">Failed to load: ${escapeHtml(err.message || "unknown error")}</div>`;
+  }
+}
+
+function _updateAdminOpenShiftsBadge(count) {
+  const badge = document.getElementById("activity-tab-open-shifts-badge");
+  if (!badge) return;
+  if (count > 0) {
+    badge.textContent = String(count);
+    badge.classList.remove("hidden");
+  } else {
+    badge.classList.add("hidden");
+  }
+}
+
+function _renderAdminOpenShiftsTable(container, shifts) {
+  container.innerHTML = "";
+  if (!shifts.length) {
+    container.innerHTML = '<div class="ts-empty" style="padding:1.5rem;">No open shifts. Everyone is clocked out.</div>';
+    return;
+  }
+  const wrap = document.createElement("div");
+  wrap.className = "ts-admin-shifts-wrap";
+  wrap.style.cssText = "display:flex;flex-direction:column;gap:0.5rem;";
+  const intro = document.createElement("div");
+  intro.style.cssText = "color:var(--muted);font-size:0.78rem;padding:0 0.25rem;";
+  intro.textContent = `${shifts.length} open shift${shifts.length === 1 ? "" : "s"} across the company. Close them below.`;
+  wrap.appendChild(intro);
+
+  const table = document.createElement("table");
+  table.className = "ts-admin-shifts-table";
+  table.style.cssText = "width:100%;border-collapse:collapse;font-size:0.82rem;";
+  table.innerHTML = `
+    <thead>
+      <tr style="text-align:left;color:var(--muted);font-size:0.74rem;text-transform:uppercase;letter-spacing:0.04em;">
+        <th style="padding:0.4rem 0.5rem;border-bottom:1px solid var(--border);">User</th>
+        <th style="padding:0.4rem 0.5rem;border-bottom:1px solid var(--border);">Project</th>
+        <th style="padding:0.4rem 0.5rem;border-bottom:1px solid var(--border);">Clocked in</th>
+        <th style="padding:0.4rem 0.5rem;border-bottom:1px solid var(--border);">Elapsed</th>
+        <th style="padding:0.4rem 0.5rem;border-bottom:1px solid var(--border);">Break</th>
+        <th style="padding:0.4rem 0.5rem;border-bottom:1px solid var(--border);">Notes</th>
+        <th style="padding:0.4rem 0.5rem;border-bottom:1px solid var(--border);text-align:right;">Actions</th>
+      </tr>
+    </thead>
+    <tbody id="admin-open-shifts-tbody"></tbody>
+  `;
+  wrap.appendChild(table);
+  container.appendChild(wrap);
+  const tbody = table.querySelector("#admin-open-shifts-tbody");
+  _renderAdminOpenShiftsRows(tbody, shifts);
+}
+
+function _renderAdminOpenShiftsRows(tbody, shifts) {
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  shifts.forEach(shift => {
+    const tr = document.createElement("tr");
+    tr.style.cssText = "border-bottom:1px solid var(--border);";
+    tr.dataset.entryId = String(shift.id);
+
+    // Compute elapsed in hours/minutes for the "Elapsed" cell.
+    const ci = shift.clock_in ? new Date(shift.clock_in) : null;
+    const nowMs = Date.now();
+    let elapsedText = "—";
+    if (ci) {
+      const elapsedMin = Math.floor((nowMs - ci.getTime()) / 60000);
+      // Subtract any in-progress break.
+      let breakMs = (shift.break_minutes || 0) * 60000;
+      if (shift.break_start) {
+        const bs = new Date(shift.break_start);
+        if (!isNaN(bs.getTime())) breakMs += (nowMs - bs.getTime());
+      }
+      const effMin = Math.max(0, elapsedMin - Math.floor(breakMs / 60000));
+      const eh = Math.floor(effMin / 60);
+      const em = effMin % 60;
+      elapsedText = eh > 0 ? `${eh}h ${em}m` : `${em}m`;
+    }
+
+    const ciText = ci ? ci.toLocaleString(undefined, {
+      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"
+    }) : "—";
+
+    const breakText = shift.break_start
+      ? `<span style="color:var(--warning,#f59e0b);">On break</span>${(shift.break_minutes || 0) > 0 ? ` <span style="color:var(--muted);">(+${shift.break_minutes}m)</span>` : ""}`
+      : (shift.break_minutes || 0) > 0
+        ? `<span style="color:var(--muted);">${shift.break_minutes}m</span>`
+        : `<span style="color:var(--muted);">—</span>`;
+
+    const notesText = shift.notes
+      ? `<span title="${escapeHtml(shift.notes)}">${escapeHtml(shift.notes.length > 30 ? shift.notes.slice(0, 30) + "…" : shift.notes)}</span>`
+      : `<span style="color:var(--muted);">—</span>`;
+
+    tr.innerHTML = `
+      <td style="padding:0.5rem;color:var(--text);">${escapeHtml(shift.user_name || shift.user_email || "Unknown")}</td>
+      <td style="padding:0.5rem;color:var(--text);">${escapeHtml(shift.opportunity_title || "—")}</td>
+      <td style="padding:0.5rem;color:var(--muted);">${ciText}</td>
+      <td style="padding:0.5rem;color:var(--text);">${elapsedText}</td>
+      <td style="padding:0.5rem;">${breakText}</td>
+      <td style="padding:0.5rem;color:var(--muted);">${notesText}</td>
+      <td style="padding:0.5rem;text-align:right;white-space:nowrap;">
+        <button type="button" class="btn btn-primary btn-sm ts-admin-shift-close">Close now</button>
+        <button type="button" class="btn btn-secondary btn-sm ts-admin-shift-pick">Set time\u2026</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // Wire action buttons (delegate once per tbody).
+  tbody.querySelectorAll(".ts-admin-shift-close").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      const tr = e.target.closest("tr");
+      const entryId = parseInt(tr?.dataset.entryId || "0", 10);
+      if (entryId) _adminCloseShift(entryId, new Date().toISOString(), btn);
+    });
+  });
+  tbody.querySelectorAll(".ts-admin-shift-pick").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      const tr = e.target.closest("tr");
+      const entryId = parseInt(tr?.dataset.entryId || "0", 10);
+      if (entryId) _adminOpenShiftTimePicker(entryId, tr);
+    });
+  });
+}
+
+function _adminOpenShiftTimePicker(entryId, rowEl) {
+  // Inline datetime picker in a small popover.
+  document.querySelectorAll(".ts-admin-shift-picker").forEach(m => m.remove());
+  const ci = rowEl?.querySelector("td")?.nextElementSibling?.textContent || "";
+  // Default to NOW as a local datetime-local value.
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const defaultLocal = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const popup = document.createElement("div");
+  popup.className = "ts-admin-shift-picker";
+  popup.style.cssText = "position:fixed;z-index:10001;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);padding:0.75rem;min-width:280px;";
+  popup.innerHTML = `
+    <div style="font-size:0.82rem;font-weight:600;color:var(--text);margin-bottom:0.4rem;">Close shift with specific time</div>
+    <div style="font-size:0.74rem;color:var(--muted);margin-bottom:0.4rem;">Current clock-in: ${escapeHtml(ci || "unknown")}</div>
+    <input type="datetime-local" class="ts-admin-shift-picker-input" value="${defaultLocal}" style="width:100%;padding:0.4rem;border:1px solid var(--border);border-radius:4px;background:var(--surface-2);color:var(--text);font:inherit;font-size:0.82rem;box-sizing:border-box;">
+    <div style="display:flex;gap:0.5rem;margin-top:0.6rem;justify-content:flex-end;">
+      <button type="button" class="btn btn-secondary btn-sm ts-admin-shift-picker-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary btn-sm ts-admin-shift-picker-ok">Close shift</button>
+    </div>
+  `;
+  document.body.appendChild(popup);
+  const teardown = () => popup.remove();
+  popup.querySelector(".ts-admin-shift-picker-cancel").addEventListener("click", teardown);
+  popup.querySelector(".ts-admin-shift-picker-ok").addEventListener("click", () => {
+    const localVal = popup.querySelector(".ts-admin-shift-picker-input").value;
+    if (!localVal) {
+      showToast("Pick a time first", true);
+      return;
+    }
+    // datetime-local has no timezone; treat as local and convert to ISO.
+    const iso = new Date(localVal).toISOString();
+    teardown();
+    const okBtn = popup.querySelector(".ts-admin-shift-picker-ok");
+    _adminCloseShift(entryId, iso, null, okBtn);
+  });
+  setTimeout(() => {
+    document.addEventListener("click", function close(ev) {
+      if (!popup.contains(ev.target)) { teardown(); document.removeEventListener("click", close); }
+    }, { once: true });
+  }, 0);
+}
+
+async function _adminCloseShift(entryId, clockOutIso, fallbackBtn, pickerBtn) {
+  // Pick a visible button to disable during the request.
+  const btn = pickerBtn || fallbackBtn;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Closing\u2026";
+  }
+  try {
+    const data = await api(`/api/timesheet/admin/close/${entryId}`, {
+      method: "POST",
+      body: JSON.stringify({ clock_out: clockOutIso }),
+    });
+    showToast(`Shift closed (${data.entry?.break_minutes || 0}m break).`);
+    // Re-render the open-shifts list. Fall back to re-fetching if the row
+    // is gone (race with another admin).
+    const container = document.getElementById("activity-content");
+    if (container) await renderAdminOpenShifts(container);
+  } catch (err) {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = pickerBtn ? "Set time\u2026" : "Close now";
+    }
+    showToast(err.message || "Failed to close shift", true);
+  }
 }
 
 /* ── Admin Console: Enhanced Timesheet Date Views ─────────────────────────── */
