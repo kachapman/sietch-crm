@@ -3409,8 +3409,15 @@ body {
 }
 
 .modal-card-deal-edit .modal-form {
-  flex: none;
-  overflow-y: visible;
+  /* Audit: the form is the scroll container. Previously set to
+     `flex: none; overflow-y: visible` which meant that on the
+     bookmark / preview side-by-side layout with many custom fields,
+     the form content overflowed the card and got clipped (no scroll).
+     Now the form grows to fill remaining space and scrolls when
+     its contents exceed the card's max-height. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .modal-card-deal-edit .modal-actions {
@@ -6735,17 +6742,27 @@ body {
 .opp-preview-field.opp-preview-field-chk .opp-preview-chk-yes,
 .opp-preview-field-chk-inline .opp-preview-chk-yes {
   color: var(--success, #22c55e);
-  font-size: 0.8rem;
-  font-weight: 600;
   flex-shrink: 0;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
 }
 .opp-preview-field.opp-preview-field-chk .opp-preview-chk-no,
 .opp-preview-field-chk-inline .opp-preview-chk-no {
   color: var(--muted);
-  font-size: 0.8rem;
   flex-shrink: 0;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
+/* Audit: the checkbox / square icons inside these spans are full-size
+   Tabler SVGs (24x24). Scale them down to match the small inline
+   field-row size (≈14px tall, 1em line-height). */
+.opp-preview-chk-yes svg,
+.opp-preview-chk-no svg {
+  width: 0.95em;
+  height: 0.95em;
+  flex-shrink: 0;
 }
 
 .field-value-tag {

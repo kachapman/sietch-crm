@@ -406,10 +406,6 @@
           <span class="add-tile-option-title">Calendar</span>
           <span class="add-tile-option-desc">Monthly view of a public Proton (or other) ICS calendar feed.</span>
         </button>
-        <button type="button" id="add-tile-notes" class="add-tile-option">
-          <span class="add-tile-option-title">Notes / To-do</span>
-          <span class="add-tile-option-desc">Markdown notes, checklists, CRM quick note, and more.</span>
-        </button>
         <button type="button" id="add-tile-local-kanban" class="add-tile-option">
           <span class="add-tile-option-title">Local Kanban Board</span>
           <span class="add-tile-option-desc">Custom drag-and-drop tasks with statuses (local only, no CRM link).</span>
@@ -1744,7 +1740,7 @@
     <div class="modal-card modal-card-form modal-card-deal-edit">
       <div class="deal-edit-modal-head">
         <h2 id="deal-edit-modal-title" class="modal-title">Edit project</h2>
-        <a id="deal-edit-crm-link" class="deal-edit-crm-link" href="#" target="_blank" rel="noopener noreferrer">Open Project</a>
+        <button type="button" class="btn btn-icon-only modal-header-control" title="Close" data-deal-edit-dismiss aria-label="Close edit"><i class="ti ti-x"></i></button>
       </div>
       <form id="deal-edit-form" class="modal-form deal-edit-form">
         <div class="field deal-edit-title-field">
@@ -1767,7 +1763,7 @@
     <div class="modal-card modal-card-form modal-card-deal-edit">
       <div class="deal-edit-modal-head">
         <h2 id="quick-note-modal-title" class="modal-title">Project Note</h2>
-        <a id="quick-note-crm-link" class="deal-edit-crm-link hidden" href="#" target="_blank" rel="noopener noreferrer">Open Project</a>
+        <button type="button" class="btn btn-icon-only modal-header-control" title="Close" data-quick-note-dismiss aria-label="Close note"><i class="ti ti-x"></i></button>
       </div>
       <form id="quick-note-form" class="modal-form">
         <div class="field opportunity-picker-field">

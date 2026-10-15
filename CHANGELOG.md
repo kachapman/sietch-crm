@@ -2,6 +2,20 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Project modal fixes: edit/quick-note auto-close, X button, checkbox icons, add-tile cleanup (2026-10-14)
+
+Six user-reported issues across the project edit / quick-note / bookmark / search-popup modals, plus the project page reply toolbar and the add-tile modal:
+
+- **Fix C1 — Edit modal attached to the left of the bookmark sidebar / search popup.** `openDealEditModal` and `openQuickNoteModal` previously only called `layoutSideBySideDealEditAndPreview()` when the regular preview modal was open. The bookmark and search-popup layout functions existed but were never called from the open path, so the edit modal opened at the default center position over the rest of the UI. Both openers now also call `layoutSideBySideDealEditAndBookmark()` (when `state.activeBookmarkTab` is set) and `layoutSideBySideDealEditAndSearchPopup()` (when `#search-popup-modal` is visible).
+- **Fix C2 — Edit modal not scrollable in side-by-side state.** `public/styles.css` `.modal-card-deal-edit .modal-form` was set to `flex: none; overflow-y: visible`, which meant that on the bookmark side-by-side layout with many custom fields, the form content overflowed the card and got clipped (no scroll). Now `flex: 1 1 auto; min-height: 0; overflow-y: auto` so the form grows to fill the card and scrolls when content overflows.
+- **Fix D — Edit / quick-note modal auto-closes when its parent project modal closes.** `_doClosePreviewModal()`, `closeSearchPopupModal()`, and `closeBookmarkPreview()` now call `closeDealEditModal()` / `closeQuickNoteModal()` when the same `oppId` is open. Without this, the side-attached edit modal stays orphaned and visible after the preview is gone (confirmed by hand-testing on the bookmark sidebar).
+- **Fix E — Edit modal title bar.** Removed the redundant "Open Project" hyperlink and the project name from the title bar (the project name is already in the first editable field below). Added an X close button matching the project preview modal's `modal-header-control` style. Same change applied to `#quick-note-modal` for consistency.
+- **Fix F — Checkbox fields render as the text "true".** Legacy or misclassified fields (where the stored type code isn't 3) used to leak the raw string "true" / "false" into the preview body. `formatCustomFieldValueForDisplay` now normalizes any boolean-looking value (true/false/yes/no/1/0/on/off) to "Yes"/"No" regardless of type code. `buildFieldElement` was also broadened to detect raw boolean values. The old `✓`/`✗` text-glyph icons were replaced with the Tabler Icons SVGs (`icon-tabler-checkbox` / `icon-tabler-square`) for visual consistency with the rest of the dashboard.
+- **Prior Fix 1 — Project page reply toolbar** (from earlier in this session): added the 3 missing buttons (emoji, link, color) to match the dashboard preview's 8-button toolbar. Inline handlers implemented for each since `project.html` doesn't load `app.js`.
+- **Prior Fix 2 — Remove "Notes / To-do" from the add tile modal**: the button is gone from `public/index.html` and the dead click handler is gone from `public/app.js`. The notes tile is always auto-added by `ensureTileLayout()` so the picker option was misleading anyway.
+
+New tests: `tests/test_project_modal_fixes.mjs` (24 source-grep tests) covering all of the above. Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 = **176 tests, 0 failures**. `py_compile` ×2, `node --check` clean.
+
 ## Fix: compose email modal X / Cancel / Escape buttons not working (2026-10-14)
 
 The compose email modal's X close button, Cancel button, and Escape key

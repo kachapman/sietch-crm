@@ -13,6 +13,28 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-14
 
+**Topic:** Project modal fixes — edit/quick-note auto-close, X close button, checkbox icons, side-by-side layout, add-tile cleanup, project-page reply toolbar.
+
+**What landed (6 fixes from the user's report + 2 from the prior turn):**
+
+- **Fix C1 — Edit modal attaches to bookmark + search popup.** `openDealEditModal` and `openQuickNoteModal` only called `layoutSideBySideDealEditAndPreview()` previously. They now also call `layoutSideBySideDealEditAndBookmark()` (when `state.activeBookmarkTab` is set) and `layoutSideBySideDealEditAndSearchPopup()` (when `#search-popup-modal` is visible). `public/app.js:13540-13560` and `public/app.js:14199-14211`.
+- **Fix C2 — Edit modal scrolls when content overflows.** `.modal-card-deal-edit .modal-form` in `public/styles.css` was `flex: none; overflow-y: visible` (no scroll). Now `flex: 1 1 auto; min-height: 0; overflow-y: auto`.
+- **Fix D — Edit / quick-note auto-closes when parent modal closes.** `_doClosePreviewModal()` (line 26983), `closeSearchPopupModal()` (line 27435), and `closeBookmarkPreview()` (line 29590) now call `closeDealEditModal()` / `closeQuickNoteModal()` when the same `oppId` is open.
+- **Fix E — Edit modal title bar cleanup.** Removed `#deal-edit-crm-link` and the project name from the title bar (the name is in the first editable field). Added an X close button matching the project preview's `modal-header-control` style. Same change to `#quick-note-modal` for consistency. The `crmLink` setter was removed from `openDealEditModal`, `clearQuickNoteOpportunitySelection`, and `updateQuickNoteOpportunitySelectedUi`.
+- **Fix F — Checkbox fields render as a checkbox icon, not "true" text.** Added `_looksLikeCheckboxValue()` helper to `public/app.js:26536` that recognizes any boolean-looking string. `formatCustomFieldValueForDisplay` now normalizes legacy boolean strings to "Yes"/"No" even when the field type code isn't 3. `buildFieldElement` was broadened to detect raw boolean values. The old `✓`/`✗` text-glyph icons were replaced with the Tabler Icons SVGs (`icon-tabler-checkbox` for checked, `icon-tabler-square` for unchecked, scaled to 0.95em via `public/styles.css`).
+- **Prior Fix 1 — Project page reply toolbar:** added emoji, link, and color buttons to `public/project.html:711-723` (the event-reply editor markup). Inline handlers in the `replyBtn.addEventListener("click", ...)` block since `project.html` doesn't load `app.js`. Matches the dashboard preview's 8-button toolbar.
+- **Prior Fix 2 — Remove "Notes / To-do" from the add tile modal:** button deleted from `public/index.html:409-412`, click handler deleted from `public/app.js:15555`. The notes tile is always auto-added by `ensureTileLayout()`.
+
+**Tests:** `tests/test_project_modal_fixes.mjs` (new, 24 source-grep tests covering all 6 fixes + the 2 prior fixes). Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 = **176 tests, 0 failures**. `py_compile` ×2, `node --check` clean.
+
+**Verified live:** `git status --short` shows 4 modified files (`public/app.js`, `public/index.html`, `public/project.html`, `public/styles.css`) + 1 new test file. `git diff --stat` = `+262 −49` across 4 files. **Server restart + browser refresh required** for the changes to take effect.
+
+**Next:** No urgent follow-ups. Remaining audit findings from `docs/EMAIL_TEMPLATE_AUDIT.md`: 🔴 #2 (template CRUD auth/ownership), 🟠 #3 (size cap), 🟠 #4 (dead `template_id` FK), 🟠 #5 (no `[#PROJECTID]` outgoing standardization), 🟠 #6 (inconsistent naming), 🟡 #7–10, ⚪ #11–15.
+
+---
+
+## Previous summary (2026-10-14)
+
 **Topic:** Fix compose email modal — X / Cancel / Escape buttons silently did nothing.
 
 **Bug:** User reported that the close button (X) and Cancel button in the compose email modal did nothing when clicked. Root cause: `bindComposeEmailModal` in `public/app.js:22139` had a **temporal-dead-zone ReferenceError** on the local `fromSelect` variable — declared at line 22174 (`const fromSelect = ...`) but used at line 22168 (in the graph-banner section inserted by an earlier commit, `31d2214`). The function aborted at line 22168 on every call, so every line after it — dismiss handler binding (line 22207), Escape key handler (line 22221), auto-save timer (line 22238) — never ran. (My own bug from a previous session; the refactor that introduced the Graph sendMail feature inserted new code above an existing `const` declaration and the TDZ wasn't caught at review or build time.)

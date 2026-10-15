@@ -13520,11 +13520,11 @@ async function openDealEditModal(opp, group) {
   const titleInput = $("#deal-edit-title");
   if (titleInput) titleInput.value = state.dealEdit.initialTitle;
 
-  const titleEl = $("#deal-edit-modal-title");
-  if (titleEl) titleEl.textContent = state.dealEdit.oppTitle;
-
-  const crmLink = $("#deal-edit-crm-link");
-  if (crmLink) crmLink.href = crmProjectUrl(state.dealEdit.projectNumber || id);
+  // The modal title bar no longer shows the project name (it's already in
+  // the editable Project Name field below) and the "Open Project" hyperlink
+  // has been replaced with a close (X) button matching the project preview
+  // modal's header style. See the bindDealEditModal handler — the X uses
+  // the existing data-deal-edit-dismiss binding.
 
   // Render user fields immediately (no toggle needed)
   const ufWrap = $("#deal-edit-user-fields");
@@ -13545,6 +13545,17 @@ async function openDealEditModal(opp, group) {
       modal.classList.add("deal-edit-fullscreen");
     } else if (isPreviewOpen && state.dealEdit && oppPreviewContext && Number(oppPreviewContext.oppId) === Number(state.dealEdit.oppId)) {
       layoutSideBySideDealEditAndPreview();
+    } else if (state.activeBookmarkTab) {
+      // Audit: openDealEditModal previously only laid out side-by-side
+      // against the regular preview modal — so clicking Edit on a
+      // bookmark left the edit modal centered over the page instead of
+      // attached to the left of the bookmark sidebar. Route to the
+      // bookmark layout whenever the bookmark sidebar has an active tab.
+      layoutSideBySideDealEditAndBookmark();
+    } else if (!$("#search-popup-modal")?.classList.contains("hidden")) {
+      // Same fix for the search-popup modal — without this, the edit
+      // modal sits behind the search popup and is unusable.
+      layoutSideBySideDealEditAndSearchPopup();
     }
   }, 80);
 }
@@ -14092,13 +14103,8 @@ function clearQuickNoteOpportunitySelection() {
   state.quickNote = null;
   const search = $("#quick-note-opportunity-search");
   const selected = $("#quick-note-opportunity-selected");
-  const crmLink = $("#quick-note-crm-link");
   if (search) search.value = "";
   if (selected) selected.textContent = "";
-  if (crmLink) {
-    crmLink.classList.add("hidden");
-    crmLink.href = "#";
-  }
   const due = $("#quick-note-due");
   if (due) due.value = "";
   const tags = $("#quick-note-tags");
@@ -14109,7 +14115,6 @@ function updateQuickNoteOpportunitySelectedUi() {
   const ctx = state.quickNote;
   const selected = $("#quick-note-opportunity-selected");
   const search = $("#quick-note-opportunity-search");
-  const crmLink = $("#quick-note-crm-link");
   if (!selected) return;
   if (ctx?.oppId) {
     selected.innerHTML = `${escapeHtml(ctx.oppTitle || `Project #${ctx.oppId}`)} <span class="contact-clear" role="button" tabindex="0">clear</span>`;
@@ -14117,14 +14122,9 @@ function updateQuickNoteOpportunitySelectedUi() {
       clearQuickNoteOpportunitySelection();
       renderQuickNoteTagChips();
     });
-    if (crmLink) {
-      crmLink.href = crmProjectUrl(ctx.projectNumber || ctx.oppId);
-      crmLink.classList.remove("hidden");
-    }
     if (search) search.value = "";
   } else {
     selected.textContent = "";
-    if (crmLink) crmLink.classList.add("hidden");
   }
 }
 
@@ -14201,6 +14201,12 @@ async function openQuickNoteModal() {
     const p = $("#opp-preview-modal");
     if (p && !p.classList.contains("hidden") && oppPreviewContext && oppPreviewContext.oppId != null) {
       layoutSideBySideDealEditAndPreview();  // generalized to support quick-note as side
+    } else if (state.activeBookmarkTab) {
+      // Audit: same fix as openDealEditModal — attach to the left of
+      // the bookmark sidebar when the bookmark has an active tab.
+      layoutSideBySideDealEditAndBookmark();
+    } else if (!$("#search-popup-modal")?.classList.contains("hidden")) {
+      layoutSideBySideDealEditAndSearchPopup();
     }
   }, 80);
 
@@ -15552,7 +15558,6 @@ function bindAddTileModal() {
     addOpportunityGroupTile();
   });
   $("#add-tile-calendar")?.addEventListener("click", showAddTileCalendarForm);
-  $("#add-tile-notes")?.addEventListener("click", showAddTileNotesForm);
   $("#add-tile-local-kanban")?.addEventListener("click", addLocalKanbanTile);
   $("#add-tile-team")?.addEventListener("click", () => {
     closeAddTileModal();
@@ -26527,6 +26532,17 @@ function formatMembersLabel(opp) {
     .join(", ");
 }
 
+// True for any string that looks like a boolean value (checkbox-style
+// true/false, yes/no, 1/0, on/off). Audit: legacy or misclassified
+// checkbox fields can leak the raw string "true" or "false" into the
+// preview body if the field type code isn't 3. The renderer also uses
+// this to decide whether to draw a checkbox icon vs. plain text.
+function _looksLikeCheckboxValue(v) {
+  const s = String(v ?? "").toLowerCase().trim();
+  return s === "true" || s === "false" || s === "yes" || s === "no"
+    || s === "1" || s === "0" || s === "on" || s === "off";
+}
+
 function formatCustomFieldValueForDisplay(def, rawValue) {
   const code = customFieldTypeCode(def);
   if (code === 3) {
@@ -26535,6 +26551,15 @@ function formatCustomFieldValueForDisplay(def, rawValue) {
     return "Yes";
   }
   if (code === 4) return "";
+  // Audit: if the value looks like a boolean (e.g. "true") but the
+  // field's stored type code isn't 3 (legacy data, misclassified def),
+  // normalize it to "Yes"/"No" so the preview doesn't render literal
+  // "true" text.
+  if (_looksLikeCheckboxValue(rawValue)) {
+    const t = String(rawValue ?? "").trim().toLowerCase();
+    if (t === "false" || t === "0" || t === "no" || t === "off") return "No";
+    return "Yes";
+  }
   return formatCustomFieldValueForApi(def, rawValue) || "—";
 }
 
@@ -26982,6 +27007,18 @@ function closeOpportunityPreviewModal() {
 
 function _doClosePreviewModal() {
   _previewDirty = false;
+  // Audit: when the project preview closes, also close any deal-edit
+  // or quick-note modal that was attached to the same project. Without
+  // this, the edit modal stays orphaned and visible after the preview
+  // is gone.
+  if (state.dealEdit && oppPreviewContext && Number(oppPreviewContext.oppId) === Number(state.dealEdit.oppId)) {
+    closeDealEditModal();
+  }
+  // Quick-note modal also attaches side-by-side; close it for the
+  // same reason if it was opened for the same project.
+  if (state.quickNote && oppPreviewContext && Number(oppPreviewContext.oppId) === Number(state.quickNote.oppId)) {
+    closeQuickNoteModal();
+  }
   restoreSideBySideCards();
   oppPreviewMailCache.clear();
   setOpportunityPreviewContext(null);
@@ -27417,6 +27454,11 @@ async function openSearchPopupModal() {
 function closeSearchPopupModal() {
   const modal = $("#search-popup-modal");
   if (!modal) return;
+  // Audit: if a deal-edit or quick-note modal was attached to a
+  // preview inside the search popup, close it too. Without this it
+  // stays orphaned on screen.
+  if (state.dealEdit) closeDealEditModal();
+  if (state.quickNote) closeQuickNoteModal();
   modal.classList.add("hidden");
   // Clear all preview tabs
   for (const oppId of Array.from(searchPopupPreviewTabs.keys())) {
@@ -29565,6 +29607,14 @@ async function activateBookmarkTab(oppId) {
 }
 
 function closeBookmarkPreview() {
+  // Audit: if a deal-edit or quick-note modal was attached to the
+  // bookmark preview, close it too so it doesn't stay orphaned.
+  if (state.dealEdit && Number(state.activeBookmarkTab) === Number(state.dealEdit.oppId)) {
+    closeDealEditModal();
+  }
+  if (state.quickNote && Number(state.activeBookmarkTab) === Number(state.quickNote.oppId)) {
+    closeQuickNoteModal();
+  }
   state.activeBookmarkTab = null;
   updateBookmarkBodyClass();
   updateMobileBookmarkPreview();
@@ -37038,18 +37088,57 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     renderFieldGrid(body, rows);
   }
 
+  // Build a checkbox icon element using the project's existing
+  // Tabler Icons style (icon-tabler-square for unchecked,
+  // icon-tabler-checkbox for checked). Replaces the older ✓/✗
+  // text-glyph approach so the preview matches the rest of the UI.
+  function _checkboxIcon(checked) {
+    const span = document.createElement("span");
+    span.className = checked ? "opp-preview-chk-yes" : "opp-preview-chk-no";
+    if (checked) {
+      span.innerHTML =
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" ' +
+        'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
+        'class="icon icon-tabler icons-tabler-outline icon-tabler-checkbox">' +
+        '<path stroke="none" d="M0 0h24v24H0z" fill="none" />' +
+        '<path d="M9 11l3 3l8 -8" />' +
+        '<path d="M20 12v6a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2h9" />' +
+        '</svg>';
+    } else {
+      span.innerHTML =
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" ' +
+        'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
+        'class="icon icon-tabler icons-tabler-outline icon-tabler-square">' +
+        '<path stroke="none" d="M0 0h24v24H0z" fill="none" />' +
+        '<path d="M3 5a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14" />' +
+        '</svg>';
+    }
+    return span;
+  }
+
+  // Audit: legacy / misclassified checkbox fields can have a value
+  // of raw "true" / "false" (or "yes" / "no" / "1" / "0") — detect
+  // them in the renderer too so the checkbox icon shows even when
+  // row._isCheckbox is false (the field def was lost or never set).
+  const _valueIsCheckboxLike = (v) => {
+    const s = String(v ?? "").toLowerCase().trim();
+    return s === "true" || s === "false" || s === "yes" || s === "no"
+      || s === "1" || s === "0" || s === "on" || s === "off";
+  };
+  const _valueIsChecked = (v) => {
+    const s = String(v ?? "").toLowerCase().trim();
+    return s === "true" || s === "yes" || s === "1" || s === "on";
+  };
+
   function buildFieldElement(row) {
     // Checkbox fields: simple icon + label, no card
     if (row._isCheckbox) {
       const field = document.createElement("div");
       field.className = "opp-preview-field-chk-inline";
-      const checked = row.value === "Yes" || String(row.value).toLowerCase() === "true";
-      const ico = document.createElement("span");
-      ico.className = checked ? "opp-preview-chk-yes" : "opp-preview-chk-no";
-      ico.textContent = checked ? "\u2713" : "\u2717";
+      const checked = row.value === "Yes" || _valueIsChecked(row.value);
+      field.appendChild(_checkboxIcon(checked));
       const lbl = document.createElement("span");
       lbl.textContent = row.label;
-      field.appendChild(ico);
       field.appendChild(lbl);
       return field;
     }
@@ -37067,26 +37156,24 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     dt.textContent = row.label;
     const dd = document.createElement("dd");
 
-    if (row.value === "Yes" || row.value === "No") {
+    if (row.value === "Yes" || row.value === "No" || _valueIsCheckboxLike(row.value)) {
       if (fieldNameMatches(row.label, ["PA CONTRACT"])) {
-        const ico = document.createElement("span");
-        const checked = row.value === "Yes";
-        ico.className = checked ? "opp-preview-chk-yes" : "opp-preview-chk-no";
-        ico.textContent = checked ? "\u2713" : "\u2717";
-        dd.appendChild(ico);
+        dd.appendChild(_checkboxIcon(_valueIsChecked(row.value)));
       } else {
-        const tag = document.createElement("span");
-        tag.className = "field-value-tag";
-        tag.textContent = row.value;
-        dd.appendChild(tag);
+        // For non-PA-CONTRACT checkboxes, fall back to the text tag
+        // ("Yes" / "No") only if the value is the post-formatter
+        // string; otherwise (raw "true" etc.) draw the icon.
+        if (row.value === "Yes" || row.value === "No") {
+          const tag = document.createElement("span");
+          tag.className = "field-value-tag";
+          tag.textContent = row.value;
+          dd.appendChild(tag);
+        } else {
+          dd.appendChild(_checkboxIcon(_valueIsChecked(row.value)));
+        }
       }
     } else if (fieldNameMatches(row.label, ["PA CONTRACT"])) {
-      const ico = document.createElement("span");
-      const lower = (row.value || "").toLowerCase();
-      const checked = lower === "true" || lower === "yes" || lower === "1";
-      ico.className = checked ? "opp-preview-chk-yes" : "opp-preview-chk-no";
-      ico.textContent = checked ? "\u2713" : "\u2717";
-      dd.appendChild(ico);
+      dd.appendChild(_checkboxIcon(_valueIsChecked(row.value)));
     } else {
       dd.textContent = row.value;
     }

@@ -716,6 +716,9 @@
                 '<button type="button" class="phtml-note-format-btn note-format-btn" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>' +
                 '<span class="phtml-note-sep note-format-sep"></span>' +
                 '<button type="button" class="phtml-note-format-btn note-format-btn note-format-hilite-btn" title="Highlight color">🖍</button>' +
+                '<button type="button" class="phtml-note-format-btn note-format-btn note-format-emoji-btn" title="Emoji">😀</button>' +
+                '<button type="button" class="phtml-note-format-btn note-format-btn note-format-link-btn" title="Insert link">🔗</button>' +
+                '<button type="button" class="phtml-note-format-btn note-format-btn note-format-color-btn" title="Text color">A<span class="note-format-color-bar"></span></button>' +
               '</div>' +
               '<div class="event-reply-editor-body">' +
                 '<div class="phtml-note-editor note-editor event-reply-input" contenteditable="true" data-placeholder="Write a reply…"></div>' +
@@ -761,6 +764,116 @@
                 }
               });
             });
+
+            // Wire emoji / link / color pickers — the project page
+            // doesn't load app.js, so we have to inline the handlers
+            // here. Matches the dashboard preview's history reply
+            // toolbar (8 buttons: B/I/U/S/hilite/emoji/link/color).
+            const emojiBtn = editor.querySelector(".note-format-emoji-btn");
+            if (emojiBtn) {
+              emojiBtn.addEventListener("mousedown", (e) => {
+                e.preventDefault();
+                replyInput.focus();
+              });
+              emojiBtn.addEventListener("click", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const emojis = ["😀","😂","😍","🤔","👍","👎","❤️","🔥","✅","⭐","📌","📝","🎯","💬","📎","🔗","📊","🗓️","✨","🙏"];
+                // Build a tiny popup anchored to the button.
+                const existing = editor.querySelector(".event-reply-emoji-popup");
+                if (existing) { existing.remove(); return; }
+                const popup = document.createElement("div");
+                popup.className = "event-reply-emoji-popup";
+                popup.style.cssText = "position:absolute; top:100%; left:0; margin-top:4px; background:var(--surface); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,0.2); padding:0.4rem; z-index:100; display:grid; grid-template-columns:repeat(8,1fr); gap:0.2rem;";
+                emojis.forEach((em) => {
+                  const b = document.createElement("button");
+                  b.type = "button";
+                  b.textContent = em;
+                  b.style.cssText = "font-size:1.1rem; padding:0.2rem; background:none; border:none; cursor:pointer; border-radius:4px;";
+                  b.addEventListener("mousedown", (ev) => { ev.preventDefault(); });
+                  b.addEventListener("click", (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    document.execCommand("insertText", false, em);
+                    replyInput.focus();
+                    popup.remove();
+                  });
+                  popup.appendChild(b);
+                });
+                emojiBtn.style.position = "relative";
+                emojiBtn.appendChild(popup);
+                const closer = (ev) => {
+                  if (!popup.contains(ev.target) && ev.target !== emojiBtn) {
+                    popup.remove();
+                    document.removeEventListener("mousedown", closer, true);
+                  }
+                };
+                setTimeout(() => document.addEventListener("mousedown", closer, true), 0);
+              });
+            }
+            const linkBtn = editor.querySelector(".note-format-link-btn");
+            if (linkBtn) {
+              linkBtn.addEventListener("mousedown", (e) => {
+                e.preventDefault();
+                replyInput.focus();
+              });
+              linkBtn.addEventListener("click", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const url = prompt("Enter URL:");
+                if (url) document.execCommand("createLink", false, url);
+                replyInput.focus();
+              });
+            }
+            const colorBtn = editor.querySelector(".note-format-color-btn");
+            if (colorBtn) {
+              colorBtn.addEventListener("mousedown", (e) => {
+                e.preventDefault();
+                replyInput.focus();
+              });
+              const colors = [
+                { name: "Default", hex: "" },
+                { name: "Red", hex: "#ef5350" },
+                { name: "Orange", hex: "#ff9800" },
+                { name: "Green", hex: "#66bb6a" },
+                { name: "Blue", hex: "#42a5f5" },
+                { name: "Purple", hex: "#ab47bc" },
+              ];
+              colorBtn.addEventListener("click", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const existing = editor.querySelector(".event-reply-color-popup");
+                if (existing) { existing.remove(); return; }
+                const popup = document.createElement("div");
+                popup.className = "event-reply-color-popup";
+                popup.style.cssText = "position:absolute; top:100%; left:0; margin-top:4px; background:var(--surface); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,0.2); padding:0.4rem; z-index:100; display:flex; gap:0.3rem;";
+                colors.forEach((c) => {
+                  const b = document.createElement("button");
+                  b.type = "button";
+                  b.title = c.name;
+                  b.style.cssText = `width:22px; height:22px; border-radius:4px; border:1px solid var(--border); cursor:pointer; background:${c.hex || "transparent"};`;
+                  b.addEventListener("mousedown", (ev) => { ev.preventDefault(); });
+                  b.addEventListener("click", (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    if (c.hex) document.execCommand("foreColor", false, c.hex);
+                    else document.execCommand("removeFormat", false, null);
+                    replyInput.focus();
+                    popup.remove();
+                  });
+                  popup.appendChild(b);
+                });
+                colorBtn.style.position = "relative";
+                colorBtn.appendChild(popup);
+                const closer = (ev) => {
+                  if (!popup.contains(ev.target) && ev.target !== colorBtn) {
+                    popup.remove();
+                    document.removeEventListener("mousedown", closer, true);
+                  }
+                };
+                setTimeout(() => document.addEventListener("mousedown", closer, true), 0);
+              });
+            }
 
             // Wire @-mention autocomplete (reuse the same helper as the
             // main "Add Note" editor).
