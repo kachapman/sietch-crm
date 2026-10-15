@@ -13,6 +13,40 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-14
 
+**Topic:** Round 4 — project page highlight fix (the one I kept getting wrong in rounds 2 + 3).
+
+**What landed:**
+
+- **Root cause of the persistent bug:** in round 3, I added the subtle highlight rule to `public/project.html` but scoped it only to `.event-reply-body` (the reply body class). The user's screenshot showed highlights in the **main history event body** — which is rendered with `class="event-body"` at `project.html:611`, not `.event-reply-body`. The `.event-reply-body` rule never matched, so the un-overridden inline `background-color: rgb(34, 197, 94)` was still showing in dark mode with light text → terrible contrast.
+
+  The dashboard's `styles.css:3357-3381` already covers both event body + reply body + note detail. The project page now mirrors that with a second rule scoped to `.event-body`.
+
+- **Fix:** added the same 5-selector block to `.event-body` in `public/project.html`:
+  ```css
+  .event-body mark,
+  .event-body span[style*="background-color"],
+  .event-body span[style*="background:"],
+  .event-body b[style*="background-color"],
+  .event-body b[style*="background:"] {
+    background-color: rgba(34, 197, 94, 0.3) !important;
+    color: inherit;
+    padding: 0 2px;
+    border-radius: 2px;
+  }
+  ```
+
+- **Tests:** `tests/test_user_round2_fixes.mjs` (now 11 tests) — new test asserts the `.event-body` rule exists with the 0.3-opacity background and covers all 5 selectors. This guards against the regression I just spent 2 rounds failing to fix.
+
+Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 = **187 tests, 0 failures**. `node --check` clean.
+
+**Verified live:** 2 files modified (`public/project.html`, `tests/test_user_round2_fixes.mjs`). `git diff --stat` = `+47 −8`. **Browser refresh required** — the change is in the inline `<style>` block of `project.html`, served fresh on hard reload.
+
+**Lesson:** the user said it themselves — "you're probably editing a modal instead of the page." When the user reports a CSS issue in a standalone page, the first thing to check is which CSS file the page loads and which elements actually carry the affected markup. Don't trust the path of least resistance (assume the dashboard `styles.css` covers everything).
+
+---
+
+## Previous summary (2026-10-14)
+
 **Topic:** Round 3 polish — highlight opacity + checkbox SVG size.
 
 **What landed:**

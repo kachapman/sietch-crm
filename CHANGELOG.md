@@ -2,6 +2,16 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Round 4: project page highlight fix — covered .event-body (2026-10-14)
+
+The previous round (round 3) added the subtle highlight tint rule to the project page but only scoped it to `.event-reply-body`. The user's screenshot showed the highlight still rendering with the un-overridden inline style — because the highlight markup was actually inside `.event-body` (the main history event content, rendered at `project.html:611`), not inside a reply. The `.event-reply-body` rule never matched.
+
+Fix: added a second rule scoped to `.event-body` (5 selectors: `<mark>`, `<span style*="background-color">`, `<span style*="background:">`, `<b style*="background-color">`, `<b style*="background:">`) using the same `rgba(34, 197, 94, 0.3) !important; color: inherit;` as the dashboard's working rule at `styles.css:3357-3381`.
+
+The dashboard's `styles.css` already covers both event body + reply body + note detail. The project page now mirrors that.
+
+Tests: `tests/test_user_round2_fixes.mjs` (now 11 tests) — new test asserts the `.event-body` rule exists with the 0.3-opacity background and covers all 5 selectors. Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 = **187 tests, 0 failures**. `node --check` clean.
+
 ## Round 3: highlight opacity + checkbox SVG size (2026-10-14)
 
 Two visual polish fixes from the previous round:

@@ -209,6 +209,32 @@ test('Issue 5: highlight opacity is now low (subtle tint, not vivid block)', () 
   );
 });
 
+test('Issue 5 round 4: project.html highlight covers .event-body (not just .event-reply-body)', () => {
+  // Audit 2026-10-14 round 4: I missed the .event-body selector in
+  // round 3. The user's screenshots showed highlights inside the
+  // main history event body (rendered with class="event-body" at
+  // project.html:611), not inside replies. The .event-reply-body
+  // rule only covered replies, so event-body highlights were still
+  // showing the un-overridden inline style (vivid green on dark text
+  // in dark mode, terrible contrast). This test guards against the
+  // regression.
+  assert.ok(
+    /\.event-body\s+mark[\s\S]{0,500}background-color:\s*rgba\(34,\s*197,\s*94,\s*0\.3\)/.test(projectHtml),
+    'project.html .event-body mark must use the subtle highlight (0.3 opacity)'
+  );
+  // Also verify the .event-body rule targets the same 5 selectors as
+  // .event-reply-body (mark, span[style*="background-color"],
+  // span[style*="background:"], b[style*="background-color"],
+  // b[style*="background:"]) so all 3 inline-style formats are covered.
+  const eventBodyBlock = projectHtml.match(
+    /\.event-body\s+mark,[\s\S]*?\.event-body\s+b\[style\*="background:"\]\s*\{[^}]+\}/
+  );
+  assert.ok(
+    eventBodyBlock,
+    'project.html .event-body rule must cover mark + 2 span variants + 2 b variants (5 selectors)'
+  );
+});
+
 // --- Issue 6: checkbox SVG matches font height (≥ 1em) ---
 
 test('Issue 6: checkbox / square SVG is at least 1em tall', () => {

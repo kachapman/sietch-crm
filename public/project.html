@@ -130,14 +130,27 @@
     .event-reply-body strong, .event-reply-body b { font-weight: 700; }
     .event-reply-body em, .event-reply-body i { font-style: italic; }
     .event-reply-body u { text-decoration: underline; }
-    /* Subtle highlighter for reply bodies (same rule as the
-       .opp-preview-history-reply-body rule in styles.css). Audit
-       2026-10-14: dropped the vivid 0.65 opacity + forced #000 text
-       color in both modes — the user found it too high-contrast.
-       Now a single low-opacity tint with the text color inherited
-       from the surrounding content. Works the same in light and
-       dark mode. The !important on background-color is needed to
-       override inline styles the CRM saved into the reply HTML. */
+    /* Subtle highlighter for event body + reply body (Audit
+       2026-10-14 round 4: I missed the .event-body selector in round
+       3 — the user kept reporting "still wrong" because the
+       highlights inside the main history event body (rendered with
+       class="event-body" at line 611) were untouched. The dashboard
+       has 3 selectors (--history-body, --html, --plain, note-detail)
+       that all cover the same case. Here on the project page the
+       analogous selectors are .event-body (event content) and
+       .event-reply-body (reply content). 0.3 opacity + color:
+       inherit + !important to override the inline style the CRM
+       saved when execCommand hiliteColor ran. */
+    .event-body mark,
+    .event-body span[style*="background-color"],
+    .event-body span[style*="background:"],
+    .event-body b[style*="background-color"],
+    .event-body b[style*="background:"] {
+      background-color: rgba(34, 197, 94, 0.3) !important;
+      color: inherit;
+      padding: 0 2px;
+      border-radius: 2px;
+    }
     .event-reply-body mark,
     .event-reply-body span[style*="background-color"],
     .event-reply-body span[style*="background:"],
