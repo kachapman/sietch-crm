@@ -2,6 +2,22 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Timesheet audit round 5 (closing) — modal "● Live" badge + ISSUE-017 (2026-10-15)
+
+The last two items from the timesheet audit queue: a small UX polish on the modal's entries list, and a doc-hygiene close-out of all 9 audit findings into a single ISSUE-017 entry.
+
+**Modal polish in `public/app.js` + `public/styles.css`:**
+
+- The still-running entry row in the modal's entries list now shows a `● Live` badge (green pill, same color family as the success semantic) so the user can spot the active shift at a glance.
+- The active row's duration cell now shows `Hh Mm Ss` (with seconds) instead of `Hh Mm`, and updates every second via the existing timer interval. The non-active rows still show `Hh Mm` (no churn).
+- The elapsed-time math was extracted into a shared helper `_tsComputeActiveElapsed()` so the big modal timer (`#modal-ts-timer`) and the row duration stay in sync — no risk of drift between the two displays.
+
+**Doc hygiene in `ISSUES.md`:**
+
+- New `ISSUE-017` closes out all 9 audit findings across rounds 3, 4 (parts 1 and 2), and 5: 4 medium-severity security/correctness issues (clock-out-while-on-break, 403 cross-user enforcement, delete-on-active-shift disable, click-listener leak); the admin "Open Shifts" tab (Option C); the "clocked in for 10h+" reminder; the modal "● Live" polish; and the two pre-existing issues that were masked by the dead tile-version code (modal range-nav broken, timer never started) — both fixed in `48e29df` / `d670f21`. The issue lists the two items still deliberately open (`time_entries_daily` view's `COALESCE(clock_out, NOW())` unbounded, and `_tsActiveEntry` periodic refresh) with the reasoning for not addressing them now.
+
+No server-side changes. No migrations. No new tests (purely UX + docs; the `● Live` badge is a single `<span>` and the `Hh Mm Ss` format change is a one-line string template). All existing tests still pass: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 + 5 + 7 + 5 + 5 = **210 tests, 0 failures**. `py_compile` ×3, `node --check public/app.js` clean.
+
 ## Timesheet audit round 4 (part 2) — "clocked in for 10+ hours" reminder (2026-10-15)
 
 When a user has been continuously clocked in for ≥10 hours without clocking out, they now get a gentle reminder. At 14 hours, a second escalation reminder fires. The same row is delivered through two channels: Telegram (via the existing `notification_dispatcher` pipeline) and the CRM notification drawer (the bell-icon dropdown).

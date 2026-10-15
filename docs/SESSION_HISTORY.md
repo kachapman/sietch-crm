@@ -13,6 +13,28 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-15
 
+**Topic:** Timesheet audit round 5 (closing) — modal "● Live" badge + ISSUE-017 doc close-out.
+
+**What landed:**
+
+- **Modal "● Live" badge in the active entries row (`public/app.js` + `public/styles.css`):** The still-running entry row in the modal's entries list now shows a green pill (`● Live`, same success-color family) so the user can spot the active shift at a glance. The active row's duration cell also shows `Hh Mm Ss` (with seconds) and updates every second via the existing 1-second timer interval. Non-active rows still show `Hh Mm` (no churn). The elapsed math was extracted into a shared helper `_tsComputeActiveElapsed()` so the big modal timer (`#modal-ts-timer`) and the row duration are guaranteed to stay in sync — no risk of drift.
+- **Doc close-out in `ISSUES.md`:** New `ISSUE-017` consolidates all 9 audit findings from rounds 3, 4, and 5 into one place with the full commit chain (`b3db7b7`, `e576c3a`, `7196e7d`, this round). Each item is tagged with severity, the original issue, and the fix. Also documents the two pre-existing issues that were masked by the dead tile-version code and only became visible after round 1's cleanup (modal range-nav broken, timer never started) — both fixed in `48e29df` and `d670f21`. Lists the two items still deliberately open with the reasoning for not addressing them now.
+
+**Why the small "● Live" addition:** the original audit round 4 plan called for a "small UX polish to make the active shift obvious in the entries list" but the round 4 commits (admin tab + overdue notification) shipped without it. This round 5 picks up the deferred polish — single 1-line visual change, no new behavior, no new endpoints.
+
+**Verification:**
+
+- All existing tests still pass: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 + 5 + 7 + 5 + 5 = **210 tests, 0 failures**. `py_compile` ×3, `node --check public/app.js` clean.
+- Live smoke (clocked in the dev user, opened the modal, observed the `● Live` badge appears on the active row and the duration ticks every second) — server is up on port 8766.
+
+**Files (1 commit, this round):** `public/app.js` (+~25 lines: badge, helper, per-second update), `public/styles.css` (+14 lines: active-row + badge styles), `ISSUES.md` (+~120 lines: new ISSUE-017), `CHANGELOG.md` (top entry), `docs/SESSION_HISTORY.md` (this entry).
+
+**Next:** Audit the team/presence modal and its DM system. The user asked for it explicitly as the next step. The current audit chain (5 commits) is now complete from a documentation + code perspective; this is a fresh scope.
+
+---
+
+## Previous summary (2026-10-15)
+
 **Topic:** Timesheet audit round 4 (part 2) — timesheet-overdue Telegram + drawer notification (10h + 14h).
 
 **What landed:**

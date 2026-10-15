@@ -18800,19 +18800,40 @@ function tsStopTimer() {
 function tsUpdateTimerDisplay() {
   const timerDisplay = document.getElementById('modal-ts-timer');
   if (!timerDisplay || !_tsActiveEntry) return;
-  const clockIn = new Date(_tsActiveEntry.clock_in);
-  const now = new Date();
-  let elapsed = (now - clockIn) / 1000;
-  if (_tsActiveEntry.break_start) {
-    const breakStart = new Date(_tsActiveEntry.break_start);
-    elapsed -= (now - breakStart) / 1000;
-  }
-  elapsed -= (_tsActiveEntry.break_minutes || 0) * 60;
-  if (elapsed < 0) elapsed = 0;
+  const elapsed = _tsComputeActiveElapsed();
+  if (elapsed === null) return;
   const h = Math.floor(elapsed / 3600);
   const m = Math.floor((elapsed % 3600) / 60);
   const s = Math.floor(elapsed % 60);
   timerDisplay.textContent = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  // Also update the active row's duration cell in the entries list so
+  // the "● Live" row's hh/mm/ss stays in sync with the big timer.
+  const activeRow = document.querySelector(".ts-entry-row-active .ts-entry-duration");
+  if (activeRow) {
+    const dh = Math.floor(elapsed / 3600);
+    const dm = Math.floor((elapsed % 3600) / 60);
+    const ds = Math.floor(elapsed % 60);
+    activeRow.textContent = `${dh}h ${dm}m ${ds}s`;
+  }
+}
+
+// Shared elapsed-seconds calculation for the active entry. Returns
+// non-negative seconds, or null if there's no active entry. Used by
+// both the big modal timer and the live row in the entries list.
+function _tsComputeActiveElapsed() {
+  if (!_tsActiveEntry) return null;
+  const clockIn = new Date(_tsActiveEntry.clock_in);
+  if (isNaN(clockIn.getTime())) return null;
+  const now = new Date();
+  let elapsed = (now - clockIn) / 1000;
+  if (_tsActiveEntry.break_start) {
+    const breakStart = new Date(_tsActiveEntry.break_start);
+    if (!isNaN(breakStart.getTime())) {
+      elapsed -= (now - breakStart) / 1000;
+    }
+  }
+  elapsed -= (_tsActiveEntry.break_minutes || 0) * 60;
+  return Math.max(0, elapsed);
 }
 
 function modalToggleClock() {
@@ -18867,8 +18888,9 @@ function modalRefreshEntries() {
     entries.forEach(entry => {
       const ci = entry.clock_in ? new Date(entry.clock_in) : null;
       const co = entry.clock_out ? new Date(entry.clock_out) : null;
+      const isActive = !co;  // clock_out IS NULL = still running
       const row = document.createElement('div');
-      row.className = 'ts-entry-row';
+      row.className = isActive ? 'ts-entry-row ts-entry-row-active' : 'ts-entry-row';
       const times = document.createElement('div');
       times.className = 'ts-entry-times';
       const dateStr = ci ? ci.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—';
@@ -18881,10 +18903,19 @@ function modalRefreshEntries() {
       if (ci && co) {
         durSec = (co - ci) / 1000 - (entry.break_minutes || 0) * 60;
         totalSeconds += durSec;
+      } else if (ci && isActive) {
+        // Active row: use the shared elapsed helper if this entry is
+        // the current _tsActiveEntry. The per-second ticker keeps the
+        // displayed value fresh.
+        if (_tsActiveEntry && String(_tsActiveEntry.id) === String(entry.id)) {
+          const e = _tsComputeActiveElapsed();
+          if (e !== null) durSec = e;
+        }
       }
       const dh = Math.floor(durSec / 3600);
       const dm = Math.floor((durSec % 3600) / 60);
-      dur.textContent = `${dh}h ${dm}m`;
+      const ds = Math.floor(durSec % 60);
+      dur.textContent = isActive ? `${dh}h ${dm}m ${ds}s` : `${dh}h ${dm}m`;
       const proj = document.createElement('div');
       proj.className = 'ts-entry-project';
       proj.textContent = entry.opportunity_title || '';
@@ -18892,6 +18923,16 @@ function modalRefreshEntries() {
       // Tooltip: show note on hover
       if (entry.notes) {
         row.title = entry.notes;
+      }
+      // "● Live" indicator on the still-running row so the user can spot
+      // the active shift at a glance. The duration on the right also
+      // counts up because the per-second timer interval updates it.
+      if (isActive) {
+        const liveBadge = document.createElement('span');
+        liveBadge.className = 'ts-entry-live-dot';
+        liveBadge.title = 'Still clocked in';
+        liveBadge.textContent = '● Live';
+        row.append(liveBadge);
       }
       row.addEventListener("contextmenu", (ev) => tsEntryContextMenu(ev, entry));
       const rightGroup = document.createElement("div");

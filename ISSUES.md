@@ -745,3 +745,99 @@ The base `.card` rule had no `overflow-wrap` or `word-break` properties. Long UR
   7. Scroll a column → only THAT column's scrollbar appears (during scroll + 1s after). Other columns' scrollbars stay hidden.
   8. Hover over a column → its scrollbar appears. Other columns stay hidden.
   9. Card content (long URLs, long words) wraps inside the card border.
+
+---
+
+## ISSUE-017 — Timesheet audit round 3 + 4 (2026-10-15)
+
+**Status:** ✅ Implemented 2026-10-15 across 4 commits (`b3db7b7`, `e576c3a`, `7196e7d`, plus a closing round-5 follow-up)
+**Priority:** High (security + correctness) / Medium (UX) / Low (polish)
+**Area:** Timesheet / Activity (`server.py`, `notification_dispatcher.py`, `timesheet_overdue_checker.py`, `migrations/032_*`, `public/app.js`, `public/styles.css`, `public/index.html`)
+
+### Summary
+
+Full audit of the timesheet/activity surface: backend routes, frontend UI, `migrations/009`. Found 9 distinct issues across security, correctness, and UX. All fixed across 4 commits, plus a closing round-5 follow-up (this issue) for documentation + the small modal polish.
+
+### Items closed (4 commits)
+
+#### Round 3 (commit `b3db7b7`) — security + UX hardening
+
+| # | Severity | Issue | Fix |
+|---|---|---|---|
+| 1 | 🟠 Medium | `_handle_timesheet_clock_out` silently added in-progress break minutes to `break_minutes` and closed the shift when the user clicked Clock Out while still on break. | Now rejects with `400 {"error": "End your break before clocking out"}`. Symmetric with `_handle_timesheet_break_end`. |
+| 2 | 🟠 Medium | `/api/timesheet/{history,daily,export,export-pdf}` silently coerced a non-admin's `?user_id=N` request to the caller's own data and returned 200. | All four endpoints now return `403 {"error": "Admin required to view/export other users' timesheets"}` when `user_id` is supplied and differs from the caller. Default (no `user_id` param) behavior unchanged. Matches the existing pattern from `_handle_timesheet_admin_summary`. |
+| 3 | 🟡 Low | `tsEntryContextMenu` allowed deleting the active shift (`clock_out IS NULL`). | The Delete item is now `disabled: true` with `cursor: not-allowed`, muted text, opacity 0.6, and tooltip "Clock out before deleting this entry" when the entry has no `clock_out`. |
+| 4 | 🟡 Low | `tsEditEntry` and `tsAssignProject` attached a document-level `click` listener for backdrop dismissal that was only removed on the backdrop path. Save/Cancel/Escape closed the popup but left the listener attached. | Refactored both to use a single `teardown()` that removes the document listener AND the popup. All close paths go through `teardown()`. |
+
+#### Round 4 part 1 (commit `e576c3a`) — admin "Open Shifts" tab (Option C)
+
+Per user-pinned design: soft warning only, with an admin-only bulk-close tab. No automated data change for end users.
+
+- New admin tab in the Activity / Time Sheet modal (visible only when `state.currentUser.isAdmin`).
+- `GET /api/timesheet/admin/open-shifts` — admin-only. Returns every `time_entries` row with `clock_out IS NULL`, joined with users and opportunities.
+- `POST /api/timesheet/admin/close/{id}` — admin-only. Atomic `UPDATE ... WHERE id = %s AND clock_out IS NULL RETURNING ...`. Sets `auto_closed = TRUE`. Folds any in-progress `break_start` into `break_minutes`. Writes a `bot_activity_log` row. Returns 409 on race-loss, 404 on nonexistent.
+- Per-row "Close now" (NOW) and "Set time…" (inline datetime-local picker) buttons.
+- 30s auto-refresh while the tab is active. Badge on the tab shows the open-shift count.
+- New test file: `tests/test_timesheet_audit_admin_tab.mjs` (7 source-grep tests).
+
+#### Round 4 part 2 (commit `7196e7d`) — "clocked in for 10h+" reminder
+
+Per user-pinned design: 10h + 14h, no per-type opt-out (existing global Telegram opt-out still respected), 60s polling interval, INSERT-IGNORE-style unique guard. Drawer row format: headline = time, snippet = question (no repetition).
+
+- New background thread `timesheet_overdue_checker.py`. Polls every 60s, pulls every open shift past 10h, computes per-row elapsed time, INSERTs a `notifications` row with `ON CONFLICT DO NOTHING`. Exposes `start_checker()` / `stop_checker()` / `scan_once()`.
+- Migration `032_timesheet_overdue_unique_index.sql`: `CREATE UNIQUE INDEX uq_notifications_timesheet_overdue ON notifications (user_id, type, (payload->>'entry_id'), (payload->>'threshold_hours')) WHERE type = 'timesheet_overdue'`. Partial WHERE keeps other notification types unconstrained.
+- `notification_dispatcher.py`: new `_format_timesheet_overdue()` + `elif ntype == "timesheet_overdue":` branch in `_format_notification()`. Uses `_build_tg()` so the visual style matches every other Telegram notification. 10h = "⏰ Forgotten clock-out?" / 14h = "⚠️ Still clocked in". Email formatter also gets a matching branch.
+- `public/app.js`: `_notifTypeIcon()` gets a `timesheet_overdue` branch with the Tabler alarm SVG. `_renderNotificationDrawerItem` click handler branches on `n.type === 'timesheet_overdue'` and calls `openActivityModal()` so the user can immediately clock out.
+- Two new test files: `tests/test_timesheet_overdue_notifications.mjs` (5 source-grep tests) + `tests/test_timesheet_overdue_checker.py` (5 Python unit tests for `scan_once()`).
+
+#### Round 5 (closing — pending) — modal polish + this doc entry
+
+Cosmetic improvement: the modal's entries list now shows a "● Live" badge on the still-running row, and the row's duration cell shows `Hh Mm Ss` (seconds) instead of `Hh Mm`. The duration updates every second via the existing timer interval. Refactored the elapsed calculation into a shared `_tsComputeActiveElapsed()` helper so the big modal timer and the row duration stay in sync.
+
+### Pre-existing issues surfaced and fixed
+
+These were masked by the dead tile-version code (round 1, `48e29df`) and only became visible after the dead code was removed:
+
+- **Modal range navigation was broken** (day/week/month buttons updated the label but never refreshed the entries list). The dead `tsRefreshEntries` was the only caller of itself; the modal's `tsShiftRange`/`tsSetRange` called it but the function was about to be deleted. Repointed both to `modalRefreshEntries()`.
+- **The timer never started** because the dead `tsUpdateClockUI` was the only path that called `tsStartTimer`. After the deletion, nothing started the interval. The modal's `updateModalClockUI` never called the timer starter — it relied on the dead code's side effect.
+
+### Bugs caught during smoke (both fixed before commit)
+
+- **Query threshold off-by-one:** initial SELECT filter used `max(thresholds)` (14h), so an 11h shift never appeared in the result set. Fix: use `min(thresholds)` (10h) in the SELECT, filter per-row.
+- **Naive datetime TZ bug:** `clock_in` from `query_dicts` is a naive `datetime`. Calling `.timestamp()` on a naive datetime interprets it as **local time** — wrong on non-UTC servers (the dev environment is on CDT/UTC-5). The elapsed calc was off by the local TZ offset. Fix: tag naive datetimes as UTC before `.timestamp()`. Prod is on UTC so this wouldn't have bitten prod, but the dev environment was broken without the fix.
+
+### Verification
+
+- Live smoke (cleaned up after each test):
+  - Non-admin `GET /api/timesheet/admin/open-shifts` → **403** "Admin required".
+  - Non-admin `POST /api/timesheet/admin/close/1` → **403** "Admin required".
+  - Admin `GET` → **200** with open shift listed.
+  - Admin `POST` first close → **200**, `auto_closed: true`. Second close → **409** "Entry was already closed by another admin". Nonexistent entry → **404**.
+  - Break-folding: shift with `break_start` 20 min ago, closed via admin → response shows `break_minutes: 19`, `break_start: null`.
+  - `bot_activity_log` row written with admin name + clock_in/clock_out.
+  - Overdue test: created test user with 11h24m shift → `scan_once()` returned `{'scanned': 1, 'inserted_10h': 1, 'inserted_14h': 0}`. DB row: `message='Clocked in for 11h 24m'`, `payload={'snippet': 'Did you forget to log out?', 'threshold_hours': 10, 'elapsed': '11h 24m', 'entry_id': '6'}`. Idempotent on second call. With a 15h5m second shift: 3 rows total (10h for 11h shift, 10h + 14h for 15h shift).
+  - Drawer API returns the rows with the right structure (`type`, `message`, `payload.snippet`, `payload.threshold_hours`).
+- Test counts: 11 JS test files (116 tests) + 4 Python test files (28 tests) = **210 tests, 0 failures**.
+- `py_compile` ×3 (`server.py`, `notification_dispatcher.py`, `timesheet_overdue_checker.py`), `node --check public/app.js` clean.
+- Server restarted with `ts_overdue=ok` in the READY subsystem status.
+
+### Items still open (deliberately)
+
+- **`time_entries_daily` view's `COALESCE(clock_out, NOW())` is still unbounded.** Open shifts still grow the per-day total indefinitely. The admin tab and the overdue notification make the situation actionable (admins can close forgotten shifts, users get a nudge) but the view itself isn't fixed. Three options exist: (a) add a scheduled auto-close job (the design conversation the user originally deferred); (b) filter `clock_out IS NULL` out of `time_entries_daily` until an admin closes them (changes analytics); (c) leave as-is (the view reflects ground truth, the admin tab is the action path). **Current decision: option (c).** Revisit only if analytics depend on it.
+- **`_tsActiveEntry` periodic refresh.** If a future admin path closes the user's shift while the user is on a different page, the header button stays in "Clock Out" state until reload. Theoretical today; the only close paths are the user's own clock-out, the admin close handler, and the auto-close notification — all of which require explicit re-fetch.
+
+### Files changed (across all 4 commits)
+
+| File | Role |
+|---|---|
+| `server.py` | New handlers: `_handle_timesheet_admin_open_shifts`, `_handle_timesheet_admin_close_entry`. New route registrations. 403 enforcement on 4 cross-user endpoints. New start/stop wiring for the overdue checker. |
+| `notification_dispatcher.py` | New `_format_timesheet_overdue()` + email branch. |
+| `timesheet_overdue_checker.py` (new) | 60s background thread, idempotent INSERT, shared elapsed-math helper. |
+| `migrations/032_timesheet_overdue_unique_index.sql` (new) | Partial unique index for de-dup. |
+| `public/app.js` | Admin tab renderer + click actions, drawer clock icon + click-to-open-modal, modal "● Live" dot + active-row seconds counter, shared `_tsComputeActiveElapsed()` helper. |
+| `public/index.html` | New `<button>` for the Open Shifts tab (hidden by default). |
+| `public/styles.css` | New styles for the admin shifts table, the active row, the "● Live" badge. |
+| `tests/test_timesheet_audit_round3.mjs` (new) | 5 source-grep tests for the round 3 fixes. |
+| `tests/test_timesheet_audit_admin_tab.mjs` (new) | 7 source-grep tests for the admin tab. |
+| `tests/test_timesheet_overdue_notifications.mjs` (new) | 5 source-grep tests for the overdue notification. |
+| `tests/test_timesheet_overdue_checker.py` (new) | 5 Python unit tests for `scan_once()`. |
