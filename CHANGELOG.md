@@ -2,6 +2,12 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Tasks tile: cap the linked project name (visual fix) (2026-10-15)
+
+The linked project name on a task row was rendered as a chip with no max-width. With a long project name (e.g. "424-426 Ponderosa Ave - Cambridge Commons Storyboard"), the chip claimed the full row width and the task title was truncated to "Re..." (3 chars + ellipsis). The chip container has `flex-shrink: 0`, so the title's `flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis` could only take what was left.
+
+Fix: add a max-width + ellipsis to `.task-chip-project-text` in `public/styles.css` (4 lines: `max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap`). The full project name is already available in the `title` tooltip on hover, so the truncation is non-destructive.
+
 ## Automation: remaining polish + targeted test endpoint (audit round 8 part 2) (2026-10-15)
 
 The remaining 5 low-priority items from the original automation audit, shipped in one commit.

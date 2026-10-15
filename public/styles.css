@@ -2435,7 +2435,16 @@ body {
 .task-chip-project:hover {
   text-decoration: underline;
 }
-.task-chip-project-text { /* visible by default */ }
+/* The linked project name on a task row. The full name is already
+   available in the `title` tooltip on hover, so capping + ellipsis
+   here is non-destructive — it just gives the task title its
+   horizontal space back on long project names. */
+.task-chip-project-text {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 @container (max-width: 400px) {
   .task-chip-project-text { display: none; }
   .task-chip-project { padding: 0.15rem 0.35rem; }
