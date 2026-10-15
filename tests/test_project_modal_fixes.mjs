@@ -274,11 +274,17 @@ test('Fix F: buildFieldElement uses checkbox SVG icon (not text glyph)', () => {
   );
 });
 
-test('Fix F: CSS sizes the checkbox icons', () => {
-  assert.ok(
-    /\.opp-preview-chk-(yes|no)\s+svg\s*\{[\s\S]*?width:\s*0\.95em/.test(stylesCss),
-    'CSS does not size the new checkbox SVGs (0.95em)'
-  );
+test('Fix F: CSS sizes the checkbox icons at least 1em', () => {
+  // Audit 2026-10-14 round 3: bumped from 0.95em to 1.1em so the
+  // icons match the field-row font height (the user said the
+  // previous 0.95em was way too small).
+  const m = stylesCss.match(/\.opp-preview-chk-(yes|no)\s+svg\s*\{([^}]+)\}/);
+  assert.ok(m, 'could not find .opp-preview-chk-(yes|no) svg rule');
+  const body = m[2];
+  const w = body.match(/width:\s*([\d.]+)em/);
+  const h = body.match(/height:\s*([\d.]+)em/);
+  assert.ok(w && parseFloat(w[1]) >= 1.0, `SVG width is ${w?.[1]}em, should be >= 1.0em`);
+  assert.ok(h && parseFloat(h[1]) >= 1.0, `SVG height is ${h?.[1]}em, should be >= 1.0em`);
 });
 
 // --- Prior Fix 1: project page reply toolbar ---

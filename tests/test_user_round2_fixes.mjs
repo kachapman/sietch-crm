@@ -176,24 +176,66 @@ test('Issue 4: _handle_contact_photo_get still falls back to avatar_url', () => 
   );
 });
 
-// --- Issue 5: project page highlight respects dark mode ---
+// --- Issue 5: project page highlight — subtle tint, both modes ---
 
-test('Issue 5: project.html highlight rule has a dark-mode media query', () => {
-  // The .event-reply-body mark rule was previously !important on
-  // background-color: rgba(34, 197, 94, 0.65) + color: #000 for ALL
-  // color schemes. The fix splits into a default (dark-friendly)
-  // rule + a light-only @media block.
+test('Issue 5: highlight opacity is now low (subtle tint, not vivid block)', () => {
+  // Audit 2026-10-14 round 3: dropped the vivid 0.65 opacity + forced
+  // #000 text color. The user said the previous version was "still
+  // too high contrast." Now a single 0.3-opacity tint with text
+  // color inherited from the surrounding content.
   assert.ok(
-    /@media\s*\(prefers-color-scheme:\s*light\)/.test(projectHtml),
-    'project.html has no @media (prefers-color-scheme: light) block for the highlight rule'
+    /rgba\(34,\s*197,\s*94,\s*0\.3\)\s*!important/.test(projectHtml),
+    'project.html should use rgba(34, 197, 94, 0.3) for the highlight (subtle tint)'
   );
-  // The high-contrast !important rule should now be INSIDE the
-  // light-mode media query, not outside it.
-  const lightBlockMatch = projectHtml.match(
-    /@media\s*\(prefers-color-scheme:\s*light\)\s*\{[\s\S]*?rgba\(34,\s*197,\s*94,\s*0\.65\)/,
+  // The forced #000 text color is gone — text should inherit.
+  assert.ok(
+    !/color:\s*#000\s*!important/.test(projectHtml),
+    'project.html should not force color: #000 !important on the highlight (it broke dark mode)'
+  );
+  // The light-only media query is gone — single rule for both modes.
+  assert.ok(
+    !/@media\s*\(prefers-color-scheme:\s*light\)/.test(projectHtml),
+    'project.html should not have a light-only @media block for the highlight'
+  );
+  // Same fix applied to the dashboard preview (styles.css).
+  const stylesCss = readFileSync(join(repoRoot, 'public/styles.css'), 'utf8');
+  assert.ok(
+    /rgba\(34,\s*197,\s*94,\s*0\.3\)/.test(stylesCss),
+    'styles.css .opp-preview-history-reply-body highlight should use 0.3 opacity'
   );
   assert.ok(
-    lightBlockMatch,
-    'light-mode @media block does not contain the high-contrast green highlight'
+    !/color:\s*#000\s*!important/.test(stylesCss),
+    'styles.css should not force color: #000 !important on the highlight'
+  );
+});
+
+// --- Issue 6: checkbox SVG matches font height (≥ 1em) ---
+
+test('Issue 6: checkbox / square SVG is at least 1em tall', () => {
+  // Audit 2026-10-14 round 3: bumped from 0.95em to 1.1em — the user
+  // said the previous 0.95em was way too small and the icons should
+  // "at least match font height."
+  const stylesCss = readFileSync(join(repoRoot, 'public/styles.css'), 'utf8');
+  // Find the .opp-preview-chk-yes svg / .opp-preview-chk-no svg rule.
+  const ruleMatch = stylesCss.match(
+    /\.opp-preview-chk-(yes|no)\s+svg\s*\{([^}]+)\}/
+  );
+  assert.ok(
+    ruleMatch,
+    'could not find .opp-preview-chk-(yes|no) svg rule in styles.css'
+  );
+  const body = ruleMatch[2];
+  // Must have width: >= 1em and height: >= 1em.
+  const widthMatch = body.match(/width:\s*([\d.]+)em/);
+  const heightMatch = body.match(/height:\s*([\d.]+)em/);
+  assert.ok(widthMatch, 'checkbox SVG width rule missing or not in em');
+  assert.ok(heightMatch, 'checkbox SVG height rule missing or not in em');
+  assert.ok(
+    parseFloat(widthMatch[1]) >= 1.0,
+    `checkbox SVG width is ${widthMatch[1]}em, should be ≥ 1.0em`
+  );
+  assert.ok(
+    parseFloat(heightMatch[1]) >= 1.0,
+    `checkbox SVG height is ${heightMatch[1]}em, should be ≥ 1.0em`
   );
 });

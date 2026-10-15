@@ -13,6 +13,26 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-14
 
+**Topic:** Round 3 polish — highlight opacity + checkbox SVG size.
+
+**What landed:**
+
+- **Highlight contrast was still too high.** The previous round's split light/dark rule had a `0.65` opacity + forced `#000` text in light mode. The user said it was "still too high contrast." Now: single rule for both modes — `rgba(34, 197, 94, 0.3) !important; color: inherit;`. Applied to three places that had the same pattern:
+  - `public/project.html:133-160` `.event-reply-body mark` (project page reply box)
+  - `public/styles.css:7272` `.opp-preview-history-reply-body mark` (dashboard preview reply box)
+  - `public/styles.css:3377` `.opp-preview-history-body--plain` / `.opp-preview-note-detail mark` (the main note detail body — third place with the same pattern that I missed in round 2)
+- **Checkbox SVG was way too small.** Bumped from `0.95em` to `1.1em` in `public/styles.css:6763-6765`. At 1.1em the icon clearly matches the field-row font height and is visible without being huge.
+
+**Tests:** `tests/test_user_round2_fixes.mjs` (now 10 tests) updated Issue 5 to assert the new low-opacity single-rule design + added Issue 6 to assert SVG ≥ 1em. `tests/test_project_modal_fixes.mjs` updated Fix F CSS-size assertion to check ≥ 1em. Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 10 = **186 tests, 0 failures**. `node --check` clean.
+
+**Verified live:** 4 files modified (`public/project.html`, `public/styles.css`, 2 test files). `git diff --stat` = `+92 −50`. **Browser refresh required** for the changes to take effect.
+
+**Next:** No urgent follow-ups. The remaining audit findings from `docs/EMAIL_TEMPLATE_AUDIT.md` (template CRUD auth, size caps, dead `template_id` FK, `[#PROJECTID]` outgoing standardization, etc.) are still in the queue.
+
+---
+
+## Previous summary (2026-10-14)
+
 **Topic:** Round 2 fixes — checkbox icon (no more "Yes" text), contact edit button removed, contact history sync, contact photos, dark-mode highlight.
 
 **What landed (5 user-reported regressions from the previous commit):**

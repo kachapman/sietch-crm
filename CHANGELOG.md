@@ -2,6 +2,18 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Round 3: highlight opacity + checkbox SVG size (2026-10-14)
+
+Two visual polish fixes from the previous round:
+
+- **Highlight contrast was still too high.** The previous fix (round 2) used `rgba(34, 197, 94, 0.35) + color: inherit` in dark mode and `rgba(34, 197, 94, 0.65) + color: #000 !important` in light mode. The user said the light-mode variant (and the dashboard preview's identical rule) was still too high-contrast. Now: single rule for both modes — `rgba(34, 197, 94, 0.3) !important; color: inherit;`. Applied to:
+  - `public/project.html` `.event-reply-body mark` etc. (project page reply box)
+  - `public/styles.css:7272` `.opp-preview-history-reply-body mark` etc. (dashboard preview reply box)
+  - `public/styles.css:3377` `.opp-preview-history-body--plain mark` etc. and `.opp-preview-note-detail mark` etc. (the main note detail body in the preview — third place with the same pattern that I missed in round 2)
+- **Checkbox SVG was way too small.** Bumped from `0.95em` to `1.1em` in `public/styles.css:6763-6765` (`.opp-preview-chk-yes svg` and `.opp-preview-chk-no svg`). At 1.1em the icon clearly matches the field-row font height and is visible without being huge.
+
+Tests: `tests/test_user_round2_fixes.mjs` (now 10 tests) updated the Issue 5 assertion to check the new low-opacity single-rule design, and added a new Issue 6 test that the SVG is at least 1em. `tests/test_project_modal_fixes.mjs` updated the Fix F CSS-size assertion to check ≥ 1em. Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 10 = **186 tests, 0 failures**. `node --check` clean.
+
 ## Round 2 fixes: checkbox icon, contact edit button, contact history sync, contact photos, dark-mode highlight (2026-10-14)
 
 Five user-reported regressions from the previous commit, all fixed:

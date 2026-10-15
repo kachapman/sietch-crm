@@ -3374,8 +3374,8 @@ body {
 .opp-preview-note-detail span[style*="background:"],
 .opp-preview-note-detail b[style*="background-color"],
 .opp-preview-note-detail b[style*="background:"] {
-  background-color: rgba(34, 197, 94, 0.65) !important;
-  color: #000 !important;
+  background-color: rgba(34, 197, 94, 0.3) !important;
+  color: inherit;
   padding: 0 2px;
   border-radius: 2px;
 }
@@ -6756,12 +6756,14 @@ body {
   align-items: center;
 }
 /* Audit: the checkbox / square icons inside these spans are full-size
-   Tabler SVGs (24x24). Scale them down to match the small inline
-   field-row size (≈14px tall, 1em line-height). */
+   Tabler SVGs (24x24). Scale them to match the field-row font
+   height (1.1em so they sit slightly above the baseline for visual
+   prominence). Audit 2026-10-14: bumped from 0.95em to 1.1em — the
+   user said the previous size was way too small. */
 .opp-preview-chk-yes svg,
 .opp-preview-chk-no svg {
-  width: 0.95em;
-  height: 0.95em;
+  width: 1.1em;
+  height: 1.1em;
   flex-shrink: 0;
 }
 
@@ -7256,17 +7258,19 @@ body {
 .opp-preview-history-reply-body u {
   text-decoration: underline;
 }
-/* Dark-mode-aware highlight for reply bodies (mirrors the rule set at lines
-   3268-3291 for the main note body). Without this, any <mark> / inline
-   background-color in a reply renders with raw high-contrast colors and is
-   invisible / unreadable in dark mode. */
+/* Subtle highlighter for reply bodies (mirrors the rule set at lines
+   3268-3291 for the main note body). Audit 2026-10-14: dropped the
+   vivid 0.65 opacity + forced #000 text color in both modes — too
+   high-contrast. Now a single low-opacity tint with the text color
+   inherited from the surrounding content. Works the same in light
+   and dark mode. */
 .opp-preview-history-reply-body mark,
 .opp-preview-history-reply-body span[style*="background-color"],
 .opp-preview-history-reply-body span[style*="background:"],
 .opp-preview-history-reply-body b[style*="background-color"],
 .opp-preview-history-reply-body b[style*="background:"] {
-  background-color: rgba(34, 197, 94, 0.65) !important;
-  color: #000 !important;
+  background-color: rgba(34, 197, 94, 0.3) !important;
+  color: inherit;
   padding: 0 2px;
   border-radius: 2px;
 }
