@@ -2,6 +2,20 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Timesheet audit round 3 — security + UX hardening (2026-10-15)
+
+Four follow-up fixes from the original timesheet audit. End-to-end verified with a temp non-admin user.
+
+**Item 2 — Reject clock-out while on break.** `_handle_timesheet_clock_out` in `server.py` silently added any in-progress break minutes to `break_minutes` and closed the shift when the user clicked Clock Out while still on break. Now rejects with `400 {"error": "End your break before clocking out"}` and points the user to the break/end endpoint first. Symmetric with `_handle_timesheet_break_end`, which already refused to end a non-existent break.
+
+**Item 3 — Return 403 for non-admin cross-user requests on history/daily/export endpoints.** All four handlers (`_handle_timesheet_history`, `_handle_timesheet_daily`, `_handle_timesheet_export_csv`, `_handle_timesheet_export_pdf`) in `server.py` silently coerced a non-admin's `?user_id=N` request to the caller's own data and returned 200. Now each handler returns `403 {"error": "Admin required to view/export other users' timesheets"}` when `user_id` is supplied and differs from the caller. Default behavior (no `user_id` param) is unchanged. Matches the pattern already used by `_handle_timesheet_admin_summary`.
+
+**Item 4 — Disable Delete on the active shift in the right-click context menu.** `tsEntryContextMenu` in `public/app.js` allowed deleting the active shift (`clock_out IS NULL`), which would silently discard the in-progress shift's `clock_in` and any `break_minutes` accumulated. Now the Delete item is `disabled: true` with `cursor: not-allowed`, muted text, opacity 0.6, and a tooltip "Clock out before deleting this entry" when the entry has no `clock_out`. Add/Edit Note and Assign to Project still work on active shifts.
+
+**Item 5 — Fix the document-level click listener leak in the note and project popups.** `tsEditEntry` and `tsAssignProject` in `public/app.js` attached a document-level `click` listener for backdrop dismissal that was only removed on the backdrop path. If the user clicked Save/Cancel/Escape, `popup.remove()` ran but the document-level listener stayed attached, accumulating one stale handler per open/close cycle. Refactored both functions to use a single `teardown()` that removes the document listener AND the popup. Save, Cancel, Escape, and the project-pick click in `tsAssignProject` all go through `teardown()` now.
+
+Tests: new `tests/test_timesheet_audit_round3.mjs` (5 source-grep tests covering all four items). Full suite: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 + 5 = **191 tests, 0 failures**. `py_compile` ×2, `node --check public/app.js` clean. Server restarted (PID 2275339, port 8766) and serving the new `app.js` (1,870,251 bytes).
+
 ## Timesheet modal: live timer fix (2026-10-15)
 
 The previous commit (`48e29df`) removed ~254 lines of dead "tile-version" timesheet code from `public/app.js`, but in the process exposed a latent timer bug: the live modal's `updateModalClockUI()` had never called `tsStartTimer()` on its own — it relied on the dead `tsUpdateClockUI` (now deleted) to start the interval. The result was a frozen `00:00:00` display even when clocked in (the entry existed in the DB and the Clock Out button showed, but the elapsed time never ticked). Pre-existing, the dead `tsUpdateTimerDisplay` was also looking up the dead `#ts-timer-display` instead of the live `#modal-ts-timer`, so the timer would have ticked but updated nothing.

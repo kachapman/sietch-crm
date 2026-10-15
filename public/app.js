@@ -19008,11 +19008,11 @@ function tsRenderAdminWeeklyView(container) {
 function tsEditEntry(entry) {
   // Close any existing popup
   document.querySelectorAll(".ts-note-popup").forEach(m => m.remove());
-  
+
   const popup = document.createElement("div");
   popup.className = "ts-note-popup";
   popup.style.cssText = "position:fixed;z-index:10001;background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);padding:0.75rem;width:min(320px,90vw);";
-  
+
   popup.innerHTML = `
     <div style="font-size:0.78rem;font-weight:600;color:var(--muted);margin-bottom:0.4rem;">Entry Note</div>
     <textarea class="ts-note-textarea" rows="4" style="width:100%;font:inherit;font-size:0.82rem;padding:0.4rem;border:1px solid var(--border);border-radius:4px;background:var(--surface-2);color:var(--text);resize:vertical;box-sizing:border-box;" placeholder="Add a note...">${escapeHtml(entry.notes || "")}</textarea>
@@ -19021,70 +19021,94 @@ function tsEditEntry(entry) {
       <button type="button" class="btn btn-primary btn-small ts-note-save">Save</button>
     </div>
   `;
-  
+
   // Position near the right-click or center of screen
   popup.style.left = "50%";
   popup.style.top = "50%";
   popup.style.transform = "translate(-50%, -50%)";
   document.body.appendChild(popup);
-  
+
   const textarea = popup.querySelector(".ts-note-textarea");
   textarea.focus();
   textarea.select();
-  
+
+  // The backdrop close listener must be removed by every close path
+  // (Save, Cancel, Escape, backdrop click) to avoid the leak where
+  // document-level listeners accumulate across popup open/close cycles.
+  const closeBackdropListener = (ev) => {
+    if (!popup.contains(ev.target)) teardown();
+  };
+  const teardown = () => {
+    document.removeEventListener("click", closeBackdropListener);
+    if (popup.parentNode) popup.remove();
+  };
   const save = () => {
     const notes = textarea.value;
-    popup.remove();
+    teardown();
     api(`/api/timesheet/entries/${entry.id}`, {
       method: "PUT",
       body: JSON.stringify({ notes }),
     }).then(() => modalRefreshEntries());
   };
-  const cancel = () => popup.remove();
-  
+  const cancel = () => teardown();
+
   popup.querySelector(".ts-note-save").addEventListener("click", save);
   popup.querySelector(".ts-note-cancel").addEventListener("click", cancel);
   textarea.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) save();
     if (e.key === "Escape") cancel();
   });
-  // Close on backdrop click
+  // Close on backdrop click. The setTimeout defers attachment so the
+  // click that opened the popup doesn't immediately close it.
   setTimeout(() => {
-    document.addEventListener("click", function close(ev) {
-      if (!popup.contains(ev.target)) { popup.remove(); document.removeEventListener("click", close); }
-    });
+    document.addEventListener("click", closeBackdropListener);
   }, 0);
 }
 
 function tsEntryContextMenu(e, entry) {
   e.preventDefault();
   document.querySelectorAll(".ts-context-menu").forEach(m => m.remove());
-  
+
   const menu = document.createElement("div");
   menu.className = "ts-context-menu";
   menu.style.cssText = "position:fixed;z-index:1000;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 4px 12px rgba(0,0,0,0.3);padding:0.25rem 0;min-width:140px;";
-  
+
+  // Block delete on the active shift (clock_out IS NULL). Deleting the
+  // running entry would silently discard the in-progress shift's clock_in
+  // and any break_minutes already accumulated. The user must clock out
+  // (or an admin must use the bulk close path) to make it deletable.
+  const isActive = !entry.clock_out;
+  const deleteTitle = isActive
+    ? "Clock out before deleting this entry"
+    : "";
+
   const items = [
     { label: "Add/Edit Note", action: () => tsEditEntry(entry) },
     { label: "Assign to Project", action: () => tsAssignProject(entry, e) },
-    { label: "Delete", action: () => tsDeleteEntry(entry), danger: true },
+    { label: "Delete", action: () => tsDeleteEntry(entry), danger: true, disabled: isActive, title: deleteTitle },
   ];
-  
+
   items.forEach(item => {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.textContent = item.label;
-    btn.style.cssText = `display:block;width:100%;padding:0.4rem 0.75rem;border:none;background:transparent;text-align:left;cursor:pointer;font-size:0.82rem;font-family:var(--font);color:${item.danger ? 'var(--danger, #ef4444)' : 'var(--text)'};`;
-    btn.addEventListener("mouseenter", () => btn.style.background = "var(--hover-bg, rgba(255,255,255,0.06))");
-    btn.addEventListener("mouseleave", () => btn.style.background = "transparent");
-    btn.addEventListener("click", () => { menu.remove(); item.action(); });
+    btn.disabled = !!item.disabled;
+    btn.title = item.title || "";
+    const baseColor = item.danger ? 'var(--danger, #ef4444)' : 'var(--text)';
+    const color = item.disabled ? 'var(--muted)' : baseColor;
+    btn.style.cssText = `display:block;width:100%;padding:0.4rem 0.75rem;border:none;background:transparent;text-align:left;cursor:${item.disabled ? 'not-allowed' : 'pointer'};font-size:0.82rem;font-family:var(--font);color:${color};opacity:${item.disabled ? 0.6 : 1};`;
+    if (!item.disabled) {
+      btn.addEventListener("mouseenter", () => btn.style.background = "var(--hover-bg, rgba(255,255,255,0.06))");
+      btn.addEventListener("mouseleave", () => btn.style.background = "transparent");
+      btn.addEventListener("click", () => { menu.remove(); item.action(); });
+    }
     menu.appendChild(btn);
   });
-  
+
   menu.style.left = e.clientX + "px";
   menu.style.top = e.clientY + "px";
   document.body.appendChild(menu);
-  
+
   setTimeout(() => {
     document.addEventListener("click", function close() { menu.remove(); document.removeEventListener("click", close); }, { once: true });
   }, 0);
@@ -19111,7 +19135,19 @@ function tsAssignProject(entry, mouseEvent) {
   const input = popup.querySelector(".ts-project-search");
   const results = popup.querySelector(".ts-project-results");
   input.focus();
-  
+
+  // Single teardown removes the backdrop close listener AND the popup.
+  // Every close path (project click, Escape, backdrop click) must call
+  // teardown() so the document-level click listener doesn't leak.
+  const closeBackdropListener = (ev) => {
+    if (!popup.contains(ev.target)) teardown();
+  };
+  const teardown = () => {
+    document.removeEventListener("click", closeBackdropListener);
+    if (searchTimer) clearTimeout(searchTimer);
+    if (popup.parentNode) popup.remove();
+  };
+
   let searchTimer;
   const doSearch = (q) => {
     searchOpportunitiesByTitle(q, { limit: 8 }).then(items => {
@@ -19128,7 +19164,7 @@ function tsAssignProject(entry, mouseEvent) {
         btn.addEventListener("mouseenter", () => btn.style.background = "var(--hover-bg, rgba(255,255,255,0.06))");
         btn.addEventListener("mouseleave", () => btn.style.background = "transparent");
         btn.addEventListener("click", () => {
-          popup.remove();
+          teardown();
           api(`/api/timesheet/entries/${entry.id}`, {
             method: "PUT",
             body: JSON.stringify({ opportunity_id: opp.id }),
@@ -19138,18 +19174,20 @@ function tsAssignProject(entry, mouseEvent) {
       });
     }).catch(() => {});
   };
-  
+
   input.addEventListener("input", () => {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => doSearch(input.value.trim()), 250);
   });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") teardown();
+  });
   doSearch("");
-  
-  // Close on click outside
+
+  // Close on backdrop click. The setTimeout defers attachment so the
+  // right-click that opened this popup doesn't immediately close it.
   setTimeout(() => {
-    document.addEventListener("click", function close(ev) {
-      if (!popup.contains(ev.target)) { popup.remove(); document.removeEventListener("click", close); }
-    });
+    document.addEventListener("click", closeBackdropListener);
   }, 0);
 }
 

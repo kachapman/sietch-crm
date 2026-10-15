@@ -15717,16 +15717,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "Not currently clocked in"})
             return
         entry = entries[0]
-        extra_break = 0
+        # Symmetric with _handle_timesheet_break_end: refuse to clock out
+        # while a break is in progress. The user must end the break first;
+        # the frontend can then clock out normally. This prevents silently
+        # adding the in-progress break to break_minutes and closing the shift.
         if entry.get("break_start"):
-            bs = _parse_iso_datetime(str(entry["break_start"]))
-            if bs:
-                extra_break = int((datetime.now(timezone.utc) - bs).total_seconds() / 60)
-        if extra_break:
-            db.execute(
-                "UPDATE time_entries SET break_minutes = break_minutes + %s, break_start = NULL WHERE id = %s",
-                (extra_break, entry["id"]),
-            )
+            _json_response(self, 400, {"error": "End your break before clocking out"})
+            return
         db.execute(
             "UPDATE time_entries SET clock_out = NOW(), updated_at = NOW() WHERE id = %s",
             (entry["id"],),
@@ -15794,8 +15791,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         from_date = (qs.get("from") or [""])[0]
         to_date = (qs.get("to") or [""])[0]
         target_user = int(uid) if uid.isdigit() else user["id"]
-        if target_user != user["id"] and not user.get("is_admin"):
-            target_user = user["id"]
+        # Non-admin users may only read their own data. A request that asks
+        # for a different user_id must be rejected explicitly so the caller
+        # cannot silently coerce the result to their own data.
+        if uid.isdigit() and target_user != user["id"] and not user.get("is_admin"):
+            _json_response(self, 403, {"error": "Admin required to view other users' timesheets"})
+            return
         conditions = ["te.user_id = %s"]
         params: list = [target_user]
         if from_date:
@@ -15823,8 +15824,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         from_date = (qs.get("from") or [""])[0]
         to_date = (qs.get("to") or [""])[0]
         target_user = int(uid) if uid.isdigit() else user["id"]
-        if target_user != user["id"] and not user.get("is_admin"):
-            target_user = user["id"]
+        # Non-admin users may only read their own data. A request that asks
+        # for a different user_id must be rejected explicitly so the caller
+        # cannot silently coerce the result to their own data.
+        if uid.isdigit() and target_user != user["id"] and not user.get("is_admin"):
+            _json_response(self, 403, {"error": "Admin required to view other users' timesheets"})
+            return
         conditions = ["user_id = %s"]
         params: list = [target_user]
         if from_date:
@@ -15927,8 +15932,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         from_date = (qs.get("from") or [""])[0]
         to_date = (qs.get("to") or [""])[0]
         target_user = int(uid) if uid.isdigit() else user["id"]
-        if target_user != user["id"] and not user.get("is_admin"):
-            target_user = user["id"]
+        # Non-admin users may only export their own data. A request that asks
+        # for a different user_id must be rejected explicitly so the caller
+        # cannot silently coerce the result to their own data.
+        if uid.isdigit() and target_user != user["id"] and not user.get("is_admin"):
+            _json_response(self, 403, {"error": "Admin required to export other users' timesheets"})
+            return
         conditions = ["te.user_id = %s"]
         params: list = [target_user]
         if from_date:
@@ -15986,8 +15995,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         from_date = (qs.get("from") or [""])[0]
         to_date = (qs.get("to") or [""])[0]
         target_user = int(uid) if uid.isdigit() else user["id"]
-        if target_user != user["id"] and not user.get("is_admin"):
-            target_user = user["id"]
+        # Non-admin users may only export their own data. A request that asks
+        # for a different user_id must be rejected explicitly so the caller
+        # cannot silently coerce the result to their own data.
+        if uid.isdigit() and target_user != user["id"] and not user.get("is_admin"):
+            _json_response(self, 403, {"error": "Admin required to export other users' timesheets"})
+            return
         users = db.query_dicts("SELECT display_name, email FROM users WHERE id = %s", (target_user,))
         user_info = users[0] if users else {"display_name": "Unknown", "email": ""}
         conditions = ["te.user_id = %s"]

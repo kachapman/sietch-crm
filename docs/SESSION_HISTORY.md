@@ -13,6 +13,46 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-15
 
+**Topic:** Timesheet audit round 3 — clear the remaining 4 low/medium findings (#2-#5 from the audit).
+
+**What landed:**
+
+- **Item 2 (medium):** `_handle_timesheet_clock_out` in `server.py` silently added any in-progress break minutes to `break_minutes` and closed the shift when the user clicked Clock Out while still on break. Now rejects with `400 {"error": "End your break before clocking out"}` and points the user to the break/end endpoint first. Symmetric with `_handle_timesheet_break_end`, which already refused to end a non-existent break.
+- **Item 3 (medium):** `/api/timesheet/{history,daily,export,export-pdf}` in `server.py` silently coerced a non-admin's cross-user request (e.g. `?user_id=42`) to the caller's own data and returned 200. Now all four endpoints return `403 {"error": "Admin required to view/export other users' timesheets"}` when `user_id` is supplied and differs from the caller. Default behavior (no `user_id` param) is unchanged — caller gets their own data with 200. Matches the pattern already used by `_handle_timesheet_admin_summary`.
+- **Item 4 (low):** `tsEntryContextMenu` in `public/app.js` allowed deleting the active shift (`clock_out IS NULL`). Now the Delete item is `disabled: true` with `cursor: not-allowed`, muted text, opacity 0.6, and a tooltip "Clock out before deleting this entry" when the entry has no `clock_out`. Add/Edit Note and Assign to Project still work on active shifts (those are safe).
+- **Item 5 (low):** `tsEditEntry` and `tsAssignProject` in `public/app.js` attached a document-level `click` listener for backdrop dismissal that was only removed on the backdrop path. If the user clicked Save/Cancel/Escape, `popup.remove()` ran but the document-level listener stayed attached, accumulating one stale handler per open/close cycle. Refactored both functions to use a single `teardown()` that removes the document listener AND the popup. Save, Cancel, Escape, and the project-pick click in `tsAssignProject` all go through `teardown()` now. `tsEntryContextMenu` already used `{ once: true }` correctly and was not affected.
+
+**Verification:**
+
+- Live end-to-end smoke test (using a temp non-admin user `audit-test@sietch.local` with password `TestPass123!`, then cleaned up):
+  - `GET /api/timesheet/{history,daily,export,export-pdf}?user_id=1` (non-admin) → **403** with "Admin required to view/export other users' timesheets".
+  - `GET /api/timesheet/history?user_id=107` (own) → **200**.
+  - `GET /api/timesheet/history` (no user_id) → **200**.
+  - `POST /api/timesheet/clock-out` with `break_start` set → **400** with "End your break before clocking out".
+  - `POST /api/timesheet/break/end` → **200** with `break_minutes: 15`.
+  - `POST /api/timesheet/clock-out` (after break ended) → **200**, entry has `clock_out` set and `break_minutes: 15` preserved.
+- All existing tests still pass: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 = **186 tests, 0 failures** (before this round).
+- New: `tests/test_timesheet_audit_round3.mjs` (5 source-grep tests):
+  1. `_handle_timesheet_clock_out` no longer has the `extra_break` silent-coerce path; it returns 400 "End your break before clocking out" when `break_start` is set.
+  2. All four handlers (`history`, `daily`, `export_csv`, `export_pdf`) no longer have the `target_user = user['id']` silent-coerce; each returns 403 "Admin required to ...".
+  3. `tsEntryContextMenu` detects active shift via `!entry.clock_out`, disables Delete with "Clock out before deleting this entry" tooltip, sets `disabled: isActive` in the items array.
+  4. `tsEditEntry` has a `teardown()` that removes the document click listener; both `save()` and `cancel()` call `teardown()`.
+  5. `tsAssignProject` has the same teardown pattern; project-pick click and Escape keypress both call `teardown()`; the old anonymous `function close(ev)` leak pattern is gone.
+- Full suite after this round: 15 + 49 + 8 + 14 + 17 + 4 + 28 + 5 + 7 + 5 + 24 + 11 + 5 = **191 tests, 0 failures**. `py_compile` ×2, `node --check public/app.js` clean. Server restarted (PID 2275339, port 8766), serving the new `app.js` (1,870,251 bytes).
+
+**Verified live (manual, after browser reload):**
+
+- Settings → Activity / Time Sheet → right-click an active (still-running) shift → Delete is greyed out with the "Clock out before deleting this entry" tooltip. Clock Out first, then Delete becomes available.
+- Right-click an old entry → Add/Edit Note and Delete both work. Open the note popup, click Save → popup closes, no stale document-level listener.
+- Open the Assign-to-Project popup, press Escape → popup closes cleanly. Click outside the popup → also closes cleanly. No leaks across multiple open/close cycles.
+- Settings → Activity → click "Activity" tab → renders without errors. (Unchanged from before.)
+
+**Next:** Plan Option C for the open-shift auto-close (item #1 from the original audit). The user explicitly chose Option C: soft warning only (badge in modal + admin summary), with an admin-only bulk-close tab. No automated data change for end users. **Switching agents before implementing this one — needs design decisions.**
+
+---
+
+## Previous summary (2026-10-15)
+
 **Topic:** Timesheet modal live timer — fix frozen `00:00:00` after dead-code deletion.
 
 **What landed:**
