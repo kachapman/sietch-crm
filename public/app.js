@@ -34569,10 +34569,18 @@ function bindAdminContacts() {
 async function populateAdminStagesList(search = "") {
   const listEl = $("#admin-stages-list");
   if (!listEl) return;
+  // Dragging reorders the WHOLE pipeline, but the Sortable onEnd handler reads
+  // the ids straight out of this DOM. When a search filter is active that DOM
+  // holds only the matching rows, so posting it would renumber sort_order for
+  // the visible subset and collide with the rows that are filtered out —
+  // scrambling the pipeline. Disable drag while filtering rather than trying
+  // to reconstruct correct positions client-side.
+  const filtered = !!search;
+  listEl.classList.toggle("stages-filtered", filtered);
   try {
     const data = await api("/api/v2/stages");
     let stages = unwrap(data) || data || [];
-    if (search) {
+    if (filtered) {
       const q = search.toLowerCase();
       stages = stages.filter(s => (s.title || "").toLowerCase().includes(q));
     }
@@ -34600,6 +34608,10 @@ async function populateAdminStagesList(search = "") {
         </div>
       </div>`;
     }).join("");
+    if (filtered) {
+      listEl.insertAdjacentHTML("beforeend",
+        '<div class="admin-customize-empty">Reordering is disabled while searching — clear the search to drag stages.</div>');
+    }
   } catch (e) {
     listEl.innerHTML = `<div class="admin-customize-empty" style="color:var(--danger);">Failed to load stages.</div>`;
   }
@@ -34704,6 +34716,14 @@ function bindAdminStages() {
       ghostClass: "sortable-ghost",
       chosenClass: "sortable-chosen",
       onEnd: async (evt) => {
+        // Belt-and-braces: the CSS hides the handles while a search filter is
+        // active, but a stray drag (or a re-render racing the class toggle)
+        // must never post a partial id set and renumber a subset.
+        if (stagesList.classList.contains("stages-filtered")) {
+          populateAdminStagesList($("#admin-stages-search")?.value.trim() || "");
+          showToast("Clear the search to reorder stages", true);
+          return;
+        }
         const ids = [...stagesList.querySelectorAll(".admin-customize-row")]
           .map(row => parseInt(row.dataset.stageId)).filter(Boolean);
         try {
@@ -34867,6 +34887,46 @@ async function populateAdminCustomFieldsList(search = "") {
   }
 }
 
+/**
+ * Set the custom-field type <select> to `type`, adding the option first if
+ * it isn't already present.
+ *
+ * Assigning select.value a string that matches no <option> leaves
+ * selectedIndex at -1 and value at "" per the HTML spec. The save handler
+ * then falls back to `value || "text"`, so a field stored as e.g. "textarea"
+ * would be silently rewritten to "text" on an unrelated edit — that silently
+ * destroyed 7 live fields (Address, Claim #, Supplement Request and four URL
+ * fields) before the textarea/url options were added to the markup.
+ *
+ * Injecting the option instead means an unrecognised type is *shown* (so the
+ * admin sees what the record actually contains) rather than quietly lost. The
+ * injected option is removed again on the next "Add" so the dropdown never
+ * accumulates phantom entries.
+ */
+function _setCustomFieldTypeSelect(select, type) {
+  if (!select) return "text";
+  const wanted = type || "text";
+  let opt = Array.from(select.options).find(o => o.value === wanted);
+  if (!opt) {
+    opt = document.createElement("option");
+    opt.value = wanted;
+    opt.textContent = wanted;
+    opt.dataset.injected = "1";
+    select.appendChild(opt);
+  }
+  select.value = wanted;
+  return wanted;
+}
+
+/** Remove any options _setCustomFieldTypeSelect injected, and reset to text. */
+function _resetCustomFieldTypeSelect(select) {
+  if (!select) return;
+  Array.from(select.options)
+    .filter(o => o.dataset && o.dataset.injected === "1")
+    .forEach(o => o.remove());
+  select.value = "text";
+}
+
 function bindAdminCustomFields() {
   const search = $("#admin-cf-search");
   if (search) {
@@ -34883,7 +34943,7 @@ function bindAdminCustomFields() {
       $("#admin-cf-editing-id").value = "";
       $("#admin-cf-label").value = "";
       $("#admin-cf-key").value = "";
-      $("#admin-cf-type").value = "text";
+      _resetCustomFieldTypeSelect($("#admin-cf-type"));
       $("#admin-cf-required").checked = false;
       $("#admin-cf-options").value = "";
       const optWrap = $("#admin-cf-options-wrap");
@@ -34958,7 +35018,7 @@ function bindAdminCustomFields() {
           $("#admin-cf-editing-id").value = f.id;
           $("#admin-cf-label").value = f.label || "";
           $("#admin-cf-key").value = f.key || f.fieldKey || "";
-          $("#admin-cf-type").value = f.type || f.fieldType || "text";
+          _setCustomFieldTypeSelect($("#admin-cf-type"), f.type || f.fieldType);
           $("#admin-cf-required").checked = !!f.isRequired;
           const optWrap = $("#admin-cf-options-wrap");
           if (optWrap) optWrap.style.display = (f.type || f.fieldType) === "select" ? "" : "none";

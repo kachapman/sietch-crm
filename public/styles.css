@@ -17647,6 +17647,17 @@ select.form-control {
   cursor: grabbing;
 }
 
+/* Stages list while a search filter is active. The Sortable onEnd handler
+   reads ids out of the rendered DOM, which under a filter holds only the
+   matching rows — posting that would renumber sort_order for a subset and
+   scramble the pipeline. Hide the handles so the action is unavailable. */
+#admin-stages-list.stages-filtered .admin-customize-drag-handle {
+  display: none;
+}
+#admin-stages-list.stages-filtered .admin-customize-row {
+  padding-left: 0.4rem;
+}
+
 /* ── History category accent style ────────────────────────────────────── */
 .opp-preview-history-item--accent {
   border-left: 3px solid var(--cat-accent-color, #2563eb);
