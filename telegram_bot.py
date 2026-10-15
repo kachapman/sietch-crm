@@ -277,12 +277,16 @@ async def log_activity(
 
 
 async def _heartbeat_loop() -> None:
-    """POST /api/bot/heartbeat every 60s."""
+    """POST /api/bot/heartbeat every 60s.
+
+    A failed heartbeat is what makes the admin console show "Bot is
+    stopped", so surface it (throttled) instead of silently swallowing —
+    previously `except: pass` hid a dead CRM for hours.
+    """
     while True:
-        try:
-            await _post("/api/bot/heartbeat", {})
-        except Exception:
-            pass
+        status, _body, err = await _request("POST", "/api/bot/heartbeat", data={})
+        if status != 200:
+            _log_throttled("heartbeat", "Heartbeat failed: %s", err)
         await asyncio.sleep(60)
 
 
@@ -310,13 +314,78 @@ async def _config_poll_loop() -> None:
                     _bg_bot_name = cfg.get("botName", _bg_bot_name)
                     logger.info("Config reloaded: botName=%s", _bg_bot_name)
         except Exception as e:
-            logger.debug("Config poll failed: %s", e)
+            _log_throttled("config-poll", "Config poll failed: %s", e)
         await asyncio.sleep(60)
+
+
+# Throttled-error helper. A persistently broken CRM would otherwise emit one
+# ERROR line per cycle forever; we want the first failure, then every Nth.
+_throttle_state: dict[str, int] = {}
+THROTTLE_EVERY = 10
+
+
+def _log_throttled(key: str, fmt: str, *args) -> None:
+    """Log at WARNING the first time `key` fails, then every THROTTLE_EVERY'th."""
+    n = _throttle_state.get(key, 0) + 1
+    _throttle_state[key] = n
+    if n == 1 or n % THROTTLE_EVERY == 0:
+        suffix = "" if n == 1 else f" (failure #{n})"
+        logger.warning(fmt + suffix, *args)
+
+
+async def _check_crm_connectivity() -> bool:
+    """Verify the bot can actually talk to the CRM, loudly.
+
+    Returns True on success. On failure it logs a multi-line WARNING naming
+    the URL it tried — the single most useful diagnostic when invite codes
+    stop working, because the failure mode is otherwise invisible: the bot
+    polls Telegram happily while every CRM call fails.
+    """
+    status, _body, err = await _request("GET", "/api/health")
+    if status == 200:
+        logger.info("CRM reachable at %s", _get_dashboard_url())
+        return True
+    logger.warning(
+        "⚠  CRM NOT REACHABLE — bot will not be able to search projects or\n"
+        "   redeem invite codes until this is fixed.\n"
+        "   URL tried : %s\n"
+        "   Error     : %s\n"
+        "   Check     : is DASHBOARD_URL correct, is server.py running, and if\n"
+        "               it points at a tunnel — is the tunnel up?",
+        _get_dashboard_url(), err,
+    )
+    return False
 
 
 async def _startup_init(application) -> None:
     """Fetch initial config version and start background tasks."""
     global _bg_config_version, _bg_bot_name
+    # Log which Telegram identity we actually booted as. server.py and
+    # telegram_bot.py both load .env with `if key not in os.environ`, so a
+    # process launched from a shell that already exports TELEGRAM_BOT_TOKEN
+    # silently uses THAT value instead of the one in .env. Comparing
+    # bot_id here makes that class of mistake obvious immediately.
+    try:
+        me = application.bot_data.get("me") or {}
+        if not me.get("id"):
+            import httpx as _httpx
+            resp = await _httpx.AsyncClient(timeout=10).get(
+                f"https://api.telegram.org/bot{TOKEN}/getMe"
+            )
+            me = resp.json().get("result", {})
+        bot_id = me.get("id")
+        logger.info("Telegram identity: id=%s @%s (token %s…)",
+                    bot_id, me.get("username", "?"), TOKEN[:10])
+        if bot_id and not TOKEN.startswith(str(bot_id)):
+            logger.warning(
+                "⚠  This process is polling with token %s… but getMe reports "
+                "bot id %s — the running bot does not match its own token. "
+                "Check for a stale TELEGRAM_BOT_TOKEN exported in the "
+                "environment overriding .env.", TOKEN[:10], bot_id)
+    except Exception as e:
+        logger.debug("Could not log bot identity: %s", e)
+
+    reachable = await _check_crm_connectivity()
     try:
         cfg = await _get("/api/v2/admin/bot-settings")
         if cfg:
@@ -341,9 +410,9 @@ async def _startup_init(application) -> None:
                         })
                         logger.info("Auto-populated bot username: @%s", username)
                 except Exception as e:
-                    logger.debug("Could not auto-populate bot username: %s", e)
-    except Exception:
-        pass
+                    _log_throttled("bot-username", "Could not auto-populate bot username: %s", e)
+    except Exception as e:
+        _log_throttled("startup-cfg", "Startup config fetch failed: %s", e)
     asyncio.create_task(_heartbeat_loop(), name="bot-heartbeat")
     asyncio.create_task(_config_poll_loop(), name="bot-config-poll")
     logger.info("Background tasks started (heartbeat 60s, config poll 5min)")
