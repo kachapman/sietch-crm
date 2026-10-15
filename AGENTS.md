@@ -43,6 +43,24 @@
   - LocalStorage fallbacks + debounce server saves (`scheduleUserProfileSave`).
 - **Tiles:** Opportunity groups (kanban with filters/stages/tags/red), fixed panels (feed/notifications, tasks), addable (calendars ICS, notes markdown). See `Toaster_Features` for ideas.
 
+### Environment / .env gotcha (caused a production outage)
+
+`server.py:395` and `telegram_bot.py:42` both load `.env` with `if key and key not in os.environ` — they **skip keys already exported in the shell**. A stale variable in the launching shell therefore silently overrides `.env`.
+
+This is not theoretical: the Telegram bot ran with a retired bot's token for hours because of it. Rules:
+
+- **Never launch the server or bot from a shell that exports `TELEGRAM_BOT_TOKEN`, `DB_*`, or other `.env` keys.** Use `env -u TELEGRAM_BOT_TOKEN setsid bash -c '…'`, or `systemctl start crm-server.service` (its `EnvironmentFile=.env` is the correct path — but note **`sudo` is unavailable in this environment**, so it has been running from an ad-hoc `setsid` since 2026-09-22).
+- **`DASHBOARD_URL` is the bot's INTERNAL API base and must be loopback** (`http://127.0.0.1:8766`). Bot and CRM share a host. Never point it at a tunnel or public URL — a stopped tunnel returns **HTTP 200 with an HTML page**, which the bot previously reported to users as "your invite code is invalid".
+- **`DASHBOARD_PUBLIC_URL` is a separate variable** for "View project" links customers click; it must be reachable by them (`https://crm.publicadjustermidwest.com`). Blank ⇒ falls back to `DASHBOARD_URL`.
+- The bot logs its Telegram identity and the CRM URL at boot, and warns when the polling token doesn't match the `getMe` bot id. **Check those two lines first** if the bot misbehaves.
+- Bot endpoints split by auth: `/api/bot/*` uses `Bearer <token>`; `/api/v2/admin/bot-settings` needs an **admin session**. The bot must never call the latter.
+
+### Testing gotcha: `unittest.TestCase` does NOT run `async def test_*`
+
+The coroutine is never awaited; the test silently reports as passing. Use `unittest.IsolatedAsyncioTestCase`, and mock awaited calls with `AsyncMock` (a plain `MagicMock` isn't awaitable).
+
+This hid ~20 real assertions in `tests/test_telegram_bot.py` for an entire session. **A green suite proves nothing if the tests can't execute — verify a deliberate failure actually fails.** Other suites in `tests/` are unaffected (all sync).
+
 ### Key patterns to ALWAYS reuse
 - **Profile:** `buildUserProfilePayload`, `applyUserProfile`, `loadUserProfileFromServer` (prefers server), `saveGroupsToStorage` / `scheduleUserProfileSave` / `saveUserProfileToServer`, `strip*RuntimeFields`.
 - **Tiles/layout:** `bindTileChrome`, `applyTileBodyCollapsed` / `applyTileLayoutClasses`, `createLayoutButtons`, `attachTileCollapseButton`, `tileLayout` in `state`.
