@@ -4971,6 +4971,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             # Publish stage_changed event for automation engine
             if "stageId" in payload:
                 event_bus.publish("stage_changed", {"opportunity_id": opp_id, "stage_id": payload["stageId"]})
+            # Always publish project_updated so automation rules with
+            # trigger_type='project_updated' actually fire. Without this
+            # the trigger type was registered in the SSE map but had no
+            # upstream publisher — rules only fired via the polling
+            # sweep's last_run_at cutoff, which is much weaker than the
+            # SSE-driven design intended.
+            try:
+                event_bus.publish("project_updated", {"opportunity_id": opp_id})
+            except Exception:
+                pass
 
             # Create history events for field changes
             logger.info("Change tracking: payload=%s, OLD_VALUES=%s", list(payload.keys()), OLD_VALUES)
