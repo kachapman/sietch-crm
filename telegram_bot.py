@@ -181,46 +181,60 @@ def _get_http_client() -> httpx.AsyncClient:
     return _http_client
 
 
-async def _get(path: str, params: dict | None = None) -> dict | None:
+async def _request(method: str, path: str, params: dict | None = None,
+                   data: dict | None = None) -> tuple[int | None, dict | None, str | None]:
+    """Perform a CRM API call, reporting the failure kind distinctly.
+
+    Returns (status, body, err):
+      - success: (200, {...}, None)
+      - HTTP error: (status, None, "<reason> from <body snippet>")
+      - unreachable / non-JSON: (None, None, "<reason>")
+
+    Why this exists: the old `_get`/`_post` returned `None` for a 404, a 403,
+    a 500 AND for "the tunnel served us an HTML error page". Callers therefore
+    could not tell a genuinely-missing resource from the bot being
+    disconnected, and `verify_code` reported the latter to users as
+    "That code wasn't recognized or has expired" — pointing admins at the
+    invite codes when the real problem was the bot's own connectivity.
+    """
+    url = f"{_get_dashboard_url()}{path}"
     try:
-        resp = await _get_http_client().get(
-            f"{_get_dashboard_url()}{path}",
-            params=params,
-        )
-        if resp.status_code == 200:
-            return resp.json()
-        logger.warning("GET %s -> %d %s", path, resp.status_code, resp.text[:200])
-        return None
+        resp = await _get_http_client().request(method, url, params=params, json=data)
     except httpx.HTTPError as e:
-        # Catches RequestError (connection), TimeoutException (timeout),
-        # and HTTPStatusError (4xx/5xx with raise_for_status). The original
-        # code only caught RequestError, so a timeout would propagate
-        # up to the message handler's catch (which is good), but the
-        # user's message would be lost without an error response. Now
-        # all HTTP errors are caught at the API call layer.
-        logger.error("GET %s failed: %s", path, e)
-        return None
-    except json.JSONDecodeError as e:
-        logger.error("GET %s returned invalid JSON: %s", path, e)
-        return None
+        logger.error("%s %s failed: %s", method, path, e)
+        return None, None, f"cannot reach CRM at {_get_dashboard_url()} ({type(e).__name__})"
+
+    ctype = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if resp.status_code == 200:
+        # A gateway/proxy error page comes back as HTTP 200 with HTML, and a
+        # stopped tunnel does exactly this. Treat a non-JSON body as a
+        # connectivity failure rather than feeding it to resp.json().
+        if ctype and ctype != "application/json":
+            body = resp.text[:120].replace("\n", " ")
+            logger.error("%s %s -> 200 but content-type=%s (not JSON): %s",
+                         method, path, ctype, body)
+            return None, None, f"CRM returned {ctype} instead of JSON (gateway/tunnel error?)"
+        try:
+            return 200, resp.json(), None
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error("%s %s returned invalid JSON: %s", method, path, e)
+            return None, None, "CRM returned a non-JSON response"
+
+    snippet = resp.text[:200].replace("\n", " ")
+    logger.warning("%s %s -> %d %s", method, path, resp.status_code, snippet)
+    return resp.status_code, None, f"HTTP {resp.status_code} from CRM"
+
+
+async def _get(path: str, params: dict | None = None) -> dict | None:
+    """GET returning the decoded body, or None on any failure."""
+    _status, body, _err = await _request("GET", path, params=params)
+    return body
 
 
 async def _post(path: str, data: dict) -> dict | None:
-    try:
-        resp = await _get_http_client().post(
-            f"{_get_dashboard_url()}{path}",
-            json=data,
-        )
-        if resp.status_code == 200:
-            return resp.json()
-        logger.warning("POST %s -> %d %s", path, resp.status_code, resp.text[:200])
-        return None
-    except httpx.HTTPError as e:
-        logger.error("POST %s failed: %s", path, e)
-        return None
-    except json.JSONDecodeError as e:
-        logger.error("POST %s returned invalid JSON: %s", path, e)
-        return None
+    """POST returning the decoded body, or None on any failure."""
+    _status, body, _err = await _request("POST", path, data=data)
+    return body
 
 
 async def _close_http_client() -> None:
@@ -375,12 +389,33 @@ async def get_tags() -> list[dict] | None:
     return None
 
 
+class BotUnreachable(Exception):
+    """The bot could not get a usable answer from the CRM.
+
+    Raised instead of returning None when the failure is on OUR side
+    (CRM down, auth rejected, tunnel/proxy serving HTML, 5xx) rather than
+    the code being wrong. Callers use this to avoid telling a user their
+    invite code is invalid when the bot itself is the problem.
+    """
+
+
 async def verify_code(code: str, chat_id: int) -> dict | None:
-    return await _post("/api/bot-customers/verify-code", {
+    """Redeem an invite code.
+
+    Returns the mapping on success, None when the code is genuinely
+    unknown/expired (HTTP 404), and raises BotUnreachable when the CRM
+    could not be consulted at all.
+    """
+    status, body, err = await _request("POST", "/api/bot-customers/verify-code", data={
         "code": code,
         "chatId": chat_id,
         "portal": "sietch",
     })
+    if status == 404:
+        return None  # genuinely an invalid or expired code
+    if status == 200 and body:
+        return body
+    raise BotUnreachable(err or "CRM returned an unexpected response")
 
 
 # ── Message Formatting ──
@@ -1610,7 +1645,20 @@ def main() -> None:
                 return
             else:
                 # Not linked yet — treat message as invite code
-                result = await verify_code(text, chat_id)
+                try:
+                    result = await verify_code(text, chat_id)
+                except BotUnreachable as exc:
+                    # The code may be perfectly valid — WE are the problem.
+                    # Saying "invalid code" here sends the user (and the
+                    # admin) hunting for a code that works fine.
+                    logger.error("Cannot verify invite code from chat %d: %s", chat_id, exc)
+                    await _reply_html(
+                        update,
+                        "😕 I'm having trouble reaching Sietch CRM right now, so I "
+                        "can't check that code yet.\n\nPlease try again in a minute — "
+                        "your code will still be valid.",
+                    )
+                    return
                 if result:
                     contact_id = result.get("contactId")
                     is_employee = result.get("employee", False)
