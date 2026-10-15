@@ -13,6 +13,45 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-15
 
+**Topic:** Presence/DM audit round 6 (part 8) — `presence_store` test coverage.
+
+**What landed:**
+
+- **36 new tests in `tests/test_presence_store.py`** covering the entire `presence_store.py` persistence layer. Before this commit, the disk layer had zero test coverage despite being 430 lines and powering status, heartbeats, and DMs.
+
+  Coverage breakdown:
+  - `_safe_segment` collision semantics (6 tests) — whitespace, dots/hyphens, special chars, Unicode, empty fallback, length cap.
+  - Presence round-trip (4 tests) — every field preserved, corrupt file returns empty, status field capped.
+  - Touch heartbeat (3 tests) — basic set, visible bumps dashboard, offline clears heartbeat but preserves dashboard activity.
+  - Set status (3 tests) — `status=None` leaves existing, `status=""` clears, `autoStatus` independent.
+  - Clean stale presence (2 tests) — clears old records, preserves recent ones and manual status.
+  - Get portal snapshot (2 tests) — returns all users, isolates by portal.
+  - Conversation round-trip (5 tests) — append, reply resolution, history cap, text cap, self-DM rejection.
+  - Mark messages read (2 tests) — flips flag + timestamp; idempotent.
+  - Clear conversation (1 test) — deletes file + clears last-read marker.
+  - Set last read DM (3 tests) — per-user isolated, idempotent.
+  - **Get conversation pagination (3 tests)** — the audit round 6 part 2 fix is exercised here; `offset=N` properly skips the N newest messages.
+  - Get recent DMs for user (2 tests) — one latest per partner; includes outgoing.
+
+- **Test isolation:** a tmpdir is created at module load, `presence_store.DATA_DIR` and `presence_store.MESSAGES_DIR` are monkey-patched to point at the tmpdir. The tests don't touch the real `data/` tree. The tmpdir is reused across runs (cheap on /tmp). Some tests use unique user IDs (e.g. `a_outgoing`, `b_outgoing`) so they don't collide with data left by other tests in the same module.
+
+- **All existing tests still pass:** 14 JS files (130 tests) + 5 Python files (28 + 36 = 64 tests) = **194 tests, 0 failures**. `py_compile` ×2, `node --check public/app.js` clean. No server-side changes.
+
+**Audit round 6 final state (3 commits + 1 new test file):**
+
+- `cddc3de` — SSE wire-up (publish dm:new, dm:read, presence:update; fixed handlePresenceUpdate envelope bug; broadened handleNewDM/handleDMRead to refresh all three DM containers)
+- `c382a8c` — Fix mark-as-read on every Load-More click (GET is now pure; explicit mark endpoint is the only place that flips the read flag)
+- `a2940d9` — Debounce `updateInferredStatus` (800ms trailing edge) + persist `_lastNotifiedDmTs` in localStorage (DMs in the polling gap now get desktop notifications after a reload)
+- This commit — `presence_store` test coverage (36 tests, no production code changes)
+
+**Audit chain complete.** All 8 original findings from the timesheet + presence/DM audits are either shipped or explicitly deferred by design. The remaining queue (defensive items 5/6/7 from the original presence audit) is skipped by user choice.
+
+**Next:** open question for the user — what feature work or audit chain to tackle next? The CRM is in a clean state.
+
+---
+
+## Previous summary (2026-10-15)
+
 **Topic:** Presence/DM audit round 6 (parts 3 + 4) — debounce + persist + presence_store tests.
 
 **What landed:**

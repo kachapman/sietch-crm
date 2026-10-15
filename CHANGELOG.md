@@ -2,6 +2,27 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Presence/DM test coverage (audit round 6 part 8) (2026-10-15)
+
+The presence/DM persistence layer (`presence_store.py`, 430 lines) had **zero test coverage** before this commit. Added `tests/test_presence_store.py` with 36 tests covering:
+
+- **`_safe_segment`** (6 tests): collision semantics for the file-naming scheme — whitespace → underscore, dots/hyphens kept, special chars replaced, Unicode kept, empty falls back, length cap at 120.
+- **Presence round-trip** (4 tests): every schema field round-trips through JSON; corrupt file returns empty; status field capped at 200 chars.
+- **Touch heartbeat** (3 tests): `lastHeartbeat` set; `visible=True` bumps `lastDashboardActivity`; `offline=True` clears `lastHeartbeat` but preserves `lastDashboardActivity`.
+- **Set status** (3 tests): `status=None` leaves existing manual status; `status=""` clears; `autoStatus` updates independently.
+- **Clean stale presence** (2 tests): clears `lastHeartbeat` + `autoStatus` for records older than 3h; preserves `status` (manual).
+- **Get portal snapshot** (2 tests): returns all per-user presences; isolates by portal name.
+- **Conversation round-trip** (5 tests): `append_dm` + `get_conversation`; `reply_to` resolves `reply_text` from recent history; caps at `DM_HISTORY_LIMIT`; truncates `text` to 2000; rejects self-DM.
+- **Mark messages read** (2 tests): flips `read=True` + sets `read_at`; idempotent.
+- **Clear conversation** (1 test): deletes the file AND clears the `lastReadDms` marker.
+- **Set last read DM** (3 tests): per-user isolated; idempotent overwrite.
+- **Get conversation pagination** (3 tests): respects `offset=N` (the audit round 6 part 2 fix is exercised here).
+- **Get recent DMs for user** (2 tests): one latest per conversation partner; includes outgoing messages.
+
+The tests use a `tmp_path`-style isolation: a tmpdir is created at module load, `presence_store.DATA_DIR` and `presence_store.MESSAGES_DIR` are monkey-patched to point at the tmpdir, so the tests don't touch the real `data/` tree. The tmpdir is reused across runs (cheap on /tmp).
+
+Full suite: 14 JS files (130 tests) + 5 Python files (28 + 36 = 64 tests) = **194 tests, 0 failures**. `py_compile` ×2, `node --check public/app.js` clean. No server-side changes.
+
 ## Presence/DM UX polish (audit round 6 part 3 + 4) (2026-10-15)
 
 Two small UX/notification fixes from the original presence audit.
