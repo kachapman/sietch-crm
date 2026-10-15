@@ -2,6 +2,42 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Telegram bot outage: valid invite codes reported as invalid (2026-10-15)
+
+**Symptom:** users sent a correct invite code and the bot replied *"That code wasn't recognized or has expired."* The admin console showed **"Bot is stopped"** with empty credential fields. Codes generated in the admin console were still pending and unexpired on disk.
+
+**Root cause (three stacked problems):**
+
+1. **`DASHBOARD_URL` pointed at a dead localtonet tunnel.** The bot and the CRM run on the same host, so every CRM call should have gone to `http://127.0.0.1:8766`. Instead it went to `https://g2vpdgb498.localto.net`, which returns **HTTP 200 with an HTML "Tunnel Stopped" page**. The bot called `resp.json()` on that, the `JSONDecodeError` was swallowed, and `_post` returned `None` — the exact same value a genuinely bad code returns. So every failure mode collapsed into "your code is invalid". 297 consecutive failures occurred over ~2.5h.
+
+2. **The bot was logged into the wrong Telegram bot.** `server.py:395` and `telegram_bot.py:42` both load `.env` with `if key and key not in os.environ` — they *skip* keys already exported. A stale `TELEGRAM_BOT_TOKEN` in the launching shell (pointing at a retired bot) silently overrode `.env`. A clean restart from systemd would have picked up `.env` instead, so the working identity was an accident of how the process happened to be started.
+
+3. **`/api/v2/admin/bot-settings` requires an admin session, but the bot only sends `Bearer <token>`.** All four bot call sites returned 401, meaning `botUsername`/`botLink` auto-population had **never** worked (hence the permanent empty credential fields), config reload never worked, and the upload size limit always silently used the hardcoded 20 MB default.
+
+### Fixes
+
+- **`_get_dashboard_url()` (internal) split from `_get_public_dashboard_url()` (customer links).** The same variable was serving two contradictory purposes. API calls stay on loopback; "View project" links use `DASHBOARD_PUBLIC_URL` (falls back to the internal URL when blank, so single-host deployments are unchanged). `config.example.env` documents both and warns why the internal one must never be a tunnel.
+- **`_request()` distinguishes failure kinds.** Returns `(status, body, err)` and checks `Content-Type` before parsing — a gateway/proxy/tunnel page is HTTP 200 + `text/html`, which status alone cannot detect. `_get`/`_post` are thin wrappers, so all ~30 existing call sites keep their `dict | None` contract.
+- **`verify_code()` returns the mapping on 200, `None` **only** on 404, and raises the new `BotUnreachable` otherwise.** The handler catches that and says *"I'm having trouble reaching Sietch CRM right now — your code will still be valid"* instead of blaming the code.
+- **Startup connectivity probe.** `_check_crm_connectivity()` hits `/api/health` at boot and logs a multi-line WARNING naming the URL it tried. `_startup_init` previously ended in `except Exception: pass`.
+- **Throttled error logging.** `_log_throttled()` logs the first failure then every 10th, applied to the config poll, heartbeat loop and username auto-population — all previously `logger.debug` or bare `except: pass`.
+- **Telegram identity logged at boot,** with a warning when the polling token doesn't match the `getMe` bot id. Makes problem 2 above immediately visible.
+- **New `GET`/`POST /api/bot/settings`** using the bot's own auth. `GET` omits the token entirely; `POST` accepts **only** `botUsername`/`botLink`, so the bot cannot rewrite its token or flip the enabled flag. Verified: an attempt to write `token`/`enabled`/`welcomeMessage`/`maxFileSizeMb`/`botName` was ignored.
+
+### Tests (+28, 92 total)
+
+**Found and fixed a serious test defect:** every `async def test_*` in `test_telegram_bot.py` was silently doing nothing. `unittest.TestCase` doesn't support coroutine test methods — the coroutine is never awaited and the test reports as passing. Verified directly (`async def test_never_runs` raising `AssertionError` still yielded `OK`). Three test classes from the previous session had never executed a single assertion. Converted to `unittest.IsolatedAsyncioTestCase`; running them for the first time immediately exposed 16 hidden errors.
+
+Mutation-verified — 6 mutations, all caught: removing the content-type check, `verify_code` returning `None` on any failure, links reverted to the internal URL, public URL ignoring blank, connectivity check always `True`, throttle logging every failure.
+
+**Full suite: 134 JS + 311 Python = 445 tests, 0 failures.**
+
+### Operational notes
+
+- `.env` now sets `DASHBOARD_URL=http://127.0.0.1:8766` and `DASHBOARD_PUBLIC_URL=https://crm.publicadjustermidwest.com`.
+- **`crm-server.service` had been dead for 3 weeks** and the server was running from an ad-hoc `setsid` launch. Restarted manually with a clean environment (`env -u TELEGRAM_BOT_TOKEN`) so `.env` supplies the token. `sudo` is unavailable, so it cannot be started via systemd from here — worth switching to the unit so `EnvironmentFile=.env` handles this automatically and the restart-on-failure policy applies.
+- Token rotation is no longer handled by the config poll (the settings endpoint deliberately doesn't return the token). Rotate by editing `.env` and restarting the service.
+
 ## Infrastructure test coverage + CI gap (2026-10-15)
 
 New `tests/test_infrastructure.py` (64 tests) covering the admin Infrastructure tab, the restart endpoints, and the probe helpers.

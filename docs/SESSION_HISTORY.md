@@ -13,6 +13,81 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-15
 
+**Topic:** Telegram bot outage — valid invite codes rejected. (Continuation of the infra/audit chain below.)
+
+**Status: FIXED.** All 445 tests pass, bot is live and heart-beating, `botUsername`/`botLink` auto-populated for the first time ever.
+
+### The three stacked root causes
+
+1. **`DASHBOARD_URL` pointed at a dead localtonet tunnel.** Bot and CRM share a host, so this should have been `http://127.0.0.1:8766`. The dead tunnel returns **HTTP 200 + HTML "Tunnel Stopped"**, `resp.json()` raised, the error was swallowed, and `_post` returned `None` — identical to a bad code. **297 consecutive failures over ~2.5h**, all reported to users as *"your code wasn't recognized."*
+
+2. **The bot was logged into the WRONG Telegram bot.** `server.py:395` and `telegram_bot.py:42` both load `.env` with `if key and key not in os.environ` — they **skip** already-exported keys. A stale `TELEGRAM_BOT_TOKEN` in the launching shell silently overrode `.env`. **This is a recurring trap:** any restart from a shell with that var exported diverges from `.env`. `systemctl start` (clean env) would have picked up `.env`, so the working identity was an accident of how the process was started.
+
+3. **`/api/v2/admin/bot-settings` needs an admin SESSION; the bot sends `Bearer <token>` → 401.** All four call sites failed. So `botUsername`/`botLink` auto-population had **never** worked (the permanent empty credential fields in the admin console), config reload never worked, and upload size silently used the hardcoded 20 MB default.
+
+### Commits
+
+| Commit | Change |
+|---|---|
+| `9a5523f` | Split `_get_dashboard_url()` (internal/API) from `_get_public_dashboard_url()` (customer links) |
+| `89d122e` | `_request()` distinguishes failure kinds + Content-Type check; `verify_code` raises `BotUnreachable` instead of reporting our failures as bad codes |
+| `b9b3dbe` | Startup connectivity probe, throttled error logging, Telegram-identity mismatch warning |
+| `5ddd579` | New `GET`/`POST /api/bot/settings` (bot's own auth); GET omits token, POST whitelists only `botUsername`/`botLink` |
+| `e978be4` | +28 tests (92 total) **and fixed vacuous async tests** |
+
+### The test defect worth remembering
+
+**Every `async def test_*` in `test_telegram_bot.py` was silently doing nothing.** `unittest.TestCase` doesn't support coroutine test methods — the coroutine is never awaited and the test reports as passing. Proved it with `async def test_never_runs` raising `AssertionError` → still `OK`. Three classes added in the *previous session* had never executed a single assertion.
+
+Fix: `unittest.IsolatedAsyncioTestCase`. Running them for the first time immediately surfaced 16 hidden errors. **Lesson: a green suite proves nothing if the tests can't execute — check that a deliberate failure actually fails.** `telegram_bot.py` was the only file affected; all other suites use sync tests.
+
+Mutation-verified 6/6 (was 0/4 caught before the fix): removing the content-type check, `verify_code` returning `None` on any failure, links reverted to internal URL, public URL ignoring blank, connectivity check always `True`, throttle logging every failure.
+
+### Config changed (`.env`, gitignored)
+
+```
+DASHBOARD_URL=http://127.0.0.1:8766
+DASHBOARD_PUBLIC_URL=https://crm.publicadjustermidwest.com
+```
+
+### Ops notes / open items
+
+- **`crm-server.service` was dead for 3 weeks** (killed 2026-09-22); the server was running from an ad-hoc `setsid`. Restarted manually with `env -u TELEGRAM_BOT_TOKEN` so `.env` wins. **`sudo` is unavailable in this environment**, so it can't be started via systemd from here — recommend switching to the unit so `EnvironmentFile=.env` applies and `Restart=on-failure` works.
+- **Token rotation is no longer handled by the config poll** (the settings endpoint deliberately never returns the token). Rotate by editing `.env` + restarting the service.
+- `telegram_bot.py` is systemd-managed (`crm-telegram-bot.service`, `Restart=always`) and currently healthy.
+
+### Earlier in this session (audit chain)
+
+- **Infrastructure (admin console)** — `5316f40` authz gap on `/api/v2/admin/infrastructure` (only admin endpoint without `_require_admin`; anonymous callers got the whole payload), `662080e` 8 fixes (most severe: `restart-server` could take the CRM down permanently — SO_REUSEADDR doesn't cover an active listener, `main()` had no bind retry, and `restart: on-failure:5` never recovers an exit-0 container → added `_bind_server_with_retry`), `44af2cf` 64 tests + closed a CI gap (smoke.yml ran only 3 of 8 Python test files).
+- **Telegram bot audit** — `ab5148f` 8 fixes incl. an **XSS** fix (`javascript:`/`vbscript:`/`data:` URLs in `<a href>`), `b5febb3` 64 tests.
+- **Tasks tile** — `bf8b9f` cap the linked project name so the task title isn't squeezed to "Re...".
+
+Full audit chain now complete: timesheet (1-5), presence/DM (6-7), automation (8), telegram, infrastructure.
+
+```
+e978be4        Bot tests: +28 tests, and fix vacuous async tests
+5ddd579        Add /api/bot/settings so the bot can read its own config
+b9b3dbe        Bot: fail loudly at startup instead of silently degrading
+89d122e        Bot: don't report our own failures as 'invalid invite code'
+9a5523f        Bot: split internal API URL from public link URL
+3009e8e        Docs: session history + AGENTS.md testing section
+44af2cf        Infra tests (64) + close the CI test gap
+662080e        Infra audit: restart safety, runtime detection, probes
+5316f40        Infra: gate /api/v2/admin/infrastructure behind _require_admin
+b5febb3        Telegram bot: test coverage + _esc None check
+ab5148f        Telegram bot: 8 audit fixes
+bf8b9f9        Tasks tile: cap the linked project name
+... (18 more commits)
+```
+
+**Next:** open items are the deferred timesheet B/C items (`_tsActiveEntry` periodic refresh, open-shift auto-close job), moving the CRM server onto its systemd unit, and `crm.publicadjustermidwest.com` deployment.
+
+---
+
+## Previous summary (for next resume)
+
+**Date:** 2026-10-15
+
 **Topic:** Telegram bot audit + tasks-tile visual fix + infrastructure (admin console) audit.
 
 **Audit chain status:** timesheet (rounds 1-5) ✅ · presence/DM (round 6-7) ✅ · automation (round 8) ✅ · telegram bot ✅ · **infrastructure/admin console ✅ (this session)**.
