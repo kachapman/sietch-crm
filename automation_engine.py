@@ -23,6 +23,7 @@ Action types:
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import queue
@@ -208,7 +209,6 @@ def _action_send_email(config: dict, opp: dict, ctx: TemplateVars, dry_run: bool
     subject_template = config.get("subject", "Update on {project}")
     body_template = config.get("body", "Hello,\n\nThis is an automated update regarding {project}.\n\nStage: {stage}\nStatus: {days_in_stage} days in current stage.\n")
     subject = _render_template(subject_template, ctx)
-    html_body = _render_template(body_template, ctx).replace("\n", "<br>")
 
     to_type = config.get("to_type", "project_owner")
     to_email = _resolve_email_recipient(to_type, opp, config)
@@ -224,14 +224,25 @@ def _action_send_email(config: dict, opp: dict, ctx: TemplateVars, dry_run: bool
     if not smtp_config:
         return {"error": f"SMTP not configured for from_type={from_type}"}
 
+    # HTML-escape user-supplied template content + template-interpolated
+    # values (opp.title, contact name, etc. — all from the DB and not
+    # HTML-safe by default). Build the escape from the rendered text
+    # (with \n line breaks), then construct the HTML by replacing
+    # \n with <br>. This way the \n-><br> conversion happens AFTER the
+    # escape, so the resulting <br> tags are real tags, not entity-
+    # escaped ones. The plain-text part just keeps the escaped \n.
+    body_text = _render_template(body_template, ctx)
+    body_html_safe = html.escape(body_text, quote=False)
+    body_html = body_html_safe.replace("\n", "<br>\n")
+
     try:
         msg = MIMEMultipart("alternative")
         display_from = f"{smtp_config.get('from_name', 'Sietch CRM')} <{smtp_config['from_addr']}>"
         msg["From"] = display_from
         msg["To"] = to_email
         msg["Subject"] = subject
-        msg.attach(MIMEText(html_body.replace("<br>", "\n"), "plain"))
-        msg.attach(MIMEText(html_body, "html"))
+        msg.attach(MIMEText(body_text, "plain"))
+        msg.attach(MIMEText(body_html, "html"))
 
         import os
         host = smtp_config["host"]
@@ -818,6 +829,61 @@ def _sweep_once_polling() -> int:
     matches.extend(_evaluate_tag_duration_rules())
     total += _execute_matches(matches)
     return total
+
+
+def _evaluate_single_rule(rule: dict) -> list[dict]:
+    """Evaluate JUST this rule (used by the test endpoint to preview
+    a single rule's matches without running the full evaluator for
+    the trigger type). Returns the list of matches in the same shape
+    that _sweep_once_polling() / _handle_sse_event() use. last_run_at
+    is reset to None first so the evaluator uses epoch and shows all
+    possible historical matches, not just the new ones.
+    """
+    rule = dict(rule)  # shallow copy so we don't mutate the caller's row
+    rule["last_run_at"] = None
+    trigger_type = rule.get("trigger_type", "")
+    if trigger_type == "stage_duration":
+        return _evaluate_stage_duration_rules_filtered(rule)
+    if trigger_type == "project_created":
+        return _evaluate_project_created_rules_filtered(rule)
+    if trigger_type == "stage_changed":
+        return _evaluate_stage_changed_rules_filtered(rule)
+    if trigger_type == "project_updated":
+        return _evaluate_project_updated_rules_filtered(rule)
+    if trigger_type == "tag_duration":
+        return _evaluate_tag_duration_rules_filtered(rule)
+    if trigger_type == "tag_added":
+        return _evaluate_tag_added_rules_filtered(rule)
+    return []
+
+
+def _filter_by_rule_id(matches: list, rule_id: int) -> list:
+    return [m for m in matches if m["rule"]["id"] == rule_id]
+
+
+# Per-rule variants: each delegates to the bulk evaluator and then
+# filters by rule_id. We could push the rule_id down into the SQL,
+# but that requires either parameterizing the existing functions
+# (a wider refactor) or adding parallel implementations. For the
+# test endpoint the post-filter is fine — it's a one-time
+# admin-triggered call, not the hot polling path.
+def _evaluate_stage_duration_rules_filtered(rule):
+    return _filter_by_rule_id(_evaluate_stage_duration_rules(), rule["id"])
+
+def _evaluate_project_created_rules_filtered(rule):
+    return _filter_by_rule_id(_evaluate_project_created_rules(), rule["id"])
+
+def _evaluate_stage_changed_rules_filtered(rule):
+    return _filter_by_rule_id(_evaluate_stage_changed_rules(), rule["id"])
+
+def _evaluate_project_updated_rules_filtered(rule):
+    return _filter_by_rule_id(_evaluate_project_updated_rules(), rule["id"])
+
+def _evaluate_tag_duration_rules_filtered(rule):
+    return _filter_by_rule_id(_evaluate_tag_duration_rules(), rule["id"])
+
+def _evaluate_tag_added_rules_filtered(rule):
+    return _filter_by_rule_id(_evaluate_tag_added_rules(), rule["id"])
 
 
 def _execute_matches(matches: list) -> int:

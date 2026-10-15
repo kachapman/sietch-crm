@@ -607,5 +607,137 @@ class TestExecuteActionDispatch(unittest.TestCase):
         self.assertEqual(result["count"], 1)
 
 
+class TestEmailHtmlEscaping(unittest.TestCase):
+    """Audit round 8 fix #4: the email body must HTML-escape
+    user-supplied template content and template-interpolated values
+    (opp.title, contact, etc.) so a contact with <script> in their
+    name doesn't render as script in the email."""
+
+    def test_plain_part_preserves_newlines_no_html_escaping(self):
+        # The plain part is just the rendered text with \n preserved.
+        # The html part escapes the user-supplied template (any < or >
+        # in the template body or in interpolated values), then
+        # converts \n -> <br> so line breaks render in html clients.
+        from automation_engine import _action_send_email
+        from email.mime.text import MIMEText
+        # Template body has literal < and >. The {project} value is
+        # HTML-injection-vulnerable (a malicious contact name). The
+        # template value for {project} is also escaped in the html part.
+        config = {
+            "from_type": "crm_mail",
+            "to_type": "project_owner",
+            "subject": "Hi",
+            "body": "Hello,\n\nYour <project> {project} is in <stage>.",
+        }
+        ctx = {"project": "<Project X>"}
+        opp = {"id": 5, "title": "P", "responsible_user_id": 100}
+        with patch("automation_engine.db") as db:
+            db.query_one.side_effect = [
+                {"email": "owner@example.com"},
+                {"email": "crm@example.com", "smtp_host": "smtp.example.com",
+                 "smtp_port": 587, "smtp_user": "u",
+                 "smtp_password_encrypted": "p"},
+            ]
+            with patch("automation_engine.smtplib.SMTP") as smtp, \
+                 patch("automation_engine.MIMEText", wraps=MIMEText) as mt:
+                _action_send_email(config, opp, ctx, dry_run=False)
+        plain_part = None
+        html_part = None
+        for call in mt.call_args_list:
+            body = call.args[0] if call.args else call.kwargs.get("_text", "")
+            subtype = call.args[1] if len(call.args) > 1 else call.kwargs.get("subtype", "plain")
+            if "plain" in str(subtype):
+                plain_part = body
+            elif "html" in str(subtype):
+                html_part = body
+        self.assertIsNotNone(plain_part, "plain text part not found")
+        self.assertIsNotNone(html_part, "html part not found")
+        # Plain part preserves \n.
+        self.assertIn("\n", plain_part)
+        # User-supplied < and > in the template body are escaped in html.
+        self.assertIn("&lt;project&gt;", html_part)
+        self.assertIn("&lt;stage&gt;", html_part)
+        # Template-interpolated value (<Project X>) is also escaped.
+        self.assertIn("&lt;Project X&gt;", html_part)
+        # Plain part does NOT contain HTML entities (it's plain text).
+        self.assertNotIn("&lt;", plain_part)
+        # Html part converts \n -> <br> for line breaks.
+        self.assertIn("<br>", html_part)
+        self.assertIn("\n", html_part)  # original newlines preserved alongside the <br>
+
+    def test_xss_in_contact_name_is_escaped(self):
+        from automation_engine import _action_send_email
+        from email.mime.text import MIMEText
+        # A contact with a malicious name. The recipient's email
+        # client should see "Hi <b>NotNice</b>" as literal text, not
+        # bold formatting.
+        config = {
+            "from_type": "crm_mail",
+            "to_type": "project_owner",
+            "subject": "Hi",
+            "body": "Hello {contact}",
+        }
+        opp = {"id": 5, "title": "P", "responsible_user_id": 100}
+        ctx = {"contact": "<script>alert(1)</script>"}
+        with patch("automation_engine.db") as db:
+            db.query_one.side_effect = [
+                {"email": "owner@example.com"},
+                {"email": "crm@example.com", "smtp_host": "smtp.example.com",
+                 "smtp_port": 587, "smtp_user": "u",
+                 "smtp_password_encrypted": "p"},
+            ]
+            with patch("automation_engine.smtplib.SMTP") as smtp, \
+                 patch("automation_engine.MIMEText", wraps=MIMEText) as mt:
+                _action_send_email(config, opp, ctx, dry_run=False)
+        html_part = None
+        for call in mt.call_args_list:
+            body = call.args[0] if call.args else call.kwargs.get("_text", "")
+            subtype = call.args[1] if len(call.args) > 1 else call.kwargs.get("subtype", "plain")
+            if "html" in str(subtype):
+                html_part = body
+                break
+        self.assertIsNotNone(html_part)
+        # The script tag is escaped, not executed.
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html_part)
+        self.assertNotIn("<script>", html_part)
+
+
+class TestEvaluateSingleRule(unittest.TestCase):
+    """Audit round 8 fix #7: the test endpoint should use a
+    targeted single-rule evaluator instead of running all 6 bulk
+    evaluators and filtering by rule_id."""
+
+    def test_single_rule_dispatches_to_correct_evaluator(self):
+        from automation_engine import _evaluate_single_rule
+        # stage_duration rule
+        with patch("automation_engine._evaluate_stage_duration_rules_filtered") as f:
+            f.return_value = [{"rule": {"id": 1}, "opp": {}}]
+            matches = _evaluate_single_rule({"id": 1, "trigger_type": "stage_duration"})
+        f.assert_called_once()
+        self.assertEqual(len(matches), 1)
+
+    def test_unknown_trigger_type_returns_empty(self):
+        from automation_engine import _evaluate_single_rule
+        matches = _evaluate_single_rule({"id": 1, "trigger_type": "weird_unknown"})
+        self.assertEqual(matches, [])
+
+    def test_last_run_at_is_reset_to_none(self):
+        # The targeted evaluator should reset last_run_at to None so
+        # the underlying evaluator uses epoch and shows all possible
+        # matches, not just the new ones since the last sweep.
+        from automation_engine import _evaluate_single_rule
+        rule = {"id": 1, "trigger_type": "project_created", "last_run_at": "2026-10-15T00:00:00"}
+        with patch("automation_engine._evaluate_project_created_rules_filtered") as f:
+            f.return_value = []
+            _evaluate_single_rule(rule)
+        # The rule passed to the filtered function should have
+        # last_run_at = None.
+        call_rule = f.call_args[0][0]
+        self.assertIsNone(call_rule["last_run_at"])
+        # The original caller's rule should NOT be mutated (we
+        # shallow-copied before resetting).
+        self.assertEqual(rule["last_run_at"], "2026-10-15T00:00:00")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -4815,30 +4815,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not rule:
             _json_response(self, 404, {"error": "Rule not found"})
             return
-        # Reset last_run_at so evaluator uses epoch — show all possible matches
-        rule["last_run_at"] = None
+        # Use the targeted single-rule evaluator. The previous
+        # implementation called all 6 bulk evaluators and then
+        # filtered by rule_id, which fetched up to 50 matching opps
+        # per rule across the entire enabled-rule set. For a CRM
+        # with many rules this was wasteful; the test endpoint is
+        # admin-triggered and one-shot, but the targeted path is
+        # still cleaner.
         from automation_engine import (
-            _evaluate_stage_duration_rules, _evaluate_project_created_rules,
-            _evaluate_stage_changed_rules, _evaluate_project_updated_rules,
-            _evaluate_tag_duration_rules, _evaluate_tag_added_rules,
-            _build_template_context, _execute_action,
+            _evaluate_single_rule, _build_template_context, _execute_action,
         )
-        trigger_type = rule.get("trigger_type", "")
-        matches = []
-        if trigger_type == "stage_duration":
-            matches = _evaluate_stage_duration_rules()
-        elif trigger_type == "project_created":
-            matches = _evaluate_project_created_rules()
-        elif trigger_type == "stage_changed":
-            matches = _evaluate_stage_changed_rules()
-        elif trigger_type == "project_updated":
-            matches = _evaluate_project_updated_rules()
-        elif trigger_type == "tag_duration":
-            matches = _evaluate_tag_duration_rules()
-        elif trigger_type == "tag_added":
-            matches = _evaluate_tag_added_rules()
-        # Filter to this rule only
-        matches = [m for m in matches if m["rule"]["id"] == rule_id]
+        matches = _evaluate_single_rule(rule)
         previews = []
         for m in matches[:10]:
             opp = m["opp"]
@@ -4850,7 +4837,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "days_in_stage": m.get("days_in_stage", 0),
                 "preview": result,
             })
-        _json_response(self, 200, {"previews": previews, "total_matches": len(matches)})
+        _json_response(self, 200, {
+            "previews": previews,
+            "total_matches": len(matches),
+            "dry_run": True,
+        })
 
     def _handle_automation_logs_get(self, qs: dict) -> None:
         user = _require_admin(self)

@@ -36704,7 +36704,7 @@ async function saveAutomationRule() {
     closeAutomationRuleForm();
     await populateAdminAutomation();
   } catch (e) {
-    alert("Failed to save rule: " + e.message);
+    showToast("Failed to save rule: " + (e.message || e), true);
   }
 }
 
@@ -36716,10 +36716,17 @@ async function testAutomationRule(id) {
     if (!preview || !results) return;
     preview.style.display = "block";
     if (!resp.previews || !resp.previews.length) {
-      results.innerHTML = `<p style="color:var(--muted); margin:0;">No matching projects found (${resp.total_matches || 0} total matches).</p>`;
+      const dryRunNote = resp.dry_run ? " (dry run, no actions were actually executed)" : "";
+      results.innerHTML = `<p style="color:var(--muted); margin:0;">No matching projects found (${resp.total_matches || 0} total matches)${dryRunNote}.</p>`;
       return;
     }
-    results.innerHTML = resp.previews.map(p => `
+    // Audit round 8 fix #8: show the dry-run banner so the user knows
+    // nothing was actually executed. The previews show what WOULD
+    // happen if the rule fired in production.
+    const banner = `<div class="automation-dry-run-banner" style="background:rgba(245,158,11,0.12); color:#f59e0b; padding:0.5rem 0.75rem; border-radius:6px; font-size:0.8rem; margin-bottom:0.5rem;">
+      ⚠ DRY RUN — showing ${resp.previews.length} of ${resp.total_matches} potential match${resp.total_matches === 1 ? "" : "es"}. No actions were actually executed.
+    </div>`;
+    results.innerHTML = banner + resp.previews.map(p => `
       <div class="automation-test-result">
         <span class="project-name">#${p.opportunity_id} ${escapeHtml(p.title)}</span>
         ${p.days_in_stage ? `<span style="color:var(--muted);"> (${p.days_in_stage}d in stage)</span>` : ""}
@@ -36728,7 +36735,7 @@ async function testAutomationRule(id) {
     `).join("");
   } catch (e) {
     console.error("Test failed:", e);
-    alert("Test failed: " + e.message);
+    showToast("Test failed: " + (e.message || e), true);
   }
 }
 
@@ -36755,7 +36762,13 @@ async function loadAutomationLogs(page) {
         const parts = [];
         if (result.task_ids) parts.push(`${result.count} task(s) created`);
         if (result.notification_ids) parts.push(`${result.count} user(s) notified`);
-        if (result.email_sent_to) parts.push(`Email to ${result.email_sent_to}`);
+        // Audit round 8 fix #10: include the email subject in the
+        // log row so the admin can see what was sent without
+        // expanding the log entry.
+        if (result.email_sent_to) {
+          const subject = result.subject ? ` "${escapeHtml(result.subject)}"` : "";
+          parts.push(`Email to ${result.email_sent_to}${subject}`);
+        }
         if (result.moved_to_stage) parts.push(`Moved to stage ${result.stage_title || result.moved_to_stage}`);
         if (result.tags_added) parts.push(`${result.count} tag(s) added`);
         detail = parts.join(", ") || escapeHtml(JSON.stringify(result));

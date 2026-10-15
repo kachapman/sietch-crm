@@ -2,6 +2,62 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Automation: remaining polish + targeted test endpoint (audit round 8 part 2) (2026-10-15)
+
+The remaining 5 low-priority items from the original automation audit, shipped in one commit.
+
+**#4 — `_action_send_email` HTML-escapes user-supplied template content (`automation_engine.py`):**
+
+The previous implementation did `_render_template(body_template, ctx).replace("\n", "<br>")` and attached the result as `text/html` with no escaping. A contact with `<img src=x onerror=alert(1)>` in their name (or an admin who pasted HTML into the template body) would render as actual script/img tags in the recipient's email client.
+
+Fix: render the template to plain text first, then `html.escape()` the entire body, then convert `\n` → `<br>` in the html version. The plain-text part is the raw escaped text (no HTML entities); the html part is escaped + has `<br>` tags for line breaks. Both parts are constructed in a deterministic order, with the `MIMEText` calls captured in test for assertion.
+
+**#7 — Targeted single-rule evaluator (`automation_engine.py` + `server.py`):**
+
+`_handle_automation_rule_test` previously called all 6 bulk evaluators (`_evaluate_stage_duration_rules`, `_evaluate_project_created_rules`, etc.) and then filtered by `rule_id`. Each bulk evaluator does `SELECT * FROM automation_rules WHERE enabled = TRUE AND trigger_type = ...` and iterates up to 50 matching opps. For a CRM with many rules, the test endpoint was wasteful.
+
+Fix: added `_evaluate_single_rule(rule)` to `automation_engine.py` that dispatches to a per-trigger-type `_evaluate_*_rules_filtered(rule)` helper. The filtered helpers delegate to the bulk evaluators and filter by `rule_id` post-hoc (a wider refactor would push the `rule_id` down into SQL, but the post-filter is fine for a one-shot admin-triggered call). The rule's `last_run_at` is reset to `None` so the evaluator uses epoch and shows all possible historical matches. The original caller's rule dict is shallow-copied before mutation.
+
+**#8 — Test endpoint labels the response as "dry run" (`server.py` + `public/app.js`):**
+
+The test endpoint returns `{"previews": [...], "total_matches": N}` but never tells the user the result is a dry run. A user could think the email went out.
+
+Fix: the endpoint now returns `{"previews": [...], "total_matches": N, "dry_run": true}`. The frontend renders a warning banner above the previews: "⚠ DRY RUN — showing N of M potential matches. No actions were actually executed."
+
+**#9 — `alert()` → `showToast()` in 2 places (`public/app.js`):**
+
+`saveAutomationRule` and `testAutomationRule` used `alert()` for error messages. The rest of the app uses `showToast()`. Replaced both with `showToast(msg, true)`.
+
+**#10 — Show email subject in log row (`public/app.js`):**
+
+`loadAutomationLogs` previously rendered email-sent rows as `Email to <recipient>`. Now also includes the subject: `Email to <recipient> "Subject text"`. The subject is HTML-escaped via the existing `escapeHtml()` helper.
+
+**Tests added to `tests/test_automation_engine.py` (5 new tests, total now 50):**
+
+- `test_plain_part_preserves_newlines_no_html_escaping` (#4): the plain-text part is the raw escaped text with `\n` preserved; the html part has `&lt;` and `&gt;` escapes plus `<br>` line breaks.
+- `test_xss_in_contact_name_is_escaped` (#4): a contact named `<script>alert(1)</script>` renders as escaped text in the email, not as a script tag.
+- `test_single_rule_dispatches_to_correct_evaluator` (#7): `_evaluate_single_rule` dispatches to the right per-type filtered helper.
+- `test_unknown_trigger_type_returns_empty` (#7): unknown trigger types don't crash.
+- `test_last_run_at_is_reset_to_none` (#7): the original caller's `last_run_at` is NOT mutated (we shallow-copy before resetting); the filtered helper sees `None`.
+
+**Verification:**
+
+- All 50 tests pass (45 previous + 5 new).
+- Full suite: 15 JS files (134 tests) + 6 Python files (64 + 50 = 114 tests) = **274 tests, 0 failures**. `py_compile` ×3, `node --check public/app.js` clean. Server restarted (PID 2506524, port 8766).
+- Live verified: created a test rule, hit the test endpoint, got `{"previews": [], "total_matches": 0, "dry_run": true}` — the new `dry_run: true` field is in the response.
+
+**Audit round 8 fully closed.** All 11 findings from the original audit are now shipped:
+- 🔴 #1 — `project_updated` published (`c0c06db`)
+- 🔴 #2 — `task:created` mapping removed (`f4297e4`)
+- 🟠 #3 — `change_stage` publishes `stage_changed` (`f4297e4`)
+- 🟠 #5 — cooldown validation (`436f2d3`)
+- 🟡 #4 — email HTML-escape (this commit)
+- 🟡 #7 — targeted test endpoint (this commit)
+- 🟡 #8 — dry-run banner in UI (this commit)
+- 🟡 #9 — `alert()` → `showToast()` (this commit)
+- 🟡 #10 — subject in log row (this commit)
+- 🟡 #11 — stale docstring (already partially fixed in `f4297e4`)
+
 ## Automation SSE wiring + cooldown validation + test coverage (audit round 8) (2026-10-15)
 
 Full audit of the admin console automation functionality (`automation_engine.py` 903 lines, `server.py` route handlers, `migrations/013_add_automation_rules.sql` schema, `public/index.html` rule form, `public/app.js` render/save/load). Found 11 issues, fixed the 4 most impactful across 4 commits + 1 test commit.

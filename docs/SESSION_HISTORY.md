@@ -13,6 +13,56 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-15
 
+**Topic:** Automation audit round 8 part 2 — remaining 5 polish items.
+
+**What landed:**
+
+The remaining 5 low-priority items from the original automation audit, shipped in one commit. Each fix is small (3-20 lines) but the audit chain is now complete.
+
+- **#4 — `_action_send_email` HTML-escapes user-supplied template content.** The previous implementation did `render_template(body).replace("\n", "<br>")` and attached the result as `text/html` with no escaping. A contact with `<img src=x onerror=alert(1)>` in their name (or an admin pasting HTML into the template body) would render as a real script tag in the recipient's email client. Fix: render to plain text first, then `html.escape()` the whole body, then convert `\n` → `<br>` only in the html version. Plain text part has no HTML entities (clean text); html part has escaped user content + `<br>` for line breaks.
+
+- **#7 — Targeted single-rule evaluator.** `_handle_automation_rule_test` previously called all 6 bulk evaluators and filtered by `rule_id` post-hoc. Each bulk evaluator queries all enabled rules of that trigger type and iterates up to 50 matching opps. For a CRM with many rules, the test endpoint was wasteful. Fix: new `_evaluate_single_rule(rule)` in `automation_engine.py` that dispatches to per-type filtered helpers. `last_run_at` is reset to `None` so the evaluator uses epoch and shows all possible historical matches. The original caller's rule dict is shallow-copied before mutation (no side effect on the caller's data).
+
+- **#8 — Test endpoint labels the response as "dry run" in the UI.** The endpoint now returns `{"previews": [...], "total_matches": N, "dry_run": true}`. The frontend renders a warning banner above the previews: "⚠ DRY RUN — showing N of M potential matches. No actions were actually executed." A user can no longer mistake the test output for real rule firings.
+
+- **#9 — `alert()` → `showToast()` in 2 places.** `saveAutomationRule` and `testAutomationRule` used `alert()` for error messages; the rest of the app uses `showToast()`. Replaced both.
+
+- **#10 — Email subject in the log row.** `loadAutomationLogs` previously rendered email-sent rows as `Email to <recipient>`. Now includes the subject: `Email to <recipient> "Subject text"`. HTML-escaped via the existing `escapeHtml()` helper.
+
+**Tests (5 new, total now 50):**
+
+- `test_plain_part_preserves_newlines_no_html_escaping` (#4)
+- `test_xss_in_contact_name_is_escaped` (#4)
+- `test_single_rule_dispatches_to_correct_evaluator` (#7)
+- `test_unknown_trigger_type_returns_empty` (#7)
+- `test_last_run_at_is_reset_to_none` (#7)
+
+**Verification:**
+
+- All 50 tests pass.
+- Full suite: 15 JS files (134 tests) + 6 Python files (64 + 50 = 114 tests) = **274 tests, 0 failures**. `py_compile` ×3, `node --check public/app.js` clean. Server restarted (PID 2506524, port 8766).
+- Live verified: created a test rule, hit `/api/v2/admin/automation/rules/{id}/test`, got `{"previews": [], "total_matches": 0, "dry_run": true}` — the new `dry_run` field is in the response.
+
+**Audit round 8 fully closed. All 11 original findings shipped.** Recent commit chain:
+
+```
+# (this commit)  Automation: remaining 5 polish items + 5 tests
+a1bc058        Automation: 45 unit tests (round 8)
+436f2d3        Automation: validate cooldown_hours > 0 for recurring
+f4297e4        Automation: remove bad task:created SSE mapping + fix #3
+c0c06db        Automation: publish project_updated on PUT (round 8 fix #1)
+2b59711        Presence: tighten online/AFD windows + fix cross-tab close
+... (10 more commits)
+```
+
+**Next:** open question for the user — what's the next feature/audit to tackle? The CRM is in a clean state.
+
+---
+
+## Previous summary (for next resume)
+
+**Date:** 2026-10-15
+
 **Topic:** Automation audit round 8 — 4 SSE/cooldown fixes + 45 new tests.
 
 **What landed:**
