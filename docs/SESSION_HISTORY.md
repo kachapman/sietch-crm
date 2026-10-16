@@ -13,7 +13,15 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-16
 
-**Topic:** Calendar parity Phase 3 — views.
+**Topic:** Calendar parity Phase 4 — editor + detail actions.
+
+**Status: PHASE 4 SHIPPED.** Recurrence builder + per-event TZ/color/busy/URL/attendees/custom reminder + inline validation + Only/Series scope (locked decision) + detail Edit path. Backend: migration 035, series expand-at-write, scope-aware update/delete, attendees codec. 19 new tests (9 JS + 10 Python); full regression green (15 JS files + 13 Python suites, 0 failures).
+
+**Next:** Phase 5 sources/sync/settings (per-tile source picker, visibility/color/rename, sync buttons + errors, hide-OAuth-when-unconfigured, CalDAV beta label, plaintext-password note, ICS file import, default-reminder setting). Files: `public/app.js`, `public/index.html`, `server.py`, `calendar_sync.py`, `oauth_providers.py` (maybe), `CHANGELOG.md`.
+
+---
+
+## Previous summary (2026-10-16 — calendar Phase 3)
 
 **Status: PHASE 3 SHIPPED.** Week/day rewritten (0–24h, all-day strip + continuations, positioned durations, overlap columns, now-line, working-hours shade, click-to-create with hour prefill); month `+more` jumps to day view + empty-day click creates; agenda location/ranges/load-more; week-start + 12/24h display prefs persisted via profile (`calendarDisplay`). 10 new JS mirror tests (24/24 pass); full regression green (15 JS files + 12 Python suites, 0 failures).
 

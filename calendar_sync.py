@@ -18,6 +18,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from html import escape as _esc
+from typing import Any
 
 import db
 
@@ -30,6 +31,147 @@ REMINDER_SWEEP_INTERVAL = 60  # seconds
 
 def _url_hash(url: str) -> str:
     return hashlib.sha256(url.encode()).hexdigest()[:32]
+
+
+def serialize_attendees(value: Any) -> str | None:
+    """Normalize attendees (list of dicts or free text) to a JSON string or None."""
+    import json as _json
+
+    if not value:
+        return None
+    if isinstance(value, str):
+        lines = [ln.strip() for ln in value.replace(",", "\n").split("\n") if ln.strip()]
+        if not lines:
+            return None
+        return _json.dumps([{"name": ln, "email": "", "partstat": "", "label": ln} for ln in lines])
+    if isinstance(value, list):
+        norm = []
+        for a in value:
+            if isinstance(a, dict):
+                name = str(a.get("name") or "").strip()
+                email = str(a.get("email") or "").strip()
+                partstat = str(a.get("partstat") or "").strip()
+                label = str(a.get("label") or name or email).strip()
+                if name or email:
+                    norm.append({"name": name, "email": email, "partstat": partstat, "label": label})
+            elif str(a).strip():
+                norm.append({"name": str(a).strip(), "email": "", "partstat": "", "label": str(a).strip()})
+        return _json.dumps(norm) if norm else None
+    return None
+
+
+def parse_attendees_json(raw: Any) -> list[dict]:
+    """Inverse of serialize_attendees — always returns a list."""
+    import json as _json
+
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [a for a in raw if isinstance(a, dict)]
+    if isinstance(raw, str):
+        try:
+            parsed = _json.loads(raw)
+            if isinstance(parsed, list):
+                return [a for a in parsed if isinstance(a, dict)]
+        except Exception:
+            pass
+        # Legacy plain text: one attendee per line.
+        return [
+            {"name": ln, "email": "", "partstat": "", "label": ln}
+            for ln in raw.split("\n") if ln.strip()
+        ]
+    return []
+
+
+def _local_master_shape(fields: dict) -> dict:
+    """Build a parsed-event-shaped master from local editor fields for expansion."""
+    all_day = bool(fields.get("all_day"))
+    dtstart = fields["dtstart"]
+    dtend = fields["dtend"]
+    tzid = fields.get("timezone") or "UTC"
+
+    def _shape(dt, is_end=False):
+        if all_day:
+            return {
+                "allDay": True, "year": dt.year, "month": dt.month, "day": dt.day,
+                "iso": f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d}", "tzid": tzid,
+            }
+        return {
+            "allDay": False, "year": dt.year, "month": dt.month, "day": dt.day,
+            "hour": dt.hour, "minute": dt.minute,
+            "iso": dt.strftime("%Y-%m-%dT%H:%M:%S"), "tzid": tzid,
+        }
+
+    return {
+        "uid": fields["uid"],
+        "summary": fields.get("summary", ""),
+        "description": fields.get("description", ""),
+        "location": fields.get("location", ""),
+        "status": fields.get("status") or "CONFIRMED",
+        "color": fields.get("color") or "",
+        "rrule": fields.get("rrule") or "",
+        "transparency": fields.get("transparency") or "",
+        "url": fields.get("url") or "",
+        "attendees": fields.get("attendees_list") or [],
+        "alarmMinutes": fields.get("reminder_minutes"),
+        "start": _shape(dtstart),
+        "end": _shape(dtend, True),
+        "exdates": [],
+        "rdates": [],
+    }
+
+
+def build_local_series_rows(fields: dict) -> list[dict]:
+    """Row dicts for a locally-created/edited event.
+
+    Recurring events expand into occurrence rows (same scheme as ICS sync:
+    uid "<master>#<ts>", recurrence_id = master uid, no bare master row).
+    Non-recurring events return one row with the bare uid.
+    """
+    from datetime import date as _date
+    from ics_calendar import (
+        EXPANSION_FUTURE_DAYS,
+        EXPANSION_PAST_DAYS,
+        _event_start_naive,
+        expand_calendar_events,
+    )
+    master_uid = fields["uid"]
+    rrule = (fields.get("rrule") or "").strip()
+    today = _date.today()
+    if rrule:
+        expanded = expand_calendar_events(
+            [_local_master_shape(fields)],
+            today - timedelta(days=EXPANSION_PAST_DAYS),
+            today + timedelta(days=EXPANSION_FUTURE_DAYS),
+        )
+    else:
+        expanded = [_local_master_shape(fields)]
+    rows = []
+    for ev in expanded:
+        start_dt = _event_start_naive(ev)
+        end_dt = _event_start_naive({"start": ev.get("end")}) or start_dt
+        if not start_dt:
+            continue
+        rows.append({
+            "uid": ev.get("uid") if rrule else master_uid,
+            "summary": ev.get("summary", ""),
+            "description": ev.get("description", ""),
+            "location": ev.get("location", ""),
+            "dtstart": start_dt,
+            "dtend": end_dt,
+            "all_day": bool(fields.get("all_day")),
+            "rrule": rrule or None,
+            "color": fields.get("color") or None,
+            "status": (fields.get("status") or "CONFIRMED").upper(),
+            "reminder_minutes": fields.get("reminder_minutes"),
+            "transparency": fields.get("transparency") or None,
+            "url": fields.get("url") or None,
+            "attendees": serialize_attendees(fields.get("attendees_list")),
+            "timezone": fields.get("timezone") or None,
+            "recurrence_id": ev.get("recurrenceId") or None,
+            "is_occurrence": bool(ev.get("isOccurrence")),
+        })
+    return rows
 
 
 def _fetch_ics_feed(url: str) -> tuple[str | None, str | None]:
@@ -139,6 +281,10 @@ def _sync_ics_events_to_db(user_id: int, source_id: int, parsed: dict) -> int:
         color = ev.get("color", "")
         rrule = ev.get("rrule", "")
         reminder = ev.get("alarmMinutes")  # None when the feed has no VALARM
+        transparency = (ev.get("transparency") or "").strip() or None
+        url = (ev.get("url") or "").strip() or None
+        attendees = serialize_attendees(ev.get("attendees"))
+        event_tz = (ev.get("start") or {}).get("tzid") or None
 
         # Parse start/end
         start_data = ev.get("start", {})
@@ -176,9 +322,10 @@ def _sync_ics_events_to_db(user_id: int, source_id: int, parsed: dict) -> int:
             db.execute(
                 """INSERT INTO calendar_events (user_id, source_id, uid, summary, description, location,
                    dtstart, dtend, all_day, rrule, color, status, last_modified,
-                   recurrence_id, is_occurrence, reminder_minutes)
+                   recurrence_id, is_occurrence, reminder_minutes,
+                   transparency, url, attendees, timezone)
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(),
-                           %s, %s, %s)
+                           %s, %s, %s, %s, %s, %s, %s)
                    ON CONFLICT (user_id, uid) DO UPDATE SET
                      summary = EXCLUDED.summary,
                      description = EXCLUDED.description,
@@ -191,10 +338,15 @@ def _sync_ics_events_to_db(user_id: int, source_id: int, parsed: dict) -> int:
                      status = EXCLUDED.status,
                      recurrence_id = EXCLUDED.recurrence_id,
                      is_occurrence = EXCLUDED.is_occurrence,
+                     transparency = EXCLUDED.transparency,
+                     url = EXCLUDED.url,
+                     attendees = EXCLUDED.attendees,
+                     timezone = EXCLUDED.timezone,
                      last_modified = NOW()""",
                 (user_id, source_id, uid, summary, description, location,
                  dtstart, dtend, all_day, rrule or None, color or None, status,
-                 recurrence_id, is_occurrence, reminder),
+                 recurrence_id, is_occurrence, reminder,
+                 transparency, url, attendees, event_tz),
             )
             count += 1
         except Exception as e:

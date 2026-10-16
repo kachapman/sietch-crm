@@ -1557,6 +1557,8 @@
       <h2 id="calendar-event-modal-title" class="modal-title"></h2>
       <div id="calendar-event-modal-body" class="calendar-event-modal-body"></div>
       <div class="modal-actions">
+        <span id="calendar-event-modal-readonly" class="calendar-event-readonly hidden">Read-only — synced from an external feed.</span>
+        <button type="button" id="calendar-event-modal-edit" class="btn btn-primary hidden">Edit</button>
         <button type="button" id="calendar-event-modal-close" class="btn btn-secondary">Close</button>
       </div>
     </div>
@@ -1643,8 +1645,58 @@
           <div class="field" style="flex:1"><label>Start</label><input type="date" id="cal-edit-start-date" /><input type="time" id="cal-edit-start-time" class="cal-edit-time" /></div>
           <div class="field" style="flex:1"><label>End</label><input type="date" id="cal-edit-end-date" /><input type="time" id="cal-edit-end-time" class="cal-edit-time" /></div>
         </div>
+        <div class="field"><label>Times in</label><select id="cal-edit-timezone"></select></div>
+        <p id="cal-edit-error" class="modal-error hidden" role="alert"></p>
         <div class="field"><label>Location</label><input type="text" id="cal-edit-location" placeholder="Optional" /></div>
+        <div class="field"><label>Link (URL)</label><input type="url" id="cal-edit-url" placeholder="https://…" autocomplete="off" /></div>
         <div class="field"><label>Description</label><textarea id="cal-edit-description" rows="3" placeholder="Optional"></textarea></div>
+        <div class="field"><label>Attendees (one per line, Name &lt;email&gt;)</label><textarea id="cal-edit-attendees" rows="2" placeholder="Optional"></textarea></div>
+        <div class="cal-edit-row-2">
+          <div class="field"><label>Show as</label>
+            <select id="cal-edit-transparency">
+              <option value="OPAQUE">Busy</option>
+              <option value="TRANSPARENT">Free</option>
+            </select>
+          </div>
+          <div class="field"><label>Color</label>
+            <div id="cal-edit-colors" class="cal-edit-colors" role="radiogroup" aria-label="Event color"></div>
+          </div>
+        </div>
+        <div class="field"><label>Repeats</label>
+          <select id="cal-edit-freq">
+            <option value="">Does not repeat</option>
+            <option value="DAILY">Daily</option>
+            <option value="WEEKLY">Weekly</option>
+            <option value="MONTHLY">Monthly</option>
+            <option value="YEARLY">Yearly</option>
+          </select>
+        </div>
+        <div id="cal-edit-recur-opts" class="hidden">
+          <div class="cal-edit-row-2">
+            <div class="field"><label>Every</label>
+              <span class="cal-edit-inline"><input type="number" id="cal-edit-interval" min="1" max="99" value="1" /> <span id="cal-edit-interval-unit">days</span></span>
+            </div>
+            <div class="field"><label>Ends</label>
+              <select id="cal-edit-end-cond">
+                <option value="never">Never</option>
+                <option value="count">After N times</option>
+                <option value="until">On date</option>
+              </select>
+            </div>
+          </div>
+          <div id="cal-edit-byday-row" class="field hidden"><label>On days</label>
+            <div id="cal-edit-byday" class="cal-edit-byday"></div>
+          </div>
+          <div class="cal-edit-row-2">
+            <div class="field hidden" id="cal-edit-count-wrap"><label>Occurrences</label><input type="number" id="cal-edit-count" min="2" max="500" value="10" /></div>
+            <div class="field hidden" id="cal-edit-until-wrap"><label>End date</label><input type="date" id="cal-edit-until" /></div>
+          </div>
+          <p id="cal-edit-rrule-preview" class="cal-edit-rrule-preview"></p>
+        </div>
+        <div class="field" id="cal-edit-scope-wrap" hidden><label>Apply changes to</label>
+          <label class="cal-edit-scope"><input type="radio" name="cal-edit-scope" value="single" checked /> This event only</label>
+          <label class="cal-edit-scope"><input type="radio" name="cal-edit-scope" value="series" /> Entire series</label>
+        </div>
         <div class="field">
           <label>Calendar</label>
           <select id="cal-edit-source"></select>
@@ -1658,7 +1710,12 @@
             <option value="30">30 minutes before</option>
             <option value="60">1 hour before</option>
             <option value="1440">1 day before</option>
+            <option value="custom">Custom…</option>
           </select>
+        </div>
+        <div class="field hidden" id="cal-edit-reminder-custom-wrap">
+          <label>Custom reminder (minutes before)</label>
+          <input type="number" id="cal-edit-reminder-custom" min="1" max="10080" placeholder="e.g. 45" />
         </div>
       </div>
       <div class="modal-actions">

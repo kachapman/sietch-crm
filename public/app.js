@@ -4008,6 +4008,9 @@ function findCalendarEventByUid(cal, uid) {
   return events.find((ev) => ev.uid === uid) || null;
 }
 
+/** Event + tile behind the open detail modal (for the Edit button). */
+let calendarEventModalContext = null;
+
 function formatCalendarEventWhen(ev, timeZone) {
   const pad = (n) => String(n).padStart(2, "0");
   if (ev.start?.allDay) {
@@ -4110,12 +4113,21 @@ function openCalendarEventModal(ev, cal) {
   if (ev.uid) {
     bodyHtml += `<p class="calendar-event-detail-uid" title="Event UID">${escapeHtml(ev.uid)}</p>`;
   }
+  if (ev.timezone) {
+    bodyHtml += `<p class="calendar-event-detail-uid" title="Event timezone">Times in ${escapeHtml(String(ev.timezone).replace(/_/g, " "))}</p>`;
+  }
   bodyEl.innerHTML = bodyHtml;
+  // Edit path: local rows (created in the CRM) open the editor; feed rows are read-only.
+  calendarEventModalContext = { ev, cal };
+  const editable = !!ev._dbId;
+  $("#calendar-event-modal-edit")?.classList.toggle("hidden", !editable);
+  $("#calendar-event-modal-readonly")?.classList.toggle("hidden", editable);
   modal.classList.remove("hidden");
 }
 
 function closeCalendarEventModal() {
   $("#calendar-event-modal")?.classList.add("hidden");
+  calendarEventModalContext = null;
 }
 
 function bindCalendarEventClicks(section, cal) {
@@ -6034,6 +6046,91 @@ function bindCalendarSettingsModal() {
 
 // ── Calendar Event Edit Modal ────────────────────────────────────────────────
 
+const CAL_EDIT_COLORS = [
+  "#6e4bdb", "#439fe5", "#3eb489", "#e8b930", "#e07a2f",
+  "#e05252", "#b35db8", "#5b8def", "#2dbfa0", "#c97cd8",
+];
+const CAL_EDIT_WEEKDAYS = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
+const CAL_EDIT_WEEKDAY_LABELS = { MO: "Mon", TU: "Tue", WE: "Wed", TH: "Thu", FR: "Fri", SA: "Sat", SU: "Sun" };
+
+/** Local (user-created) events are editable as a series; feed-synced rows are not. Pure. */
+function isLocalCalendarEvent(ev) {
+  return String(ev?.uid || "").startsWith("local-");
+}
+
+/** Build an RRULE string from recurrence controls. Pure. */
+function buildRruleFromControls({ freq, interval, byday, endCond, count, until }) {
+  if (!freq) return "";
+  const parts = [`FREQ=${freq}`];
+  const n = parseInt(interval, 10);
+  if (Number.isFinite(n) && n > 1) parts.push(`INTERVAL=${n}`);
+  if (freq === "WEEKLY" && Array.isArray(byday) && byday.length) {
+    parts.push(`BYDAY=${byday.join(",")}`);
+  }
+  if (endCond === "count") {
+    const c = parseInt(count, 10);
+    if (Number.isFinite(c) && c >= 2) parts.push(`COUNT=${Math.min(c, 500)}`);
+  } else if (endCond === "until" && until) {
+    const d = String(until).replace(/-/g, "");
+    if (/^\d{8}$/.test(d)) parts.push(`UNTIL=${d}T000000Z`);
+  }
+  return parts.join(";");
+}
+
+/** Parse a simple RRULE back into controls; null when too complex for the UI. Pure. */
+function parseRruleToControls(rrule) {
+  if (!rrule) return { freq: "", interval: 1, byday: [], endCond: "never", count: 10, until: "" };
+  const dict = {};
+  for (const part of String(rrule).split(";")) {
+    if (part.includes("=")) {
+      const [k, v] = part.split("=", 2);
+      dict[k.trim().toUpperCase()] = v.trim().toUpperCase();
+    }
+  }
+  if (!["DAILY", "WEEKLY", "MONTHLY", "YEARLY"].includes(dict.FREQ)) return null;
+  if (dict.BYMONTHDAY || dict.BYMONTH || dict.BYYEARDAY || dict.BYWEEKNO || dict.BYHOUR || dict.BYMINUTE) return null;
+  if (dict.BYDAY && dict.FREQ !== "WEEKLY") return null;
+  const byday = dict.FREQ === "WEEKLY" && dict.BYDAY
+    ? dict.BYDAY.split(",").filter((d) => CAL_EDIT_WEEKDAYS.includes(d))
+    : [];
+  if (dict.BYDAY && dict.FREQ === "WEEKLY" && !byday.length) return null;
+  const out = {
+    freq: dict.FREQ,
+    interval: Math.max(parseInt(dict.INTERVAL || "1", 10) || 1, 1),
+    byday, endCond: "never", count: 10, until: "",
+  };
+  if (dict.COUNT) {
+    const c = parseInt(dict.COUNT, 10);
+    if (!Number.isFinite(c) || c < 2) return null;
+    out.endCond = "count";
+    out.count = Math.min(c, 500);
+  } else if (dict.UNTIL) {
+    const m = dict.UNTIL.match(/^(\d{4})(\d{2})(\d{2})/);
+    if (!m) return null;
+    out.endCond = "until";
+    out.until = `${m[1]}-${m[2]}-${m[3]}`;
+  }
+  return out;
+}
+
+/** "Jane <jane@x.com>" → {name, email}. Pure. */
+function attendeeLineToObj(line) {
+  const s = String(line || "").trim();
+  if (!s) return null;
+  const m = s.match(/^(.*?)\s*<([^<>@\s]+@[^<>@\s]+)>\s*$/);
+  if (m) return { name: m[1].trim(), email: m[2].trim() };
+  if (/^[^@\s]+@[^@\s]+$/.test(s)) return { name: "", email: s };
+  return { name: s, email: "" };
+}
+
+/** {name, email} → "Jane <jane@x.com>" display line. Pure. */
+function attendeeObjToLine(a) {
+  const name = String(a?.name || "").trim();
+  const email = String(a?.email || "").trim();
+  if (name && email) return `${name} <${email}>`;
+  return name || email;
+}
+
 function openCalendarEventEditModal(ev, cal, prefill) {
   const modal = $("#calendar-event-edit-modal");
   if (!modal) return;
@@ -6043,10 +6140,19 @@ function openCalendarEventEditModal(ev, cal, prefill) {
   $("#cal-edit-summary").value = isEdit ? (ev.summary || "") : "";
   $("#cal-edit-allday").checked = isEdit ? !!ev.start?.allDay : false;
   $("#cal-edit-location").value = isEdit ? (ev.location || "") : "";
+  $("#cal-edit-url").value = isEdit ? (ev.url || "") : "";
   $("#cal-edit-description").value = isEdit ? (ev.description || "") : "";
+  $("#cal-edit-attendees").value = isEdit && Array.isArray(ev.attendees)
+    ? ev.attendees.map(attendeeObjToLine).filter(Boolean).join("\n") : "";
+  $("#cal-edit-transparency").value = isEdit && ev.transparency === "TRANSPARENT" ? "TRANSPARENT" : "OPAQUE";
+  $("#cal-edit-error")?.classList.add("hidden");
   $("#cal-edit-delete").classList.toggle("hidden", !isEdit);
 
   const tz = resolveCalendarTimezone(cal || {});
+  // Per-event timezone: wall times are interpreted in it on save.
+  populateCalendarTimezoneSelect($("#cal-edit-timezone"), isEdit ? (ev.timezone || tz) : tz);
+  // Stored instants render as wall time in the event timezone.
+  const etz = isEdit ? (ev.timezone || tz) : tz;
   if (isEdit && ev.start) {
     if (ev.start.allDay) {
       $("#cal-edit-start-date").value = `${ev.start.year}-${String(ev.start.month).padStart(2,"0")}-${String(ev.start.day).padStart(2,"0")}`;
@@ -6059,12 +6165,12 @@ function openCalendarEventEditModal(ev, cal, prefill) {
       const startMs = eventStartUtcMs(ev);
       const endMs = eventEndUtcMs(ev);
       if (startMs) {
-        const sp = getZonedParts(startMs, tz);
+        const sp = getZonedParts(startMs, etz);
         $("#cal-edit-start-date").value = `${sp.year}-${String(sp.month).padStart(2,"0")}-${String(sp.day).padStart(2,"0")}`;
         $("#cal-edit-start-time").value = `${String(sp.hour).padStart(2,"0")}:${String(sp.minute).padStart(2,"0")}`;
       }
       if (endMs) {
-        const ep = getZonedParts(endMs, tz);
+        const ep = getZonedParts(endMs, etz);
         $("#cal-edit-end-date").value = `${ep.year}-${String(ep.month).padStart(2,"0")}-${String(ep.day).padStart(2,"0")}`;
         $("#cal-edit-end-time").value = `${String(ep.hour).padStart(2,"0")}:${String(ep.minute).padStart(2,"0")}`;
       }
@@ -6099,8 +6205,126 @@ function openCalendarEventEditModal(ev, cal, prefill) {
     if (isEdit && ev._sourceId) srcSel.value = ev._sourceId;
   }).catch(() => {});
 
+  // Color dots
+  const colorWrap = $("#cal-edit-colors");
+  const currentColor = isEdit ? (ev.color || "") : "";
+  if (colorWrap) {
+    colorWrap.innerHTML = "";
+    colorWrap.dataset.selected = currentColor;
+    for (const c of CAL_EDIT_COLORS) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "cal-edit-color" + (c === currentColor ? " selected" : "");
+      b.dataset.color = c;
+      b.style.background = c;
+      b.title = c;
+      b.setAttribute("aria-label", `Color ${c}`);
+      b.addEventListener("click", () => {
+        colorWrap.dataset.selected = c;
+        colorWrap.querySelectorAll(".cal-edit-color").forEach((x) =>
+          x.classList.toggle("selected", x.dataset.color === c));
+      });
+      colorWrap.appendChild(b);
+    }
+  }
+
+  // Recurrence controls
+  const bydayWrap = $("#cal-edit-byday");
+  if (bydayWrap && !bydayWrap.dataset.built) {
+    bydayWrap.dataset.built = "1";
+    for (const code of CAL_EDIT_WEEKDAYS) {
+      const lab = document.createElement("label");
+      lab.className = "cal-edit-byday-day";
+      lab.innerHTML = `<input type="checkbox" value="${code}" /> ${CAL_EDIT_WEEKDAY_LABELS[code]}`;
+      bydayWrap.appendChild(lab);
+    }
+  }
+  const parsed = parseRruleToControls(isEdit ? (ev.rrule || "") : "");
+  const freqSel = $("#cal-edit-freq");
+  if (freqSel) freqSel.value = parsed ? parsed.freq : "";
+  if (parsed) {
+    $("#cal-edit-interval").value = parsed.interval;
+    bydayWrap?.querySelectorAll("input").forEach((cb) => { cb.checked = parsed.byday.includes(cb.value); });
+    $("#cal-edit-end-cond").value = parsed.endCond;
+    $("#cal-edit-count").value = parsed.count;
+    $("#cal-edit-until").value = parsed.until;
+  }
+  syncCalEditRecurUI();
+  // Complex rules the builder can't represent stay read-only.
+  let rruleNote = $("#cal-edit-rrule-note");
+  if (isEdit && !parsed && ev.rrule) {
+    if (!rruleNote) {
+      rruleNote = document.createElement("p");
+      rruleNote.id = "cal-edit-rrule-note";
+      rruleNote.className = "cal-edit-rrule-preview";
+      freqSel?.closest(".field")?.appendChild(rruleNote);
+    }
+    rruleNote.textContent = `Custom rule kept as-is: ${ev.rrule}`;
+  } else if (rruleNote) {
+    rruleNote.textContent = "";
+  }
+
+  // Reminder: preset or custom value.
+  const remSel = $("#cal-edit-reminder");
+  const remCustomWrap = $("#cal-edit-reminder-custom-wrap");
+  const remCustom = $("#cal-edit-reminder-custom");
+  if (isEdit && Number.isFinite(ev.reminderMinutes)) {
+    const preset = ["5", "15", "30", "60", "1440"].includes(String(ev.reminderMinutes));
+    if (remSel) remSel.value = preset ? String(ev.reminderMinutes) : "custom";
+    if (!preset && remCustom) remCustom.value = ev.reminderMinutes;
+  } else if (remSel && !isEdit) {
+    remSel.value = "15";
+  }
+  remCustomWrap?.classList.toggle("hidden", remSel?.value !== "custom");
+
+  // Series scope: only local occurrences offer this/series.
+  const scopeWrap = $("#cal-edit-scope-wrap");
+  const showScope = isEdit && ev.isOccurrence && isLocalCalendarEvent(ev);
+  if (scopeWrap) {
+    scopeWrap.hidden = !showScope;
+    if (showScope) scopeWrap.querySelector('input[value="single"]')?.click?.();
+  }
+  modal.dataset.syncNote = isEdit && ev._dbId && !isLocalCalendarEvent(ev) ? "1" : "";
+  let syncNote = $("#cal-edit-sync-note");
+  if (modal.dataset.syncNote) {
+    if (!syncNote) {
+      syncNote = document.createElement("p");
+      syncNote.id = "cal-edit-sync-note";
+      syncNote.className = "cal-edit-rrule-preview";
+      $("#cal-edit-title")?.after(syncNote);
+    }
+    syncNote.textContent = "Synced from an external feed — edits apply locally and refresh from the feed.";
+  } else if (syncNote) {
+    syncNote.textContent = "";
+  }
+
   modal.classList.remove("hidden");
   setTimeout(() => $("#cal-edit-summary")?.focus(), 100);
+}
+
+/** Show/hide recurrence sub-controls + live RRULE preview. */
+function syncCalEditRecurUI() {
+  const freq = $("#cal-edit-freq")?.value || "";
+  $("#cal-edit-recur-opts")?.classList.toggle("hidden", !freq);
+  $("#cal-edit-byday-row")?.classList.toggle("hidden", freq !== "WEEKLY");
+  const unit = { DAILY: "days", WEEKLY: "weeks", MONTHLY: "months", YEARLY: "years" }[freq] || "days";
+  const unitEl = $("#cal-edit-interval-unit");
+  if (unitEl) unitEl.textContent = unit;
+  const endCond = $("#cal-edit-end-cond")?.value || "never";
+  $("#cal-edit-count-wrap")?.classList.toggle("hidden", endCond !== "count");
+  $("#cal-edit-until-wrap")?.classList.toggle("hidden", endCond !== "until");
+  const preview = $("#cal-edit-rrule-preview");
+  if (preview) {
+    const rrule = buildRruleFromControls({
+      freq,
+      interval: $("#cal-edit-interval")?.value,
+      byday: [...document.querySelectorAll("#cal-edit-byday input:checked")].map((cb) => cb.value),
+      endCond,
+      count: $("#cal-edit-count")?.value,
+      until: $("#cal-edit-until")?.value,
+    });
+    preview.textContent = rrule ? `Rule: ${rrule}` : "";
+  }
 }
 
 function closeCalendarEventEditModal() {
@@ -6127,27 +6351,78 @@ function bindCalendarEventEditModal() {
 
   // Save
   $("#cal-edit-save")?.addEventListener("click", async () => {
+    const errEl = $("#cal-edit-error");
+    const fail = (msg) => {
+      if (errEl) {
+        errEl.textContent = msg;
+        errEl.classList.remove("hidden");
+      } else {
+        showToast(msg, true);
+      }
+    };
+    errEl?.classList.add("hidden");
     const summary = $("#cal-edit-summary")?.value?.trim();
-    if (!summary) { showToast("Title is required", true); return; }
+    if (!summary) { fail("Title is required."); return; }
     const allDay = $("#cal-edit-allday")?.checked;
     const startDate = $("#cal-edit-start-date")?.value;
-    const startTime = $("#cal-edit-start-time")?.value;
     const endDate = $("#cal-edit-end-date")?.value;
-    const endTime = $("#cal-edit-end-time")?.value;
+    if (!startDate) { fail("Start date is required."); return; }
+    const eventTz = $("#cal-edit-timezone")?.value || getBrowserTimezone();
+    const toParts = (d, t) => {
+      const [Y, M, D] = d.split("-").map(Number);
+      const [h, mi] = String(t || "09:00").split(":").map(Number);
+      return { Y, M, D, h: h || 0, mi: mi || 0 };
+    };
     let dtstart, dtend;
     if (allDay) {
+      if (!endDate) { fail("End date is required."); return; }
       dtstart = startDate;
-      dtend = endDate || startDate;
+      dtend = endDate;
+      if (dtend < dtstart) { fail("End date must be on or after the start date."); return; }
     } else {
-      dtstart = startDate + "T" + (startTime || "09:00");
-      dtend = endDate + "T" + (endTime || "10:00");
+      const startTime = $("#cal-edit-start-time")?.value || "09:00";
+      const endTime = $("#cal-edit-end-time")?.value || "10:00";
+      const s = toParts(startDate, startTime);
+      const e = toParts(endDate || startDate, endTime);
+      const startMs = wallTimeInZoneToUtc(s.Y, s.M, s.D, s.h, s.mi, eventTz);
+      const endMs = wallTimeInZoneToUtc(e.Y, e.M, e.D, e.h, e.mi, eventTz);
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) { fail("Invalid date or time."); return; }
+      if (endMs <= startMs) { fail("End must be after start."); return; }
+      dtstart = new Date(startMs).toISOString();
+      dtend = new Date(endMs).toISOString();
     }
+    const remSel = $("#cal-edit-reminder")?.value;
+    const reminder_minutes = remSel === "custom"
+      ? (parseInt($("#cal-edit-reminder-custom")?.value, 10) || null)
+      : (parseInt(remSel, 10) || null);
+    if (remSel === "custom" && reminder_minutes != null && (reminder_minutes < 1 || reminder_minutes > 10080)) {
+      fail("Custom reminder must be 1–10080 minutes.");
+      return;
+    }
+    const attendees = String($("#cal-edit-attendees")?.value || "")
+      .split("\n").map(attendeeLineToObj).filter(Boolean);
+    const rrule = buildRruleFromControls({
+      freq: $("#cal-edit-freq")?.value || "",
+      interval: $("#cal-edit-interval")?.value,
+      byday: [...document.querySelectorAll("#cal-edit-byday input:checked")].map((cb) => cb.value),
+      endCond: $("#cal-edit-end-cond")?.value || "never",
+      count: $("#cal-edit-count")?.value,
+      until: $("#cal-edit-until")?.value,
+    });
+    const scopeRadio = document.querySelector('input[name="cal-edit-scope"]:checked');
     const body = {
       summary, all_day: allDay, dtstart, dtend,
       location: $("#cal-edit-location")?.value?.trim() || "",
+      url: $("#cal-edit-url")?.value?.trim() || "",
       description: $("#cal-edit-description")?.value?.trim() || "",
+      attendees,
+      transparency: $("#cal-edit-transparency")?.value || "OPAQUE",
+      color: $("#cal-edit-colors")?.dataset.selected || "",
+      rrule,
+      timezone: allDay ? "" : eventTz,
       source_id: $("#cal-edit-source")?.value || null,
-      reminder_minutes: parseInt($("#cal-edit-reminder")?.value) || null,
+      reminder_minutes,
+      edit_scope: scopeRadio && !$("#cal-edit-scope-wrap")?.hidden ? scopeRadio.value : "single",
     };
     const editId = $("#cal-edit-id")?.value;
     try {
@@ -6166,22 +6441,36 @@ function bindCalendarEventEditModal() {
         if (cal._el) loadCalendarForTile(cal, { quiet: true }).catch(() => {});
       }
       showToast(editId ? "Event updated" : "Event created");
-    } catch (e) { showToast(e.message, true); }
+    } catch (e) { fail(e.message); }
   });
 
-  // Delete
+  // Delete (honors the series scope when visible)
   $("#cal-edit-delete")?.addEventListener("click", async () => {
     const editId = $("#cal-edit-id")?.value;
     if (!editId) return;
-    if (!confirm("Delete this event?")) return;
+    const scopeRadio = document.querySelector('input[name="cal-edit-scope"]:checked');
+    const series = scopeRadio && !$("#cal-edit-scope-wrap")?.hidden && scopeRadio.value === "series";
+    if (!confirm(series ? "Delete the entire series?" : "Delete this event?")) return;
     try {
-      await api(`/api/v2/calendar/events/${editId}`, { method: "DELETE" });
+      await api(`/api/v2/calendar/events/${editId}${series ? "?scope=series" : ""}`, { method: "DELETE" });
       closeCalendarEventEditModal();
+      closeCalendarEventModal();
       for (const cal of state.calendarTiles) {
         if (cal._el) loadCalendarForTile(cal, { quiet: true }).catch(() => {});
       }
-      showToast("Event deleted");
+      showToast(series ? "Series deleted" : "Event deleted");
     } catch (e) { showToast(e.message, true); }
+  });
+
+  // Recurrence + reminder-custom UI sync
+  $("#cal-edit-freq")?.addEventListener("change", syncCalEditRecurUI);
+  $("#cal-edit-end-cond")?.addEventListener("change", syncCalEditRecurUI);
+  $("#cal-edit-interval")?.addEventListener("input", syncCalEditRecurUI);
+  $("#cal-edit-count")?.addEventListener("input", syncCalEditRecurUI);
+  $("#cal-edit-until")?.addEventListener("change", syncCalEditRecurUI);
+  document.querySelector("#cal-edit-byday")?.addEventListener("change", syncCalEditRecurUI);
+  $("#cal-edit-reminder")?.addEventListener("change", (e) => {
+    $("#cal-edit-reminder-custom-wrap")?.classList.toggle("hidden", e.target.value !== "custom");
   });
 }
 
@@ -6208,6 +6497,11 @@ function bindCalendarEventModal() {
   if (!modal || modal.dataset.bound) return;
   modal.dataset.bound = "1";
   $("#calendar-event-modal-close")?.addEventListener("click", closeCalendarEventModal);
+  $("#calendar-event-modal-edit")?.addEventListener("click", () => {
+    const ctx = calendarEventModalContext;
+    closeCalendarEventModal();
+    if (ctx?.ev?._dbId) openCalendarEventEditModal(ctx.ev, ctx.cal);
+  });
   modal.querySelectorAll("[data-calendar-event-dismiss]").forEach((el) => {
     el.addEventListener("click", closeCalendarEventModal);
   });
@@ -6270,6 +6564,11 @@ async function loadCalendarForTile(cal, { quiet = false } = {}) {
         recurrence: ev.recurrence || ev.rrule || "",
         isOccurrence: !!ev.is_occurrence,
         recurrenceId: ev.recurrence_id || "",
+        transparency: ev.transparency || "",
+        url: ev.url || "",
+        attendees: Array.isArray(ev.attendees) ? ev.attendees : [],
+        timezone: ev.timezone || "",
+        reminderMinutes: ev.reminder_minutes ?? null,
         _dbId: ev.id,
         _sourceId: ev.source_id,
       }));
@@ -6306,6 +6605,11 @@ async function loadCalendarForTile(cal, { quiet = false } = {}) {
           recurrence: ev.recurrence || ev.rrule || "",
           isOccurrence: !!ev.is_occurrence,
           recurrenceId: ev.recurrence_id || "",
+          transparency: ev.transparency || "",
+          url: ev.url || "",
+          attendees: Array.isArray(ev.attendees) ? ev.attendees : [],
+          timezone: ev.timezone || "",
+          reminderMinutes: ev.reminder_minutes ?? null,
           _dbId: ev.id,
           _sourceId: ev.source_id,
         }));

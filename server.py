@@ -939,6 +939,10 @@ try:
             reminder_sent BOOLEAN DEFAULT FALSE,
             recurrence_id TEXT,
             is_occurrence BOOLEAN DEFAULT FALSE,
+            transparency TEXT,
+            url TEXT,
+            attendees TEXT,
+            timezone TEXT,
             created_at TIMESTAMPTZ DEFAULT NOW(),
             UNIQUE(user_id, uid)
         )
@@ -970,6 +974,11 @@ try:
     db.execute("CREATE INDEX IF NOT EXISTS idx_cal_events_recurrence ON calendar_events(user_id, recurrence_id) WHERE recurrence_id IS NOT NULL")
 except Exception:
     pass
+for _col in ("transparency", "url", "attendees", "timezone"):
+    try:
+        db.execute(f"ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS {_col} TEXT")
+    except Exception:
+        pass
 try:
     db.execute("""
         CREATE TABLE IF NOT EXISTS ics_feed_cache (
@@ -16921,7 +16930,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             f"""SELECT ce.id, ce.uid, ce.summary, ce.description, ce.location,
                        ce.dtstart, ce.dtend, ce.all_day, ce.rrule, ce.color, ce.status,
                        ce.reminder_minutes, ce.source_id, cs.name AS source_name, cs.source_type,
-                       ce.recurrence_id, ce.is_occurrence
+                       ce.recurrence_id, ce.is_occurrence,
+                       ce.transparency, ce.url, ce.attendees, ce.timezone
                 FROM calendar_events ce
                 LEFT JOIN calendar_sources cs ON cs.id = ce.source_id
                 WHERE {where}
@@ -16938,6 +16948,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 ev["is_occurrence"] = bool(ev.get("is_occurrence"))
             except Exception:
                 pass
+            try:
+                from calendar_sync import parse_attendees_json
+                ev["attendees"] = parse_attendees_json(ev.get("attendees"))
+            except Exception:
+                ev["attendees"] = []
             if ev.get("rrule"):
                 try:
                     ev["recurrence"] = _humanize_rrule(ev["rrule"])
@@ -17145,6 +17160,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         color = (body.get("color") or "").strip() or None
         rrule = (body.get("rrule") or "").strip() or None
         reminder = body.get("reminder_minutes")
+        transparency = (body.get("transparency") or "").strip().upper() or None
+        if transparency not in ("TRANSPARENT", "OPAQUE", None):
+            transparency = None
+        url = (body.get("url") or "").strip() or None
+        attendees_list = body.get("attendees")
+        event_timezone = (body.get("timezone") or "").strip() or None
         source_id = body.get("source_id")
         if source_id == "" or source_id == "null":
             source_id = None
@@ -17153,16 +17174,37 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         else:
             source_id = None
         uid = f"local-{user['id']}-{int(time.time()*1000)}"
-        event_id = db.insert_returning(
-            """INSERT INTO calendar_events (user_id, source_id, uid, summary, description, location,
-               dtstart, dtend, all_day, rrule, color, reminder_minutes)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-            (user["id"], source_id, uid, summary, description, location, dtstart, dtend, all_day, rrule, color, reminder),
-        )
-        _json_response(self, 200, {"ok": True, "id": event_id, "uid": uid})
+        from calendar_sync import build_local_series_rows
+        rows = build_local_series_rows({
+            "uid": uid, "summary": summary, "description": description, "location": location,
+            "dtstart": dtstart, "dtend": dtend, "all_day": all_day, "rrule": rrule or "",
+            "color": color or "", "status": "CONFIRMED", "reminder_minutes": reminder,
+            "transparency": transparency or "", "url": url or "",
+            "attendees_list": attendees_list, "timezone": event_timezone or "",
+        })
+        first_id = None
+        for row in rows:
+            rid = db.insert_returning(
+                """INSERT INTO calendar_events (user_id, source_id, uid, summary, description, location,
+                   dtstart, dtend, all_day, rrule, color, reminder_minutes,
+                   transparency, url, attendees, timezone, recurrence_id, is_occurrence)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                (user["id"], source_id, row["uid"], row["summary"], row["description"], row["location"],
+                 row["dtstart"], row["dtend"], row["all_day"], row["rrule"], row["color"],
+                 row["reminder_minutes"], row["transparency"], row["url"], row["attendees"],
+                 row["timezone"], row["recurrence_id"], row["is_occurrence"]),
+            )
+            if first_id is None:
+                first_id = rid
+        _json_response(self, 200, {"ok": True, "id": first_id, "uid": uid, "occurrences": len(rows)})
 
     def _handle_calendar_event_update(self, event_id: int) -> None:
-        """Update a local calendar event."""
+        """Update a local calendar event.
+
+        edit_scope="series" rewrites every row of the series (local series
+        only); "single" (default) updates just this row and detaches an
+        edited occurrence from its series.
+        """
         user = _require_auth(self)
         if not user: return
         ev = db.query_one("SELECT * FROM calendar_events WHERE id = %s AND user_id = %s", (event_id, user["id"]))
@@ -17173,12 +17215,81 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             body = json.loads(_read_body(self) or b"{}")
         except Exception:
             body = {}
+        from calendar_sync import build_local_series_rows, parse_attendees_json, serialize_attendees
+        scope = "series" if (body.get("edit_scope") or "") == "series" else "single"
+        master_uid = ev.get("recurrence_id") or ev.get("uid")
+        is_series = bool(ev.get("is_occurrence") or ev.get("recurrence_id") or ev.get("rrule"))
+
+        if scope == "series" and is_series:
+            # Rebuild the whole series from merged fields.
+            cur_att = parse_attendees_json(ev.get("attendees"))
+            merged = {
+                "uid": master_uid,
+                "summary": body.get("summary", ev.get("summary") or "").strip(),
+                "description": body.get("description", ev.get("description") or "").strip(),
+                "location": body.get("location", ev.get("location") or "").strip(),
+                "dtstart": ev.get("dtstart"),
+                "dtend": ev.get("dtend"),
+                "all_day": bool(body.get("all_day", ev.get("all_day", False))),
+                "rrule": (body.get("rrule", ev.get("rrule") or "") or "").strip(),
+                "color": (body.get("color", ev.get("color") or "") or "").strip(),
+                "status": (body.get("status", ev.get("status") or "CONFIRMED") or "CONFIRMED"),
+                "reminder_minutes": body.get("reminder_minutes", ev.get("reminder_minutes")),
+                "transparency": (body.get("transparency", ev.get("transparency") or "") or "").strip(),
+                "url": (body.get("url", ev.get("url") or "") or "").strip(),
+                "attendees_list": body.get("attendees", cur_att),
+                "timezone": (body.get("timezone", ev.get("timezone") or "") or "").strip(),
+            }
+            for key in ("dtstart", "dtend"):
+                if key in body:
+                    try:
+                        dt = datetime.fromisoformat(body[key].replace("Z", "+00:00"))
+                        if dt.tzinfo: dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+                        merged[key] = dt
+                    except (ValueError, AttributeError):
+                        pass
+            if isinstance(merged["dtstart"], datetime) and isinstance(merged["dtend"], datetime):
+                if merged["dtend"] <= merged["dtstart"]:
+                    merged["dtend"] = merged["dtstart"] + (
+                        timedelta(days=1) if merged["all_day"] else timedelta(hours=1))
+            new_source = ev.get("source_id")
+            if "source_id" in body:
+                sid = body.get("source_id")
+                new_source = int(sid) if sid and str(sid).isdigit() else None
+            db.execute(
+                "DELETE FROM calendar_events WHERE user_id = %s AND (uid = %s OR recurrence_id = %s)",
+                (user["id"], master_uid, master_uid),
+            )
+            rows = build_local_series_rows(merged)
+            for row in rows:
+                db.execute(
+                    """INSERT INTO calendar_events (user_id, source_id, uid, summary, description, location,
+                       dtstart, dtend, all_day, rrule, color, reminder_minutes,
+                       transparency, url, attendees, timezone, recurrence_id, is_occurrence,
+                       status, last_modified)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())""",
+                    (user["id"], new_source, row["uid"], row["summary"], row["description"], row["location"],
+                     row["dtstart"], row["dtend"], row["all_day"], row["rrule"], row["color"],
+                     row["reminder_minutes"], row["transparency"], row["url"], row["attendees"],
+                     row["timezone"], row["recurrence_id"], row["is_occurrence"], row["status"]),
+                )
+            _json_response(self, 200, {"ok": True, "occurrences": len(rows)})
+            return
+
+        # Single-row update (detaches an edited occurrence from its series).
         updates = []
         params = []
-        for field in ["summary", "description", "location", "color", "rrule", "status"]:
+        for field in ["summary", "description", "location", "color", "status", "transparency", "url", "timezone"]:
             if field in body:
                 updates.append(f"{field} = %s")
-                params.append((body[field] or "").strip() if isinstance(body[field], str) else body[field])
+                val = body[field]
+                params.append(val.strip() if isinstance(val, str) else val)
+        if "attendees" in body:
+            updates.append("attendees = %s")
+            params.append(serialize_attendees(body["attendees"]))
+        if "rrule" in body:
+            updates.append("rrule = %s")
+            params.append((body["rrule"] or "").strip() or None)
         if "reminder_minutes" in body:
             updates.append("reminder_minutes = %s")
             updates.append("reminder_sent = FALSE")
@@ -17202,18 +17313,37 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if "all_day" in body:
             updates.append("all_day = %s")
             params.append(bool(body["all_day"]))
+        if "source_id" in body:
+            sid = body.get("source_id")
+            updates.append("source_id = %s")
+            params.append(int(sid) if sid and str(sid).isdigit() else None)
+        if ev.get("is_occurrence"):
+            # Detach: an individually edited occurrence becomes a standalone event.
+            updates.append("recurrence_id = NULL")
+            updates.append("is_occurrence = FALSE")
+            updates.append("rrule = NULL")
         if updates:
             params.append(event_id)
             db.execute(f"UPDATE calendar_events SET {', '.join(updates)}, last_modified = NOW() WHERE id = %s", tuple(params))
         _json_response(self, 200, {"ok": True})
 
     def _handle_calendar_event_delete(self, event_id: int) -> None:
-        """Delete a calendar event."""
+        """Delete a calendar event (?scope=series deletes the whole local series)."""
         user = _require_auth(self)
         if not user: return
         ev = db.query_one("SELECT * FROM calendar_events WHERE id = %s AND user_id = %s", (event_id, user["id"]))
         if not ev:
             _json_response(self, 404, {"error": "Event not found"})
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        scope = (qs.get("scope") or [""])[0]
+        master_uid = ev.get("recurrence_id") or ev.get("uid")
+        if scope == "series" and (ev.get("is_occurrence") or ev.get("recurrence_id") or ev.get("rrule")):
+            db.execute(
+                "DELETE FROM calendar_events WHERE user_id = %s AND (uid = %s OR recurrence_id = %s)",
+                (user["id"], master_uid, master_uid),
+            )
+            _json_response(self, 200, {"ok": True, "scope": "series"})
             return
         db.execute("DELETE FROM calendar_events WHERE id = %s", (event_id,))
         _json_response(self, 200, {"ok": True})

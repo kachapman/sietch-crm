@@ -10520,6 +10520,72 @@ body {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* ── Calendar event editor additions ─────────────────────────────────── */
+.cal-edit-row-2 {
+  display: flex;
+  gap: 0.6rem;
+}
+.cal-edit-row-2 .field {
+  flex: 1;
+  min-width: 0;
+}
+.cal-edit-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.cal-edit-inline input[type="number"] {
+  width: 4.5rem;
+}
+.cal-edit-colors {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+  padding: 0.15rem 0;
+}
+.cal-edit-color {
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.cal-edit-color.selected {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--text);
+}
+.cal-edit-byday {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+.cal-edit-byday-day {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.78rem;
+  color: var(--text);
+}
+.cal-edit-rrule-preview {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin: 0.25rem 0 0;
+}
+.cal-edit-scope {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  color: var(--text);
+  margin-top: 0.25rem;
+}
+.calendar-event-readonly {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-right: auto;
+}
 .calendar-agenda-empty {
   text-align: center;
   color: var(--muted);

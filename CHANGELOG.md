@@ -2,6 +2,32 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Calendar parity Phase 4: editor + detail actions (2026-10-16)
+
+### Editor (`public/index.html`, `public/app.js`, `styles.css`)
+
+- Recurrence builder: freq / every-N / weekly day chips / ends (never, after-N, on-date) with live `RRULE` preview; existing rules parsed back into controls, complex ones kept read-only as-is. Pure helpers `buildRruleFromControls` / `parseRruleToControls`.
+- Per-event timezone ("Times in" select, full IANA list): wall times convert to UTC on save, render back in the event TZ on edit.
+- Color dots (10 presets), Show-as Busy/Free, Link URL, attendees textarea (`Name <email>` lines, pure parse/format helpers), custom reminder minutes alongside presets.
+- Inline validation errors (title, dates, end-after-start, custom range) instead of toasts-only.
+- Series scope radio (This event only / Entire series) when editing a locally-created occurrence; delete honors the scope (`?scope=series`).
+- Synced feed rows show an honest "edits refresh from the feed" note.
+
+### Detail modal
+
+- Edit button for CRM-stored rows (opens the editor; delete stays in the editor so scope is always chosen); read-only note for external feed rows.
+
+### Backend (`server.py`, `calendar_sync.py`, migration `035`)
+
+- New columns `transparency/url/attendees/timezone` (+ migration file + inline ALTERs); ICS sync stores them so DB rows match feed content.
+- Shared `build_local_series_rows` (recurring local events expand at write, same occurrence scheme as ICS — reminders work) + attendee serialize/parse helpers.
+- Create expands recurring events; update supports `edit_scope=series` (rebuild) vs single (detach occurrence); delete supports `?scope=series`; events API returns attendees as objects.
+
+### Tests
+
+- `tests/test_calendar_views.mjs` +9 (RRULE build/parse incl. round-trip + complex rejection, attendee lines). 33/33 pass.
+- `tests/test_calendar_editor.py` (new, 10 tests, stubbed `db`): series rows, field carry-over, attendee codec, source-level guards for the new API surface.
+
 ## Calendar parity Phase 3: views (2026-10-16)
 
 ### Week/day rewrite (`public/app.js`, `styles.css`)

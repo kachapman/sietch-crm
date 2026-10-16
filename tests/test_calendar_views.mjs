@@ -338,3 +338,134 @@ test('week start Monday on a Sunday goes back 6 days', () => {
   const s = calendarWeekStartDate(2026, 10, 18, 'mon');
   assert.equal(formatCalendarYmd(s), '2026-10-12');
 });
+
+// ── Phase 4 mirrors ────────────────────────────────────────────────
+// Mirrors of public/app.js#buildRruleFromControls, parseRruleToControls,
+// attendeeLineToObj, attendeeObjToLine. Keep in sync with app.js.
+
+function buildRruleFromControls({ freq, interval, byday, endCond, count, until }) {
+  if (!freq) return "";
+  const parts = [`FREQ=${freq}`];
+  const n = parseInt(interval, 10);
+  if (Number.isFinite(n) && n > 1) parts.push(`INTERVAL=${n}`);
+  if (freq === "WEEKLY" && Array.isArray(byday) && byday.length) {
+    parts.push(`BYDAY=${byday.join(",")}`);
+  }
+  if (endCond === "count") {
+    const c = parseInt(count, 10);
+    if (Number.isFinite(c) && c >= 2) parts.push(`COUNT=${Math.min(c, 500)}`);
+  } else if (endCond === "until" && until) {
+    const d = String(until).replace(/-/g, "");
+    if (/^\d{8}$/.test(d)) parts.push(`UNTIL=${d}T000000Z`);
+  }
+  return parts.join(";");
+}
+
+function parseRruleToControls(rrule) {
+  const WEEKDAYS = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
+  if (!rrule) return { freq: "", interval: 1, byday: [], endCond: "never", count: 10, until: "" };
+  const dict = {};
+  for (const part of String(rrule).split(";")) {
+    if (part.includes("=")) {
+      const [k, v] = part.split("=", 2);
+      dict[k.trim().toUpperCase()] = v.trim().toUpperCase();
+    }
+  }
+  if (!["DAILY", "WEEKLY", "MONTHLY", "YEARLY"].includes(dict.FREQ)) return null;
+  if (dict.BYMONTHDAY || dict.BYMONTH || dict.BYYEARDAY || dict.BYWEEKNO || dict.BYHOUR || dict.BYMINUTE) return null;
+  if (dict.BYDAY && dict.FREQ !== "WEEKLY") return null;
+  const byday = dict.FREQ === "WEEKLY" && dict.BYDAY
+    ? dict.BYDAY.split(",").filter((d) => WEEKDAYS.includes(d))
+    : [];
+  if (dict.BYDAY && dict.FREQ === "WEEKLY" && !byday.length) return null;
+  const out = {
+    freq: dict.FREQ,
+    interval: Math.max(parseInt(dict.INTERVAL || "1", 10) || 1, 1),
+    byday, endCond: "never", count: 10, until: "",
+  };
+  if (dict.COUNT) {
+    const c = parseInt(dict.COUNT, 10);
+    if (!Number.isFinite(c) || c < 2) return null;
+    out.endCond = "count";
+    out.count = Math.min(c, 500);
+  } else if (dict.UNTIL) {
+    const m = dict.UNTIL.match(/^(\d{4})(\d{2})(\d{2})/);
+    if (!m) return null;
+    out.endCond = "until";
+    out.until = `${m[1]}-${m[2]}-${m[3]}`;
+  }
+  return out;
+}
+
+function attendeeLineToObj(line) {
+  const s = String(line || "").trim();
+  if (!s) return null;
+  const m = s.match(/^(.*?)\s*<([^<>@\s]+@[^<>@\s]+)>\s*$/);
+  if (m) return { name: m[1].trim(), email: m[2].trim() };
+  if (/^[^@\s]+@[^@\s]+$/.test(s)) return { name: "", email: s };
+  return { name: s, email: "" };
+}
+
+function attendeeObjToLine(a) {
+  const name = String(a?.name || "").trim();
+  const email = String(a?.email || "").trim();
+  if (name && email) return `${name} <${email}>`;
+  return name || email;
+}
+
+test('empty freq builds no rule', () => {
+  assert.equal(buildRruleFromControls({ freq: '' }), '');
+});
+
+test('daily with interval and count', () => {
+  assert.equal(
+    buildRruleFromControls({ freq: 'DAILY', interval: '2', byday: [], endCond: 'count', count: '10', until: '' }),
+    'FREQ=DAILY;INTERVAL=2;COUNT=10'
+  );
+});
+
+test('weekly with days and until date', () => {
+  assert.equal(
+    buildRruleFromControls({ freq: 'WEEKLY', interval: '1', byday: ['MO', 'WE'], endCond: 'until', count: '', until: '2026-12-31' }),
+    'FREQ=WEEKLY;BYDAY=MO,WE;UNTIL=20261231T000000Z'
+  );
+});
+
+test('count clamps to 500, interval 1 omitted', () => {
+  assert.equal(
+    buildRruleFromControls({ freq: 'MONTHLY', interval: '1', byday: [], endCond: 'count', count: '9999', until: '' }),
+    'FREQ=MONTHLY;COUNT=500'
+  );
+});
+
+test('rrule round-trips through parse', () => {
+  const built = buildRruleFromControls({ freq: 'WEEKLY', interval: '2', byday: ['TU'], endCond: 'count', count: '8', until: '' });
+  assert.deepEqual(parseRruleToControls(built), {
+    freq: 'WEEKLY', interval: 2, byday: ['TU'], endCond: 'count', count: 8, until: '',
+  });
+});
+
+test('complex rules return null (kept as-is)', () => {
+  assert.equal(parseRruleToControls('FREQ=MONTHLY;BYDAY=3TU'), null);
+  assert.equal(parseRruleToControls('FREQ=MINUTELY;INTERVAL=5'), null);
+  assert.equal(parseRruleToControls('FREQ=YEARLY;BYMONTH=1'), null);
+});
+
+test('empty rrule parses to defaults', () => {
+  assert.deepEqual(parseRruleToControls(''), {
+    freq: '', interval: 1, byday: [], endCond: 'never', count: 10, until: '',
+  });
+});
+
+test('attendee lines parse', () => {
+  assert.deepEqual(attendeeLineToObj('Jane <jane@x.com>'), { name: 'Jane', email: 'jane@x.com' });
+  assert.deepEqual(attendeeLineToObj('jane@x.com'), { name: '', email: 'jane@x.com' });
+  assert.deepEqual(attendeeLineToObj('Jane'), { name: 'Jane', email: '' });
+  assert.equal(attendeeLineToObj('  '), null);
+});
+
+test('attendee objects format back to lines', () => {
+  assert.equal(attendeeObjToLine({ name: 'Jane', email: 'jane@x.com' }), 'Jane <jane@x.com>');
+  assert.equal(attendeeObjToLine({ name: '', email: 'j@x.com' }), 'j@x.com');
+  assert.equal(attendeeObjToLine({ name: 'Jane', email: '' }), 'Jane');
+});
