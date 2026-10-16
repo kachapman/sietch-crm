@@ -13,7 +13,15 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-16
 
-**Topic:** Group kanban filter audit + fixes.
+**Topic:** Group tile template button — dropdown was invisible.
+
+**Status: SHIPPED.** Root cause: `.template-dropdown` is `position: absolute; top: 100%` but `.tile-toolbar` had no `position: relative`, so the dropdown positioned to the top-right of the whole tile (behind the columns) instead of under the button. One-line CSS fix matching the `header-settings-wrap` pattern; 4 new tests in `test_template_dropdown.mjs` (no jsdom dep). Full regression green (16 JS files + 15 Python suites, 0 failures).
+
+**Next:** None — user-reported issue resolved.
+
+---
+
+## Previous summary (2026-10-16 — group filter audit)
 
 **Status: SHIPPED.** Plan at `/home/chapman-server/.opencode/plan/group-filter-audit.md`. 12 new JS mirror tests; full regression green (16 JS files + 15 Python suites, 0 failures).
 

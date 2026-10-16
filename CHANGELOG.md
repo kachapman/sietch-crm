@@ -2,6 +2,18 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Template button dropdown not visible (2026-10-16)
+
+The group tile's "Templates" button toggled `hidden` correctly but the dropdown (`position: absolute; top: 100%`) had no `position: relative` ancestor — it positioned to the top of the entire tile, behind/over the column headers where the user couldn't see it. One-line CSS fix matching the working `header-settings-wrap` pattern.
+
+### Fixed
+
+- `public/styles.css`: `.tile-toolbar { position: relative; }` so the template dropdown anchors under the button instead of the tile.
+
+### Tests
+
+- `tests/test_template_dropdown.mjs` (new, 4 tests, no jsdom): builds a tile in a minimal shim, asserts the dropdown is hidden by default, the click removes `hidden`, and a `getBoundingClientRect` lands at a non-zero area when its ancestor is positioned.
+
 ## Group kanban filter audit + fixes (2026-10-16)
 
 Plan: `/home/chapman-server/.opencode/plan/group-filter-audit.md`.

@@ -1537,6 +1537,10 @@ body {
   background: var(--surface-2);
   cursor: grab;
   user-select: none;
+  /* Anchor for absolute-positioned children (e.g. .template-dropdown)
+     so they land under the toolbar instead of the nearest positioned
+     ancestor (the tile), where they'd be hidden behind the columns. */
+  position: relative;
 }
 
 .tile-toolbar:active {
