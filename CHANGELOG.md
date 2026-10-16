@@ -38,7 +38,7 @@ Full suite: 134 JS + 337 Python = **471 tests, 0 failures**.
 
 ### Not addressed (called out for you)
 
-- **`task_labels` is empty** despite `init.sql:1075` seeding 10 defaults — the column shows nothing in the admin UI. Looks like data drift, not a code bug. Re-seeding is a write; flag this if you want me to insert the 10 default rows.
+- ~~**`task_labels` is empty** despite `init.sql:1075` seeding 10 defaults — the column shows nothing in the admin UI. Looks like data drift, not a code bug. Re-seeding is a write; flag this if you want me to insert the 10 default rows.~~ **Reseeded 2026-10-15**: 10 default rows inserted (`follow-up`, `estimate`, `inspection`, `phone call`, `email`, `appointment`, `note`, `expression of gratitude`, `opportunity`, `stage estimate`) with sort_orders 1-10 matching `init.sql` exactly. `color` left NULL (init.sql doesn't set it; admins can colour via the Customize tab).
 
 ## Telegram bot outage: valid invite codes reported as invalid (2026-10-15)
 
