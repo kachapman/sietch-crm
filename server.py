@@ -3129,6 +3129,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/admin/photo-report-templates":
             self._handle_photo_report_templates_get()
             return
+        # /api/v2/admin/logos/<rest...> — proxy endpoint that streams files
+        # from data/logos/ (or data/sigs/) with a strict content-type
+        # allowlist. Replaces the admin previews' broken <img src="/data/...
+        # references: the static-file server's root is public/, not the
+        # project root, so /data/logos/* would 404 otherwise. The path is
+        # normalised to data/logos/ or data/sigs/ - any traversal attempt
+        # (../, absolute paths, symlinks pointing elsewhere) gets 400.
+        m = re.match(r"^/api/v2/admin/logos/(.+)$", api_path)
+        if m:
+            self._handle_logo_serve(m.group(1))
+            return
         if api_path == "/api/v2/admin/document-templates":
             self._handle_document_templates_get()
             return
@@ -8606,6 +8617,84 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 if r.get(k):
                     r[k] = r[k].isoformat() if hasattr(r[k], "isoformat") else str(r[k])
         _json_response(self, 200, rows)
+
+    def _handle_logo_serve(self, requested_path: str) -> None:
+        """Stream a logo / signature file from data/logos/ or data/sigs/.
+
+        The admin previews reference logos via /data/logos/... and
+        /data/sigs/... (a path-style stored in the DB). Those paths are
+        NOT under public/, so the static server can't serve them. This
+        proxy bridges that: admin-gated, strict allowlist, no path
+        traversal, no arbitrary content-type.
+
+        Only two top-level directories are reachable: data/logos/ and
+        data/sigs/. Anything else (a "secret" path that tries to escape,
+        an absolute path, a symlink that resolves outside) gets 400.
+        """
+        user = _require_admin(self)
+        if not user:
+            return
+        # Strip any leading slashes; reject anything that's not a relative
+        # path or contains null bytes / traversal.
+        requested = (requested_path or "").lstrip("/")
+        if not requested or "\x00" in requested:
+            _json_response(self, 400, {"error": "Invalid logo path"})
+            return
+        # Normalise: the stored paths are "data/logos/..." or "data/sigs/...".
+        # Allow the caller to pass either the full "data/logos/..." or just
+        # "logos/..." (the latter is what an <img src="/api/v2/admin/logos/logos/foo">
+        # request would carry).
+        if requested.startswith("data/"):
+            rel = requested[len("data/"):]
+        else:
+            rel = requested
+        # Restrict to the two top-level dirs the upload handlers write to.
+        if not (rel.startswith("logos/") or rel.startswith("sigs/")):
+            _json_response(self, 400, {"error": "Logo path must be under data/logos/ or data/sigs/"})
+            return
+        # Resolve and ensure the final path is still under the allowed root
+        # (defeats "../" traversal and any symlink pointing elsewhere). The
+        # stored paths are "data/logos/..." or "data/sigs/..." - the "data/"
+        # prefix was already stripped into `rel`, so we reattach it here.
+        allowed_root = (ROOT / "data").resolve()
+        candidate = (ROOT / "data" / rel).resolve()
+        try:
+            candidate.relative_to(allowed_root)
+        except ValueError:
+            _json_response(self, 400, {"error": "Logo path escapes data/"})
+            return
+        if not candidate.is_file():
+            self.send_error(404)
+            return
+        # Strict content-type allowlist based on extension. SVGs are rejected
+        # even though PIL could read them - SVG can carry <script> and
+        # <foreignObject>, and a "logo.png" that's actually an SVG would
+        # still bypass the browser's image-only Content-Type sniff. The
+        # upload handler also rejects these extensions.
+        ext = candidate.suffix.lower()
+        ctype_map = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+            ".gif": "image/gif",
+        }
+        ctype = ctype_map.get(ext)
+        if ctype is None:
+            _json_response(self, 415, {"error": f"Unsupported image type: {ext}"})
+            return
+        try:
+            data = candidate.read_bytes()
+        except OSError:
+            self.send_error(500)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        # Cache aggressively - logos are immutable for a given template id.
+        self.send_header("Cache-Control", "private, max-age=3600")
+        self.end_headers()
+        self.wfile.write(data)
 
     def _handle_photo_report_template_create(self) -> None:
         user = _require_admin(self)

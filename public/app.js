@@ -44972,14 +44972,14 @@ function openAdminDocTplEditor(template) {
   const logoPreview = $("#doc-tpl-admin-logo-preview");
   if (logoPreview) {
     logoPreview.innerHTML = template && template.logo_path
-      ? `<img src="/${escapeHtml(template.logo_path)}" alt="logo" style="max-height:32px;max-width:120px;margin-top:0.25rem;border:1px solid var(--border);padding:2px;background:var(--surface);">`
+      ? `<img src="/api/v2/admin/logos/${escapeHtml(template.logo_path)}" alt="logo" style="max-height:32px;max-width:120px;margin-top:0.25rem;border:1px solid var(--border);padding:2px;background:var(--surface);">`
       : "";
   }
   // Preview existing signature
   const sigPreview = $("#doc-tpl-admin-signature-preview");
   if (sigPreview) {
     sigPreview.innerHTML = template && template.signature_path
-      ? `<img src="/${escapeHtml(template.signature_path)}" alt="signature" style="max-height:32px;max-width:120px;margin-top:0.25rem;border:1px solid var(--border);padding:2px;background:var(--surface);">`
+      ? `<img src="/api/v2/admin/logos/${escapeHtml(template.signature_path)}" alt="signature" style="max-height:32px;max-width:120px;margin-top:0.25rem;border:1px solid var(--border);padding:2px;background:var(--surface);">`
       : "";
   }
   const delBtn = $("#doc-tpl-admin-delete");
