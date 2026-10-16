@@ -41,7 +41,7 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 - NOTE: round-trip testing rotated user 1's password; temp `en_xI7kAxTnT` issued via standard temp flow (must_change_password=TRUE, sessions revoked) — share out of band.
 
 ```
-(to be filled at commit) Users: docs (CHANGELOG + SESSION_HISTORY + AGENTS + CI)
+790632d        Users: docs (CHANGELOG + SESSION_HISTORY + AGENTS + CI)
 5a19a27        Users: 21 tests (plaintext, landing, grey-out, guards)
 6a79b99        Users: dup-email 409 on create + avatar serve containment
 7afa923        Password reset: plaintext email + /reset landing page + greyed-out email option
