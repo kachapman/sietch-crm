@@ -8587,11 +8587,25 @@ body {
 }
 
 /* Quick note modal: the fieldset is now INSIDE the form (it used to be
-   a flex sibling of the form). The form's overflow-y: auto handles
-   overflow, and the note-editor's own min-height: 4.5rem / max-height:
-   12rem give the textarea its bounds. We keep just the box styling here
-   and a thin top border so the fieldset reads as a section. */
+   a flex sibling of the form). We make the form a flex column so the
+   fieldset can grow inside it, and the fieldset a flex column so the
+   qn-editor-wrap (already flex: 1) fills the space between the toolbar
+   and the attachments row. The note-editor's existing
+   flex: 1; min-height: 0; max-height: none; (see .qn-editor-wrap below)
+   then fills the qn-editor-wrap. min-height: 0 is required on every
+   flex item in the chain so children can shrink and the overflow-y:
+   auto on the form (.modal-card-deal-edit .modal-form) actually
+   overflows. */
+#quick-note-modal .modal-form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 #quick-note-modal .deal-edit-note-fieldset {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
   margin-top: 0.5rem;
   border: none;
   border-top: 1px solid var(--border);
