@@ -24290,6 +24290,7 @@ let searchPopupQueryAbort = null; // debounce abort controller
 // Contacts search state
 let searchPopupContactsQueryAbort = null;
 let searchPopupContactsStartIndex = 0;
+let searchPopupContactsTotal = 0;
 const SEARCH_POPUP_CONTACTS_PAGE_SIZE = 50;
 
 function createCrmOpenLink(oppId, projectNumber, { className = "crm-open-external", title = "Open Project" } = {}) {
@@ -27631,6 +27632,13 @@ function closeSearchPopupModal() {
   searchPopupCustomFilters = [];
   searchPopupStartIndex = 0;
   searchPopupTotal = 0;
+  // Contacts pagination state too - matches the deals reset above.
+  searchPopupContactsStartIndex = 0;
+  searchPopupContactsTotal = 0;
+  if (searchPopupContactsQueryAbort) {
+    try { searchPopupContactsQueryAbort.abort(); } catch {}
+    searchPopupContactsQueryAbort = null;
+  }
   clearSearchPopupSelection();
   renderSearchPopupCustomFilters();
   updateSearchPopupPagination();
@@ -28017,18 +28025,63 @@ async function performSearchContactsQuery() {
   if (ct) qs.push(`contact_type=${encodeURIComponent(ct)}`);
   qs.push(`count=${SEARCH_POPUP_CONTACTS_PAGE_SIZE}`);
   qs.push(`startIndex=${searchPopupContactsStartIndex}`);
+  // Abort any in-flight contacts query so a fast typer doesn't race a slow
+  // response from an earlier keystroke. The AbortController is declared
+  // at module scope (searchPopupContactsQueryAbort) but was previously
+  // unused - same race-safe pattern as the deals search.
+  if (searchPopupContactsQueryAbort) {
+    try { searchPopupContactsQueryAbort.abort(); } catch {}
+  }
+  const ac = new AbortController();
+  searchPopupContactsQueryAbort = ac;
   try {
-    const data = await api(`/api/v2/contacts?${qs.join("&")}`);
+    const [data, countData] = await Promise.all([
+      api(`/api/v2/contacts?${qs.join("&")}`, { signal: ac.signal }),
+      api(`/api/v2/contacts/count?${qs.join("&")}`, { signal: ac.signal }),
+    ]);
+    if (ac.signal.aborted) return;
     const contacts = unwrap(data) || data || [];
-    if (countEl) countEl.textContent = `${contacts.length} contact${contacts.length !== 1 ? 's' : ''}`;
+    searchPopupContactsTotal = countData?.count ?? contacts.length;
+    if (countEl) {
+      if (searchPopupContactsTotal > 0) {
+        const start = searchPopupContactsStartIndex + 1;
+        const end = Math.min(searchPopupContactsStartIndex + SEARCH_POPUP_CONTACTS_PAGE_SIZE, searchPopupContactsTotal);
+        countEl.textContent = `Showing ${start}–${end} of ${searchPopupContactsTotal} contact${searchPopupContactsTotal !== 1 ? 's' : ''}`;
+      } else {
+        countEl.textContent = "";
+      }
+    }
     container.innerHTML = contacts.map(c => renderSearchContactRow(c)).join("") ||
       '<div style="padding:1rem; color:var(--muted); text-align:center;">No contacts found.</div>';
+    updateSearchContactsPagination();
   } catch (e) {
+    if (ac.signal.aborted) return;
     if (errorEl) {
       errorEl.textContent = "Failed to load contacts: " + (e.message || e);
       errorEl.classList.remove("hidden");
     }
   }
+}
+
+function performSearchContactsPageChange(direction) {
+  const totalPages = Math.max(1, Math.ceil(searchPopupContactsTotal / SEARCH_POPUP_CONTACTS_PAGE_SIZE));
+  const currentPage = Math.floor(searchPopupContactsStartIndex / SEARCH_POPUP_CONTACTS_PAGE_SIZE) + 1;
+  const newPage = currentPage + direction;
+  if (newPage < 1 || newPage > totalPages) return;
+  searchPopupContactsStartIndex = (newPage - 1) * SEARCH_POPUP_CONTACTS_PAGE_SIZE;
+  performSearchContactsQuery();
+}
+
+function updateSearchContactsPagination() {
+  const prev = $("#search-popup-contacts-prev");
+  const next = $("#search-popup-contacts-next");
+  const info = $("#search-popup-contacts-page-info");
+  if (!prev || !next || !info) return;
+  const totalPages = Math.max(1, Math.ceil(searchPopupContactsTotal / SEARCH_POPUP_CONTACTS_PAGE_SIZE));
+  const currentPage = Math.floor(searchPopupContactsStartIndex / SEARCH_POPUP_CONTACTS_PAGE_SIZE) + 1;
+  info.textContent = `Page ${currentPage} of ${totalPages}`;
+  prev.disabled = currentPage <= 1;
+  next.disabled = currentPage >= totalPages;
 }
 
 function renderSearchContactRow(c) {
@@ -28219,6 +28272,8 @@ function bindSearchPopupModal() {
     searchPopupContactsStartIndex = 0;
     performSearchContactsQuery();
   });
+  $("#search-popup-contacts-prev")?.addEventListener("click", () => performSearchContactsPageChange(-1));
+  $("#search-popup-contacts-next")?.addEventListener("click", () => performSearchContactsPageChange(1));
   // Contacts row click delegation
   const contactsResults = $("#search-popup-contacts-results");
   if (contactsResults) {
@@ -28570,19 +28625,25 @@ async function performSearchPopupQuery() {
       updateSearchPopupPagination();
       renderSearchPopupResults(opps);
     } else {
-      // Closed: fetch Won + Lost in parallel, merge by id (de-dup if a deal
-      // somehow appears in both — shouldn't happen because stageType is
-      // mutually exclusive server-side, but defensive). We fetch ALL closed
-      // matches per stageType (no per-stageType page limit) so pagination
-      // works across the merged client-side list.
+      // Closed: Won (stageType=1) + Lost (stageType=2) in parallel, merge by
+      // id (de-dup if a deal somehow appears in both - shouldn't happen because
+      // stageType is mutually exclusive server-side, but defensive).
+      //
+      // Each stageType uses server-side pagination with the real page size,
+      // so the merged result is exactly the deals for the current page. The
+      // total count is the sum of the two server counts. Previously this
+      // hardcoded count: 500 and sliced the merged list client-side, which
+      // broke when either stageType had more than 500 matches.
       const baseParams = getSearchPopupQueryParams();
       const wonParams = new URLSearchParams(baseParams);
       wonParams.set("stageType", "1");
-      wonParams.set("count", "500");
+      wonParams.set("count", String(SEARCH_POPUP_PAGE_SIZE));
+      wonParams.set("startIndex", String(searchPopupStartIndex));
       const wonParamsStr = wonParams.toString();
       const lostParams = new URLSearchParams(baseParams);
       lostParams.set("stageType", "2");
-      lostParams.set("count", "500");
+      lostParams.set("count", String(SEARCH_POPUP_PAGE_SIZE));
+      lostParams.set("startIndex", String(searchPopupStartIndex));
       const lostParamsStr = lostParams.toString();
       const [
         [wonData, wonCount],
@@ -28611,16 +28672,13 @@ async function performSearchPopupQuery() {
         if (id != null && !seen.has(id)) { seen.add(id); opps.push(o); }
       }
       searchPopupTotal = (wonCount?.count ?? wonOpps.length) + (lostCount?.count ?? lostOpps.length);
-      // Slice the merged list to the current page (client-side pagination).
-      const start = searchPopupStartIndex;
-      const end = start + SEARCH_POPUP_PAGE_SIZE;
-      const pageSlice = opps.slice(start, end);
+      // No client-side slicing: the server already returned the page.
       searchPopupCurrentOpps = opps;
       searchPopupCurrentTagLabel = null;
       searchPopupSelected.clear();
       updateSearchPopupBatchBar();
       updateSearchPopupPagination();
-      renderSearchPopupResults(pageSlice);
+      renderSearchPopupResults(opps);
     }
   } catch (err) {
     if (abortController && abortController.aborted) return;
