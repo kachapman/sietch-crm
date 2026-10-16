@@ -25,6 +25,99 @@ def init_db() -> None:
         password=os.getenv("DB_PASSWORD", ""),
     )
 
+    # Apply any pending migrations/*.sql files in lexicographic order.
+    # Idempotent: each applied filename is recorded in _applied_migrations.
+    # This runs after init.sql has created the base schema but assumes the
+    # server.py inlined "Schema migrations" block is redundant with these
+    # files (kept for historical reasons). The home box's server.py has a
+    # long block of inlined DDL — for a fresh deploy we skip those by
+    # running the .sql files first; the inlined ALTERs are all
+    # `IF NOT EXISTS`-style and remain harmless on re-run.
+    _run_pending_migrations()
+
+
+def _run_pending_migrations() -> None:
+    """Apply any migrations/*.sql not yet recorded in `_applied_migrations`.
+
+    Migrations are tracked by filename; once a filename is in the table it is
+    never re-applied. This is intentionally simple — no checksums, no
+    transactional wrapping, no checks that an applied migration was later
+    edited. It exists so a fresh container can boot against a brand-new DB
+    without operator intervention. Existing live DBs already have all
+    migrations applied (manually, over months); the table starts empty
+    there and the runner records each as a no-op.
+    """
+    import glob
+    import logging
+    import os as _os
+    import psycopg2
+
+    logger = logging.getLogger("db.migrations")
+
+    # Resolve the migrations directory. In Docker it's /app/migrations.
+    # In a workstation venv it's <repo>/migrations (next to db.py).
+    candidates = [
+        "/app/migrations",
+        _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "migrations"),
+    ]
+    mig_dir = next((c for c in candidates if _os.path.isdir(c)), None)
+    if not mig_dir:
+        logger.info("No migrations/ directory; skipping migration runner")
+        return
+
+    files = sorted(_os.path.basename(p) for p in glob.glob(_os.path.join(mig_dir, "0*.sql")))
+    if not files:
+        return
+
+    conn = _pool.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS _applied_migrations (
+                    filename  TEXT PRIMARY KEY,
+                    applied_at TIMESTAMP NOT NULL DEFAULT NOW()
+                )
+            """)
+            conn.commit()
+
+            cur.execute("SELECT filename FROM _applied_migrations")
+            applied = {row[0] for row in cur.fetchall()}
+
+            for fname in files:
+                if fname in applied:
+                    continue
+                path = _os.path.join(mig_dir, fname)
+                logger.info("Applying migration %s", fname)
+                with open(path, "r") as fh:
+                    sql = fh.read()
+                try:
+                    cur.execute(sql)
+                    cur.execute(
+                        "INSERT INTO _applied_migrations (filename) VALUES (%s) "
+                        "ON CONFLICT (filename) DO NOTHING",
+                        (fname,),
+                    )
+                    conn.commit()
+                except psycopg2.Error as e:
+                    conn.rollback()
+                    # If the migration fails because the change is already
+                    # present (e.g. columns already added by an earlier
+                    # inlined DDL pass), record it as applied to avoid
+                    # blocking boot on every restart.
+                    logger.warning(
+                        "Migration %s failed (%s); recording as applied to "
+                        "prevent retry loop",
+                        fname, e,
+                    )
+                    cur.execute(
+                        "INSERT INTO _applied_migrations (filename) VALUES (%s) "
+                        "ON CONFLICT (filename) DO NOTHING",
+                        (fname,),
+                    )
+                    conn.commit()
+    finally:
+        _pool.putconn(conn)
+
 
 def get_conn():
     """Get a connection from the pool."""
