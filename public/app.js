@@ -41195,6 +41195,67 @@ async function refreshAll({ force = false } = {}) {
   }
 }
 
+// ── Forced password change ─────────────────────────────────────────────
+// Accounts with must_change_password (temp passwords issued by an admin)
+// must pick a real password before entering the app. The flag is set
+// correctly in the DB, but until Oct 2026 nothing read it: both login
+// paths called showApp() unconditionally, so a temp password worked as
+// a permanent one. This blocking overlay has no dismiss path (no X, no
+// backdrop click, no Escape) — the only way out is a new password or
+// closing the tab. On success the session is dead anyway (set_password
+// revokes all sessions), so we send the user back to the login screen
+// to sign in fresh.
+function showForcePasswordChangeModal() {
+  // Remove any existing instance (e.g. double login submit).
+  document.getElementById("force-pw-overlay")?.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "force-pw-overlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:10000;display:flex;align-items:center;justify-content:center;";
+  overlay.innerHTML = `
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.5rem;max-width:400px;width:90%;">
+      <h3 style="margin:0 0 0.5rem;font-size:1rem;">Change your password</h3>
+      <p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.75rem;">Your temporary password must be replaced before you can use the dashboard.</p>
+      <label style="display:block;font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--muted);margin-bottom:0.3rem;">Temporary password</label>
+      <input type="password" id="force-pw-current" autocomplete="current-password" style="display:block;width:100%;padding:0.5rem 0.65rem;border:1px solid var(--border);border-radius:8px;background:var(--surface-2);color:var(--text);font:inherit;box-sizing:border-box;margin-bottom:0.5rem;" />
+      <label style="display:block;font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--muted);margin-bottom:0.3rem;">New password</label>
+      <input type="password" id="force-pw-new" autocomplete="new-password" style="display:block;width:100%;padding:0.5rem 0.65rem;border:1px solid var(--border);border-radius:8px;background:var(--surface-2);color:var(--text);font:inherit;box-sizing:border-box;margin-bottom:0.5rem;" />
+      <label style="display:block;font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--muted);margin-bottom:0.3rem;">Confirm new password</label>
+      <input type="password" id="force-pw-confirm" autocomplete="new-password" style="display:block;width:100%;padding:0.5rem 0.65rem;border:1px solid var(--border);border-radius:8px;background:var(--surface-2);color:var(--text);font:inherit;box-sizing:border-box;" />
+      <p id="force-pw-error" class="error-text hidden"></p>
+      <div style="text-align:right;margin-top:0.75rem;">
+        <button type="button" id="force-pw-submit" class="btn btn-primary">Set New Password</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const errEl = overlay.querySelector("#force-pw-error");
+  overlay.querySelector("#force-pw-submit").addEventListener("click", async () => {
+    const current = overlay.querySelector("#force-pw-current").value || "";
+    const pw = overlay.querySelector("#force-pw-new").value || "";
+    const confirm = overlay.querySelector("#force-pw-confirm").value || "";
+    errEl.classList.add("hidden");
+    if (!current) { errEl.textContent = "Enter your temporary password."; errEl.classList.remove("hidden"); return; }
+    if (pw.length < 6) { errEl.textContent = "New password must be at least 6 characters."; errEl.classList.remove("hidden"); return; }
+    if (pw !== confirm) { errEl.textContent = "New passwords do not match."; errEl.classList.remove("hidden"); return; }
+    try {
+      const res = await fetch("/api/v2/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ currentPassword: current, newPassword: pw }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Password change failed");
+      overlay.remove();
+      showToast("Password updated. Please sign in with your new password.");
+      location.reload();
+    } catch (e) {
+      errEl.textContent = e.message || "Password change failed";
+      errEl.classList.remove("hidden");
+    }
+  });
+  setTimeout(() => overlay.querySelector("#force-pw-current")?.focus(), 0);
+}
+
 function showApp() {
   const login = $("#login-screen");
   const app = $("#app");
@@ -42279,6 +42340,14 @@ async function init() {
           bindChangelogModal(_loginCfg.version);
           maybeShowChangelog(_loginCfg.version);
         } catch {}
+        // Temp-password accounts must pick a real password before using
+        // the app. The overlay blocks until the change succeeds (the
+        // session is revoked by the change itself, so the user signs
+        // in fresh afterwards).
+        try {
+          const _me = await (await fetch("/api/v2/me", { credentials: "same-origin" })).json().catch(() => ({}));
+          if (_me && _me.mustChangePassword) showForcePasswordChangeModal();
+        } catch {}
         setTimeout(async () => {
           await initCaches();
           await refreshAll();
@@ -42326,6 +42395,11 @@ async function init() {
         // Login success
         showApp();
         try { ensurePresenceOnLogin(); } catch {}
+        // Same temp-password gate as the password login path above.
+        try {
+          const _me2 = await (await fetch("/api/v2/me", { credentials: "same-origin" })).json().catch(() => ({}));
+          if (_me2 && _me2.mustChangePassword) showForcePasswordChangeModal();
+        } catch {}
         const config = await (await fetch("/api/config")).json();
         bindChangelogModal(config.version);
         maybeShowChangelog(config.version);
