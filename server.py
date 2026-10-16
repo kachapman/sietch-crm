@@ -598,6 +598,14 @@ try:
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_service_feeds_webhook_secret ON service_feeds(webhook_secret) WHERE webhook_secret IS NOT NULL")
 except Exception:
     pass
+try:
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_photo_report_templates_one_default ON photo_report_templates (is_default) WHERE is_default = TRUE")
+except Exception:
+    pass
+try:
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_document_templates_one_default ON document_templates (is_default) WHERE is_default = TRUE")
+except Exception:
+    pass
 
 # Migration 023: convert service_feeds timestamps to TIMESTAMPTZ so the user's
 # browser correctly interprets the ISO string and converts to local time on
@@ -2048,6 +2056,53 @@ def _docker_status() -> dict:
 CUSTOM_FIELD_TYPES = frozenset({
     "text", "textarea", "url", "number", "date", "select", "checkbox",
 })
+
+# Image extensions accepted for template logos / signatures. SVGs are
+# deliberately excluded: they can carry <script> and <foreignObject>,
+# and a "logo.png" that's actually an SVG would still bypass a
+# Content-Type-only browser sniff. The avatar upload also rejects them.
+ALLOWED_LOGO_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+# Maximum logo / signature file size. Matches the avatar upload cap.
+# Server-side cap is the only one - browsers honouring a client cap is
+# advisory.
+MAX_LOGO_BYTES = 5 * 1024 * 1024
+
+
+def _validate_logo_upload(parsed_file: dict) -> tuple[bytes | None, str | None]:
+    """Apply size / content-type / extension allowlist to an uploaded logo.
+
+    Returns (data, None) on success or (None, error_message) on any
+    rejection. Centralised so the photo, document and signature upload
+    handlers all use the same rules - the previous version had a 5 MB
+    cap and image/* check on the avatar upload but not on these, which
+    let an admin upload arbitrary content (HTML, SVG, executables) as a
+    "logo" and the server stored it under data/logos/.
+    """
+    if not parsed_file:
+        return None, "file field required"
+    data = parsed_file["data"]
+    if not isinstance(data, (bytes, bytearray)):
+        return None, "file field must be binary"
+    if len(data) > MAX_LOGO_BYTES:
+        return None, f"File too large (max {MAX_LOGO_BYTES // (1024*1024)} MB)"
+    mime = (parsed_file.get("content-type") or "").split(";")[0].strip().lower()
+    if not mime.startswith("image/"):
+        return None, f"Only image files are supported (got {mime or 'no content-type'})"
+    filename = parsed_file.get("filename") or ""
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_LOGO_EXTENSIONS:
+        return None, f"File extension {ext!r} not allowed (use {', '.join(sorted(ALLOWED_LOGO_EXTENSIONS))})"
+    return bytes(data), None
+
+
+def _safe_logo_filename(raw_name: str) -> str:
+    """Strip everything except word chars, dots and dashes.
+
+    The allowed extension list is enforced separately; this is purely a
+    filesystem-safety filter (no path separators, no spaces, no NULs).
+    """
+    return re.sub(r"[^\w.\-]", "_", raw_name)
+
 
 _EXT_TO_MIME = {
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -8700,7 +8755,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_admin(self)
         if not user:
             return
-        data = json.loads(_read_body(self) or b"{}")
+        try:
+            data = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
         if not data or not data.get("name"):
             _json_response(self, 400, {"error": "name is required"})
             return
@@ -8729,7 +8788,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_admin(self)
         if not user:
             return
-        data = json.loads(_read_body(self) or b"{}")
+        try:
+            data = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
         if not data:
             _json_response(self, 400, {"error": "No data"})
             return
@@ -8784,19 +8847,34 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": f"Invalid multipart body: {exc}"})
             return
         file_info = parsed.get("file")
-        if not file_info:
-            _json_response(self, 400, {"error": "file field required"})
+        data, err = _validate_logo_upload(file_info)
+        if err is not None:
+            _json_response(self, 400, {"error": err})
             return
-        data = file_info["data"]
-        filename = file_info["filename"]
-        safe_name = re.sub(r'[^\w.\-]', '_', filename)
+        filename = file_info.get("filename") or ""
+        safe_name = _safe_logo_filename(filename)
         logos_dir = ROOT / "data" / "logos"
         logos_dir.mkdir(parents=True, exist_ok=True)
-        file_path = logos_dir / f"template_{template_id}_{safe_name}"
-        file_path.write_bytes(data)
+        # Delete the previous logo file for this template, if any. The
+        # signature upload handler already does this; the logo handler
+        # didn't, which left orphans in data/logos/ on every re-upload.
+        prev = db.query_one(
+            "SELECT logo_path FROM photo_report_templates WHERE id = %s",
+            (template_id,),
+        )
+        new_path = logos_dir / f"template_{template_id}_{safe_name}"
+        if prev and prev.get("logo_path"):
+            try:
+                _old = ROOT / prev["logo_path"]
+                if _old.exists() and _old != new_path:
+                    _old.unlink()
+            except OSError:
+                pass
+        new_path.write_bytes(data)
+        rel = str(new_path.relative_to(ROOT))
         db.execute("UPDATE photo_report_templates SET logo_path = %s, updated_at = NOW() WHERE id = %s",
-                   (str(file_path.relative_to(ROOT)), template_id))
-        _json_response(self, 200, {"ok": True, "logoPath": str(file_path.relative_to(ROOT))})
+                   (rel, template_id))
+        _json_response(self, 200, {"ok": True, "logoPath": rel})
 
     # ── Document Templates (admin) ───────────────────────────────────────
 
@@ -8927,17 +9005,31 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": f"Invalid multipart body: {exc}"})
             return
         file_info = parsed.get("file")
-        if not file_info:
-            _json_response(self, 400, {"error": "file field required"})
+        data, err = _validate_logo_upload(file_info)
+        if err is not None:
+            _json_response(self, 400, {"error": err})
             return
-        data = file_info["data"]
-        filename = file_info["filename"]
-        safe_name = re.sub(r'[^\w.\-]', '_', filename)
+        filename = file_info.get("filename") or ""
+        safe_name = _safe_logo_filename(filename)
         logos_dir = ROOT / "data" / "logos"
         logos_dir.mkdir(parents=True, exist_ok=True)
-        file_path = logos_dir / f"doctemplate_{template_id}_{safe_name}"
-        file_path.write_bytes(data)
-        rel = str(file_path.relative_to(ROOT))
+        # Mirror the signature handler: delete the previous logo for
+        # this template so re-uploads don't leave orphans in
+        # data/logos/. The previous code did not.
+        prev = db.query_one(
+            "SELECT logo_path FROM document_templates WHERE id = %s",
+            (template_id,),
+        )
+        new_path = logos_dir / f"doctemplate_{template_id}_{safe_name}"
+        if prev and prev.get("logo_path"):
+            try:
+                _old = ROOT / prev["logo_path"]
+                if _old.exists() and _old != new_path:
+                    _old.unlink()
+            except OSError:
+                pass
+        new_path.write_bytes(data)
+        rel = str(new_path.relative_to(ROOT))
         db.execute("UPDATE document_templates SET logo_path = %s, updated_at = NOW() WHERE id = %s",
                    (rel, template_id))
         _json_response(self, 200, {"ok": True, "logoPath": rel})
@@ -8956,16 +9048,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": f"Invalid multipart body: {exc}"})
             return
         file_info = parsed.get("file")
-        if not file_info:
-            _json_response(self, 400, {"error": "file field required"})
+        data, err = _validate_logo_upload(file_info)
+        if err is not None:
+            _json_response(self, 400, {"error": err})
             return
-        data = file_info["data"]
-        filename = file_info["filename"]
-        safe_name = re.sub(r'[^\w.\-]', '_', filename)
+        filename = file_info.get("filename") or ""
+        safe_name = _safe_logo_filename(filename)
         sigs_dir = ROOT / "data" / "logos"
         sigs_dir.mkdir(parents=True, exist_ok=True)
         # Use a distinct filename prefix so signatures don't collide with logos.
-        file_path = sigs_dir / f"docsig_{template_id}_{safe_name}"
+        new_path = sigs_dir / f"docsig_{template_id}_{safe_name}"
         # Replace any existing signature file for this template.
         try:
             existing = db.query_one(
@@ -8974,15 +9066,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             )
             if existing and existing.get("signature_path"):
                 _old = ROOT / existing["signature_path"]
-                if _old.exists() and _old != file_path:
+                if _old.exists() and _old != new_path:
                     try:
                         _old.unlink()
                     except Exception:
                         pass
         except Exception:
             pass
-        file_path.write_bytes(data)
-        rel = str(file_path.relative_to(ROOT))
+        new_path.write_bytes(data)
+        rel = str(new_path.relative_to(ROOT))
         db.execute(
             "UPDATE document_templates SET signature_path = %s, updated_at = NOW() WHERE id = %s",
             (rel, template_id),
