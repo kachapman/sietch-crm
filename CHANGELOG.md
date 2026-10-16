@@ -2,6 +2,16 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Users: force-change gate + SMTP deliverability findings (2026-10-16)
+
+### must_change_password was never enforced (fixed)
+
+The flag was set correctly in the DB, but both login paths called `showApp()` unconditionally — a temp password worked as a permanent one (confirmed live: Bre logged in with a temp password, never prompted). New blocking `showForcePasswordChangeModal()` (no dismiss path) on both login-success sites, posting the existing `/api/v2/auth/change-password`; success reloads to a fresh login since the change revokes all sessions. Covered by `TestForcePasswordChangeGate`.
+
+### SMTP test result: plaintext still 550-blocked, and it's content-based
+
+Live test to kenc@vanguardadj.com via the real `/reset-request` path: token created fine, but Proton's relay refused with `550 5.7.0 Blocked by SpamAssassin`. Control probe (minimal subject + one-line body, same relay/account) **delivered**. No URIBL hits on the link domains. Conclusion: the block is message-content-pattern based, not sender/IP — further wording tweaks have diminishing returns per live email. Email resets stay disabled per plan; next lever if ever revisited is SPF/DKIM + dedicated transactional relay, not message tweaks.
+
 ## Users audit + password-reset deliverability (2026-10-16)
 
 Audited users + user profiles including the admin Users tab. Found 7 issues; fixed all, plus the password-reset deliverability work (plaintext email, `/reset` landing page, greyed-out email option).

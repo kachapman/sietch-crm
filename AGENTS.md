@@ -76,7 +76,7 @@ This hid ~20 real assertions in `tests/test_telegram_bot.py` for an entire sessi
 
 ## Testing
 
-All test surfaces run via CI (`.github/workflows/smoke.yml`). **549 tests total: 134 JS + 415 Python, 0 failures.**
+All test surfaces run via CI (`.github/workflows/smoke.yml`). **551 tests total: 134 JS + 417 Python, 0 failures.**
 
 ```bash
 # Python unit tests (stdlib unittest)

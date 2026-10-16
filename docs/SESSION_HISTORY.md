@@ -48,7 +48,7 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 3791177        Users: fix dead kebab Reset Password + stacked list click handler
 ```
 
-**Next:** audit chain now covers timesheet, presence/DM, automation, telegram, infra, customize, reports, search modal, **users**. Remaining deferred: timesheet B/C, `crm-server.service` on systemd, production deploy.
+**Next:** audit chain now covers timesheet, presence/DM, automation, telegram, infra, customize, reports, search modal, **users**. Remaining deferred: timesheet B/C, `crm-server.service` on systemd, production deploy. Since this entry: force-change gate shipped (temp passwords now block until changed); SMTP live test shows plaintext still 550-blocked content-side (control probe delivered, no URIBL hits) — email resets stay disabled. Open: bot-token auth on users-get (accepted risk); server-side API gate for must_change_password (client-only for now).
 
 ---
 
