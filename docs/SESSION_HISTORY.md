@@ -13,7 +13,15 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-16
 
-**Topic:** Calendar parity Phase 5 — sources/sync/settings.
+**Topic:** Calendar parity Phase 6 — reminders + search + polish. **All 6 phases shipped.**
+
+**Status: PHASE 6 SHIPPED — PLAN COMPLETE.** Snooze (10m/1h) + Dismiss buttons on every calendar reminder card (new migration 036 + `snoozed_until` column, sweep honors it). Telegram pref key fixed (`calendar_telegram` → `telegram_calendar_reminder`, legacy row still honored). New `GET /api/v2/calendar/search` (paginated, ILIKE) and `GET /api/v2/calendar/export` (fresh .ics, RFC-5545 escaping via pure `_ics_dump` helper). Settings modal "Search & Export" section: search box, Print current view, Export .ics. `@media print` CSS hides everything but the tile. 16 new tests (38 JS files + 15 Python suites, 0 failures). Recovery: lost a class-indent boundary when inserting `_ics_dump`; `git stash/checkout` reset clean, then re-applied Phase 6 surgically with all subsequent edits as `+4`-space appendages — final compile + full regression green.
+
+**Next:** None — all 6 plan phases shipped. Possible follow-ups outside the plan: print/save list style, attendee email + RSVP dispatch, Telegram notif body improvements, server-side CalDAV sync implementation.
+
+---
+
+## Previous summary (2026-10-16 — calendar Phase 5)
 
 **Status: PHASE 5 SHIPPED.** Sources list (visibility/color/rename/sync-now+errors/sync-all), per-tile source filter, OAuth hide-when-unconfigured, CalDAV beta label, ICS import endpoint + UI, real defaultReminder pref. 17 new tests (5 JS + 12 Python); full regression green (15 JS files + 14 Python suites, 0 failures). Caught by `node --check`: helper insert swallowed `fetchCalendarFeed` header (fixed).
 

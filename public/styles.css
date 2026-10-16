@@ -8893,6 +8893,77 @@ body {
   flex-shrink: 0;
   max-width: 12rem;
 }
+/* Calendar search results + export row */
+.cal-settings-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.5rem;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+.cal-search-row {
+  display: grid;
+  grid-template-columns: 9rem 1fr 1fr;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.78rem;
+}
+.cal-search-when {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.cal-search-summary {
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cal-search-where {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cal-settings-export-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+/* Notification drawer snooze/dismiss actions */
+.notification-drawer-item-actions {
+  display: flex;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+  flex-wrap: wrap;
+}
+.notification-drawer-action {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 0.72rem;
+  padding: 0.2rem 0.55rem;
+  cursor: pointer;
+}
+.notification-drawer-action:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+@media print {
+  /* Hide everything but the tile currently being printed. */
+  body * { visibility: hidden !important; }
+  .calendar-tile, .calendar-tile * { visibility: visible !important; }
+  .calendar-tile { position: absolute; inset: 0; }
+  .calendar-tile .tile-toolbar .btn-calendar-today,
+  .calendar-tile .tile-toolbar .btn-calendar-nav,
+  .calendar-tile .tile-toolbar .btn-tile-remove { display: none !important; }
+  .calendar-tile .calendar-agenda-more { display: none !important; }
+}
 .calendar-settings-add-form {
   padding: 0.5rem 0;
   border-top: 1px solid var(--border);

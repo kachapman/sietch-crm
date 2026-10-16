@@ -5904,6 +5904,36 @@ function openCalendarSettingsModal() {
   modal.classList.remove("hidden");
 }
 
+/** Print a single tile's view (month/week/day/agenda) without chrome. */
+function printTile(tileEl) {
+  if (!tileEl) return;
+  // Snapshot the tile body, hide the rest of the dashboard, then print.
+  const dashboard = tileEl.parentElement;
+  const originalDisplay = [];
+  const children = Array.from(dashboard.children);
+  for (const c of children) {
+    if (c === tileEl) continue;
+    originalDisplay.push([c, c.style.display]);
+    c.style.display = "none";
+  }
+  const onAfter = () => {
+    for (const [el, display] of originalDisplay) el.style.display = display;
+    window.removeEventListener("afterprint", onAfter);
+  };
+  window.addEventListener("afterprint", onAfter);
+  try {
+    window.print();
+  } catch (err) {
+    onAfter();
+    showToast("Could not open the print dialog", true);
+  }
+}
+
+/** Remember the tile a tile-scoped control refers to when the gear is opened. */
+function setLastCalendarPrintTile(cal) {
+  state._lastCalPrintTile = cal || null;
+}
+
 /** OAuth source buttons from the tile/settings forms (dead when unconfigured). */
 let calendarOauthFlags = null; // {google, microsoft} — filled by sources GET
 
@@ -6180,6 +6210,56 @@ function bindCalendarSettingsModal() {
   weekStartSel?.addEventListener("change", saveDisplayPrefs);
   timeFormatSel?.addEventListener("change", saveDisplayPrefs);
   defaultRemSel?.addEventListener("change", saveDisplayPrefs);
+
+  // Search events
+  const searchInput = $("#cal-settings-search-q");
+  const searchStatus = $("#cal-settings-search-status");
+  const searchResults = $("#cal-settings-search-results");
+  const runSearch = async (offset) => {
+    if (offset == null) offset = 0;
+    const q = (searchInput?.value || "").trim();
+    if (!q) {
+      if (searchStatus) searchStatus.textContent = "Type something to search.";
+      return;
+    }
+    if (searchStatus) searchStatus.textContent = "Searching…";
+    try {
+      const data = await api(`/api/v2/calendar/search?q=${encodeURIComponent(q)}&offset=${offset}&limit=50`);
+      const events = data.events || [];
+      if (searchStatus) searchStatus.textContent = `${data.total || 0} match${data.total === 1 ? "" : "es"}.`;
+      if (!events.length) { if (searchResults) searchResults.innerHTML = ""; return; }
+      const html = events.map((e) => {
+        const d = e.dtstart ? new Date(e.dtstart) : null;
+        const when = d ? d.toLocaleString() : "?";
+        return `<div class="cal-search-row">
+          <div class="cal-search-when">${escapeHtml(when)}</div>
+          <div class="cal-search-summary">${escapeHtml(e.summary || "(No title)")}</div>
+          <div class="cal-search-where">${escapeHtml(e.location || "")}</div>
+        </div>`;
+      }).join("");
+      if (searchResults) searchResults.innerHTML = html;
+    } catch (err) {
+      if (searchStatus) searchStatus.textContent = `Search failed: ${err.message}`;
+    }
+  };
+  $("#cal-settings-search-run")?.addEventListener("click", () => runSearch(0));
+  searchInput?.addEventListener("keydown", (e) => { if (e.key === "Enter") runSearch(0); });
+
+  // Print + export for the tile the user came from (or the first one if invoked from the gear)
+  const targetCalendarForExport = () => state._lastCalPrintTile || state.calendarTiles[0];
+  modal.querySelector("[data-cal-print]")?.addEventListener("click", () => {
+    const cal = targetCalendarForExport();
+    if (!cal || !cal._el) { showToast("No calendar tile to print", true); return; }
+    printTile(cal._el);
+  });
+  modal.querySelector("[data-cal-export]")?.addEventListener("click", () => {
+    const cal = targetCalendarForExport();
+    if (!cal) { showToast("No calendar tile to export", true); return; }
+    const { startStr, endStr } = calendarViewRange(cal);
+    const sourceParam = calendarTileSourceParam(cal).replace(/^&/, "");
+    const url = `/api/v2/calendar/export?start=${startStr}&end=${endStr}${sourceParam ? `&${sourceParam}` : ""}`;
+    window.location.href = url;
+  });
 
   // Sync-all button
   $("#calendar-settings-sync-all")?.addEventListener("click", async (e) => {
@@ -6999,6 +7079,7 @@ function bindCalendarTileChrome(section, cal, tileId) {
   settingsBtn.innerHTML = '<i class="ti ti-settings"></i>';
   settingsBtn.addEventListener("click", (e) => {
     e.stopPropagation();
+    setLastCalendarPrintTile(cal);
     openCalendarSettingsModal();
   });
 
@@ -44191,6 +44272,12 @@ function _renderNotificationDrawerItem(n) {
       <div class="notification-drawer-item-body">
         <div class="notification-drawer-item-actor">${msgHtml}</div>
         ${snippet ? `<div class="notification-drawer-item-message">${snippet}…</div>` : ""}
+        ${n.type === "calendar_reminder" && n.payload && n.payload.event_id ? `
+          <div class="notification-drawer-item-actions">
+            <button class="notification-drawer-action" data-cal-snooze="${n.payload.event_id}" data-cal-snooze-minutes="10">Snooze 10m</button>
+            <button class="notification-drawer-action" data-cal-snooze="${n.payload.event_id}" data-cal-snooze-minutes="60">Snooze 1h</button>
+            <button class="notification-drawer-action" data-cal-dismiss="${n.payload.event_id}">Dismiss</button>
+          </div>` : ""}
       </div>
       <div class="notification-drawer-item-time">${time}</div>
     </div>
@@ -44215,12 +44302,41 @@ function _renderNotificationDrawerItem(n) {
         openActivityModal();
       } catch (err) { /* swallow */ }
     }
+    // Calendar reminder snooze / dismiss — handled below on the buttons themselves.
+    if (e.target.closest("[data-cal-snooze]") || e.target.closest("[data-cal-dismiss]")) return;
     if (!n.isRead) {
       n.isRead = true;
       el.classList.remove("unread");
       api(`/api/v2/notifications/${n.id}/read`, { method: "PUT" }).catch(() => {});
       _updateNotificationBadge();
     }
+  });
+  el.querySelectorAll("[data-cal-snooze]").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.calSnooze;
+      const mins = parseInt(btn.dataset.calSnoozeMinutes, 10) || 10;
+      try {
+        await api(`/api/v2/calendar/events/${id}/snooze`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ minutes: mins }),
+        });
+        showToast(`Snoozed for ${mins} minutes`);
+        el.remove();
+        _pollNotificationBadge();
+      } catch (err) { showToast(err.message, true); }
+    });
+  });
+  el.querySelectorAll("[data-cal-dismiss]").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.calDismiss;
+      try {
+        await api(`/api/v2/calendar/events/${id}/dismiss-reminder`, { method: "POST" });
+        el.remove();
+        _pollNotificationBadge();
+      } catch (err) { showToast(err.message, true); }
+    });
   });
 
   // Project link opens preview
@@ -44257,11 +44373,41 @@ function _renderNotificationDrawerItem(n) {
         div.innerHTML = content;
         el.appendChild(div);
         expandBtn.textContent = "Hide note";
-      } catch {
+      } catch (err) {
         expandBtn.textContent = "Show note";
+        showToast(err.message || "Could not load note", true);
       }
     });
   }
+
+  // Calendar reminder snooze / dismiss.
+  el.querySelectorAll("[data-cal-snooze]").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.calSnooze;
+      const mins = parseInt(btn.dataset.calSnoozeMinutes, 10) || 10;
+      try {
+        await api(`/api/v2/calendar/events/${id}/snooze`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ minutes: mins }),
+        });
+        showToast(`Snoozed for ${mins} minutes`);
+        el.remove();
+        _pollNotificationBadge();
+      } catch (err) { showToast(err.message, true); }
+    });
+  });
+  el.querySelectorAll("[data-cal-dismiss]").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.calDismiss;
+      try {
+        await api(`/api/v2/calendar/events/${id}/dismiss-reminder`, { method: "POST" });
+        el.remove();
+        _pollNotificationBadge();
+      } catch (err) { showToast(err.message, true); }
+    });
+  });
 
   return el;
 }

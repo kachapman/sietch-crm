@@ -2,6 +2,25 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Calendar parity Phase 6: reminders + search + polish (2026-10-16)
+
+### Reminders
+
+- Snooze (10m / 1h buttons) and one-shot Dismiss on every calendar reminder card in the notifications drawer (server endpoints `POST /api/v2/calendar/events/{id}/snooze` and `…/dismiss-reminder`; new `snoozed_until` column + migration `036`).
+- Reminder sweep honors `snoozed_until`; snoozes auto-clamp so they never push past the event start.
+- Telegram pref key fixed: was `calendar_telegram` (no-op since the dispatcher checks `telegram_<type>`); now `telegram_calendar_reminder` (legacy row still honored).
+
+### Search & export
+
+- `GET /api/v2/calendar/search?q=…&offset=&limit=` (user-wide, summary/description/location ILIKE, paginated).
+- `GET /api/v2/calendar/export?start=&end=&source_id=` returns a fresh `.ics` file (pure `_ics_dump` serializer with proper RFC 5545 escaping).
+- Settings modal "Search & Export" section: search box with Enter-to-submit, Print current view, Export .ics (downloads via the same range the tile shows).
+- `@media print` rule hides the rest of the dashboard and the tile chrome (nav buttons, close X, "more" buttons).
+
+### Tests
+
+- `tests/test_calendar_phase6.py` (new, 16 tests): 7 `_ics_dump` cases (timed, all-day, escapes, RRULE, empty, missing-end fallback, missing-start) + 9 source-level guards for the new endpoints, sweep, Telegram key, drawer wiring, and print stylesheet.
+
 ## Calendar parity Phase 5: sources/sync/settings (2026-10-16)
 
 ### Sources list (settings modal)

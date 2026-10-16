@@ -437,7 +437,8 @@ def _sweep_calendar_reminders() -> int:
                  AND reminder_minutes > 0
                  AND dtstart - (reminder_minutes || ' minutes')::interval <= NOW()
                  AND dtstart > NOW()
-                 AND status != 'CANCELLED'"""
+                 AND status != 'CANCELLED'
+                 AND (snoozed_until IS NULL OR snoozed_until <= NOW())"""
         )
     except Exception:
         return 0

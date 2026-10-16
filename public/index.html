@@ -1589,6 +1589,19 @@
           <div id="calendar-settings-tiles-list" class="calendar-settings-tiles-list"></div>
         </div>
         <div class="calendar-settings-section">
+          <h3>Search & Export</h3>
+          <div class="field"><label>Search events</label>
+            <input type="text" id="cal-settings-search-q" placeholder="Find by title, description, or location" />
+          </div>
+          <button type="button" id="cal-settings-search-run" class="btn btn-ghost btn-small"><i class="ti ti-search"></i> Search</button>
+          <p id="cal-settings-search-status" class="calendar-oauth-info-text"></p>
+          <div id="cal-settings-search-results" class="cal-settings-search-results"></div>
+          <div class="cal-settings-export-row">
+            <button type="button" class="btn btn-ghost btn-small" data-cal-print><i class="ti ti-printer"></i> Print current view</button>
+            <button type="button" class="btn btn-ghost btn-small" data-cal-export><i class="ti ti-download"></i> Export .ics</button>
+          </div>
+        </div>
+        <div class="calendar-settings-section">
           <h3>Import .ics File</h3>
           <div class="field"><label>File</label><input type="file" id="cal-settings-import-file" accept=".ics,text/calendar" /></div>
           <div class="field"><label>Import into</label><select id="cal-settings-import-source"></select></div>

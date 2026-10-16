@@ -943,6 +943,7 @@ try:
             url TEXT,
             attendees TEXT,
             timezone TEXT,
+            snoozed_until TIMESTAMPTZ,
             created_at TIMESTAMPTZ DEFAULT NOW(),
             UNIQUE(user_id, uid)
         )
@@ -979,6 +980,10 @@ for _col in ("transparency", "url", "attendees", "timezone"):
         db.execute(f"ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS {_col} TEXT")
     except Exception:
         pass
+try:
+    db.execute("ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS snoozed_until TIMESTAMPTZ")
+except Exception:
+    pass
 try:
     db.execute("""
         CREATE TABLE IF NOT EXISTS ics_feed_cache (
@@ -2397,6 +2402,46 @@ def _resolve_change_display(field, val):
     if field == "isPrivate":
         return "Yes" if val else "No"
     return str(val)
+
+
+def _ics_dump(events: list[dict]) -> str:
+    """Serialize calendar events back to an .ics file (UTC). Pure."""
+    def _esc(s) -> str:
+        s = "" if s is None else str(s)
+        return s.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+
+    def _fmt(dt, all_day: bool) -> str:
+        if all_day:
+            return dt.strftime("%Y%m%d")
+        if dt.tzinfo is None:
+            return dt.strftime("%Y%m%dT%H%M%S")
+        return dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Sietch CRM//Calendar//EN"]
+    for ev in events or []:
+        uid = ev.get("uid") or f"export-{int(time.time()*1000)}"
+        lines.append("BEGIN:VEVENT")
+        lines.append(f"UID:{_esc(uid)}")
+        lines.append(f"DTSTAMP:{_esc(datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))}")
+        dtstart = ev.get("dtstart")
+        if dtstart:
+            lines.append(f"DTSTART:{_esc(_fmt(dtstart, bool(ev.get('all_day'))))}")
+        dtend = ev.get("dtend")
+        if dtend:
+            lines.append(f"DTEND:{_esc(_fmt(dtend, bool(ev.get('all_day'))))}")
+        elif dtstart:
+            lines.append(f"DTEND:{_esc(_fmt(dtstart, bool(ev.get('all_day'))))}")
+        if ev.get("summary"):
+            lines.append(f"SUMMARY:{_esc(ev.get('summary'))}")
+        if ev.get("description"):
+            lines.append(f"DESCRIPTION:{_esc(ev.get('description'))}")
+        if ev.get("location"):
+            lines.append(f"LOCATION:{_esc(ev.get('location'))}")
+        if ev.get("rrule"):
+            lines.append(f"RRULE:{_esc(ev.get('rrule'))}")
+        lines.append("END:VEVENT")
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines) + "\r\n"
 
 
 class KanbanHandler(SimpleHTTPRequestHandler):
@@ -4775,11 +4820,25 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if m and method == "DELETE":
             self._handle_calendar_event_delete(int(m.group(1)))
             return
+        m = re.match(r"^/api/v2/calendar/events/(\d+)/snooze$", api_path)
+        if m and method == "POST":
+            self._handle_calendar_event_snooze(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/calendar/events/(\d+)/dismiss-reminder$", api_path)
+        if m and method == "POST":
+            self._handle_calendar_event_dismiss_reminder(int(m.group(1)))
+            return
         if api_path == "/api/v2/calendar/settings" and method == "PUT":
             self._handle_calendar_settings_put()
             return
         if api_path == "/api/v2/calendar/import" and method == "POST":
             self._handle_calendar_import()
+            return
+        if api_path == "/api/v2/calendar/search" and method == "GET":
+            self._handle_calendar_search(qs)
+            return
+        if api_path == "/api/v2/calendar/export" and method == "GET":
+            self._handle_calendar_export(qs)
             return
 
         self.send_error(404)
@@ -16982,7 +17041,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         prefs = {r["notification_type"]: r["enabled"] for r in rows}
         _json_response(self, 200, {
             "browser_notifications": prefs.get("calendar_browser", True),
-            "telegram_notifications": prefs.get("calendar_telegram", True),
+            # NOTE: the dispatcher gates Telegram on telegram_<type>, so the
+            # calendar toggle must use telegram_calendar_reminder (a legacy
+            # calendar_telegram row is honored as fallback).
+            "telegram_notifications": prefs.get(
+                "telegram_calendar_reminder", prefs.get("calendar_telegram", True)),
             "default_reminder_minutes": 15,
         })
 
@@ -16994,7 +17057,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             body = json.loads(_read_body(self) or b"{}")
         except Exception:
             body = {}
-        for key, db_type in [("browser_notifications", "calendar_browser"), ("telegram_notifications", "calendar_telegram")]:
+        for key, db_type in [("browser_notifications", "calendar_browser"), ("telegram_notifications", "telegram_calendar_reminder")]:
             if key in body:
                 val = bool(body[key])
                 db.execute(
@@ -17436,6 +17499,152 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         db.execute("DELETE FROM calendar_events WHERE id = %s", (event_id,))
         _json_response(self, 200, {"ok": True})
+
+    def _handle_calendar_event_snooze(self, event_id: int) -> None:
+        """Snooze the next reminder by `minutes` (default 10) or `until` ISO."""
+        user = _require_auth(self)
+        if not user: return
+        ev = db.query_one("SELECT id FROM calendar_events WHERE id = %s AND user_id = %s", (event_id, user["id"]))
+        if not ev:
+            _json_response(self, 404, {"error": "Event not found"})
+            return
+        try:
+            body = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            body = {}
+        minutes_raw = body.get("minutes")
+        try:
+            minutes = int(minutes_raw) if minutes_raw is not None and str(minutes_raw) != "" else 10
+        except (TypeError, ValueError):
+            minutes = 10
+        until_str = (body.get("until") or "").strip()
+        if until_str:
+            try:
+                until = datetime.fromisoformat(until_str.replace("Z", "+00:00"))
+                if until.tzinfo: until = until.astimezone(timezone.utc).replace(tzinfo=None)
+            except ValueError:
+                _json_response(self, 400, {"error": "Invalid until"})
+                return
+        elif minutes and minutes > 0:
+            until = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=minutes)
+        else:
+            _json_response(self, 400, {"error": "minutes or until is required"})
+            return
+        # Don't snooze past the event start.
+        start = db.query_one("SELECT dtstart FROM calendar_events WHERE id = %s", (event_id,))
+        if start and start["dtstart"] and until >= start["dtstart"]:
+            until = start["dtstart"] - timedelta(minutes=1)
+        db.execute(
+            "UPDATE calendar_events SET snoozed_until = %s, last_modified = NOW() WHERE id = %s",
+            (until, event_id),
+        )
+        _json_response(self, 200, {"ok": True, "snoozed_until": until.isoformat()})
+
+    def _handle_calendar_event_dismiss_reminder(self, event_id: int) -> None:
+        """Permanently dismiss the next reminder for this event (one-shot)."""
+        user = _require_auth(self)
+        if not user: return
+        ev = db.query_one("SELECT id FROM calendar_events WHERE id = %s AND user_id = %s", (event_id, user["id"]))
+        if not ev:
+            _json_response(self, 404, {"error": "Event not found"})
+            return
+        db.execute(
+            "UPDATE calendar_events SET reminder_sent = TRUE, last_modified = NOW() WHERE id = %s",
+            (event_id,),
+        )
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_calendar_search(self, qs: dict) -> None:
+        """User-wide search across all calendar events (paginated, ?q=)."""
+        user = _require_auth(self)
+        if not user: return
+        q = (qs.get("q") or [""])[0].strip()
+        if not q:
+            _json_response(self, 400, {"error": "q is required"})
+            return
+        try:
+            limit = max(1, min(int((qs.get("limit") or [50])[0]), 200))
+        except ValueError:
+            limit = 50
+        try:
+            offset = max(0, int((qs.get("offset") or [0])[0]))
+        except ValueError:
+            offset = 0
+        like = f"%{q}%"
+        conditions = [
+            "ce.user_id = %s",
+            "ce.status != 'CANCELLED'",
+            "(ce.summary ILIKE %s OR ce.description ILIKE %s OR ce.location ILIKE %s)",
+        ]
+        params: list = [user["id"], like, like, like]
+        where = " AND ".join(conditions)
+        events = db.query_dicts(
+            f"""SELECT ce.id, ce.uid, ce.summary, ce.description, ce.location,
+                       ce.dtstart, ce.dtend, ce.all_day, ce.color,
+                       ce.source_id, cs.name AS source_name
+                FROM calendar_events ce
+                LEFT JOIN calendar_sources cs ON cs.id = ce.source_id
+                WHERE {where}
+                ORDER BY ce.dtstart DESC
+                LIMIT %s OFFSET %s""",
+            tuple(params) + (limit, offset),
+        )
+        total = db.query_one(
+            f"SELECT COUNT(*) AS c FROM calendar_events ce WHERE {where}",
+            tuple(params),
+        ) or {"c": 0}
+        _json_response(self, 200, {
+            "events": events,
+            "total": total.get("c", 0),
+            "limit": limit,
+            "offset": offset,
+        })
+
+    def _handle_calendar_export(self, qs: dict) -> None:
+        """Download current view as a fresh .ics file."""
+        user = _require_auth(self)
+        if not user: return
+        start_str = (qs.get("start") or [""])[0]
+        end_str = (qs.get("end") or [""])[0]
+        if not start_str or not end_str:
+            _json_response(self, 400, {"error": "start and end required"})
+            return
+        try:
+            start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+            if start_dt.tzinfo: start_dt = start_dt.astimezone(timezone.utc).replace(tzinfo=None)
+            end_dt = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+            if end_dt.tzinfo: end_dt = end_dt.astimezone(timezone.utc).replace(tzinfo=None)
+        except ValueError:
+            _json_response(self, 400, {"error": "Invalid date format"})
+            return
+        source_id = (qs.get("source_id") or [""])[0]
+        conditions = [
+            "ce.user_id = %s", "ce.status != 'CANCELLED'",
+            "ce.dtstart < %s", "ce.dtend > %s",
+            "(cs.visible IS NULL OR cs.visible != FALSE)",
+        ]
+        params: list = [user["id"], end_dt, start_dt]
+        if source_id and source_id.isdigit():
+            conditions.append("ce.source_id = %s")
+            params.append(int(source_id))
+        where = " AND ".join(conditions)
+        events = db.query_dicts(
+            f"""SELECT ce.uid, ce.summary, ce.description, ce.location,
+                       ce.dtstart, ce.dtend, ce.all_day, ce.rrule
+                FROM calendar_events ce
+                LEFT JOIN calendar_sources cs ON cs.id = ce.source_id
+                WHERE {where}
+                ORDER BY ce.dtstart""",
+            tuple(params),
+        )
+        body = _ics_dump(events)
+        payload = body.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/calendar; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="calendar-{start_str}-{end_str}.ics"')
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
 
     # ── OAuth Handlers ───────────────────────────────────────────────────────
 
