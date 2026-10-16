@@ -85,11 +85,14 @@ def _clean_calendar_tiles(tiles: Any) -> list[dict[str, Any]]:
             "timezone": str(item.get("timezone") or "")[:80],
             "viewYear": int(item.get("viewYear") or 0) or None,
             "viewMonth": int(item.get("viewMonth") or 0) or None,
+            "viewDay": int(item.get("viewDay") or 0) or None,
         }
         if cleaned["viewYear"] is None:
             del cleaned["viewYear"]
         if cleaned["viewMonth"] is None:
             del cleaned["viewMonth"]
+        if cleaned["viewDay"] is None:
+            del cleaned["viewDay"]
         # Preserve calendar view mode and DB source reference
         view = str(item.get("view") or "").strip()
         if view and view in ("month", "week", "day", "agenda"):

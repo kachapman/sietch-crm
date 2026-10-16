@@ -76,13 +76,17 @@ def _unescape_ics_text(value: str) -> str:
     )
 
 
-def _parse_organizer(raw: str) -> str:
+def _parse_organizer(raw: str, meta: dict[str, str] | None = None) -> str:
+    # CN/PARTSTAT usually arrive as property params (ORGANIZER;CN=Alice:...),
+    # which _parse_prop splits off into meta — prefer them over the bare value.
+    if meta and meta.get("CN"):
+        return meta["CN"].strip().strip('"')
     raw = raw.strip()
     if not raw:
         return ""
     cn_match = re.search(r"CN=([^;:]+)", raw, re.I)
     if cn_match:
-        return cn_match.group(1).strip()
+        return cn_match.group(1).strip().strip('"')
     mail = re.search(r"mailto:([^;\s]+)", raw, re.I)
     if mail:
         return mail.group(1).strip()
@@ -91,18 +95,23 @@ def _parse_organizer(raw: str) -> str:
     return raw
 
 
-def _parse_attendee(raw: str) -> dict[str, str]:
+def _parse_attendee(raw: str, meta: dict[str, str] | None = None) -> dict[str, str]:
     raw = raw.strip()
-    cn_match = re.search(r"CN=([^;:]+)", raw, re.I)
-    name = cn_match.group(1).strip() if cn_match else ""
+    meta = meta or {}
+    cn = (meta.get("CN") or "").strip().strip('"')
+    if not cn:
+        cn_match = re.search(r"CN=([^;:]+)", raw, re.I)
+        cn = cn_match.group(1).strip().strip('"') if cn_match else ""
     mail = re.search(r"mailto:([^;\s]+)", raw, re.I)
     email = mail.group(1).strip() if mail else ""
-    partstat_m = re.search(r"PARTSTAT=([^;:]+)", raw, re.I)
-    partstat = partstat_m.group(1).strip() if partstat_m else ""
-    label = name or email or raw
+    partstat = (meta.get("PARTSTAT") or "").strip()
+    if not partstat:
+        partstat_m = re.search(r"PARTSTAT=([^;:]+)", raw, re.I)
+        partstat = partstat_m.group(1).strip() if partstat_m else ""
+    label = cn or email or raw
     if partstat and partstat.upper() != "ACCEPTED":
         label = f"{label} ({partstat})"
-    return {"name": name, "email": email, "partstat": partstat, "label": label}
+    return {"name": cn, "email": email, "partstat": partstat, "label": label}
 
 
 def _format_ics_instant(value: str) -> str:
@@ -267,9 +276,14 @@ def parse_ics_calendar(text: str) -> dict[str, Any]:
             description = _unescape_ics_text(props.get("DESCRIPTION", "").strip())
             description = re.sub(r"<br\s*/?>", "\n", description, flags=re.I)
             location = _unescape_ics_text(props.get("LOCATION", "").strip())
-            organizer = _parse_organizer(props.get("ORGANIZER", ""))
+            organizer = _parse_organizer(props.get("ORGANIZER", ""), prop_meta.get("ORGANIZER"))
             url = props.get("URL", "").strip()
-            attendees = [_parse_attendee(a) for a in props.get("_ATTENDEES", [])]
+            attendees = [
+                _parse_attendee(a.get("value", ""), a.get("meta"))
+                if isinstance(a, dict)
+                else _parse_attendee(a)
+                for a in props.get("_ATTENDEES", [])
+            ]
             categories_raw = _unescape_ics_text(props.get("CATEGORIES", ""))
             categories = [c.strip() for c in categories_raw.split(",") if c.strip()]
             rrule = props.get("RRULE", "").strip()
@@ -317,7 +331,7 @@ def parse_ics_calendar(text: str) -> dict[str, Any]:
             continue
         name, meta, value = _parse_prop(line)
         if name == "ATTENDEE":
-            props.setdefault("_ATTENDEES", []).append(value)
+            props.setdefault("_ATTENDEES", []).append({"value": value, "meta": meta})
         else:
             props[name] = value
             prop_meta[name] = meta

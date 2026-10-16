@@ -2,6 +2,27 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Calendar parity Phase 0+1: tests, ICS contact params, nav/refetch (2026-10-16)
+
+Plan: `/home/chapman-server/.opencode/plan/calendar-parity.md`. Locked decisions: hide OAuth/CalDAV when unconfigured, expand recurrences at sync, Only+Series edit scope, Sun start + 24h defaults.
+
+### Fixed
+
+**ICS ORGANIZER/ATTENDEE names dropped.** `ics_calendar.py` stored only the post-colon value, discarding `;CN=`/`;PARTSTAT=` params where Google/Outlook put display names — organizer showed `alice@example.com` instead of `Alice`, attendees lost names + RSVP flags. `_parse_organizer/_parse_attendee` now take the param dict (preferred) with value-regex fallback. Covered by `tests/test_ics_calendar.py` (31 tests; the full-parse case failed before the fix, passes after).
+
+**Month nav never refetched.** Prev/next and view-tab switches only re-rendered the stale cache, so other months/weeks/days showed empty or wrong events. Nav and tab handlers now call `loadCalendarForTile`, which fetches a view-aware range (`calendarViewRange`: month = full month, week = Sun–Sat, day = single day, agenda = today+90d). New `Today` button + prev/next/today controls for week/day views (nav was month-only); toolbar label shows week range / day / Upcoming accordingly.
+
+**Week/day/agenda event clicks dead.** `bindCalendarEventClicks` only handled month chips; week/day/agenda rows carry `data-event-uid` but had no listener. Now delegates on `[data-event-uid]`.
+
+**Agenda dropped all all-day events** (filter required a timed end timestamp) and sorted all-day first regardless of date. All-day ranges now compare against the range end date and sort by start date (`eventAgendaSortKey`/`eventAgendaDayParts`).
+
+**`viewDay` not persisted.** `_clean_calendar_tiles` now keeps `viewDay`; `newCalendarTile` defaults it to today. Legacy tiles without it fall back to today.
+
+### Tests
+
+- `tests/test_ics_calendar.py` (new, 31 tests, no DB): URL allow-list, unfolding, prop parsing, organizer/attendee, RRULE humanize, color fallback, datetime shapes, full-feed parse, CANCELLED exclusion, missing-DTSTART skip.
+- `tests/test_calendar_views.mjs` (new, 14 tests): range math (incl. cross-month weeks), shift math (incl. year boundaries), nav labels. Mirrors `app.js` helpers per `test_pure_helpers.mjs` convention.
+
 ## Users: force-change gate + SMTP deliverability findings (2026-10-16)
 
 ### must_change_password was never enforced (fixed)

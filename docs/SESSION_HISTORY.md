@@ -13,6 +13,20 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-16
 
+**Topic:** Calendar parity — full plan + Phase 0/1 build.
+
+**Status: PHASE 0+1 SHIPPED.** Plan at `/home/chapman-server/.opencode/plan/calendar-parity.md`. Decisions locked via options: hide OAuth/CalDAV when unconfigured, expand recurrences at sync, Only+Series edit scope, Sun+24h defaults. 45 new tests (31 Python + 14 JS), all suites green.
+
+**Fixed:** ICS ORGANIZER/ATTENDEE CN params dropped (now preferred over value); month nav/view-tabs now refetch view-aware ranges + Today button + week/day nav + range/agenda labels; week/day/agenda clicks open detail modal; agenda includes + correctly sorts all-day events; `viewDay` persisted (`user_profile_store` + `newCalendarTile`).
+
+**Next:** Phase 2 recurrence expansion (EXDATE/RDATE/RECURRENCE-ID/VALARM, expand at sync per decision). Files changed: `ics_calendar.py`, `public/app.js`, `user_profile_store.py`, `tests/test_ics_calendar.py` (new), `tests/test_calendar_views.mjs` (new), `CHANGELOG.md`.
+
+---
+
+## Current session summary (for next resume)
+
+**Date:** 2026-10-16
+
 **Topic:** Users audit + password-reset deliverability.
 
 **Status: SHIPPED.** 21 new tests (549 total: 134 JS + 415 Python, 0 failures), five commits.

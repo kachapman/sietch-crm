@@ -3085,6 +3085,7 @@ function newCalendarTile(overrides = {}) {
     timezone: "",
     viewYear: now.getFullYear(),
     viewMonth: now.getMonth() + 1,
+    viewDay: now.getDate(),
     ...overrides,
   };
 }
@@ -3337,6 +3338,121 @@ function shiftCalendarViewMonth(cal, delta) {
   saveCalendarsToStorage();
 }
 
+const CALENDAR_WEEKDAY_NAMES = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
+
+/** Normalize an out-of-range (y, m, d) triple onto the real calendar. */
+function normalizeCalendarViewDate(cal) {
+  const d = new Date(
+    cal.viewYear || new Date().getFullYear(),
+    (cal.viewMonth || new Date().getMonth() + 1) - 1,
+    cal.viewDay || new Date().getDate()
+  );
+  cal.viewYear = d.getFullYear();
+  cal.viewMonth = d.getMonth() + 1;
+  cal.viewDay = d.getDate();
+}
+
+/** Shift the viewed date by the unit matching the current view. */
+function shiftCalendarView(cal, delta) {
+  const view = cal.view || "month";
+  if (view === "month") {
+    shiftCalendarViewMonth(cal, delta);
+    return;
+  }
+  if (view === "agenda") return; // agenda is anchored at today; nothing to shift
+  normalizeCalendarViewDate(cal);
+  const d = new Date(cal.viewYear, cal.viewMonth - 1, cal.viewDay);
+  d.setDate(d.getDate() + delta * (view === "week" ? 7 : 1));
+  cal.viewYear = d.getFullYear();
+  cal.viewMonth = d.getMonth() + 1;
+  cal.viewDay = d.getDate();
+  saveCalendarsToStorage();
+}
+
+/** Reset the viewed date to today (in the tile's timezone). */
+function resetCalendarViewToToday(cal) {
+  const tz = resolveCalendarTimezone(cal);
+  const today = todayYmdInTimezone(tz);
+  cal.viewYear = today.year;
+  cal.viewMonth = today.month;
+  cal.viewDay = today.day;
+  saveCalendarsToStorage();
+}
+
+const CALENDAR_MONTH_SHORT = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/** Toolbar label for the current view: month name, week range, day, or Upcoming. */
+function calendarViewNavLabel(cal) {
+  const view = cal.view || "month";
+  if (view === "day") {
+    const wd = CALENDAR_WEEKDAY_NAMES[new Date(cal.viewYear, cal.viewMonth - 1, cal.viewDay).getDay()] || "";
+    return `${wd} ${cal.viewMonth}/${cal.viewDay}/${cal.viewYear}`;
+  }
+  if (view === "week") {
+    const anchor = new Date(cal.viewYear, cal.viewMonth - 1, cal.viewDay);
+    const start = new Date(anchor);
+    start.setDate(start.getDate() - start.getDay());
+    const end = new Date(start);
+    end.setDate(end.getDate() + 6);
+    const sm = CALENDAR_MONTH_SHORT[start.getMonth()];
+    const em = CALENDAR_MONTH_SHORT[end.getMonth()];
+    if (start.getMonth() === end.getMonth()) {
+      return `${sm} ${start.getDate()} – ${end.getDate()}, ${end.getFullYear()}`;
+    }
+    return `${sm} ${start.getDate()} – ${em} ${end.getDate()}, ${end.getFullYear()}`;
+  }
+  if (view === "agenda") return "Upcoming";
+  return calendarViewMonthLabel(cal);
+}
+
+function formatCalendarYmd(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/**
+ * Date range the tile needs loaded for its current view.
+ * Month → whole month; week → Sun–Sat; day → single day; agenda → today +90d.
+ */
+function calendarViewRange(cal) {
+  const view = cal.view || "month";
+  const y = cal.viewYear || new Date().getFullYear();
+  const m = cal.viewMonth || new Date().getMonth() + 1;
+  const day = cal.viewDay || new Date().getDate();
+  if (view === "day") {
+    const d = new Date(y, m - 1, day);
+    const s = formatCalendarYmd(d);
+    return { startStr: s, endStr: s };
+  }
+  if (view === "week") {
+    const anchor = new Date(y, m - 1, day);
+    const start = new Date(anchor);
+    start.setDate(start.getDate() - start.getDay());
+    const end = new Date(start);
+    end.setDate(end.getDate() + 6);
+    return { startStr: formatCalendarYmd(start), endStr: formatCalendarYmd(end) };
+  }
+  if (view === "agenda") {
+    const now = new Date();
+    const end = new Date(now);
+    end.setDate(end.getDate() + 90);
+    return { startStr: formatCalendarYmd(now), endStr: formatCalendarYmd(end) };
+  }
+  const startDate = new Date(y, m - 1, 1);
+  const endDate = new Date(y, m, 0);
+  return { startStr: formatCalendarYmd(startDate), endStr: formatCalendarYmd(endDate) };
+}
+
 function eventDateParts(dt) {
   if (!dt) return null;
   return { y: dt.year, m: dt.month, d: dt.day };
@@ -3445,6 +3561,8 @@ function renderCalendarView(section, cal) {
   else if (view === "day") renderCalendarDayView(body, section, cal);
   else if (view === "agenda") renderCalendarAgendaView(body, section, cal);
   else renderCalendarMonthBody(section, cal);
+  const navLabel = section?.querySelector(".calendar-month-label");
+  if (navLabel) navLabel.textContent = calendarViewNavLabel(cal);
 }
 
 function renderCalendarWeekView(body, section, cal) {
@@ -3545,20 +3663,45 @@ function renderCalendarDayView(body, section, cal) {
   bindCalendarEventClicks(body.closest(".dashboard-tile") || section, cal);
 }
 
+/** Sort key for the agenda: all-day events sort by their start date, timed by start time. */
+function eventAgendaSortKey(ev) {
+  if (ev.start?.allDay) {
+    const s = ev.start;
+    if (s.year != null) return Date.UTC(s.year, (s.month || 1) - 1, s.day || 1);
+    return 0;
+  }
+  return eventStartUtcMs(ev) || 0;
+}
+
+/** Day parts used to group agenda rows; all-day events use their start date. */
+function eventAgendaDayParts(ev, timeZone) {
+  if (ev.start?.allDay && ev.start.year != null) {
+    return { year: ev.start.year, month: ev.start.month, day: ev.start.day };
+  }
+  const startMs = eventStartUtcMs(ev);
+  return startMs ? getZonedParts(startMs, timeZone) : null;
+}
+
 function renderCalendarAgendaView(body, section, cal) {
   const tid = calendarTileId(cal);
   const events = state.calendarCache[tid]?.events || [];
   const tz = resolveCalendarTimezone(cal);
   const today = todayYmdInTimezone(tz);
 
+  const nowMs = Date.now();
   const futureEvents = events.filter(ev => {
     if (ev.status === "CANCELLED") return false;
+    if (ev.start?.allDay) {
+      // eventEndUtcMs is null for all-day events — compare the range end date.
+      const range = allDayRangeFloating(ev);
+      if (!range) return false;
+      const endMs = Date.UTC(range.end.y, range.end.m - 1, range.end.d, 23, 59, 59);
+      return endMs >= nowMs;
+    }
     const endMs = eventEndUtcMs(ev);
-    return endMs && endMs >= Date.now();
+    return endMs && endMs >= nowMs;
   }).sort((a, b) => {
-    const aMs = eventStartUtcMs(a) || 0;
-    const bMs = eventStartUtcMs(b) || 0;
-    return aMs - bMs;
+    return eventAgendaSortKey(a) - eventAgendaSortKey(b);
   }).slice(0, 50);
 
   if (!futureEvents.length) {
@@ -3569,8 +3712,7 @@ function renderCalendarAgendaView(body, section, cal) {
   let html = '<div class="calendar-agenda">';
   let lastDay = "";
   for (const ev of futureEvents) {
-    const startMs = eventStartUtcMs(ev);
-    const p = startMs ? getZonedParts(startMs, tz) : null;
+    const p = eventAgendaDayParts(ev, tz);
     const dayKey = p ? `${p.year}-${String(p.month).padStart(2,"0")}-${String(p.day).padStart(2,"0")}` : "";
     const isToday = dayKey === `${today.year}-${String(today.month).padStart(2,"0")}-${String(today.day).padStart(2,"0")}`;
 
@@ -3661,7 +3803,7 @@ function renderCalendarMonthBody(section, cal) {
   function renderNextWeek() {
     if (weekIdx >= weeks.length) {
       const monthLabel = $(".calendar-month-label", section);
-      if (monthLabel) monthLabel.textContent = calendarViewMonthLabel(cal);
+      if (monthLabel) monthLabel.textContent = calendarViewNavLabel(cal);
       const countEl = $(".calendar-tile-count", section);
       if (countEl) {
         const inMonth = events.filter((ev) => {
@@ -3808,8 +3950,10 @@ function bindCalendarEventClicks(section, cal) {
   if (!section || section.dataset.calendarEventsBound) return;
   section.dataset.calendarEventsBound = "1";
   section.addEventListener("click", (e) => {
-    const chip = e.target.closest(".calendar-event-chip");
-    if (!chip) return;
+    // Month chips are <button>s; week/day and agenda rows are <div>s —
+    // all carry data-event-uid.
+    const chip = e.target.closest("[data-event-uid]");
+    if (!chip || !section.contains(chip)) return;
     e.stopPropagation();
     const uid = chip.dataset.eventUid;
     const ev = findCalendarEventByUid(cal, uid);
@@ -5877,12 +6021,7 @@ async function loadCalendarForTile(cal, { quiet = false } = {}) {
 
     if (cal.sourceId) {
       // New DB-backed mode: fetch events from local API
-      const y = cal.viewYear || new Date().getFullYear();
-      const m = cal.viewMonth || new Date().getMonth() + 1;
-      const startDate = new Date(y, m - 1, 1);
-      const endDate = new Date(y, m, 0, 23, 59, 59);
-      const startStr = startDate.toISOString().split("T")[0];
-      const endStr = endDate.toISOString().split("T")[0];
+      const { startStr, endStr } = calendarViewRange(cal);
       const data = await api(`/api/v2/calendar/events?start=${startStr}&end=${endStr}`);
       events = (data.events || []).map(ev => ({
         uid: ev.uid || String(ev.id),
@@ -5916,12 +6055,7 @@ async function loadCalendarForTile(cal, { quiet = false } = {}) {
       }
       // Merge local DB events (events not tied to any ICS source)
       try {
-        const y = cal.viewYear || new Date().getFullYear();
-        const m = cal.viewMonth || new Date().getMonth() + 1;
-        const startDate = new Date(y, m - 1, 1);
-        const endDate = new Date(y, m, 0, 23, 59, 59);
-        const startStr = startDate.toISOString().split("T")[0];
-        const endStr = endDate.toISOString().split("T")[0];
+        const { startStr, endStr } = calendarViewRange(cal);
         const dbData = await api(`/api/v2/calendar/events?start=${startStr}&end=${endStr}`);
         const dbEvents = (dbData.events || []).map(ev => ({
           uid: ev.uid || String(ev.id),
@@ -6037,7 +6171,8 @@ function bindCalendarTileChrome(section, cal, tileId) {
       saveCalendarsToStorage();
       viewTabs.querySelectorAll(".calendar-view-tab").forEach(b => b.classList.toggle("active", b.dataset.view === v.key));
       updateCalendarNavVisibility(section, cal);
-      renderCalendarView(section, cal);
+      // Refetch: each view loads a different date range (month/week/day/agenda).
+      loadCalendarForTile(cal).catch(() => {});
     });
     viewTabs.appendChild(btn);
   }
@@ -6052,15 +6187,21 @@ function bindCalendarTileChrome(section, cal, tileId) {
   prevBtn.title = "Previous";
   const monthLabel = document.createElement("span");
   monthLabel.className = "calendar-month-label";
-  monthLabel.textContent = calendarViewMonthLabel(cal);
+  monthLabel.textContent = calendarViewNavLabel(cal);
   const nextBtn = document.createElement("button");
   nextBtn.type = "button";
   nextBtn.className = "btn btn-ghost btn-calendar-nav";
   nextBtn.textContent = "\u203A";
   nextBtn.title = "Next";
+  const todayBtn = document.createElement("button");
+  todayBtn.type = "button";
+  todayBtn.className = "btn btn-ghost btn-calendar-nav btn-calendar-today";
+  todayBtn.textContent = "Today";
+  todayBtn.title = "Jump to today";
   nav.appendChild(prevBtn);
   nav.appendChild(monthLabel);
   nav.appendChild(nextBtn);
+  nav.appendChild(todayBtn);
 
   const tzWrap = document.createElement("label");
   tzWrap.className = "calendar-tz-label";
@@ -6118,18 +6259,24 @@ function bindCalendarTileChrome(section, cal, tileId) {
   ensureTileAutoRefreshButton(section, tileId);
 
   const syncMonth = () => {
-    monthLabel.textContent = calendarViewMonthLabel(cal);
-    renderCalendarView(section, cal);
+    monthLabel.textContent = calendarViewNavLabel(cal);
+    // Refetch: the newly viewed period needs its own date range from the API.
+    loadCalendarForTile(cal).catch(() => {});
   };
 
   prevBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    shiftCalendarViewMonth(cal, -1);
+    shiftCalendarView(cal, -1);
     syncMonth();
   });
   nextBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    shiftCalendarViewMonth(cal, 1);
+    shiftCalendarView(cal, 1);
+    syncMonth();
+  });
+  todayBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    resetCalendarViewToToday(cal);
     syncMonth();
   });
 
@@ -6167,7 +6314,20 @@ function bindCalendarTileChrome(section, cal, tileId) {
 
 function updateCalendarNavVisibility(section, cal) {
   const nav = section?.querySelector(".calendar-month-nav");
-  if (nav) nav.style.display = (cal.view || "month") === "month" ? "" : "none";
+  if (!nav) return;
+  const view = cal.view || "month";
+  // Month/week/day all navigate; agenda is anchored at today.
+  nav.style.display = view === "agenda" ? "none" : "";
+  const label = section?.querySelector(".calendar-month-label");
+  if (label) label.textContent = calendarViewNavLabel(cal);
+  const prevBtn = nav.querySelector(".btn-calendar-nav:first-child");
+  if (prevBtn) {
+    prevBtn.title = view === "month" ? "Previous month" : view === "week" ? "Previous week" : "Previous day";
+  }
+  const nextBtn = nav.querySelectorAll(".btn-calendar-nav")[1];
+  if (nextBtn) {
+    nextBtn.title = view === "month" ? "Next month" : view === "week" ? "Next week" : "Next day";
+  }
 }
 
 function renderCalendarTiles(dash) {
