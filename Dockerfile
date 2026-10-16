@@ -23,7 +23,10 @@ RUN curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${
     && chmod +x /usr/local/bin/docker \
     && rm /tmp/docker.tgz
 
-COPY server.py db.py auth.py smtp_client.py ics_calendar.py notes_store.py user_profile_store.py presence_store.py event_log_store.py crm_bot_store.py notification_dispatcher.py telegram_bot.py backup_service.py infra_log.py ./
+# All top-level Python modules server.py may import (and the test-server).
+# Keeping this as a glob avoids the "missing module → container crash" failure
+# mode called out in AGENTS.md when a new .py file is added at the repo root.
+COPY *.py ./
 COPY VERSION ./
 COPY CHANGELOG.md ./
 COPY init.sql ./
