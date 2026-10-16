@@ -2,6 +2,41 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Reports audit fixes (admin console) (2026-10-15)
+
+Audited the admin **Reports** tab (photo report templates + document templates). Found 7 issues, fixed all of them across three commits plus tests.
+
+### What was actually wrong
+
+**Logos saved to `data/logos/` were never reachable via HTTP.** The static-file server's root is `public/`, not the project root, so `<img src="/data/logos/foo.png">` returned 404 in the admin preview. Server-side PDF generation (invoice, COC, photo report) reads files from disk directly and worked fine — only the admin editor's preview was broken. Two existing template records (`Vanguard Adjusting` photo, `Vanguard Adjusting` doc) had dead `logo_path` columns.
+
+**Logo / signature uploads had no size cap and no content-type check.** The avatar upload handler does both; the three template upload handlers did neither. Admins could upload a 500 MB arbitrary file as a "logo" — and a `.png` that's actually HTML or an SVG-with-script would be stored verbatim.
+
+**The photo template handlers crashed on malformed JSON.** The document template handlers have a `try/except JSONDecodeError`; the photo template create / update don't. A bad body returned a generic 500.
+
+**Two concurrent "set as default" saves could end up with two defaults.** The handler-level guard ("clear all then set the chosen one") is correct for a single request but races under concurrency. The "Cannot delete the default template" check then refused to delete either one, because both rows were flagged is_default.
+
+**Re-uploading a logo left orphans.** The signature handler deletes the previous file before writing the new one; the two logo handlers didn't.
+
+### Fixes (3 commits)
+
+1. **Commit 1 — Serve logos safely.** New `GET /api/v2/admin/logos/<path>` handler in `_handle_api_get`. Admin-gated. Normalises the path (`data/logos/...` and `logos/...` both work). Restricts to `data/logos/` and `data/sigs/`; rejects anything else with 400. Resolves and validates the candidate is under `data/` (defeats `../` and symlinks). Strict extension allowlist (`png/jpg/jpeg/webp/gif`) with 415 for anything else — **SVG rejected** because it can carry `<script>` / `<foreignObject>` and a "logo.png" that's actually SVG would bypass a browser's image-only content-type sniff. JS: two preview `<img>` sources updated to use the new proxy.
+
+2. **Commit 2 — Upload hardening, JSON guards, unique-default index.** Added `_validate_logo_upload()` and `_safe_logo_filename()` helpers (5 MB cap, `image/*` content-type, extension allowlist) and applied to all three template upload handlers. Added `try/except JSONDecodeError` to the two photo template handlers. Made the two logo upload handlers delete the previous file on replace (mirroring the signature handler's pattern). New partial unique index `WHERE is_default = TRUE` on both `photo_report_templates` and `document_templates` via `migrations/033_reports_unique_default_template.sql`; the server boot path runs `CREATE UNIQUE INDEX IF NOT EXISTS` for both, idempotently.
+
+3. **Commit 3 — Tests.** New `tests/test_reports.py` — **33 tests** (10 real handler exercises + 17 source guards + 6 markup checks). Mutation-verified: 6 regressions injected, all caught. Full suite: **504 tests, 0 failures**.
+
+### Live verification
+
+- `/api/v2/admin/logos/data/logos/template_1_11262.png` → 200, `image/png`, 710 431 bytes (the real file).
+- `/api/v2/admin/logos/data/logos/test_evil.svg` → 415.
+- `/api/v2/admin/logos/data/private.txt` → 400 (not under logos/sigs).
+- `/api/v2/admin/logos/data/logos/../../../../etc/passwd` → 404 (Python HTTP normalises `..` before the handler runs).
+- Without session cookie → 401.
+- `INSERT` two `is_default = TRUE` rows → `UniqueViolation`.
+- `UPDATE` one row to `is_default = TRUE` while another is already TRUE → `UniqueViolation`.
+- Malformed JSON to photo template create → 400 (was 500).
+
 ## Customize Projects audit fixes (admin console) (2026-10-15)
 
 Audited the admin **Customize Projects** tab (stages, tags, custom fields, field groups, note types, task labels). Found 14 issues, fixed 13 in three commits.

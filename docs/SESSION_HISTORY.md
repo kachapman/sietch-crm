@@ -140,6 +140,62 @@ bf8b9f9        Tasks tile: cap the linked project name
 
 ---
 
+## Current session summary (for next resume)
+
+**Date:** 2026-10-15
+
+**Topic:** Reports audit (admin console). (Continuation of the audit chain below.)
+
+**Status: SHIPPED.** 33 new tests (504 total, 0 failures), three commits.
+
+### Findings
+
+**Logos saved to `data/logos/` were never reachable via HTTP.** The static server's root is `public/`, so the admin preview's `<img src="/data/logos/foo.png">` returned 404. Server-side PDF generation reads files from disk directly and worked, so this was a *cosmetic* bug for the admin preview only — not a data-loss or rendered-output issue. Two existing template records (`Vanguard Adjusting` photo + doc) had dead `logo_path` columns.
+
+**Logo / signature uploads had no size cap and no content-type check.** The avatar upload handler does both; the three template upload handlers did neither. Admins could upload a 500 MB arbitrary file as a "logo" — and a `.png` that's actually HTML or an SVG-with-script would be stored verbatim. **SVG was the most concerning** — a logo that's actually an SVG-with-script silently bypasses a browser's image-only content-type sniff, and SVGs are valid on `/data/` paths and will be served if the proxy is ever fixed in a way that doesn't re-validate.
+
+**The photo template handlers crashed on malformed JSON.** The document template handlers have a `try/except JSONDecodeError`; the photo template create / update don't. A bad body returned a generic 500. Inconsistency with the document side.
+
+**Two concurrent "set as default" saves could end up with two defaults.** The handler-level guard ("clear all then set the chosen one") is correct for a single request but races under concurrency. The "Cannot delete the default template" check then refused to delete either one.
+
+**Re-uploading a logo left orphans.** The signature handler deletes the previous file before writing the new one; the two logo handlers didn't.
+
+### Fixes (3 commits)
+
+1. **Serve logos safely** — `GET /api/v2/admin/logos/<path>` proxy. Admin-gated, normalises path, restricts to `data/logos/` and `data/sigs/`, `Path.resolve().relative_to()` for containment, strict extension allowlist (no SVG).
+2. **Upload hardening, JSON guards, unique-default index** — 5 MB cap + `image/*` content-type + extension allowlist on all three upload handlers; `try/except JSONDecodeError` on the two photo template handlers; delete-orphan in the two logo upload handlers; new partial unique index `WHERE is_default = TRUE` on both tables via `migrations/033_reports_unique_default_template.sql`.
+3. **Tests** — `tests/test_reports.py`, 33 tests, mutation-verified (6 mutations, all caught).
+
+### Tests
+- 10 real handler exercises (`_validate_logo_upload`, photo template JSON guards, etc.)
+- 17 source guards (logo proxy routing, path containment, content-type allowlist, partial index exists)
+- 6 markup checks (CSS / DB indexes / migration file)
+
+Full suite: **134 JS + 370 Python = 504 tests, 0 failures**.
+
+### Notable corrections from the original audit
+- **I initially claimed the renderer "didn't use the logo" — wrong.** I re-checked `_create_photo_report_pdf` (line 9358) and `_create_invoice_pdf` (line 9960) before posting the final plan and they both open the file server-side. Only the admin preview was broken.
+
+### Earlier in this session (audit chain)
+- **Customize Projects** (3 commits): custom field type loss on edit, filtered stage reorder scrambles pipeline, and 11 correctness/cleanup fixes. 26 new tests (471 total).
+- **Telegram bot outage** (7 commits): three stacked root causes (dead localtonet tunnel, wrong Telegram bot from .env skip-precedence, admin-session 401 on bot-settings).
+- **Infrastructure (admin console)** (4 commits): `_require_admin` gate on the only unguarded admin endpoint, restart-safety fixes, container-runtime detection, probes parallelised.
+- **Telegram bot audit** (2 commits): 8 fixes including XSS, shared `httpx.AsyncClient`.
+- **Tasks tile** (1 commit): cap the linked project name.
+
+Full chain: timesheet 1-5, presence 6-7, automation 8, telegram, infrastructure, customize projects, **reports**.
+
+```
+803164a        Reports: 33 tests (10 real + 17 source guards + 6 markup)
+92befe8        Reports: JSON guards, upload hardening, unique-default index
+7247bad        Reports: admin-gated logo proxy + upload path fix
+... (continues audit chain)
+```
+
+**Next:** the audit chain is extensive. Open items: timesheet B/C (`_tsActiveEntry` periodic refresh, open-shift auto-close job), move `crm-server.service` to systemd (currently ad-hoc `setsid`), deploy `crm.publicadjustermidwest.com`.
+
+---
+
 ## Previous summary (for next resume)
 
 **Date:** 2026-10-15
