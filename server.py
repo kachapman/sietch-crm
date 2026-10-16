@@ -7832,7 +7832,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not avatar_url:
             self.send_error(404)
             return
-        avatar_path = ROOT / avatar_url
+        # Containment: avatar_url is server-written today, but resolve +
+        # pin it under AVATAR_STORAGE_PATH anyway so one tainted row
+        # can't turn this into an arbitrary file read.
+        try:
+            avatar_path = (ROOT / avatar_url).resolve()
+            base = AVATAR_STORAGE_PATH.resolve()
+            if base not in avatar_path.parents:
+                self.send_error(404)
+                return
+        except Exception:
+            self.send_error(404)
+            return
         if want_thumb:
             thumb_path = avatar_path.parent / f"thumb_{avatar_path.name}"
             if thumb_path.exists():
@@ -7859,7 +7870,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not avatar_url:
             self.send_error(404)
             return
-        avatar_path = ROOT / avatar_url
+        # Same containment as _handle_avatar_get above.
+        try:
+            avatar_path = (ROOT / avatar_url).resolve()
+            base = AVATAR_STORAGE_PATH.resolve()
+            if base not in avatar_path.parents:
+                self.send_error(404)
+                return
+        except Exception:
+            self.send_error(404)
+            return
         if want_thumb:
             thumb_path = avatar_path.parent / f"thumb_{avatar_path.name}"
             if thumb_path.exists():
@@ -8034,6 +8054,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         email = str(payload.get("email") or "").strip().lower()
         if not email:
             _json_response(self, 400, {"error": "Email is required"})
+            return
+        # users.email is UNIQUE. Without this check a duplicate goes
+        # straight to INSERT and surfaces as a generic 500 (raw
+        # UniqueViolation via _run_api_handler). The update handler
+        # already returns 409 for this; create now matches.
+        dup = db.query_one("SELECT id FROM users WHERE email = %s", (email,))
+        if dup:
+            _json_response(self, 409, {"error": "Email already in use"})
             return
         role = payload.get("role", "member")
         if role not in ("admin", "manager", "member", "limited"):
