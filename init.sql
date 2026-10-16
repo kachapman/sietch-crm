@@ -286,6 +286,16 @@ CREATE TABLE history_categories (
     icon_style TEXT DEFAULT 'stroke'
 );
 
+-- task_labels (normalized vocabulary for task categorization). Was created
+-- later by migration 015; pulled forward into init.sql so the seeded
+-- INSERTs in this file land without needing a migration runner.
+CREATE TABLE task_labels (
+    id SERIAL PRIMARY KEY,
+    title TEXT UNIQUE NOT NULL,
+    color TEXT,
+    sort_order INTEGER DEFAULT 0
+);
+
 CREATE TABLE history_events (
     id SERIAL PRIMARY KEY,
     opportunity_id INTEGER REFERENCES opportunities(id) ON DELETE CASCADE,
