@@ -2431,6 +2431,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self.send_header("Location", new_path)
             self.end_headers()
             return
+        # Rewrite /reset → /reset.html (password reset landing page).
+        # Same redirect pattern as /project/{id} so the token stays in
+        # the URL query (?token=) where reset.html's script reads it.
+        # The reset email links here; without this the link 404s (the
+        # static root only serves files under public/).
+        if urlparse(self.path).path == "/reset":
+            qs = urlparse(self.path).query
+            new_path = "/reset.html" + (f"?{qs}" if qs else "")
+            self.send_response(302)
+            self.send_header("Location", new_path)
+            self.end_headers()
+            return
         super().do_GET()
 
     def send_head(self):

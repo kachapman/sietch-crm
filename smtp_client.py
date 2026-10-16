@@ -34,7 +34,8 @@ def send_email(to_addr: str, subject: str, html_body: str, text_body: str | None
 
     if text_body:
         msg.attach(MIMEText(text_body, "plain"))
-    msg.attach(MIMEText(html_body, "html"))
+    if html_body:
+        msg.attach(MIMEText(html_body, "html"))
 
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
@@ -136,34 +137,33 @@ def send_email_from_account(
 
 
 def send_password_reset_email(to_addr: str, reset_url: str, smtp_config: dict | None = None) -> bool:
-    """Send a password reset email. If smtp_config provided, use CRM mail account; else fallback to env vars."""
+    """Send a password reset email as PLAIN TEXT only (no HTML part).
+
+    Deliverability choice, Oct 2026: the previous multipart/alternative
+    template (styled HTML + remote logo <img>) was consistently
+    spam-foldered. This sends a single text/plain part: no HTML, no
+    remote images, no tracking-adjacent markup. The reset URL is on its
+    own line as bare text plus an explicit copy-paste instruction, so
+    the message stays usable even in clients that don't linkify.
+    """
     subject = "Your Sietch CRM password reset link"
-    html_body = f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;background:#f5f5f5;">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f5;padding:40px 20px;">
-<tr><td align="center">
-<table width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;">
-<tr><td style="padding:32px 40px;text-align:center;border-bottom:1px solid #eeeeee;">
-  <img src="https://dashboard.publicadjustermidwest.com/assets/sietch-logo-2-nobg2.png" alt="Sietch CRM" height="40" style="display:block;margin:0 auto 16px;">
-  <h2 style="margin:0;font-size:20px;color:#333333;">Password Reset</h2>
-</td></tr>
-<tr><td style="padding:32px 40px;">
-  <p style="margin:0 0 16px;font-size:15px;color:#555555;">You requested a password reset for your Sietch CRM account.</p>
-  <p style="margin:0 0 24px;font-size:15px;color:#555555;">Use the link below to set a new password. This link expires in 1 hour.</p>
-  <p style="margin:0 0 24px;font-size:15px;word-break:break-all;"><a href="{reset_url}" style="color:#6d4aff;">{reset_url}</a></p>
-  <p style="margin:0;font-size:13px;color:#999999;">If you did not request this, you can safely ignore this email. Your password will not be changed unless you click the link above.</p>
-</td></tr>
-<tr><td style="padding:20px 40px;background:#f9f9f9;text-align:center;border-top:1px solid #eeeeee;">
-  <p style="margin:0;font-size:12px;color:#aaaaaa;">Sietch CRM</p>
-</td></tr>
-</table>
-</td></tr>
-</table>
-</body>
-</html>"""
-    text_body = f"Password Reset\n\nYou requested a password reset for your Sietch CRM account.\n\nUse the link below to set a new password (expires in 1 hour):\n{reset_url}\n\nIf you did not request this, ignore this email. Your password will not be changed unless you click the link."
+    text_body = (
+        "Hello,\n"
+        "\n"
+        "You requested a password reset for your Sietch CRM account.\n"
+        "\n"
+        "Open this link to set a new password (expires in 1 hour):\n"
+        "\n"
+        f"{reset_url}\n"
+        "\n"
+        "If the link above is not clickable, copy it and paste it into\n"
+        "your browser's address bar.\n"
+        "\n"
+        "If you did not request this, ignore this message. Your password\n"
+        "will not be changed unless you open the link above.\n"
+        "\n"
+        "-- Sietch CRM\n"
+    )
     if smtp_config:
         use_oauth = bool(smtp_config.get("oauth_provider") and smtp_config.get("oauth_access_token")
                          and not smtp_config.get("smtp_password_encrypted"))
@@ -176,7 +176,7 @@ def send_password_reset_email(to_addr: str, reset_url: str, smtp_config: dict | 
             from_addr=smtp_config.get("email", ""),
             to_addr=to_addr,
             subject=subject,
-            html_body=html_body,
+            html_body="",
             text_body=text_body,
             oauth_provider=smtp_config["oauth_provider"] if use_oauth else None,
             oauth_access_token=smtp_config["oauth_access_token"] if use_oauth else None,
@@ -184,4 +184,4 @@ def send_password_reset_email(to_addr: str, reset_url: str, smtp_config: dict | 
         if not ok:
             logger.warning("Password reset email to %s failed: %s", to_addr, err)
         return ok
-    return send_email(to_addr, subject, html_body, text_body)
+    return send_email(to_addr, subject, "", text_body)

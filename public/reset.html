@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Reset password — Sietch CRM</title>
+<link rel="stylesheet" href="/styles.css" />
+<style>
+  body { display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; }
+  .reset-card { width:min(420px, 92vw); background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:1.75rem; }
+  .reset-card h1 { margin:0 0 0.5rem; font-size:1.25rem; }
+  .reset-card p.hint { font-size:0.85rem; color:var(--muted); margin:0 0 1rem; }
+  .reset-card label { display:block; font-size:0.7rem; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted); margin:0.75rem 0 0.3rem; }
+  .reset-card input[type="password"] { display:block; width:100%; padding:0.5rem 0.65rem; border:1px solid var(--border); border-radius:8px; background:var(--surface-2); color:var(--text); font:inherit; box-sizing:border-box; }
+  .reset-error { color:var(--danger); font-size:0.85rem; margin:0.5rem 0 0; }
+  .reset-ok { font-size:0.9rem; }
+  .reset-ok a { color:var(--accent); }
+  .reset-actions { display:flex; gap:0.5rem; margin-top:1rem; }
+</style>
+</head>
+<body>
+  <div class="reset-card" role="main">
+    <h1>Reset password</h1>
+    <p class="hint" id="reset-hint">Enter your new password below.</p>
+    <div id="reset-form">
+      <label for="reset-pw">New password</label>
+      <input type="password" id="reset-pw" autocomplete="new-password" />
+      <label for="reset-pw2">Confirm password</label>
+      <input type="password" id="reset-pw2" autocomplete="new-password" />
+      <p id="reset-error" class="reset-error hidden"></p>
+      <div class="reset-actions">
+        <button type="button" id="reset-submit" class="btn btn-primary btn-block">Set New Password</button>
+      </div>
+    </div>
+    <div id="reset-done" class="hidden">
+      <p class="reset-ok">Password updated. <a href="/">Back to sign in</a>.</p>
+    </div>
+  </div>
+<script>
+(function () {
+  var params = new URLSearchParams(window.location.search);
+  var token = (params.get("token") || "").trim();
+  var form = document.getElementById("reset-form");
+  var errEl = document.getElementById("reset-error");
+  function fail(msg) {
+    errEl.textContent = msg;
+    errEl.classList.remove("hidden");
+  }
+  if (!token) {
+    form.classList.add("hidden");
+    document.getElementById("reset-hint").textContent =
+      "This reset link is missing its token. Please request a new reset email and open the link from it.";
+    return;
+  }
+  document.getElementById("reset-submit").addEventListener("click", function () {
+    var pw = document.getElementById("reset-pw").value || "";
+    var confirm = document.getElementById("reset-pw2").value || "";
+    errEl.classList.add("hidden");
+    if (pw.length < 6) { fail("Password must be at least 6 characters."); return; }
+    if (pw !== confirm) { fail("Passwords do not match."); return; }
+    fetch("/api/v2/auth/reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: token, password: pw }),
+    }).then(function (r) {
+      return r.json().then(function (body) {
+        if (!r.ok) throw new Error(body.error || "Reset failed");
+        return body;
+      });
+    }).then(function () {
+      form.classList.add("hidden");
+      document.getElementById("reset-done").classList.remove("hidden");
+      document.getElementById("reset-hint").textContent = "Done.";
+    }).catch(function (e) {
+      fail(e.message || "Invalid or expired reset token. Please request a new reset email.");
+    });
+  });
+})();
+</script>
+</body>
+</html>

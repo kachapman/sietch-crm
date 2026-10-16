@@ -1711,11 +1711,16 @@ function initForgotPassword() {
         methodSection?.classList.add("hidden");
         telegramVerify?.classList.remove("hidden");
       } else {
-        // No Telegram linked, try email
-        await api("/api/v2/auth/reset-request", { method: "POST", body: JSON.stringify({ email: forgotEmail }) });
-        forgotSection?.classList.add("hidden");
-        methodSection?.classList.add("hidden");
-        emailSent?.classList.remove("hidden");
+        // No Telegram linked. Email resets are temporarily disabled
+        // (spam blocking) — direct the user to their admin instead of
+        // sending an email that will never arrive.
+        const errEl = $("#forgot-error");
+        if (errEl) {
+          errEl.textContent = "No Telegram account linked. Email resets are temporarily unavailable — please ask your admin for a temporary password.";
+          errEl.classList.remove("hidden");
+        } else {
+          showToast("Email resets are temporarily unavailable — please ask your admin for a temporary password.", true);
+        }
       }
     } catch (err) {
       showToast(err.message || "Failed to send reset", true);
@@ -1737,6 +1742,13 @@ function initForgotPassword() {
   });
 
   $("#forgot-email-btn")?.addEventListener("click", async () => {
+    // Email resets are temporarily disabled (spam blocking). The button
+    // is disabled in markup; this guard covers programmatic clicks.
+    const btn = $("#forgot-email-btn");
+    if (btn && btn.disabled) {
+      showToast("Email resets are temporarily unavailable — please ask your admin for a temporary password.", true);
+      return;
+    }
     try {
       await api("/api/v2/auth/reset-request", { method: "POST", body: JSON.stringify({ email: forgotEmail }) });
       methodSection?.classList.add("hidden");
