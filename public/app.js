@@ -35108,10 +35108,10 @@ async function populateAdminFieldGroupsList() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ ids }),
           });
-          state.fieldGroups = [];
+          if (typeof loadFieldGroups === "function") await loadFieldGroups();
+          else state.fieldGroups = [];
         } catch (e) {
           showToast("Failed to reorder groups", true);
-          state.fieldGroups = [];
           await populateAdminFieldGroupsList();
         }
       },
@@ -35161,24 +35161,47 @@ function bindAdminFieldGroups() {
           groupId = res?.id;
           showToast("Group added");
         }
-        // Assign checked custom fields to this group (unchecked fields keep their existing groupId)
+        // Assign custom fields to this group. Fields that WERE in this group
+        // and are now unchecked are explicitly cleared (groupId: null) —
+        // previously the handler's own comment read "unchecked fields keep
+        // their existing groupId", which meant a field could be moved
+        // between groups but never removed from one. There was no UI path
+        // back to the ungrouped state.
         if (groupId) {
           const cfWrap = $("#admin-fg-custom-fields");
           if (cfWrap) {
-            let failCount = 0;
-            for (const cb of cfWrap.querySelectorAll("input[type=checkbox][data-cf-id]")) {
-              if (!cb.checked) continue;
+            const boxes = [...cfWrap.querySelectorAll("input[type=checkbox][data-cf-id]")];
+            const updates = boxes.map(cb => {
               const cfId = cb.dataset.cfId;
-              try {
-                await api(`/api/v2/custom-fields/${cfId}`, { method: "PUT", body: JSON.stringify({ groupId: groupId }) });
-              } catch (err) { failCount++; }
-            }
-            if (failCount) showToast(`Failed to assign ${failCount} field(s)`, true);
+              const def = (state.customFieldDefs || []).find(d => String(customFieldDefinitionId(d)) === String(cfId));
+              const currentlyHere = def && String(def.groupId) === String(groupId);
+              let groupIdValue;
+              if (cb.checked) {
+                groupIdValue = groupId;
+              } else if (currentlyHere) {
+                groupIdValue = null;   // was in this group, now unchecked -> remove
+              } else {
+                return null;           // untouched, leave it alone
+              }
+              return api(`/api/v2/custom-fields/${cfId}`, {
+                method: "PUT",
+                body: JSON.stringify({ groupId: groupIdValue }),
+              });
+            }).filter(Boolean);
+            // Parallel, not sequential: a group with 30 fields previously
+            // issued 30 awaited round-trips back to back.
+            const results = await Promise.allSettled(updates);
+            const failCount = results.filter(r => r.status === "rejected").length;
+            if (failCount) showToast(`Failed to update ${failCount} field(s)`, true);
           }
         }
         if (form) form.style.display = "none";
         await populateAdminFieldGroupsList();
-        state.fieldGroups = [];
+        // Reload the real cache rather than blanking it — populating the
+        // admin list does NOT repopulate state.fieldGroups, so clearing it
+        // left grouping broken on every tile until a full page reload.
+        if (typeof loadFieldGroups === "function") await loadFieldGroups();
+        else state.fieldGroups = [];
       } catch (e) {
         showToast("Failed to save group: " + (e.message || e), true);
       }
@@ -35216,7 +35239,8 @@ function bindAdminFieldGroups() {
           await api(`/api/v2/field-groups/${id}`, { method: "DELETE" });
           showToast("Group deleted");
           await populateAdminFieldGroupsList();
-          state.fieldGroups = [];
+          if (typeof loadFieldGroups === "function") await loadFieldGroups();
+          else state.fieldGroups = [];
         } catch (err) { showToast("Failed to delete group: " + (err.message || err), true); }
       }
     });

@@ -2042,6 +2042,13 @@ def _docker_status() -> dict:
     return {**base, "note": ""}
 
 
+# Field types accepted for a custom field definition. Keep in sync with the
+# <select id="admin-cf-type"> options in public/index.html — 'textarea' and
+# 'url' are omitted from neither, and existing records use all of these.
+CUSTOM_FIELD_TYPES = frozenset({
+    "text", "textarea", "url", "number", "date", "select", "checkbox",
+})
+
 _EXT_TO_MIME = {
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "doc": "application/msword",
@@ -5245,8 +5252,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         rows = db.query(
             """SELECT id, field_key, label, field_type, is_required, default_value,
-                      sort_order, show_on_create, show_on_edit, group_id
-               FROM custom_field_definitions WHERE is_active = TRUE ORDER BY sort_order"""
+                      sort_order, group_id
+               FROM custom_field_definitions WHERE is_active = TRUE ORDER BY sort_order, id"""
         )
         fields = []
         for r in rows:
@@ -5254,10 +5261,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "SELECT option_value, option_label FROM custom_field_options WHERE field_id = %s ORDER BY sort_order",
                 (r[0],),
             )
+            # show_on_create / show_on_edit are deliberately NOT returned. They
+            # exist as columns defaulting to TRUE but no handler has ever
+            # written them and no frontend reads them, so exposing them in the
+            # API contract implied a capability that does not exist.
             fields.append({
                 "id": r[0], "key": r[1], "label": r[2], "type": r[3],
                 "isRequired": r[4], "defaultValue": r[5], "sortOrder": r[6],
-                "showOnCreate": r[7], "showOnEdit": r[8], "groupId": r[9],
+                "groupId": r[7],
                 "options": [{"value": o[0], "label": o[1]} for o in opts],
             })
         _json_response(self, 200, fields)
@@ -5280,13 +5291,33 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             key = label.lower().replace(" ", "_").replace("-", "_")
             key = "".join(c for c in key if c.isalnum() or c == "_")
         field_type = str(payload.get("type") or "text").strip()
+        if field_type not in CUSTOM_FIELD_TYPES:
+            _json_response(self, 400, {"error": f"Unknown field type '{field_type}'. Expected one of: {', '.join(sorted(CUSTOM_FIELD_TYPES))}"})
+            return
         is_required = bool(payload.get("isRequired"))
         default_value = payload.get("defaultValue")
+        # field_key is UNIQUE. The key is auto-slugged from the label, so two
+        # fields with the same label (or a hand-edited key) collide. Without
+        # this check the raw UniqueViolation escaped to _run_api_handler and
+        # surfaced as a generic 500 "Internal server error" with a stack
+        # trace — useless to an admin who only typed a duplicate label.
+        existing = db.query_one(
+            "SELECT id, label FROM custom_field_definitions WHERE field_key = %s",
+            (key,),
+        )
+        if existing:
+            _json_response(self, 409, {
+                "error": f"A field with the key '{key}' already exists "
+                         f"(“{existing['label']}”). Choose a different field key.",
+            })
+            return
         max_sort = db.query_one("SELECT COALESCE(MAX(sort_order), 0) as mx FROM custom_field_definitions")["mx"]
         fid = db.insert_returning(
-            """INSERT INTO custom_field_definitions (field_key, label, field_type, is_required, default_value, sort_order, created_by)
-               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-            (key, label, field_type, is_required, default_value, max_sort + 1, user["id"]),
+            """INSERT INTO custom_field_definitions (field_key, label, field_type, is_required, default_value, sort_order, group_id, created_by)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (key, label, field_type, is_required, default_value, max_sort + 1,
+             payload.get("groupId") if payload.get("groupId") not in ("", None) else None,
+             user["id"]),
         )
         options = payload.get("options") or []
         for i, opt in enumerate(options):
@@ -5308,6 +5339,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except json.JSONDecodeError:
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
+        if "type" in payload:
+            new_type = str(payload.get("type") or "").strip()
+            if new_type not in CUSTOM_FIELD_TYPES:
+                _json_response(self, 400, {"error": f"Unknown field type '{new_type}'. Expected one of: {', '.join(sorted(CUSTOM_FIELD_TYPES))}"})
+                return
         sets, params = [], []
         for field, col in [("label", "label"), ("type", "field_type"), ("isRequired", "is_required"),
                            ("defaultValue", "default_value"), ("sortOrder", "sort_order"),
@@ -5319,14 +5355,24 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             params.append(field_id)
             db.execute(f"UPDATE custom_field_definitions SET {', '.join(sets)} WHERE id = %s", (*params,))
         if "options" in payload and isinstance(payload["options"], list):
-            db.execute("DELETE FROM custom_field_options WHERE field_id = %s", (field_id,))
+            # DELETE + re-INSERT in ONE transaction. These were separate
+            # db.execute() calls, each committing on its own, so a failure
+            # part-way through the loop left the field with a truncated (or
+            # empty) option list and no way to recover the original values.
+            opts = []
             for i, opt in enumerate(payload["options"]):
+                if not isinstance(opt, dict):
+                    continue
                 val = opt.get("value") or opt.get("label") or ""
                 lbl = opt.get("label") or val
                 if val:
-                    db.execute(
+                    opts.append((field_id, val, lbl, i))
+            with db.db_cursor() as cur:
+                cur.execute("DELETE FROM custom_field_options WHERE field_id = %s", (field_id,))
+                for row in opts:
+                    cur.execute(
                         "INSERT INTO custom_field_options (field_id, option_value, option_label, sort_order) VALUES (%s, %s, %s, %s)",
-                        (field_id, val, lbl, i),
+                        row,
                     )
         _json_response(self, 200, {"ok": True})
 
@@ -5812,7 +5858,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                FROM stages s
                LEFT JOIN opportunities o ON o.stage_id = s.id
                GROUP BY s.id
-               ORDER BY s.sort_order"""
+               ORDER BY s.sort_order, s.id"""
         )
         _json_response(self, 200, [
             {"id": r[0], "title": r[1], "color": r[2], "sortOrder": r[3],
@@ -5834,9 +5880,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "Title is required"})
             return
         sid = db.insert_returning(
-            """INSERT INTO stages (title, color, sort_order, stage_type, probability)
-               VALUES (%s, %s, %s, %s, %s) RETURNING id""",
-            (title, payload.get("color"), payload.get("sortOrder", 0), payload.get("stageType", 0), payload.get("probability", 0)),
+            """INSERT INTO stages (title, color, sort_order, stage_type, probability, is_active)
+               VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+            (title, payload.get("color"), payload.get("sortOrder", 0), payload.get("stageType", 0),
+             payload.get("probability", 0), bool(payload.get("isActive", True))),
         )
         _json_response(self, 201, {"id": sid, "ok": True})
 
@@ -5989,7 +6036,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not cat:
             _json_response(self, 404, {"error": "Category not found"})
             return
-        sets = ["updated_at = NOW()"] if "updated_at" in [c[0] for c in db.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'history_categories'")] else []
+        sets = []
         params: list = []
         for field, col in [("title", "title"), ("color", "display_color"), ("iconKey", "icon_key"), ("iconStyle", "icon_style")]:
             if field in payload:
