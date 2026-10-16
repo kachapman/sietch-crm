@@ -30,6 +30,10 @@ COPY *.py ./
 COPY VERSION ./
 COPY CHANGELOG.md ./
 COPY init.sql ./
+# Migrations directory — db.init_db() applies these on first boot against
+# a fresh DB to catch up with the schema additions documented in
+# migrations/0??_*.sql (init.sql alone is no longer enough).
+COPY migrations ./migrations
 COPY public ./public
 
 RUN mkdir -p /app/data && chown -R appuser:appuser /app
