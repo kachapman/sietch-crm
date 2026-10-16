@@ -8586,13 +8586,13 @@ body {
   padding: 0 0.25rem;
 }
 
-/* Quick note modal: note editor fills available space */
+/* Quick note modal: the fieldset is now INSIDE the form (it used to be
+   a flex sibling of the form). The form's overflow-y: auto handles
+   overflow, and the note-editor's own min-height: 4.5rem / max-height:
+   12rem give the textarea its bounds. We keep just the box styling here
+   and a thin top border so the fieldset reads as a section. */
 #quick-note-modal .deal-edit-note-fieldset {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 250px;
-  margin: 0;
+  margin-top: 0.5rem;
   border: none;
   border-top: 1px solid var(--border);
   border-radius: 0;
