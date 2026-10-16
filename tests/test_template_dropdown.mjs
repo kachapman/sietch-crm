@@ -60,19 +60,22 @@ function buildTileDom() {
   const section = makeEl('section');
   const toolbar = makeEl('div');
   applyClass(toolbar, 'tile-toolbar');
+  const templateMenu = makeEl('div');
+  applyClass(templateMenu, 'template-menu-wrap');
   const templateBtn = makeEl('button');
   applyClass(templateBtn, 'btn btn-ghost tile-btn tile-btn-icon btn-template-menu');
   templateBtn.title = 'Templates';
   const dropdown = makeEl('div');
   applyClass(dropdown, 'template-dropdown hidden');
-  toolbar.appendChild(templateBtn);
-  toolbar.appendChild(dropdown);
+  templateMenu.appendChild(templateBtn);
+  templateMenu.appendChild(dropdown);
+  toolbar.appendChild(templateMenu);
   section.appendChild(toolbar);
   // Wire the real app.js handler shape (toggle hidden, schedule close)
   templateBtn.addEventListener('click', () => {
     dropdown.classList.toggle('hidden');
   });
-  return { section, toolbar, templateBtn, dropdown };
+  return { section, toolbar, templateMenu, templateBtn, dropdown };
 }
 
 test('dropdown hidden by default', () => {
@@ -88,26 +91,33 @@ test('click removes hidden class', () => {
   assert.equal(dropdown.classList.contains('hidden'), false);
 });
 
-test('dropdown lands at a non-zero rect when its ancestor is positioned', () => {
-  // Simulate the CSS fix: .tile-toolbar { position: relative; }.
-  // We flip the global so the fake getBoundingClientRect reports a visible rect.
-  posRel = true;
-  const { dropdown, toolbar } = buildTileDom();
-  const r = dropdown.getBoundingClientRect();
-  // Position is relative to the offsetParent — with the fix, top/left are
-  // the toolbar's bottom-right corner, not (0,0) of the page.
-  assert.equal(toolbar.classList.contains('tile-toolbar'), true);
-  assert.ok(r.width > 0 && r.height > 0,
-    'expected dropdown to render at a non-zero rect when .tile-toolbar is positioned');
+test('dropdown is wrapped in template-menu-wrap (positioned anchor)', () => {
+  posRel = false;
+  const { templateMenu, dropdown } = buildTileDom();
+  assert.equal(templateMenu.classList.contains('template-menu-wrap'), true,
+    'wrap exists so .template-dropdown anchors under the button, not the tile');
+  // The dropdown must be a child of the wrap, not a sibling of the toolbar.
+  assert.equal(dropdown.parentNode, templateMenu);
 });
 
-test('without the fix the dropdown would render at the tile top-right (off-screen)', () => {
-  // Document the regression: a position: absolute element with no positioned
-  // ancestor resolves to the viewport/body — width/height would still report
-  // non-zero via getBoundingClientRect, but its top/left would be wrong.
-  // We assert the toolbar itself has the marker class needed for the fix.
+test('dropdown rect lands at a non-zero area when the wrap is positioned', () => {
+  // With CSS .template-menu-wrap { position: relative; } in place, the
+  // dropdown is anchored to the button. We flip the global so the fake
+  // getBoundingClientRect reports a visible rect.
+  posRel = true;
+  const { dropdown, templateMenu } = buildTileDom();
+  const r = dropdown.getBoundingClientRect();
+  assert.equal(templateMenu.classList.contains('template-menu-wrap'), true);
+  assert.ok(r.width > 0 && r.height > 0,
+    'expected dropdown to render at a non-zero rect when its wrap is positioned');
+});
+
+test('documented regression: a bare position:absolute dropdown resolves to the wrong ancestor', () => {
+  // The .template-menu-wrap is what scopes the dropdown under the button.
+  // Without it, the dropdown would inherit the toolbar's right edge as its
+  // anchor and end up over the columns (the previous bug).
   posRel = false;
-  const { toolbar } = buildTileDom();
-  assert.equal(toolbar.classList.contains('tile-toolbar'), true,
-    'tile-toolbar element exists — CSS .tile-toolbar { position: relative } is the fix');
+  const { templateMenu } = buildTileDom();
+  assert.equal(templateMenu.classList.contains('template-menu-wrap'), true,
+    'wrap element is the fix; CSS .template-menu-wrap { position: relative } is required');
 });

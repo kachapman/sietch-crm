@@ -13,7 +13,15 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-16
 
-**Topic:** Group tile template button — dropdown was invisible.
+**Topic:** Group tile template dropdown — anchor under the button.
+
+**Status: SHIPPED.** Follow-up to the previous "position relative on .tile-toolbar" fix: dropdown was visible but anchored to the toolbar's right edge (far from the button). Fix: wrap `templateBtn + templateDropdown` in a `.template-menu-wrap` div, add CSS `position: relative` (matches `header-settings-wrap` pattern), tighten `top` to `calc(100% + 2px)`. 5 tests in `test_template_dropdown.mjs` (up from 4) covering the new wrap shape + dropdown parent assertion. Full regression green (16 JS files + 15 Python suites, 0 failures).
+
+**Next:** None — user-reported issue resolved.
+
+---
+
+## Previous summary (2026-10-16 — template dropdown visibility)
 
 **Status: SHIPPED.** Root cause: `.template-dropdown` is `position: absolute; top: 100%` but `.tile-toolbar` had no `position: relative`, so the dropdown positioned to the top-right of the whole tile (behind the columns) instead of under the button. One-line CSS fix matching the `header-settings-wrap` pattern; 4 new tests in `test_template_dropdown.mjs` (no jsdom dep). Full regression green (16 JS files + 15 Python suites, 0 failures).
 

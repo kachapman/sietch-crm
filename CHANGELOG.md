@@ -2,7 +2,18 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
-## Template button dropdown not visible (2026-10-16)
+## Template dropdown anchors to button, not tile (2026-10-16)
+
+Follow-up to the previous "position relative on `.tile-toolbar`" fix: the dropdown was visible but anchored to the *right edge of the tile* (because the toolbar's `right: 0` was the new offsetParent's right). The button is left-of-center, so the dropdown appeared far away.
+
+### Fixed
+
+- `public/app.js`: wrap `templateBtn + templateDropdown` in `<div class="template-menu-wrap">` so the dropdown anchors under the button (matches the working `header-settings-wrap` pattern).
+- `public/styles.css`: add `.template-menu-wrap { position: relative; }` and tighten `.template-dropdown { top: calc(100% + 2px) }`.
+
+### Tests
+
+- `tests/test_template_dropdown.mjs` (+1 → 5 tests): new wrap DOM shape, dropdown parent assertion, anchor-on-button rect.
 
 The group tile's "Templates" button toggled `hidden` correctly but the dropdown (`position: absolute; top: 100%`) had no `position: relative` ancestor — it positioned to the top of the entire tile, behind/over the column headers where the user couldn't see it. One-line CSS fix matching the working `header-settings-wrap` pattern.
 

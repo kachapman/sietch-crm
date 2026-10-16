@@ -2429,6 +2429,11 @@ function bindGroupTileChrome(section, group, tileId) {
   toggleFiltersBtn.setAttribute("aria-expanded", "true");
 
   // --- Template popover ---
+  // Wrap button + dropdown so the absolute-positioned dropdown anchors under
+  // the button itself, not the toolbar's right edge.
+  const templateMenu = document.createElement("div");
+  templateMenu.className = "template-menu-wrap";
+
   const templateBtn = document.createElement("button");
   templateBtn.type = "button";
   templateBtn.className = "btn btn-ghost tile-btn tile-btn-icon btn-template-menu";
@@ -2534,8 +2539,9 @@ function bindGroupTileChrome(section, group, tileId) {
   toolbar.appendChild(nameDisplay);
   toolbar.appendChild(nameInput);
   toolbar.appendChild(toggleFiltersBtn);
-  toolbar.appendChild(templateBtn);
-  toolbar.appendChild(templateDropdown);
+  templateMenu.appendChild(templateBtn);
+  templateMenu.appendChild(templateDropdown);
+  toolbar.appendChild(templateMenu);
   toolbar.appendChild(countAndSummary);
   toolbar.appendChild(actions);
 

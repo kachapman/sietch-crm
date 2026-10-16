@@ -15840,9 +15840,14 @@ select.form-control {
 }
 
 /* ── Template Dropdown ────────────────────────────────────────────────────── */
+.template-menu-wrap {
+  /* Anchors the absolute-positioned dropdown to the button itself instead
+     of the toolbar's right edge (matches .header-settings-wrap pattern). */
+  position: relative;
+}
 .template-dropdown {
   position: absolute;
-  top: 100%;
+  top: calc(100% + 2px);
   right: 0;
   z-index: 100;
   min-width: 200px;
