@@ -271,5 +271,34 @@ class TestUsersListListenerGuard(unittest.TestCase):
         self.assertIn('container.dataset.bound = "1";', block)
 
 
+class TestForcePasswordChangeGate(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app_src = (HERE.parent / "public" / "app.js").read_text(encoding="utf-8")
+
+    def test_modal_exists_and_has_no_dismiss(self):
+        start = self.app_src.index("function showForcePasswordChangeModal()")
+        block = self.app_src[start:start + 4000]
+        self.assertIn("/api/v2/auth/change-password", block)
+        self.assertIn("currentPassword", block)
+        self.assertIn("location.reload()", block)
+        # No dismiss path: exactly one overlay.remove() (post-success
+        # teardown) plus the pre-existing-instance cleanup, and no
+        # close/dismiss wiring of any kind.
+        code = "\n".join(
+            line.split("//")[0] for line in block.splitlines()
+        )
+        self.assertEqual(code.count("overlay.remove()"), 1)
+        self.assertIn('getElementById("force-pw-overlay")?.remove()', code)
+        self.assertNotIn("force-pw-close", code)
+        self.assertNotIn("data-force-pw-dismiss", code)
+
+    def test_both_login_paths_gate_on_flag(self):
+        # Both login-success sites (password + 2FA verify) gate on the
+        # canonical flag via /api/v2/me before entering the app: one
+        # definition + two call sites, nothing else.
+        self.assertEqual(self.app_src.count("showForcePasswordChangeModal()"), 3)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
