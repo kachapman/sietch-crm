@@ -2,6 +2,40 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Users audit + password-reset deliverability (2026-10-16)
+
+Audited users + user profiles including the admin Users tab. Found 7 issues; fixed all, plus the password-reset deliverability work (plaintext email, `/reset` landing page, greyed-out email option).
+
+### High fixes
+
+**Kebab "Reset Password" was dead (always 400).** The profile modal's kebab POSTed `/api/v2/users/{id}/reset-password/send` with no body; the server requires `method` + `password`. The inline row button used the working temp flow. The kebab now uses the identical temp-password flow and reuses `showTempPasswordDialog`.
+
+**Users-list click listener stacked.** Every `populateAdminUsersList` refresh added another container-level listener (container never replaced, only `innerHTML`). Guarded with `container.dataset.bound`, scoped so the re-rendered search/add-form inputs still rebind.
+
+### Password-reset deliverability
+
+**Plain-text reset email.** `send_password_reset_email` now sends a single `text/plain` part — no HTML, no remote logo image (the old multipart template was consistently spam-foldered). Bare URL on its own line + explicit copy-paste instruction. Both callers (self-service + admin invite) switched with no caller changes; `send_email`'s unconditional HTML attach is now guarded.
+
+**`/reset` landing page.** Reset emails link at `{CRM_PUBLIC_URL}/reset?token=`, but no page, route, or `?token=` handler existed — the link 404'd. New standalone `public/reset.html` (no app.js dependency) plus a `/reset` → `/reset.html` 302 rewrite mirroring the project rewrite. Verified live: rewrite preserves `?token=`, bad token → 400, real token redeems 200 once then 400 on reuse.
+
+**Email option greyed out.** `#forgot-email-btn` disabled with an explanatory note; the no-Telegram fallback now directs to admin instead of sending a doomed email. Endpoint untouched (admin invite still needs mail).
+
+### Server hardening
+
+- **Dup-email 409 on create** (was raw 500; update already had it). Verified live.
+- **Avatar serve containment** under `AVATAR_STORAGE_PATH` in both serve handlers (mirrors delete-personal-data guard).
+- Bot-token auth on `GET /api/v2/users` deliberately kept (accepted risk, pending owner decision).
+
+### Tests
+
+New `tests/test_users.py` — **21 tests**, mutation-verified (5 targeted kills, all caught). Full suite: **134 JS + 415 Python = 549 tests, 0 failures**. CI runs the new suite.
+
+### Deploy notes
+
+- `CRM_PUBLIC_URL=https://crm.publicadjustermidwest.com` required (links built from it, falls back to docs URL silently).
+- Configure + live-test one SMTP path (alternate SMTP or CRM Mail); self-service returns `ok:true` even on send failure (anti-enumeration), so misconfiguration is silent.
+- NOTE: testing rotated user 1's password; a temp password was issued via the standard temp flow and must be shared with the account owner out of band.
+
 ## Search modal audit fixes (2026-10-16)
 
 Audited the global **Search modal** (`#search-popup-modal`: Projects + Contacts tabs, parked preview tabs, batch ops, side-by-side layouts, minimize-to-sidebar). Found 9 issues, fixed all of them across two commits plus tests.

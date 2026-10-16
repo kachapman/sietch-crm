@@ -13,6 +13,49 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-16
 
+**Topic:** Users audit + password-reset deliverability.
+
+**Status: SHIPPED.** 21 new tests (549 total: 134 JS + 415 Python, 0 failures), five commits.
+
+### Findings (7 issues, all fixed)
+
+**High:**
+- **#1 — Kebab Reset Password dead (always 400).** Profile-modal kebab POSTed `/reset-password/send` with no body; server requires method+password. Inline row button used the working temp flow. Kebab now identical + reuses `showTempPasswordDialog`.
+- **#2 — Users-list click listener stacked.** Every refresh added another container-level listener (container never replaced). Guarded with `dataset.bound`, scoped so re-rendered inputs still rebind.
+
+**Deliverability:**
+- Plain-text reset email (single text/plain, bare URL + copy-paste instruction; remote-image HTML template was spam-foldered). Both callers switched.
+- `/reset` landing page (`public/reset.html` + 302 rewrite; the emailed link previously 404'd). Verified live incl. single-use redeem.
+- Email option greyed out (disabled button + note; no-Telegram fallback directs to admin; endpoint untouched).
+
+**Server hardening:**
+- Dup-email 409 on create (was 500). Avatar serve containment in both handlers. Bot-token auth on users-get kept (accepted risk).
+
+### Tests
+
+`tests/test_users.py` — 21 tests, mutation-verified (5 kills caught). CI + AGENTS counts updated (549).
+
+### Deploy notes
+
+- `CRM_PUBLIC_URL` required; configure + live-test one SMTP path (self-service returns ok:true even on send failure — silent misconfiguration).
+- NOTE: round-trip testing rotated user 1's password; temp `en_xI7kAxTnT` issued via standard temp flow (must_change_password=TRUE, sessions revoked) — share out of band.
+
+```
+(to be filled at commit) Users: docs (CHANGELOG + SESSION_HISTORY + AGENTS + CI)
+5a19a27        Users: 21 tests (plaintext, landing, grey-out, guards)
+6a79b99        Users: dup-email 409 on create + avatar serve containment
+7afa923        Password reset: plaintext email + /reset landing page + greyed-out email option
+3791177        Users: fix dead kebab Reset Password + stacked list click handler
+```
+
+**Next:** audit chain now covers timesheet, presence/DM, automation, telegram, infra, customize, reports, search modal, **users**. Remaining deferred: timesheet B/C, `crm-server.service` on systemd, production deploy.
+
+---
+
+## Previous summary (for next resume)
+
+**Date:** 2026-10-16
+
 **Topic:** Search modal audit. (Continuation of the audit chain below.)
 
 **Status: SHIPPED.** 24 new tests (528 total: 134 JS + 394 Python, 0 failures), three commits.

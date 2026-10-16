@@ -76,7 +76,7 @@ This hid ~20 real assertions in `tests/test_telegram_bot.py` for an entire sessi
 
 ## Testing
 
-All test surfaces run via CI (`.github/workflows/smoke.yml`). **528 tests total: 134 JS + 394 Python, 0 failures.**
+All test surfaces run via CI (`.github/workflows/smoke.yml`). **549 tests total: 134 JS + 415 Python, 0 failures.**
 
 ```bash
 # Python unit tests (stdlib unittest)
@@ -91,6 +91,7 @@ python3 tests/test_infrastructure.py         # infra probes, restart safety, aut
 python3 tests/test_customize.py              # customize-projects handlers + source guards
 python3 tests/test_reports.py                # report templates, logo proxy, upload validator
 python3 tests/test_search_modal.py           # search modal: ?ids= filter, pagination, layout restore
+python3 tests/test_users.py                  # users: dup-email 409, kebab temp flow, plaintext reset email
                                            # ⚠ needs a live PostgreSQL; exits 0 with a SKIP: line otherwise
 
 # Node unit tests (node:test, no npm deps) — run all *.mjs
