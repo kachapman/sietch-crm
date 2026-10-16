@@ -2,6 +2,44 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Customize Projects audit fixes (admin console) (2026-10-15)
+
+Audited the admin **Customize Projects** tab (stages, tags, custom fields, field groups, note types, task labels). Found 14 issues, fixed 13 in three commits.
+
+### Two data-loss / corruption bugs
+
+**#1 Editing a custom field silently downgraded its type.** The type `<select>` offered only `text/number/date/select/checkbox`, but the DB uses `textarea` and `url` too. The edit handler did `select.value = f.type`, which per the HTML spec leaves `selectedIndex=-1` and `value=""` for any string with no matching `<option>`. Save then sent `type: ... || "text"`, rewriting the field. **7 of 30 live fields were affected** — `Address`, `Claim #`, `Supplement Request` (all `textarea`) and `PA CONTRACT`, `Measurement Report`, `Insurance Documents`, `Inspection Photos` (all `url`).
+
+Two-layer fix: added the missing `<option>`s to the markup, plus a defensive `_setCustomFieldTypeSelect()` that injects an unknown option rather than blanking the select. Future type drift can't repeat this.
+
+**#2 Dragging a stage while a search filter was active scrambled the pipeline.** The Sortable `onEnd` handler built its id list from the rendered DOM, which under a filter holds only the matching rows. `/api/v2/stages/reorder` rewrote `sort_order` 0..n for *only those* rows; hidden stages kept stale values and collided. Search "PA", drag one stage → other 8 stages got scrambled ordering.
+
+Fix: `populateAdminStagesList` toggles a `stages-filtered` class on the list when a search is active; CSS hides the drag handles; the `onEnd` handler checks the class and refuses with a toast. Defence in depth — both UI and JS.
+
+### Other fixes
+
+- **#3** `_handle_stages_get` and `_handle_custom_fields_get` now `ORDER BY sort_order, id` (deterministic tiebreak; all 19 stages have `sort_order = 0`).
+- **#4** Field-group save: fields that WERE in the group and are now unchecked are explicitly cleared (`groupId: null`). Previously a field could be moved between groups but never removed from one.
+- **#5** `state.fieldGroups = []` was a hard clear with no reload, breaking grouping on every tile until a full page reload. Now calls the real loader (`loadOpportunityCustomFieldDefs`).
+- **#6** Duplicate `field_key` returns **409** with the existing label named, instead of a generic 500 + stack trace.
+- **#7** Dropped `showOnCreate` / `showOnEdit` from the API contract — columns exist (defaulting to TRUE) but no handler ever wrote them and no frontend reads them.
+- **#8** Removed the per-update `information_schema` catalog query from `_handle_history_category_update` — `history_categories` has no `updated_at` column, so the branch could never fire.
+- **#9** Custom-field options rewrite (`DELETE` + re-`INSERT`) is now wrapped in `db.db_cursor()` so a mid-loop failure rolls back together. Previously these were separate `db.execute` commits and a crash lost all options.
+- **#10** Stage create now honours the UI's `isActive` (it was being ignored).
+- **#11** Custom-field create now accepts `groupId` (previously only update did, so you couldn't place a new field in a group from the same form).
+- **#12** Group assignment to multiple custom fields now uses `Promise.allSettled` instead of sequential awaits — 30 fields = 1 round-trip latency, not 30.
+- **#13** `field_type` validated against a known set (`CUSTOM_FIELD_TYPES` frozenset) on both create and update; unknown values get 400 with the accepted types listed.
+
+### Tests
+
+New `tests/test_customize.py` — **26 tests** (8 exercising the real handler bodies under heavy mocking + 16 source guards + 2 markup checks). Mutation-verified: 8 regressions injected one at a time, all caught.
+
+Full suite: 134 JS + 337 Python = **471 tests, 0 failures**.
+
+### Not addressed (called out for you)
+
+- **`task_labels` is empty** despite `init.sql:1075` seeding 10 defaults — the column shows nothing in the admin UI. Looks like data drift, not a code bug. Re-seeding is a write; flag this if you want me to insert the 10 default rows.
+
 ## Telegram bot outage: valid invite codes reported as invalid (2026-10-15)
 
 **Symptom:** users sent a correct invite code and the bot replied *"That code wasn't recognized or has expired."* The admin console showed **"Bot is stopped"** with empty credential fields. Codes generated in the admin console were still pending and unexpired on disk.

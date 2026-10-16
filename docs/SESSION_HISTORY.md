@@ -13,6 +13,62 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-15
 
+**Topic:** Customize Projects audit (admin console). (Continuation of the bot/infra/audit chain below.)
+
+**Status: SHIPPED.** 26 new tests (471 total, 0 failures), three commits.
+
+### Two data-corruption bugs in the Customize Projects tab
+
+**#1 — Custom field type loss on edit.** The admin type `<select>` only offered `text/number/date/select/checkbox`, but the DB used `textarea` and `url` too. The edit handler did `select.value = f.type`; per the HTML spec, assigning a string with no matching `<option>` leaves `selectedIndex=-1` and `value=""`. Save then sent `type: ... || "text"`, **silently rewriting 7 of 30 live fields** — `Address`, `Claim #`, `Supplement Request` and `PA CONTRACT`, `Measurement Report`, `Insurance Documents`, `Inspection Photos`.
+
+Two-layer fix: added the missing `<option>`s, plus a defensive `_setCustomFieldTypeSelect()` that injects an unknown option rather than blanking the select. Future type drift can't repeat this — the JS helper round-trips *any* string the DB holds (verified against a Node-simulated `<select>`: pre-fix `'textarea'` → `""` → saved as `"text"`; post-fix round-trips, and even a hypothetical `'weird_future_type'` survives).
+
+**#2 — Stage reorder scrambled the pipeline when a search filter was active.** Sortable `onEnd` built its id list from the rendered DOM, which under a filter holds only the matching rows. `/api/v2/stages/reorder` rewrote `sort_order` 0..n for those; hidden stages kept stale values and collided. Fix: `populateAdminStagesList` toggles `stages-filtered`; CSS hides drag handles; `onEnd` checks the class and refuses with a toast.
+
+### Other fixes
+
+- **#3** `ORDER BY sort_order, id` on both stages and custom fields (all 19 stages had `sort_order = 0`).
+- **#4** Field-group save unassigns unchecked previously-assigned fields (`groupId: null`).
+- **#5** `state.fieldGroups = []` after save/delete replaced with a real `loadFieldGroups()` call — grouping now survives editing without a page reload.
+- **#6** Duplicate field key returns **409** with the existing label named, not a generic 500.
+- **#7** `showOnCreate` / `showOnEdit` dropped from the API contract (never written; never read).
+- **#8** Removed per-update `information_schema` catalog query from `_handle_history_category_update` — `history_categories` has no `updated_at` column, branch could never fire.
+- **#9** Custom-field options rewrite wrapped in `db.db_cursor()` — `DELETE` + re-`INSERT` commit together.
+- **#10** Stage create honours `isActive`; **#11** custom-field create honours `groupId`; **#12** group assignment parallelised with `Promise.allSettled`; **#13** `field_type` validated against `CUSTOM_FIELD_TYPES`.
+
+### Tests
+
+`tests/test_customize.py` — 26 tests, 8 exercising real handler bodies under heavy mocking + 16 source guards + 2 markup checks. Mutation-verified — 8 mutations injected one at a time, all caught.
+
+Full suite: **134 JS + 337 Python = 471 tests, 0 failures**.
+
+### Notes
+- **One item not addressed:** `task_labels` is empty despite `init.sql:1075` seeding 10 defaults — the Task Labels column in the admin tab shows nothing. Looks like data drift, not a code bug. Flag this if you want me to re-seed (would need confirmation; it's a write).
+
+### Earlier in this session
+- **Telegram bot outage fix** (7 commits): three stacked root causes (dead localtonet tunnel, wrong Telegram bot from .env skip-precedence, admin-session 401 on bot-settings), all resolved. Bot is systemd-managed, `crm-server.service` is dead and was relaunched via `setsid`. New endpoint `GET/POST /api/bot/settings` (bot-token auth, POST whitelists only `botUsername`/`botLink`). Found and fixed a vacuous-async-test defect in the previous session's `test_telegram_bot.py` (16 hidden errors now surface).
+- **Infrastructure (admin console)** (4 commits): `_require_admin` gate on the only unguarded admin endpoint, restart-safety fixes (the CRITICAL bind-race where SO_REUSEADDR doesn't cover an active listener, plus `main()` retry on `EADDRINUSE`), container-runtime detection rewrite, probes parallelised, dead columns removed, etc.
+- **Telegram bot audit** (2 commits): 8 fixes including an XSS fix in `_TelegramHTMLSanitizer` (`javascript:` etc.) and shared `httpx.AsyncClient`.
+- **Tasks tile** (1 commit): cap the linked project name so the task title isn't squeezed to "Re...".
+
+Full audit chain: timesheet (1-5), presence/DM (6-7), automation (8), telegram, infrastructure, **customize projects**.
+
+```
+03da62f        Customize: 26 tests (16 source guards, 8 unit + 2 markup)
+3f0dfa3        Customize: correctness + cleanup across 6 admin handlers
+af76f2c        Customize: stop custom-field type loss and filtered stage reorder
+3009e8e        Docs: session history + AGENTS.md testing section
+... (more)
+```
+
+**Next:** the audit chain is now extensive. The deferred items from earlier sessions remain: timesheet B/C (`_tsActiveEntry` periodic refresh, open-shift auto-close job), `crm-server.service` (currently running from `setsid`, should be on systemd), and `crm.publicadjustermidwest.com` deployment.
+
+---
+
+## Previous summary (for next resume)
+
+**Date:** 2026-10-15
+
 **Topic:** Telegram bot outage — valid invite codes rejected. (Continuation of the infra/audit chain below.)
 
 **Status: FIXED.** All 445 tests pass, bot is live and heart-beating, `botUsername`/`botLink` auto-populated for the first time ever.
