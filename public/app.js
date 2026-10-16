@@ -6037,7 +6037,9 @@ async function loadCalendarForTile(cal, { quiet = false } = {}) {
           ? { allDay: true, year: new Date(ev.dtend).getFullYear(), month: new Date(ev.dtend).getMonth() + 1, day: new Date(ev.dtend).getDate() }
           : { allDay: false, iso: ev.dtend, year: new Date(ev.dtend).getFullYear(), month: new Date(ev.dtend).getMonth() + 1, day: new Date(ev.dtend).getDate(), hour: new Date(ev.dtend).getHours(), minute: new Date(ev.dtend).getMinutes(), tzid: "UTC" },
         rrule: ev.rrule || "",
-        recurrence: ev.rrule || "",
+        recurrence: ev.recurrence || ev.rrule || "",
+        isOccurrence: !!ev.is_occurrence,
+        recurrenceId: ev.recurrence_id || "",
         _dbId: ev.id,
         _sourceId: ev.source_id,
       }));
@@ -6071,7 +6073,9 @@ async function loadCalendarForTile(cal, { quiet = false } = {}) {
             ? { allDay: true, year: new Date(ev.dtend).getFullYear(), month: new Date(ev.dtend).getMonth() + 1, day: new Date(ev.dtend).getDate() }
             : { allDay: false, iso: ev.dtend, year: new Date(ev.dtend).getFullYear(), month: new Date(ev.dtend).getMonth() + 1, day: new Date(ev.dtend).getDate(), hour: new Date(ev.dtend).getHours(), minute: new Date(ev.dtend).getMinutes(), tzid: "UTC" },
           rrule: ev.rrule || "",
-          recurrence: ev.rrule || "",
+          recurrence: ev.recurrence || ev.rrule || "",
+          isOccurrence: !!ev.is_occurrence,
+          recurrenceId: ev.recurrence_id || "",
           _dbId: ev.id,
           _sourceId: ev.source_id,
         }));

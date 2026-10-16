@@ -937,6 +937,8 @@ try:
             last_modified TIMESTAMPTZ,
             reminder_minutes INTEGER,
             reminder_sent BOOLEAN DEFAULT FALSE,
+            recurrence_id TEXT,
+            is_occurrence BOOLEAN DEFAULT FALSE,
             created_at TIMESTAMPTZ DEFAULT NOW(),
             UNIQUE(user_id, uid)
         )
@@ -953,6 +955,19 @@ except Exception:
     pass
 try:
     db.execute("CREATE INDEX IF NOT EXISTS idx_cal_events_reminder ON calendar_events(user_id, dtstart) WHERE reminder_sent = FALSE AND reminder_minutes IS NOT NULL")
+except Exception:
+    pass
+try:
+    # Migration 034: recurrence occurrence rows (expand at sync).
+    db.execute("ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS recurrence_id TEXT")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS is_occurrence BOOLEAN DEFAULT FALSE")
+except Exception:
+    pass
+try:
+    db.execute("CREATE INDEX IF NOT EXISTS idx_cal_events_recurrence ON calendar_events(user_id, recurrence_id) WHERE recurrence_id IS NOT NULL")
 except Exception:
     pass
 try:
@@ -14503,6 +14518,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             _json_response(self, 422, {"error": f"Could not parse calendar: {exc}"})
             return
+        # Expand recurring masters so legacy ICS tiles show every instance.
+        try:
+            from ics_calendar import (
+                EXPANSION_FUTURE_DAYS,
+                EXPANSION_PAST_DAYS,
+                expand_calendar_events,
+            )
+            _today = datetime.now(timezone.utc).date()
+            payload["events"] = expand_calendar_events(
+                payload.get("events", []),
+                _today - timedelta(days=EXPANSION_PAST_DAYS),
+                _today + timedelta(days=EXPANSION_FUTURE_DAYS),
+            )
+        except Exception as exc:
+            print(f"[WARN] ICS expansion failed: {exc}", file=sys.stderr)
         _json_response(self, 200, payload)
 
     # ── User Profile (local store, unchanged) ───────────────────────────────
@@ -16890,13 +16920,29 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         events = db.query_dicts(
             f"""SELECT ce.id, ce.uid, ce.summary, ce.description, ce.location,
                        ce.dtstart, ce.dtend, ce.all_day, ce.rrule, ce.color, ce.status,
-                       ce.reminder_minutes, ce.source_id, cs.name AS source_name, cs.source_type
+                       ce.reminder_minutes, ce.source_id, cs.name AS source_name, cs.source_type,
+                       ce.recurrence_id, ce.is_occurrence
                 FROM calendar_events ce
                 LEFT JOIN calendar_sources cs ON cs.id = ce.source_id
                 WHERE {where}
                 ORDER BY ce.dtstart""",
             tuple(params),
         )
+        try:
+            from ics_calendar import _humanize_rrule
+        except ImportError:
+            _humanize_rrule = lambda r: r  # noqa: E731
+        for ev in events:
+            try:
+                ev["recurrence_id"] = ev.get("recurrence_id")
+                ev["is_occurrence"] = bool(ev.get("is_occurrence"))
+            except Exception:
+                pass
+            if ev.get("rrule"):
+                try:
+                    ev["recurrence"] = _humanize_rrule(ev["rrule"])
+                except Exception:
+                    ev["recurrence"] = ev["rrule"]
         _json_response(self, 200, {"events": events})
 
     def _handle_calendar_settings_get(self) -> None:

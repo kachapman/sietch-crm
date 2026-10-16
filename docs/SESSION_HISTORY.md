@@ -13,6 +13,20 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-16
 
+**Topic:** Calendar parity Phase 2 — recurrence expansion.
+
+**Status: PHASE 2 SHIPPED.** Expand-at-sync per locked decision. 21 new tests (15 expansion + 6 sync; 52 Python calendar tests total), all suites green (15 JS files + 12 Python suites, 0 failures).
+
+**What changed:** `ics_calendar.py` retains EXDATE/RDATE/RECURRENCE-ID/DURATION/VALARM + stdlib expander (DAILY/WEEKLY/MONTHLY/YEARLY, INTERVAL/COUNT/UNTIL/BYDAY/BYMONTHDAY/BYMONTH/WKST, nth-weekday, caps 500/window 1y+2y); `calendar_sync.py` upserts occurrence rows (`<uid>#<ts>`, `recurrence_id`, VALARM→reminder on insert only, legacy bare-row + stale-occurrence prune); `server.py` feed endpoint expands + events API returns `recurrence_id/is_occurrence/recurrence` (+ migration `034`, inline ALTERs); `app.js` maps humanized recurrence + occurrence flags. Fixed along the way: DURATION-applies-to-end (RFC 5545), window_start clip bug (caught by yearly test), weekly count expectation (test-side).
+
+**Next:** Phase 3 views (all-day strip + 0–24h + overlap + now-line; `+more` popover; agenda load-more; week-start/12-24h settings). Files: `ics_calendar.py`, `calendar_sync.py`, `server.py`, `public/app.js`, `migrations/034_calendar_occurrences.sql`, `tests/test_ics_calendar.py`, `tests/test_calendar_sync.py` (new), `CHANGELOG.md`.
+
+---
+
+## Previous summary (2026-10-16 — calendar Phase 0+1)
+
+**Date:** 2026-10-16
+
 **Topic:** Calendar parity — full plan + Phase 0/1 build.
 
 **Status: PHASE 0+1 SHIPPED.** Plan at `/home/chapman-server/.opencode/plan/calendar-parity.md`. Decisions locked via options: hide OAuth/CalDAV when unconfigured, expand recurrences at sync, Only+Series edit scope, Sun+24h defaults. 45 new tests (31 Python + 14 JS), all suites green.

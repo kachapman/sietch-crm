@@ -87,20 +87,58 @@ def _store_ics_cache(url: str, raw_text: str, parsed: dict) -> None:
 
 
 def _sync_ics_events_to_db(user_id: int, source_id: int, parsed: dict) -> int:
-    """Upsert ICS events into calendar_events. Returns count of events synced."""
-    from ics_calendar import _parse_ics_datetime
-    events = parsed.get("events", [])
+    """Upsert ICS events into calendar_events. Returns count of events synced.
+
+    Recurring masters are expanded into per-occurrence rows (stable uid
+    "<master>#<timestamp>", recurrence_id = master uid) so month/week/day
+    views and reminder sweeps see every instance. The bare master row is
+    never stored; a legacy bare row from before expansion is removed.
+    VALARM triggers seed reminder_minutes on insert only (never clobbers
+    a user-customized reminder on conflict).
+    """
+    from datetime import date as _date
+    from ics_calendar import (
+        EXPANSION_FUTURE_DAYS,
+        EXPANSION_PAST_DAYS,
+        expand_calendar_events,
+    )
+    today = _date.today()
+    events = expand_calendar_events(
+        parsed.get("events", []),
+        today - timedelta(days=EXPANSION_PAST_DAYS),
+        today + timedelta(days=EXPANSION_FUTURE_DAYS),
+    )
+    # Masters that produced occurrences: their legacy bare rows must go.
+    expanded_masters = {
+        ev.get("recurrenceId") for ev in events if ev.get("isOccurrence") and ev.get("recurrenceId")
+    }
+    for master_uid in expanded_masters:
+        try:
+            db.execute(
+                """DELETE FROM calendar_events
+                   WHERE user_id = %s AND source_id = %s AND uid = %s
+                     AND COALESCE(is_occurrence, FALSE) = FALSE""",
+                (user_id, source_id, master_uid),
+            )
+        except Exception:
+            pass  # columns pre-date migration 034; upsert below still works
     count = 0
+    seen_occurrence_uids: set[str] = set()
     for ev in events:
         uid = ev.get("uid", "")
         if not uid:
             continue
+        is_occurrence = bool(ev.get("isOccurrence"))
+        recurrence_id = ev.get("recurrenceId") or None
+        if is_occurrence:
+            seen_occurrence_uids.add(uid)
         summary = ev.get("summary", "")
         description = ev.get("description", "")
         location = ev.get("location", "")
         status = (ev.get("status") or "CONFIRMED").upper()
         color = ev.get("color", "")
         rrule = ev.get("rrule", "")
+        reminder = ev.get("alarmMinutes")  # None when the feed has no VALARM
 
         # Parse start/end
         start_data = ev.get("start", {})
@@ -137,8 +175,10 @@ def _sync_ics_events_to_db(user_id: int, source_id: int, parsed: dict) -> int:
         try:
             db.execute(
                 """INSERT INTO calendar_events (user_id, source_id, uid, summary, description, location,
-                   dtstart, dtend, all_day, rrule, color, status, last_modified)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                   dtstart, dtend, all_day, rrule, color, status, last_modified,
+                   recurrence_id, is_occurrence, reminder_minutes)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(),
+                           %s, %s, %s)
                    ON CONFLICT (user_id, uid) DO UPDATE SET
                      summary = EXCLUDED.summary,
                      description = EXCLUDED.description,
@@ -149,13 +189,36 @@ def _sync_ics_events_to_db(user_id: int, source_id: int, parsed: dict) -> int:
                      rrule = EXCLUDED.rrule,
                      color = EXCLUDED.color,
                      status = EXCLUDED.status,
+                     recurrence_id = EXCLUDED.recurrence_id,
+                     is_occurrence = EXCLUDED.is_occurrence,
                      last_modified = NOW()""",
                 (user_id, source_id, uid, summary, description, location,
-                 dtstart, dtend, all_day, rrule or None, color or None, status),
+                 dtstart, dtend, all_day, rrule or None, color or None, status,
+                 recurrence_id, is_occurrence, reminder),
             )
             count += 1
         except Exception as e:
             logger.debug("Failed to upsert event %s: %s", uid[:40], e)
+    # Drop occurrences that vanished from the feed (series shortened,
+    # instances deleted, or master turned non-recurring).
+    try:
+        if seen_occurrence_uids:
+            db.execute(
+                """DELETE FROM calendar_events
+                   WHERE user_id = %s AND source_id = %s
+                     AND COALESCE(is_occurrence, FALSE) = TRUE
+                     AND NOT (uid = ANY(%s))""",
+                (user_id, source_id, list(seen_occurrence_uids)),
+            )
+        else:
+            db.execute(
+                """DELETE FROM calendar_events
+                   WHERE user_id = %s AND source_id = %s
+                     AND COALESCE(is_occurrence, FALSE) = TRUE""",
+                (user_id, source_id),
+            )
+    except Exception as e:
+        logger.debug("Failed to prune stale occurrences for source %s: %s", source_id, e)
     return count
 
 

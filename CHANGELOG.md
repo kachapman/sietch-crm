@@ -2,6 +2,30 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Calendar parity Phase 2: recurrence expansion (2026-10-16)
+
+Recurring ICS events previously appeared only on the master DTSTART day. Per the locked plan decision (expand at sync), recurring masters are now expanded into per-occurrence rows.
+
+### Parser (`ics_calendar.py`)
+
+- Retains `EXDATE`/`RDATE` (repeatable + comma lists, per-part params), `RECURRENCE-ID` (+ `RANGE`), `DURATION` (applied to end when `DTEND` absent, RFC 5545 3.6.1), and `VALARM TRIGGER` (→ `alarmMinutes`).
+- New stdlib expander: `expand_calendar_events` / `expand_event_occurrences` — DAILY/WEEKLY/MONTHLY/YEARLY with INTERVAL/COUNT/UNTIL/BYDAY/BYMONTHDAY/BYMONTH/WKST, nth-weekday (`3TU`, `-1FR`), EXDATE/RDATE/RECURRENCE-ID overrides, stable occurrence UIDs (`<master>#<timestamp>`), caps (500 instances, 1y past + 2y future). Unsupported `FREQ` values pass through as single events.
+
+### Sync + API (`calendar_sync.py`, `server.py`)
+
+- `_sync_ics_events_to_db` upserts occurrence rows (`recurrence_id` = master UID, `is_occurrence`); VALARM seeds `reminder_minutes` on insert only (never clobbers user edits on conflict); legacy bare master rows removed; stale occurrences pruned per source.
+- Legacy `/api/calendar/feed` proxy expands before responding. `/api/v2/calendar/events` returns `recurrence_id`, `is_occurrence`, and humanized `recurrence`.
+- Schema: `migrations/034_calendar_occurrences.sql` + inline `ALTER TABLE … ADD COLUMN IF NOT EXISTS` at startup (the path that actually runs; `migrations/` has no runner).
+
+### Frontend (`public/app.js`)
+
+- DB event mapping carries `recurrence` (humanized, falls back to raw RRULE), `isOccurrence`, `recurrenceId` — detail modal "Repeats" rows now read naturally; flags reserved for Phase 4 series editing.
+
+### Tests
+
+- `tests/test_ics_calendar.py` +15 (retention, daily/weekly/monthly/yearly, COUNT/UNTIL/INTERVAL, EXDATE/RDATE/override, DURATION, caps, nth-weekday).
+- `tests/test_calendar_sync.py` (new, 6 tests, stubbed `db`): occurrence UID suffixing, no bare master row, legacy cleanup, stale prune scoping, VALARM seeding, insert-only reminder preservation.
+
 ## Calendar parity Phase 0+1: tests, ICS contact params, nav/refetch (2026-10-16)
 
 Plan: `/home/chapman-server/.opencode/plan/calendar-parity.md`. Locked decisions: hide OAuth/CalDAV when unconfigured, expand recurrences at sync, Only+Series edit scope, Sun start + 24h defaults.
