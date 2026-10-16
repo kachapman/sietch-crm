@@ -32,7 +32,7 @@ def _empty_profile() -> dict[str, Any]:
         "groups": [],
         "tileLayout": {"order": [], "widths": {}, "heights": {}, "collapsed": {}, "pinned": {}},
         "calendarTiles": [],
-        "calendarDisplay": {"weekStart": "sun", "timeFormat": "24h"},
+        "calendarDisplay": {"weekStart": "sun", "timeFormat": "24h", "defaultReminder": 15},
         "notesTiles": [],
         "groupTemplates": [],
         "hiddenFeedKeys": [],
@@ -73,10 +73,22 @@ def _clean_notes_tiles(tiles: Any) -> list[dict[str, Any]]:
 
 
 def _clean_calendar_display(value: Any) -> dict[str, str]:
-    """Display prefs shared by all calendar tiles (week start, clock format)."""
+    """Display prefs shared by all calendar tiles (week start, clock format, default reminder)."""
     week_start = "mon" if isinstance(value, dict) and str(value.get("weekStart") or "").lower() in ("mon", "monday") else "sun"
     time_format = "12h" if isinstance(value, dict) and str(value.get("timeFormat") or "").lower() in ("12h", "12") else "24h"
-    return {"weekStart": week_start, "timeFormat": time_format}
+    reminder = None
+    has_reminder = isinstance(value, dict) and "defaultReminder" in value
+    if has_reminder and value.get("defaultReminder") not in (None, ""):
+        try:
+            reminder = int(value.get("defaultReminder"))
+            if reminder < 0 or reminder > 10080:
+                reminder = None
+        except (TypeError, ValueError):
+            reminder = None
+    out = {"weekStart": week_start, "timeFormat": time_format}
+    # None = explicit "no default"; missing key = legacy default (15).
+    out["defaultReminder"] = reminder if has_reminder else 15
+    return out
 
 
 def _clean_calendar_tiles(tiles: Any) -> list[dict[str, Any]]:
@@ -108,6 +120,9 @@ def _clean_calendar_tiles(tiles: Any) -> list[dict[str, Any]]:
         source_id = item.get("sourceId")
         if source_id is not None:
             cleaned["sourceId"] = int(source_id) if str(source_id).isdigit() else None
+        only_source = item.get("onlySourceId")
+        if only_source is not None and str(only_source).isdigit():
+            cleaned["onlySourceId"] = int(only_source)
         out.append(cleaned)
     return out
 

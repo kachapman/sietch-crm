@@ -13,7 +13,15 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-16
 
-**Topic:** Calendar parity Phase 4 — editor + detail actions.
+**Topic:** Calendar parity Phase 5 — sources/sync/settings.
+
+**Status: PHASE 5 SHIPPED.** Sources list (visibility/color/rename/sync-now+errors/sync-all), per-tile source filter, OAuth hide-when-unconfigured, CalDAV beta label, ICS import endpoint + UI, real defaultReminder pref. 17 new tests (5 JS + 12 Python); full regression green (15 JS files + 14 Python suites, 0 failures). Caught by `node --check`: helper insert swallowed `fetchCalendarFeed` header (fixed).
+
+**Next:** Phase 6 reminders + search + polish (VALARM already seeds reminders; needs snooze/dismiss, Telegram path decision, tile/global search, .ics export, print). Files: `server.py`, `calendar_sync.py`, `public/app.js`, `public/index.html`, `tests/test_calendar_sources.py` (new), `CHANGELOG.md`.
+
+---
+
+## Previous summary (2026-10-16 — calendar Phase 4)
 
 **Status: PHASE 4 SHIPPED.** Recurrence builder + per-event TZ/color/busy/URL/attendees/custom reminder + inline validation + Only/Series scope (locked decision) + detail Edit path. Backend: migration 035, series expand-at-write, scope-aware update/delete, attendees codec. 19 new tests (9 JS + 10 Python); full regression green (15 JS files + 13 Python suites, 0 failures).
 

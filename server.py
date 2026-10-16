@@ -4778,6 +4778,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/calendar/settings" and method == "PUT":
             self._handle_calendar_settings_put()
             return
+        if api_path == "/api/v2/calendar/import" and method == "POST":
+            self._handle_calendar_import()
+            return
 
         self.send_error(404)
 
@@ -16890,7 +16893,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_auth(self)
         if not user: return
         sources = db.query_dicts(
-            "SELECT id, name, source_type, color, visible, last_synced_at, ics_url, oauth_email, caldav_url "
+            "SELECT id, name, source_type, color, visible, last_synced_at, ics_url, oauth_email, caldav_url, "
+            "caldav_username, caldav_password_encrypted "
             "FROM calendar_sources WHERE user_id = %s ORDER BY name",
             (user["id"],),
         )
@@ -16898,9 +16902,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         for s in sources:
             s.pop("oauth_access_token", None)
             s.pop("oauth_refresh_token", None)
-            s.pop("caldav_password_encrypted", None)
-            s["has_password"] = bool(s.get("caldav_password_encrypted"))
-        _json_response(self, 200, {"sources": sources})
+            has_pw = bool(s.pop("caldav_password_encrypted", None))
+            s["has_password"] = has_pw
+        _json_response(self, 200, {
+            "sources": sources,
+            "oauth": {
+                "google": bool(oauth_providers.GOOGLE_CLIENT_ID),
+                "microsoft": bool(oauth_providers.MICROSOFT_CLIENT_ID),
+            },
+        })
 
     def _handle_calendar_events_get(self, qs: dict) -> None:
         """List events in a date range from the local DB."""
@@ -16920,7 +16930,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except ValueError:
             _json_response(self, 400, {"error": "Invalid date format"})
             return
-        conditions = ["ce.user_id = %s", "ce.status != 'CANCELLED'", "ce.dtstart < %s", "ce.dtend > %s"]
+        conditions = ["ce.user_id = %s", "ce.status != 'CANCELLED'", "ce.dtstart < %s", "ce.dtend > %s",
+                      "(cs.visible IS NULL OR cs.visible != FALSE)"]
         params: list = [user["id"], end_dt, start_dt]
         if source_id and source_id.isdigit():
             conditions.append("ce.source_id = %s")
@@ -17326,6 +17337,84 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             params.append(event_id)
             db.execute(f"UPDATE calendar_events SET {', '.join(updates)}, last_modified = NOW() WHERE id = %s", tuple(params))
         _json_response(self, 200, {"ok": True})
+
+    def _handle_calendar_import(self) -> None:
+        """Import a pasted/uploaded .ics file as local events (recurring expanded)."""
+        from ics_calendar import (
+            EXPANSION_FUTURE_DAYS,
+            EXPANSION_PAST_DAYS,
+            _event_start_naive,
+            expand_calendar_events,
+            parse_ics_calendar,
+        )
+        from calendar_sync import serialize_attendees
+        user = _require_auth(self)
+        if not user: return
+        try:
+            body = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            body = {}
+        ics_text = body.get("ics_text") or ""
+        if not isinstance(ics_text, str) or not ics_text.strip():
+            _json_response(self, 400, {"error": "ics_text is required"})
+            return
+        if len(ics_text) > 1024 * 1024:
+            _json_response(self, 413, {"error": "ICS file too large (1 MB max)"})
+            return
+        source_id = body.get("source_id")
+        if source_id and str(source_id).isdigit():
+            src = db.query_one(
+                "SELECT id FROM calendar_sources WHERE id = %s AND user_id = %s",
+                (int(source_id), user["id"]),
+            )
+            source_id = int(source_id) if src else None
+        else:
+            source_id = None
+        try:
+            parsed = parse_ics_calendar(ics_text)
+        except Exception as exc:
+            _json_response(self, 422, {"error": f"Could not parse calendar: {exc}"})
+            return
+        today = datetime.now(timezone.utc).date()
+        expanded = expand_calendar_events(
+            [e for e in parsed.get("events", []) if (e.get("status") or "") != "CANCELLED"],
+            today - timedelta(days=EXPANSION_PAST_DAYS),
+            today + timedelta(days=EXPANSION_FUTURE_DAYS),
+        )[:2000]
+        stamp = int(time.time() * 1000)
+        imported = 0
+        for n, ev in enumerate(expanded):
+            start_dt = _event_start_naive(ev)
+            end_dt = _event_start_naive({"start": ev.get("end")}) or start_dt
+            if not start_dt:
+                continue
+            new_master = f"import-{user['id']}-{stamp}-{n}"
+            if ev.get("isOccurrence") and "#" in (ev.get("uid") or ""):
+                new_uid = new_master + "#" + ev["uid"].split("#", 1)[1]
+            elif ev.get("isOccurrence"):
+                new_uid = f"{new_master}#{start_dt.strftime('%Y%m%dT%H%M%S')}"
+            else:
+                new_uid = new_master
+            try:
+                db.execute(
+                    """INSERT INTO calendar_events (user_id, source_id, uid, summary, description, location,
+                       dtstart, dtend, all_day, rrule, color, status, reminder_minutes,
+                       transparency, url, attendees, timezone, recurrence_id, is_occurrence, last_modified)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                       ON CONFLICT (user_id, uid) DO NOTHING""",
+                    (user["id"], source_id, new_uid, ev.get("summary", ""), ev.get("description", ""),
+                     ev.get("location", ""), start_dt, end_dt, bool((ev.get("start") or {}).get("allDay")),
+                     ev.get("rrule") or None, ev.get("color") or None,
+                     (ev.get("status") or "CONFIRMED").upper(), ev.get("alarmMinutes"),
+                     (ev.get("transparency") or "").strip() or None, (ev.get("url") or "").strip() or None,
+                     serialize_attendees(ev.get("attendees")),
+                     (ev.get("start") or {}).get("tzid") or None,
+                     new_master if ev.get("isOccurrence") else None, bool(ev.get("isOccurrence"))),
+                )
+                imported += 1
+            except Exception:
+                continue
+        _json_response(self, 200, {"ok": True, "imported": imported})
 
     def _handle_calendar_event_delete(self, event_id: int) -> None:
         """Delete a calendar event (?scope=series deletes the whole local series)."""

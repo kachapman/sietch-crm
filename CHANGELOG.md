@@ -2,6 +2,35 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Calendar parity Phase 5: sources/sync/settings (2026-10-16)
+
+### Sources list (settings modal)
+
+- Per-source visibility checkbox (enforced server-side in the range query), color picker, inline rename, last-synced label, per-source Sync-now with inline error text, Sync-all with status line. Remove now warns events are deleted and refreshes tiles.
+- Fixed `has_password` always false (password column was never selected; still never exposed — popped before respond).
+
+### Tiles section (settings modal)
+
+- Per-tile "All calendars / one source" filter (`onlySourceId`, persisted); loader passes `&source_id=`; tile name aggregates ("Team" vs "3 calendars") instead of first-row guessing.
+
+### OAuth/CalDAV honesty (locked decision: hide when unconfigured)
+
+- Sources API exposes `oauth: {google, microsoft}` from server env; add-tile + settings forms hide unconfigured provider buttons with an explanatory note instead of a failing redirect. CalDAV labeled Beta (connect-only, sync pending) in both forms.
+- Known limitation (documented, not fixed): CalDAV passwords are stored as plaintext (`caldav_password_encrypted` is a plain copy) — never returned by the API, but not encrypted at rest.
+
+### ICS import
+
+- New `POST /api/v2/calendar/import` (1 MB cap, CANCELLED skipped, recurring expanded, UIDs rewritten with `import-` prefix so feeds never collide) + settings-modal file picker with target-source select.
+
+### Default reminder
+
+- Real `defaultReminder` pref in shared `calendarDisplay` (None vs 15-vs-unset distinguished end-to-end), settings dropdown, new-event default in the editor (preset or custom value).
+
+### Tests
+
+- `tests/test_calendar_views.mjs` +5 (source param, aggregate names). 38/38 pass.
+- `tests/test_calendar_sources.py` (new, 12 tests): reminder cleaner, `onlySourceId` cleaner, server source guards.
+
 ## Calendar parity Phase 4: editor + detail actions (2026-10-16)
 
 ### Editor (`public/index.html`, `public/app.js`, `styles.css`)

@@ -469,3 +469,48 @@ test('attendee objects format back to lines', () => {
   assert.equal(attendeeObjToLine({ name: '', email: 'j@x.com' }), 'j@x.com');
   assert.equal(attendeeObjToLine({ name: 'Jane', email: '' }), 'Jane');
 });
+
+// ── Phase 5 mirrors ────────────────────────────────────────────────
+// Mirrors of public/app.js#calendarTileSourceParam, calendarAggregateName.
+
+function calendarTileSourceParam(cal) {
+  const id = Number(cal.onlySourceId);
+  return Number.isFinite(id) && id > 0 ? `&source_id=${id}` : "";
+}
+
+function calendarAggregateName(events, fallback) {
+  const names = [...new Set((events || []).map((e) => e.source_name).filter(Boolean))];
+  if (names.length === 1) return names[0];
+  if (names.length > 1) return `${names.length} calendars`;
+  return fallback;
+}
+
+test('no filter means no source param', () => {
+  assert.equal(calendarTileSourceParam({}), '');
+  assert.equal(calendarTileSourceParam({ onlySourceId: null }), '');
+  assert.equal(calendarTileSourceParam({ onlySourceId: 'abc' }), '');
+});
+
+test('filtered tile passes source_id', () => {
+  assert.equal(calendarTileSourceParam({ onlySourceId: 7 }), '&source_id=7');
+  assert.equal(calendarTileSourceParam({ onlySourceId: '7' }), '&source_id=7');
+});
+
+test('aggregate name prefers the single source', () => {
+  assert.equal(
+    calendarAggregateName([{ source_name: 'Team' }, { source_name: 'Team' }], 'Cal'),
+    'Team'
+  );
+});
+
+test('aggregate name counts multiple sources', () => {
+  assert.equal(
+    calendarAggregateName([{ source_name: 'A' }, { source_name: 'B' }], 'Cal'),
+    '2 calendars'
+  );
+});
+
+test('aggregate name falls back with no source names', () => {
+  assert.equal(calendarAggregateName([], 'Cal'), 'Cal');
+  assert.equal(calendarAggregateName([{ source_name: null }], 'Cal'), 'Cal');
+});

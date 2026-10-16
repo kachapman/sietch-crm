@@ -810,7 +810,7 @@ const state = {
   feedLoading: false,
   calendarTiles: [],
   calendarCache: {},
-  calendarDisplay: { weekStart: "sun", timeFormat: "24h" },
+  calendarDisplay: { weekStart: "sun", timeFormat: "24h", defaultReminder: 15 },
   notesTiles: [],
   notes: [],                 // personal notes from PostgreSQL (/api/v2/notes)
   notesTileMode: "browse",   // "browse" | "edit" — single notes tile mode
@@ -3075,12 +3075,20 @@ function stripCalendarRuntimeFields(cal) {
   return rest;
 }
 
-/** Shared display prefs (week start, clock format) with safe defaults. */
+/** Shared display prefs (week start, clock format, default reminder) with safe defaults. */
 function calendarDisplayPrefs() {
   const d = state.calendarDisplay || {};
+  let reminder;
+  if (d.defaultReminder === undefined) reminder = 15; // legacy default
+  else if (d.defaultReminder === null || d.defaultReminder === "") reminder = null; // explicit None
+  else {
+    reminder = parseInt(d.defaultReminder, 10);
+    if (!Number.isFinite(reminder) || reminder < 0 || reminder > 10080) reminder = 15;
+  }
   return {
     weekStart: d.weekStart === "mon" ? "mon" : "sun",
     timeFormat: d.timeFormat === "12h" ? "12h" : "24h",
+    defaultReminder: reminder,
   };
 }
 
@@ -5892,7 +5900,34 @@ function openCalendarSettingsModal() {
   const modal = $("#calendar-settings-modal");
   if (!modal) return;
   loadCalendarSourcesList();
+  loadCalendarTilesSection();
   modal.classList.remove("hidden");
+}
+
+/** OAuth source buttons from the tile/settings forms (dead when unconfigured). */
+let calendarOauthFlags = null; // {google, microsoft} — filled by sources GET
+
+function refreshCalendarOauthButtons(root) {
+  if (!root) return;
+  const flags = calendarOauthFlags;
+  const pairs = [["google_oauth", "google"], ["microsoft_oauth", "microsoft"]];
+  let anyHidden = false;
+  for (const [type, key] of pairs) {
+    const btn = root.querySelector(`.calendar-source-type-btn[data-source-type="${type}"]`);
+    const ok = !flags || flags[key] !== false;
+    if (btn) btn.classList.toggle("hidden", !ok);
+    if (!ok) anyHidden = true;
+  }
+  let note = root.querySelector("[data-oauth-unconfigured-note]");
+  if (anyHidden && !note) {
+    note = document.createElement("p");
+    note.dataset.oauthUnconfiguredNote = "1";
+    note.className = "calendar-oauth-info-text";
+    note.textContent = "Online calendars aren't configured on this server — ask your admin to connect Google/Microsoft. ICS feeds work regardless.";
+    root.appendChild(note);
+  } else if (!anyHidden && note) {
+    note.remove();
+  }
 }
 
 function closeCalendarSettingsModal() {
@@ -5904,33 +5939,140 @@ async function loadCalendarSourcesList() {
   if (!list) return;
   try {
     const data = await api("/api/v2/calendar/sources");
+    calendarOauthFlags = data.oauth || null;
+    refreshCalendarOauthButtons($("#add-tile-calendar-form"));
+    refreshCalendarOauthButtons($("#calendar-settings-modal"));
     const sources = data.sources || [];
     if (!sources.length) {
       list.innerHTML = '<p class="calendar-settings-empty">No calendars connected yet.</p>';
       return;
     }
+    const fmtSync = (iso) => {
+      if (!iso) return "never synced";
+      const d = new Date(iso);
+      return Number.isNaN(d.getTime()) ? "never synced" : `synced ${d.toLocaleString()}`;
+    };
     list.innerHTML = sources.map(s => `
       <div class="calendar-settings-source-row" data-source-id="${s.id}">
-        <div class="source-color-dot" style="background:${escapeHtml(s.color || "#5b8abf")}"></div>
+        <input type="checkbox" class="source-visible" data-source-visible="${s.id}" ${s.visible === false ? "" : "checked"} title="Show events from this calendar" />
+        <input type="color" class="source-color" data-source-color="${s.id}" value="${escapeHtml(s.color || "#5b8abf")}" title="Calendar color" />
         <div class="source-info">
-          <div class="source-name">${escapeHtml(s.name || "Calendar")}</div>
-          <div class="source-detail">${escapeHtml(s.oauth_email || s.ics_url || s.caldav_url || s.source_type)}</div>
+          <input type="text" class="source-name-input" data-source-name="${s.id}" value="${escapeHtml(s.name || "Calendar")}" aria-label="Calendar name" />
+          <div class="source-detail">${escapeHtml(s.oauth_email || s.ics_url || s.caldav_url || s.source_type)} · ${escapeHtml(fmtSync(s.last_synced_at))}</div>
+          <div class="source-error hidden" data-source-error="${s.id}"></div>
         </div>
+        <button type="button" class="source-sync" title="Sync now" data-sync-source="${s.id}"><i class="ti ti-refresh"></i></button>
         <button type="button" class="source-remove" title="Remove" data-remove-source="${s.id}"><i class="ti ti-trash"></i></button>
       </div>
     `).join("");
+    const refreshTiles = () => {
+      for (const cal of state.calendarTiles) {
+        if (cal._el) loadCalendarForTile(cal, { quiet: true }).catch(() => {});
+      }
+    };
     list.querySelectorAll("[data-remove-source]").forEach(btn => {
       btn.addEventListener("click", async () => {
         const id = btn.dataset.removeSource;
-        if (!confirm("Remove this calendar source?")) return;
+        if (!confirm("Remove this calendar source? Its events will be deleted.")) return;
         try {
           await api(`/api/v2/calendar/sources/${id}`, { method: "DELETE" });
           loadCalendarSourcesList();
+          refreshTiles();
         } catch (e) { showToast(e.message, true); }
+      });
+    });
+    list.querySelectorAll("[data-sync-source]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.syncSource;
+        const errEl = list.querySelector(`[data-source-error="${id}"]`);
+        btn.disabled = true;
+        try {
+          const res = await api(`/api/v2/calendar/sources/${id}/sync`, { method: "POST" });
+          if (errEl) { errEl.textContent = ""; errEl.classList.add("hidden"); }
+          showToast(`Synced ${res.events_synced ?? 0} events`);
+          loadCalendarSourcesList();
+          refreshTiles();
+        } catch (e) {
+          if (errEl) {
+            errEl.textContent = e.message;
+            errEl.classList.remove("hidden");
+          } else {
+            showToast(e.message, true);
+          }
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+    const saveField = async (id, body) => {
+      try {
+        await api(`/api/v2/calendar/sources/${id}`, {
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+        refreshTiles();
+      } catch (e) { showToast(e.message, true); }
+    };
+    list.querySelectorAll("[data-source-visible]").forEach(cb => {
+      cb.addEventListener("change", () => saveField(cb.dataset.sourceVisible, { visible: cb.checked }));
+    });
+    list.querySelectorAll("[data-source-color]").forEach(inp => {
+      inp.addEventListener("change", () => saveField(inp.dataset.sourceColor, { color: inp.value }));
+    });
+    list.querySelectorAll("[data-source-name]").forEach(inp => {
+      inp.addEventListener("change", () => {
+        const v = inp.value.trim() || "Calendar";
+        inp.value = v;
+        saveField(inp.dataset.sourceName, { name: v });
       });
     });
   } catch (e) {
     list.innerHTML = `<p class="calendar-settings-empty">Failed to load: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+/** Per-tile source filter rows (All calendars vs. one source). */
+async function loadCalendarTilesSection() {
+  const list = $("#calendar-settings-tiles-list");
+  if (!list) return;
+  if (!state.calendarTiles.length) {
+    list.innerHTML = '<p class="calendar-settings-empty">No calendar tiles on the dashboard yet.</p>';
+    return;
+  }
+  let sources = [];
+  try {
+    const data = await api("/api/v2/calendar/sources");
+    sources = data.sources || [];
+  } catch { /* tile list still renders with All option */ }
+  list.innerHTML = "";
+  for (const cal of state.calendarTiles) {
+    const row = document.createElement("div");
+    row.className = "calendar-settings-tile-row";
+    const label = document.createElement("span");
+    label.className = "calendar-settings-tile-name";
+    label.textContent = cal.name || "Calendar";
+    const sel = document.createElement("select");
+    sel.className = "calendar-settings-tile-source";
+    sel.setAttribute("aria-label", `Calendars shown in ${cal.name || "Calendar"}`);
+    const all = document.createElement("option");
+    all.value = "";
+    all.textContent = "All calendars";
+    sel.appendChild(all);
+    for (const s of sources) {
+      const opt = document.createElement("option");
+      opt.value = String(s.id);
+      opt.textContent = s.name || "Calendar";
+      sel.appendChild(opt);
+    }
+    sel.value = cal.onlySourceId ? String(cal.onlySourceId) : "";
+    sel.addEventListener("change", () => {
+      cal.onlySourceId = sel.value ? parseInt(sel.value, 10) : null;
+      if (cal.onlySourceId != null && !Number.isFinite(cal.onlySourceId)) cal.onlySourceId = null;
+      saveCalendarsToStorage();
+      if (cal._el) loadCalendarForTile(cal).catch(() => {});
+    });
+    row.appendChild(label);
+    row.appendChild(sel);
+    list.appendChild(row);
   }
 }
 
@@ -6017,15 +6159,18 @@ function bindCalendarSettingsModal() {
   // Display prefs (week start, clock format) — shared profile state.
   const weekStartSel = $("#cal-settings-week-start");
   const timeFormatSel = $("#cal-settings-time-format");
+  const defaultRemSel = $("#cal-settings-default-reminder");
   const syncDisplayPrefsUI = () => {
     const prefs = calendarDisplayPrefs();
     if (weekStartSel) weekStartSel.value = prefs.weekStart;
     if (timeFormatSel) timeFormatSel.value = prefs.timeFormat;
+    if (defaultRemSel) defaultRemSel.value = prefs.defaultReminder == null ? "" : String(prefs.defaultReminder);
   };
   const saveDisplayPrefs = () => {
     setCalendarDisplayPrefs({
       weekStart: weekStartSel?.value === "mon" ? "mon" : "sun",
       timeFormat: timeFormatSel?.value === "12h" ? "12h" : "24h",
+      defaultReminder: defaultRemSel?.value === "" ? null : (parseInt(defaultRemSel?.value, 10) || 15),
     });
     // Re-render open calendar tiles so grids/labels pick up the new prefs.
     for (const cal of state.calendarTiles) {
@@ -6034,6 +6179,73 @@ function bindCalendarSettingsModal() {
   };
   weekStartSel?.addEventListener("change", saveDisplayPrefs);
   timeFormatSel?.addEventListener("change", saveDisplayPrefs);
+  defaultRemSel?.addEventListener("change", saveDisplayPrefs);
+
+  // Sync-all button
+  $("#calendar-settings-sync-all")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const status = $("#calendar-settings-sync-status");
+    btn.disabled = true;
+    try {
+      const res = await api("/api/v2/calendar/sync-all", { method: "POST" });
+      if (status) status.textContent = `Synced ${res.synced ?? 0} source(s).`;
+      loadCalendarSourcesList();
+      for (const cal of state.calendarTiles) {
+        if (cal._el) loadCalendarForTile(cal, { quiet: true }).catch(() => {});
+      }
+    } catch (err) {
+      if (status) status.textContent = `Sync failed: ${err.message}`;
+      else showToast(err.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ICS file import
+  const importSourceSel = $("#cal-settings-import-source");
+  const refreshImportSources = async () => {
+    if (!importSourceSel) return;
+    importSourceSel.innerHTML = '<option value="">Local (no source)</option>';
+    try {
+      const data = await api("/api/v2/calendar/sources");
+      for (const s of (data.sources || [])) {
+        const opt = document.createElement("option");
+        opt.value = String(s.id);
+        opt.textContent = s.name || "Calendar";
+        importSourceSel.appendChild(opt);
+      }
+    } catch { /* list stays local-only */ }
+  };
+  refreshImportSources();
+  $("#cal-settings-import-run")?.addEventListener("click", async () => {
+    const fileInput = $("#cal-settings-import-file");
+    const status = $("#cal-settings-import-status");
+    const file = fileInput?.files?.[0];
+    if (!file) {
+      if (status) status.textContent = "Choose an .ics file first.";
+      return;
+    }
+    const text = await file.text().catch(() => "");
+    if (!text.trim()) {
+      if (status) status.textContent = "Could not read that file.";
+      return;
+    }
+    if (status) status.textContent = "Importing…";
+    try {
+      const res = await api("/api/v2/calendar/import", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ics_text: text.slice(0, 1024 * 1024), source_id: importSourceSel?.value || null }),
+      });
+      if (status) status.textContent = `Imported ${res.imported ?? 0} events.`;
+      showToast(`Imported ${res.imported ?? 0} events`);
+      for (const cal of state.calendarTiles) {
+        if (cal._el) loadCalendarForTile(cal, { quiet: true }).catch(() => {});
+      }
+    } catch (err) {
+      if (status) status.textContent = `Import failed: ${err.message}`;
+      else showToast(err.message, true);
+    }
+  });
   // Load settings when modal opens
   const observer = new MutationObserver(() => {
     if (!modal.classList.contains("hidden")) {
@@ -6273,7 +6485,16 @@ function openCalendarEventEditModal(ev, cal, prefill) {
     if (remSel) remSel.value = preset ? String(ev.reminderMinutes) : "custom";
     if (!preset && remCustom) remCustom.value = ev.reminderMinutes;
   } else if (remSel && !isEdit) {
-    remSel.value = "15";
+    // New events default to the shared default reminder (None → "None").
+    const def = calendarDisplayPrefs().defaultReminder;
+    if (def == null) {
+      remSel.value = "";
+    } else if (["5", "15", "30", "60", "1440"].includes(String(def))) {
+      remSel.value = String(def);
+    } else {
+      remSel.value = "custom";
+      if (remCustom) remCustom.value = def;
+    }
   }
   remCustomWrap?.classList.toggle("hidden", remSel?.value !== "custom");
 
@@ -6510,6 +6731,20 @@ function bindCalendarEventModal() {
   });
 }
 
+/** &source_id= param when the tile is filtered to one source. */
+function calendarTileSourceParam(cal) {
+  const id = Number(cal.onlySourceId);
+  return Number.isFinite(id) && id > 0 ? `&source_id=${id}` : "";
+}
+
+/** Aggregate tile name from loaded events (single source vs. N calendars). */
+function calendarAggregateName(events, fallback) {
+  const names = [...new Set((events || []).map((e) => e.source_name).filter(Boolean))];
+  if (names.length === 1) return names[0];
+  if (names.length > 1) return `${names.length} calendars`;
+  return fallback;
+}
+
 async function fetchCalendarFeed(feedUrl) {
   const q = new URLSearchParams({ url: feedUrl }).toString();
   const res = await fetch(`/api/calendar/feed?${q}`, { credentials: "same-origin" });
@@ -6546,7 +6781,7 @@ async function loadCalendarForTile(cal, { quiet = false } = {}) {
     if (cal.sourceId) {
       // New DB-backed mode: fetch events from local API
       const { startStr, endStr } = calendarViewRange(cal);
-      const data = await api(`/api/v2/calendar/events?start=${startStr}&end=${endStr}`);
+      const data = await api(`/api/v2/calendar/events?start=${startStr}&end=${endStr}${calendarTileSourceParam(cal)}`);
       events = (data.events || []).map(ev => ({
         uid: ev.uid || String(ev.id),
         summary: ev.summary || "",
@@ -6572,7 +6807,7 @@ async function loadCalendarForTile(cal, { quiet = false } = {}) {
         _dbId: ev.id,
         _sourceId: ev.source_id,
       }));
-      calendarName = data.events?.[0]?.source_name || cal.name || "Calendar";
+      calendarName = calendarAggregateName(data.events, cal.name || "Calendar");
       timezone = getBrowserTimezone();
     } else if (cal.feedUrl) {
       // Legacy ICS proxy mode — also fetch local DB events and merge
@@ -6587,7 +6822,7 @@ async function loadCalendarForTile(cal, { quiet = false } = {}) {
       // Merge local DB events (events not tied to any ICS source)
       try {
         const { startStr, endStr } = calendarViewRange(cal);
-        const dbData = await api(`/api/v2/calendar/events?start=${startStr}&end=${endStr}`);
+        const dbData = await api(`/api/v2/calendar/events?start=${startStr}&end=${endStr}${calendarTileSourceParam(cal)}`);
         const dbEvents = (dbData.events || []).map(ev => ({
           uid: ev.uid || String(ev.id),
           summary: ev.summary || "",
@@ -7301,9 +7536,18 @@ function applyUserProfile(profile) {
 
   // Shared calendar display prefs
   if (profile.calendarDisplay && typeof profile.calendarDisplay === "object") {
+    const raw = profile.calendarDisplay.defaultReminder;
+    let r;
+    if (raw === undefined) r = 15;
+    else if (raw === null || raw === "") r = null;
+    else {
+      r = parseInt(raw, 10);
+      r = Number.isFinite(r) && r >= 0 && r <= 10080 ? r : 15;
+    }
     state.calendarDisplay = {
       weekStart: profile.calendarDisplay.weekStart === "mon" ? "mon" : "sun",
       timeFormat: profile.calendarDisplay.timeFormat === "12h" ? "12h" : "24h",
+      defaultReminder: r,
     };
   }
 }
@@ -16218,6 +16462,15 @@ function showAddTileCalendarForm() {
   if (nameInput && !nameInput.value) nameInput.value = "My calendar";
   if (urlInput) urlInput.value = "";
   setAddTileError("");
+  // Hide OAuth buttons when the server has no provider configured.
+  if (calendarOauthFlags) {
+    refreshCalendarOauthButtons($("#add-tile-calendar-form"));
+  } else {
+    api("/api/v2/calendar/sources").then((data) => {
+      calendarOauthFlags = data.oauth || null;
+      refreshCalendarOauthButtons($("#add-tile-calendar-form"));
+    }).catch(() => {});
+  }
   urlInput?.focus();
 }
 

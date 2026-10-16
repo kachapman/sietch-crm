@@ -458,6 +458,7 @@
           </div>
         </div>
         <div id="add-tile-calendar-caldav-fields" class="hidden">
+          <p class="field-hint">Beta — connect only for now; automatic CalDAV sync is still pending.</p>
           <div class="field">
             <label for="add-tile-calendar-caldav-url">CalDAV server URL</label>
             <input type="url" id="add-tile-calendar-caldav-url" autocomplete="off" placeholder="https://dav.example.com/dav/" />
@@ -1579,6 +1580,20 @@
             <p class="calendar-settings-empty">No calendars connected yet.</p>
           </div>
           <button type="button" id="calendar-settings-add-source" class="btn btn-ghost btn-small" style="margin-top:0.4rem;"><i class="ti ti-plus"></i> Add Calendar</button>
+          <button type="button" id="calendar-settings-sync-all" class="btn btn-ghost btn-small" style="margin-top:0.4rem;"><i class="ti ti-refresh"></i> Sync all</button>
+          <p id="calendar-settings-sync-status" class="calendar-oauth-info-text"></p>
+        </div>
+        <div class="calendar-settings-section">
+          <h3>Dashboard Tiles</h3>
+          <p class="calendar-oauth-info-text">Choose which calendars each tile shows.</p>
+          <div id="calendar-settings-tiles-list" class="calendar-settings-tiles-list"></div>
+        </div>
+        <div class="calendar-settings-section">
+          <h3>Import .ics File</h3>
+          <div class="field"><label>File</label><input type="file" id="cal-settings-import-file" accept=".ics,text/calendar" /></div>
+          <div class="field"><label>Import into</label><select id="cal-settings-import-source"></select></div>
+          <p id="cal-settings-import-status" class="calendar-oauth-info-text"></p>
+          <button type="button" id="cal-settings-import-run" class="btn btn-ghost btn-small"><i class="ti ti-upload"></i> Import</button>
         </div>
         <div id="calendar-settings-add-form" class="calendar-settings-add-form hidden">
           <h3>Add Calendar Source</h3>
@@ -1593,6 +1608,7 @@
             <div class="field"><label>ICS URL</label><input type="url" id="cal-settings-ics-url" placeholder="https://..." /></div>
           </div>
           <div id="cal-settings-caldav-fields" class="hidden">
+            <p class="calendar-oauth-info-text">Beta — connect only for now; automatic CalDAV sync is still pending.</p>
             <div class="field"><label>CalDAV URL</label><input type="url" id="cal-settings-caldav-url" placeholder="https://dav.example.com/dav/" /></div>
             <div class="field"><label>Username</label><input type="text" id="cal-settings-caldav-user" /></div>
             <div class="field"><label>Password</label><input type="password" id="cal-settings-caldav-pass" /></div>
@@ -1620,6 +1636,16 @@
             <select id="cal-settings-time-format">
               <option value="24h">24-hour (14:05)</option>
               <option value="12h">12-hour (2:05 PM)</option>
+            </select>
+          </div>
+          <div class="field"><label>Default reminder</label>
+            <select id="cal-settings-default-reminder">
+              <option value="">None</option>
+              <option value="5">5 minutes before</option>
+              <option value="15">15 minutes before</option>
+              <option value="30">30 minutes before</option>
+              <option value="60">1 hour before</option>
+              <option value="1440">1 day before</option>
             </select>
           </div>
         </div>

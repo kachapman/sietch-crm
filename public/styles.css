@@ -8813,6 +8813,86 @@ body {
   color: #e05252;
   background: rgba(224, 82, 82, 0.1);
 }
+.calendar-settings-source-row .source-sync {
+  flex-shrink: 0;
+  padding: 0.2rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  cursor: pointer;
+  border: none;
+  background: none;
+  border-radius: 4px;
+}
+.calendar-settings-source-row .source-sync:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.calendar-settings-source-row .source-sync:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.calendar-settings-source-row .source-visible {
+  flex-shrink: 0;
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.calendar-settings-source-row .source-color {
+  flex-shrink: 0;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+.calendar-settings-source-row .source-name-input {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 0.05rem 0.25rem;
+  width: 100%;
+  font-family: var(--font);
+}
+.calendar-settings-source-row .source-name-input:hover,
+.calendar-settings-source-row .source-name-input:focus {
+  border-color: var(--border);
+  background: var(--surface);
+}
+.calendar-settings-source-row .source-error {
+  font-size: 0.72rem;
+  color: #e05252;
+  margin-top: 0.15rem;
+}
+/* Per-tile source filter rows */
+.calendar-settings-tiles-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.calendar-settings-tile-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.calendar-settings-tile-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.82rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar-settings-tile-source {
+  flex-shrink: 0;
+  max-width: 12rem;
+}
 .calendar-settings-add-form {
   padding: 0.5rem 0;
   border-top: 1px solid var(--border);
