@@ -33720,7 +33720,15 @@ async function populateAdminUsersList() {
     // toast instead of silently doing nothing (a previous
     // `ReferenceError: isSelf` shipped to production because the async
     // function bailed before any toast fallback could fire).
-    container.addEventListener("click", async (e) => {
+    //
+    // Guarded: the container element itself is never replaced (only
+    // innerHTML), so an unguarded addEventListener here would stack one
+    // handler per refresh — one click firing N API calls, N toasts,
+    // N modals. The search input and add-user form below are recreated
+    // by the innerHTML rewrite each call, so those still rebind fresh.
+    if (!container.dataset.bound) {
+      container.dataset.bound = "1";
+      container.addEventListener("click", async (e) => {
       try {
         // View — open the admin user profile modal (kebab dropdown with
         // Reset PW / Sessions / Deactivate / Reactivate / Delete Personal Data).
@@ -33817,6 +33825,7 @@ async function populateAdminUsersList() {
         showToast("Action failed: " + (err?.message || err), true);
       }
     });
+    } // end guarded container click binding
 
     // Add user form
     const addBtn = $("#admin-add-user-btn");
@@ -34115,7 +34124,13 @@ function _renderAdminUserKebabMenu(user, opts = {}) {
     } });
   }
 
-  // Reset Password
+  // Reset Password — same temp-password flow as the inline row action:
+  // POST /api/v2/users/{id}/reset-password {method:"temp"} returns
+  // {tempPassword}, shown in the copy-friendly dialog (which also
+  // offers Send-via-Email/Telegram with a proper body). The previous
+  // code POSTed /reset-password/send with NO body, which the server
+  // always rejects with 400 "password is required" — so Reset
+  // Password from this modal was dead while the row button worked.
   items.push({ icon: "ti-key", label: "Reset Password", onClick: async () => {
     const ok = await confirmDialog({
       title: "Reset Password",
@@ -34124,18 +34139,10 @@ function _renderAdminUserKebabMenu(user, opts = {}) {
     });
     if (!ok) return;
     try {
-      const res = await api(`/api/v2/users/${encodeURIComponent(user.id)}/reset-password/send`, { method: "POST" });
-      if (res && res.temporaryPassword) {
-        // Show the temp password in a copy-friendly dialog.
-        await confirmDialog({
-          title: "Temporary Password",
-          message: `New temporary password for ${user.email}:\n\n${res.temporaryPassword}\n\nShare this with the user. They'll be forced to change it on next login.`,
-          confirmLabel: "Copy & Close",
-          danger: false,
-        });
-        if (navigator.clipboard) {
-          try { await navigator.clipboard.writeText(res.temporaryPassword); showToast("Copied to clipboard"); } catch (_) {}
-        }
+      const result = await api(`/api/v2/users/${encodeURIComponent(user.id)}/reset-password`, { method: "POST", body: JSON.stringify({ method: "temp" }) });
+      const pw = result.tempPassword || "";
+      if (pw) {
+        showTempPasswordDialog(pw, user.id, user.email || "");
       } else {
         showToast("Password reset initiated");
       }
