@@ -858,10 +858,14 @@ function groupFilterSummary(group) {
     const st = state.stages.find((s) => String(s.id) === String(group.stageId));
     if (st) parts.push(`Filter stage: ${st.title}`);
   }
-  if (group.groupBy === "stage" && group.visibleStageIds?.length) {
+  if (group.groupBy === "stage" && group.stageColumnsConfigured && group.visibleStageIds?.length) {
     const n = group.visibleStageIds.length;
     const total = state.stages.length;
-    if (n < total) parts.push(`${n} stage columns`);
+    if (n < total) {
+      // Warn when the filter selected a stage that is also hidden by the column selector.
+      const filterStageHidden = !group.visibleStageIds.includes(String(group.stageId));
+      parts.push(filterStageHidden ? `${n} stage columns (filter column auto-shown)` : `${n} stage columns`);
+    }
   }
   if (group.groupBy === "stage" && group.showEmptyStages === false) {
     parts.push("Hiding empty stages");
@@ -3026,6 +3030,24 @@ function ensureVisibleStageIds(group) {
 function isStageColumnVisible(group, stageId) {
   if (!group.stageColumnsConfigured) return true;
   return (group.visibleStageIds || []).includes(String(stageId));
+}
+
+/**
+ * Effective stage-id set: user's visibleStageIds PLUS the explicit stageId
+ * filter, so a filtered stage can never silently drop its own column.
+ * Pure. Mirrored in tests/test_group_filters.mjs.
+ */
+function effectiveVisibleStageIds(group) {
+  if (!group.stageColumnsConfigured) return null; // null = "all stages visible" (pre-configuration)
+  const out = new Set((group.visibleStageIds || []).map(String));
+  if (group.stageId != null && group.stageId !== "") out.add(String(group.stageId));
+  return out;
+}
+
+function isStageEffectivelyVisible(group, stageId) {
+  const set = effectiveVisibleStageIds(group);
+  if (set === null) return true;
+  return set.has(String(stageId));
 }
 
 function getOpportunityContactLabel(opp) {
@@ -10994,11 +11016,10 @@ function buildTagCatalog() {
 }
 
 function tagLookupKey(value, catalog) {
+  // Title-based key. (Old ID-equality branch was dead: no UI path stores tag
+  // IDs in group.tagTitles, so the byId check fired on titles and never matched.)
   const raw = normalizeTagTitle(value);
   if (!raw) return "";
-  if (catalog?.byId?.has(raw)) {
-    return catalog.byId.get(raw).title.toLowerCase();
-  }
   const lower = raw.toLowerCase();
   if (catalog?.byTitleLower?.has(lower)) return lower;
   return lower;
@@ -11576,6 +11597,9 @@ function buildFilterQuery(group) {
 
   if (group.stageType !== "") params.set("stageType", group.stageType);
   else if (group.dealStatus === "open") params.set("stageType", "0");
+  // TODO(perf): "closed" currently returns all stages server-side; mirror
+  // searchPopup's parallel won(1) + lost(2) fetches so the 500-cap doesn't
+  // drop one of the two halves when a large closed set is requested.
 
   if (group.stageId) params.set("opportunityStagesid", group.stageId);
 
@@ -11637,8 +11661,9 @@ function groupOpportunities(group) {
 
   if (groupBy === "stage") {
     ensureVisibleStageIds(group);
+    const visibleSet = effectiveVisibleStageIds(group);
     const columns = state.stages
-      .filter((s) => isStageColumnVisible(group, s.id))
+      .filter((s) => visibleSet === null || visibleSet.has(String(s.id)))
       .map((s) => ({
         id: Number(s.id),
         title: s.title,
@@ -11673,6 +11698,22 @@ function groupOpportunities(group) {
       const known = state.allTags.find((t) => tagsEqual(t.title || t, tag));
       return known?.title || tag;
     };
+
+    if (selected.length === 0) {
+      // No tags selected — return a single placeholder column so the board
+      // shows the empty-state hint instead of looking like a load failure.
+      return [
+        {
+          id: "tag-empty",
+          title: "Select tags",
+          color: "#4f8cff",
+          items: [],
+          stageId: null,
+          empty: true,
+          placeholder: "Select tags in the filter bar to group by them.",
+        },
+      ];
+    }
 
     if (selected.length > 0) {
       const catalog = buildTagCatalog();
@@ -12220,7 +12261,8 @@ function renderGroupBoard(group, container, onComplete) {
     body.className = "column-body";
 
     if (!col.items.length) {
-      body.innerHTML = '<p class="empty-column">No deals</p>';
+      const hint = col.placeholder || "No deals";
+      body.innerHTML = `<p class="empty-column">${escapeHtml(hint)}</p>`;
     }
 
     column.appendChild(header);
@@ -12609,7 +12651,6 @@ function renderBoardGroups() {
       // Rebuild stage filter options (stages may have changed).
       const stageFilter = $(".stage-filter", section);
       if (stageFilter) {
-        const prev = stageFilter.value;
         stageFilter.innerHTML = '<option value="">All stages</option>';
         for (const s of state.stages) {
           const opt = document.createElement("option");
@@ -12617,7 +12658,14 @@ function renderBoardGroups() {
           opt.textContent = s.title;
           stageFilter.appendChild(opt);
         }
-        stageFilter.value = group.stageId || prev || "";
+        // Only keep group.stageId if the option still exists; otherwise the select
+        // would silently retain a removed stage and buildFilterQuery would 0 it out.
+        const ids = new Set(state.stages.map((s) => String(s.id)));
+        if (group.stageId && !ids.has(String(group.stageId))) {
+          group.stageId = "";
+          saveGroupsToStorage();
+        }
+        stageFilter.value = group.stageId || "";
       }
 
       syncStageGroupFiltersUI(section, group);
@@ -42114,6 +42162,11 @@ async function refreshGroup(group, opts = {}) {
   try {
     let items = await fetchOpportunitiesForGroup(group, { force, _manualGroupTileRefresh });
     clearTimeout(loadingTimer);
+    // dealStatus="open" was already pushed to the server as stageType=0 by
+    // buildFilterQuery, so the !group.stageType guard skips the redundant
+    // client filter in that case. For "closed" the server returns ALL stages
+    // (no stageType sent) and the client drops opens — see TODO in
+    // buildFilterQuery about mirroring the popup's parallel won+lost fetch.
     if (group.dealStatus !== "all" && !group.stageType) {
       items = applyClientDealStatus(items, group.dealStatus);
     }

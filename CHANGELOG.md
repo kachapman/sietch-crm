@@ -2,6 +2,27 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Group kanban filter audit + fixes (2026-10-16)
+
+Plan: `/home/chapman-server/.opencode/plan/group-filter-audit.md`.
+
+### Fixed (`public/app.js`)
+
+- **Filter stage no longer hides its own column.** New `effectiveVisibleStageIds(group)` always includes the explicit `stageId` filter even when the user has hidden that column; `groupOpportunities` uses the effective set so cards never silently disappear when a stage filter is combined with the column multiselect. `isStageColumnVisible` retained for the multiselect checkboxes' UI; the new helper drives what actually renders.
+- **Stale stage dropdown values are cleared.** When `state.stages` shrinks, the update path now resets `group.stageId` to `""` (with a save) if the new option list doesn't contain it — no more dead stageId reaching the API.
+- **`groupBy="tag"` + no tags selected** now shows a "Select tags" placeholder column with a hint instead of an empty board.
+- **`tagLookupKey` dead ID branch removed.** The `catalog.byId.has(raw)` check fired on normalized titles and never matched; only the title-based path was real. Pure title lookup now (no UI path stored IDs in `group.tagTitles`).
+- **Filter summary warns** when the stage filter is hidden by the column selector: "... stage columns (filter column auto-shown)".
+
+### Documented (no behavior change)
+
+- `dealStatus="closed"` over-fetches: server returns all stages, client filters. `buildFilterQuery` carries a `TODO(perf)` to mirror the search popup's parallel won+lost fetches.
+- `refreshGroup`'s `!group.stageType` guard now has an inline comment explaining why the second filter is skipped for "open" but not "closed".
+
+### Tests
+
+- `tests/test_group_filters.mjs` (new, 12 tests): effective-visible stages (null vs configured, hidden filter auto-shown, numeric/string coercion), `tagLookupKey` (normalization, catalog hit, empty), and `groupFilterSummary` warning branch. 12/12 pass. Full regression green (16 JS files + 15 Python suites, 0 failures).
+
 ## Calendar parity Phase 6: reminders + search + polish (2026-10-16)
 
 ### Reminders

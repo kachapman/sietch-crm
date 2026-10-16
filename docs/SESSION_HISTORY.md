@@ -13,7 +13,17 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-16
 
-**Topic:** Calendar parity Phase 6 — reminders + search + polish. **All 6 phases shipped.**
+**Topic:** Group kanban filter audit + fixes.
+
+**Status: SHIPPED.** Plan at `/home/chapman-server/.opencode/plan/group-filter-audit.md`. 12 new JS mirror tests; full regression green (16 JS files + 15 Python suites, 0 failures).
+
+**Fixed:** filter stage now always renders its column even when hidden by the column multiselect (new `effectiveVisibleStageIds` helper); stage dropdown no longer carries a stale value after `state.stages` shrinks; `groupBy="tag"` + empty tags now shows a "Select tags" placeholder; `tagLookupKey` dead ID branch removed; filter summary warns when the filtered stage is hidden. Documented `dealStatus="closed"` perf TODO + inline comment for the `!group.stageType` guard.
+
+**Next:** Per the plan, remaining smells are out of scope: per-stage color picker, custom-field filters on the tile, drag-to-reorder columns, virtualized rendering. Other CRM-tile work is a separate audit.
+
+---
+
+## Previous summary (2026-10-16 — calendar Phase 6)
 
 **Status: PHASE 6 SHIPPED — PLAN COMPLETE.** Snooze (10m/1h) + Dismiss buttons on every calendar reminder card (new migration 036 + `snoozed_until` column, sweep honors it). Telegram pref key fixed (`calendar_telegram` → `telegram_calendar_reminder`, legacy row still honored). New `GET /api/v2/calendar/search` (paginated, ILIKE) and `GET /api/v2/calendar/export` (fresh .ics, RFC-5545 escaping via pure `_ics_dump` helper). Settings modal "Search & Export" section: search box, Print current view, Export .ics. `@media print` CSS hides everything but the tile. 16 new tests (38 JS files + 15 Python suites, 0 failures). Recovery: lost a class-indent boundary when inserting `_ics_dump`; `git stash/checkout` reset clean, then re-applied Phase 6 surgically with all subsequent edits as `+4`-space appendages — final compile + full regression green.
 
