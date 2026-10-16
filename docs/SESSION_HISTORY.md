@@ -13,7 +13,15 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-16
 
-**Topic:** Calendar parity Phase 2 — recurrence expansion.
+**Topic:** Calendar parity Phase 3 — views.
+
+**Status: PHASE 3 SHIPPED.** Week/day rewritten (0–24h, all-day strip + continuations, positioned durations, overlap columns, now-line, working-hours shade, click-to-create with hour prefill); month `+more` jumps to day view + empty-day click creates; agenda location/ranges/load-more; week-start + 12/24h display prefs persisted via profile (`calendarDisplay`). 10 new JS mirror tests (24/24 pass); full regression green (15 JS files + 12 Python suites, 0 failures).
+
+**Next:** Phase 4 editor + detail actions (recurrence editor, per-event TZ/color/busy-URL/attendees/custom reminder, validation, Edit/Delete from detail, Only+Series scope). Files: `public/app.js`, `public/index.html`, `public/styles.css`, `user_profile_store.py`, `tests/test_calendar_views.mjs`, `CHANGELOG.md`.
+
+---
+
+## Previous summary (2026-10-16 — calendar Phase 2)
 
 **Status: PHASE 2 SHIPPED.** Expand-at-sync per locked decision. 21 new tests (15 expansion + 6 sync; 52 Python calendar tests total), all suites green (15 JS files + 12 Python suites, 0 failures).
 

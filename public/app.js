@@ -810,6 +810,7 @@ const state = {
   feedLoading: false,
   calendarTiles: [],
   calendarCache: {},
+  calendarDisplay: { weekStart: "sun", timeFormat: "24h" },
   notesTiles: [],
   notes: [],                 // personal notes from PostgreSQL (/api/v2/notes)
   notesTileMode: "browse",   // "browse" | "edit" — single notes tile mode
@@ -3070,8 +3071,105 @@ function saveGroupsToStorage() {
 }
 
 function stripCalendarRuntimeFields(cal) {
-  const { _el, _loading, ...rest } = cal;
+  const { _el, _loading, agendaLimit, ...rest } = cal;
   return rest;
+}
+
+/** Shared display prefs (week start, clock format) with safe defaults. */
+function calendarDisplayPrefs() {
+  const d = state.calendarDisplay || {};
+  return {
+    weekStart: d.weekStart === "mon" ? "mon" : "sun",
+    timeFormat: d.timeFormat === "12h" ? "12h" : "24h",
+  };
+}
+
+function setCalendarDisplayPrefs(patch) {
+  state.calendarDisplay = { ...calendarDisplayPrefs(), ...patch };
+  scheduleUserProfileSave();
+}
+
+/** "14:05" or "2:05 PM" depending on the clock-format pref. Pure. */
+function formatCalendarClock(hour, minute, timeFormat) {
+  const fmt = timeFormat || calendarDisplayPrefs().timeFormat;
+  const m = String(minute).padStart(2, "0");
+  if (fmt === "12h") {
+    const suffix = hour >= 12 ? "PM" : "AM";
+    const h = hour % 12 === 0 ? 12 : hour % 12;
+    return `${h}:${m} ${suffix}`;
+  }
+  return `${String(hour).padStart(2, "0")}:${m}`;
+}
+
+/** Minutes since midnight for an event start in the display timezone (null for all-day). */
+function eventStartMinutesInTimezone(ev, timeZone) {
+  if (ev.start?.allDay) return null;
+  const ms = eventStartUtcMs(ev);
+  if (!Number.isFinite(ms)) return null;
+  const p = getZonedParts(ms, timeZone);
+  return p.hour * 60 + p.minute;
+}
+
+/** Minutes since midnight for an event end (falls back to start + 60m). */
+function eventEndMinutesInTimezone(ev, timeZone) {
+  if (ev.start?.allDay) return null;
+  const endMs = eventEndUtcMs(ev);
+  const base = Number.isFinite(endMs) ? endMs : (eventStartUtcMs(ev) || 0) + 3600000;
+  if (!Number.isFinite(base)) return null;
+  const p = getZonedParts(base, timeZone);
+  return p.hour * 60 + p.minute;
+}
+
+/** "9:00 AM – 10:30 AM" / "09:00 – 10:30" range label, or "" for all-day. Pure. */
+function formatEventRangeInTimezone(ev, timeZone, timeFormat) {
+  const s = eventStartMinutesInTimezone(ev, timeZone);
+  if (s == null) return "";
+  const e = eventEndMinutesInTimezone(ev, timeZone);
+  const fmt = (mins) => formatCalendarClock(Math.floor(mins / 60) % 24, mins % 60, timeFormat);
+  if (e == null || e <= s) return fmt(s);
+  return `${fmt(s)} – ${fmt(e)}`;
+}
+
+/**
+ * Column layout for overlapping timed events on one day. Pure.
+ * Input: [{start: minutes, end: minutes}] sorted or not. Output: [{col, ncols}]
+ * in the same order — overlapping events share the row width side-by-side.
+ */
+function layoutDayEvents(spans) {
+  const idx = spans.map((s, i) => ({ ...s, _i: i })).sort((a, b) => a.start - b.start || a.end - b.end);
+  const out = new Array(spans.length);
+  let cluster = [];
+  let clusterEnd = -1;
+  const flush = () => {
+    const cols = [];
+    for (const ev of cluster) {
+      let c = 0;
+      while (cols[c] != null && cols[c] > ev.start) c++;
+      cols[c] = ev.end;
+      out[ev._i] = { col: c, ncols: 0 };
+    }
+    const ncols = cols.length || 1;
+    for (const ev of cluster) out[ev._i].ncols = ncols;
+    cluster = [];
+    clusterEnd = -1;
+  };
+  for (const ev of idx) {
+    if (cluster.length && ev.start >= clusterEnd) flush();
+    cluster.push(ev);
+    clusterEnd = Math.max(clusterEnd, ev.end);
+  }
+  if (cluster.length) flush();
+  return out;
+}
+
+/** Week start date (Sun or Mon per pref) for the week containing (y, m, d). Pure. */
+function calendarWeekStartDate(y, m, d, weekStart) {
+  const ws = weekStart === "mon" ? "mon" : "sun";
+  const anchor = new Date(y, m - 1, d);
+  const shift = ws === "mon" ? (anchor.getDay() + 6) % 7 : anchor.getDay();
+  const start = new Date(anchor);
+  start.setDate(start.getDate() - shift);
+  return start;
 }
 
 function newCalendarTile(overrides = {}) {
@@ -3400,9 +3498,7 @@ function calendarViewNavLabel(cal) {
     return `${wd} ${cal.viewMonth}/${cal.viewDay}/${cal.viewYear}`;
   }
   if (view === "week") {
-    const anchor = new Date(cal.viewYear, cal.viewMonth - 1, cal.viewDay);
-    const start = new Date(anchor);
-    start.setDate(start.getDate() - start.getDay());
+    const start = calendarWeekStartDate(cal.viewYear, cal.viewMonth, cal.viewDay, calendarDisplayPrefs().weekStart);
     const end = new Date(start);
     end.setDate(end.getDate() + 6);
     const sm = CALENDAR_MONTH_SHORT[start.getMonth()];
@@ -3435,9 +3531,7 @@ function calendarViewRange(cal) {
     return { startStr: s, endStr: s };
   }
   if (view === "week") {
-    const anchor = new Date(y, m - 1, day);
-    const start = new Date(anchor);
-    start.setDate(start.getDate() - start.getDay());
+    const start = calendarWeekStartDate(y, m, day, calendarDisplayPrefs().weekStart);
     const end = new Date(start);
     end.setDate(end.getDate() + 6);
     return { startStr: formatCalendarYmd(start), endStr: formatCalendarYmd(end) };
@@ -3453,9 +3547,36 @@ function calendarViewRange(cal) {
   return { startStr: formatCalendarYmd(startDate), endStr: formatCalendarYmd(endDate) };
 }
 
+/** Switch a tile's view, syncing tabs/nav, then refetch for the new range. */
+function setCalendarView(section, cal, view) {
+  if (!["month", "week", "day", "agenda"].includes(view)) return;
+  cal.view = view;
+  // Agenda shows more rows on repeated visits; reset the paging each time.
+  if (view === "agenda") cal.agendaLimit = 50;
+  saveCalendarsToStorage();
+  section?.querySelectorAll(".calendar-view-tab").forEach((b) =>
+    b.classList.toggle("active", b.dataset.view === view)
+  );
+  updateCalendarNavVisibility(section, cal);
+  loadCalendarForTile(cal).catch(() => {});
+}
+
 function eventDateParts(dt) {
   if (!dt) return null;
   return { y: dt.year, m: dt.month, d: dt.day };
+}
+
+/** Jump a tile to a specific date (and optional view). */
+function jumpCalendarToDate(section, cal, y, m, d, view) {
+  cal.viewYear = y;
+  cal.viewMonth = m;
+  cal.viewDay = d;
+  saveCalendarsToStorage();
+  if (view) setCalendarView(section, cal, view);
+  else {
+    updateCalendarNavVisibility(section, cal);
+    loadCalendarForTile(cal).catch(() => {});
+  }
 }
 
 function eventOnCalendarDay(ev, year, month, day, timeZone) {
@@ -3489,7 +3610,7 @@ function formatEventTimeInTimezone(ev, timeZone) {
   const ms = eventStartUtcMs(ev);
   if (!Number.isFinite(ms)) return "";
   const p = getZonedParts(ms, timeZone);
-  return `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")} `;
+  return formatCalendarClock(p.hour, p.minute) + " ";
 }
 
 function eventsForCalendarDay(events, year, month, day, timeZone) {
@@ -3505,7 +3626,8 @@ function eventsForCalendarDay(events, year, month, day, timeZone) {
 
 function buildCalendarMonthGrid(year, month) {
   const first = new Date(year, month - 1, 1);
-  const startPad = first.getDay();
+  const weekStart = calendarDisplayPrefs().weekStart;
+  const startPad = weekStart === "mon" ? (first.getDay() + 6) % 7 : first.getDay();
   const daysInMonth = new Date(year, month, 0).getDate();
   const cells = [];
   const prevMonthDays = new Date(year, month - 1, 0).getDate();
@@ -3565,19 +3687,100 @@ function renderCalendarView(section, cal) {
   if (navLabel) navLabel.textContent = calendarViewNavLabel(cal);
 }
 
+const CALENDAR_HOUR_HEIGHT = 44; // px per hour in week/day grids
+const CALENDAR_WORK_START = 8; // working-hours shading window
+const CALENDAR_WORK_END = 18;
+
+/**
+ * One day column for week/day views: all-day strip + 24h positioned events.
+ * Timed events starting this day render as blocks (clipped at midnight, with
+ * overlap columns); all-day events and multi-day continuations render as
+ * strip chips. Returns HTML for a single `.calendar-time-col`.
+ */
+function buildCalendarTimeCol(dayY, dayM, dayD, events, tz, headerHtml, isToday, timeFormat) {
+  const dayStartMs = wallTimeInZoneToUtc(dayY, dayM, dayD, 0, 0, tz);
+  const dayEndMs = dayStartMs + 24 * 3600000;
+  const dateStr = `${dayY}-${String(dayM).padStart(2, "0")}-${String(dayD).padStart(2, "0")}`;
+
+  const stripChips = [];
+  const spans = [];
+  for (const ev of events) {
+    if (ev.status === "CANCELLED") continue;
+    if (ev.start?.allDay) {
+      if (!eventOnCalendarDay(ev, dayY, dayM, dayD, tz)) continue;
+      stripChips.push({ ev, continued: false });
+      continue;
+    }
+    const startMs = eventStartUtcMs(ev);
+    if (!Number.isFinite(startMs)) continue;
+    let endMs = eventEndUtcMs(ev);
+    if (!Number.isFinite(endMs)) endMs = startMs + 3600000;
+    if (endMs < dayStartMs || startMs >= dayEndMs) continue;
+    if (startMs < dayStartMs) {
+      // Continues from an earlier day — strip chip, not a block.
+      stripChips.push({ ev, continued: true });
+      continue;
+    }
+    const sMin = Math.max(0, Math.round((startMs - dayStartMs) / 60000));
+    const eMin = Math.min(1440, Math.round((endMs - dayStartMs) / 60000));
+    spans.push({ ev, start: sMin, end: Math.max(eMin, sMin + 30), continues: endMs > dayEndMs });
+  }
+  const layout = layoutDayEvents(spans.map((s) => ({ start: s.start, end: s.end })));
+
+  let html = `<div class="calendar-time-col">`;
+  html += `<div class="calendar-time-header${isToday ? " calendar-time-today" : ""}">${headerHtml}</div>`;
+  if (stripChips.length) {
+    html += `<div class="calendar-allday-strip">`;
+    for (const { ev, continued } of stripChips) {
+      const color = ev.color || "#5b8abf";
+      const label = continued ? `↔ ${ev.summary || ""}` : (ev.summary || "");
+      html += `<button type="button" class="calendar-allday-chip" style="--event-color:${escapeHtml(color)}" data-event-uid="${escapeHtml(ev.uid || "")}" title="${escapeHtml(label)}">${escapeHtml(label)}</button>`;
+    }
+    html += `</div>`;
+  }
+  html += `<div class="calendar-time-slots">`;
+  for (let h = 0; h < 24; h++) {
+    const off = h < CALENDAR_WORK_START || h >= CALENDAR_WORK_END ? " calendar-hour-off" : "";
+    html += `<div class="calendar-time-slot${off}" data-date="${dateStr}" data-hour="${h}" style="height:${CALENDAR_HOUR_HEIGHT}px"></div>`;
+  }
+  for (let i = 0; i < spans.length; i++) {
+    const { ev, start, end, continues } = spans[i];
+    const { col, ncols } = layout[i];
+    const color = ev.color || "#5b8abf";
+    const top = (start / 60) * CALENDAR_HOUR_HEIGHT;
+    const height = Math.max(((end - start) / 60) * CALENDAR_HOUR_HEIGHT - 2, 20);
+    const width = 100 / ncols;
+    const left = col * width;
+    const timeStr = formatEventRangeInTimezone(ev, tz, timeFormat);
+    const title = `${ev.summary || ""}${timeStr ? ` (${timeStr})` : ""}${continues ? " →" : ""}`;
+    html += `<div class="calendar-time-event" style="--event-color:${escapeHtml(color)};top:${top.toFixed(1)}px;height:${height.toFixed(1)}px;left:${left.toFixed(2)}%;width:calc(${width.toFixed(2)}% - 3px)" data-event-uid="${escapeHtml(ev.uid || "")}" title="${escapeHtml(title)}">`;
+    html += `<div class="calendar-time-event-title">${escapeHtml(ev.summary || "")}${continues ? " →" : ""}</div>`;
+    if (timeStr) html += `<div class="calendar-time-event-time">${escapeHtml(timeStr)}</div>`;
+    html += `</div>`;
+  }
+  if (isToday) {
+    try {
+      const nowP = getZonedParts(Date.now(), tz);
+      const top = ((nowP.hour * 60 + nowP.minute) / 60) * CALENDAR_HOUR_HEIGHT;
+      if (top >= 0 && top <= 24 * CALENDAR_HOUR_HEIGHT) {
+        html += `<div class="calendar-now-line" style="top:${top.toFixed(1)}px" aria-hidden="true"></div>`;
+      }
+    } catch { /* clock unavailable — skip the now-line */ }
+  }
+  html += `</div></div>`;
+  return html;
+}
+
 function renderCalendarWeekView(body, section, cal) {
   const tid = calendarTileId(cal);
   const events = state.calendarCache[tid]?.events || [];
   const tz = resolveCalendarTimezone(cal);
   const today = todayYmdInTimezone(tz);
+  const prefs = calendarDisplayPrefs();
   const y = cal.viewYear || today.year;
   const m = cal.viewMonth || today.month;
   const d = cal.viewDay || today.day;
-  const weekStart = new Date(y, m - 1, d);
-  weekStart.setDate(weekStart.getDate() - weekStart.getDay());
-
-  const hours = [];
-  for (let h = 6; h <= 22; h++) hours.push(h);
+  const weekStart = calendarWeekStartDate(y, m, d, prefs.weekStart);
 
   let html = '<div class="calendar-week-grid">';
   for (let i = 0; i < 7; i++) {
@@ -3588,32 +3791,8 @@ function renderCalendarWeekView(body, section, cal) {
     const dayD = day.getDate();
     const isToday = dayY === today.year && dayM === today.month && dayD === today.day;
     const dayEvents = eventsForCalendarDay(events, dayY, dayM, dayD, tz);
-
-    html += `<div class="calendar-time-col">`;
-    html += `<div class="calendar-time-header${isToday ? " calendar-time-today" : ""}">${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][day.getDay()]} ${dayD}</div>`;
-    html += `<div class="calendar-time-slots">`;
-    for (const h of hours) {
-      const slotEvents = dayEvents.filter(ev => {
-        if (ev.start?.allDay) return false;
-        const ms = eventStartUtcMs(ev);
-        if (!ms) return false;
-        const p = getZonedParts(ms, tz);
-        return p.hour === h;
-      });
-      html += `<div class="calendar-time-slot" data-date="${dayY}-${String(dayM).padStart(2,"0")}-${String(dayD).padStart(2,"0")}" data-hour="${h}">`;
-      for (const ev of slotEvents) {
-        const color = ev.color || "#5b8abf";
-        const startMs = eventStartUtcMs(ev);
-        const p = startMs ? getZonedParts(startMs, tz) : { hour: h, minute: 0 };
-        const timeStr = `${String(p.hour).padStart(2,"0")}:${String(p.minute).padStart(2,"0")}`;
-        html += `<div class="calendar-time-event" style="--event-color:${escapeHtml(color)}" data-event-uid="${escapeHtml(ev.uid || "")}" title="${escapeHtml((ev.summary || "").replace(/"/g, "&quot;"))}">`;
-        html += `<div class="calendar-time-event-title">${escapeHtml(ev.summary || "")}</div>`;
-        html += `<div class="calendar-time-event-time">${timeStr}</div>`;
-        html += `</div>`;
-      }
-      html += `</div>`;
-    }
-    html += `</div></div>`;
+    const header = `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day.getDay()]} ${dayD}`;
+    html += buildCalendarTimeCol(dayY, dayM, dayD, dayEvents, tz, header, isToday, prefs.timeFormat);
   }
   html += '</div>';
   body.innerHTML = html;
@@ -3630,35 +3809,12 @@ function renderCalendarDayView(body, section, cal) {
   const d = cal.viewDay || today.day;
   const isToday = y === today.year && m === today.month && d === today.day;
   const dayEvents = eventsForCalendarDay(events, y, m, d, tz);
+  const prefs = calendarDisplayPrefs();
 
-  const hours = [];
-  for (let h = 6; h <= 22; h++) hours.push(h);
-
-  let html = '<div class="calendar-day-grid"><div class="calendar-time-col">';
-  html += `<div class="calendar-time-header${isToday ? " calendar-time-today" : ""}">${["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][new Date(y, m-1, d).getDay()]} ${m}/${d}/${y}</div>`;
-  html += `<div class="calendar-time-slots">`;
-  for (const h of hours) {
-    const slotEvents = dayEvents.filter(ev => {
-      if (ev.start?.allDay) return false;
-      const ms = eventStartUtcMs(ev);
-      if (!ms) return false;
-      const p = getZonedParts(ms, tz);
-      return p.hour === h;
-    });
-    html += `<div class="calendar-time-slot" data-date="${y}-${String(m).padStart(2,"0")}-${String(d).padStart(2,"0")}" data-hour="${h}">`;
-    for (const ev of slotEvents) {
-      const color = ev.color || "#5b8abf";
-      const startMs = eventStartUtcMs(ev);
-      const p = startMs ? getZonedParts(startMs, tz) : { hour: h, minute: 0 };
-      const timeStr = `${String(p.hour).padStart(2,"0")}:${String(p.minute).padStart(2,"0")}`;
-      html += `<div class="calendar-time-event" style="--event-color:${escapeHtml(color)}" data-event-uid="${escapeHtml(ev.uid || "")}" title="${escapeHtml((ev.summary || "").replace(/"/g, "&quot;"))}">`;
-      html += `<div class="calendar-time-event-title">${escapeHtml(ev.summary || "")}</div>`;
-      html += `<div class="calendar-time-event-time">${timeStr}</div>`;
-      html += `</div>`;
-    }
-    html += `</div>`;
-  }
-  html += `</div></div></div>`;
+  const header = `${CALENDAR_WEEKDAY_NAMES[new Date(y, m - 1, d).getDay()]} ${m}/${d}/${y}`;
+  const html = '<div class="calendar-day-grid">' +
+    buildCalendarTimeCol(y, m, d, dayEvents, tz, header, isToday, prefs.timeFormat) +
+    '</div>';
   body.innerHTML = html;
   bindCalendarEventClicks(body.closest(".dashboard-tile") || section, cal);
 }
@@ -3702,16 +3858,20 @@ function renderCalendarAgendaView(body, section, cal) {
     return endMs && endMs >= nowMs;
   }).sort((a, b) => {
     return eventAgendaSortKey(a) - eventAgendaSortKey(b);
-  }).slice(0, 50);
+  });
+  const total = futureEvents.length;
+  const limit = cal.agendaLimit || 50;
+  const shown = futureEvents.slice(0, limit);
 
-  if (!futureEvents.length) {
+  if (!shown.length) {
     body.innerHTML = '<div class="calendar-agenda-empty">No upcoming events</div>';
     return;
   }
 
+  const prefs = calendarDisplayPrefs();
   let html = '<div class="calendar-agenda">';
   let lastDay = "";
-  for (const ev of futureEvents) {
+  for (const ev of shown) {
     const p = eventAgendaDayParts(ev, tz);
     const dayKey = p ? `${p.year}-${String(p.month).padStart(2,"0")}-${String(p.day).padStart(2,"0")}` : "";
     const isToday = dayKey === `${today.year}-${String(today.month).padStart(2,"0")}-${String(today.day).padStart(2,"0")}`;
@@ -3723,15 +3883,24 @@ function renderCalendarAgendaView(body, section, cal) {
       html += `<div class="calendar-agenda-day"><div class="calendar-agenda-day-header${isToday ? " agenda-today" : ""}">${escapeHtml(dayLabel)}</div>`;
     }
     const color = ev.color || "#5b8abf";
-    const timeLabel = ev.start?.allDay ? "All day" : (p ? `${String(p.hour).padStart(2,"0")}:${String(p.minute).padStart(2,"0")}` : "");
-    html += `<div class="calendar-agenda-event" data-event-uid="${escapeHtml(ev.uid || "")}">`;
+    const timeLabel = ev.start?.allDay ? "All day" : formatEventRangeInTimezone(ev, tz, prefs.timeFormat);
+    html += `<div class="calendar-agenda-event" data-event-uid="${escapeHtml(ev.uid || "")}" role="button" tabindex="0" title="${escapeHtml(ev.summary || "")}">`;
     html += `<div class="calendar-agenda-dot" style="background:${escapeHtml(color)}"></div>`;
     html += `<div class="calendar-agenda-event-info"><div class="calendar-agenda-event-title">${escapeHtml(ev.summary || "")}</div>`;
     if (timeLabel) html += `<div class="calendar-agenda-event-time">${escapeHtml(timeLabel)}</div>`;
+    if (ev.location) html += `<div class="calendar-agenda-event-location">${escapeHtml(ev.location)}</div>`;
     html += `</div></div>`;
   }
   html += '</div>';
+  if (total > shown.length) {
+    html += `<button type="button" class="calendar-agenda-more" data-agenda-more>Show more (${total - shown.length} remaining)</button>`;
+  }
   body.innerHTML = html;
+  body.querySelector("[data-agenda-more]")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    cal.agendaLimit = limit + 50;
+    renderCalendarView(section, cal);
+  });
   bindCalendarEventClicks(body.closest(".dashboard-tile") || section, cal);
 }
 
@@ -3751,7 +3920,9 @@ function renderCalendarMonthBody(section, cal) {
   const today = todayYmdInTimezone(tz);
   const cells = buildCalendarMonthGrid(y, m);
 
-  const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const weekdays = calendarDisplayPrefs().weekStart === "mon"
+    ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    : ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   let headerHtml = '<div class="calendar-month-grid" role="grid" aria-label="Monthly calendar">';
   headerHtml += '<div class="calendar-weekdays" role="row">';
   for (const wd of weekdays) {
@@ -3792,7 +3963,8 @@ function renderCalendarMonthBody(section, cal) {
         html += "</button>";
       }
       if (dayEvents.length > maxShow) {
-        html += `<div class="calendar-more-events">+${dayEvents.length - maxShow} more</div>`;
+        const dateStr = `${cell.year}-${String(cell.month).padStart(2, "0")}-${String(cell.day).padStart(2, "0")}`;
+        html += `<button type="button" class="calendar-more-events" data-more-date="${dateStr}" title="Show all events for ${dateStr}">+${dayEvents.length - maxShow} more</button>`;
       }
       html += "</div></div>";
     }
@@ -3950,14 +4122,41 @@ function bindCalendarEventClicks(section, cal) {
   if (!section || section.dataset.calendarEventsBound) return;
   section.dataset.calendarEventsBound = "1";
   section.addEventListener("click", (e) => {
+    // "+N more" jumps to the day view for that date.
+    const more = e.target.closest(".calendar-more-events");
+    if (more && section.contains(more)) {
+      e.stopPropagation();
+      const parts = (more.dataset.moreDate || "").split("-").map(Number);
+      if (parts.length === 3 && parts.every(Number.isFinite)) {
+        jumpCalendarToDate(section, cal, parts[0], parts[1], parts[2], "day");
+      }
+      return;
+    }
+    // Month chips / week-day blocks / agenda rows open the detail modal.
     // Month chips are <button>s; week/day and agenda rows are <div>s —
     // all carry data-event-uid.
     const chip = e.target.closest("[data-event-uid]");
-    if (!chip || !section.contains(chip)) return;
-    e.stopPropagation();
-    const uid = chip.dataset.eventUid;
-    const ev = findCalendarEventByUid(cal, uid);
-    if (ev) openCalendarEventModal(ev, cal);
+    if (chip && section.contains(chip)) {
+      e.stopPropagation();
+      const uid = chip.dataset.eventUid;
+      const ev = findCalendarEventByUid(cal, uid);
+      if (ev) openCalendarEventModal(ev, cal);
+      return;
+    }
+    // Clicking an empty month day or a week/day hour slot starts a new event there.
+    const dayCell = e.target.closest(".calendar-day, .calendar-time-slot");
+    if (dayCell && section.contains(dayCell)) {
+      e.stopPropagation();
+      const dateStr = dayCell.dataset.date || "";
+      const parts = dateStr.split("-").map(Number);
+      if (parts.length === 3 && parts.every(Number.isFinite)) {
+        const hour = dayCell.dataset.hour != null ? Number(dayCell.dataset.hour) : null;
+        openCalendarEventEditModal(null, cal, {
+          year: parts[0], month: parts[1], day: parts[2],
+          hour: Number.isFinite(hour) ? hour : 9, minute: 0,
+        });
+      }
+    }
   });
 }
 
@@ -5803,16 +6002,39 @@ function bindCalendarSettingsModal() {
   }
   browserCb?.addEventListener("change", saveCalendarNotifPref);
   telegramCb?.addEventListener("change", saveCalendarNotifPref);
+  // Display prefs (week start, clock format) — shared profile state.
+  const weekStartSel = $("#cal-settings-week-start");
+  const timeFormatSel = $("#cal-settings-time-format");
+  const syncDisplayPrefsUI = () => {
+    const prefs = calendarDisplayPrefs();
+    if (weekStartSel) weekStartSel.value = prefs.weekStart;
+    if (timeFormatSel) timeFormatSel.value = prefs.timeFormat;
+  };
+  const saveDisplayPrefs = () => {
+    setCalendarDisplayPrefs({
+      weekStart: weekStartSel?.value === "mon" ? "mon" : "sun",
+      timeFormat: timeFormatSel?.value === "12h" ? "12h" : "24h",
+    });
+    // Re-render open calendar tiles so grids/labels pick up the new prefs.
+    for (const cal of state.calendarTiles) {
+      if (cal._el) renderCalendarView(cal._el, cal);
+    }
+  };
+  weekStartSel?.addEventListener("change", saveDisplayPrefs);
+  timeFormatSel?.addEventListener("change", saveDisplayPrefs);
   // Load settings when modal opens
   const observer = new MutationObserver(() => {
-    if (!modal.classList.contains("hidden")) loadCalendarSettings();
+    if (!modal.classList.contains("hidden")) {
+      loadCalendarSettings();
+      syncDisplayPrefsUI();
+    }
   });
   observer.observe(modal, { attributes: true, attributeFilter: ["class"] });
 }
 
 // ── Calendar Event Edit Modal ────────────────────────────────────────────────
 
-function openCalendarEventEditModal(ev, cal) {
+function openCalendarEventEditModal(ev, cal, prefill) {
   const modal = $("#calendar-event-edit-modal");
   if (!modal) return;
   const isEdit = !!ev;
@@ -5847,6 +6069,14 @@ function openCalendarEventEditModal(ev, cal) {
         $("#cal-edit-end-time").value = `${String(ep.hour).padStart(2,"0")}:${String(ep.minute).padStart(2,"0")}`;
       }
     }
+  } else if (prefill && Number.isFinite(prefill.year)) {
+    const pDate = `${prefill.year}-${String(prefill.month).padStart(2, "0")}-${String(prefill.day).padStart(2, "0")}`;
+    const pHour = Number.isFinite(prefill.hour) ? prefill.hour : 9;
+    const pMin = Number.isFinite(prefill.minute) ? prefill.minute : 0;
+    $("#cal-edit-start-date").value = pDate;
+    $("#cal-edit-start-time").value = `${String(pHour).padStart(2, "0")}:${String(pMin).padStart(2, "0")}`;
+    $("#cal-edit-end-date").value = pDate;
+    $("#cal-edit-end-time").value = `${String((pHour + 1) % 24).padStart(2, "0")}:${String(pMin).padStart(2, "0")}`;
   } else {
     const now = new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
@@ -6171,12 +6401,7 @@ function bindCalendarTileChrome(section, cal, tileId) {
     btn.innerHTML = `<span class="tab-icon">${v.icon}</span><span class="tab-label">${v.label}</span>`;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      cal.view = v.key;
-      saveCalendarsToStorage();
-      viewTabs.querySelectorAll(".calendar-view-tab").forEach(b => b.classList.toggle("active", b.dataset.view === v.key));
-      updateCalendarNavVisibility(section, cal);
-      // Refetch: each view loads a different date range (month/week/day/agenda).
-      loadCalendarForTile(cal).catch(() => {});
+      setCalendarView(section, cal, v.key);
     });
     viewTabs.appendChild(btn);
   }
@@ -6665,6 +6890,7 @@ function buildUserProfilePayload() {
     groupTemplates: state.groupTemplates,
     hiddenFeedKeys: serializeHiddenFeedEntries(),
     feedKeywordFilter: state.feedKeywordFilter || "",
+    calendarDisplay: { ...calendarDisplayPrefs() },
     bookmarkedDeals: state.bookmarkedDeals.map((d) => stripBookmarkedRuntimeFields(d)),
     minimizedSearchTabs: (minimizedSearchTabs || []).map((t) => ({ oppId: t.oppId, title: t.title })),
   };
@@ -6767,6 +6993,14 @@ function applyUserProfile(profile) {
   // Feed keyword filter
   if (typeof profile.feedKeywordFilter === "string") {
     state.feedKeywordFilter = profile.feedKeywordFilter;
+  }
+
+  // Shared calendar display prefs
+  if (profile.calendarDisplay && typeof profile.calendarDisplay === "object") {
+    state.calendarDisplay = {
+      weekStart: profile.calendarDisplay.weekStart === "mon" ? "mon" : "sun",
+      timeFormat: profile.calendarDisplay.timeFormat === "12h" ? "12h" : "24h",
+    };
   }
 }
 

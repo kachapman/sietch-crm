@@ -32,6 +32,7 @@ def _empty_profile() -> dict[str, Any]:
         "groups": [],
         "tileLayout": {"order": [], "widths": {}, "heights": {}, "collapsed": {}, "pinned": {}},
         "calendarTiles": [],
+        "calendarDisplay": {"weekStart": "sun", "timeFormat": "24h"},
         "notesTiles": [],
         "groupTemplates": [],
         "hiddenFeedKeys": [],
@@ -69,6 +70,13 @@ def _clean_notes_tiles(tiles: Any) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def _clean_calendar_display(value: Any) -> dict[str, str]:
+    """Display prefs shared by all calendar tiles (week start, clock format)."""
+    week_start = "mon" if isinstance(value, dict) and str(value.get("weekStart") or "").lower() in ("mon", "monday") else "sun"
+    time_format = "12h" if isinstance(value, dict) and str(value.get("timeFormat") or "").lower() in ("12h", "12") else "24h"
+    return {"weekStart": week_start, "timeFormat": time_format}
 
 
 def _clean_calendar_tiles(tiles: Any) -> list[dict[str, Any]]:
@@ -234,6 +242,7 @@ def load_user_profile(portal: str, user_id: str) -> dict[str, Any]:
         if "tasksColumns" in layout:
             profile["tileLayout"]["tasksColumns"] = bool(layout["tasksColumns"])
     profile["calendarTiles"] = _clean_calendar_tiles(data.get("calendarTiles"))
+    profile["calendarDisplay"] = _clean_calendar_display(data.get("calendarDisplay"))
     profile["notesTiles"] = _clean_notes_tiles(data.get("notesTiles"))
     templates = data.get("groupTemplates")
     profile["groupTemplates"] = templates if isinstance(templates, list) else []
@@ -260,6 +269,7 @@ def save_user_profile(portal: str, user_id: str, payload: dict[str, Any]) -> dic
         if isinstance(payload.get("tileLayout"), dict)
         else _empty_profile()["tileLayout"],
         "calendarTiles": _clean_calendar_tiles(payload.get("calendarTiles")),
+        "calendarDisplay": _clean_calendar_display(payload.get("calendarDisplay")),
         "notesTiles": _clean_notes_tiles(payload.get("notesTiles")),
         "groupTemplates": payload.get("groupTemplates")
         if isinstance(payload.get("groupTemplates"), list)

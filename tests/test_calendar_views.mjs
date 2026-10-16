@@ -215,3 +215,126 @@ test('week label shows range across months', () => {
 test('agenda label is Upcoming', () => {
   assert.equal(calendarViewNavLabel({ view: 'agenda' }), 'Upcoming');
 });
+
+// ── Phase 3 mirrors ────────────────────────────────────────────────
+// Mirrors of public/app.js#formatCalendarClock, layoutDayEvents,
+// calendarWeekStartDate. Keep in sync with app.js.
+
+function formatCalendarClock(hour, minute, timeFormat) {
+  const fmt = timeFormat || '24h';
+  const m = String(minute).padStart(2, "0");
+  if (fmt === "12h") {
+    const suffix = hour >= 12 ? "PM" : "AM";
+    const h = hour % 12 === 0 ? 12 : hour % 12;
+    return `${h}:${m} ${suffix}`;
+  }
+  return `${String(hour).padStart(2, "0")}:${m}`;
+}
+
+function layoutDayEvents(spans) {
+  const idx = spans.map((s, i) => ({ ...s, _i: i })).sort((a, b) => a.start - b.start || a.end - b.end);
+  const out = new Array(spans.length);
+  let cluster = [];
+  let clusterEnd = -1;
+  const flush = () => {
+    const cols = [];
+    for (const ev of cluster) {
+      let c = 0;
+      while (cols[c] != null && cols[c] > ev.start) c++;
+      cols[c] = ev.end;
+      out[ev._i] = { col: c, ncols: 0 };
+    }
+    const ncols = cols.length || 1;
+    for (const ev of cluster) out[ev._i].ncols = ncols;
+    cluster = [];
+    clusterEnd = -1;
+  };
+  for (const ev of idx) {
+    if (cluster.length && ev.start >= clusterEnd) flush();
+    cluster.push(ev);
+    clusterEnd = Math.max(clusterEnd, ev.end);
+  }
+  if (cluster.length) flush();
+  return out;
+}
+
+function calendarWeekStartDate(y, m, d, weekStart) {
+  const ws = weekStart === "mon" ? "mon" : "sun";
+  const anchor = new Date(y, m - 1, d);
+  const shift = ws === "mon" ? (anchor.getDay() + 6) % 7 : anchor.getDay();
+  const start = new Date(anchor);
+  start.setDate(start.getDate() - shift);
+  return start;
+}
+
+test('24h clock pads hours', () => {
+  assert.equal(formatCalendarClock(9, 5, '24h'), '09:05');
+  assert.equal(formatCalendarClock(14, 30, '24h'), '14:30');
+});
+
+test('12h clock converts correctly', () => {
+  assert.equal(formatCalendarClock(0, 0, '12h'), '12:00 AM');
+  assert.equal(formatCalendarClock(9, 5, '12h'), '9:05 AM');
+  assert.equal(formatCalendarClock(12, 0, '12h'), '12:00 PM');
+  assert.equal(formatCalendarClock(14, 30, '12h'), '2:30 PM');
+  assert.equal(formatCalendarClock(23, 59, '12h'), '11:59 PM');
+});
+
+test('non-overlapping events each take the full width', () => {
+  const out = layoutDayEvents([
+    { start: 540, end: 600 },
+    { start: 660, end: 720 },
+  ]);
+  assert.deepEqual(out, [{ col: 0, ncols: 1 }, { col: 0, ncols: 1 }]);
+});
+
+test('overlapping events share columns', () => {
+  const out = layoutDayEvents([
+    { start: 540, end: 660 },
+    { start: 600, end: 720 },
+  ]);
+  assert.deepEqual(out, [{ col: 0, ncols: 2 }, { col: 1, ncols: 2 }]);
+});
+
+test('three-way overlap gets three columns', () => {
+  const out = layoutDayEvents([
+    { start: 540, end: 700 },
+    { start: 560, end: 640 },
+    { start: 600, end: 720 },
+  ]);
+  assert.deepEqual(out.map(o => o.ncols), [3, 3, 3]);
+  assert.deepEqual(out.map(o => o.col).sort(), [0, 1, 2]);
+});
+
+test('adjacent events do not overlap', () => {
+  const out = layoutDayEvents([
+    { start: 540, end: 600 },
+    { start: 600, end: 660 },
+  ]);
+  assert.deepEqual(out, [{ col: 0, ncols: 1 }, { col: 0, ncols: 1 }]);
+});
+
+test('separate clusters are independent', () => {
+  const out = layoutDayEvents([
+    { start: 540, end: 660 },
+    { start: 600, end: 620 },
+    { start: 800, end: 860 },
+  ]);
+  assert.equal(out[2].ncols, 1);
+  assert.equal(out[0].ncols, 2);
+});
+
+test('week start Sunday by default', () => {
+  const s = calendarWeekStartDate(2026, 10, 16, 'sun');
+  assert.equal(formatCalendarYmd(s), '2026-10-11');
+});
+
+test('week start Monday shifts the anchor', () => {
+  const s = calendarWeekStartDate(2026, 10, 16, 'mon');
+  assert.equal(formatCalendarYmd(s), '2026-10-12');
+});
+
+test('week start Monday on a Sunday goes back 6 days', () => {
+  const s = calendarWeekStartDate(2026, 10, 18, 'mon');
+  assert.equal(formatCalendarYmd(s), '2026-10-12');
+});

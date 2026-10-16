@@ -2,6 +2,29 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Calendar parity Phase 3: views (2026-10-16)
+
+### Week/day rewrite (`public/app.js`, `styles.css`)
+
+- Full 0–24h columns (was 6–22h; early/late events were invisible) with working-hours shading (8–18) and sticky headers.
+- All-day strip on top per day, including `↔` continuation chips for multi-day timed events spilling over from earlier days; starting-day blocks clip at midnight with a `→` marker.
+- Positioned event blocks with real durations (`9:00 AM – 10:30 AM` range labels) and side-by-side overlap columns via pure `layoutDayEvents`.
+- Red now-line on today's column (positioned at render time).
+- Clicking an hour row opens the create modal prefilled with that date+hour.
+
+### Month + agenda
+
+- `+N more` is now a button jumping straight to day view for that date; clicking an empty month day opens the create modal prefilled.
+- Agenda rows show location + full time ranges, honor the clock pref, and have Show-more paging (50 at a time, runtime-only `agendaLimit` stripped from persistence).
+
+### Display prefs
+
+- Week-start (Sun/Mon, default Sun) and 12/24h clock (default 24h) in Calendar Settings → Display section; shared profile state (`calendarDisplay`, whitelisted in `user_profile_store.py`), applied to month grid/headers, week anchors/ranges/labels, and all time labels. New pure helpers: `formatCalendarClock`, `formatEventRangeInTimezone`, `calendarWeekStartDate`, `eventStart/EndMinutesInTimezone`.
+
+### Tests
+
+- `tests/test_calendar_views.mjs` +10 (clock formats, overlap columns incl. 3-way/adjacent/clusters, Mon/Sun week anchors). 24/24 pass.
+
 ## Calendar parity Phase 2: recurrence expansion (2026-10-16)
 
 Recurring ICS events previously appeared only on the master DTSTART day. Per the locked plan decision (expand at sync), recurring masters are now expanded into per-occurrence rows.

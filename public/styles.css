@@ -10320,12 +10320,13 @@ body {
   flex-direction: column;
   flex: 1;
   overflow-y: auto;
+  position: relative;
 }
 .calendar-time-slot {
-  min-height: 2rem;
   border-bottom: 1px solid var(--border);
   position: relative;
   cursor: pointer;
+  flex-shrink: 0;
 }
 .calendar-time-slot:hover {
   background: color-mix(in srgb, var(--accent) 5%, transparent);
@@ -10334,10 +10335,15 @@ body {
   border-bottom-style: dotted;
   border-bottom-color: color-mix(in srgb, var(--border) 50%, transparent);
 }
+/* Non-working hours are shaded so the work day stands out. */
+.calendar-time-slot.calendar-hour-off {
+  background: color-mix(in srgb, var(--muted) 6%, transparent);
+}
+.calendar-time-slot.calendar-hour-off:hover {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
 .calendar-time-event {
   position: absolute;
-  left: 2px;
-  right: 2px;
   border-radius: 4px;
   padding: 0.15rem 0.3rem;
   font-size: 0.65rem;
@@ -10361,6 +10367,53 @@ body {
 .calendar-time-event-time {
   font-size: 0.6rem;
   color: var(--muted);
+}
+/* Now-line across today's column in week/day views. */
+.calendar-now-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: #e05252;
+  z-index: 2;
+  pointer-events: none;
+}
+.calendar-now-line::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e05252;
+}
+/* All-day + continuation strip above the hour grid. */
+.calendar-allday-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 0.2rem;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+}
+.calendar-allday-chip {
+  border-radius: 3px;
+  padding: 0.1rem 0.3rem;
+  font-size: 0.65rem;
+  font-family: var(--font);
+  border: none;
+  border-left: 3px solid var(--event-color, var(--accent));
+  background: color-mix(in srgb, var(--event-color, var(--accent)) 15%, var(--surface));
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.calendar-allday-chip:hover {
+  background: color-mix(in srgb, var(--event-color, var(--accent)) 25%, var(--surface));
 }
 /* All-day section */
 .calendar-allday-section {
@@ -10443,6 +10496,29 @@ body {
 .calendar-agenda-event-time {
   font-size: 0.72rem;
   color: var(--muted);
+}
+.calendar-agenda-event-location {
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.calendar-agenda-more {
+  display: block;
+  margin: 0.4rem auto 0.6rem;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 0.75rem;
+  padding: 0.3rem 0.8rem;
+  cursor: pointer;
+}
+.calendar-agenda-more:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .calendar-agenda-empty {
   text-align: center;
@@ -10988,6 +11064,15 @@ body {
   font-size: 0.6rem;
   color: var(--muted);
   padding-left: 0.15rem;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font);
+  text-align: left;
+}
+button.calendar-more-events:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .calendar-loading-hint,
