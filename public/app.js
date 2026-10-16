@@ -27356,6 +27356,7 @@ function restoreSideBySideCards() {
   const previewModal = $("#opp-preview-modal");
   const searchModal = $("#search-popup-modal");
   const editModal = $("#deal-edit-modal");
+  const quickNoteModal = $("#quick-note-modal");
   [previewModal, searchModal, editModal].forEach((modal) => {
     if (!modal) return;
     const card = modal.querySelector(".modal-card");
@@ -27364,13 +27365,23 @@ function restoreSideBySideCards() {
       delete card.dataset.origStyle;
     }
   });
-  if (editModal) {
-    editModal.style.pointerEvents = "";
-    editModal.style.zIndex = "";
-    const eBack = editModal.querySelector(".modal-backdrop");
-    if (eBack && eBack.dataset.sideHidden) {
-      eBack.style.display = "";
-      delete eBack.dataset.sideHidden;
+  // The side modal can be either deal-edit OR quick-note (the layout
+  // functions detect this dynamically). Reset the inline styles on
+  // whichever one is currently in use - otherwise the modal stays
+  // click-through (pointerEvents: none) after the layout is restored.
+  // The bug was: open quick-note side-by-side -> close it -> open
+  // quick-note again -> the modal is visible but every click passes
+  // through it, requiring a page refresh to recover.
+  const sideModal = editModal && !editModal.classList.contains("hidden")
+    ? editModal
+    : quickNoteModal;
+  if (sideModal) {
+    sideModal.style.pointerEvents = "";
+    sideModal.style.zIndex = "";
+    const sBack = sideModal.querySelector(".modal-backdrop");
+    if (sBack && sBack.dataset.sideHidden) {
+      sBack.style.display = "";
+      delete sBack.dataset.sideHidden;
     }
   }
   if (previewModal) {
@@ -27670,7 +27681,12 @@ function minimizeSearchPopup() {
   for (const [oppId, tab] of searchPopupPreviewTabs) {
     parked.push({ oppId, title: tab.title || "" });
   }
-  // Enforce limit: keep at most MAX_SEARCH_PREVIEW_TABS entries (minus 1 for the search tab)
+  // Enforce limit: keep at most MAX_SEARCH_PREVIEW_TABS parked entries.
+  // The live cap is enforced when opening a new tab (see the check
+  // below) which adds a "<MAX reached>" error. The previously inline
+  // comment about "minus 1 for the search tab" was stale; the cap is
+  // on PREVIEW tabs, separate from the built-in Projects/Contacts
+  // tabs that always exist in the bar.
   minimizedSearchTabs = parked.slice(0, MAX_SEARCH_PREVIEW_TABS);
 
   // Clear live tabs (remove buttons/containers, clear the Map)
@@ -28740,7 +28756,7 @@ function renderSearchPopupResults(opps, container) {
 
   const selectAll = document.createElement("div");
   selectAll.className = "search-popup-select-all";
-  selectAll.innerHTML = `<label><input type="checkbox" id="search-popup-select-all"> Select all on page</label>`;
+  selectAll.innerHTML = `<label><input type="checkbox" id="search-popup-select-all"> Select all on page <span style="color:var(--muted); font-size:0.75rem;">(selections carry across pages)</span></label>`;
   results.appendChild(selectAll);
   const selAllCb = selectAll.querySelector("input");
   selAllCb.addEventListener("change", () => {
@@ -29111,15 +29127,21 @@ async function applySearchPopupBatchAction() {
     showSearchPopupError('Choose a batch action first');
     return;
   }
-  let done = 0;
-  for (const id of ids) {
-    try {
-      if (addTag) { await addOpportunityTag(id, addTag); addEventLogEntry("update", id, "", `Tag added: ${addTag}`, true); }
-      if (remTag) { await removeOpportunityTag(id, remTag); addEventLogEntry("update", id, "", `Tag removed: ${remTag}`, true); }
-      if (stageId) { await updateOpportunityStage(id, Number(stageId)); addEventLogEntry("update", id, "", `Stage changed (batch)`, true); }
-      done++;
-    } catch (e) {
-      showToast(`Batch failed on deal #${id}: ${e.message || e}`, true);
+  // Per-deal: build all the API calls first, then run them in parallel
+  // with Promise.allSettled. Previously this looped one await at a time
+  // over each deal AND each action, so 20 selected deals * 3 actions
+  // meant 60 sequential HTTP requests. Now it's at most `ids.length`
+  // concurrent requests regardless of how many actions are selected.
+  const perDeal = await Promise.allSettled(ids.map(async (id) => {
+    if (addTag) { await addOpportunityTag(id, addTag); addEventLogEntry("update", id, "", `Tag added: ${addTag}`, true); }
+    if (remTag) { await removeOpportunityTag(id, remTag); addEventLogEntry("update", id, "", `Tag removed: ${remTag}`, true); }
+    if (stageId) { await updateOpportunityStage(id, Number(stageId)); addEventLogEntry("update", id, "", `Stage changed (batch)`, true); }
+    return id;
+  }));
+  const done = perDeal.filter(r => r.status === "fulfilled").length;
+  for (const r of perDeal) {
+    if (r.status === "rejected") {
+      showToast(`Batch failed on deal #${r.reason?.id ?? "?"}: ${r.reason?.message ?? r.reason}`, true);
     }
   }
   showToast(`${done} deal(s) updated`);
@@ -29130,10 +29152,24 @@ async function applySearchPopupBatchAction() {
   await performSearchPopupQuery();
 }
 
-function exportSearchPopupSelected() {
-  const opps = searchPopupCurrentOpps.filter((o) => searchPopupSelected.has(Number(o.id ?? o.ID)));
-  if (!opps.length) return;
-  exportSearchResultsToCsv(opps);
+async function exportSearchPopupSelected() {
+  const ids = Array.from(searchPopupSelected).map(Number).filter((id) => id > 0);
+  if (!ids.length) return;
+  // Re-fetch by id (not from the current page's cached opps) so a
+  // cross-page selection - deals on page 1 plus deals on page 2 -
+  // all lands in the export. The server's /api/v2/projects supports
+  // ?ids=... via the new o.id = ANY(...) filter added in this commit.
+  try {
+    const data = await api(`/api/v2/projects?ids=${ids.join(",")}&count=${ids.length}`);
+    const opps = unwrap(data) || data || [];
+    if (!opps.length) {
+      showSearchPopupError("Selected deals could not be loaded");
+      return;
+    }
+    exportSearchResultsToCsv(opps);
+  } catch (e) {
+    showSearchPopupError("Export failed: " + (e.message || e));
+  }
 }
 
 function clearSearchPopupSelection() {

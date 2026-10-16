@@ -4807,6 +4807,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             where.append("o.responsible_user_id = %s")
             params.append(int(rid))
 
+        # Filter by a specific set of opportunity ids. Used by the search
+        # modal's "Export selected" to fetch a cross-page selection
+        # (the current page might only hold a subset of the selected
+        # deals). Comma-separated integers; the integer array is bound as
+        # a single parameter and matched with = ANY(%s).
+        ids_raw = qval(qs, "ids")
+        if ids_raw:
+            try:
+                parsed_ids = [int(x) for x in ids_raw.split(",") if x.strip()]
+                if parsed_ids:
+                    where.append("o.id = ANY(%s)")
+                    params.append(parsed_ids)
+            except ValueError:
+                pass
+
         tag_id = qval(qs, "tag_id", "tagId")
         if tag_id:
             where.append("o.id IN (SELECT opportunity_id FROM opportunity_tags WHERE tag_id = %s)")
