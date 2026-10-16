@@ -73,6 +73,15 @@ jobs:
       - name: Run infrastructure tests
         run: python3 tests/test_infrastructure.py
 
+      - name: Run customize tests
+        run: python3 tests/test_customize.py
+
+      - name: Run reports tests
+        run: python3 tests/test_reports.py
+
+      - name: Run search modal tests
+        run: python3 tests/test_search_modal.py
+
   node:
     name: JavaScript unit tests
     runs-on: ubuntu-latest

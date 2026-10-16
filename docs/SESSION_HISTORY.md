@@ -11,6 +11,45 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-16
+
+**Topic:** Search modal audit. (Continuation of the audit chain below.)
+
+**Status: SHIPPED.** 24 new tests (528 total: 134 JS + 394 Python, 0 failures), three commits.
+
+### Findings (9 issues)
+
+**High:**
+- **#1 — Closed-deals filter truncated at 500 per stage.** `performSearchPopupQuery` hardcoded `count: 500` for Won + Lost, then sliced the merged client-side array, while `searchPopupTotal` used the true server counts. Page numbers ran past the data and "Showing 1–20 of N" lied past 1000 rows. Fix: each stageType now uses the real page size (50) + current `startIndex`; the merged list IS the page.
+- **#2 — Side-by-side restore never cleared the quick-note modal.** Layout sets `pointerEvents: "none"` + `zIndex` on whichever side modal is active (deal-edit or quick-note), but `restoreSideBySideCards` only reset `editModal`. Repro: quick-note side-by-side → close → reopen → visible but click-through until refresh. Fix: restore detects the active side modal the same way.
+
+**Medium:**
+- **#3** Cross-page export dropped off-page selections (filtered cached current-page opps). New `?ids=` param on `/api/v2/projects` (`o.id = ANY(%s)` integer array); export re-fetches the full set.
+- **#4** Batch ops awaited N×M sequentially (20 deals × 3 actions = 60 requests). Now `Promise.allSettled` per deal with per-deal failure toasts.
+- **#5** "Select all" label already said "on page"; added muted "(selections carry across pages)" hint.
+- **#6** Contacts search declared `searchPopupContactsQueryAbort` but never used it. Now wraps data + count fetches (same race-safe pattern as deals).
+- **#7** Contacts `searchPopupContactsStartIndex` reset but never incremented, no prev/next UI. Added `performSearchContactsPageChange` / `updateSearchContactsPagination`, buttons in markup, total from `/api/v2/contacts/count`, reset/abort on close.
+
+**Low:**
+- **#8** `MAX_SEARCH_PREVIEW_TABS` stale "(minus 1 for the search tab)" comment fixed.
+
+### Tests
+
+`tests/test_search_modal.py` — 24 tests (4 real `?ids=` handler exercises + 2 count-flow + 18 JS source guards). Mutation-verified, 6 targeted mutations all caught. Also closed the CI gap for `test_customize.py`, `test_reports.py`, `test_search_modal.py` in `smoke.yml`, and updated `AGENTS.md` counts (528).
+
+```
+0fcb197        Search modal: docs (CHANGELOG + SESSION_HISTORY + AGENTS + CI)
+144913e        Search modal: 24 tests (4 real + 20 source guards)
+781fc6c        Search modal: layout restore + batch parallelism + cross-page export
+f9cd324        Search modal: pagination correctness + contacts pagination
+```
+
+**Next:** audit chain now covers timesheet, presence/DM, automation, telegram, infra, customize, reports, **search modal**. Remaining deferred items: timesheet B/C (`_tsActiveEntry` refresh, open-shift auto-close), `crm-server.service` on systemd (still ad-hoc `setsid`), `crm.publicadjustermidwest.com` deployment.
+
+---
+
+## Previous summary (for next resume)
+
 **Date:** 2026-10-15
 
 **Topic:** Customize Projects audit (admin console). (Continuation of the bot/infra/audit chain below.)

@@ -2,6 +2,32 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Search modal audit fixes (2026-10-16)
+
+Audited the global **Search modal** (`#search-popup-modal`: Projects + Contacts tabs, parked preview tabs, batch ops, side-by-side layouts, minimize-to-sidebar). Found 9 issues, fixed all of them across two commits plus tests.
+
+### High
+
+**#1 Closed-deals filter truncated results at 500 per stage.** `performSearchPopupQuery` hardcoded `count: 500` for both `stageType: 1` (Won) and `stageType: 2` (Lost), then sliced the merged client-side array. The count endpoint (`/api/v2/projects/count`) returns the true server-side total, so `searchPopupTotal = wonCount + lostCount` could far exceed the 1000 rows actually fetched — page numbers ran past the data and "Showing 1–20 of 1200" lied. Fix: each stageType now uses the real page size (`SEARCH_POPUP_PAGE_SIZE = 50`) plus the current `searchPopupStartIndex`, so the server returns exactly the current page per stage and the merged list IS the page (no client-side slice).
+
+**#2 Side-by-side layout never restored the quick-note modal.** `layoutSideBySideDealEditAndPreview` and `layoutSideBySideDealEditAndSearchPopup` detect the active side modal (deal-edit preferred, else quick-note) and set `pointerEvents: "none"` + `zIndex: "2010"` on it. But `restoreSideBySideCards` only cleared those inline styles on `editModal`. Repro: open a quick-note side-by-side → close it → open a new quick-note → the modal is visible but every click passes through it (page refresh required). Fix: the restore now detects the active side modal the same way and clears its inline styles plus the backdrop flag.
+
+### Medium
+
+- **#3 Cross-page export dropped selections.** `exportSearchPopupSelected` filtered the current page's cached opps, losing selections from other pages (batch tag/stage actions already worked cross-page since they call the API by ID). Fix: new `?ids=` param on `/api/v2/projects` (`o.id = ANY(%s)` bound as an integer array, invalid/empty silently dropped) and the export re-fetches the full selected set in one call.
+- **#4 Sequential batch ops.** `applySearchPopupBatchAction` awaited N deals × M actions one at a time (20 deals × 3 actions = 60 sequential requests). Now `Promise.allSettled` over per-deal operations; per-deal failures still surface via toast with a fulfilled count.
+- **#5 "Select all" clarity.** The label already said "on page"; added a muted "(selections carry across pages)" hint since the Set persists past pagination.
+- **#6 Contacts search had no AbortController.** `searchPopupContactsQueryAbort` was declared but never used — a slow early keystroke could race a later one. Now wraps the contacts fetch (data + count) with the same race-safe pattern as the deals search.
+- **#7 Contacts pagination wired up.** `searchPopupContactsStartIndex` was reset but never incremented; no prev/next UI existed. Added `performSearchContactsPageChange` / `updateSearchContactsPagination`, prev/next buttons in the contacts tab, `searchPopupContactsTotal` from the existing `/api/v2/contacts/count` endpoint, "Showing N–M of K" count text, and reset/abort in `closeSearchPopupModal`.
+
+### Low
+
+- **#8 `MAX_SEARCH_PREVIEW_TABS` stale comment.** Removed the wrong "(minus 1 for the search tab)" wording; the cap is on parked preview tabs, separate from the built-in Projects/Contacts tabs.
+
+### Tests
+
+New `tests/test_search_modal.py` — **24 tests** (4 real handler exercises for `?ids=` + 2 count-flow + 18 JS source guards). Mutation-verified: 6 targeted mutations, all caught. Full suite: **134 JS + 394 Python = 528 tests, 0 failures**.
+
 ## Reports audit fixes (admin console) (2026-10-15)
 
 Audited the admin **Reports** tab (photo report templates + document templates). Found 7 issues, fixed all of them across three commits plus tests.
