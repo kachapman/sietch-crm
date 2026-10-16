@@ -275,7 +275,15 @@ CREATE TABLE history_categories (
     title TEXT UNIQUE NOT NULL,
     display_color TEXT,
     is_system BOOLEAN DEFAULT TRUE,
-    sort_order INTEGER DEFAULT 0
+    sort_order INTEGER DEFAULT 0,
+    -- icon_key / icon_style were added later by migration
+    -- 015_add_task_labels_and_category_icons.sql. We include them here so a
+    -- *fresh* `init.sql` (no migrations) is self-consistent — the seeded
+    -- INSERT below references them. Existing live DBs already have these
+    -- columns via the migration; this DDL is `IF NOT EXISTS`-equivalent for
+    -- the bootstrap path.
+    icon_key TEXT DEFAULT 'note',
+    icon_style TEXT DEFAULT 'stroke'
 );
 
 CREATE TABLE history_events (
