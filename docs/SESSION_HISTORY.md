@@ -11,9 +11,17 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-16
+**Date:** 2026-10-16 (continued through 2026-10-17 UTC)
 
-**Topic:** Group tile template dropdown — anchor under the button.
+**Topic:** CRM deploy from home dev to new droplet `147.182.164.19`.
+
+**Status: IN PROGRESS — long-haul scp running.** Steps 4-6 complete; universal imports landed; **history-attachments (30 GB / 19,462 files) tarball transfer ETA ≈12 hr**. Started ~21:48 EDT, expected completion ~09:30 UTC next day. The droplet now runs `sietch-db / sietch-crm / sietch-redis / onlyoffice-docserver`, all 37 migrations applied, full per-bundle JSON imported (db-core: 95,966 rows / files-documents: 106 files / files-state: 22 files). DB row counts: 11 users, 1,229 opportunities, 46,623 history events, 17,114 history_attachments rows, 840 tasks, 23 tags, 19 stages, 30 custom field definitions. Bootstrap admin: `admin@chapmanfamily.online` / `TempPass!2026Deploy` (PBKDF2; user must rotate on first login). 7 commits pushed to `origin/main` adding `curl` to Dockerfile, globbing `COPY *.py`, shipping `migrations/`, adding a bootstrap migration runner to `db.init_db()`, and forward-creating three columns/tables that init.sql assumed existed (`history_categories.icon_key/icon_style`, `task_labels`, `tag_definitions.is_system`). Droplet created `/etc/sietch/telegram-bot.env` with same `@SietchCRM_bot` token `8574869232:AAGrIYvJ1Az5YAg_DCFfi_7EnoKPnZwMYE`, systemd unit `/etc/systemd/system/crm-telegram-bot.service` installed but **disabled** (per earlier "don't do the other items yet" instruction). Fresh 43-char random secrets generated for `DB_PASSWORD` / `COOKIE_SECRET` / `DOCS_JWT_SECRET`. Old home `.env` had dev placeholders so we did NOT carry them over.
+
+**Next:** Wait for `/root/sietch-history.tar.gz` to fully reach 31,513,453,507 bytes (auto-detected by `wait-and-extract.sh` running as pid `97055` on the droplet), then auto-extract into `/var/lib/docker/volumes/sietch-crm_dashboard-data/_data/history-attachments/`, sha256-verify, restart dashboard, and sample-check history attachment URLs no longer 404. Then steps 7-9: nginx + certbot + DNS cutover (you already flipped crm.publicadjustermidwest.com A → 147.182.164.19, propagation pending), second export+import for delta, then home-box CRM volume cleanup.
+
+---
+
+## Previous summary (2026-10-16 — template dropdown visibility)
 
 **Status: SHIPPED.** Follow-up to the previous "position relative on .tile-toolbar" fix: dropdown was visible but anchored to the toolbar's right edge (far from the button). Fix: wrap `templateBtn + templateDropdown` in a `.template-menu-wrap` div, add CSS `position: relative` (matches `header-settings-wrap` pattern), tighten `top` to `calc(100% + 2px)`. 5 tests in `test_template_dropdown.mjs` (up from 4) covering the new wrap shape + dropdown parent assertion. Full regression green (16 JS files + 15 Python suites, 0 failures).
 
