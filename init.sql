@@ -254,7 +254,12 @@ CREATE TABLE tag_definitions (
     id SERIAL PRIMARY KEY,
     title TEXT UNIQUE NOT NULL,
     color TEXT,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMP DEFAULT NOW(),
+    -- is_system was added later by the migration that gave tag_definitions
+    -- its current shape. Forward-create so a fresh install with ONLY
+    -- init.sql has a self-consistent table — the per-bundle JSON export
+    -- writes this column.
+    is_system BOOLEAN DEFAULT FALSE
 );
 
 CREATE TABLE opportunity_tags (
