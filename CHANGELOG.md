@@ -26,6 +26,26 @@ The importer used a bare `ON CONFLICT DO NOTHING`, which swallows *every* unique
 
 Against a scratch database built from the corrected `init.sql` + all 37 migrations, importing the real per-bundle `db-core` export across **all 66 exported tables**: **918,964 rows inserted, 0 failed**, every `category_id` resolving to the correct production title, the 3 forward-referencing contacts recovered on the deferred pass, and every populated table matching the export manifest. A second identical import reports 0 inserted / all duplicates / 0 failed.
 
+## nginx + TLS on the production droplet (2026-10-18)
+
+The CRM is now served over HTTPS from the new droplet (`147.182.164.19`).
+
+### Added
+
+- `deploy/nginx-sietch-droplet.conf` — the two site files now live on the droplet:
+  - `crm.publicadjustermidwest.com` → `127.0.0.1:8766` (sietch-crm)
+  - `docs.publicadjustermidwest.com` → `127.0.0.1:8080` (onlyoffice-docserver)
+- `deploy/provision-nginx-droplet.sh` — idempotent provisioning script (packages, ACME webroot, HTTP-only vhosts, certbot, TLS vhosts, renewal hook, `certbot.timer`).
+- `docker-compose.yml` — the dashboard and docserver now bind **127.0.0.1 only**, so nginx is the sole public entry point. The docserver maps `:80` (its internal nginx has no `:443` listener — the previous `9443:443` mapping answered nothing).
+
+### nginx specifics
+
+- `client_max_body_size 100m`, `proxy_request_buffering off`, `proxy_read_timeout 120s` on the CRM (required for uploads, per `docs/UPDATE_AND_DEPLOY.txt`).
+- `proxy_buffering off` + `proxy_set_header Connection ""` so the `/api/events` SSE stream isn't buffered.
+- The Document Server vhost carries WebSocket upgrade headers, `proxy_read_timeout 3600s`, and `client_max_body_size 100M` for editor uploads and long conversions.
+- One Let's Encrypt ECDSA certificate covers both hostnames (SAN: `crm.` + `docs.`), valid to 2027-01-16, auto-renewed by `certbot.timer` with a `systemctl reload nginx` renewal hook. `certbot renew --dry-run` passes with the HTTP→HTTPS redirect in place.
+- Note: nginx 1.24 (Ubuntu 24.04) does **not** support the `http2 on;` directive (1.25.1+); HTTP/2 is enabled with `listen 443 ssl http2;`.
+
 ## Template dropdown anchors to button, not tile (2026-10-16)
 
 Follow-up to the previous "position relative on `.tile-toolbar`" fix: the dropdown was visible but anchored to the *right edge of the tile* (because the toolbar's `right: 0` was the new offsetParent's right). The button is left-of-center, so the dropdown appeared far away.
