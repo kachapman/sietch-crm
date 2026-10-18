@@ -26,6 +26,45 @@ The importer used a bare `ON CONFLICT DO NOTHING`, which swallows *every* unique
 
 Against a scratch database built from the corrected `init.sql` + all 37 migrations, importing the real per-bundle `db-core` export across **all 66 exported tables**: **918,964 rows inserted, 0 failed**, every `category_id` resolving to the correct production title, the 3 forward-referencing contacts recovered on the deferred pass, and every populated table matching the export manifest. A second identical import reports 0 inserted / all duplicates / 0 failed.
 
+## Basic admin gating: is_admin is the single source of truth (2026-10-18)
+
+Admin gating was split across two different checks, which could disagree for one account:
+
+- `_require_admin()` checks the `is_admin` boolean and guarded **109** endpoints.
+- `_require_strict_admin()` → `_require_role(handler, "admin")` checked `role` and guarded
+  exactly **2**: `_handle_user_reset_password` and `_handle_user_reset_password_send`.
+
+An account with `is_admin=true` but `role='member'` therefore rendered the entire admin
+console (is_admin gate passes) yet got `Forbidden: requires one of roles: admin` on password
+reset — the half-admin symptom reported during the migration. There was no intentional extra
+strictness; the requirement is basic gating (members cannot reach the admin console or modify
+other users).
+
+### Changes
+- Both password-reset handlers now use `_require_admin`, matching the other 109 endpoints.
+- `_require_strict_admin` and `_require_role` are **removed**, so a divergent, stricter gate
+  cannot be reintroduced by accident.
+- **`role` is now authoritative for admin-ness.** `_handle_user_update` previously mapped
+  `isAdmin → is_admin` in a generic field loop and only synced `is_admin` from `role` when
+  `isAdmin` was *absent*. A direct `PUT {"isAdmin": false}` against a `role='admin'` user
+  therefore left the columns disagreeing (`is_admin=false, role='admin'`) — the same broken
+  shape as the bootstrap account. `isAdmin` and `role` are now handled explicitly and always
+  written together; a bare `isAdmin` moves `role` with it, and an invalid `role` is rejected
+  with 400.
+- The admin UI edit form was already safe (it sends `role`, never `isAdmin`), as is user
+  create (`is_admin = role in ('admin','manager')`).
+
+### Verified
+- 10 new source-level guards in `tests/test_admin_gating.py`, wired into CI, including a sweep
+  asserting no `/api/v2/admin/` handler gates on anything but `_require_admin`.
+- Mutation-checked: reintroducing the drift hole fails a guard.
+- Full suite green: **485 Python + 189 JS, 0 failures.**
+
+### Scope
+The other 109 `_require_admin` endpoints are assumed correctly scoped; re-auditing each for
+over-exposure is a separate review. `role` remains meaningful as a descriptive/feature field
+(badges, and the `limited` CRM-Mail restriction, which is still enforced server-side).
+
 ## Fix Infrastructure tab: "Containers — Docker socket not mounted" (2026-10-18)
 
 ### Symptom

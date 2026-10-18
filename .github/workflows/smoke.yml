@@ -73,6 +73,9 @@ jobs:
       - name: Run telegram bot tests
         run: python3 tests/test_telegram_bot.py
 
+      - name: Run admin gating tests
+        run: python3 tests/test_admin_gating.py
+
       - name: Run infrastructure tests
         run: python3 tests/test_infrastructure.py
 

@@ -1145,21 +1145,14 @@ def _require_admin(handler: SimpleHTTPRequestHandler) -> dict | None:
     return user
 
 
-def _require_role(handler: SimpleHTTPRequestHandler, *allowed_roles: str) -> dict | None:
-    """Return user dict if user.role is in allowed_roles, else 403."""
-    user = _require_auth(handler)
-    if not user:
-        return None
-    role = user.get("role", "member")
-    if role not in allowed_roles:
-        _json_response(handler, 403, {"error": f"Forbidden: requires one of roles: {', '.join(allowed_roles)}"})
-        return None
-    return user
-
-
-def _require_strict_admin(handler: SimpleHTTPRequestHandler) -> dict | None:
-    """Return user dict only for admin role (not manager). For user-management endpoints."""
-    return _require_role(handler, "admin")
+# NOTE: a role-based admin gate (`_require_role` / `_require_strict_admin`) used to
+# guard the two password-reset endpoints while the other 109 admin endpoints used
+# `_require_admin` (the is_admin boolean). That split let an account with
+# is_admin=true but role='member' render the whole admin console yet receive
+# "Forbidden: requires one of roles: admin" on password reset. There was no
+# intentional extra strictness, so admin gating is now uniformly `_require_admin`
+# and `role` is a descriptive/feature field only (badges, the `limited` CRM-Mail
+# restriction). Removed deliberately so a divergent gate can't creep back in.
 
 
 def _humanize_file_size(size_bytes) -> str:
@@ -8276,10 +8269,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         # Build update sets
+        # NOTE: isAdmin/role are handled explicitly below rather than in this
+        # generic loop, because they must always move together.
         sets, params = [], []
         for field, col in [("email", "email"), ("displayName", "display_name"), ("firstName", "first_name"),
-                           ("lastName", "last_name"), ("isAdmin", "is_admin"), ("isActive", "is_active"),
-                           ("role", "role"), ("twofaMethod", "twofa_method")]:
+                           ("lastName", "last_name"), ("isActive", "is_active"),
+                           ("twofaMethod", "twofa_method")]:
             if field in payload:
                 sets.append(f"{col} = %s")
                 params.append(payload[field])
@@ -8292,13 +8287,34 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 409, {"error": "Email already in use"})
                 return
 
-        # Sync is_admin from role
+        # `role` is authoritative for admin-ness; is_admin is always derived from
+        # it. Writing is_admin on its own (which the generic loop used to allow
+        # whenever a payload carried isAdmin but no role) could leave the two
+        # columns disagreeing -- e.g. is_admin=false with role='admin'. That
+        # inconsistent row is what produced a half-admin account: full admin
+        # console (is_admin gate) but 403 on role-gated endpoints.
+        role_write: str | None = None
         if "role" in payload:
-            role = payload["role"]
-            is_admin = role in ("admin", "manager")
-            if "isAdmin" not in payload:
-                sets.append("is_admin = %s")
-                params.append(is_admin)
+            role_write = payload["role"]
+            if role_write not in ("admin", "manager", "member", "limited"):
+                _json_response(self, 400, {"error": "Invalid role"})
+                return
+        elif "isAdmin" in payload:
+            # Legacy callers may still send isAdmin alone. Honor it, but move
+            # role with it so the columns can't drift.
+            row = db.query_one("SELECT role FROM users WHERE id = %s", (user_id,))
+            current_role = (row or {}).get("role") or "member"
+            if payload["isAdmin"]:
+                if current_role not in ("admin", "manager"):
+                    role_write = "admin"
+            elif current_role in ("admin", "manager"):
+                role_write = "member"
+
+        if role_write is not None:
+            sets.append("role = %s")
+            params.append(role_write)
+            sets.append("is_admin = %s")
+            params.append(role_write in ("admin", "manager"))
 
         if "password" in payload and payload["password"]:
             pw_hash, salt = auth_mod.hash_password(payload["password"])
@@ -8325,7 +8341,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         _json_response(self, 200, {"ok": True})
 
     def _handle_user_reset_password(self, user_id: int) -> None:
-        admin = _require_strict_admin(self)
+        admin = _require_admin(self)
         if not admin:
             return
         try:
@@ -8368,7 +8384,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_user_reset_password_send(self, user_id: int) -> None:
         """Send temp password to user via email or Telegram."""
-        admin = _require_strict_admin(self)
+        admin = _require_admin(self)
         if not admin:
             return
         try:
