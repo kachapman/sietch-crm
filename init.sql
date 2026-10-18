@@ -1076,23 +1076,35 @@ VALUES ('Sietch CRM', 'Sietch CRM', 'Sietch CRM', 'Workspace <em>dashboard</em>'
 -- Seed Data
 -- ============================================================================
 
--- Default history categories
-INSERT INTO history_categories (title, display_color, is_system, sort_order, icon_key, icon_style) VALUES
-    ('Note', '#4a90d9', TRUE, 1, 'note', 'stroke'),
-    ('Call', '#27ae60', TRUE, 2, 'call', 'stroke'),
-    ('Meeting', '#8e44ad', TRUE, 3, 'meeting', 'stroke'),
-    ('Email', '#e67e22', TRUE, 4, 'email', 'stroke'),
-    ('Customer Update', '#e74c3c', TRUE, 5, 'customer', 'accent'),
-    ('Text Message', '#1abc9c', TRUE, 6, 'sms', 'stroke'),
-    ('Task', '#95a5a6', TRUE, 7, 'task', 'stroke'),
-    ('Comment', '#34495e', TRUE, 8, 'comment', 'stroke'),
-    ('Follow-Up', NULL, TRUE, 9, 'clock', 'stroke'),
-    ('Estimate', NULL, TRUE, 10, 'document', 'stroke'),
-    ('Inspection', NULL, TRUE, 11, 'building', 'stroke'),
-    ('Expression of gratitude', NULL, TRUE, 12, 'star', 'stroke'),
-    ('Opportunity', NULL, TRUE, 13, 'alert', 'stroke'),
-    ('Stage Estimate', NULL, TRUE, 14, 'document', 'fill'),
-    ('Action', NULL, TRUE, 15, 'pencil', 'stroke');
+-- Default history categories.
+--
+-- These ids and titles MUST match what the live OnlyOffice-derived data uses.
+-- history_events.category_id is a hard FK into this table, and the per-bundle
+-- importer inserts restored rows with their original category_id. This file
+-- previously seeded a *different* 15-row taxonomy at ids 1-15 (Note/Call/
+-- Meeting/...), while production uses 10 rows at ids 8-17 (Note/Mail Message/
+-- Files are uploaded/...). Because the importer used a bare
+-- `ON CONFLICT DO NOTHING` and this table has UNIQUE(title), the seed rows
+-- shadowed production's ids by title: the restore silently discarded the real
+-- categories, 6,597 events failed an FK check, and every event that did import
+-- was labelled with the wrong title (category_id=8 read "Comment", not "Note").
+-- Keep these in sync with the production taxonomy.
+INSERT INTO history_categories (id, title, display_color, is_system, sort_order, icon_key, icon_style) VALUES
+    (8,  'Note',              '#4a90d9', TRUE, 1,  'note',     'stroke'),
+    (9,  'Mail Message',      '#5b8def', TRUE, 2,  'mail',     'stroke'),
+    (10, 'Files are uploaded','#4a90d9', TRUE, 3,  'file',     'stroke'),
+    (11, 'Task is closed',    '#95a5a6', TRUE, 4,  'check',    'stroke'),
+    (12, 'Phone call',        '#27ae60', TRUE, 5,  'phone',    'stroke'),
+    (13, 'Email',             '#e67e22', TRUE, 6,  'mail',     'stroke'),
+    (14, 'Appointment',       '#8e44ad', TRUE, 7,  'calendar', 'stroke'),
+    (15, 'Text',              '#1abc9c', TRUE, 8,  'message',  'stroke'),
+    (16, 'Customer Update',   '#e74c3c', TRUE, 9,  'customer', 'accent'),
+    (17, 'Quick Context',     '#34495e', TRUE, 10, 'note',     'stroke');
+
+-- Advance the sequence past the explicit ids above so a later insert without
+-- an id doesn't collide with 17.
+SELECT setval(pg_get_serial_sequence('history_categories', 'id'),
+              (SELECT COALESCE(MAX(id), 1) FROM history_categories));
 
 -- Default task labels
 INSERT INTO task_labels (title, sort_order) VALUES

@@ -55,6 +55,9 @@ jobs:
       - name: Run backup tests
         run: python3 tests/test_backup.py -v
 
+      - name: Run import conflict regression tests
+        run: python3 tests/test_import_conflict.py -v
+
       - name: Run onlyoffice import tests
         run: python3 tests/test_onlyoffice_import.py
 

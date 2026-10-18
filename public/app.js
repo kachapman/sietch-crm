@@ -32224,10 +32224,24 @@ function openAdminConsoleModal() {
         const res = await fetch("/api/v2/admin/import/json", { method: "POST", body: form, credentials: "same-origin" });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.error || "Import failed");
-        const bits = [`${data.rows_imported || 0} rows imported`, `${data.rows_skipped || 0} skipped`, `${data.files_copied || 0} files copied`];
+        const bits = [`${data.rows_imported || 0} rows imported`, `${data.files_copied || 0} files copied`];
+        if (data.rows_duplicate) bits.push(`${data.rows_duplicate} already present`);
+        // rows_failed is the number that matters: rows rejected for reasons
+        // OTHER than already-exists (FK violations, missing columns). A
+        // non-zero value means the restore silently truncated, so surface it
+        // loudly instead of folding it into a generic "skipped" count.
+        const failed = data.rows_failed || 0;
+        if (failed) {
+          bits.push(`<span style="color:var(--danger);">${failed} FAILED — restore incomplete</span>`);
+          if (data.failure_samples?.length) {
+            bits.push(`<br><span style="color:var(--danger);">${data.failure_samples.slice(0, 8).map(escapeHtml).join("<br>")}</span>`);
+          }
+        }
         if (data.backup_set) bits.push(`set ${escapeHtml(data.backup_set.set_id)}: landed [${(data.backup_set.landed || []).map(escapeHtml).join(", ")}]`);
         if (data.backup_set?.missing?.length) bits.push(`<span style="color:var(--warn, #f0b429);">missing parts: ${data.backup_set.missing.map(escapeHtml).join(", ")}</span>`);
-        if (el) el.innerHTML = `<span style="color:#3fb950;">Done: ${bits.join(", ")}.</span>` + (data.warnings?.length ? `<br><span style="color:var(--warn, #f0b429);">${data.warnings.map(escapeHtml).join("<br>")}</span>` : "");
+        const colour = failed ? "var(--danger)" : "#3fb950";
+        const head = failed ? "Incomplete" : "Done";
+        if (el) el.innerHTML = `<span style="color:${colour};">${head}: ${bits.join(", ")}.</span>` + (data.warnings?.length ? `<br><span style="color:var(--warn, #f0b429);">${data.warnings.map(escapeHtml).join("<br>")}</span>` : "");
       } catch (e) {
         if (el) el.innerHTML = `<span style="color:var(--danger);">${escapeHtml(e.message)}</span>`;
       }

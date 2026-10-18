@@ -1032,6 +1032,47 @@ def _read_body(handler: SimpleHTTPRequestHandler) -> bytes:
     return handler.rfile.read(length)
 
 
+# ── Import conflict targeting ────────────────────────────────────────────────
+# A bare `ON CONFLICT DO NOTHING` swallows *every* unique violation, not just
+# the primary key. During the 2026-10-17 droplet migration that silently
+# discarded the production `history_categories` rows (their titles collided
+# with init.sql's seed rows) and left 6,597 history events failing an FK
+# check while the endpoint still reported `{"ok": true}`. We therefore always
+# name the conflict target explicitly, and we resolve each table's PK at
+# runtime because the exported tables are heterogeneous: most are keyed on
+# `id`, but several use composite keys (`opportunity_tags`,
+# `notification_preferences`) or a natural key (`system_settings.key`,
+# `sessions.token`, `user_profiles.user_id`).
+_PK_CACHE: dict[str, list[str]] = {}
+
+
+def _table_primary_key(table: str) -> list[str]:
+    """Primary-key column list for `table`, cached. Empty if it has no PK."""
+    if table in _PK_CACHE:
+        return _PK_CACHE[table]
+    rows = db.query(
+        """SELECT a.attname
+             FROM pg_constraint con
+             JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord) ON TRUE
+             JOIN pg_attribute a
+               ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+            WHERE con.conrelid = to_regclass(%s) AND con.contype = 'p'
+            ORDER BY k.ord""",
+        (table,),
+    )
+    cols = [r[0] for r in rows] if rows else []
+    _PK_CACHE[table] = cols
+    return cols
+
+
+def _conflict_target(table: str) -> str:
+    """` ON CONFLICT (<pk>) DO NOTHING`, or bare DO NOTHING when there is no PK."""
+    cols = _table_primary_key(table)
+    if not cols:
+        return " ON CONFLICT DO NOTHING"
+    return " ON CONFLICT (" + ", ".join(cols) + ") DO NOTHING"
+
+
 def _session_token(handler: SimpleHTTPRequestHandler) -> str | None:
     jar = cookies.SimpleCookie(handler.headers.get("Cookie", ""))
     tok = jar.get(SESSION_COOKIE)
@@ -12652,7 +12693,29 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
             # Extract and process ZIP
             buf = io.BytesIO(file_data)
-            results: dict[str, Any] = {"tables_imported": 0, "rows_imported": 0, "rows_skipped": 0, "files_copied": 0, "errors": []}
+            results: dict[str, Any] = {
+                "tables_imported": 0,
+                "rows_imported": 0,
+                # Rows the DB already had. Expected and harmless on a re-import.
+                "rows_duplicate": 0,
+                # Rows that failed for a reason OTHER than already-exists (FK
+                # violation, missing column, ...). Any of these means the restore
+                # is incomplete — see `complete` below.
+                "rows_failed": 0,
+                # Forward references that succeeded on the second pass.
+                "rows_deferred_recovered": 0,
+                # Back-compat alias = rows_duplicate + rows_failed.
+                "rows_skipped": 0,
+                "files_copied": 0,
+                "errors": [],
+                "failure_samples": [],
+            }
+            # Rows that failed on a foreign-key violation. These are usually
+            # forward references: the parent row is inserted later in the same
+            # table (contacts.company_id self-references contacts.id) or in a
+            # later table. Held here and retried once after every table has
+            # been processed, then anything still unresolved is a real failure.
+            deferred_fk: list[tuple[str, str, str, tuple]] = []
 
             with zipfile.ZipFile(buf, "r") as zf:
                 # Read manifest
@@ -12675,23 +12738,80 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         columns = list(rows[0].keys())
                         placeholders = ", ".join(["%s"] * len(columns))
                         col_names = ", ".join(columns)
+                        conflict = _conflict_target(table_name)
                         inserted = 0
-                        skipped = 0
+                        duplicate = 0
+                        failed = 0
                         for row in rows:
                             values = tuple(row.get(c) for c in columns)
                             try:
-                                db.execute(
-                                    f"INSERT INTO {table_name} ({col_names}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",
+                                # ON CONFLICT DO NOTHING doesn't raise when it
+                                # skips a row, so counting statements here would
+                                # report every row as "imported" even on a
+                                # no-op re-import. Use the real rowcount.
+                                if db.execute(
+                                    f"INSERT INTO {table_name} ({col_names}) VALUES ({placeholders}){conflict}",
                                     values,
-                                )
-                                inserted += 1
-                            except Exception:
-                                skipped += 1
+                                ):
+                                    inserted += 1
+                                else:
+                                    duplicate += 1
+                            except Exception as exc:
+                                # A unique violation means the row is genuinely
+                                # already present (expected on a re-import). Any
+                                # *other* failure — FK violation, missing column,
+                                # type mismatch — means the restore is incomplete
+                                # and must not be reported as a clean success.
+                                sqlstate = getattr(getattr(exc, "diag", None), "sqlstate", None)
+                                if sqlstate == "23505":  # unique_violation
+                                    duplicate += 1
+                                elif sqlstate == "23503":  # foreign_key_violation
+                                    # Likely a forward reference; retry later.
+                                    deferred_fk.append((table_name, col_names, placeholders, values))
+                                else:
+                                    failed += 1
+                                    if len(results["failure_samples"]) < 20:
+                                        results["failure_samples"].append(
+                                            f"{table_name}: sqlstate={sqlstate} {str(exc).strip()[:200]}"
+                                        )
                         results["tables_imported"] += 1
                         results["rows_imported"] += inserted
-                        results["rows_skipped"] += skipped
+                        results["rows_duplicate"] += duplicate
+                        results["rows_failed"] += failed
+                        # Back-compat: callers that predate the split still see a
+                        # single "skipped" number, now equal to dupes + failures.
+                        results["rows_skipped"] += duplicate + failed
                     except Exception as e:
                         results["errors"].append(f"{table_name}: {e}")
+
+                # ── Deferred FK retry ──────────────────────────────────────
+                # Rows deferred as forward references (e.g. contacts whose
+                # company_id points at a company row that appeared later in
+                # the same file) get one second attempt now that every table
+                # has been loaded. Whatever still fails is a genuine problem
+                # and is counted as rows_failed.
+                deferred_recovered = 0
+                for table_name, col_names, placeholders, values in deferred_fk:
+                    try:
+                        db.execute(
+                            f"INSERT INTO {table_name} ({col_names}) VALUES ({placeholders})"
+                            + _conflict_target(table_name),
+                            values,
+                        )
+                        deferred_recovered += 1
+                        results["rows_imported"] += 1
+                    except Exception as exc:
+                        sqlstate = getattr(getattr(exc, "diag", None), "sqlstate", None)
+                        if sqlstate == "23505":
+                            results["rows_duplicate"] += 1
+                        else:
+                            results["rows_failed"] += 1
+                            if len(results["failure_samples"]) < 20:
+                                results["failure_samples"].append(
+                                    f"{table_name} (deferred): sqlstate={sqlstate} {str(exc).strip()[:200]}"
+                                )
+                if deferred_fk:
+                    results["rows_deferred_recovered"] = deferred_recovered
 
                 # Copy files (zip-slip guarded; scanner alias mapped back)
                 import backup_service
@@ -12756,6 +12876,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                 f"Could not record landed part: {e}"
                             )
 
+            # `ok` means "the request completed", NOT "the restore was
+            # complete". A non-zero rows_failed means rows were rejected for
+            # reasons other than already-exists (FK violations, missing
+            # columns, type mismatches), which silently truncated the 2026-10-17
+            # droplet restore while still reporting ok:true. `complete` is the
+            # flag callers should gate on.
+            results["complete"] = results["rows_failed"] == 0 and not results["errors"]
+            if not results["complete"]:
+                results.setdefault("warnings", []).append(
+                    f"{results['rows_failed']} row(s) FAILED to import (not duplicates). "
+                    "The restore is INCOMPLETE — see failure_samples. Common causes: "
+                    "a seed row from init.sql colliding with production ids, or a "
+                    "missing migration."
+                )
             _json_response(self, 200, {"ok": True, **results})
         except Exception as e:
             logger.exception("JSON import failed")

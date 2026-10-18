@@ -2,6 +2,29 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Per-bundle JSON importer: no longer silently drops rows (2026-10-17)
+
+Found while migrating the CRM to a new droplet. A fresh install + per-bundle import reported `{"ok": true, "rows_skipped": 816873}` while **6,597 history events were rejected** and every event that *did* import was labelled with the wrong history category. The restore looked successful.
+
+### Root cause
+
+The importer used a bare `ON CONFLICT DO NOTHING`, which swallows *every* unique violation, not just the primary key. `history_categories` has `UNIQUE(title)`, and `init.sql` seeded a 15-row taxonomy at ids 1-15 (`Note`, `Call`, `Meeting`, `Email`, `Customer Update`, …) while production uses 10 rows at ids 8-17 (`Note`, `Mail Message`, `Files are uploaded`, …, `Customer Update`, `Quick Context`). The seed rows shadowed production's ids by title, so the real categories were discarded, `id=16` never existed, and events hit `history_events_category_id_fkey`. Worse, events that *did* import pointed at ids now labelled `Comment` instead of `Note` — a silent mislabel, not just a gap.
+
+### Fixed
+
+- `server.py`: added `_table_primary_key()` / `_conflict_target()`. The conflict target is now always explicit and resolved from the real PK at runtime (cached), because exported tables are heterogeneous — `id` for most, composite for `opportunity_tags`/`notification_preferences`, natural keys for `system_settings.key`/`sessions.token`/`user_profiles.user_id`.
+- `server.py`: the insert loop now separates `rows_duplicate` (sqlstate `23505`, benign) from `rows_failed` (anything else), captures the reason into capped `failure_samples`, and sets `complete: false` when any row genuinely failed. `rows_skipped` is kept as a back-compat alias.
+- `server.py`: forward-referencing rows (sqlstate `23503`, e.g. `contacts.company_id` pointing at a company later in the same file) are deferred and retried once after every table loads; whatever still fails is counted as a real failure.
+- `server.py`: `rows_imported` now counts actual inserted rows via `db.execute()`'s rowcount. Previously a no-op re-import reported all 68k rows as "imported".
+- `init.sql`: seed `history_categories` with explicit ids 8-17 matching production exactly, and `setval` past them. The old 15-row seed titles are gone.
+- `public/app.js`: the admin import panel shows `rows_failed` and `failure_samples` in red under an "Incomplete" heading instead of folding failures into a generic "skipped" count.
+- `tests/test_import_conflict.py`: new — 32 tests covering all of the above (source-level guards plus taxonomy assertions).
+- `.github/workflows/smoke.yml`: new suite wired into CI.
+
+### Verified
+
+Against a scratch database built from the corrected `init.sql` + all 37 migrations, importing the real per-bundle `db-core` export: **48,823 history events, 17,180 attachments, 1,229 opportunities, 841 tasks, 0 failed rows**, every `category_id` resolving to the correct production title, and the 3 forward-referencing contacts recovered on the deferred pass. A second identical import reports 0 inserted / 68,194 duplicates / 0 failed.
+
 ## Template dropdown anchors to button, not tile (2026-10-16)
 
 Follow-up to the previous "position relative on `.tile-toolbar`" fix: the dropdown was visible but anchored to the *right edge of the tile* (because the toolbar's `right: 0` was the new offsetParent's right). The button is left-of-center, so the dropdown appeared far away.
