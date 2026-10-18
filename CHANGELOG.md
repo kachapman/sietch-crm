@@ -26,6 +26,50 @@ The importer used a bare `ON CONFLICT DO NOTHING`, which swallows *every* unique
 
 Against a scratch database built from the corrected `init.sql` + all 37 migrations, importing the real per-bundle `db-core` export across **all 66 exported tables**: **918,964 rows inserted, 0 failed**, every `category_id` resolving to the correct production title, the 3 forward-referencing contacts recovered on the deferred pass, and every populated table matching the export manifest. A second identical import reports 0 inserted / all duplicates / 0 failed.
 
+## Restore the real admin accounts; drop the bootstrap account (2026-10-18)
+
+A bootstrap admin was created on the new droplet to get past the login screen while the
+per-bundle import was being diagnosed. It caused two problems, both now fixed.
+
+### What went wrong
+
+The bootstrap row was inserted into an **empty** `users` table, so it took **id = 1**.
+The per-bundle export's real user id=1 is **`bre@chapmanfamily.online`**
+(`is_admin=true, role=admin`). On import, `ON CONFLICT (id) DO NOTHING` silently
+skipped bre's row because the placeholder already occupied that id.
+
+1. **The placeholder was half-admin.** It was inserted with `is_admin=TRUE` but not
+   `role`, and `users.role` defaults to `'member'`. The admin console is gated on
+   `is_admin` (`_require_admin`), so it rendered every tab; user-management endpoints
+   are gated on `role` (`_require_strict_admin` → `_require_role(handler, "admin")`),
+   so they returned `Forbidden: requires one of roles: admin`.
+2. **The real admin was missing**, and 108 `history_events` with `created_by=1`
+   (bre's) were attributed to the placeholder. bre's profile
+   (`data/user-profiles/sietch/1.json`, keyed by user_id) was attached to it too.
+
+### Fixed
+
+- Restored id 1 in place as bre — `email`, `display_name`, `first_name`, `last_name`,
+  `external_user_id`, `is_admin=TRUE`, `role='admin'`, `is_active=TRUE`. Restoring
+  the row rather than deleting-and-reinserting keeps the id (and therefore the 108
+  events and bre's profile) attached to the right person; a `DELETE` would have
+  failed the `NO ACTION` foreign key from those events.
+- Cleared the placeholder's password hash — it was the temporary bootstrap password,
+  which must not stay live on a real account.
+- Purged the placeholder's sessions so nobody inherits a session minted for it.
+- Gave the existing admin `kenc@vanguardadj.com` a temp password via the app's own
+  PBKDF2 scheme (`hash_password` → PBKDF2-HMAC-SHA256, 100k iterations, 16-byte
+  salt). The account already carried `is_admin=true, role='admin'`, so no other change
+  was needed.
+- The placeholder account no longer exists: `admin@chapmanfamily.online` is gone
+  (`SELECT count(*) ... = 0`).
+
+### Note
+
+`auth.set_password` calls `destroy_all_user_sessions`, so changing a password
+invalidates that user's existing sessions everywhere. Expected, but it means a
+password reset logs the user out of any other browser tab.
+
 ## nginx + TLS on the production droplet (2026-10-18)
 
 The CRM is now served over HTTPS from the new droplet (`147.182.164.19`).
