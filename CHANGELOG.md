@@ -26,6 +26,48 @@ The importer used a bare `ON CONFLICT DO NOTHING`, which swallows *every* unique
 
 Against a scratch database built from the corrected `init.sql` + all 37 migrations, importing the real per-bundle `db-core` export across **all 66 exported tables**: **918,964 rows inserted, 0 failed**, every `category_id` resolving to the correct production title, the 3 forward-referencing contacts recovered on the deferred pass, and every populated table matching the export manifest. A second identical import reports 0 inserted / all duplicates / 0 failed.
 
+## Fix Infrastructure tab: "Containers — Docker socket not mounted" (2026-10-18)
+
+### Symptom
+Admin → Infrastructure showed a red **Containers** card ("Docker socket not mounted")
+while the Document Server probe stayed green. The socket was in fact mounted.
+
+### Root cause — two independent bugs
+
+**1. The Dockerfile installed the docker client at the wrong path.** The static archive's
+member is `docker/docker` (a file inside a `docker/` dir), so
+`tar -xzf ... -C /usr/local/bin docker/docker` created a **directory** at
+`/usr/local/bin/docker` with the client nested inside — tar does not flatten. Then
+`shutil.which("docker")` resolved to a directory, and every `docker` call failed
+"Permission denied" **even as root**.
+
+**2. The runtime user wasn't in the socket's group.** The container runs as `appuser`
+(uid/gid 10001) but the mounted socket is `srw-rw---- root:docker` (gid 987), so the
+non-root user couldn't open it even once the binary was on PATH.
+
+### Fix
+- **Dockerfile** — extract the client to a temp dir and `install -m 0755` it flat onto
+  `/usr/local/bin/docker` (a real file) instead of extracting the nested path.
+- **docker-compose.yml** — add `group_add: ["${DOCKER_GID:-987}"]` to the dashboard service
+  so the non-root runtime user belongs to the host `docker` group. No image rebuild needed
+  for this half.
+
+No `server.py` change: `_docker_status()` / `_docker_containers()` were correct and simply
+could not find/reach a working CLI.
+
+### Verified live (droplet)
+- `/usr/local/bin/docker` is now a FILE on PATH; `docker --version` → 29.6.1.
+- `appuser` shows `groups=10001,987` and `docker ps` lists all four compose siblings.
+- `_docker_status()` returns `accessible: True`, empty `note`, and all four containers with
+  status + restart counts — exactly what the Infrastructure card renders.
+- Restart path can reach the docserver container; `/api/v2/admin/infrastructure` stays
+  admin-gated (401 unauthenticated).
+
+Mounting the docker socket is host-root-equivalent, but that was the pre-existing,
+intended design — the socket was deliberately mounted for this feature. The fix only makes
+the already-mounted socket usable by the non-root runtime user; it adds no new privilege
+surface beyond the existing mount.
+
 ## Customers can no longer see employee-level information via the bot (2026-10-18)
 
 ### The bug
