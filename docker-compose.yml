@@ -29,7 +29,10 @@ services:
       - dashboard-uploads:/app/uploads
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
-      - "0.0.0.0:8766:8766"
+      # Loopback only: the host nginx terminates TLS and proxies in. Binding
+      # 0.0.0.0 would expose the dashboard over plain HTTP, bypassing the
+      # certificate (and COOKIE_SECURE=true would then refuse the session).
+      - "127.0.0.1:8766:8766"
     networks:
       - sietch-internal
 
@@ -70,7 +73,11 @@ services:
       - docserver-data:/var/www/onlyoffice/Data
       - docserver-logs:/var/log/onlyoffice
     ports:
-      - "0.0.0.0:9443:443"
+      # The Document Server's internal nginx listens on :80 only (there is no
+      # :443 listener), so map 80 — not 443 — to the host. nginx on the host
+      # terminates TLS for docs.<domain> and proxies plain HTTP to here.
+      # Loopback only, for the same reason as the dashboard above.
+      - "127.0.0.1:8080:80"
     networks:
       - sietch-internal
 
