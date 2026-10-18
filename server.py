@@ -1073,6 +1073,47 @@ def _conflict_target(table: str) -> str:
     return " ON CONFLICT (" + ", ".join(cols) + ") DO NOTHING"
 
 
+# ── Import jsonb adaptation ──────────────────────────────────────────────────
+# psycopg2 cannot adapt a Python dict/list to a `jsonb` column on its own: it
+# either raises "can't adapt type 'dict'" or, for a list, silently renders a
+# Postgres ARRAY and fails with "column X is of type jsonb but expression is of
+# type text[]". The per-bundle export stores such columns as native JSON, so
+# every affected row was being rejected. In the 2026-10-17 restore that silently
+# cost 753,627 of 816,863 `notifications` rows (the `payload` column) plus rows
+# in 14 other tables. Wrap those values in psycopg2.extras.Json.
+_JSONB_CACHE: dict[str, set[str]] = {}
+
+
+def _table_jsonb_columns(table: str) -> set[str]:
+    """jsonb column names for `table`, cached. Empty if none."""
+    if table in _JSONB_CACHE:
+        return _JSONB_CACHE[table]
+    rows = db.query(
+        """SELECT column_name
+             FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = %s AND data_type = 'jsonb'""",
+        (table,),
+    )
+    cols = {r[0] for r in rows} if rows else set()
+    _JSONB_CACHE[table] = cols
+    return cols
+
+
+def _adapt_row_values(table: str, columns: list[str], values: tuple) -> tuple:
+    """Wrap dict/list values destined for jsonb columns so psycopg2 can bind them."""
+    jsonb_cols = _table_jsonb_columns(table)
+    if not jsonb_cols:
+        return values
+    from psycopg2.extras import Json
+
+    out = list(values)
+    for i, col in enumerate(columns):
+        v = out[i]
+        if col in jsonb_cols and isinstance(v, (dict, list)):
+            out[i] = Json(v)
+    return tuple(out)
+
+
 def _session_token(handler: SimpleHTTPRequestHandler) -> str | None:
     jar = cookies.SimpleCookie(handler.headers.get("Cookie", ""))
     tok = jar.get(SESSION_COOKIE)
@@ -12743,8 +12784,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         duplicate = 0
                         failed = 0
                         for row in rows:
-                            values = tuple(row.get(c) for c in columns)
+                            raw_values = tuple(row.get(c) for c in columns)
                             try:
+                                values = _adapt_row_values(table_name, columns, raw_values)
                                 # ON CONFLICT DO NOTHING doesn't raise when it
                                 # skips a row, so counting statements here would
                                 # report every row as "imported" even on a
@@ -12767,7 +12809,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                     duplicate += 1
                                 elif sqlstate == "23503":  # foreign_key_violation
                                     # Likely a forward reference; retry later.
-                                    deferred_fk.append((table_name, col_names, placeholders, values))
+                                    deferred_fk.append((table_name, col_names, placeholders, raw_values))
                                 else:
                                     failed += 1
                                     if len(results["failure_samples"]) < 20:
@@ -12791,12 +12833,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 # has been loaded. Whatever still fails is a genuine problem
                 # and is counted as rows_failed.
                 deferred_recovered = 0
-                for table_name, col_names, placeholders, values in deferred_fk:
+                for table_name, col_names, placeholders, raw_values in deferred_fk:
                     try:
                         db.execute(
                             f"INSERT INTO {table_name} ({col_names}) VALUES ({placeholders})"
                             + _conflict_target(table_name),
-                            values,
+                            _adapt_row_values(table_name, col_names.split(", "), raw_values),
                         )
                         deferred_recovered += 1
                         results["rows_imported"] += 1

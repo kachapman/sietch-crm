@@ -18,12 +18,13 @@ The importer used a bare `ON CONFLICT DO NOTHING`, which swallows *every* unique
 - `server.py`: `rows_imported` now counts actual inserted rows via `db.execute()`'s rowcount. Previously a no-op re-import reported all 68k rows as "imported".
 - `init.sql`: seed `history_categories` with explicit ids 8-17 matching production exactly, and `setval` past them. The old 15-row seed titles are gone.
 - `public/app.js`: the admin import panel shows `rows_failed` and `failure_samples` in red under an "Incomplete" heading instead of folding failures into a generic "skipped" count.
-- `tests/test_import_conflict.py`: new — 32 tests covering all of the above (source-level guards plus taxonomy assertions).
+- `server.py`: added `_table_jsonb_columns()` / `_adapt_row_values()`. psycopg2 cannot bind a Python `dict` to a `jsonb` column (`can't adapt type 'dict'`) and binds a `list` as a Postgres ARRAY (`column X is of type jsonb but expression is of type text[]`). The export stores those columns as native JSON, so **every affected row was being rejected** — silently, as `rows_skipped`. This was the single largest data loss in the restore: **753,627 of 816,863 `notifications` rows** (the `payload` column), plus rows in 14 other tables. Values destined for `jsonb` columns are now wrapped in `psycopg2.extras.Json`.
+- `tests/test_import_conflict.py`: new — 40 tests covering all of the above (source-level guards plus taxonomy assertions).
 - `.github/workflows/smoke.yml`: new suite wired into CI.
 
 ### Verified
 
-Against a scratch database built from the corrected `init.sql` + all 37 migrations, importing the real per-bundle `db-core` export: **48,823 history events, 17,180 attachments, 1,229 opportunities, 841 tasks, 0 failed rows**, every `category_id` resolving to the correct production title, and the 3 forward-referencing contacts recovered on the deferred pass. A second identical import reports 0 inserted / 68,194 duplicates / 0 failed.
+Against a scratch database built from the corrected `init.sql` + all 37 migrations, importing the real per-bundle `db-core` export across **all 66 exported tables**: **918,964 rows inserted, 0 failed**, every `category_id` resolving to the correct production title, the 3 forward-referencing contacts recovered on the deferred pass, and every populated table matching the export manifest. A second identical import reports 0 inserted / all duplicates / 0 failed.
 
 ## Template dropdown anchors to button, not tile (2026-10-16)
 

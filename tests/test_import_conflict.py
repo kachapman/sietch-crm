@@ -296,5 +296,59 @@ class TestRowcountIsHonest(unittest.TestCase):
         )
 
 
+class TestJsonbAdaptation(unittest.TestCase):
+    """jsonb columns need psycopg2.extras.Json() — otherwise the row is lost.
+
+    psycopg2 cannot bind a Python dict to a `jsonb` column ("can't adapt type
+    'dict'") and binds a list as a Postgres ARRAY ("column X is of type jsonb
+    but expression is of type text[]"). The per-bundle export stores those
+    columns as native JSON. Before this fix that silently cost 753,627 of
+    816,863 `notifications` rows, plus rows in 14 other tables.
+    """
+
+    def test_helper_exists(self):
+        self.assertIn("def _adapt_row_values(", SRC)
+        self.assertIn("def _table_jsonb_columns(", SRC)
+
+    def test_uses_psycopg2_json_wrapper(self):
+        self.assertIn("from psycopg2.extras import Json", SRC)
+        self.assertIn("Json(v)", SRC)
+
+    def test_wraps_dicts_and_lists_only(self):
+        self.assertIn("isinstance(v, (dict, list))", SRC)
+
+    def test_jsonb_columns_discovered_from_catalog(self):
+        self.assertIn("information_schema.columns", SRC)
+        self.assertIn("data_type = 'jsonb'", SRC)
+
+    def test_jsonb_cache_present(self):
+        self.assertIn("_JSONB_CACHE", SRC)
+
+    def test_both_insert_sites_adapt(self):
+        """Two insert sites: the main loop and the deferred-FK retry pass.
+
+        The deferral *append* deliberately stores raw values (it adapts at
+        retry time), so only two call sites are expected.
+        """
+        self.assertGreaterEqual(
+            len(re.findall(r"_adapt_row_values\(", HANDLER)), 2,
+            "both the main insert and the retry pass must adapt jsonb values",
+        )
+
+    def test_values_adapted_before_insert(self):
+        code = "\n".join(
+            line for line in HANDLER.split("\n") if not line.strip().startswith("#")
+        )
+        self.assertRegex(
+            code,
+            r"values = _adapt_row_values\(",
+            "values must be adapted before being handed to db.execute",
+        )
+
+    def test_deferred_rows_keep_raw_values(self):
+        """Deferral must store the raw tuple so the retry can adapt it."""
+        self.assertRegex(HANDLER, r"deferred_fk\.append\([^)]*raw_values")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
