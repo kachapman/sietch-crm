@@ -28,6 +28,14 @@ services:
       - dashboard-data:/app/data
       - dashboard-uploads:/app/uploads
       - /var/run/docker.sock:/var/run/docker.sock
+    # The dashboard container runs as uid/gid 10001 (appuser), but the mounted
+    # /var/run/docker.sock is srw-rw---- root:docker -- so without this
+    # supplementary group the non-root runtime user gets "permission denied
+    # while trying to connect to the docker API" and the admin Infrastructure
+    # tab reports the socket as unavailable. DOCKER_GID is the host's docker
+    # group gid (987 on the production droplet); override it if a host differs.
+    group_add:
+      - "${DOCKER_GID:-987}"
     ports:
       # Loopback only: the host nginx terminates TLS and proxies in. Binding
       # 0.0.0.0 would expose the dashboard over plain HTTP, bypassing the

@@ -17,11 +17,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Docker CLI (static client) so the admin Infrastructure tab can inspect sibling
 # containers and drive restart buttons via the mounted /var/run/docker.sock.
+#
+# BUG (fixed): the archive member is `docker/docker` -- a file INSIDE a `docker/`
+# directory. `tar -xzf ... -C /usr/local/bin docker/docker` therefore creates a
+# DIRECTORY at /usr/local/bin/docker with the client inside it, and tar does not
+# flatten. `shutil.which("docker")` then resolves to a directory rather than an
+# executable, so every `docker` call failed with "Permission denied" even as root
+# and the admin Infrastructure tab reported the socket as unmounted.
+# Extract to a temp dir and `install` the binary flat onto PATH instead.
 ARG DOCKER_CLI_VERSION=29.6.1
 RUN curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" -o /tmp/docker.tgz \
-    && tar -xzf /tmp/docker.tgz -C /usr/local/bin docker/docker \
-    && chmod +x /usr/local/bin/docker \
-    && rm /tmp/docker.tgz
+    && tar -xzf /tmp/docker.tgz -C /tmp docker/docker \
+    && install -m 0755 /tmp/docker/docker /usr/local/bin/docker \
+    && rm -rf /tmp/docker.tgz /tmp/docker
 
 # All top-level Python modules server.py may import (and the test-server).
 # Keeping this as a glob avoids the "missing module → container crash" failure
