@@ -972,5 +972,95 @@ class TestLogThrottled(unittest.TestCase):
         self.assertEqual(len(logs.output), 2)
 
 
+class TestEmployeeCustomerIsolation(unittest.TestCase):
+    """Customers must never see employee-level information.
+
+    The bot token authenticates the bot *process*, not an individual chat, so it is
+    not an authorization boundary. Employee-vs-customer is decided server-side from the
+    stored chatId mapping. These are source-level guards: they pin the invariant that no
+    employee/customer decision is ever read off the wire, without needing a live DB.
+    """
+
+    @staticmethod
+    def _server_src() -> str:
+        return (Path(__file__).resolve().parents[1] / "server.py").read_text(encoding="utf-8")
+
+    @staticmethod
+    def _bot_src() -> str:
+        return (Path(__file__).resolve().parents[1] / "telegram_bot.py").read_text(encoding="utf-8")
+
+    @staticmethod
+    def _deals_handler(src: str) -> str:
+        start = src.index('if api_path == "/api/bot/deals":')
+        return src[start:start + 2500]
+
+    def test_deals_does_not_trust_employee_query_param(self):
+        """The regression: ?employee=true used to decide employee access."""
+        self.assertNotIn('qs.get("employee")', self._deals_handler(self._server_src()))
+
+    def test_deals_does_not_trust_contact_id_query_param(self):
+        """A client must not be able to ask for another contact's projects."""
+        handler = self._deals_handler(self._server_src())
+        self.assertNotIn('qs.get("contactId")', handler)
+
+    def test_deals_derives_employee_from_mapping(self):
+        handler = self._deals_handler(self._server_src())
+        self.assertIn("get_mapping_by_chat", handler)
+        self.assertIn('bool(deals_mapping.get("employee"))', handler)
+
+    def test_deals_requires_chat_id(self):
+        """Without a chatId there is no identity, so no data may be returned."""
+        handler = self._deals_handler(self._server_src())
+        self.assertIn('chatId is required', handler)
+
+    def test_deals_403s_when_chat_has_no_linked_account(self):
+        handler = self._deals_handler(self._server_src())
+        self.assertIn("No linked account for this chat", handler)
+
+    def test_deals_customer_scope_comes_from_mapping(self):
+        """Customer contact_id is read from the mapping, not the request."""
+        handler = self._deals_handler(self._server_src())
+        self.assertIn('contact_id = deals_mapping.get("contactId") if not is_employee else None', handler)
+
+    def test_bot_get_deals_has_no_employee_parameter(self):
+        """The bot must stop asserting its own authorization on the wire."""
+        src = self._bot_src()
+        start = src.index("async def get_deals(")
+        sig_line = src[start:src.index("\n", start)]
+        self.assertNotIn("employee", sig_line)
+
+    def test_bot_never_sends_employee_param(self):
+        self.assertNotIn('params["employee"]', self._bot_src())
+
+    def test_tag_callback_is_employee_gated(self):
+        """tag: searches span all contacts; a stale keyboard must not widen access."""
+        src = self._bot_src()
+        branch = src[src.index('if data.startswith("tag:"):'):]
+        branch = branch[:branch.index('if data.startswith("act:note:")')]
+        self.assertIn("get_mapping(chat_id)", branch)
+        self.assertIn('tag_mapping.get("employee")', branch)
+        # The guard must run BEFORE the deal fetch, so a customer never gets data.
+        self.assertLess(branch.index('tag_mapping.get("employee")'),
+                        branch.index("get_deals("))
+        # employee= must not be forwarded to the server on this branch. (is_employee=
+        # is fine -- that is display formatting only, after the data is scoped.)
+        self.assertNotIn("employee=True,", branch)
+        self.assertNotIn(", employee=", branch)
+
+    def test_no_endpoint_reads_employee_from_the_wire(self):
+        """Sweep: no /api/bot/ handler may take `employee` from a query string.
+
+        generate-code reads it from the body, but that endpoint is _require_admin-gated
+        (an admin deliberately minting an employee invite), so it is excluded by name.
+        """
+        src = self._server_src()
+        for match in re.finditer(r'if api_path == "/api/bot/[a-z-]+"', src):
+            path = match.group(0)
+            if "generate-code" in path:
+                continue
+            body = src[match.start():match.start() + 2500]
+            self.assertNotIn('qs.get("employee")', body, f"{path} trusts ?employee from the wire")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

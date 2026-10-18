@@ -15279,15 +15279,29 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         if api_path == "/api/bot/deals":
+            # SECURITY: employee/customer is decided HERE, from the stored chatId
+            # mapping, never from a client-supplied flag. The bot token authenticates
+            # the bot *process*, not an individual chat, so it is not an authorization
+            # boundary. Previously ?employee=true and ?contactId= were trusted from the
+            # wire, which let a crafted request drop the contact filter and return every
+            # opportunity across every contact. A caller still sending employee=true
+            # (older bot build) is simply ignored -- the mapping is authoritative.
             raw_chat_deals = (qs.get("chatId") or [""])[0]
-            if raw_chat_deals:
-                track_request("sietch", int(raw_chat_deals), "deals")
-            is_employee = (qs.get("employee") or [""])[0].lower() == "true"
-            raw_contact = (qs.get("contactId") or [""])[0]
-            if not is_employee and not raw_contact:
-                _json_response(self, 400, {"error": "contactId is required"})
+            if not raw_chat_deals:
+                _json_response(self, 400, {"error": "chatId is required"})
                 return
-            contact_id = int(raw_contact) if raw_contact else None
+            track_request("sietch", int(raw_chat_deals), "deals")
+            deals_mapping = get_mapping_by_chat("sietch", int(raw_chat_deals))
+            if not deals_mapping:
+                _json_response(self, 403, {"error": "No linked account for this chat"})
+                return
+            is_employee = bool(deals_mapping.get("employee"))
+            # Customers are scoped to their own contact; the id comes from the
+            # mapping so a client cannot ask for somebody else's projects.
+            contact_id = deals_mapping.get("contactId") if not is_employee else None
+            if not is_employee and not contact_id:
+                _json_response(self, 400, {"error": "Account is not fully set up"})
+                return
 
             # Query PostgreSQL with enriched fields
             where = ["o.stage_type = 0"]
@@ -15316,13 +15330,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     WHERE {' AND '.join(where)} ORDER BY o.created_at DESC LIMIT 100""",
                 (*params,),
             )
-            # Filter by allowedProjectIds if customer mapping has restrictions
+            # Filter by allowedProjectIds if customer mapping has restrictions.
+            # Reuse the already-resolved mapping rather than re-reading the store.
             allowed_ids = None
-            if not is_employee and raw_chat_deals:
+            if not is_employee:
                 from crm_bot_store import get_allowed_projects
-                mapping = get_mapping_by_chat("sietch", int(raw_chat_deals))
-                if mapping:
-                    allowed_ids = get_allowed_projects("sietch", contact_id, is_employee=False)
+                allowed_ids = get_allowed_projects("sietch", contact_id, is_employee=False)
             deals = []
             for r in rows:
                 opp_id = r[0]

@@ -26,6 +26,68 @@ The importer used a bare `ON CONFLICT DO NOTHING`, which swallows *every* unique
 
 Against a scratch database built from the corrected `init.sql` + all 37 migrations, importing the real per-bundle `db-core` export across **all 66 exported tables**: **918,964 rows inserted, 0 failed**, every `category_id` resolving to the correct production title, the 3 forward-referencing contacts recovered on the deferred pass, and every populated table matching the export manifest. A second identical import reports 0 inserted / all duplicates / 0 failed.
 
+## Customers can no longer see employee-level information via the bot (2026-10-18)
+
+### The bug
+
+`TELEGRAM_BOT_TOKEN` is a single shared secret that authenticates the bot **process** to
+the server. Every customer and every employee talk through that one token, so the token
+is **not** an authorization boundary — it never was. The real boundary is the server-side
+mapping store (`data/bot-customers/sietch/store.json`), which maps `chatId` to
+`{employee, contactId, userId}`.
+
+Most `/api/bot/*` endpoints already enforced that correctly: require the bot Bearer token,
+resolve the mapping by `chatId`, then `if not mapping.get("employee"): 403`. Two paths did
+not, and both could have shown a customer employee-level data:
+
+1. **`/api/bot/deals` trusted the wire** (server.py:15285).
+   ```python
+   is_employee = (qs.get("employee") or [""])[0].lower() == "true"   # client-controlled
+   raw_contact = (qs.get("contactId") or [""])[0]                     # client-controlled
+   ```
+   A request with `?employee=true` and no `contactId` dropped the `o.contact_id = %s`
+   filter entirely and returned **every opportunity across every contact**, plus the
+   employee-only history-event enrichment gated on `is_employee`.
+
+2. **The `tag:` callback hardcoded `employee=True`** (telegram_bot.py:1421).
+   `get_deals(None, chat_id, tag=tag_name, employee=True)` ran with no mapping check.
+   It was safe in practice only because the tag keyboard is built by `/tags`, which does
+   check `mapping.employee`. A **stale keyboard** tapped after an admin downgraded the
+   account would return employee-wide deals.
+
+### The fix
+
+- **`server.py` — `/api/bot/deals` is now authoritative.** `chatId` is required; the
+  mapping is resolved by `chatId` (403 when the chat has no linked account);
+  `is_employee` comes from the mapping, and a customer's `contact_id` comes from the
+  mapping too, so a client cannot request another contact's projects. The wire params
+  are no longer read.
+- **`telegram_bot.py` — the `tag:` callback re-checks the mapping** before fetching, and
+  refuses non-employees. The guard runs before the fetch, so no data is returned first.
+- **`telegram_bot.py` — `get_deals()` no longer takes an `employee` parameter** and never
+  sends `?employee=`. Keeping it would have left a misleading, misuse-prone parameter on
+  the wire. Older bot builds still sending it are safely ignored: `parse_qs` just parses an
+  unused key, and the server no longer reads it. Legitimate traffic is unaffected, because
+  the server now derives the same `is_employee` value from the mapping.
+
+### Verified
+
+- 11 new source-level guards in `tests/test_telegram_bot.py` (`TestEmployeeCustomerIsolation`),
+  including a sweep asserting **no** `/api/bot/*` endpoint reads `employee` from a query
+  string. `generate-code` reads it from the body but is `_require_admin`-gated — an admin
+  deliberately minting an employee invite — so it is excluded by name.
+- **Mutation-checked:** re-introducing both bugs fails 4 of the guards, so the suite
+  genuinely pins the invariant rather than passing vacuously.
+- Full suite green: **475 Python + 189 JS, 0 failures.**
+
+### Audited and already correct (unchanged)
+
+`me, tasks, my-projects, overdue, due-this-week, pipeline, calendar, today, team, recent,
+stats, task-create, task-done, stage, note, upload, notification-by-message` all resolve the
+mapping server-side and scope by `userId`/`responsible_user_id`/`chat_id`. Note
+`/api/bot/upload` is **employee-only** — customers cannot upload at all today; enabling that
+for customers is a separate feature needing its own scoping design.
+
 ## Restore the real admin accounts; drop the bootstrap account (2026-10-18)
 
 A bootstrap admin was created on the new droplet to get past the login screen while the

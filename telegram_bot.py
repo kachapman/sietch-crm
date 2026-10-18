@@ -420,7 +420,13 @@ async def get_mapping(chat_id: int) -> dict | None:
     return await _get("/api/bot/me", {"chatId": chat_id})
 
 
-async def get_deals(contact_id: int | None, chat_id: int | None = None, search: str | None = None, employee: bool = False, tag: str | None = None) -> list[dict] | None:
+async def get_deals(contact_id: int | None, chat_id: int | None = None, search: str | None = None, tag: str | None = None) -> list[dict] | None:
+    # SECURITY: there is deliberately no `employee` parameter. The bot token
+    # authenticates this process, not the chat, so employee-vs-customer is decided
+    # server-side from the chatId mapping (see /api/bot/deals in server.py).
+    # Sending the claim from here would only re-introduce the wire-trust bug.
+    # contact_id is likewise only a hint for employees; the server scopes customers
+    # to their own contact regardless of what is sent here.
     params: dict = {}
     if contact_id is not None:
         params["contactId"] = contact_id
@@ -428,8 +434,6 @@ async def get_deals(contact_id: int | None, chat_id: int | None = None, search: 
         params["chatId"] = chat_id
     if search:
         params["search"] = search
-    if employee:
-        params["employee"] = "true"
     if tag:
         params["tag"] = tag
     result = await _get("/api/bot/deals", params)
@@ -1418,7 +1422,16 @@ def main() -> None:
             if not tag_name:
                 await query.edit_message_text("Invalid tag.")
                 return
-            deals = await get_deals(None, chat_id, tag=tag_name, employee=True)
+            # SECURITY: tag: searches span every contact, so they are employee-only.
+            # The keyboard that produces this callback is built by /tags (which already
+            # checks employee), but the callback itself was unguarded -- a stale
+            # keyboard tapped after a downgrade would return employee-wide deals.
+            # Re-check the mapping here so the callback can never widen access.
+            tag_mapping = await get_mapping(chat_id)
+            if not tag_mapping or not tag_mapping.get("employee"):
+                await query.edit_message_text("This is only available to employees.")
+                return
+            deals = await get_deals(None, chat_id, tag=tag_name)
             if deals is None:
                 await query.edit_message_text("I'm having trouble reaching the server. Please try again.")
                 return
@@ -1694,7 +1707,7 @@ def main() -> None:
 
                 # Treat any other text as a title search
                 search = text
-                deals = await get_deals(contact_id, chat_id, search=search, employee=is_employee)
+                deals = await get_deals(contact_id, chat_id, search=search)
                 if deals is None:
                     await _reply_html(update, "I'm having trouble reaching the server. Please try again in a couple of minutes.")
                     return
