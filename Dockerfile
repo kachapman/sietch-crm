@@ -4,9 +4,9 @@ WORKDIR /app
 
 RUN useradd --create-home --uid 10001 appuser
 
-RUN pip install --no-cache-dir psycopg2-binary Pillow ExifRead httpx imap_tools
 # ML dependencies for email classifier retraining (optional — retrain will fail gracefully without these)
 RUN pip install --no-cache-dir sentence-transformers scikit-learn numpy 2>/dev/null || true
+RUN pip install --no-cache-dir psycopg2-binary Pillow ExifRead httpx imap_tools
 # Base tools (curl is required by the docker-cli install step below; otherwise
 # `python:3.12-slim-bookworm` ships without it and the build fails).
 # PostgreSQL client tools (pg_dump, psql) for database backup/restore.
