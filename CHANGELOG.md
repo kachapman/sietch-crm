@@ -58,6 +58,54 @@ behind. After any bulk import that uses explicit project_number values,
 this sequence must be resynced. A guard could be added to the import path
 to call `setval` automatically, but that is out of scope here.
 
+## Fix: scanner ignored behavior checkboxes; [\#NNNN] resolved to id not project_number (2026-10-19)
+
+### Symptoms
+
+1. **Scanner kept linking despite every behavior checkbox being off.** The
+   only one that should run is "Auto-link emails by [\#PROJECTID] in subject".
+   "Post email body as note to linked deal" and "Auto-link by content"
+   were off but links were still created.
+2. **Wrong project linked.** An email with [\#1241] ended up linked to
+   `id 1241` (WS Liquor Inc) — but the user meant `project_number 1241`
+   (Barbara O'Malley).
+
+### Root causes (both one-line bugs in scanner/mail_scanner.py)
+
+- **Line 1433:** `auto_link_enabled = toggles.get("auto_link_project_id", True)`.
+  `toggles.get(...)` returns a CONFIG DICT (`{enabled, dry_run, accounts}`),
+  not a bool. A non-empty dict is always truthy, so the classifiers ran
+  regardless of the checkbox. Every other call site uses the correct
+  `_is_behavior_enabled()` helper. Fix reads `.get("enabled", False)`
+  from the config dict.
+- **`_find_opportunity_by_deal_id` (line 1302):** looked up `WHERE id = %s`.
+  The number users put in [\#NNNN] is the CRM project number shown in the
+  UI header, NOT the row id. These agreed for 1,229 of 1,242 opportunities
+  but DIVERGED for the 13 created by the 2026-10-19 sync, which is why
+  [\#1241] resolved to `id 1241` (WS Liquor Inc) instead of
+  `project_number 1241` (Barbara O'Malley). `server.py _resolve_project_id`
+  does it correctly. Fix matches.
+
+### Data fix on the droplet
+
+- Unlinked the 3 wrong `mail_deal_links` (ids 181, 182, 185)
+- Realigned the 13 divergent deals so `project_number = id`
+  (restored the invariant the whole system assumes; temporary `-id` to
+  dodge the unique-constraint collision)
+- Re-pointed both `opportunities_id_seq` and
+  `opportunities_project_number_seq` to 1247 so future inserts stay in
+  lockstep
+
+### Test
+
+New `tests/test_scanner_toggle_gating.py` (6) covers:
+- the toggle gate reads the `enabled` key, not the dict itself
+- `_find_opportunity_by_deal_id` resolves by `project_number` first
+- the Dockerfile no longer builds the torch layer
+
+Full suite: **500 Python + 189 JS, 0 failures.**
+Image size: **9.77 GB → 432 MB** (torch dropped, builds from ~15 min to ~2 min).
+
 ## Fix Documents tab empty + bookmark titles; dedup history events (2026-10-19)
 
 ### Documents missing on deals
