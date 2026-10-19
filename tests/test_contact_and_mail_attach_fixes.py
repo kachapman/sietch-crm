@@ -193,6 +193,17 @@ class TestBackfillScripts(unittest.TestCase):
         self.assertIn("crm_file_id", body)
         self.assertIn("--write", body)
 
+    def test_contact_live_backfill_exists(self):
+        path = ROOT / "scripts" / "backfill_contacts_live.py"
+        self.assertTrue(path.exists())
+        body = path.read_text(encoding="utf-8")
+        self.assertIn("DRY-RUN BY DEFAULT", body)
+        self.assertIn("oo_authenticate", body)
+        self.assertIn("/api/2.0/crm/opportunity/", body)
+        self.assertIn("--write", body)
+        # Must use authenticated API, not just any HTTP
+        self.assertIn("Authorization", body)
+
 
 import re  # used above
 
