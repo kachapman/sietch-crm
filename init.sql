@@ -757,7 +757,8 @@ CREATE TABLE mail_accounts (
     auto_bcc_addr TEXT,
     retention_days INTEGER DEFAULT 90,
     tab_icon TEXT DEFAULT 'user',
-    tab_color TEXT DEFAULT 'var(--accent)'
+    tab_color TEXT DEFAULT 'var(--accent)',
+    created_at TIMESTAMP DEFAULT NOW()
 );
 
 CREATE TABLE mail_messages (

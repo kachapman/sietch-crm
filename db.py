@@ -17,12 +17,13 @@ def init_db() -> None:
     global _pool
     _pool = pool.SimpleConnectionPool(
         minconn=2,
-        maxconn=10,
+        maxconn=20,
         host=os.getenv("DB_HOST", "db"),
         port=os.getenv("DB_PORT", "5432"),
         dbname=os.getenv("DB_NAME", "sietch_crm"),
         user=os.getenv("DB_USER", "sietch"),
         password=os.getenv("DB_PASSWORD", ""),
+        connect_timeout=10,
     )
 
     # Apply any pending migrations/*.sql files in lexicographic order.
