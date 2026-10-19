@@ -28,6 +28,17 @@ DASHBOARD_URL = os.getenv("DASHBOARD_URL", "http://127.0.0.1:8766")
 def _get_dashboard_url() -> str:
     """Read DASHBOARD_URL lazily to pick up .env changes."""
     return os.getenv("DASHBOARD_URL", DASHBOARD_URL)
+
+
+def _get_public_dashboard_url() -> str:
+    """Public base for links the RECIPIENT clicks (e.g. "View project" in Telegram).
+
+    These are opened in the customer's browser, so this must be reachable
+    by them and can never be 127.0.0.1. Falls back to the internal URL
+    when DASHBOARD_PUBLIC_URL is unset, which preserves the historical
+    behaviour for single-host deployments.
+    """
+    return (os.getenv("DASHBOARD_PUBLIC_URL") or _get_dashboard_url()).rstrip("/")
 TELEGRAM_NOTIFY_ENABLED = os.getenv("TELEGRAM_NOTIFY_ENABLED", "true").lower() == "true"
 POLL_INTERVAL = int(os.getenv("TELEGRAM_NOTIFY_POLL_INTERVAL", "5"))
 BATCH_SIZE = int(os.getenv("TELEGRAM_NOTIFY_BATCH_SIZE", "10"))
@@ -81,7 +92,7 @@ def _resolve_actor(notification: dict, actor_name: str) -> str:
 
 def _project_link(project_title: str, project_id: int | None, project_number: int | None) -> str:
     """Build project link line."""
-    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
+    link = f"{_get_public_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
     if project_title and link:
         return f"<b>Project:</b> <a href=\"{link}\">{_escape_html(project_title)}</a>"
     elif project_title:
@@ -101,7 +112,7 @@ def _build_tg(header_emoji: str, header_text: str, project_title: str, project_i
     if cta_reply:
         lines.append("<code>Reply to add a note.</code>")
     else:
-        link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
+        link = f"{_get_public_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
         if link:
             lines.append(f"\U0001f517 <a href=\"{link}\">View project</a>")
     return "\n".join(lines)
@@ -285,7 +296,7 @@ def _format_email_notification(notification: dict, project_title: str, actor_nam
     """Build plain text email from notification. Returns (subject, text) or (None, None)."""
     actor = _resolve_actor(notification, actor_name)
     payload = notification.get("payload") or {}
-    link = f"{_get_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
+    link = f"{_get_public_dashboard_url()}/project/{project_number or project_id}" if (project_number or project_id) else ""
 
     ntype = notification.get("type")
     if ntype == "note_tagged":
