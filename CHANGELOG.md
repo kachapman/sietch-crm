@@ -58,6 +58,61 @@ behind. After any bulk import that uses explicit project_number values,
 this sequence must be resynced. A guard could be added to the import path
 to call `setval` automatically, but that is out of scope here.
 
+## Fix Documents tab empty + bookmark titles; dedup history events (2026-10-19)
+
+### Documents missing on deals
+
+`project_documents` and `history_attachments` are two mirrors of the same
+files, keyed 1:1 on `file_path`. The pull-deals OnlyOffice sync inserted
+into `history_attachments` but **never** into `project_documents`, and the
+Documents tab (`GET /api/v2/projects/{id}/documents`) reads ONLY
+`project_documents`. So synced files were on disk and in the DB but the tab
+showed "0 documents".
+
+Three fixes:
+1. **Backfill** (droplet): mirrored 130 `history_attachments` rows into
+   `project_documents` (files verified present on disk first; 14 rows
+   skipped because the file is genuinely absent — a pre-existing gap from
+   the original migration). `project_documents` 17,166 -> 17,296.
+2. **Sync now mirrors** into `project_documents` on every attachment, and
+   the event query no longer restricts to events with *zero* attachments —
+   an event that already had some files was skipped entirely, so its
+   remaining files were downloaded to disk but never recorded.
+3. **Documents endpoint falls back** to `history_attachments` for anything
+   without a `project_documents` twin, so a missing mirror can never
+   render as "0 documents".
+
+Affected 62 deals, including all 13 created by the 2026-10-19 sync.
+
+### Bookmark project titles showing as "Project #N"
+
+The preview modal sets `oppPreviewContext(id, null, group)` and becomes
+interactive *before* the project data loads. The bookmark button read
+`ctx.opp.title` during that window, got `""`, and stored the
+`Project #<id>` placeholder — which was never re-resolved. The same
+bookmarks on dev rendered correctly because the data had already loaded.
+
+- `resolveOpportunityTitleById(id)` looks up a real title from loaded
+  groups, bookmark caches, or the preview context.
+- `addBookmarkDeal` resolves before falling back to the placeholder.
+- `renderBookmarkTabs` prefers a live title, so existing bad snapshots
+  self-heal on next render.
+
+### Duplicate history events cleaned up
+
+The sweep of all 70 tables against the export manifest found **7,074
+duplicate `(opportunity_id, crm_event_id)` groups** (14,148 rows). All were
+pre-migration (created_at <= 2026-10-13) — baked in on the home box, not
+caused by the recent sync. Deleted the 7,074 extras (49,351 -> 42,277
+events, 0 duplicate groups remaining) and added migration 034 with a
+partial unique index to prevent recurrence.
+
+### Cache-bust bumps
+
+`app.js?v=3.7.12`, `styles.css?v=3.7.17` — the previous versions were
+already cached in browsers, which is why the new icons and the System
+checkbox appeared not to deploy.
+
 ## Cut over the live Telegram bot to @vanguardupdates_bot (2026-10-19)
 
 Moved the live Telegram bot from the old droplet to the new Sietch droplet, keeping the

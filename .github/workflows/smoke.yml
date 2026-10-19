@@ -76,6 +76,12 @@ jobs:
       - name: Run admin gating tests
         run: python3 tests/test_admin_gating.py
 
+      - name: Run mail template auth tests
+        run: python3 tests/test_mail_template_auth.py
+
+      - name: Run attachment mirror + bookmark title tests
+        run: python3 tests/test_attachment_mirror_and_bookmark_titles.py
+
       - name: Run infrastructure tests
         run: python3 tests/test_infrastructure.py
 

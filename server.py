@@ -11009,7 +11009,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 (opp_id,),
             )
             docs = []
+            seen_paths = set()
             for r in rows:
+                seen_paths.add(r[2])
                 docs.append({
                     "id": r[0], "title": r[1], "filePath": r[2],
                     "fileSize": r[3], "mimeType": r[4], "uploadedBy": r[5],
@@ -11017,6 +11019,38 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     "companyScope": r[7],
                     "editUrl": f"/doc-editor.html?id={r[0]}",
                 })
+            # Fallback: attachments that exist in history_attachments but have no
+            # project_documents mirror. The Documents tab used to show "0 documents"
+            # for a deal whose files were synced but never mirrored. Surface them
+            # rather than hiding them. project_documents rows win on file_path.
+            try:
+                extra = db.query(
+                    """SELECT ha.id, ha.filename, ha.file_path, ha.file_size, ha.mime_type,
+                              ha.uploaded_by, ha.uploaded_at, he.id
+                         FROM history_attachments ha
+                         JOIN history_events he ON he.id = ha.event_id
+                        WHERE he.opportunity_id = %s
+                          AND NOT EXISTS (
+                              SELECT 1 FROM project_documents pd
+                               WHERE pd.file_path = ha.file_path AND pd.is_deleted = FALSE
+                          )
+                        ORDER BY ha.uploaded_at DESC""",
+                    (opp_id,),
+                )
+                for r in extra:
+                    if r[2] in seen_paths:
+                        continue
+                    seen_paths.add(r[2])
+                    docs.append({
+                        "id": r[0], "title": r[1], "filePath": r[2],
+                        "fileSize": r[3], "mimeType": r[4], "uploadedBy": r[5],
+                        "uploadedAt": r[6].isoformat() if r[6] else None,
+                        "companyScope": False,
+                        "editUrl": f"/doc-editor.html?id={r[0]}",
+                        "fromHistoryAttachment": True,
+                    })
+            except Exception:
+                pass
             _json_response(self, 200, {"documents": docs})
         except Exception as exc:
             logger.exception("projects/{id}/documents failed")
@@ -11812,15 +11846,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
                 # ── History attachments (Bug #5 fix): DOWNLOAD for new events ──
                 try:
-                    # Find events for this opp that have crm_event_id but no attachments yet
+                    # Find events for this opp that have crm_event_id. We used to
+                    # restrict this to events with NO attachments at all, which meant
+                    # an event that already had some files was skipped entirely on
+                    # later runs -- so its remaining files were downloaded to disk
+                    # but never recorded. Select every event and let the per-file
+                    # ON CONFLICT below decide what still needs inserting.
                     events_with_files = []
                     # We just inserted them above; query back to find their IDs
                     event_rows = db.query_dicts(
                         """SELECT he.id, he.crm_event_id FROM history_events he
-                           WHERE he.opportunity_id = %s AND he.crm_event_id IS NOT NULL
-                             AND NOT EXISTS (
-                                 SELECT 1 FROM history_attachments ha WHERE ha.event_id = he.id
-                             )""",
+                           WHERE he.opportunity_id = %s AND he.crm_event_id IS NOT NULL""",
                         (v3_opp_id,),
                     )
                     if event_rows:
@@ -11878,6 +11914,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                        ON CONFLICT (event_id, crm_file_id) WHERE crm_file_id IS NOT NULL DO NOTHING""",
                                     (v3_event_id, f_title, rel_path, actual_size, mime_type,
                                      v3_uploader_id, view_url, f_id),
+                                )
+                                # Mirror into project_documents. The Documents tab
+                                # (GET /api/v2/projects/{id}/documents) reads ONLY
+                                # project_documents, so without this row the file is on
+                                # disk and in history_attachments but the tab shows
+                                # "0 documents". The two tables are 1:1 mirrors of each
+                                # other keyed on file_path.
+                                db.execute(
+                                    """INSERT INTO project_documents
+                                           (opportunity_id, title, file_path, file_size, mime_type,
+                                            uploaded_by, uploaded_at)
+                                       VALUES (%s,%s,%s,%s,%s,%s,NOW())
+                                       ON CONFLICT DO NOTHING""",
+                                    (v3_opp_id, f_title, rel_path, actual_size, mime_type,
+                                     v3_uploader_id),
                                 )
                                 attachments_synced += 1
                 except Exception as e:

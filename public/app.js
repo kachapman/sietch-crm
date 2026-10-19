@@ -28568,7 +28568,15 @@ function bindOpportunityPreviewModal() {
     const ctx = oppPreviewContext;
     if (!ctx || ctx.oppId == null) return;
     const id = Number(ctx.oppId);
-    const title = ctx.opp ? (ctx.opp.title || ctx.opp.Title || "") : "";
+    // The preview context is set with a NULL opp while the project is still
+    // loading, and the bookmark button is clickable during that window. Using
+    // ctx.opp then yielded an empty title, so the bookmark was stored with the
+    // "Project #<id>" placeholder and never corrected. Resolve a real title
+    // from whatever is available before falling back.
+    let title = ctx.opp ? (ctx.opp.title || ctx.opp.Title || "") : "";
+    if (!title) {
+      title = resolveOpportunityTitleById(id) || "";
+    }
     if (isDealBookmarked(id)) {
       removeBookmarkDeal(id);
     } else {
@@ -30734,10 +30742,16 @@ function renderBookmarkTabs() {
       }
     }
 
+    // Prefer a live title over the snapshot stored at bookmark time. A
+    // bookmark saved while the preview modal was still loading carries the
+    // "Project #<id>" placeholder; resolve it now so the panel self-heals.
+    const liveTitle = resolveOpportunityTitleById(deal.oppId);
+    const shownTitle = liveTitle || deal.title || `Project #${deal.oppId}`;
+
     btn.innerHTML = `
       <span class="bookmark-tab-icon">${bookmarkRibbonSvg(true)}</span>
       <span class="bookmark-tab-stage-dot" style="background:${escapeHtml(stageColor)}"></span>
-      <span class="bookmark-tab-title">${escapeHtml(deal.title)}</span>
+      <span class="bookmark-tab-title">${escapeHtml(shownTitle)}</span>
       <span class="bookmark-tab-meta">${escapeHtml(stageLabel)}${stageLabel && dueLabel ? " · " : ""}${escapeHtml(dueLabel)}</span>
     `;
     tabBar.appendChild(btn);
@@ -30955,6 +30969,33 @@ function closeBookmarkPreview() {
   renderBookmarkTabs();
 }
 
+/* Resolve a real opportunity title by id from whatever is already loaded:
+   the group tiles first, then the search/preview caches. Returns "" if the
+   opportunity isn't loaded anywhere (caller decides the fallback). */
+function resolveOpportunityTitleById(oppId) {
+  const id = Number(oppId);
+  if (!Number.isFinite(id) || id <= 0) return "";
+  for (const g of state.groups || []) {
+    const opp = (g.opportunities || []).find(o => Number(o.id ?? o.ID) === id);
+    if (opp) {
+      const t = opp.title || opp.Title || "";
+      if (t) return String(t).trim();
+    }
+  }
+  for (const d of state.bookmarkedDeals || []) {
+    if (Number(d.oppId) === id && d._cachedData?.opp) {
+      const t = d._cachedData.opp.title || d._cachedData.opp.Title || "";
+      if (t) return String(t).trim();
+    }
+  }
+  const ctx = (typeof oppPreviewContext !== "undefined") ? oppPreviewContext : null;
+  if (ctx && Number(ctx.oppId) === id && ctx.opp) {
+    const t = ctx.opp.title || ctx.opp.Title || "";
+    if (t) return String(t).trim();
+  }
+  return "";
+}
+
 function addBookmarkDeal(oppId, title) {
   const id = Number(oppId);
   if (!Number.isFinite(id) || id <= 0) return;
@@ -30966,10 +31007,18 @@ function addBookmarkDeal(oppId, title) {
     return;
   }
 
+  // Never persist a placeholder if a real title is reachable. The bookmark
+  // title is a snapshot taken at bookmark time and is never re-resolved, so a
+  // "Project #<id>" written here would stick forever.
+  let resolved = String(title || "").trim();
+  if (!resolved || /^Project #\d+$/.test(resolved) || /^Deal #\d+$/.test(resolved)) {
+    resolved = (resolveOpportunityTitleById(id) || "").trim();
+  }
+
   state.bookmarkedDeals.push({
     type: "deal",
     oppId: id,
-    title: String(title || "").trim() || `Project #${id}`,
+    title: resolved || `Project #${id}`,
     addedAt: new Date().toISOString(),
   });
 
