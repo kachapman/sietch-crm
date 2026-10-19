@@ -558,109 +558,155 @@ Or, if using the existing `project_documents` table for number assignment, add a
 
 ## FEAT-026 — Full Dashboard Light Mode
 
-**Status:** Planned — final cosmetic phase.  
-**Priority:** Low  
-**Area:** Entire dashboard UI (`public/styles.css`, `public/app.js`, `public/index.html`)
+**Status:** Planned — final cosmetic phase.
+**Priority:** Low
+**Area:** Entire dashboard UI (`public/styles.css`, `public/app.js`, `public/index.html`, `user_profile_store.py`, `server.py`)
 
 ### Goal
 
-Provide a **theme toggle** (dark ↔ light) that reskins the entire dashboard. The current dark theme is the default. Light mode inverts surfaces, borders, text, and accents to produce a clean, readable light UI.
+Full dark ↔ light theme toggle that reskins the entire dashboard. Dark is the
+current default; light mode inverts surfaces, borders, text, and accents for a
+clean, readable light UI.
 
-### Scope
+### Current state (verified)
+
+The dashboard already uses CSS custom properties throughout (`--bg`,
+`--surface`, `--surface-2`, `--text`, `--muted`, `--border`, `--accent`, etc.).
+This means light mode is a **variable-override problem**, not a per-component
+rewrite.
+
+### Color mapping
 
 | Element | Dark (current) | Light |
-|---------|----------------|-------|
+|---------|---------------|-------|
 | Background | `#0f172a` (slate-900) | `#ffffff` or `#f8fafc` |
 | Surface | `#1e293b` (slate-800) | `#ffffff` |
 | Surface elevated | `#334155` (slate-700) | `#f1f5f9` |
 | Text | `#e2e8f0` (slate-200) | `#0f172a` (slate-900) |
 | Muted text | `#64748b` (slate-500) | `#64748b` (same) |
 | Borders | `#334155` (slate-700) | `#e2e8f0` (slate-200) |
-| Accent | `#3b82f6` (blue-500) | `#2563eb` (blue-600, slightly darker for contrast) |
+| Accent | `#3b82f6` (blue-500) | `#2563eb` (blue-600, darker for contrast) |
 | Cards/tiles | Dark surfaces with subtle borders | White/light surfaces with subtle shadows |
 
-### Implementation approach
+### Toggle mechanism
 
-1. **CSS custom properties** — all colors already use CSS variables (`--bg`, `--surface`, `--text`, `--border`, etc.). A `[data-theme="light"]` selector on `<html>` overrides every variable.
-2. **Toggle** — small sun/moon icon button in the header (next to the sign-out button or inside the profile dropdown).
-3. **Persistence** — stored in `user_profile_store` (server) + localStorage fallback. Applied on page load via `document.documentElement.dataset.theme`.
-4. **No JS class toggling** — CSS variables handle everything; no per-component class swaps needed.
-5. **Scope** — all dashboard UI (tiles, modals, sidebar, header, footer, admin console). Document Server iframe remains unchanged (OnlyOffice has its own theme).
+1. **CSS custom properties** — a `[data-theme="light"]` selector on `<html>`
+   overrides every variable. No JS class toggling on individual components.
+2. **Toggle button** — small sun/moon icon button in the header (next to the
+   sign-out button or inside the profile dropdown).
+3. **Persistence** — stored in `user_profile_store` (server) + localStorage
+   fallback. Applied on page load via `document.documentElement.dataset.theme`.
+4. **No JS class toggling** — CSS variables handle everything; no per-component
+   class swaps needed.
 
-### Files to modify
+### Scope
 
-| File | Change |
-|------|--------|
-| `public/styles.css` | `[data-theme="light"]` variable overrides at `:root`; toggle button styles |
-| `public/app.js` | Toggle handler; load theme from profile/localStorage on init; persist on change |
+All dashboard UI: tiles, modals, sidebar, header, footer, admin console.
+Document Server iframe remains unchanged (OnlyOffice has its own theme).
+
+### Auto-schedule (optional enhancement)
+
+A "Dark/light schedule" option (Tier 4 item #29 from the merged Toaster backlog)
+that auto-switches based on time of day. Stored as a user preference:
+- `theme: "dark" | "light" | "auto"`
+- `themeAutoLightStart: "08:00"` — switch to light at this time
+- `themeAutoDarkStart: "18:00"` — switch to dark at this time
+- A 5-minute interval checks the current time and applies the correct theme.
+
+## Implementation steps
+
+### 1. CSS variable overrides (`public/styles.css`)
+
+Add a `[data-theme="light"]` block at `:root` level:
+
+```css
+[data-theme="light"] {
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f1f5f9;
+  --text: #0f172a;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  /* ... override every variable used in the dark theme ... */
+}
+```
+
+Audit every `var(--*)` reference in `styles.css` to ensure all are covered.
+Some components may have hardcoded colors (e.g., inline styles in JS-rendered
+HTML) — those need to be converted to variables.
+
+### 2. Toggle button (`public/index.html` + `public/app.js`)
+
+- Add a sun/moon icon button in the header (next to sign-out).
+- On click: toggle `document.documentElement.dataset.theme` between `"dark"` and
+  `"light"`.
+- Persist the choice to the server profile + localStorage.
+- On page load: read the saved theme and apply it before first paint (to avoid
+  flash).
+
+### 3. Profile persistence (`user_profile_store.py` + `server.py`)
+
+- Add `theme` field to the user profile payload.
+- `buildUserProfilePayload` includes `theme`.
+- `applyUserProfile` applies it.
+- `PUT /api/v2/me` accepts a `theme` field.
+
+### 4. Auto-schedule (optional, separate commit)
+
+- Add `themeAutoLightStart` / `themeAutoDarkStart` to profile.
+- A 5-minute `setInterval` checks the time and applies the correct theme.
+- Only active when `theme === "auto"`.
+
+### 5. Inline style audit
+
+Some JS-rendered HTML uses inline `style="..."` attributes with hardcoded
+colors (e.g., tag badges, role badges, custom field values). These need to be
+converted to use CSS variables or `currentColor` so they respond to the theme.
+
+Search for `style="` in `public/app.js` and audit each occurrence.
+
+## Files to modify
+
+| File | Changes |
+|------|---------|
+| `public/styles.css` | `[data-theme="light"]` variable overrides; audit all `var(--*)` usage |
 | `public/index.html` | Toggle button in header; `<html data-theme="dark">` default |
-| `user_profile_store.py` | Persist `theme` preference (dark/light) |
-| `server.py` | Expose `theme` in profile payload |
+| `public/app.js` | Toggle handler; load theme from profile/localStorage on init; persist on change; audit inline styles |
+| `user_profile_store.py` | Persist `theme` preference |
+| `server.py` | Expose `theme` in profile payload; accept in `PUT /api/v2/me` |
+| `tests/test_theme_toggle.mjs` (new) | Source-grep tests for the toggle logic |
 
-### Acceptance criteria
+## Acceptance criteria
 
 1. Toggle switches between dark and light mode instantly (no page reload).
 2. All dashboard surfaces, text, borders, and accents are readable in both modes.
 3. Theme persists across sessions (server + localStorage).
 4. Default is dark (current behavior unchanged for existing users).
 5. Document Server iframe is unaffected.
+6. No flash of wrong theme on page load (theme applied before first paint).
+7. Inline styles in JS-rendered HTML respond to the theme.
 
----
+## Non-goals
 
-## Phase 2G — User Profile Modal + Notification System Overhaul
+- Auto-schedule is a separate enhancement (can be added after the basic toggle).
+- Admin console theming is included (it uses the same CSS variables).
+- Mobile layout changes (the toggle works on mobile via the same button).
+- OnlyOffice Document Server theming (out of scope; it has its own theme).
 
-**Status:** In progress on `new-crm` branch.
+## Risks
 
-### What it covers
-
-| Part | Description |
-|------|-------------|
-| **A. Profile modal** | Header button (user-square-rounded icon, left of sign-out) → modal with avatar, name/email, password change, notification prefs |
-| **B. Avatar upload** | Profile picture with Pillow thumbnail (200x200), initials fallback, stored in `data/avatars/{user_id}/` |
-| **C. @-mention system** | Replaces old `<select multiple>` notify list with inline `@username` autocomplete in note editors |
-| **D. Feed tile overhaul** | Shows only @-mentioned + task-assigned items via `GET /api/v2/notifications` (not all events) |
-| **E. Notification prefs** | Dormant toggles in profile modal (in-dashboard, Telegram), wired to `notification_preferences` table |
-| **F. Lightweight project page** | `public/project.html` — mobile-optimized page for Telegram notification links, requires auth, full project details + event history with `?event={id}` highlight |
-
-### Why the notification system changed
-
-The old system used a `<select multiple>` to pick notification recipients — clunky, too many users listed. Modern pattern: `@username` autocomplete inline in the note editor, like Slack/GitHub. Only @-mentioned users get notified. Task assignments also generate notifications.
-
-The old feed tile showed ALL history events from ALL projects. New feed shows only items relevant to the current user: @-mentions and assigned tasks.
-
-### Telegram integration
-
-The `notification_dispatcher.py` background thread already polls `notifications` table and sends Telegram messages. Changes:
-- Add project link to messages: `{DASHBOARD_URL}/project/{id}?event={event_id}`
-- Check `notification_preferences.telegram` before sending
-- The lightweight project page requires auth (session cookie) and shows full project details + highlighted event
-
-### Files
-
-| File | Changes |
-|------|---------|
-| `init.sql` | `avatar_url` column on `users` table |
-| `server.py` | PUT /api/v2/me, avatar endpoints, notification prefs, /project/{id} route |
-| `public/project.html` | New lightweight project detail page |
-| `public/index.html` | Profile button, profile modal, mention dropdown, remove old notify selects |
-| `public/app.js` | Profile modal JS, @-mention autocomplete, feed rewrite, remove old parsing |
-| `public/styles.css` | Profile modal, avatar, mention chips, project.html styles |
-| `notification_dispatcher.py` | Preference check, project link in messages |
-
----
-
-## Suggested implementation order
-
-1. **FEAT-001** — Preview popup ✅ Done.
-2. **FEAT-002** — Custom fields on create ✅ Done.
-3. **FEAT-003** — Note attachments ✅ Done.
-4. **FEAT-025** — Project number + email auto-linking ✅ Done.
-5. **OAuth2 for Outlook.com** — ✅ Done (Exchange OAuth: IMAP + SMTP, Sept 2026). Followed by **Microsoft Graph `sendMail`** ✅ Done (Sept 2026) as the workaround for `5.7.139 SmtpClientAuthentication is disabled` that Microsoft refuses to re-enable on consumer accounts. See `ISSUES.md` ISSUE-015.
-6. **FEAT-022** — In-modal document editor tab (deferred — after Document Server features stable).
-7. **FEAT-024** — Native CRM iframe embed (investigated, not implemented — see above).
-8. **FEAT-026** — Full dashboard light mode (deferred — final cosmetic phase).
-9. Pick items from the **Tile & widget backlog** above by priority.
-
+- **Inline styles** — JS-rendered HTML with hardcoded colors won't respond to
+  the theme. Must audit and convert all `style="..."` attributes in `app.js`.
+- **Third-party embeds** — OnlyOffice iframe and any external widgets have
+  their own themes. These are out of scope.
+- **Contrast** — some color combinations that work in dark mode may have
+  insufficient contrast in light mode. Need to verify WCAG AA compliance for
+  both themes.
+- **Flash of unstyled content** — if the theme is applied after page load,
+  users see a flash. Mitigation: apply theme in a `<script>` block in `<head>`
+  before the body renders.
 ---
 
 ## FEAT-027 — Photo Markup Editor (IMPLEMENTING)
