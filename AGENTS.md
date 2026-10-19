@@ -41,7 +41,7 @@
   - `user_profile_store.py` (`data/user-profiles/.../*.json`; versioned; supports groups, calendarTiles, notesTiles, groupTemplates, tileLayout, hiddenFeedKeys, feedKeywordFilter)
   - `notes_store.py` (for notes tiles content)
   - LocalStorage fallbacks + debounce server saves (`scheduleUserProfileSave`).
-- **Tiles:** Opportunity groups (kanban with filters/stages/tags/red), fixed panels (feed/notifications, tasks), addable (calendars ICS, notes markdown). See `Toaster_Features` for ideas.
+- **Tiles:** Opportunity groups (kanban with filters/stages/tags/red), fixed panels (feed/notifications, tasks), addable (calendars ICS, notes markdown). See `FUTURE_FEATURES.md` for tile/widget ideas.
 
 ### Environment / .env gotcha (caused a production outage)
 
@@ -65,12 +65,12 @@ This hid ~20 real assertions in `tests/test_telegram_bot.py` for an entire sessi
 - **Profile:** `buildUserProfilePayload`, `applyUserProfile`, `loadUserProfileFromServer` (prefers server), `saveGroupsToStorage` / `scheduleUserProfileSave` / `saveUserProfileToServer`, `strip*RuntimeFields`.
 - **Tiles/layout:** `bindTileChrome`, `applyTileBodyCollapsed` / `applyTileLayoutClasses`, `createLayoutButtons`, `attachTileCollapseButton`, `tileLayout` in `state`.
 - **API:** `api(path, opts)` + `parseApiError` (throws on `!ok`); all CRM calls go through v2 API endpoints directly (no proxy).
-- **New tile type (if adding):** follow checklist in `Toaster_Features` (add to HTML+JS chooser, persist in profile py + frontend, refresh policy, empty states, update docs).
+- **New tile type (if adding):** follow checklist in `FUTURE_FEATURES.md` (add to HTML+JS chooser, persist in profile py + frontend, refresh policy, empty states, update docs).
 - **Modals:** reuse `.modal` / `.modal-card` / backdrop / `data-*-dismiss` / escape; `openDealEditModal`, `confirmDialog`.
 - **History/feed:** `unwrapHistoryEvents`, `/api/v2/projects/{id}/history`, `applyFeedKeywordFilter`.
 - **Groups:** `fetchOpportunitiesForGroup` + `buildFilterQuery`, `renderCard`, `setupGroupToolbar` (templates, remove, filters).
 - **Custom fields on create (ISSUE-001/FEAT-002):** Fully implemented and enabled (`CREATE_OPP_USER_FIELDS_ENABLED=true`). `customFieldList` with `{key,value}` camelCase added to create body. See `ISSUES.md` for root cause.
-- **Do not:** Duplicate docs (link to `FUTURE_FEATURES.md`, `ISSUES.md`, `Toaster_Features`, `docs/UPDATE_AND_DEPLOY.txt`, `README`). No new abstractions unless the task requires. Prefer minimal changes following existing.
+- **Do not:** Duplicate docs (link to `FUTURE_FEATURES.md`, `ISSUES.md`, `docs/UPDATE_AND_DEPLOY.txt`, `README`). No new abstractions unless the task requires. Prefer minimal changes following existing.
 
 ---
 
@@ -199,7 +199,7 @@ docker exec onlyoffice-docserver /bin/sh -c 'curl -s -o /dev/null -w "%{http_cod
 - After state change that should persist: the `*ToStorage()` + `scheduleUserProfileSave()`.
 - Comments for non-obvious (esp. CRM API quirks).
 - Update docs (`FUTURE_FEATURES.md` / `ISSUES.md` / `CHANGELOG.md`) when adding/fixing.
-- For new features: add to Add Tile if applicable; document in `Toaster_Features` / `FUTURE_FEATURES.md`.
+- For new features: add to Add Tile if applicable; document in `FUTURE_FEATURES.md`.
 - Keep changes minimal and isolated.
 - On edit: prefer `edit` for precision; read first.
 

@@ -6,7 +6,6 @@ Related docs:
 
 - **[ISSUES.md](./ISSUES.md)** — open bugs with acceptance criteria
 - **[docs/UPDATE_AND_DEPLOY.txt](./docs/UPDATE_AND_DEPLOY.txt)** — ship changes to GitHub and the server
-- **[Toaster_Features](./Toaster_Features)** — widget ideas inspired by major CRMs
 
 ---
 
@@ -215,7 +214,6 @@ Until then, documents continue to open in a separate tab/window as they do today
 | `public/index.html`, `public/app.js` | Documents modal tab bar, editor lifecycle |
 | `public/styles.css` | Modal tab bar, editor iframe sizing |
 | `server.py` | Existing editor-config/callback reused |
-| `Toaster_Features` | Cross-reference |
 
 ---
 
@@ -294,25 +292,79 @@ Custom/user field filtering plus full-text search is the most-used workflow. It 
 ### See also
 
 - `sietch-crm-plan.md` — Phase 2A Details section
-- `Toaster_Features` — Cross-reference for CRM search patterns
 - `ISSUES.md` — No blocking issues
 
 ---
 
-## Other ideas (backlog)
+## Tile & widget backlog
 
-See **[Toaster_Features](./Toaster_Features)** for dashboard tile/widget ideas (pipeline metrics, stale deals, email, etc.).
+Merged from `Toaster_Features` (closed 2026-10-19). Items already implemented or
+scrapped are marked; everything else is still open.
+
+### Already implemented (do not re-list)
+
+| ID | Idea | Status |
+|----|------|--------|
+| FEAT-001 | Tile opportunity preview popup | ✅ Done |
+| FEAT-007 | Advanced Opportunity Search (custom fields, full-text, pagination, sort) | ✅ Done (Phase D) |
+| FEAT-022 | In-modal document editor tab | Deferred |
+| FEAT-023 | Stale deals tile | ❌ Scrapped (see ISSUES.md ISSUE-004) |
+
+### Tier 1 — High value, fits current APIs
+
+| # | Idea | Effort |
+|---|------|--------|
+| 3 | Closing this week / month tile — filter by expected close date in range | Medium |
+| 4 | My open tasks by due date — variant of Tasks tile sorted by due, overdue highlighted | Low |
+| 5 | Activity timeline tile — last 20 history events across my opportunities | Medium |
+| 6 | Win / loss summary counter — count by stage type or closed-won/lost | Low |
+
+### Tier 2 — Medium effort, strong UX
+
+| # | Idea | Effort |
+|---|------|--------|
+| 7 | KPI number tiles — total pipeline value, count open deals, avg deal size | Medium |
+| 8 | Leaderboard / team workload — open deals by responsible user | Medium |
+| 9 | Recent wins tile — last 5 moved to won stage | Low |
+| 10 | Contact quick-view tile — pin one contact: phone, email, linked opportunities | Medium |
+| 11 | Documents / files tile — recent files linked to opportunities | Medium |
+| 12 | Email / correspondence strip — last emails per user | Medium |
+| 13 | Duplicate / data quality alerts — opportunities missing contact, due date, or required fields | Medium |
+| 14 | Stage funnel mini-chart — count per stage for a saved filter group | Medium |
+
+### Tier 3 — Larger features
+
+| # | Idea | Effort |
+|---|------|--------|
+| 15 | Forecast & quota tile — weighted pipeline by stage probability | High |
+| 16 | Lead / intake inbox — new opportunities in "Lead" stage in last 7 days | Medium |
+| 17 | Calendar + task unified "Today" toaster — merge ICS events + CRM tasks | Medium |
+| 18 | Map / territory tile — geocode loss location user fields (niche for adjusting firms) | High |
+| 19 | Renewal / policy expiration — custom user field date thresholds → list in tile | Medium |
+| 20 | Saved reports / export tile — CSV export of current group | Medium |
+| 21 | Mobile-friendly "quick actions" bar — new opp, new task, log call | Low |
+| 22 | Integrations placeholders — webhook tile, Zapier link, Power BI / Google Sheet embed | Low |
+
+### Tier 4 — Polish & power-user
+
+| # | Idea | Effort |
+|---|------|--------|
+| 23 | Pin favorite opportunities (starred list tile) | Low |
+| 24 | Custom HTML / iframe tile (user-supplied URL — security review required) | Low |
+| 25 | Rules engine alerts — "If stage = X and no note in 3 days → show in Alerts tile" | Medium |
+| 26 | Comparison period — "This month vs last month" pipeline value delta | Low |
+| 27 | Voice note / photo upload on history (depends on FEAT-003 file API) | Medium |
+| 28 | Team @mentions feed (extend notifications tile) | Low |
+| 29 | Dark/light schedule — auto theme by time (cosmetic; see FEAT-026) | Low |
+
+### Other backlog items
 
 | ID | Idea | Effort |
 |----|------|--------|
 | FEAT-004 | Persist `estimate-network` in `docker-compose.yml` on server | Low |
 | FEAT-005 | Custom fields on **edit** deal (not only create) | Medium |
 | FEAT-006 | Export group/opportunities to CSV | Medium |
-| FEAT-007 | **Advanced Opportunity Search** — filter by stage, user, tags, custom fields, date range (see detailed section below) | High |
-| FEAT-022 | **In-modal document editor tab** — open documents inside the existing Documents modal instead of a separate page/tab. Deferred until Document Server features are fully unlocked. | Deferred |
-| FEAT-023 | **Documents: Save-as conversion** — export doc to PDF/ODT/Markdown from the documents modal context menu or toolbar. OnlyOffice Document Server supports format conversion via callback, but a simpler approach is server-side conversion using LibreOffice headless (`soffice --convert-to pdf`). Needs Docker container with LibreOffice or a dedicated conversion API. | Medium |
-| FEAT-025 | **Project number + email auto-linking** — expose a unique project number (or short ID) on each opportunity; user includes it in the subject line when forwarding emails to the CRM inbox; a classifier or regex on incoming mail auto-links the email to the matching project's history. | High |
-| FEAT-026 | **Full dashboard light mode** — a theme toggle (dark ↔ light) that reskins the entire dashboard UI. Final cosmetic phase after all functional work is complete. | Low |
+| FEAT-026 | Full dashboard light mode — theme toggle (dark ↔ light) | Low |
 
 ### FEAT-008 — AccuLynx API research (post-v1.1, from user list)
 
@@ -607,7 +659,7 @@ The `notification_dispatcher.py` background thread already polls `notifications`
 6. **FEAT-022** — In-modal document editor tab (deferred — after Document Server features stable).
 7. **FEAT-024** — Native CRM iframe embed (investigated, not implemented — see above).
 8. **FEAT-026** — Full dashboard light mode (deferred — final cosmetic phase).
-9. Pick items from **Toaster_Features** by priority.
+9. Pick items from the **Tile & widget backlog** above by priority.
 
 ---
 
@@ -649,3 +701,13 @@ Edit button on photo thumbnails opens a modal with a full-resolution canvas edit
 | `public/styles.css` | Modal + toolbar + canvas styles (~200 lines) |
 | `public/app.js` | Editor logic, tools, events, save flow (~900 lines) |
 | `server.py` | `POST /api/v2/projects/{id}/photos/markup` endpoint (~45 lines) |
+
+---
+
+## Developer checklist: adding a new tile type
+
+1. Add type to "Add Tile" modal in `public/index.html` + `public/app.js`
+2. Persist in user profile (layout + tile config) — server profile store
+3. Refresh policy: manual, hourly, or on dashboard load (match Tasks tile pattern)
+4. Empty / error states with toast, not silent failure
+5. Document in `FUTURE_FEATURES.md`; close ISSUE if bug fix
