@@ -58,6 +58,84 @@ behind. After any bulk import that uses explicit project_number values,
 this sequence must be resynced. A guard could be added to the import path
 to call `setval` automatically, but that is out of scope here.
 
+## Fix: Wash option missing, system note types uneditable, attachment backfill matched 0 (2026-10-19)
+
+Follow-up to the previous entry. Three gaps the user hit immediately after
+that deploy, all confirmed against the live droplet.
+
+### 1. There was no Wash option in the admin form
+
+The `.opp-preview-history-item--wash` CSS class existed but no `wash` radio
+button was added to the Event Note Type form, so the style was unreachable.
+The help text also still read "Accent: background wash + border", which
+contradicted the new left-bar-only Accent.
+
+- index.html: Icon Style is now Stroke / Fill / Accent / **Wash**
+- index.html: help text reads "Accent: left border bar only. Wash: left
+  border bar + light background fill."
+- app.js: the shared icon renderer colors the stroke for `wash` like `accent`
+  (the difference is the container background, not the icon)
+
+### 2. System event note types could not be edited at all
+
+`renderHistoryCatsList` hid the edit button for `isSystem` categories, so the
+icon on Mail Message / Files are uploaded / Task is closed could never be
+changed. Edit is now always rendered; Delete stays hidden for system
+categories (the server still refuses the delete).
+
+The three system types were also left with the generic `note` icon and a NULL
+color. Applied on the droplet:
+
+| id | title | icon | style | color |
+|----|-------|------|-------|-------|
+| 9 | Mail Message | email | stroke | #2563eb |
+| 10 | Files are uploaded | upload | stroke | #16a34a |
+| 11 | Task is closed | check | stroke | #6c757d |
+
+### 3. The OnlyOffice attachment backfill matched nothing
+
+Three separate bugs:
+
+- **Wrong cross-reference.** It tried to resolve the CRM_Email entity by
+  subject, but OnlyOffice mangles claim-number subjects
+  (`13-0B8T-309` -> `130B8T309`) and several events in a thread share a
+  subject, so nothing matched. Rewrote it to match by **filename** against
+  the deal's history event `files[]` array, which carries the authoritative
+  `crm_file_id` and is exact.
+- **403 on download.** `filehandler.ashx` needs the Bearer token. The
+  download call was sending none.
+- **Wrong data dir.** `DATA_DIR` resolved relative to the script location, so
+  running from `/tmp` inside the container wrote to `/data` and failed with
+  Permission denied. Now resolves against the app root.
+
+### Backfill results on the droplet
+
+- **171 mail attachments** now carry `crm_file_id` + a local cached copy under
+  `data/mail-attachments/<message_id>/`, fetched from OnlyOffice.
+- Serve chain verified:
+  - linked + cached -> HTTP 200, 3,168,674 bytes, `%PDF-1.5` magic
+  - not archived in OnlyOffice -> HTTP 410 Gone with a clear message
+    (was a bare 404 that the editor rendered as "Download failed")
+- **1,234 / 1,242 opportunities** now have `contact_id` (1,184 from
+  `CRM_export/`, 50 more from the live OnlyOffice API).
+  - Barbara O'Malley -> MDM Construction
+  - Scott Ozark -> MDM Construction
+  - Cambridge Commons Storyboard -> Baney Construction
+
+Note: the Oct 19 email `10-Customer Copy 4001405496.pdf` is not yet in
+OnlyOffice's archive for that deal (the mail aggregator has not picked it up),
+so it still cannot be served. It will resolve itself once the aggregator
+catches up and the backfill is re-run.
+
+### Tests
+
+`tests/test_contact_and_mail_attach_fixes.py` grew to 26 guards, now covering
+the Wash radio button, the corrected help text, system-category editability
+(edit present, delete still hidden), the wash branch in the icon renderer, and
+the customer-update color following the category setting.
+
+Full suite: **526 Python + 189 JS, 0 failures.**
+
 ## Fix: contacts NULL, Event Note icon/style, mail attachments OnlyOffice-first (2026-10-19)
 
 ### Three regressions surfaced after deployment
