@@ -42,6 +42,7 @@ COPY init.sql ./
 # a fresh DB to catch up with the schema additions documented in
 # migrations/0??_*.sql (init.sql alone is no longer enough).
 COPY migrations ./migrations
+COPY scanner ./scanner
 COPY public ./public
 
 RUN mkdir -p /app/data && chown -R appuser:appuser /app
