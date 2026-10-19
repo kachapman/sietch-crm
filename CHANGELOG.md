@@ -26,6 +26,34 @@ The importer used a bare `ON CONFLICT DO NOTHING`, which swallows *every* unique
 
 Against a scratch database built from the corrected `init.sql` + all 37 migrations, importing the real per-bundle `db-core` export across **all 66 exported tables**: **918,964 rows inserted, 0 failed**, every `category_id` resolving to the correct production title, the 3 forward-referencing contacts recovered on the deferred pass, and every populated table matching the export manifest. A second identical import reports 0 inserted / all duplicates / 0 failed.
 
+## Cut over the live Telegram bot to @vanguardupdates_bot (2026-10-19)
+
+Moved the live Telegram bot from the old droplet to the new Sietch droplet, keeping the
+SAME bot identity so existing chats keep working.
+
+- **Identity:** `@vanguardupdates_bot`, id `8802337788` — verified via `getMe` before and
+  after. NOT `@SietchCRM_bot` (8574869232), which was never in production use.
+- **Long-polling, not webhook** (`getWebhookInfo` → `url: ""`), so cutover was purely
+  stop-old → start-new; no webhook re-registration. Only one poller may hold a token, so
+  the old bot was fully stopped and disabled before the new one started.
+- **The token is dual-purpose** — it is both the Telegram credential and the Bearer secret
+  the CRM checks on every `/api/bot/*` call (`_get_bot_token()` → `bot_config.settings.token`,
+  falling back to `.env`). Both previously held `@SietchCRM_bot`, which would have made
+  the bot poll as the wrong identity AND rejected every API call with 403. Updated in
+  three places: `/etc/sietch/telegram-bot.env` (bot process), `/opt/sietch-crm/.env` (CRM
+  fallback), and the `bot_config` DB row (what the admin Bot tab reads — also set
+  `botUsername`/`botLink` so invite deep-links resolve).
+- The old bot is a 6-endpoint subset of the new bot's API; no shim was needed.
+
+Verified in the journal: `Telegram identity: id=8802337788 @vanguardupdates_bot`,
+`CRM reachable at http://127.0.0.1:8766`, and `/api/bot/settings` + `/api/bot/config-check`
+returning 200 (Bearer round-trips).
+
+Per user decision, the 6 existing chat mappings were **not** migrated (Option B). Users
+are linked by writing mapping rows directly into the new server's
+`data/bot-customers/sietch/store.json`; a mapped chat needs no invite code, because the
+message handler checks `get_mapping(chatId)` before ever prompting for one.
+
 ## Basic admin gating: is_admin is the single source of truth (2026-10-18)
 
 Admin gating was split across two different checks, which could disagree for one account:
