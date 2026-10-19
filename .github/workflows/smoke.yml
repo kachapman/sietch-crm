@@ -82,6 +82,9 @@ jobs:
       - name: Run attachment mirror + bookmark title tests
         run: python3 tests/test_attachment_mirror_and_bookmark_titles.py
 
+      - name: Run scanner toggle + project_number tests
+        run: python3 tests/test_scanner_toggle_gating.py
+
       - name: Run infrastructure tests
         run: python3 tests/test_infrastructure.py
 

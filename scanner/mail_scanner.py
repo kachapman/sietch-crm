@@ -1300,13 +1300,19 @@ def _find_opportunity_by_claim_code(claim_code: str) -> dict[str, Any] | None:
 
 
 def _find_opportunity_by_deal_id(deal_id: int) -> dict[str, Any] | None:
+    # The number users write in [#NNNN] is the CRM project number shown in the
+    # UI header, NOT the internal row id. Resolve by project_number first,
+    # then fall back to id. (server.py _resolve_project_id does the same.)
     rows = db.query_dicts(
-        "SELECT id, title FROM opportunities WHERE id = %s",
+        "SELECT id, title FROM opportunities WHERE project_number = %s",
         (deal_id,),
     )
-    if rows:
-        return rows[0]
-    return None
+    if not rows:
+        rows = db.query_dicts(
+            "SELECT id, title FROM opportunities WHERE id = %s",
+            (deal_id,),
+        )
+    return rows[0] if rows else None
 
 
 def _link_email_to_deal(message_id: int, opp_id: int, linked_by: int | None = None) -> bool:
@@ -1427,10 +1433,13 @@ def _classify_message(msg: dict[str, Any]) -> dict[str, Any]:
         if rule_result.get("linked_deal_id"):
             linked_deal_id = rule_result["linked_deal_id"]
 
-    # Check auto-link toggle
+    # Check auto-link toggle. toggles.get(...) returns a config DICT which is
+    # always truthy regardless of `enabled`; we must read the key explicitly.
     config = get_contractors()
     toggles = config.get("scanner_behavior", {})
-    auto_link_enabled = toggles.get("auto_link_project_id", True)
+    auto_link_enabled = bool(
+        (toggles.get("auto_link_project_id") or {}).get("enabled", False)
+    )
 
     # Try [#PROJECTID] format first (DEAL_LINK_RE)
     if auto_link_enabled and classification == "uncertain":
