@@ -27306,6 +27306,15 @@ function renderHistoryEventItem(ev) {
   if (cat && cat.iconStyle === 'accent') {
     li.classList.add('opp-preview-history-item--accent');
     li.style.setProperty('--cat-accent-color', cat.color || '#2563eb');
+  } else if (cat && cat.iconStyle === 'wash') {
+    // Wash = left bar + 8% light fill, for Quick Context look (2026-10-19)
+    li.classList.add('opp-preview-history-item--wash');
+    li.style.setProperty('--cat-accent-color', cat.color || '#2563eb');
+  }
+  // Customer Update category: orange left bar (the rule existed in CSS but
+  // nothing was adding the class — Customer Update events showed no orange bar).
+  if (cat && cat.title && cat.title.toLowerCase() === 'customer update') {
+    li.classList.add('opp-preview-history-item--customer-update');
   }
   // Detect action events by system category title
   const isActionEvent = cat && cat.title === 'Action';
@@ -36563,6 +36572,8 @@ const HISTORY_CATEGORY_ICONS = [
   { key: "calendar", label: "Calendar", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>' },
   { key: "pencil", label: "Pencil", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>' },
   { key: "mail-open", label: "Mail Open", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 5H3a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z"/><polyline points="21 7 12 13 3 7"/></svg>' },
+  { key: "eye-check", label: "Eye Check", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/><polyline points="9 12 11 14 15 10"/></svg>' },
+  { key: "device-mobile", label: "Device Mobile", svg: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>' },
 ];
 
 function renderIconGrid(containerId, selectedKey) {

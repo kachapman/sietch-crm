@@ -621,7 +621,8 @@ def _insert_opportunities(
                    title = EXCLUDED.title,
                    stage_id = EXCLUDED.stage_id,
                    bid_value = EXCLUDED.bid_value,
-                   actual_close_date = EXCLUDED.actual_close_date
+                   actual_close_date = EXCLUDED.actual_close_date,
+                   contact_id = COALESCE(EXCLUDED.contact_id, opportunities.contact_id)
                RETURNING id""",
             (title, desc, stage_id, stage_type, bid_value,
              due, actual_close_date, actual_close_value,

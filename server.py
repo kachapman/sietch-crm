@@ -269,6 +269,34 @@ def _crm_get_raw_bytes(url: str, headers: dict | None = None, timeout: int = 60)
     return None
 
 
+def _fetch_onlyoffice_file(url: str, timeout: int = 30) -> bytes | None:
+    """Fetch a file from OnlyOffice's filehandler.ashx download endpoint.
+
+    Works for any user with read access to the underlying CRM entity (the bot
+    account has access to all deals + emails). Returns None on 404, network
+    error, or non-2xx. Used as the primary source for mail attachments so
+    years-old emails stay viewable even after IMAP auto-archive.
+    """
+    last = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=timeout) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as e:
+            # 404/410 are terminal — file genuinely not there, no retry
+            if e.code in (404, 410):
+                return None
+            last = e
+            time.sleep(0.5 * (2 ** attempt))
+        except Exception as exc:
+            last = exc
+            time.sleep(0.5 * (2 ** attempt))
+    if last:
+        logger.debug("OnlyOffice file fetch failed (will fall back to IMAP): %s: %s", url, last)
+    return None
+
+
 def _crm_fetch_user_id_map(portal: str, token: str) -> dict[str, int]:
     """Map OnlyOffice user UUID -> Sietch user.id (matched by email)."""
     oo_users = []
@@ -422,6 +450,10 @@ DOCS_JWT_SECRET = os.environ.get("DOCS_JWT_SECRET", "")
 DOCS_INTERNAL_URL = os.environ.get("DOCS_INTERNAL_URL", "").rstrip("/")
 DOCS_PUBLIC_URL = os.environ.get("DOCS_PUBLIC_URL", "").rstrip("/")
 CRM_PUBLIC_URL = os.environ.get("CRM_PUBLIC_URL", "").rstrip("/") or DOCS_PUBLIC_URL
+# OnlyOffice Community Server (separate droplet — file archive, CRM DB).
+# Used as the primary source for mail attachment files (Bug fix 2026-10-19):
+# filehandler.ashx works for years-old emails regardless of live IMAP state.
+OO_PORTAL_URL = os.environ.get("ONLYOFFICE_PORTAL_URL", "").rstrip("/")
 CONTAINER_NAME = os.environ.get("CONTAINER_NAME", "sietch-crm")
 DOCSERVER_CONTAINER_NAME = os.environ.get("DOCSERVER_CONTAINER_NAME", "onlyoffice-docserver")
 
@@ -11681,6 +11713,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             actual_close_value = None
                         break
 
+                # Contact — resolve OnlyOffice contact.id → Sietch contacts.id
+                # Bug fix 2026-10-19: sync previously dropped contact_id entirely,
+                # so every pulled deal showed no Contact in the UI.
+                v3_contact_id = None
+                contact_data = o.get("contact") or o.get("Contact") or {}
+                if isinstance(contact_data, dict):
+                    crm_contact_id = str(contact_data.get("id") or contact_data.get("ID") or "")
+                    if crm_contact_id:
+                        row = db.query_one(
+                            "SELECT id FROM contacts WHERE onlyoffice_id = %s",
+                            (crm_contact_id,),
+                        )
+                        if row:
+                            v3_contact_id = row["id"]
+
                 # Find or create opportunity. Prefer onlyoffice_id, fall back to title.
                 v3_opp_id = None
                 if crm_id:
@@ -11692,31 +11739,35 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 is_new = v3_opp_id is None
 
                 if is_new:
-                    # Insert new opportunity with onlyoffice_id + actual_close_date
+                    # Insert new opportunity with onlyoffice_id + actual_close_date + contact_id
                     db.execute(
                         """INSERT INTO opportunities
                                (title, description, stage_id, bid_value,
                                 actual_close_date, actual_close_value,
+                                contact_id,
                                 created_at, onlyoffice_id)
-                           VALUES (%s, %s, %s, %s, %s, %s, NOW(), %s)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s)
                            RETURNING id""",
                         (title, description, v3_stage_id, bid_value,
-                         actual_close_date, actual_close_value, crm_id or None),
+                         actual_close_date, actual_close_value, v3_contact_id, crm_id or None),
                     )
                     v3_opp_id = db.query_one("SELECT id FROM opportunities WHERE onlyoffice_id = %s", (crm_id,))["id"]
                     existing_by_title[title.lower().strip()] = v3_opp_id
                     created += 1
                 else:
                     skipped += 1
-                    # Always update actual_close_date + stage for existing ones (idempotent)
+                    # Always update actual_close_date + stage + contact_id for existing ones (idempotent).
+                    # contact_id is COALESCE'd so a sync that returns a deal without a contact
+                    # doesn't wipe the link we already have.
                     try:
                         db.execute(
                             """UPDATE opportunities
                                SET actual_close_date = COALESCE(%s, actual_close_date),
                                    actual_close_value = COALESCE(%s, actual_close_value),
-                                   stage_id = COALESCE(%s, stage_id)
+                                   stage_id = COALESCE(%s, stage_id),
+                                   contact_id = COALESCE(%s, contact_id)
                                WHERE id = %s""",
-                            (actual_close_date, actual_close_value, v3_stage_id, v3_opp_id),
+                            (actual_close_date, actual_close_value, v3_stage_id, v3_contact_id, v3_opp_id),
                         )
                     except Exception:
                         pass
@@ -20053,7 +20104,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_attachment_serve(self) -> None:
-        """Serve a mail attachment to the OnlyOffice Document Server via JWT auth."""
+        """Serve a mail attachment to the OnlyOffice Document Server via JWT auth.
+
+        Source priority (Bug fix 2026-10-19):
+          1. local stored_path — already-on-disk mirror, fastest, no network
+          2. OnlyOffice via crm_file_id — filehandler.ashx download, works for
+             years-old emails regardless of live IMAP state. This is the
+             primary path on dev / production when the user's mail aggregator
+             archived the email into OnlyOffice's DB.
+          3. live IMAP — fallback for brand-new mail that hasn't been
+             archived into OnlyOffice yet (mail aggregator lag).
+
+        All three return Content-Type + Content-Disposition so the OnlyOffice
+        editor renders the file with its real filename.
+        """
         try:
             token = ""
             if "?" in (self.path or ""):
@@ -20078,12 +20142,64 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not att:
                 _json_response(self, 404, {"error": "Attachment not found"})
                 return
+
+            filename = att["filename"]
+            mime_type = att.get("mime_type") or "application/octet-stream"
+
+            def _send_bytes(content: bytes) -> None:
+                self.send_response(200)
+                self.send_header("Content-Type", mime_type)
+                self.send_header("Content-Disposition", f'inline; filename="{filename}"')
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+
+            # 1. Local mirror (existing fast path)
+            stored_path = att.get("stored_path")
+            if stored_path:
+                full = ROOT / stored_path
+                if full.is_file():
+                    try:
+                        _send_bytes(full.read_bytes())
+                        return
+                    except Exception as e:
+                        logger.warning("Failed to read local mirror %s: %s", full, e)
+                        # fall through to OnlyOffice
+
+            # 2. OnlyOffice via crm_file_id (NEW primary path)
+            crm_file_id = att.get("crm_file_id")
+            if crm_file_id and OO_PORTAL_URL:
+                try:
+                    oo_url = f"{OO_PORTAL_URL.rstrip('/')}/Products/Files/HttpHandlers/filehandler.ashx?action=download&fileid={crm_file_id}"
+                    oo_data = _fetch_onlyoffice_file(oo_url, timeout=30)
+                    if oo_data:
+                        # Opportunistically cache to disk for next time
+                        try:
+                            safe_name = re.sub(r"[^\w.\- ]+", "_", filename).strip("._") or "file"
+                            rel_dir = Path("data") / "mail-attachments" / str(message_id)
+                            full = ROOT / rel_dir / f"{int(attachment_id)}_{safe_name}"
+                            full.parent.mkdir(parents=True, exist_ok=True)
+                            full.write_bytes(oo_data)
+                            db.execute(
+                                "UPDATE mail_attachments SET stored_path=%s, fetch_source=COALESCE(fetch_source,'onlyoffice') "
+                                "WHERE id=%s AND stored_path IS NULL",
+                                (str(rel_dir / full.name), attachment_id),
+                            )
+                        except Exception as cache_exc:
+                            logger.warning("Failed to cache OnlyOffice-fetched mail attachment: %s", cache_exc)
+                        _send_bytes(oo_data)
+                        return
+                except Exception as e:
+                    logger.warning("OnlyOffice fetch for crm_file_id=%s failed: %s", crm_file_id, e)
+                    # fall through to IMAP
+
+            # 3. Live IMAP fallback (existing behavior)
             msg = db.query_one(
                 "SELECT m.imap_uid, m.folder, m.account_id FROM mail_messages m WHERE m.id = %s",
                 (message_id,),
             )
             if not msg:
-                _json_response(self, 404, {"error": "Message not found"})
+                _json_response(self, 410, {"error": "Attachment no longer available: source message gone from local store"})
                 return
             mailbox = _imap_connect(msg["account_id"])
             if not mailbox:
@@ -20095,7 +20211,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 uid = str(msg["imap_uid"])
                 msgs = list(mailbox.fetch(criteria=_ImapA2(uid=uid), mark_seen=False, bulk=False))
                 if not msgs:
-                    _json_response(self, 404, {"error": "Message not found on IMAP server"})
+                    _json_response(self, 410, {"error": "Attachment no longer available: source message purged from mail server"})
                     return
                 imap_msg = msgs[0]
                 content = None
@@ -20107,14 +20223,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     if att_obj.filename == att["filename"]:
                         content = att_obj.payload
                 if content is None:
-                    _json_response(self, 404, {"error": "Attachment content not found on IMAP server"})
+                    _json_response(self, 410, {"error": "Attachment no longer available: content missing on mail server"})
                     return
-                self.send_response(200)
-                self.send_header("Content-Type", att.get("mime_type") or "application/octet-stream")
-                self.send_header("Content-Disposition", f'inline; filename="{att["filename"]}"')
-                self.send_header("Content-Length", str(len(content)))
-                self.end_headers()
-                self.wfile.write(content)
+                _send_bytes(content)
             finally:
                 try:
                     mailbox.logout()

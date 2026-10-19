@@ -85,6 +85,9 @@ jobs:
       - name: Run scanner toggle + project_number tests
         run: python3 tests/test_scanner_toggle_gating.py
 
+      - name: Run contact sync + mail attachment OnlyOffice-first tests
+        run: python3 tests/test_contact_and_mail_attach_fixes.py
+
       - name: Run infrastructure tests
         run: python3 tests/test_infrastructure.py
 

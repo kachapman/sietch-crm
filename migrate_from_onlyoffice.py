@@ -696,7 +696,9 @@ def _migrate_opportunities(
                             expected_close_date, actual_close_date, actual_close_value,
                             contact_id, responsible_user_id, created_at, onlyoffice_id)
                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,COALESCE(%s,NOW()),%s)
-                       ON CONFLICT (onlyoffice_id) WHERE onlyoffice_id IS NOT NULL DO UPDATE SET title = EXCLUDED.title
+                       ON CONFLICT (onlyoffice_id) WHERE onlyoffice_id IS NOT NULL DO UPDATE SET
+                           title = EXCLUDED.title,
+                           contact_id = COALESCE(EXCLUDED.contact_id, opportunities.contact_id)
                        RETURNING id""",
                     (title, description, v3_stage_id, stage_type, bid_value,
                      due_date, actual_close_date, actual_close_value,

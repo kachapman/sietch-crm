@@ -17983,13 +17983,23 @@ select.form-control {
   padding-left: 0.4rem;
 }
 
-/* ── History category accent style ────────────────────────────────────── */
+/* ── History category accent style (left-bar only, no fill) ────────────── */
 .opp-preview-history-item--accent {
+  border-left: 3px solid var(--cat-accent-color, #2563eb);
+  padding-left: calc(0.75rem - 3px);
+  /* Accent is intentionally left-bar only — no background fill (2026-10-19) */
+}
+.opp-preview-history-item--accent .opp-preview-history-type-icon svg {
+  filter: drop-shadow(0 1px 1px color-mix(in srgb, var(--cat-accent-color, #2563eb) 35%, transparent));
+}
+
+/* Wash style: left bar + 8% light fill — for "Quick Context" / soft-emphasis notes (2026-10-19) */
+.opp-preview-history-item--wash {
   border-left: 3px solid var(--cat-accent-color, #2563eb);
   padding-left: calc(0.75rem - 3px);
   background: color-mix(in srgb, var(--cat-accent-color, #2563eb) 8%, transparent);
 }
-.opp-preview-history-item--accent .opp-preview-history-type-icon svg {
+.opp-preview-history-item--wash .opp-preview-history-type-icon svg {
   filter: drop-shadow(0 1px 1px color-mix(in srgb, var(--cat-accent-color, #2563eb) 35%, transparent));
 }
 

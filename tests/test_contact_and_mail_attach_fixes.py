@@ -1,0 +1,201 @@
+"""Regression tests for the three bug fixes shipped 2026-10-19.
+
+Bug A — sync dropped contact_id:
+  server.py sync INSERT/UPDATE must write contact_id from the OnlyOffice
+  contact.id field. import_json_export.py and migrate_from_onlyoffice.py
+  must include contact_id in their ON CONFLICT DO UPDATE sets.
+
+Bug B — Event Note icon/style:
+  styles.css must have a left-bar-only --accent (no fill) and a new --wash
+  (left bar + 8% fill). app.js must have the wash branch in the render path
+  and the customer-update class application.
+
+Bug C — mail attachments OnlyOffice-first:
+  server.py _handle_mail_attachment_serve must consult local stored_path,
+  then OnlyOffice via crm_file_id (NEW), then fall back to IMAP. The
+  _fetch_onlyoffice_file helper must exist and return None on 404/410.
+
+These are source-level guards, no live DB needed.
+"""
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SERVER = (ROOT / "server.py").read_text(encoding="utf-8")
+APPJS = (ROOT / "public" / "app.js").read_text(encoding="utf-8")
+CSS = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+IMPORT_JSON = (ROOT / "import_json_export.py").read_text(encoding="utf-8")
+MIGRATE = (ROOT / "migrate_from_onlyoffice.py").read_text(encoding="utf-8")
+
+
+class TestContactSyncPatches(unittest.TestCase):
+    """Bug A: every code path that writes opportunities must write contact_id."""
+
+    def _server_sync_body(self) -> str:
+        # the pull-deals handler
+        i = SERVER.index("def _handle_sync_pull_deals")
+        return SERVER[i: i + 12000]
+
+    def test_sync_resolves_contact_by_onlyoffice_id(self):
+        """The sync must look up contacts by onlyoffice_id to populate contact_id."""
+        body = self._server_sync_body()
+        self.assertIn("contacts WHERE onlyoffice_id = %s", body)
+
+    def test_sync_insert_writes_contact_id(self):
+        body = self._server_sync_body()
+        # The INSERT columns must include contact_id and the INSERT params must include v3_contact_id
+        self.assertRegex(body, r"INSERT INTO opportunities\s*\([^)]*contact_id", re.DOTALL)
+        self.assertIn("v3_contact_id, crm_id or None", body)
+
+    def test_sync_update_writes_contact_id(self):
+        body = self._server_sync_body()
+        # The UPDATE must include contact_id and use COALESCE so an empty sync doesn't wipe it
+        self.assertIn("contact_id = COALESCE(%s, contact_id)", body)
+
+    def test_import_json_export_on_conflict_includes_contact_id(self):
+        """import_json_export.py ON CONFLICT DO UPDATE must write contact_id."""
+        # Scope to the opportunities INSERT (not the contacts one, which also has
+        # ON CONFLICT but a different schema).
+        m = re.search(
+            r"INSERT INTO opportunities.{0,800}",
+            IMPORT_JSON, re.DOTALL,
+        )
+        self.assertIsNotNone(m, "opportunities INSERT not found")
+        block = m.group()
+        self.assertIn("contact_id = COALESCE(EXCLUDED.contact_id", block)
+
+    def test_migrate_from_onlyoffice_on_conflict_includes_contact_id(self):
+        m = re.search(
+            r"INSERT INTO opportunities.{0,800}",
+            MIGRATE, re.DOTALL,
+        )
+        self.assertIsNotNone(m, "opportunities INSERT not found")
+        block = m.group()
+        self.assertIn("contact_id = COALESCE(EXCLUDED.contact_id", block)
+
+
+class TestMailAttachmentOnlyOfficeFirst(unittest.TestCase):
+    """Bug C: serve endpoint must prefer local → OnlyOffice → IMAP."""
+
+    def _serve_body(self) -> str:
+        i = SERVER.index("def _handle_mail_attachment_serve")
+        return SERVER[i: i + 6000]
+
+    def test_tries_local_stored_path_first(self):
+        body = self._serve_body()
+        # Path #1: stored_path
+        self.assertIn("att.get(\"stored_path\")", body)
+        # stored_path check must come before crm_file_id check
+        sp_idx = body.index("att.get(\"stored_path\")")
+        cf_idx = body.index("att.get(\"crm_file_id\")")
+        self.assertLess(sp_idx, cf_idx, "local stored_path must come before OnlyOffice fetch")
+
+    def test_tries_onlyoffice_via_crm_file_id(self):
+        """Path #2: fetch from filehandler.ashx using crm_file_id."""
+        body = self._serve_body()
+        self.assertIn("filehandler.ashx?action=download&fileid=", body)
+        self.assertIn("att.get(\"crm_file_id\")", body)
+        self.assertIn("_fetch_onlyoffice_file", body)
+
+    def test_imap_fallback_after_onlyoffice(self):
+        """Path #3: live IMAP. Must be after crm_file_id, not the first path."""
+        body = self._serve_body()
+        cf_idx = body.index("att.get(\"crm_file_id\")")
+        imap_idx = body.index("_imap_connect")
+        self.assertLess(cf_idx, imap_idx, "IMAP must be the fallback, not the first path")
+
+    def test_returns_410_on_permanent_loss(self):
+        """When both OnlyOffice and IMAP can't find the file, return 410 Gone."""
+        body = self._serve_body()
+        self.assertIn("410", body)
+
+    def test_helper_function_exists(self):
+        """_fetch_onlyoffice_file must exist and handle 404/410."""
+        i = SERVER.index("def _fetch_onlyoffice_file")
+        helper = SERVER[i: i + 1200]
+        self.assertIn("404", helper)
+        self.assertIn("410", helper)
+        self.assertIn("filehandler", helper.lower() or "filehandler" in SERVER)
+
+    def test_oo_portal_constant_set(self):
+        self.assertIn("OO_PORTAL_URL = os.environ.get(\"ONLYOFFICE_PORTAL_URL\"", SERVER)
+
+
+class TestEventNoteIconStyle(unittest.TestCase):
+    """Bug B: --accent left-bar only, --wash new style, customer-update class."""
+
+    def test_accent_no_background(self):
+        """The --accent rule must not have a `background:` line."""
+        i = CSS.index(".opp-preview-history-item--accent {")
+        j = CSS.index("}", i)
+        block = CSS[i: j]
+        self.assertNotIn("background:", block, "Accent must be left-bar only (no fill)")
+
+    def test_wash_rule_exists(self):
+        self.assertIn(".opp-preview-history-item--wash {", CSS)
+        i = CSS.index(".opp-preview-history-item--wash {")
+        j = CSS.index("}", i)
+        block = CSS[i: j]
+        # Wash should have BOTH border-left AND a fill
+        self.assertIn("border-left", block)
+        self.assertIn("background", block)
+
+    def test_wash_render_branch_in_appjs(self):
+        i = APPJS.index("cat.iconStyle === 'accent'")
+        block = APPJS[i: i + 600]
+        self.assertIn("cat.iconStyle === 'wash'", block)
+        self.assertIn("opp-preview-history-item--wash", block)
+
+    def test_customer_update_class_applied(self):
+        i = APPJS.index("cat.iconStyle === 'accent'")
+        block = APPJS[i: i + 800]
+        self.assertIn("customer update", block.lower())
+        self.assertIn("opp-preview-history-item--customer-update", block)
+
+    def test_eye_check_icon_present(self):
+        self.assertIn('key: "eye-check"', APPJS)
+        # Should have an svg element
+        idx = APPJS.index('key: "eye-check"')
+        block = APPJS[idx: idx + 600]
+        self.assertIn("<svg", block)
+        self.assertIn("circle", block)
+
+    def test_device_mobile_icon_present(self):
+        self.assertIn('key: "device-mobile"', APPJS)
+        idx = APPJS.index('key: "device-mobile"')
+        block = APPJS[idx: idx + 600]
+        self.assertIn("<svg", block)
+        self.assertIn("rect", block)
+
+    def test_cache_bust_bumped(self):
+        idx_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("app.js?v=3.7.13", idx_html)
+        self.assertIn("styles.css?v=3.7.18", idx_html)
+
+
+class TestBackfillScripts(unittest.TestCase):
+    """The two backfill scripts must exist and default to dry-run."""
+
+    def test_contact_backfill_exists(self):
+        path = ROOT / "scripts" / "backfill_contacts_from_export.py"
+        self.assertTrue(path.exists())
+        body = path.read_text(encoding="utf-8")
+        self.assertIn("DRY-RUN BY DEFAULT", body)
+        self.assertIn("--write", body)
+        self.assertIn("contact_id", body)
+
+    def test_mail_attachment_backfill_exists(self):
+        path = ROOT / "scripts" / "backfill_mail_attachments_onlyoffice.py"
+        self.assertTrue(path.exists())
+        body = path.read_text(encoding="utf-8")
+        self.assertIn("DRY-RUN BY DEFAULT", body)
+        self.assertIn("filehandler.ashx", body)
+        self.assertIn("crm_file_id", body)
+        self.assertIn("--write", body)
+
+
+import re  # used above
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
