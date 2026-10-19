@@ -58,6 +58,75 @@ behind. After any bulk import that uses explicit project_number values,
 this sequence must be resynced. A guard could be added to the import path
 to call `setval` automatically, but that is out of scope here.
 
+## Fix: contacts NULL, Event Note icon/style, mail attachments OnlyOffice-first (2026-10-19)
+
+### Three regressions surfaced after deployment
+
+#### 1. Contact field missing on every imported project
+
+`opportunities.contact_id` was NULL for all 1,242 deals. The dashboard renders
+Contact as a standard project field; only the Sietch sync dropped the FK.
+
+Root causes:
+- server.py sync INSERT (line 11697) wrote 7 columns; contact_id not in the list
+- server.py sync UPDATE (line 11713) only updated actual_close_date + stage + actual_close_value
+- import_json_export.py ON CONFLICT DO UPDATE set 4 columns; contact_id missing
+- migrate_from_onlyoffice.py ON CONFLICT set 1 column (title only); contact_id missing
+
+Fix:
+- server.py: resolve OnlyOffice contact.id via contacts.onlyoffice_id, write into the
+  sync INSERT, and COALESCE-guarded UPDATE so a contact-less sync doesn't wipe a link.
+- import_json_export.py + migrate_from_onlyoffice.py: added
+  `contact_id = COALESCE(EXCLUDED.contact_id, opportunities.contact_id)` to the ON CONFLICT.
+- scripts/backfill_contacts_from_export.py: dry-run by default, links 1,184 of the
+  1,242 deals present in CRM_export/ to their 7 local contacts. The 51 deals created
+  2026-10-19 (onlyoffice_id >= 1241) are not in the export and need a live-API backfill
+  pass with OnlyOffice admin creds.
+
+Post-backfill: 1184/1242 opportunities have contact_id. The 58 remaining are either
+created 2026-10-19 (not in the export) or genuinely had no contact in the source.
+
+#### 2. Event Note icon/style fix
+
+- styles.css: --accent is now border-left only (no background fill)
+- styles.css: new --wash rule (border-left + 8% light fill) for the Quick Context look
+- app.js: wash branch in the history-pane render path
+- app.js: Customer Update events now actually get the orange left bar (the CSS rule
+  existed but nothing added the class)
+- app.js: eye-check + device-mobile SVGs added to HISTORY_CATEGORY_ICONS
+- index.html cache-bust: app.js?v=3.7.13, styles.css?v=3.7.18
+
+#### 3. Mail attachments OnlyOffice-first
+
+`mail_attachments.stored_path` was NULL for all 1,761 rows. The docs editor tried
+live IMAP at view time and failed for any auto-archived / purged email. OnlyOffice's
+mail aggregator stores attachments in CRM_kg with
+filehandler.ashx?action=download&fileid={crm_file_id} working independent of IMAP.
+
+Migration 036 adds crm_file_id, crm_message_url, fetch_source columns.
+
+server.py _handle_mail_attachment_serve priority (Bug fix 2026-10-19):
+  1. local stored_path (already-on-disk mirror, fastest)
+  2. OnlyOffice via crm_file_id (filehandler.ashx)  ← NEW primary path
+  3. live IMAP (existing fallback for brand-new mail not yet archived)
+
+Returns HTTP 410 Gone with clear error when both OnlyOffice and IMAP can't find it.
+
+server.py _fetch_onlyoffice_file: helper that handles 404/410 as terminal (no retry)
+and other errors with backoff.
+
+scripts/backfill_mail_attachments_onlyoffice.py: dry-run by default, cross-references
+each mail message with its OnlyOffice CRM_Email via subject+date match, fetches the
+file from filehandler.ashx, writes to data/mail-attachments/<message_id>/. Requires
+OnlyOffice admin creds (--oo-email / --oo-password or env vars).
+
+### Tests
+tests/test_contact_and_mail_attach_fixes.py: 20 source-level guards covering all three
+fixes. Mutation-checked (reverting the sync INSERT column list fails the test).
+Wired into .github/workflows/smoke.yml.
+
+Full suite: 520 Python + 189 JS, 0 failures.
+
 ## Fix: scanner ignored behavior checkboxes; [\#NNNN] resolved to id not project_number (2026-10-19)
 
 ### Symptoms

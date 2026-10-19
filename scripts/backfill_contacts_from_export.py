@@ -116,6 +116,20 @@ def main() -> None:
         updates.append((local_contact_id, opp_id))
         would_link += 1
 
+    # Final integrity check: every contact_id in updates must still exist right now.
+    # (Defends against the FK violation case where a target contact_id was deleted
+    # between the initial scan and the write — e.g. by a parallel cleanup job.)
+    if updates:
+        target_ids = list({cid for cid, _ in updates})
+        cur.execute("SELECT id FROM contacts WHERE id = ANY(%s)", (target_ids,))
+        existing_ids = {row[0] for row in cur.fetchall()}
+        before = len(updates)
+        updates = [(cid, oid) for cid, oid in updates if cid in existing_ids]
+        dropped = before - len(updates)
+        if dropped:
+            print(f"[backfill] integrity: dropped {dropped} updates whose target contact_id no longer exists")
+            would_link -= dropped
+
     print()
     print("=== would do ===")
     print(f"  link contact_id: {would_link}")
@@ -153,15 +167,28 @@ def main() -> None:
 
     if updates:
         from psycopg2.extras import execute_values
+        # execute_values expects tuples in the column order declared in the
+        # template: `AS data(opp_id, cid)`. We built updates as (cid, opp_id)
+        # earlier — swap to (opp_id, cid) for the SQL template.
+        # Defensive: verify every target contact_id still exists right now.
+        ordered = [(oid, cid) for cid, oid in updates]
+        all_cids = list({cid for _, cid in ordered})
+        cur.execute("SELECT id FROM contacts WHERE id = ANY(%s)", (all_cids,))
+        valid = {row[0] for row in cur.fetchall()}
+        before = len(ordered)
+        ordered = [(oid, cid) for oid, cid in ordered if cid in valid]
+        dropped = before - len(ordered)
+        if dropped:
+            print(f"[backfill] dropped {dropped} updates with bad targets (sanity)")
         execute_values(
             cur,
             "UPDATE opportunities SET contact_id = data.cid "
             "FROM (VALUES %s) AS data(opp_id, cid) "
             "WHERE opportunities.id = data.opp_id",
-            updates,
+            ordered,
         )
         conn.commit()
-        print(f"[backfill] committed {len(updates)} updates")
+        print(f"[backfill] committed {len(ordered)} updates")
 
     # Verify
     cur.execute(
