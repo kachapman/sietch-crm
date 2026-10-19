@@ -1089,18 +1089,30 @@ VALUES ('Sietch CRM', 'Sietch CRM', 'Sietch CRM', 'Workspace <em>dashboard</em>'
 -- shadowed production's ids by title: the restore silently discarded the real
 -- categories, 6,597 events failed an FK check, and every event that did import
 -- was labelled with the wrong title (category_id=8 read "Comment", not "Note").
--- Keep these in sync with the production taxonomy.
+-- Seed the 10 baseline categories with the correct display/colors/icons.
+-- is_system is set explicitly here for the 4 categories the CRM auto-creates
+-- (Mail Message, Files are uploaded, Task is closed, Opportunity is added
+-- separately). For a fresh DB the admin can toggle is_system from the UI;
+-- the column default is FALSE so any new category starts user-editable.
+-- The four core "Note" / "Phone call" / "Email" / "Appointment" /
+-- "Text" / "Customer Update" / "Quick Context" are intentionally
+-- is_system=FALSE so the admin can edit/delete them. The CRM auto-categories
+-- (Mail Message, Files are uploaded, Task is closed) are TRUE because the
+-- CRM code creates them programmatically and admins should not edit them.
+-- Opportunity and Stage Estimate are not in the seed -- they are created
+-- on demand by the deal/opportunity/stage handlers.
 INSERT INTO history_categories (id, title, display_color, is_system, sort_order, icon_key, icon_style) VALUES
-    (8,  'Note',              '#4a90d9', TRUE, 1,  'note',     'stroke'),
-    (9,  'Mail Message',      '#5b8def', TRUE, 2,  'mail',     'stroke'),
-    (10, 'Files are uploaded','#4a90d9', TRUE, 3,  'file',     'stroke'),
-    (11, 'Task is closed',    '#95a5a6', TRUE, 4,  'check',    'stroke'),
-    (12, 'Phone call',        '#27ae60', TRUE, 5,  'phone',    'stroke'),
-    (13, 'Email',             '#e67e22', TRUE, 6,  'mail',     'stroke'),
-    (14, 'Appointment',       '#8e44ad', TRUE, 7,  'calendar', 'stroke'),
-    (15, 'Text',              '#1abc9c', TRUE, 8,  'message',  'stroke'),
-    (16, 'Customer Update',   '#e74c3c', TRUE, 9,  'customer', 'accent'),
-    (17, 'Quick Context',     '#34495e', TRUE, 10, 'note',     'stroke');
+    (8,  'Note',              '#4a90d9', FALSE, 1,  'note',     'stroke'),
+    (9,  'Mail Message',      '#5b8def', TRUE,  2,  'mail',     'stroke'),
+    (10, 'Files are uploaded','#4a90d9', TRUE,  3,  'file',     'stroke'),
+    (11, 'Task is closed',    '#95a5a6', TRUE,  4,  'check',    'stroke'),
+    (12, 'Phone call',        '#27ae60', FALSE, 5,  'phone',    'stroke'),
+    (13, 'Email',             '#e67e22', FALSE, 6,  'mail',     'stroke'),
+    (14, 'Appointment',       '#8e44ad', FALSE, 7,  'calendar', 'stroke'),
+    (15, 'Text',              '#1abc9c', FALSE, 8,  'message',  'stroke'),
+    (16, 'Customer Update',   '#e74c3c', FALSE, 9,  'customer', 'accent'),
+    (17, 'Quick Context',     '#34495e', FALSE, 10, 'note',     'stroke')
+ON CONFLICT (id) DO NOTHING;
 
 -- Advance the sequence past the explicit ids above so a later insert without
 -- an id doesn't collide with 17.

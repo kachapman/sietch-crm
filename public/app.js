@@ -36578,6 +36578,7 @@ function bindAdminHistoryCats() {
     document.getElementById("admin-history-cat-color").value = "#6c757d";
     renderIconGrid("admin-history-cat-icon-grid", "note");
     document.querySelector('input[name="admin-history-cat-icon-style"][value="stroke"]').checked = true;
+    document.getElementById("admin-history-cat-is-system").checked = false;
     document.getElementById("admin-history-cat-form").style.display = "flex";
     document.getElementById("admin-history-cat-title").focus();
   });
@@ -36591,7 +36592,8 @@ function bindAdminHistoryCats() {
     const color = document.getElementById("admin-history-cat-color").value;
     const iconKey = document.querySelector("#admin-history-cat-icon-grid .automation-icon-btn.selected")?.dataset.icon || "note";
     const iconStyle = document.querySelector('input[name="admin-history-cat-icon-style"]:checked')?.value || "stroke";
-    const body = { title, color, iconKey, iconStyle };
+    const isSystem = document.getElementById("admin-history-cat-is-system")?.checked ?? false;
+    const body = { title, color, iconKey, iconStyle, isSystem };
     try {
       if (editingId) {
         await api(`/api/v2/history-categories/${editingId}`, { method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
@@ -36615,6 +36617,7 @@ function bindAdminHistoryCats() {
       renderIconGrid("admin-history-cat-icon-grid", cat.iconKey || "note");
       const styleRadio = document.querySelector(`input[name="admin-history-cat-icon-style"][value="${cat.iconStyle || "stroke"}"]`);
       if (styleRadio) styleRadio.checked = true;
+      document.getElementById("admin-history-cat-is-system").checked = !!cat.isSystem;
       document.getElementById("admin-history-cat-form").style.display = "flex";
     }
     const delBtn = e.target.closest("[data-delete-cat]");

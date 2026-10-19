@@ -6292,7 +6292,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         sets = []
         params: list = []
-        for field, col in [("title", "title"), ("color", "display_color"), ("iconKey", "icon_key"), ("iconStyle", "icon_style")]:
+        for field, col in [("title", "title"), ("color", "display_color"), ("iconKey", "icon_key"), ("iconStyle", "icon_style"), ("isSystem", "is_system")]:
             if field in payload:
                 sets.append(f"{col} = %s")
                 params.append(payload[field])
@@ -7367,7 +7367,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             cat_row = db.query_one("SELECT id FROM history_categories WHERE title = %s", (cat_title,))
                             if not cat_row:
                                 db.execute(
-                                    "INSERT INTO history_categories (title, is_system) VALUES (%s, TRUE) RETURNING id",
+                                    "INSERT INTO history_categories (title, is_system) VALUES (%s, FALSE) RETURNING id",
                                     (cat_title,),
                                 )
                                 cat_row = db.query_one("SELECT id FROM history_categories WHERE title = %s", (cat_title,))
@@ -11765,7 +11765,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         cat_title = str(cat_data.get("title") or cat_data.get("Title") or "Note").strip() if isinstance(cat_data, dict) else "Note"
                         cat_row = db.query_one("SELECT id FROM history_categories WHERE title = %s", (cat_title,))
                         if not cat_row:
-                            db.execute("INSERT INTO history_categories (title, is_system) VALUES (%s, TRUE) RETURNING id", (cat_title,))
+                            db.execute("INSERT INTO history_categories (title, is_system) VALUES (%s, FALSE) RETURNING id", (cat_title,))
                             cat_id = db.query_one("SELECT id FROM history_categories WHERE title = %s", (cat_title,))["id"]
                         else:
                             cat_id = cat_row["id"]
