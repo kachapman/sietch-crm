@@ -26,6 +26,38 @@ The importer used a bare `ON CONFLICT DO NOTHING`, which swallows *every* unique
 
 Against a scratch database built from the corrected `init.sql` + all 37 migrations, importing the real per-bundle `db-core` export across **all 66 exported tables**: **918,964 rows inserted, 0 failed**, every `category_id` resolving to the correct production title, the 3 forward-referencing contacts recovered on the deferred pass, and every populated table matching the export manifest. A second identical import reports 0 inserted / all duplicates / 0 failed.
 
+## Resync opportunities_project_number_seq (2026-10-19)
+
+The `opportunities_project_number` column is a `SERIAL UNIQUE`. The
+sequence had only been called once (last_value=2, is_called=true) even
+though the table contained 1,231 rows with project_number up to 1,231
+(with a gap at 251, 252). This happened because every JSON bundle import
+inserts rows with explicit project_number values from the OnlyOffice source,
+which does not advance the SERIAL sequence.
+
+On the first attempt to INSERT a new deal via the SERIAL (the pull-deals
+OnlyOffice import), the sequence tried to assign a value that already
+existed in the table, causing:
+
+    duplicate key value violates unique constraint
+    "opportunities_project_number_key"
+    DETAIL: Key (project_number)=(2) already exists.
+
+Fix:
+
+    SELECT setval('opportunities_project_number_seq',
+                  (SELECT MAX(project_number) FROM opportunities), true);
+
+This sets the sequence to the next value after the max used. After the
+fix, the sequence is at 1,232 and a test INSERT succeeded with
+project_number=1232. The pull-deals import can now run without constraint
+conflicts.
+
+Root cause is latent: every JSON bundle import leaves the sequence further
+behind. After any bulk import that uses explicit project_number values,
+this sequence must be resynced. A guard could be added to the import path
+to call `setval` automatically, but that is out of scope here.
+
 ## Cut over the live Telegram bot to @vanguardupdates_bot (2026-10-19)
 
 Moved the live Telegram bot from the old droplet to the new Sietch droplet, keeping the
