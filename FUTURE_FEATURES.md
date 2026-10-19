@@ -704,6 +704,78 @@ Edit button on photo thumbnails opens a modal with a full-resolution canvas edit
 
 ---
 
+## FEAT-028 — MCP server for self-hosted model access
+
+**Status:** Planned
+**Priority:** Medium
+**Area:** New MCP server, `server.py`, auth
+
+### Goal
+
+Expose Sietch CRM data through a Model Context Protocol (MCP) server so a
+self-hosted LLM can query opportunities, contacts, history, tasks, and other
+entities via natural language. The user runs the model locally; Sietch provides
+the tools.
+
+### Why
+
+The dashboard UI is optimized for human browsing. For "show me all hail damage
+claims over $50k that haven't had a note in 2 weeks" a structured API + LLM is
+faster than clicking through filters. MCP is the standard protocol for this.
+
+### Design
+
+- **New process** (`mcp_server.py`) — stdlib-only MCP server (no external deps
+  beyond what's already installed). Speaks MCP over stdio or HTTP.
+- **Auth** — reuses existing session-cookie auth. The MCP server accepts a
+  session token (or admin API key) and scopes all queries to that user's
+  permissions. Read-only by default; write tools (create note, update deal)
+  behind an explicit opt-in flag.
+- **Tools exposed** (read-only set):
+  - `search_opportunities` — filter by stage, tags, custom fields, date range,
+    full-text (wraps `/api/v2/projects`)
+  - `get_opportunity` — full detail + history + custom fields
+  - `search_contacts` — by name, company, phone
+  - `get_contact` — detail + linked opportunities
+  - `list_tasks` — by assignee, due date, status
+  - `get_stage_pipeline` — count + value per stage
+  - `list_recent_history` — last N events across opportunities
+  - `search_notes` — full-text across opportunity notes
+- **Write tools** (opt-in via `--enable-writes`):
+  - `create_note` — post a history event to an opportunity
+  - `update_deal_stage` — move a deal to a new stage
+- **Scope** — every query is filtered to the current user's visibility (admins
+  see all; members see their own; limited role sees own deals only, matching
+  the existing `_is_limited` logic).
+
+### Files
+
+| File | Changes |
+|------|---------|
+| `mcp_server.py` (new) | MCP server, tool definitions, auth, query handlers |
+| `server.py` | Optionally expose a `/api/v2/mcp/...` HTTP endpoint for remote MCP clients |
+| `init.sql` | None (reads existing tables) |
+| `tests/test_mcp_server.py` (new) | Unit tests for tool handlers with mocked DB |
+
+### Acceptance criteria
+
+1. `python3 mcp_server.py` starts and responds to MCP `tools/list`.
+2. Each read tool returns correct data for an admin user.
+3. A `limited`-role user cannot see other users' opportunities.
+4. Write tools refuse when `--enable-writes` is not set.
+5. No new external dependencies.
+
+### Risks
+
+- **Prompt injection** — CRM note content returned to the model could contain
+  malicious instructions. Mitigation: return data as structured JSON, not raw
+  HTML; document that the model should treat all CRM data as untrusted.
+- **Token scope** — a leaked session token gives full API access. Mitigation:
+  MCP server binds to `127.0.0.1` by default; document that it must not be
+  exposed to the network.
+
+---
+
 ## Developer checklist: adding a new tile type
 
 1. Add type to "Add Tile" modal in `public/index.html` + `public/app.js`
