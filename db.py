@@ -15,7 +15,7 @@ def init_db() -> None:
     from psycopg2 import pool
 
     global _pool
-    _pool = pool.SimpleConnectionPool(
+    _pool = pool.ThreadedConnectionPool(
         minconn=2,
         maxconn=20,
         host=os.getenv("DB_HOST", "db"),
