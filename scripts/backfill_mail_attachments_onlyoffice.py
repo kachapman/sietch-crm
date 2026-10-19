@@ -41,7 +41,17 @@ from pathlib import Path
 import psycopg2
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = ROOT / "data" / "mail-attachments"
+# When run from /tmp inside the container, __file__'s parent isn't the app root.
+# Fall back to the server.py location, then to /app.
+def _resolve_root() -> Path:
+    for candidate in (ROOT, Path("/app"), Path.cwd()):
+        if (candidate / "server.py").exists():
+            return candidate
+    return ROOT
+
+
+APP_ROOT = _resolve_root()
+DATA_DIR = APP_ROOT / "data" / "mail-attachments"
 
 
 def _ssl_ctx():
@@ -90,10 +100,17 @@ def oo_get(portal: str, token: str, path: str) -> dict | list | None:
         raise
 
 
-def oo_download(portal: str, file_id: int, timeout: int = 30) -> bytes | None:
-    """Download a file from OnlyOffice via filehandler.ashx. Returns bytes or None."""
+def oo_download(portal: str, token: str, file_id: int, timeout: int = 30) -> bytes | None:
+    """Download a file from OnlyOffice via filehandler.ashx. Returns bytes or None.
+
+    The endpoint requires the Bearer token (403 without it) — same pattern as
+    migrate_from_onlyoffice.py's _crm_get_raw().
+    """
     url = f"{portal.rstrip('/')}/Products/Files/HttpHandlers/filehandler.ashx?action=download&fileid={file_id}"
-    req = urllib.request.Request(url)
+    req = urllib.request.Request(url, headers={
+        "Authorization": token,
+        "Accept": "application/json, */*",
+    })
     try:
         with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=timeout) as resp:
             return resp.read()
@@ -105,24 +122,42 @@ def oo_download(portal: str, file_id: int, timeout: int = 30) -> bytes | None:
         return None
 
 
+def _norm_subject(s: str) -> str:
+    """Normalize subjects for matching.
+
+    OnlyOffice's archive sometimes strips dots from claim numbers (e.g.
+    "13-0B8T-309" -> "130B8T309"). Strip non-alphanumerics, lowercase.
+    """
+    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+
 def oo_find_crm_email_by_subject_date(portal: str, token: str, opp_crm_id: int,
                                        subject: str, date_sent_iso: str) -> int | None:
-    """Fallback cross-reference when Message-ID doesn't match.
+    """Cross-reference a mail message to its OnlyOffice CRM_Email entity.
 
-    Some scanner-ingested mail may not have an RFC 5322 Message-ID header (rare
-    but possible for malformed mailing-list messages). Fall back to subject +
-    approximate date match against the deal's history events.
+    Strategy: pull the deal's history events, filter to "Mail Message"
+    category, then match the subject with fuzzy normalization (strip dots,
+    hyphens, etc. — OnlyOffice's archive mangles claim numbers). If we get
+    a unique match, return the CRM_Email id; otherwise return None and let
+    the caller skip this message.
     """
-    # The CRM_Email is a history event with category title containing the subject.
-    # We pull the deal's events and search.
     try:
         data = oo_get(portal, token,
                       f"/api/2.0/crm/history/filter?entityType=opportunity&entityId={opp_crm_id}&count=500")
     except Exception:
         return None
+    if not data:
+        return None
+    if isinstance(data, dict) and "response" in data:
+        data = data["response"]
     if not isinstance(data, list):
         return None
-    subj_norm = (subject or "").strip().lower()
+
+    subj_norm = _norm_subject(subject)
+    if not subj_norm:
+        return None
+
+    matches = []
     for h in data:
         if not isinstance(h, dict):
             continue
@@ -130,13 +165,79 @@ def oo_find_crm_email_by_subject_date(portal: str, token: str, opp_crm_id: int,
         if (cat.get("title") or "").lower() != "mail message":
             continue
         content = h.get("content") or ""
-        # crude subject match
-        if subj_norm and subj_norm not in str(content).lower():
+        if not isinstance(content, str):
             continue
+        # content may be a JSON envelope: {"subject": "...", ...}
+        event_subj = ""
+        if content.startswith("{"):
+            try:
+                j = json.loads(content)
+                event_subj = j.get("subject") or ""
+            except Exception:
+                event_subj = ""
+        else:
+            event_subj = content
+        if not event_subj:
+            continue
+        event_norm = _norm_subject(event_subj)
+        # Exact match or one contains the other after normalization
+        if event_norm == subj_norm or subj_norm in event_norm or event_norm in subj_norm:
+            try:
+                matches.append((int(h.get("id")), h))
+            except (TypeError, ValueError):
+                continue
+    if len(matches) == 1:
+        return matches[0][0]
+    if len(matches) > 1:
+        # Disambiguate by date: OnlyOffice `created` carries a UTC offset
+        # (e.g. "-04:00" for US Eastern) while mail_messages.date_received is
+        # stored in UTC. Convert BOTH to UTC before comparing.
+        from datetime import datetime, timezone
+        target_dt = None
         try:
-            return int(h.get("id"))
-        except (TypeError, ValueError):
-            continue
+            raw = str(date_sent_iso or "").replace("Z", "+00:00")
+            dt = datetime.fromisoformat(raw)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            target_dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        except Exception:
+            target_dt = None
+        if target_dt:
+            best = None
+            best_delta = None
+            for eid, h in matches:
+                created = h.get("created")
+                if not created:
+                    continue
+                try:
+                    raw = str(created)
+                    # OnlyOffice returns 7-digit fractional seconds
+                    # e.g. "2026-09-14T19:24:43.0000000-04:00"
+                    if "." in raw:
+                        head, frac = raw.split(".", 1)
+                        # keep 6 digits max, drop the rest
+                        frac_digits = "".join(ch for ch in frac if ch.isdigit())[:6]
+                        tz_part = ""
+                        for tz_marker in ("+", "-"):
+                            idx = frac.find(tz_marker)
+                            if idx > 0:
+                                tz_part = frac[idx:]
+                                break
+                        raw = f"{head}.{frac_digits}{tz_part}"
+                    e_dt = datetime.fromisoformat(raw)
+                    if e_dt.tzinfo is None:
+                        e_dt = e_dt.replace(tzinfo=timezone.utc)
+                    e_dt = e_dt.astimezone(timezone.utc).replace(tzinfo=None)
+                except Exception:
+                    continue
+                delta = abs((e_dt - target_dt).total_seconds())
+                if best_delta is None or delta < best_delta:
+                    best = eid
+                    best_delta = delta
+            # Only accept the date-based pick if it's within 12 hours of the
+            # received timestamp — otherwise the subject match was coincidental.
+            if best and best_delta is not None and best_delta <= 12 * 3600:
+                return best
     return None
 
 
@@ -161,6 +262,47 @@ def oo_get_message_attachments(portal: str, token: str, crm_message_id: int) -> 
         elif isinstance(data, list) and data:
             return data
     return []
+
+
+def oo_collect_deal_files(portal: str, token: str, opp_crm_id: int) -> dict[str, int]:
+    """Collect {filename -> crm_file_id} for every file attached to any Mail
+    Message event on the deal.
+
+    This is the highest-signal cross-reference: the OnlyOffice history event's
+    `files[]` array carries the authoritative file id + title. We match the
+    scanner-side mail_attachments by exact filename.
+    """
+    out: dict[str, int] = {}
+    try:
+        data = oo_get(portal, token,
+                      f"/api/2.0/crm/history/filter?entityType=opportunity&entityId={opp_crm_id}&count=500")
+    except Exception:
+        return out
+    if not data:
+        return out
+    if isinstance(data, dict) and "response" in data:
+        data = data["response"]
+    if not isinstance(data, list):
+        return out
+    for h in data:
+        if not isinstance(h, dict):
+            continue
+        cat = h.get("category") or {}
+        if (cat.get("title") or "").lower() != "mail message":
+            continue
+        files = h.get("files") or []
+        if not isinstance(files, list):
+            continue
+        for f in files:
+            if not isinstance(f, dict):
+                continue
+            fid = int(f.get("id") or 0)
+            title = str(f.get("title") or "").strip()
+            if fid and title:
+                # First occurrence wins; later duplicates of the same title in
+                # the same deal are usually the same logical attachment.
+                out.setdefault(title, fid)
+    return out
 
 
 def main() -> None:
@@ -194,23 +336,26 @@ def main() -> None:
     conn.autocommit = False
     cur = conn.cursor()
 
-    # Pull all mail_messages with their onlyoffice-backed opportunities
+    # Pull all mail_messages with their onlyoffice-backed opportunities.
+    # A message can be linked to multiple deals — we take every (message, deal)
+    # pair so the filename match can hit whichever deal actually carries the
+    # attachment.
     cur.execute(
         """
         SELECT mm.id, mm.message_id, mm.subject, mm.date_received,
                mm.account_id, mm.folder,
                o.id AS opp_id, o.onlyoffice_id
         FROM mail_messages mm
-        LEFT JOIN mail_deal_links mdl ON mdl.message_id = mm.id
-        LEFT JOIN opportunities o ON o.id = mdl.opportunity_id
-        WHERE mm.message_id IS NOT NULL AND mm.message_id <> ''
+        JOIN mail_deal_links mdl ON mdl.message_id = mm.id
+        JOIN opportunities o ON o.id = mdl.opportunity_id
+        WHERE o.onlyoffice_id IS NOT NULL
         ORDER BY mm.date_received DESC NULLS LAST
         """
     )
     messages = cur.fetchall()
     if args.limit:
         messages = messages[: args.limit]
-    print(f"[backfill] {len(messages)} mail messages to cross-reference")
+    print(f"[backfill] {len(messages)} (message, deal) pairs to cross-reference")
 
     # Pull existing mail_attachments to know which need work
     cur.execute(
@@ -232,37 +377,34 @@ def main() -> None:
     skipped_404 = 0
     skipped_other = 0
 
+    deal_files_cache: dict[str, dict[str, int]] = {}
+
     for mm_id, mm_msg_id_hdr, subject, date_received, account_id, folder, opp_id, opp_oo_id in messages:
         if not needs_link.get(mm_id):
             continue
         if opp_id is None or opp_oo_id is None:
             skipped_no_opp += 1
             continue
-        # Try to find the CRM_Email in OnlyOffice by subject+date (onlyOffice's
-        # message-id header is per-message-id format we don't always have exact
-        # matching for, so use subject + approximate date against the opp's events)
-        crm_email_id = oo_find_crm_email_by_subject_date(
-            args.portal, token, int(opp_oo_id), subject or "", date_received.isoformat() if date_received else ""
-        )
-        if not crm_email_id:
+
+        # Primary strategy: match by FILENAME against the deal's OnlyOffice
+        # history event files. The event's files[] array carries the
+        # authoritative crm_file_id for each attachment, and filenames are
+        # exact (unlike subjects, which OnlyOffice mangles).
+        if opp_oo_id not in deal_files_cache:
+            deal_files_cache[opp_oo_id] = oo_collect_deal_files(
+                args.portal, token, int(opp_oo_id)
+            )
+        deal_files = deal_files_cache[opp_oo_id]
+        if not deal_files:
             skipped_no_match += 1
             continue
-        # Pull the attached files
-        files = oo_get_message_attachments(args.portal, token, crm_email_id)
-        if not files:
-            skipped_no_match += 1
-            continue
-        # Match by filename
-        filename_to_file = {f.get("title") or f.get("fileName"): f for f in files if isinstance(f, dict)}
+
         for ma in needs_link[mm_id]:
-            f = filename_to_file.get(ma["filename"])
-            if not f:
-                continue
-            file_id = int(f.get("id") or 0)
+            file_id = deal_files.get(ma["filename"])
             if not file_id:
                 continue
             # Update DB row with crm_file_id (we attempt to download too)
-            payload = oo_download(args.portal, file_id, timeout=30)
+            payload = oo_download(args.portal, token, file_id, timeout=30)
             if payload is None:
                 skipped_404 += 1
                 continue
@@ -285,7 +427,7 @@ def main() -> None:
                     "stored_path=%s, fetch_source='onlyoffice' "
                     "WHERE id=%s",
                     (file_id,
-                     f"/Products/CRM/HttpHandlers/filehandler.ashx?action=mailmessage&message_id={crm_email_id}",
+                     f"/Products/Files/HttpHandlers/filehandler.ashx?action=download&fileid={file_id}",
                      rel_path, ma["id"]),
                 )
             linked += 1

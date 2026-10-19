@@ -172,6 +172,68 @@ class TestEventNoteIconStyle(unittest.TestCase):
         self.assertIn("app.js?v=3.7.13", idx_html)
         self.assertIn("styles.css?v=3.7.18", idx_html)
 
+    def test_wash_radio_button_exists_in_admin_form(self):
+        """The admin Event Note Type form must OFFER a Wash option.
+
+        Bug 2026-10-19: the --wash CSS class was added but the radio button was
+        never added to the form, so the user could not select it.
+        """
+        idx_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+        self.assertIn(
+            'name="admin-history-cat-icon-style" value="wash"',
+            idx_html,
+            "Wash radio button missing from the Event Note Type admin form",
+        )
+        # All four styles must be present
+        for style in ("stroke", "fill", "accent", "wash"):
+            self.assertIn(
+                f'name="admin-history-cat-icon-style" value="{style}"',
+                idx_html,
+                f"Icon style '{style}' missing from admin form",
+            )
+
+    def test_icon_style_help_text_updated(self):
+        """The help text must describe Accent as left-bar only and mention Wash."""
+        idx_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("Accent: left border bar only", idx_html)
+        self.assertIn("Wash: left border bar + light background fill", idx_html)
+        # The old (wrong) description must be gone
+        self.assertNotIn("Accent: background wash + border", idx_html)
+
+    def test_system_categories_are_editable(self):
+        """System Event Note Types must have an Edit button.
+
+        Bug 2026-10-19: the edit button was hidden for isSystem categories, so
+        the user could not change icons on Mail Message / Files are uploaded /
+        Task is closed. They must remain non-deletable though.
+        """
+        i = APPJS.index("function renderHistoryCatsList(")
+        block = APPJS[i: i + 2000]
+        # Edit button must render unconditionally
+        self.assertIn(
+            'data-edit-cat="${cat.id}"',
+            block,
+            "Edit button must be available for system categories too",
+        )
+        # Delete button must still be hidden for system categories
+        self.assertIn(
+            '${cat.isSystem ? "" : `<button class="btn btn-ghost" data-delete-cat=',
+            block,
+            "Delete button must stay hidden for system categories",
+        )
+
+    def test_icon_svg_renderer_handles_wash(self):
+        """The shared icon renderer must color the stroke for wash style."""
+        i = APPJS.index('iconStyle === "fill"')
+        block = APPJS[i: i + 500]
+        self.assertIn('iconStyle === "accent" || iconStyle === "wash"', block)
+
+    def test_customer_update_uses_configured_color(self):
+        """Customer Update's orange bar should follow the category color."""
+        i = APPJS.index("cat.iconStyle === 'accent'")
+        block = APPJS[i: i + 900]
+        self.assertIn("'--cat-accent-color', cat.color || '#f97316'", block)
+
 
 class TestBackfillScripts(unittest.TestCase):
     """The two backfill scripts must exist and default to dry-run."""

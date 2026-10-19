@@ -7130,7 +7130,7 @@ body {
 }
 
 .opp-preview-history-item--customer-update {
-  border-left: 3px solid #f97316;
+  border-left: 3px solid var(--cat-accent-color, #f97316);
   padding-left: calc(0.75rem - 3px);
 }
 

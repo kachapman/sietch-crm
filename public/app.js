@@ -25491,7 +25491,9 @@ function historyCategoryIconHtml(catOrEv) {
       if (iconStyle === "fill") {
         svg = svg.replace(/stroke="currentColor"/g, `stroke="${escapeHtml(color)}"`)
                  .replace(/fill="none"/g, `fill="${escapeHtml(color)}"`);
-      } else if (iconStyle === "accent") {
+      } else if (iconStyle === "accent" || iconStyle === "wash") {
+        // Accent = left bar only, Wash = left bar + light fill.
+        // Both color the icon stroke; the container background differs.
         svg = svg.replace(/stroke="currentColor"/g, `stroke="${escapeHtml(color)}"`);
       }
       return svg;
@@ -27315,6 +27317,8 @@ function renderHistoryEventItem(ev) {
   // nothing was adding the class — Customer Update events showed no orange bar).
   if (cat && cat.title && cat.title.toLowerCase() === 'customer update') {
     li.classList.add('opp-preview-history-item--customer-update');
+    // Use the category's configured color so the bar follows the admin setting.
+    li.style.setProperty('--cat-accent-color', cat.color || '#f97316');
   }
   // Detect action events by system category title
   const isActionEvent = cat && cat.title === 'Action';
@@ -36626,7 +36630,7 @@ function renderHistoryCatsList(filter) {
         <div class="admin-customize-row-meta">${cat.iconKey || "note"} · ${cat.iconStyle || "stroke"} ${sysBadge}</div>
       </div>
       <div class="admin-customize-row-actions">
-        ${cat.isSystem ? "" : `<button class="btn btn-ghost" data-edit-cat="${cat.id}" title="Edit">✎</button>`}
+        <button class="btn btn-ghost" data-edit-cat="${cat.id}" title="Edit">✎</button>
         ${cat.isSystem ? "" : `<button class="btn btn-ghost" data-delete-cat="${cat.id}" title="Delete">×</button>`}
       </div>
     </div>`;
