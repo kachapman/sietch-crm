@@ -22,6 +22,7 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 - **Cache-bust:** `app.js?v=3.7.16` → `3.7.17`; fixed the stale `test_cache_bust_bumped` assertion (expected `3.7.15`, failing on HEAD before this session).
 - **Tests:** all 17 JS suites pass, `test_telegram_bot.py` (102) OK, `test_contact_and_mail_attach_fixes.py` (32) OK, `test_search_modal.py` (24) OK.
 - **Deploy note:** dashboard container serves `public/` — after `git pull` on production, `docker compose build && docker compose up -d`; no DB migration, no `.env` change.
+- **Deployed 2026-10-20:** pushed `265aa0e` to `origin/main`; on droplet (147.182.164.19, `/opt/sietch-crm`) `git pull --ff-only` + `docker compose build` + `up -d`. Verified live: `app.js?v=3.7.17`, Pending Invites + nbsp fix present in served bundle, container healthy, `/api/config` OK. No bot restart needed (no bot code touched).
 
 ## Previous session summary (2026-10-17, demoted)
 
