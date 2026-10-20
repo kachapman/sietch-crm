@@ -6004,7 +6004,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 except Exception as e:
                     print(f"[WARN] Failed to create notification for user {uid}: {e}", file=sys.stderr)
                     traceback.print_exc(file=sys.stderr)
-        # Link uploaded document IDs as history attachments
+        # Link uploaded document IDs as history attachments.
+        # fileIds are project_documents ids — scope the lookup to THIS
+        # opportunity so a wrong id can never attach another project's file
+        # (photo ids once flowed in here and linked random PDFs cross-opp).
         file_ids = payload.get("fileIds") or []
         for fid in file_ids:
             try:
@@ -6012,15 +6015,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             except (TypeError, ValueError):
                 continue
             doc = db.query(
-                "SELECT id, title, file_path, file_size, mime_type, uploaded_by FROM project_documents WHERE id = %s AND is_deleted = FALSE",
-                (fid_int,), fetch="one",
+                "SELECT id, title, file_path, file_size, mime_type, uploaded_by FROM project_documents WHERE id = %s AND opportunity_id = %s AND is_deleted = FALSE",
+                (fid_int, opp_id), fetch="one",
             )
-            if doc:
-                db.execute(
-                    """INSERT INTO history_attachments (event_id, filename, file_path, file_size, mime_type, uploaded_by)
-                       VALUES (%s, %s, %s, %s, %s, %s)""",
-                    (event_id, doc[1], doc[2], doc[3], doc[4], doc[5]),
-                )
+            if not doc:
+                logger.warning("Note fileId %d does not belong to opp %d — not linked", fid_int, opp_id)
+                continue
+            db.execute(
+                """INSERT INTO history_attachments (event_id, filename, file_path, file_size, mime_type, uploaded_by)
+                   VALUES (%s, %s, %s, %s, %s, %s)""",
+                (event_id, doc[1], doc[2], doc[3], doc[4], doc[5]),
+            )
         _json_response(self, 201, {"id": event_id, "ok": True})
 
     def _handle_history_event_delete(self, event_id: int) -> None:

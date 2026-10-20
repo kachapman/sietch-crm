@@ -11,7 +11,17 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-20 (refresh allowlist)
+**Date:** 2026-10-20 (phantom note attachments)
+
+**Topic:** Photo ids resolved as document ids → random cross-project files on notes.
+
+**Status: IMPLEMENTED + TESTED, pushed — deploy + 4-row cleanup still to do.**
+
+- Preview submit drops photo ids from fileIds; server lookup opp-scoped.
+- Tests: new scoping suite (4, discriminating); all suites green.
+- Cleanup predicate: path event segment != row event (precise; 15k import rows unaffected).
+
+## Previous session summary (2026-10-20, refresh allowlist)
 
 **Topic:** Due-date refresh inside supplemental mode; no-date-key visibility.
 

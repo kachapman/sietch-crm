@@ -39473,9 +39473,13 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
         submitBtn.disabled = true;
         const origBtnText = submitBtn.textContent;
 
-        // Upload pending images
+        // Upload pending images. NOTE: the returned photo ids must NEVER be
+        // sent as fileIds — the server resolves fileIds against
+        // project_documents, a different table, so a photo id would attach a
+        // random other project's file (live case: iws_calculation/ALLEN-G
+        // PDFs landing on Pete Morrison's note). Pasted images already live
+        // inline in the note HTML as /api/v2/photos/ URLs.
         const oppId = opp.id ?? opp.ID;
-        const uploadedIds = [];
         if (ed._pendingImages && ed._pendingImages.length) {
           submitBtn.textContent = "Uploading…";
           showToast("Uploading image…");
@@ -39492,7 +39496,6 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
                 const upData = await upRes.json();
                 const photoId = upData?.id ?? upData?.Id;
                 if (photoId) {
-                  uploadedIds.push(String(photoId));
                   // Replace placeholder with real URL
                   const placeholders = ed.querySelectorAll("img.note-img-pending");
                   placeholders.forEach(img => {
@@ -39520,7 +39523,9 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
           const pendingFiles = Array.isArray(editorWrap._pendingAttachments)
             ? editorWrap._pendingAttachments
             : [];
-          const successfulIds = [...uploadedIds];
+          // Only real project_documents ids (paperclip uploads below) may
+          // enter fileIds — never photo ids (see note above).
+          const successfulIds = [];
           const successfulNames = [];
           const failedNames = [];
           if (pendingFiles.length) {

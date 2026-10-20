@@ -2,6 +2,26 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Note attachments: photo ids no longer link random files (2026-10-20)
+
+Pasting images into a preview note uploaded them to /photos, whose ids were
+merged into fileIds — but the server resolves fileIds against
+project_documents, a different table. Photo ids 5/6 linked other projects'
+PDFs onto Pete Morrison's note (history_attachments 19382/19383; exactly 4
+rows affected total, all today).
+
+### Fixed
+
+- Preview submit no longer feeds photo ids into fileIds (pasted images live
+  inline as photo URLs; paperclip document ids unchanged). Other note paths
+  audited — only this one mixed id namespaces.
+- Server scopes the file-link lookup by opportunity_id with a warning on
+  mismatch: cross-project attachment is now impossible from any client.
+- Data cleanup: the 4 phantom rows backed up then deleted (their files belong
+  to other events and stay on disk).
+- `tests/test_note_attachment_scoping.py` (4 mocked behavioral tests, fails
+  against unpatched code), wired into CI. Cache-bust app.js 3.7.18→3.7.19.
+
 ## Supplemental refresh allowlist for due dates (2026-10-20)
 
 Sietch follow-up dates are stale vs OnlyOffice (e.g. Eileen Olsen: Oct 7 vs
