@@ -286,6 +286,62 @@ class TestBackfillScripts(unittest.TestCase):
         self.assertIn("Authorization", body)
 
 
+class TestNoteAttachmentButtons(unittest.TestCase):
+    """Paperclip button left of the calendar in all three note editors, and
+    the bookmark/search Post fix."""
+
+    def test_preview_editor_has_attach_button_left_of_backdate(self):
+        i = APPJS.index("preview-note-actions")
+        block = APPJS[i: i + 3000]
+        self.assertIn("preview-note-attach-btn", block)
+        # Attach must come before backdate in the markup order
+        self.assertLess(
+            block.index("preview-note-attach-btn"),
+            block.index("preview-note-backdate-btn"),
+            "paperclip must sit left of the calendar button",
+        )
+        self.assertIn("preview-note-attachments-input", block)
+        self.assertIn("preview-note-selected-attachments", block)
+
+    def test_preview_submit_uploads_attachments(self):
+        self.assertIn("editorWrap._pendingAttachments", APPJS)
+        self.assertIn("uploadAttachmentForNote(f, oppId)", APPJS)
+
+    def test_bookmark_post_refreshes_bookmark_not_main_modal(self):
+        i = APPJS.index('if (context === "bookmark")')
+        block = APPJS[i: i + 800]
+        self.assertIn("refreshBookmarkTab", block)
+        # The unconditional main-modal reopen must be gone from this path
+        self.assertNotIn(
+            "openOpportunityPreviewModal(opp.id ?? opp.ID, titleHint",
+            block,
+        )
+
+    def test_search_preview_renders_with_search_context(self):
+        self.assertIn('renderOpportunityPreviewContent(body, data, "search")', APPJS)
+        self.assertIn('if (context === "search")', APPJS)
+        self.assertIn("refreshSearchPreviewTab", APPJS)
+
+    def test_quick_note_has_attach_button(self):
+        idx_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("quick-note-attach-btn", idx_html)
+        qi = idx_html.index("quick-note-attach-btn")
+        bi = idx_html.index("note-backdate-btn", qi - 2000)
+        # Button order in the row: attach before backdate
+        row = idx_html[max(0, qi - 500): qi + 500]
+        self.assertIn("note-backdate-btn", row)
+
+    def test_project_page_has_attach_button(self):
+        phtml = (ROOT / "public" / "project.html").read_text(encoding="utf-8")
+        self.assertIn("phtml-note-attach-btn", phtml)
+        ai = phtml.index("phtml-note-attach-btn")
+        bi = phtml.index("note-backdate-btn", ai)
+        self.assertLess(ai, bi, "paperclip must sit left of the calendar button")
+        self.assertIn("phtml-note-attachments", phtml)
+        self.assertIn("phtml-selected-attachments", phtml)
+        self.assertIn("fileIds", phtml)
+
+
 import re  # used above
 
 

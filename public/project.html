@@ -293,8 +293,11 @@
           <div class="phtml-mention-dropdown" id="phtml-mention-dropdown"></div>
         </div>
         <div class="phtml-note-actions">
+          <button type="button" class="btn btn-ghost btn-sm phtml-note-attach-btn" title="Attach files"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 7l-6.5 6.5a1.5 1.5 0 0 0 3 3l6.5 -6.5a3 3 0 0 0 -6 -6l-6.5 6.5a4.5 4.5 0 0 0 9 9l6.5 -6.5"/></svg></button>
+          <input type="file" id="phtml-note-attachments" multiple hidden />
           <button type="button" class="btn btn-ghost btn-sm note-backdate-btn" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>
           <span class="backdate-display hidden"></span>
+          <span id="phtml-selected-attachments" class="selected-attachments"></span>
           <button type="button" id="phtml-note-cancel" class="phtml-note-cancel">Cancel</button>
           <button type="button" id="phtml-note-submit" class="phtml-note-submit">Add note</button>
         </div>
@@ -1235,7 +1238,58 @@
       if (bdbtn) delete bdbtn.dataset.backdateValue;
       var bddisplay = document.querySelector(".phtml-note-actions .backdate-display");
       if (bddisplay) { bddisplay.textContent = ""; bddisplay.classList.add("hidden"); }
+      window._phtmlPendingAttachments = [];
+      var attList = document.getElementById("phtml-selected-attachments");
+      if (attList) attList.innerHTML = "";
+      var attInp = document.getElementById("phtml-note-attachments");
+      if (attInp) attInp.value = "";
     });
+
+    // Attachment paperclip button (left of the calendar button)
+    (function() {
+      var attachBtn = document.querySelector(".phtml-note-attach-btn");
+      var attInp = document.getElementById("phtml-note-attachments");
+      if (!attachBtn || !attInp) return;
+      window._phtmlPendingAttachments = window._phtmlPendingAttachments || [];
+      function renderChips() {
+        var list = document.getElementById("phtml-selected-attachments");
+        if (!list) return;
+        list.innerHTML = "";
+        (window._phtmlPendingAttachments || []).forEach(function(f, idx) {
+          var chip = document.createElement("span");
+          chip.className = "sel-item";
+          var sizeKB = f.size > 1024 * 1024
+            ? (f.size / 1024 / 1024).toFixed(1) + " MB"
+            : Math.max(1, Math.round(f.size / 1024)) + " KB";
+          chip.textContent = f.name + " (" + sizeKB + ") ";
+          var x = document.createElement("span");
+          x.className = "sel-remove";
+          x.textContent = "×";
+          x.title = "Remove";
+          x.addEventListener("click", function(ev) {
+            ev.preventDefault(); ev.stopPropagation();
+            window._phtmlPendingAttachments.splice(idx, 1);
+            renderChips();
+          });
+          chip.appendChild(x);
+          list.appendChild(chip);
+        });
+      }
+      attachBtn.addEventListener("click", function(e) {
+        e.preventDefault(); e.stopPropagation();
+        attInp.click();
+      });
+      attInp.addEventListener("change", function() {
+        var picked = Array.prototype.slice.call(attInp.files || []);
+        picked.forEach(function(f) {
+          if (f.size > 25 * 1024 * 1024) { showToast("Skipped " + f.name + ": exceeds 25 MB", true); return; }
+          window._phtmlPendingAttachments.push(f);
+        });
+        attInp.value = "";
+        renderChips();
+      });
+      window._phtmlRenderAttachments = renderChips;
+    })();
 
     // Format button handler — passes data-val for formatBlock commands
     document.querySelectorAll(".phtml-note-format-btn").forEach(function(btn) {
@@ -1529,9 +1583,38 @@
           var parts = backdateVal.split("-");
           createdIso = new Date(backdateVal + "T12:00:00").toISOString();
         }
+        // Upload paperclip attachments first (same /documents endpoint as the
+        // dashboard note editors so files land in Documents + link to the note).
+        var pendingFiles = window._phtmlPendingAttachments || [];
+        var fileIds = [];
+        var successfulNames = [];
+        var failedNames = [];
+        if (pendingFiles.length) {
+          submitBtn.textContent = "Uploading…";
+          for (var fi = 0; fi < pendingFiles.length; fi++) {
+            var f = pendingFiles[fi];
+            try {
+              var fd = new FormData();
+              fd.append("file", f);
+              var upRes = await fetch("/api/v2/projects/" + projectId + "/documents", {
+                method: "POST", credentials: "same-origin", body: fd
+              });
+              if (!upRes.ok) throw new Error("HTTP " + upRes.status);
+              var upData = await upRes.json();
+              if (!upData || !upData.id) throw new Error(upData.error || "Upload failed");
+              fileIds.push(String(upData.id));
+              successfulNames.push(upData.title || f.name);
+            } catch (uerr) {
+              failedNames.push(f.name);
+              showToast("Failed to upload " + f.name + ": " + (uerr.message || uerr), true);
+            }
+          }
+          submitBtn.textContent = "Add note";
+        }
         var body = { content: content, categoryId: "10" };
         if (notifyUserList.length) body.notifyUserList = notifyUserList;
         if (createdIso) body.created = createdIso;
+        if (fileIds.length) body.fileIds = fileIds;
         var resp = await fetch("/api/v2/projects/" + projectId + "/history", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1543,8 +1626,16 @@
           try { errBody = await resp.json(); } catch(e) { errBody = {}; }
           throw new Error(errBody.error || "HTTP " + resp.status);
         }
+        if (failedNames.length && !fileIds.length) {
+          showToast("Note saved without attachments (" + failedNames.length + " upload failed)", true);
+        }
         ed.innerHTML = "";
         document.getElementById("phtml-note-editor-wrap").classList.remove("active");
+        window._phtmlPendingAttachments = [];
+        var attList = document.getElementById("phtml-selected-attachments");
+        if (attList) attList.innerHTML = "";
+        var attInp = document.getElementById("phtml-note-attachments");
+        if (attInp) attInp.value = "";
         if (bdbtn) delete bdbtn.dataset.backdateValue;
         var bddisplay = document.querySelector(".phtml-note-actions .backdate-display");
         if (bddisplay) { bddisplay.textContent = ""; bddisplay.classList.add("hidden"); }

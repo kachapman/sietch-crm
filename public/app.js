@@ -15718,6 +15718,14 @@ function bindQuickNoteModal() {
   }
 
   bindQuickNoteOpportunityPicker();
+
+  // Attachment paperclip button (left of the calendar button) triggers the
+  // existing hidden file input so Quick-note keeps its upload flow.
+  document.querySelector("#quick-note-modal .quick-note-attach-btn")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    document.querySelector("#quick-note-note-attachments")?.click();
+  });
 }
 
 function setCreateOpportunityError(message) {
@@ -30488,7 +30496,7 @@ async function openSearchPreviewTab(oppId, titleHint, { activate = true } = {}) 
     const body = container.querySelector(`[data-preview-body="${id}"]`);
     if (body) {
       body.innerHTML = "";
-      renderOpportunityPreviewContent(body, data);
+      renderOpportunityPreviewContent(body, data, "search");
       linkifyPhonesAndEmails(body);
       if (activate) updateInferredStatus("preview", data.opp?.title || data.opp?.Title || titleHint);
     }
@@ -30532,7 +30540,7 @@ async function refreshSearchPreviewTab(oppId) {
       // posted in this tab still works (defense in depth — same as the
       // initial setOpportunityPreviewContext call in the opener).
       setOpportunityPreviewContext(id, data.opp, null);
-      renderOpportunityPreviewContent(body, data);
+      renderOpportunityPreviewContent(body, data, "search");
       linkifyPhonesAndEmails(body);
     }
     // Update title
@@ -39124,8 +39132,11 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       '</div>' +
       '<div class="preview-note-actions">' +
         '<select class="preview-note-type-select"></select>' +
+        '<button type="button" class="btn btn-ghost btn-sm preview-note-attach-btn" title="Attach files"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 7l-6.5 6.5a1.5 1.5 0 0 0 3 3l6.5 -6.5a3 3 0 0 0 -6 -6l-6.5 6.5a4.5 4.5 0 0 0 9 9l6.5 -6.5"/></svg></button>' +
+        '<input type="file" class="preview-note-attachments-input" multiple hidden />' +
         '<button type="button" class="btn btn-ghost btn-sm preview-note-backdate-btn" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>' +
         '<span class="backdate-display hidden"></span>' +
+        '<span class="preview-note-selected-attachments selected-attachments"></span>' +
         '<button type="button" class="btn btn-ghost btn-sm preview-note-cancel">Cancel</button>' +
         '<button type="button" class="btn btn-primary btn-sm preview-note-submit">Post</button>' +
       '</div>';
@@ -39163,7 +39174,60 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       if (bdbtn) delete bdbtn.dataset.backdateValue;
       const bddisplay = editorWrap.querySelector(".backdate-display");
       if (bddisplay) { bddisplay.textContent = ""; bddisplay.classList.add("hidden"); }
+      editorWrap._pendingAttachments = [];
+      const attList = editorWrap.querySelector(".preview-note-selected-attachments");
+      if (attList) attList.innerHTML = "";
+      const attInp = editorWrap.querySelector(".preview-note-attachments-input");
+      if (attInp) attInp.value = "";
       _previewDirty = false;
+    });
+
+    // Wire attachment picker (paperclip left of the calendar button)
+    const renderPreviewAttachments = () => {
+      const list = editorWrap.querySelector(".preview-note-selected-attachments");
+      if (!list) return;
+      list.innerHTML = "";
+      const files = editorWrap._pendingAttachments || [];
+      files.forEach((f, idx) => {
+        const chip = document.createElement("span");
+        chip.className = "sel-item";
+        const sizeKB = f.size > 1024 * 1024
+          ? `${(f.size / 1024 / 1024).toFixed(1)} MB`
+          : `${Math.max(1, Math.round(f.size / 1024))} KB`;
+        chip.textContent = `${f.name} (${sizeKB}) `;
+        const x = document.createElement("span");
+        x.className = "sel-remove";
+        x.textContent = "×";
+        x.title = "Remove";
+        x.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          (editorWrap._pendingAttachments || []).splice(idx, 1);
+          renderPreviewAttachments();
+        });
+        chip.appendChild(x);
+        list.appendChild(chip);
+      });
+    };
+    editorWrap.querySelector(".preview-note-attach-btn")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      editorWrap.querySelector(".preview-note-attachments-input")?.click();
+    });
+    editorWrap.querySelector(".preview-note-attachments-input")?.addEventListener("change", (e) => {
+      const picked = Array.from(e.target.files || []);
+      if (!picked.length) return;
+      if (!Array.isArray(editorWrap._pendingAttachments)) editorWrap._pendingAttachments = [];
+      for (const f of picked) {
+        if (f.size > 25 * 1024 * 1024) {
+          showToast(`Skipped ${f.name}: exceeds 25 MB`, true);
+          continue;
+        }
+        editorWrap._pendingAttachments.push(f);
+      }
+      e.target.value = "";
+      renderPreviewAttachments();
+      _previewDirty = true;
     });
 
     // Populate note type dropdown (exclude system-only types)
@@ -39291,23 +39355,74 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
 
         try {
           const selectedCategoryId = noteTypeSelect ? Number(noteTypeSelect.value) || 10 : 10;
+          // Upload generic file attachments first (paperclip button). Uses the
+          // same /documents endpoint as Quick-note so files land in Documents
+          // and link to the note via fileIds.
+          const pendingFiles = Array.isArray(editorWrap._pendingAttachments)
+            ? editorWrap._pendingAttachments
+            : [];
+          const successfulIds = [...uploadedIds];
+          const successfulNames = [];
+          const failedNames = [];
+          if (pendingFiles.length) {
+            submitBtn.textContent = "Uploading…";
+            const results = await Promise.all(pendingFiles.map(async (f) => {
+              try {
+                const up = await uploadAttachmentForNote(f, oppId);
+                return { file: f, up, error: null };
+              } catch (e) {
+                return { file: f, up: null, error: e };
+              }
+            }));
+            for (const { file, up, error } of results) {
+              if (up) {
+                successfulIds.push(String(up.id));
+                successfulNames.push(up.title || file.name);
+              } else {
+                failedNames.push(file.name);
+                showToast(`Failed to upload ${file.name}: ${error?.message || error || "Upload failed"}`, true);
+              }
+            }
+            submitBtn.textContent = "Uploading note…";
+          }
           await createOpportunityHistoryEvent(oppId, {
             content: ed.innerHTML,
             categoryId: selectedCategoryId,
             notifyUserList,
             created,
+            fileIds: successfulIds,
+            attachmentNames: successfulNames,
+            failedAttachmentNames: failedNames,
           });
           ed.innerHTML = "";
           editorWrap.classList.remove("active");
+          editorWrap._pendingAttachments = [];
+          const attList = editorWrap.querySelector(".preview-note-selected-attachments");
+          if (attList) attList.innerHTML = "";
+          const attInp = editorWrap.querySelector(".preview-note-attachments-input");
+          if (attInp) attInp.value = "";
           if (bdbtn) delete bdbtn.dataset.backdateValue;
           const bddisplay = editorWrap.querySelector(".backdate-display");
           if (bddisplay) { bddisplay.textContent = ""; bddisplay.classList.add("hidden"); }
           showToast("Note added");
           _previewDirty = false;
           addEventLogEntry("note", opp.id ?? opp.ID, opp.title || opp.Title || "", "Note added", true);
-          // Refresh preview
+          // Refresh the preview this note was posted from — never pop the
+          // main project modal over a bookmark or search preview.
           const titleHint = opp.title || opp.Title || "";
-          openOpportunityPreviewModal(opp.id ?? opp.ID, titleHint, oppPreviewContext?.group || null).catch(() => {});
+          if (context === "bookmark") {
+            if (typeof refreshBookmarkTab === "function") {
+              refreshBookmarkTab(opp.id ?? opp.ID, false).catch(() => {});
+            }
+          } else if (context === "search") {
+            if (typeof refreshSearchPreviewTab === "function") {
+              refreshSearchPreviewTab(opp.id ?? opp.ID).catch(() => {});
+            } else {
+              openOpportunityPreviewModal(opp.id ?? opp.ID, titleHint, oppPreviewContext?.group || null).catch(() => {});
+            }
+          } else {
+            openOpportunityPreviewModal(opp.id ?? opp.ID, titleHint, oppPreviewContext?.group || null).catch(() => {});
+          }
         } catch (err) {
           showToast(err.message || "Failed to add note", true);
           addEventLogEntry("note", opp?.id ?? opp?.ID, opp?.title || opp?.Title || "", err.message || "Failed to add note", false);

@@ -136,6 +136,57 @@ the customer-update color following the category setting.
 
 Full suite: **526 Python + 189 JS, 0 failures.**
 
+## Fix: note attachment buttons + bookmark Post popup (2026-10-20)
+
+### 1. Paperclip button left of the calendar in all note editors
+
+Note file upload previously existed only in the Quick-note modal. The
+preview-inline editor, the project page editor, and the deal-edit path had
+no way to attach a file to a note.
+
+- Preview inline editor (`renderOpportunityPreviewContent`): new
+  `.preview-note-attach-btn` (Tabler paperclip, 14px) inserted immediately
+  left of `.preview-note-backdate-btn`, with a hidden
+  `.preview-note-attachments-input` and a `.preview-note-selected-attachments`
+  chip row. Selection renders filename + size chips with × removal, 25 MB
+  per-file cap, cleared on Cancel and on Post. Submit uploads via the
+  existing `uploadAttachmentForNote(file, oppId)` → `POST
+  /api/v2/projects/{id}/documents`, then passes `fileIds` /
+  `attachmentNames` / `failedAttachmentNames` into
+  `createOpportunityHistoryEvent` — the exact Quick-note flow, reused.
+- Quick-note modal (`index.html`): new `.quick-note-attach-btn` left of the
+  calendar button in the type row, triggering the existing hidden
+  `#quick-note-note-attachments` input. The old bottom file row is hidden
+  (label + input) while the selected-files chips stay visible.
+- Project page (`project.html`): new `.phtml-note-attach-btn` left of the
+  calendar in `.phtml-note-actions`, with hidden `#phtml-note-attachments`
+  and `#phtml-selected-attachments` chips. Submit uploads via `POST
+  /api/v2/projects/{id}/documents` and sends `fileIds` in the history POST.
+- Because bookmark and search previews render through the same
+  `renderOpportunityPreviewContent`, they inherit the button automatically.
+- Shared CSS for the three buttons + chip rows in `styles.css`.
+
+### 2. Posting from a bookmark preview no longer pops the main modal
+
+`renderOpportunityPreviewContent` takes a `context` ("modal" | "bookmark" |
+"search") but the note-submit success path unconditionally called
+`openOpportunityPreviewModal`, which unhides `#opp-preview-modal` over the
+bookmark sidebar. It now branches: `context === "bookmark"` →
+`refreshBookmarkTab(oppId, false)`; `context === "search"` →
+`refreshSearchPreviewTab(oppId)` (with fallback to the main modal only if
+the function is unavailable); otherwise the main modal as before.
+Search preview openers now pass `"search"` instead of the default `"modal"`.
+
+### Tests
+
+`TestNoteAttachmentButtons` (6) in `tests/test_contact_and_mail_attach_fixes.py`:
+button-before-calendar order in all three editors, hidden inputs + chip rows,
+`fileIds` in the project-page POST, `refreshBookmarkTab` /
+`refreshSearchPreviewTab` branching, and no unconditional main-modal reopen
+in the bookmark path.
+
+Cache-bust: `app.js?v=3.7.15`.
+
 ## Fix: missing email bodies (6,854), missing deal fields on 13 deals, id-collision guard (2026-10-20)
 
 ### 1. 7,521 email events had no body

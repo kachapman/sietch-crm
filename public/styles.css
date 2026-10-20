@@ -16772,9 +16772,24 @@ select.form-control {
   align-items: center;
   gap: 0.4rem;
   margin-top: 0.5rem;
+  flex-wrap: wrap;
 }
 .preview-note-backdate-btn {
   flex-shrink: 0;
+}
+/* Paperclip attach button sits left of the calendar so it never shifts the
+   backdate display. Shared by preview inline, quick-note, and project page. */
+.preview-note-attach-btn,
+.quick-note-attach-btn,
+.phtml-note-attach-btn {
+  flex-shrink: 0;
+}
+.preview-note-selected-attachments,
+#phtml-selected-attachments {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  font-size: 0.72rem;
 }
 .backdate-display {
   font-size: 0.78rem;

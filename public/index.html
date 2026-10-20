@@ -1906,6 +1906,7 @@
             <label for="quick-note-note-category">Note type</label>
             <div class="qn-note-type-row">
               <select id="quick-note-note-category" name="noteCategoryId"></select>
+              <button type="button" class="btn btn-ghost btn-sm quick-note-attach-btn" title="Attach files"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 7l-6.5 6.5a1.5 1.5 0 0 0 3 3l6.5 -6.5a3 3 0 0 0 -6 -6l-6.5 6.5a4.5 4.5 0 0 0 9 9l6.5 -6.5"/></svg></button>
               <button type="button" class="btn btn-ghost btn-sm note-backdate-btn" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>
               <span class="backdate-display hidden"></span>
             </div>
@@ -1943,8 +1944,8 @@
                        <div id="quick-note-mention-dropdown" class="mention-dropdown hidden"></div>
                     </div>
                  <div class="field note-attachments-field">
-                <label>Attachments <span class="field-hint-inline">(max 25 MB each)</span></label>
-                <input type="file" id="quick-note-note-attachments" multiple class="note-attachments-input" />
+                <label hidden>Attachments <span class="field-hint-inline">(max 25 MB each)</span></label>
+                <input type="file" id="quick-note-note-attachments" multiple class="note-attachments-input" hidden />
                 <div id="quick-note-selected-attachments" class="selected-attachments"></div>
               </div>
             </div>
@@ -3839,6 +3840,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3.7.14" type="module"></script>
+  <script src="app.js?v=3.7.15" type="module"></script>
 </body>
 </html>
