@@ -2,6 +2,33 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Supplemental refresh allowlist for due dates (2026-10-20)
+
+Sietch follow-up dates are stale vs OnlyOffice (e.g. Eileen Olsen: Oct 7 vs
+Oct 20) and the kanban's red/follow-up views key off that field — but pure
+supplemental mode preserves them by design. New targeted refresh.
+
+### Added
+
+- `refresh_columns` allowlist on pull-deals (only `expected_close_date`
+  supported; unknown names ignored loudly). Allowlisted columns use the
+  overwrite form inside supplemental mode; everything else stays fill-gaps.
+- Admin UI sub-option "Also refresh: Follow-up Due Date" (default OFF —
+  pure add-only stays the default), greyed while supplemental is off, sent
+  as `refresh_columns` only together with supplemental.
+- Missing-date visibility: OO deals carrying none of the recognized date
+  keys are counted + sampled in the sync log instead of skipped silently.
+- Response/result line: allowlisted refreshes surface as "Refreshed: N";
+  `refresh_columns` echoed back.
+
+### Verified
+
+- `tests/test_sync_supplemental.py` 8 → 12: allowlist overwrites due date
+  while preserving bid on the same statement, unknown entries ignored,
+  dateless payloads logged, sub-option wiring (present, default OFF, read).
+  Contact-id source guard updated for the dynamic UPDATE (template + pair
+  assertions; runtime shape covered behaviorally). All runnable suites green.
+
 ## Supplemental (add-only) pull-deals mode (2026-10-20)
 
 pull-deals always refreshed existing deals from OnlyOffice, overwriting Sietch

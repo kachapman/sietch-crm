@@ -68,9 +68,18 @@ class Shim:
     wfile = MagicMock()
 
 
-def _run_pull(payload, cf_insert_rowcount=1):
+def _run_pull(payload, cf_insert_rowcount=1, deals=None, local_row_update=None):
     """Run the handler with canned CRM + db. Returns (response_body, ctx)."""
     import json as _json
+
+    if deals is None:
+        deals = [dict(OO_EXISTING), dict(OO_NEW)]
+    base_local = {"id": 10, "stage_id": 3, "bid_value": 5000.0,
+                  "expected_close_date": None, "actual_close_date": None,
+                  "actual_close_value": None, "contact_id": None,
+                  "responsible_user_id": None}
+    if local_row_update:
+        base_local.update(local_row_update)
 
     responses = []
     executes = []
@@ -80,7 +89,7 @@ def _run_pull(payload, cf_insert_rowcount=1):
     def fake_api_get(portal, token, path, retries=3):
         fetch_paths.append(path)
         if "opportunity/filter" in path:
-            return [dict(OO_EXISTING), dict(OO_NEW)]
+            return [dict(d) for d in deals]
         if "/opportunity/tag/" in path:
             return [{"title": "Hot"}]
         if "customfield" in path:
@@ -92,10 +101,7 @@ def _run_pull(payload, cf_insert_rowcount=1):
     def fake_query_one(sql, params=None, *a, **k):
         if "FROM opportunities WHERE onlyoffice_id" in sql:
             if params and params[0] == "OO-1":
-                return {"id": 10, "stage_id": 3, "bid_value": 5000.0,
-                        "expected_close_date": None, "actual_close_date": None,
-                        "actual_close_value": None, "contact_id": None,
-                        "responsible_user_id": None}
+                return dict(base_local)
             # New deals: absent on first lookup, present on the post-insert
             # re-read (production always finds the row it just inserted).
             key = params[0] if params else None
@@ -228,6 +234,49 @@ class TestFiltersHonored(unittest.TestCase):
         self.assertEqual(body["skipped"], 0)
 
 
+class TestRefreshAllowlist(unittest.TestCase):
+    """refresh_columns: one column overwrites while siblings stay preserved."""
+
+    def test_allowlisted_due_date_overwrites_bid_preserved(self):
+        body, ctx = _run_pull(
+            dict(BASE_PAYLOAD, supplemental=True, refresh_columns=["expected_close_date"]),
+            deals=[dict(OO_EXISTING)],
+            local_row_update={"expected_close_date": "2026-10-07"},
+        )
+        self.assertEqual(body["refresh_columns"], ["expected_close_date"])
+        updates = _opp_updates(ctx["executes"])
+        self.assertEqual(len(updates), 1)
+        sql = updates[0]
+        # Allowlisted column uses the overwrite form...
+        self.assertIn("expected_close_date = COALESCE(%s, expected_close_date)", sql)
+        # ...while the sibling uses the fill-gaps form on the SAME statement.
+        self.assertIn("bid_value = COALESCE(bid_value, %s)", sql)
+        self.assertEqual(body["fields_overwritten"], 1)  # the stale due date
+        self.assertEqual(body["fields_preserved"], 1)    # bid 6000 vs 5000
+        self.assertEqual(body["fields_filled"], 0)
+
+    def test_unknown_allowlist_entries_ignored(self):
+        body, ctx = _run_pull(
+            dict(BASE_PAYLOAD, supplemental=True, refresh_columns=["bogus_column"]),
+            deals=[dict(OO_EXISTING)],
+            local_row_update={"expected_close_date": "2026-10-07"},
+        )
+        self.assertEqual(body["refresh_columns"], [])
+        for sql in _opp_updates(ctx["executes"]):
+            self.assertNotIn("COALESCE(%s, expected_close_date)", sql)
+        self.assertEqual(body.get("fields_overwritten", 0), 0)
+        # ... but the stale date is still reported as preserved, not silent.
+        self.assertEqual(body["fields_preserved"], 2)  # bid + due date
+
+    def test_missing_date_keys_logged_not_silent(self):
+        dateless = {"id": "OO-9", "title": "NoDate", "stage": {}}
+        body, _ctx = _run_pull(dict(BASE_PAYLOAD, supplemental=True), deals=[dateless])
+        self.assertGreaterEqual(body["deals_without_date_key"], 1)
+        log_text = "\n".join(e.get("msg", "") for e in body["log"])
+        self.assertIn("No recognizable due-date key", log_text)
+        self.assertIn("NoDate", log_text)
+
+
 class TestCheckboxWiring(unittest.TestCase):
     """The UI read-chain: checkbox element -> payload key -> handler branch."""
 
@@ -242,6 +291,21 @@ class TestCheckboxWiring(unittest.TestCase):
         region = region[:region.index("sync-tags-btn")]
         self.assertIn('sync-supplemental', region)
         self.assertIn('supplemental', region)
+
+    def test_due_date_suboption_wired_unchecked_by_default(self):
+        from pathlib import Path
+        import re
+        root = Path(__file__).resolve().parent.parent
+        html = (root / "public" / "index.html").read_text(encoding="utf-8")
+        m = re.search(r'<input[^>]*id="sync-refresh-due-date"[^>]*>', html)
+        self.assertIsNotNone(m, "due-date sub-checkbox missing")
+        self.assertNotIn("checked", m.group(), "sub-option must default OFF (pure add-only default)")
+        js = (root / "public" / "app.js").read_text(encoding="utf-8")
+        region = js[js.index('$("#sync-deals-btn")'):]
+        region = region[:region.index("sync-tags-btn")]
+        self.assertIn('sync-refresh-due-date', region)
+        self.assertIn('refresh_columns', region)
+        self.assertIn('expected_close_date', region)
 
 
 if __name__ == "__main__":

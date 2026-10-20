@@ -11711,6 +11711,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             # sends this flag — it MUST be read here (an unread flag is the
             # exact failure this mode exists to prevent).
             supplemental = bool(payload.get("supplemental"))
+            # Explicit overwrite allowlist for supplemental mode: only these
+            # columns may use the overwrite form; everything else stays
+            # fill-gaps. Unknown names are ignored loudly, never applied.
+            SUPPORTED_REFRESH_COLUMNS = {"expected_close_date"}
+            requested_refresh = payload.get("refresh_columns") or []
+            if not isinstance(requested_refresh, list):
+                requested_refresh = [requested_refresh]
+            refresh_columns = [c for c in requested_refresh if c in SUPPORTED_REFRESH_COLUMNS]
+            unknown_refresh = [c for c in requested_refresh if c not in SUPPORTED_REFRESH_COLUMNS]
             email = payload.get("email", "").strip()
             password = payload.get("password", "").strip()
             if not portal or not email or not password:
@@ -11719,8 +11728,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             if supplemental:
                 _append_sync_log("info", "Supplemental (add-only) mode: existing values are never overwritten.")
+                if refresh_columns:
+                    _append_sync_log("info", f"Refresh allowlist (explicit overwrite): {', '.join(sorted(refresh_columns))}")
+                if unknown_refresh:
+                    _append_sync_log("warn", f"Ignoring unknown refresh_columns entries: {', '.join(map(str, unknown_refresh))}")
             else:
                 _append_sync_log("info", "Full mode: OnlyOffice values overwrite existing deal fields.")
+                if requested_refresh:
+                    _append_sync_log("info", "refresh_columns has no effect in full mode (everything overwrites already).")
             _append_sync_log("info", "Authenticating to OnlyOffice CRM...")
             token = _crm_authenticate(portal, email, password)
             if not token:
@@ -11800,6 +11815,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             full_fields_overwritten = 0
             cf_preserved = 0
             filtered_out = 0
+            deals_without_date_key = 0
             start_time = time.time()
 
             def _classify_field(cur_val, oo_val):
@@ -11864,15 +11880,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 # string. The sync never wrote this column (Bug 2026-10-19:
                 # 13 newly-synced deals had no expected_close_date).
                 expected_close_date = None
+                oo_date_keys_present = False
                 for dd_key in ("expectedCloseDate", "ExpectedCloseDate", "dueDate"):
                     raw = o.get(dd_key)
                     if raw:
+                        oo_date_keys_present = True
                         try:
                             expected_close_date = str(raw)[:10]
                         except Exception:
                             expected_close_date = None
                         if expected_close_date:
                             break
+                if not oo_date_keys_present:
+                    # Visibility, not silence: a payload shape change upstream
+                    # would otherwise look exactly like "no date changes".
+                    deals_without_date_key += 1
+                    if deals_without_date_key <= 5:
+                        _append_sync_log("warn", f"No recognizable due-date key in OO payload for deal '{title}' (crm id {crm_id or '?'})")
 
                 # Responsible user — the CRM's responsible.id is a user UUID.
                 # user_id_map (built above) maps OnlyOffice UUID -> Sietch
@@ -11989,29 +12013,32 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     ]
                     cur = current_row or {}
                     if supplemental:
-                        # Fill gaps only: COALESCE keeps every existing value.
-                        # stage_type is deliberately untouched — its 0 default
+                        # Fill gaps only, except explicitly allowlisted
+                        # columns which use the overwrite form. stage_type is
+                        # deliberately never written here — its 0 default
                         # makes "empty" undetectable, so any write could clobber.
+                        set_clauses = []
+                        set_params = []
                         for _col, _oo in field_pairs:
                             outcome = _classify_field(cur.get(_col), _oo)
-                            if outcome == "fill":
-                                sup_fields_filled += 1
-                            elif outcome == "diff":
-                                sup_fields_preserved += 1
+                            if _col in refresh_columns:
+                                if outcome == "diff":
+                                    full_fields_overwritten += 1
+                                elif outcome == "fill":
+                                    sup_fields_filled += 1
+                                set_clauses.append(f"{_col} = COALESCE(%s, {_col})")
+                            else:
+                                if outcome == "fill":
+                                    sup_fields_filled += 1
+                                elif outcome == "diff":
+                                    sup_fields_preserved += 1
+                                set_clauses.append(f"{_col} = COALESCE({_col}, %s)")
+                            set_params.append(_oo)
+                        set_params.append(v3_opp_id)
                         try:
                             db.execute(
-                                """UPDATE opportunities
-                                   SET actual_close_date = COALESCE(actual_close_date, %s),
-                                       actual_close_value = COALESCE(actual_close_value, %s),
-                                       stage_id = COALESCE(stage_id, %s),
-                                       bid_value = COALESCE(bid_value, %s),
-                                       expected_close_date = COALESCE(expected_close_date, %s),
-                                       contact_id = COALESCE(contact_id, %s),
-                                       responsible_user_id = COALESCE(responsible_user_id, %s)
-                                   WHERE id = %s""",
-                                (actual_close_date, actual_close_value, v3_stage_id,
-                                 bid_value, expected_close_date,
-                                 v3_contact_id, v3_responsible_id, v3_opp_id),
+                                "UPDATE opportunities SET " + ", ".join(set_clauses) + " WHERE id = %s",
+                                tuple(set_params),
                             )
                         except Exception:
                             pass
@@ -12286,8 +12313,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _append_sync_log("info", f"Full mode overwrote {full_fields_overwritten} existing field values")
             if filtered_out:
                 _append_sync_log("info", f"{filtered_out} deals skipped by stage/responsible filter")
+            if deals_without_date_key:
+                _append_sync_log("warn", f"{deals_without_date_key} OO deals carried no recognizable due-date key (expectedCloseDate/ExpectedCloseDate/dueDate)")
             _json_response(self, 200, {"ok": True, "created": created, "skipped": skipped, "tags": tag_count, "custom_fields": cf_count, "history": history_count, "history_synced": history_synced, "history_skipped": history_skipped, "attachments": attachments_synced, "total": len(all_opps), "elapsed_seconds": int(elapsed), "log": list(_sync_log),
-                                       "supplemental": supplemental, "fields_filled": sup_fields_filled, "fields_preserved": sup_fields_preserved, "fields_overwritten": full_fields_overwritten, "custom_fields_preserved": cf_preserved, "filtered_out": filtered_out})
+                                       "supplemental": supplemental, "refresh_columns": sorted(refresh_columns), "fields_filled": sup_fields_filled, "fields_preserved": sup_fields_preserved, "fields_overwritten": full_fields_overwritten, "custom_fields_preserved": cf_preserved, "filtered_out": filtered_out, "deals_without_date_key": deals_without_date_key})
         except Exception as e:
             _append_sync_log("error", f"Deals sync failed: {e}")
             _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})

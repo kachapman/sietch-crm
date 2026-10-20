@@ -11,7 +11,17 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-20 (supplemental sync)
+**Date:** 2026-10-20 (refresh allowlist)
+
+**Topic:** Due-date refresh inside supplemental mode; no-date-key visibility.
+
+**Status: IMPLEMENTED + TESTED, pushed — NOT deployed (awaiting explicit go).**
+
+- refresh_columns allowlist (expected_close_date only); sub-option default OFF, greyed in full mode.
+- Tests: sync suite 8→12; contact guard adapted to dynamic UPDATE; all suites green.
+- Acceptance: Eileen Olsen → Oct 20; red counts converge toward old board.
+
+## Previous session summary (2026-10-20, supplemental sync)
 
 **Topic:** Add-only pull-deals mode + honored filters + checkbox wired+tested.
 

@@ -70,9 +70,12 @@ class TestContactSyncPatches(unittest.TestCase):
         full = [m for m in matches
                 if "contact_id = COALESCE(%s, contact_id)" in m.group("sets")]
         self.assertTrue(full, "full-mode overwrite UPDATE with contact_id not found")
-        supp = [m for m in matches
-                if "contact_id = COALESCE(contact_id, %s)" in m.group("sets")]
-        self.assertTrue(supp, "supplemental fill-gaps UPDATE with contact_id not found")
+        # Supplemental builds its UPDATE dynamically from field_pairs (no
+        # literal to match), so assert the fill-gaps template plus the
+        # contact_id pair that flows through it. Runtime SQL shape is covered
+        # behaviorally in test_sync_supplemental.py.
+        self.assertIn("COALESCE({_col}, %s)", body)
+        self.assertIn('("contact_id", v3_contact_id)', body)
         # And the args tuple must pass the resolved contact.
         after = body[full[0].end(): full[0].end() + 300]
         self.assertIn("v3_contact_id", after)
