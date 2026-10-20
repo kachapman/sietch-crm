@@ -973,8 +973,12 @@ try:
 except Exception:
     pass
 
-# History category id for email link events ("Email" in history_categories)
-EMAIL_HISTORY_CATEGORY_ID = 16
+# History category id for email link/import events ("Email" in
+# history_categories, seeded by init.sql at ids 8-17 matching production).
+# Was 16 ("Customer Update") — a stale value from before the taxonomy reseed
+# that filed linked/imported emails as customer updates (and leaked raw email
+# dumps into the Telegram customer-updates feed, which filters on 16).
+EMAIL_HISTORY_CATEGORY_ID = 13
 
 # ── Calendar system (migration 010) ──────────────────────────────────────────
 try:
@@ -18693,6 +18697,60 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             logger.exception("Failed to fetch message %d", message_id)
             _json_response(self, 500, {"error": str(e)})
 
+    def _create_email_history_event(self, opp_id: int, message_id: int, user_id: int | None) -> bool:
+        """Create the project-timeline event for a linked email (idempotent).
+
+        Returns True when an event now exists (created or already present).
+        Mail-link callers must use this on BOTH fresh and already-linked
+        paths: link rows can predate the event (older builds, send flow),
+        and without the event nothing appears in project history.
+        """
+        try:
+            existing = db.query_one(
+                "SELECT id FROM history_events WHERE opportunity_id = %s AND content LIKE %s",
+                (opp_id, f'%"message_id": {int(message_id)}%'),
+            )
+            if existing:
+                return True
+            msg = db.query_one(
+                "SELECT subject, from_addr, to_addr, cc_addr, body_html, body_text, date_received FROM mail_messages WHERE id = %s",
+                (message_id,),
+            )
+            if not msg:
+                return False
+            try:
+                att_rows = db.query_dicts(
+                    "SELECT filename, size_bytes, mime_type FROM mail_attachments WHERE message_id = %s",
+                    (message_id,),
+                )
+                att_snapshot = [
+                    {"filename": a["filename"], "size_bytes": a["size_bytes"] or 0, "mime_type": a["mime_type"] or ""}
+                    for a in att_rows
+                ]
+            except Exception:
+                att_snapshot = []
+            snapshot = {
+                "type": "email_snapshot",
+                "message_id": message_id,
+                "from": msg["from_addr"] or "",
+                "to": msg["to_addr"] or "",
+                "cc": msg["cc_addr"] or "",
+                "subject": msg["subject"] or "",
+                "date_sent": str(msg["date_received"]) if msg["date_received"] else "",
+                "body_html": msg["body_html"] or "",
+                "body_text": msg["body_text"] or "",
+                "attachments": att_snapshot,
+            }
+            db.execute(
+                "INSERT INTO history_events (opportunity_id, category_id, content, created_by) "
+                "VALUES (%s, %s, %s, %s)",
+                (opp_id, EMAIL_HISTORY_CATEGORY_ID, json.dumps(snapshot), user_id),
+            )
+            return True
+        except Exception:
+            logger.exception("Failed to create history event for email %d", message_id)
+            return False
+
     def _handle_mail_link(self, message_id: int) -> None:
         try:
             user = _require_auth(self)
@@ -18724,48 +18782,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     "SELECT id FROM mail_deal_links WHERE message_id = %s AND opportunity_id = %s",
                     (message_id, opp_id),
                 )
-                if existing:
-                    _json_response(self, 200, {"ok": True, "linked": False, "message": "Already linked"})
+                if not existing:
+                    _json_response(self, 500, {"error": "Failed to link email to deal"})
                     return
-                _json_response(self, 500, {"error": "Failed to link email to deal"})
+                # Already linked — but the timeline event may still be
+                # missing (link rows predate it). Backfill it now instead
+                # of reporting success while history stays empty.
+                history_created = self._create_email_history_event(opp_id, message_id, linked_by)
+                _json_response(self, 200, {"ok": True, "linked": False, "historyCreated": history_created, "message": "Already linked"})
                 return
             # Create history event so the link appears in the deal timeline.
             # Store a full JSON snapshot so the embedded mail view survives account
             # deletion / auto-delete retention purging.
-            msg = db.query_one(
-                "SELECT subject, from_addr, to_addr, cc_addr, body_html, body_text, date_received FROM mail_messages WHERE id = %s",
-                (message_id,),
-            )
-            if msg:
-                try:
-                    att_rows = db.query_dicts(
-                        "SELECT filename, size_bytes, mime_type FROM mail_attachments WHERE message_id = %s",
-                        (message_id,),
-                    )
-                    att_snapshot = [
-                        {"filename": a["filename"], "size_bytes": a["size_bytes"] or 0, "mime_type": a["mime_type"] or ""}
-                        for a in att_rows
-                    ]
-                except Exception:
-                    att_snapshot = []
-                snapshot = {
-                    "type": "email_snapshot",
-                    "message_id": message_id,
-                    "from": msg["from_addr"] or "",
-                    "to": msg["to_addr"] or "",
-                    "cc": msg["cc_addr"] or "",
-                    "subject": msg["subject"] or "",
-                    "date_sent": str(msg["date_received"]) if msg["date_received"] else "",
-                    "body_html": msg["body_html"] or "",
-                    "body_text": msg["body_text"] or "",
-                    "attachments": att_snapshot,
-                }
-                db.execute(
-                    "INSERT INTO history_events (opportunity_id, category_id, content, created_by) "
-                    "VALUES (%s, %s, %s, %s)",
-                    (opp_id, EMAIL_HISTORY_CATEGORY_ID, json.dumps(snapshot), linked_by),
-                )
-            _json_response(self, 200, {"ok": True, "linked": True})
+            history_created = self._create_email_history_event(opp_id, message_id, linked_by)
+            _json_response(self, 200, {"ok": True, "linked": True, "historyCreated": history_created})
         except Exception as e:
             logger.exception("Failed to link message %d", message_id)
             _json_response(self, 500, {"error": str(e)})
@@ -19770,6 +19800,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
                     (message_id, deal_id, user["id"] if user else None),
                 )
+                # Sent mail links into project history like manual links.
+                self._create_email_history_event(int(deal_id), int(message_id), user["id"] if user else None)
 
             if ok:
                 _json_response(self, 200, {"ok": True, "id": outgoing["id"] if outgoing else None})

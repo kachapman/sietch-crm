@@ -106,6 +106,9 @@ jobs:
       - name: Run search modal tests
         run: python3 tests/test_search_modal.py
 
+      - name: Run mail link history tests
+        run: python3 tests/test_mail_link_history.py -v
+
       - name: Run users tests
         run: python3 tests/test_users.py
 

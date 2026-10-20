@@ -11,7 +11,18 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-20 (phone plain text)
+**Date:** 2026-10-20 (mail link history)
+
+**Topic:** Linked emails missing from History & Notes (1648→opp 43) + wrong Email category.
+
+**Status: IMPLEMENTED + TESTED — push + droplet deploy (rebuild; migration 037 auto-applies) still to do.**
+
+- `_create_email_history_event` idempotent helper; called on fresh + already-linked + sent-mail paths.
+- Constant 16→13; migration 037 recategorizes old snapshots. Frontend "Already linked" honesty.
+- Tests: new test_mail_link_history.py (4, mocked db) in CI; all runnable suites green.
+- Pre-existing, untouched: CI references tests/test_mail_template_auth.py which does not exist.
+
+## Previous session summary (2026-10-20, phone plain text)
 
 **Topic:** `tel:` unrenderable on the clients — phone back to plain text, helper removed.
 

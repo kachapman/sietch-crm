@@ -23884,23 +23884,27 @@ function attachMailModalListeners() {
       if (!dealId || !mailState.selected.size) return;
       const ids = Array.from(mailState.selected);
       let ok = 0;
+      let already = 0;
       let lastErr = '';
       for (const mid of ids) {
         try {
-          await api(`/api/v2/mail/messages/${mid}/link`, {
+          const res = await api(`/api/v2/mail/messages/${mid}/link`, {
             method: "POST",
             body: JSON.stringify({ opportunityId: Number(dealId) })
           });
-          ok++;
+          if (res && res.linked === false) already++;
+          else ok++;
         } catch (e) {
           lastErr = e.message || e.error || 'unknown error';
           console.warn('[mail-inbox] link failed for', mid, lastErr);
         }
       }
-      if (ok === ids.length) {
+      if (already && !ok && !lastErr) {
+        showToast(`Already linked to this deal`);
+      } else if (ok === ids.length) {
         showToast(`Linked ${ok} email(s) to deal`);
       } else if (ok > 0) {
-        showToast(`Linked ${ok}/${ids.length} — errors: ${lastErr}`, true);
+        showToast(`Linked ${ok}/${ids.length}${already ? ` (${already} already linked)` : ''} — errors: ${lastErr}`, true);
       } else {
         showToast(`Link failed: ${lastErr}`, true);
       }
@@ -26852,8 +26856,8 @@ function renderEmailPreviewLinkedDeals(linkedEl, fullMail, messageId, ctrl) {
             b.addEventListener('mouseleave', () => b.style.background = '');
             b.addEventListener('click', async () => {
               try {
-                await api(`/api/v2/mail/messages/${messageId}/link`, { method: 'POST', body: JSON.stringify({ opportunityId: opp.id }) });
-                showToast('Linked to ' + opp.title);
+                const res = await api(`/api/v2/mail/messages/${messageId}/link`, { method: 'POST', body: JSON.stringify({ opportunityId: opp.id }) });
+                showToast(res && res.linked === false ? 'Already linked to ' + opp.title : 'Linked to ' + opp.title);
                 searchWrap.classList.add('hidden');
                 // Audit #4: refresh just the badges (listeners are preserved).
                 await refresh();

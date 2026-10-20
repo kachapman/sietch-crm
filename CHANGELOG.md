@@ -2,6 +2,34 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Mail linking creates history + correct Email category (2026-10-20)
+
+Linking an email whose link row already existed returned 200 "Already linked"
+without creating the timeline event — the toast claimed success while History
+& Notes stayed empty (live case: message 1648 → opp 43, two 200s, zero events).
+
+### Fixed
+
+- `server.py`: new `_create_email_history_event()` (idempotent snapshot insert);
+  `_handle_mail_link` calls it on fresh links AND already-linked (backfilling
+  events for link rows that predate them). Response reports `historyCreated`.
+- `EMAIL_HISTORY_CATEGORY_ID` 16 → 13: the stale pre-reseed value filed linked
+  (and OnlyOffice-imported) emails as Customer Update — mislabelling the
+  timeline and leaking raw email dumps into the Telegram customer-updates feed.
+- Migration `037_email_snapshot_category.sql`: recategorizes existing
+  `email_snapshot` rows 16 → 13 (self-identifying JSON predicate).
+- Send-mail flow: linking a sent message to a deal now also writes the
+  timeline event (previously link-only).
+- Frontend (inbox + preview link paths): "Already linked" reported honestly
+  instead of "Linked N".
+
+### Verified
+
+- New `tests/test_mail_link_history.py` (4 behavioral tests, mocked db —
+  already-linked backfill, no-duplicate, fresh link, category constant),
+  wired into CI. Full runnable suites green (JS all-pass; email_audit_345,
+  telegram_bot 124, attach-fixes, search-modal, customize, reports, infra).
+
 ## Bot: phone back to plain text (2026-10-20)
 
 The clients in use render neither `tel:` buttons (API 400s those) nor `tel:`
