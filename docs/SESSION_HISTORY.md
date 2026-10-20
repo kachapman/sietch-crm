@@ -15,7 +15,7 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Topic:** Customer-card refinements (CRM button, tappable phone, headers, divider) + reply author/notify fix.
 
-**Status: IMPLEMENTED + TESTED LOCALLY — push + droplet deploy (rebuild, bot restart) still to do at commit time.**
+**Status: DEPLOYED 2026-10-20 as 52436a6** (droplet pull + rebuild healthy + bot restart active, polling 200s; helpers + author resolution confirmed on droplet).
 
 - Keyboard: 🔗 employees-only; 📞/📍 for customers with userFields fallback; extracted to module level for tests.
 - `tel:` normalized to +1 (RFC 3966 — the invalid bare URI is why it rendered plain).
