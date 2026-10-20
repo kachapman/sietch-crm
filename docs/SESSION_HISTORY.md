@@ -11,7 +11,18 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-20 (phantom note attachments)
+**Date:** 2026-10-20 (mail polling + reply actor)
+
+**Topic:** Newest-first fetch, polling refresh button, reply notification names actor.
+
+**Status: IMPLEMENTED + TESTED, pushed — deploy still to do.**
+
+- Per-mailbox extraction (no more silent whole-cycle gaps); wakeup-event manual queue.
+- Tests: new test_mail_polling.py (9); all suites green.
+- Observed (not fixed): bare A() raises on imap_tools>=1.16 when since is None — only reachable with SCANNER_SYNC_DAYS empty/0. Left alone deliberately.
+- Still pending (scoped, unapproved): search one-liner, claim-code toggle split, NUL sanitizing, skip-reason logging, OAuth Test.
+
+## Previous session summary (2026-10-20, phantom note attachments)
 
 **Topic:** Photo ids resolved as document ids → random cross-project files on notes.
 

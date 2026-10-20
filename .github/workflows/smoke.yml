@@ -112,6 +112,9 @@ jobs:
       - name: Run note attachment scoping tests
         run: python3 tests/test_note_attachment_scoping.py -v
 
+      - name: Run mail polling tests
+        run: python3 tests/test_mail_polling.py -v
+
       - name: Run supplemental sync tests
         run: python3 tests/test_sync_supplemental.py -v
 

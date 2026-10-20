@@ -23731,10 +23731,37 @@ function attachMailModalListeners() {
     });
   }
 
-  // refresh
+  // refresh — actually polls IMAP now (not just a local re-read)
   const refBtn = $("#mail-refresh");
   if (refBtn) {
-    refBtn.addEventListener("click", () => loadMailMessagesForModal());
+    let refreshing = false;
+    refBtn.addEventListener("click", async () => {
+      // Queue a manual scan for the active account(s), then reload. Falls
+      // back to a local reload when no specific account is in view or the
+      // queue call is already running / fails.
+      const ids = [];
+      if (mailState.activeAccount && mailState.activeAccount !== 'crm') {
+        ids.push(mailState.activeAccount);
+      } else {
+        for (const a of (mailState.accounts || [])) {
+          if (a.id != null) ids.push(a.id);
+        }
+      }
+      if (!ids.length || refreshing) {
+        loadMailMessagesForModal();
+        return;
+      }
+      refreshing = true;
+      try {
+        showToast("Syncing mail…");
+        await Promise.all(ids.map((id) =>
+          api(`/api/v2/mail/accounts/${encodeURIComponent(id)}/sync-now`, { method: "POST" }).catch(() => null)
+        ));
+        await new Promise((r) => setTimeout(r, 8000));
+      } catch { /* fall through to reload */ }
+      refreshing = false;
+      loadMailMessagesForModal();
+    });
   }
 
   // account settings gear (toolbar)

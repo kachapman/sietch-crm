@@ -1161,6 +1161,15 @@ def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None, sinc
         mailbox.logout()
     except Exception as e:
         logger.error("IMAP fetch error: %s", e)
+    # Newest-first: IMAP returns UID-ascending, so a big backfill would store
+    # months of old mail before today's. Processing newest first means fresh
+    # mail lands in the DB within the first minute of a cycle.
+    def _uid_key(m: dict[str, Any]) -> int:
+        try:
+            return int(str(m.get("uid") or 0))
+        except (TypeError, ValueError):
+            return 0
+    messages.sort(key=_uid_key, reverse=True)
     return messages
 
 
@@ -1759,6 +1768,40 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
     return log_entry
 
 
+def _poll_mailbox_cfg(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    """Poll a single mailbox config (folders, fetch, process). Extracted from
+    _poll_mailboxes so a manual per-account poll reuses the exact same path."""
+    results: list[dict[str, Any]] = []
+    logger.info("Polling mailbox %s@%s", cfg["user"], cfg["host"])
+    try:
+        # Sync folder list first
+        folder_count = _sync_imap_folders(cfg)
+        if folder_count:
+            logger.info("Synced %d IMAP folders", folder_count)
+
+        folders = cfg.get("folders", [cfg.get("inbox", "INBOX")])
+        # Per-account sync window (retention_days), fallback to global SCANNER_SYNC_DAYS
+        acct_retention = cfg.get("retention_days", 0)
+        if acct_retention and acct_retention > 0:
+            since = datetime.now(timezone.utc) - timedelta(days=acct_retention)
+        else:
+            try:
+                sync_days = int(os.environ.get("SCANNER_SYNC_DAYS", "90"))
+            except (TypeError, ValueError):
+                sync_days = 90
+            since = datetime.now(timezone.utc) - timedelta(days=sync_days) if sync_days and sync_days > 0 else None
+        for folder in folders:
+            logger.info("Fetching folder %s for %s", folder, cfg["user"])
+            msgs = _fetch_messages(cfg, folder, since=since)
+            for msg in msgs:
+                result = _process_message(msg, cfg)
+                results.append(result)
+    except Exception as e:
+        logger.error("Polling error for %s: %s", cfg["host"], e)
+        infra_log.log_infra_event("error", f"Mail scanner poll failed for {cfg.get('host')}: {e}", source="mail_scanner")
+    return results
+
+
 def _poll_mailboxes() -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     mailboxes = _get_mailboxes()
@@ -1772,35 +1815,29 @@ def _poll_mailboxes() -> list[dict[str, Any]]:
         _build_deal_index()
 
     for cfg in mailboxes:
-        logger.info("Polling mailbox %s@%s", cfg["user"], cfg["host"])
-        try:
-            # Sync folder list first
-            folder_count = _sync_imap_folders(cfg)
-            if folder_count:
-                logger.info("Synced %d IMAP folders", folder_count)
-            
-            folders = cfg.get("folders", [cfg.get("inbox", "INBOX")])
-            # Per-account sync window (retention_days), fallback to global SCANNER_SYNC_DAYS
-            acct_retention = cfg.get("retention_days", 0)
-            if acct_retention and acct_retention > 0:
-                since = datetime.now(timezone.utc) - timedelta(days=acct_retention)
-            else:
-                try:
-                    sync_days = int(os.environ.get("SCANNER_SYNC_DAYS", "90"))
-                except (TypeError, ValueError):
-                    sync_days = 90
-                since = datetime.now(timezone.utc) - timedelta(days=sync_days) if sync_days and sync_days > 0 else None
-            for folder in folders:
-                logger.info("Fetching folder %s for %s", folder, cfg["user"])
-                msgs = _fetch_messages(cfg, folder, since=since)
-                for msg in msgs:
-                    result = _process_message(msg, cfg)
-                    results.append(result)
-        except Exception as e:
-            logger.error("Polling error for %s: %s", cfg["host"], e)
-            infra_log.log_infra_event("error", f"Mail scanner poll failed for {cfg.get('host')}: {e}", source="mail_scanner")
+        results.extend(_poll_mailbox_cfg(cfg))
 
     return results
+
+
+# Manual per-account polls, triggered by the UI refresh button via
+# POST /api/v2/mail/accounts/{id}/sync-now. Requests accumulate in a set
+# consumed by the scanner loop (woken immediately), so no second thread
+# races the cycle and rapid multi-account refreshes are all honored.
+_manual_poll_ids: set[int] = set()
+_wakeup = threading.Event()
+
+
+def request_manual_poll(account_id: int) -> bool:
+    """Queue a one-account poll. Returns False for a bad id; the loop picks
+    accepted requests up immediately (even mid-interval). Never lost: queued
+    ids persist until the loop consumes them."""
+    try:
+        _manual_poll_ids.add(int(account_id))
+    except (TypeError, ValueError):
+        return False
+    _wakeup.set()
+    return True
 
 
 def _enforce_retention() -> None:
@@ -1862,14 +1899,27 @@ def _scanner_loop() -> None:
             if not env_enabled and not db_enabled:
                 logger.info("Scanner disabled, sleeping %ds", interval)
             else:
-                logger.info("Starting poll cycle")
-                _poll_mailboxes()
-                _enforce_retention()
+                manual = sorted(_manual_poll_ids)
+                _manual_poll_ids.clear()
+                if manual:
+                    logger.info("Manual poll requested for accounts %s", manual)
+                    cfgs = [c for c in _get_mailboxes() if c.get("account_id") in manual]
+                    unknown = [a for a in manual if a not in {c.get("account_id") for c in cfgs}]
+                    for aid in unknown:
+                        logger.warning("Manual poll: account %d not syncable (disabled or missing credentials)", aid)
+                    for cfg in cfgs:
+                        _poll_mailbox_cfg(cfg)
+                    _enforce_retention()
+                else:
+                    logger.info("Starting poll cycle")
+                    _poll_mailboxes()
+                    _enforce_retention()
                 logger.info("Poll cycle complete")
         except Exception as e:
             logger.error("Scanner loop error: %s", e)
             infra_log.log_infra_event("error", f"Mail scanner loop error: {e}", source="mail_scanner")
-        time.sleep(int(os.environ.get("SCANNER_POLL_INTERVAL", "300")))
+        _wakeup.clear()
+        _wakeup.wait(int(os.environ.get("SCANNER_POLL_INTERVAL", "300")))
 
 
 def start_scanner() -> threading.Thread:

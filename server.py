@@ -4847,6 +4847,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if m and method == "DELETE":
             self._handle_mail_account_delete(int(m.group(1)))
             return
+        m = re.match(r"^/api/v2/mail/accounts/(\d+)/sync-now$", api_path)
+        if m and method == "POST":
+            self._handle_mail_account_sync_now(int(m.group(1)))
+            return
         # Account sharing
         m = re.match(r"^/api/v2/mail/accounts/(\d+)/share$", api_path)
         if m and method == "POST":
@@ -6196,14 +6200,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 try:
                     # Reuse the same notifications table; payload carries
                     # both event_id and reply_id so the client can deep-link
-                    # directly to the reply.
+                    # directly to the reply. The display string must name the
+                    # ACTOR (replier), not the notified user: joining users on
+                    # the recipient id reads as "X replied" to X themselves.
                     db.execute(
                         """INSERT INTO notifications (user_id, type, opportunity_id, actor_user_id, message, payload)
                            SELECT %s, 'reply_tagged', %s, %s,
                                   u.display_name || ' replied on ' || p.title,
                                   jsonb_build_object('event_id', %s, 'reply_id', %s, 'snippet', %s)
                            FROM users u, opportunities p WHERE p.id = %s AND u.id = %s""",
-                        (int(uid), opp_id, actor_id, event_id, reply_id, snippet, opp_id, int(uid)),
+                        (int(uid), opp_id, actor_id, event_id, reply_id, snippet, opp_id, actor_id),
                     )
                     event_bus.publish("notification:new", {
                         "type": "reply_tagged",
@@ -19766,6 +19772,35 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"ok": True})
         except Exception as e:
             logger.exception("Failed to update mail account %d", account_id)
+            _json_response(self, 500, {"error": str(e)})
+
+    def _handle_mail_account_sync_now(self, account_id: int) -> None:
+        """Queue an immediate one-account poll (UI refresh button).
+
+        The scanner loop picks the request up at once via its wakeup event —
+        no second thread races the normal cycle. 202 means queued, not done;
+        the client should reload the list after a short delay.
+        """
+        try:
+            user = _require_auth(self)
+            if not user:
+                return
+            if not _mail_account_manageable(user, account_id):
+                _json_response(self, 403, {"error": "You don't have permission to manage this account"})
+                return
+            if mail_scanner is None:
+                _json_response(self, 503, {"error": "Mail scanner not available"})
+                return
+            row = db.query_one("SELECT id FROM mail_accounts WHERE id = %s", (account_id,))
+            if not row:
+                _json_response(self, 404, {"error": "Mail account not found"})
+                return
+            if not mail_scanner.request_manual_poll(account_id):
+                _json_response(self, 400, {"error": "Invalid account id"})
+                return
+            _json_response(self, 202, {"ok": True, "queued": True, "account_id": account_id})
+        except Exception as e:
+            logger.exception("Failed to queue manual mail poll")
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_account_delete(self, account_id: int) -> None:

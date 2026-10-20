@@ -2,6 +2,30 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Mail: newest-first fetch, polling refresh, reply actor fix (2026-10-20)
+
+First syncs filled oldest-first (90-day window, one slow round-trip per
+message), so new mail on big mailboxes landed hours late while the toolbar
+refresh only re-read the local DB. Separately, bot/threaded replies named the
+notified user instead of the replier in the notification string.
+
+### Fixed
+
+- `scanner/mail_scanner.py::_fetch_messages` returns newest-first: fresh
+  mail stores within the first minute of a cycle; backfill drains behind it.
+  No retention/semantics change.
+- New `POST /api/v2/mail/accounts/{id}/sync-now` (202 on queued; same
+  manage-permission gate as sibling endpoints): the scanner loop consumes
+  queued account ids immediately via a wakeup event — no rival thread, rapid
+  multi-account refreshes accumulate instead of overwriting. Toolbar refresh
+  calls it for the active account (all visible accounts on the CRM tab),
+  toasts, then reloads.
+- Threaded-reply `reply_tagged` notification message now joins the display
+  name of the ACTOR (was: the recipient — "Claudiu replied" to himself).
+  Reply authorship itself was already correct.
+- `tests/test_mail_polling.py` (9 tests: fetch order, queue semantics,
+  endpoint gating, actor params, refresh wiring), wired into CI.
+
 ## Note attachments: photo ids no longer link random files (2026-10-20)
 
 Pasting images into a preview note uploaded them to /photos, whose ids were
