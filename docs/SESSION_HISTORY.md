@@ -15,7 +15,7 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Topic:** Newest-first fetch, polling refresh button, reply notification names actor.
 
-**Status: IMPLEMENTED + TESTED, pushed — deploy still to do.**
+**Status: DEPLOYED 2026-10-20 as eaf770b** (rebuild healthy; live bundle 3.7.20; scanner loop running). No migration, no bot restart.
 
 - Per-mailbox extraction (no more silent whole-cycle gaps); wakeup-event manual queue.
 - Tests: new test_mail_polling.py (9); all suites green.
