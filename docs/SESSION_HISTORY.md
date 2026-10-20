@@ -15,7 +15,7 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Topic:** Photo ids resolved as document ids → random cross-project files on notes.
 
-**Status: IMPLEMENTED + TESTED, pushed — deploy + 4-row cleanup still to do.**
+**Status: DEPLOYED 2026-10-20 as 04ae355** (rebuild healthy; live bundle 3.7.19). Cleanup done: 4 phantom rows backed up to _backup_ha_20261020 then deleted; both notes now attachment-free. No migration, no bot restart.
 
 - Preview submit drops photo ids from fileIds; server lookup opp-scoped.
 - Tests: new scoping suite (4, discriminating); all suites green.
