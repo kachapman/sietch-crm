@@ -59,16 +59,22 @@ class TestContactSyncPatches(unittest.TestCase):
 
     def test_sync_update_writes_contact_id(self):
         body = self._server_sync_body()
-        # The UPDATE must include contact_id and use COALESCE so an empty sync doesn't wipe it
-        m = re.search(
+        # Two UPDATE forms exist now: full-mode overwrite and supplemental
+        # fill-gaps. BOTH must carry contact_id (the non-greedy match hits
+        # whichever comes first, so check all of them).
+        matches = list(re.finditer(
             r"UPDATE opportunities\s+SET(?P<sets>.*?)WHERE id = %s",
             body, re.DOTALL,
-        )
-        self.assertIsNotNone(m, "opportunities UPDATE not found")
-        sets = m.group("sets")
-        self.assertIn("contact_id = COALESCE(%s, contact_id)", sets)
+        ))
+        self.assertTrue(matches, "opportunities UPDATE not found")
+        full = [m for m in matches
+                if "contact_id = COALESCE(%s, contact_id)" in m.group("sets")]
+        self.assertTrue(full, "full-mode overwrite UPDATE with contact_id not found")
+        supp = [m for m in matches
+                if "contact_id = COALESCE(contact_id, %s)" in m.group("sets")]
+        self.assertTrue(supp, "supplemental fill-gaps UPDATE with contact_id not found")
         # And the args tuple must pass the resolved contact.
-        after = body[m.end(): m.end() + 300]
+        after = body[full[0].end(): full[0].end() + 300]
         self.assertIn("v3_contact_id", after)
 
     def test_import_json_export_on_conflict_includes_contact_id(self):

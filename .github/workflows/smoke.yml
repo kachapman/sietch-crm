@@ -109,6 +109,9 @@ jobs:
       - name: Run mail link history tests
         run: python3 tests/test_mail_link_history.py -v
 
+      - name: Run supplemental sync tests
+        run: python3 tests/test_sync_supplemental.py -v
+
       - name: Run users tests
         run: python3 tests/test_users.py
 

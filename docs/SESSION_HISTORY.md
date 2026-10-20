@@ -11,7 +11,18 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-20 (mail link history)
+**Date:** 2026-10-20 (supplemental sync)
+
+**Topic:** Add-only pull-deals mode + honored filters + checkbox wired+tested.
+
+**Status: IMPLEMENTED + TESTED, pushed — NOT deployed (awaiting explicit go).**
+
+- server.py: supplemental flag branches UPDATE/CF/filter logic; provenance counters in response+log.
+- UI: default-checked checkbox, flag in payload, counts in result line.
+- Tests: new test_sync_supplemental.py (8, incl. negative control vs unpatched server); contact-guard extended; all runnable suites green.
+- Note: supplemental UPDATEs never touch stage_type (0-default ambiguity).
+
+## Previous session summary (2026-10-20, mail link history)
 
 **Topic:** Linked emails missing from History & Notes (1648→opp 43) + wrong Email category.
 

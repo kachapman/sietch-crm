@@ -2,6 +2,29 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Supplemental (add-only) pull-deals mode (2026-10-20)
+
+pull-deals always refreshed existing deals from OnlyOffice, overwriting Sietch
+edits with OO values; its since/stage/responsible filters were parsed but
+silently ignored. New opt-in add-only mode for safe supplemental syncs.
+
+### Added
+
+- `POST /api/v2/admin/sync/pull-deals` accepts `supplemental: true` (admin
+  console: "Supplemental (add-only — never overwrite)" checkbox, default
+  checked). In this mode: new deals created as before; existing deals get
+  gap-fills only (`COALESCE(col, %s)` — stage_type untouched, its 0 default
+  makes "empty" undetectable); custom fields insert-only; tags/history/new
+  definitions unchanged (already additive).
+- `since`/`stage_id`/`responsible_id` now actually scope pull-deals (OO fetch
+  params mirroring pull-deal-tags, plus local stage/responsible skip).
+- Both modes report field-level provenance: `fields_filled`,
+  `fields_preserved`, `fields_overwritten`, `custom_fields_preserved`,
+  `filtered_out` in the response + sync log; the UI result line shows them.
+- `tests/test_sync_supplemental.py` (8 mocked behavioral tests — proves the
+  flag branches both ways, filters scope, checkbox read-chain), wired into CI;
+  `test_sync_update_writes_contact_id` extended to cover both UPDATE forms.
+
 ## Mail linking creates history + correct Email category (2026-10-20)
 
 Linking an email whose link row already existed returned 200 "Already linked"

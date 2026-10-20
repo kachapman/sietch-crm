@@ -11706,12 +11706,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             since_date = payload.get("since", "").strip() or None
             filter_stage_id = payload.get("stage_id")
             filter_responsible_id = payload.get("responsible_id")
+            # Supplemental (add-only) mode: create new rows and fill gaps, but
+            # never overwrite an existing non-empty value. The admin checkbox
+            # sends this flag — it MUST be read here (an unread flag is the
+            # exact failure this mode exists to prevent).
+            supplemental = bool(payload.get("supplemental"))
             email = payload.get("email", "").strip()
             password = payload.get("password", "").strip()
             if not portal or not email or not password:
                 _json_response(self, 400, {"error": "portal_url, email, and password required"})
                 _sync_running = False
                 return
+            if supplemental:
+                _append_sync_log("info", "Supplemental (add-only) mode: existing values are never overwritten.")
+            else:
+                _append_sync_log("info", "Full mode: OnlyOffice values overwrite existing deal fields.")
             _append_sync_log("info", "Authenticating to OnlyOffice CRM...")
             token = _crm_authenticate(portal, email, password)
             if not token:
@@ -11749,13 +11758,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             existing_by_title = {d["title"].lower().strip(): d["id"] for d in existing_deals}
 
             _append_sync_log("info", "Fetching deals from OnlyOffice...")
-            # Fetch all opportunities (paginated)
+            # Fetch all opportunities (paginated). since/stage/responsible
+            # filters were previously parsed above and then IGNORED (the run
+            # always covered every deal). They are honored here now, mirroring
+            # the pull-deal-tags handler's parameter names.
             start = 0
             page_size = 500
             all_opps = []
             while True:
                 sep = "&" if "?" in "/api/2.0/crm/opportunity/filter" else "?"
                 path = f"/api/2.0/crm/opportunity/filter{sep}count={page_size}&startIndex={start}"
+                if since_date:
+                    path += f"&updatedAfter={since_date}"
+                if filter_stage_id is not None:
+                    path += f"&stageId={filter_stage_id}"
+                if filter_responsible_id:
+                    path += f"&responsibleId={filter_responsible_id}"
                 data = _unwrap(_crm_api_get(portal, token, path))
                 if not isinstance(data, list) or not data:
                     break
@@ -11774,7 +11792,24 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             tag_count = 0
             cf_count = 0
             attachments_synced = 0
+            # Supplemental-mode reporting: fills vs preservedExisting, plus
+            # overwrite counts for full mode and filter skips. Provenance for
+            # every number the UI shows at the end of the run.
+            sup_fields_filled = 0
+            sup_fields_preserved = 0
+            full_fields_overwritten = 0
+            cf_preserved = 0
+            filtered_out = 0
             start_time = time.time()
+
+            def _classify_field(cur_val, oo_val):
+                """Reporting helper: 'fill' (empty locally, OO has a value),
+                'diff' (both set and different), or 'noop' (nothing to do)."""
+                if oo_val is None:
+                    return "noop"
+                if cur_val is None:
+                    return "fill"
+                return "diff" if str(cur_val) != str(oo_val) else "noop"
 
             # Build user UUID -> Sietch user.id map (Bug #15: author mapping)
             user_id_map = _crm_fetch_user_id_map(portal, token)
@@ -11882,13 +11917,40 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             v3_contact_id = row["id"]
 
                 # Find or create opportunity. Prefer onlyoffice_id, fall back to title.
+                # The current row's mutable columns ride along so supplemental
+                # mode can fill gaps (and both modes can report overwrites).
+                # Title fallback re-reads the row: without it every field
+                # would look "empty" and supplemental mode would write them all.
                 v3_opp_id = None
+                current_row = None
                 if crm_id:
-                    row = db.query_one("SELECT id FROM opportunities WHERE onlyoffice_id = %s", (crm_id,))
+                    row = db.query_one(
+                        "SELECT id, stage_id, bid_value, expected_close_date, actual_close_date, "
+                        "actual_close_value, contact_id, responsible_user_id "
+                        "FROM opportunities WHERE onlyoffice_id = %s", (crm_id,))
                     if row:
                         v3_opp_id = row["id"]
+                        current_row = row
                 if not v3_opp_id:
                     v3_opp_id = existing_by_title.get(title.lower().strip())
+                    if v3_opp_id:
+                        current_row = db.query_one(
+                            "SELECT id, stage_id, bid_value, expected_close_date, actual_close_date, "
+                            "actual_close_value, contact_id, responsible_user_id "
+                            "FROM opportunities WHERE id = %s", (v3_opp_id,))
+                # Honor stage/responsible filters locally too: the OO API is
+                # expected to filter server-side per the params above (as the
+                # sibling pull-deal-tags handler assumes), and this guarantees
+                # it regardless of what the remote end honors.
+                if filter_stage_id is not None:
+                    oo_stage_id = str(stage_data.get("id") or stage_data.get("ID") or "")
+                    if oo_stage_id != str(filter_stage_id):
+                        filtered_out += 1
+                        continue
+                if filter_responsible_id:
+                    if resp_crm_id != str(filter_responsible_id):
+                        filtered_out += 1
+                        continue
                 is_new = v3_opp_id is None
 
                 if is_new:
@@ -11915,28 +11977,72 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     created += 1
                 else:
                     skipped += 1
-                    # Always update the standard deal fields for existing ones
-                    # (idempotent). Every field is COALESCE'd so a sync that
-                    # returns a deal without a value doesn't wipe what we have.
-                    try:
-                        db.execute(
-                            """UPDATE opportunities
-                               SET actual_close_date = COALESCE(%s, actual_close_date),
-                                   actual_close_value = COALESCE(%s, actual_close_value),
-                                   stage_id = COALESCE(%s, stage_id),
-                                   stage_type = CASE WHEN %s IS NULL THEN stage_type ELSE %s END,
-                                   bid_value = COALESCE(%s, bid_value),
-                                   expected_close_date = COALESCE(%s, expected_close_date),
-                                   contact_id = COALESCE(%s, contact_id),
-                                   responsible_user_id = COALESCE(%s, responsible_user_id)
-                               WHERE id = %s""",
-                            (actual_close_date, actual_close_value, v3_stage_id,
-                             v3_stage_type, v3_stage_type,
-                             bid_value, expected_close_date,
-                             v3_contact_id, v3_responsible_id, v3_opp_id),
-                        )
-                    except Exception:
-                        pass
+                    # Field pairs compared for reporting in both modes.
+                    field_pairs = [
+                        ("actual_close_date", actual_close_date),
+                        ("actual_close_value", actual_close_value),
+                        ("stage_id", v3_stage_id),
+                        ("bid_value", bid_value),
+                        ("expected_close_date", expected_close_date),
+                        ("contact_id", v3_contact_id),
+                        ("responsible_user_id", v3_responsible_id),
+                    ]
+                    cur = current_row or {}
+                    if supplemental:
+                        # Fill gaps only: COALESCE keeps every existing value.
+                        # stage_type is deliberately untouched — its 0 default
+                        # makes "empty" undetectable, so any write could clobber.
+                        for _col, _oo in field_pairs:
+                            outcome = _classify_field(cur.get(_col), _oo)
+                            if outcome == "fill":
+                                sup_fields_filled += 1
+                            elif outcome == "diff":
+                                sup_fields_preserved += 1
+                        try:
+                            db.execute(
+                                """UPDATE opportunities
+                                   SET actual_close_date = COALESCE(actual_close_date, %s),
+                                       actual_close_value = COALESCE(actual_close_value, %s),
+                                       stage_id = COALESCE(stage_id, %s),
+                                       bid_value = COALESCE(bid_value, %s),
+                                       expected_close_date = COALESCE(expected_close_date, %s),
+                                       contact_id = COALESCE(contact_id, %s),
+                                       responsible_user_id = COALESCE(responsible_user_id, %s)
+                                   WHERE id = %s""",
+                                (actual_close_date, actual_close_value, v3_stage_id,
+                                 bid_value, expected_close_date,
+                                 v3_contact_id, v3_responsible_id, v3_opp_id),
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        # Full mode: legacy overwrite, but count real overwrites
+                        # so the log shows what changed.
+                        for _col, _oo in field_pairs:
+                            if _classify_field(cur.get(_col), _oo) == "diff":
+                                full_fields_overwritten += 1
+                        # Always update the standard deal fields for existing ones
+                        # (idempotent). Every field is COALESCE'd so a sync that
+                        # returns a deal without a value doesn't wipe what we have.
+                        try:
+                            db.execute(
+                                """UPDATE opportunities
+                                   SET actual_close_date = COALESCE(%s, actual_close_date),
+                                       actual_close_value = COALESCE(%s, actual_close_value),
+                                       stage_id = COALESCE(%s, stage_id),
+                                       stage_type = CASE WHEN %s IS NULL THEN stage_type ELSE %s END,
+                                       bid_value = COALESCE(%s, bid_value),
+                                       expected_close_date = COALESCE(%s, expected_close_date),
+                                       contact_id = COALESCE(%s, contact_id),
+                                       responsible_user_id = COALESCE(%s, responsible_user_id)
+                                   WHERE id = %s""",
+                                (actual_close_date, actual_close_value, v3_stage_id,
+                                 v3_stage_type, v3_stage_type,
+                                 bid_value, expected_close_date,
+                                 v3_contact_id, v3_responsible_id, v3_opp_id),
+                            )
+                        except Exception:
+                            pass
 
                 # ── Tags: BOTH new and existing deals (Bug #4 fix) ──
                 try:
@@ -11976,12 +12082,28 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         cf_value = str(cf_value).strip()
                         v3_field_id = cf_map.get(cf_crm_id)
                         if v3_field_id and cf_value:
-                            db.execute(
-                                """INSERT INTO opportunity_custom_field_values (opportunity_id, field_id, field_value)
-                                   VALUES (%s, %s, %s) ON CONFLICT (opportunity_id, field_id) DO UPDATE SET field_value = EXCLUDED.field_value""",
-                                (v3_opp_id, v3_field_id, cf_value),
-                            )
-                            cf_count += 1
+                            if supplemental:
+                                # Insert-only: an existing value is never
+                                # overwritten. rowcount distinguishes the two.
+                                try:
+                                    cf_rc = db.execute(
+                                        """INSERT INTO opportunity_custom_field_values (opportunity_id, field_id, field_value)
+                                           VALUES (%s, %s, %s) ON CONFLICT DO NOTHING""",
+                                        (v3_opp_id, v3_field_id, cf_value),
+                                    )
+                                except Exception:
+                                    cf_rc = 0
+                                if cf_rc:
+                                    cf_count += 1
+                                else:
+                                    cf_preserved += 1
+                            else:
+                                db.execute(
+                                    """INSERT INTO opportunity_custom_field_values (opportunity_id, field_id, field_value)
+                                       VALUES (%s, %s, %s) ON CONFLICT (opportunity_id, field_id) DO UPDATE SET field_value = EXCLUDED.field_value""",
+                                    (v3_opp_id, v3_field_id, cf_value),
+                                )
+                                cf_count += 1
                 except Exception:
                     pass
 
@@ -12158,7 +12280,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
             elapsed = time.time() - start_time
             _append_sync_log("info", f"Deals sync complete: {created} created, {skipped} existing, {history_count} history events ({history_synced} new for existing deals, {history_skipped} deduped), {tag_count} tags, {cf_count} custom fields, {attachments_synced} attachments downloaded ({int(elapsed)}s)")
-            _json_response(self, 200, {"ok": True, "created": created, "skipped": skipped, "tags": tag_count, "custom_fields": cf_count, "history": history_count, "history_synced": history_synced, "history_skipped": history_skipped, "attachments": attachments_synced, "total": len(all_opps), "elapsed_seconds": int(elapsed), "log": list(_sync_log)})
+            if supplemental:
+                _append_sync_log("info", f"Supplemental report: {sup_fields_filled} fields gap-filled, {sup_fields_preserved} existing values preserved, {cf_preserved} custom fields preserved, {filtered_out} deals filtered out")
+            elif full_fields_overwritten:
+                _append_sync_log("info", f"Full mode overwrote {full_fields_overwritten} existing field values")
+            if filtered_out:
+                _append_sync_log("info", f"{filtered_out} deals skipped by stage/responsible filter")
+            _json_response(self, 200, {"ok": True, "created": created, "skipped": skipped, "tags": tag_count, "custom_fields": cf_count, "history": history_count, "history_synced": history_synced, "history_skipped": history_skipped, "attachments": attachments_synced, "total": len(all_opps), "elapsed_seconds": int(elapsed), "log": list(_sync_log),
+                                       "supplemental": supplemental, "fields_filled": sup_fields_filled, "fields_preserved": sup_fields_preserved, "fields_overwritten": full_fields_overwritten, "custom_fields_preserved": cf_preserved, "filtered_out": filtered_out})
         except Exception as e:
             _append_sync_log("error", f"Deals sync failed: {e}")
             _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})

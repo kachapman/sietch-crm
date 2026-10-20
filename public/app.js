@@ -32146,10 +32146,19 @@ function openAdminConsoleModal() {
         } catch (e) { console.error("Sync poll error:", e); }
       }, 3000);
       try {
-        const data = await api("/api/v2/admin/sync/pull-deals", { method: "POST", body: JSON.stringify(getSyncPayload()) });
+        // The supplemental checkbox MUST be read here: it is the add-only
+        // guarantee, and an unread checkbox is a silent full-overwrite run.
+        const supplemental = $("#sync-supplemental")?.checked !== false;
+        const data = await api("/api/v2/admin/sync/pull-deals", { method: "POST", body: JSON.stringify({ ...getSyncPayload(), supplemental }) });
         clearInterval(pollInterval);
         if (data.log) renderSyncLog(data.log);
-        showSyncResult({ message: `Deals: ${data.created || 0} created, ${data.skipped || 0} skipped | Tags: ${data.tags || 0} | History: ${data.history || 0}` });
+        let msg = `Deals: ${data.created || 0} created, ${data.skipped || 0} skipped | Tags: ${data.tags || 0} | History: ${data.history || 0}`;
+        if (data.supplemental) {
+          msg += ` | Gap-filled: ${data.fields_filled || 0} fields, preserved: ${data.fields_preserved || 0} (+${data.custom_fields_preserved || 0} custom)`;
+        } else if (data.fields_overwritten) {
+          msg += ` | Overwrote: ${data.fields_overwritten} existing values`;
+        }
+        showSyncResult({ message: msg });
       } catch (e) {
         if (e.status === 409) {
           showSyncProgress("Sync already running — showing live log...");
