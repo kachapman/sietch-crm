@@ -15013,7 +15013,14 @@ function attachNoteAttachmentsListeners() {
 // Native <input type="date"> is used directly for backdating (no custom icon/label wrapper)
 
 function plainTextToNoteHtml(text) {
-  const trimmed = String(text || "").trim();
+  let raw = String(text || "");
+  if (!raw.trim()) return "";
+  // Save paths pass contenteditable innerHTML here. Browsers encode trailing
+  // spaces as &nbsp; (e.g. "test.&nbsp;"), so decode entities FIRST — otherwise
+  // escapeHtml below double-escapes them into visible "&amp;nbsp;" junk.
+  try { raw = decodeHtmlEntities(raw); } catch { /* keep raw */ }
+  raw = raw.replace(/\u00A0/g, " ");
+  const trimmed = raw.trim();
   if (!trimmed) return "";
   return trimmed
     .split(/\r?\n/)
@@ -32657,6 +32664,10 @@ function switchAdminTab(tab) {
     if (typeof loadBotCustomersFromServer === "function") {
       loadBotCustomersFromServer().then(() => {
         if (typeof renderBotCustomerMappings === "function") renderBotCustomerMappings();
+        // Re-show the outstanding invite code(s) — the codes persist
+        // server-side, so closing the Admin Console must not lose them.
+        if (typeof renderBotPendingCodes === "function") renderBotPendingCodes();
+        if (typeof updateBotGeneratedCodeBox === "function") updateBotGeneratedCodeBox();
         if (typeof populateBotBroadcastDropdown === "function") populateBotBroadcastDropdown();
         if (typeof initBotDocPush === "function") initBotDocPush();
       });
@@ -36854,6 +36865,10 @@ function bindAdminTaskLabels() {
 
 let _botCustomersDraft = null;
 let _botCustomersMappings = [];
+// All outstanding invite codes from the server (persist across modal
+// close/reopen — the code lives in store.json with a 48h expiry, not in
+// the in-memory draft). Rendered by renderBotPendingCodes().
+let _botPendingCodes = [];
 
 async function openBotCustomersModal() {
   // Consolidated into admin console per plan: no separate modal/button
@@ -36922,7 +36937,11 @@ async function loadBotCustomersFromServer() {
     const data = await res.json();
     _botCustomersMappings = data.mappings || [];
     const codes = data.pendingCodes || [];
-    if (codes.length) {
+    // Keep the full list so every outstanding code stays visible (and
+    // cancellable) after the Admin Console is closed and reopened.
+    _botPendingCodes = codes;
+    if (typeof renderBotPendingCodes === "function") renderBotPendingCodes();
+    if (codes.length && _botCustomersDraft) {
       const code = codes[0];
       _botCustomersDraft.pendingCode = code.code;
       _botCustomersDraft.pendingExpires = code.expiresAt;
@@ -37220,6 +37239,84 @@ function updateBotGeneratedCodeBox() {
   }
 }
 
+// Pending invite codes — server-persisted (store.json, 48h expiry), so they
+// survive closing the Admin Console. Re-rendered on every bot-tab open.
+function renderBotPendingCodes() {
+  const list = $("#bot-pending-list");
+  if (!list) return;
+  if (!_botPendingCodes.length) {
+    list.innerHTML = '<p class="bot-empty">No pending invite codes.</p>';
+    return;
+  }
+  list.innerHTML = _botPendingCodes.map((c) => {
+    const who = c.employee
+      ? (c.contactName || "Employee")
+      : (c.contactName || (c.contactId != null ? `Contact #${c.contactId}` : "Invite"));
+    const nick = (c.nickname || "").trim();
+    let expires = "";
+    if (c.expiresAt) {
+      const diff = new Date(c.expiresAt) - Date.now();
+      expires = diff > 0 ? `Expires in ${Math.round(diff / 3600000)}h` : "Expired";
+    }
+    const code = String(c.code || "");
+    return `<div class="bot-mapping-row" data-bot-pending-code="${escapeHtml(code)}">` +
+      `<span class="bot-mapping-name">${escapeHtml(who)}${c.employee ? ' <span class="bot-mapping-employee-badge">Employee</span>' : ""}</span>` +
+      (nick ? `<span class="bot-mapping-nickname">${escapeHtml(nick)}</span>` : "") +
+      `<span class="bot-code-value" style="font-size:1rem;">${escapeHtml(code)}</span>` +
+      (expires ? `<span class="bot-code-expires">${escapeHtml(expires)}</span>` : "") +
+      `<button type="button" class="btn btn-ghost btn-sm bot-pending-copy-btn" title="Copy code">Copy</button>` +
+      `<button type="button" class="btn btn-danger btn-sm bot-pending-cancel-btn" title="Cancel this code">Cancel</button>` +
+      `</div>`;
+  }).join("");
+  list.querySelectorAll(".bot-pending-copy-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const code = btn.closest("[data-bot-pending-code]")?.dataset?.botPendingCode || "";
+      if (!code) return;
+      safeCopyToClipboard(code).then(() => {
+        showToast("Copied!");
+      }).catch(() => {
+        showToast("Failed to copy", true);
+      });
+    });
+  });
+  list.querySelectorAll(".bot-pending-cancel-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const code = btn.closest("[data-bot-pending-code]")?.dataset?.botPendingCode || "";
+      if (!code) return;
+      if (!confirm(`Cancel invite code ${code}?`)) return;
+      handleCancelPendingCode(code);
+    });
+  });
+}
+
+async function handleCancelPendingCode(code) {
+  try {
+    const res = await fetch("/api/bot-customers/cancel-code", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      showToast(data.error || "Failed to cancel code", true);
+      return;
+    }
+    _botPendingCodes = _botPendingCodes.filter((c) => String(c.code || "") !== String(code));
+    renderBotPendingCodes();
+    // Keep the single-code box in sync when its code was the one cancelled.
+    if (_botCustomersDraft && _botCustomersDraft.pendingCode === code) {
+      _botCustomersDraft.pendingCode = null;
+      _botCustomersDraft.pendingExpires = null;
+      _botCustomersDraft.pendingContactId = null;
+      updateBotGeneratedCodeBox();
+    }
+    showToast("Code cancelled");
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
 async function handleGenerateCode() {
   const draft = _botCustomersDraft;
   if (!draft) return;
@@ -37258,6 +37355,7 @@ async function handleGenerateCode() {
     showToast("Invite code generated!");
     await loadBotCustomersFromServer();
     renderBotCustomerMappings();
+    updateBotGeneratedCodeBox();
   } catch (err) {
     showToast(err.message, true);
   }
@@ -37286,6 +37384,8 @@ async function handleCancelCode() {
     draft.pendingExpires = null;
     draft.pendingContactId = null;
     updateBotGeneratedCodeBox();
+    await loadBotCustomersFromServer();
+    renderBotCustomerMappings();
     showToast("Code cancelled");
   } catch (err) {
     showToast(err.message, true);

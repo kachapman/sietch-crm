@@ -2,6 +2,22 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Add Note `&amp;nbsp;` fix + bot Pending Invites survive console close (2026-10-20)
+
+Two user-reported fixes, no backend or migration changes.
+
+### Fixed
+
+- **Add Note trailing `&amp;nbsp;` junk.** Typing a sentence ending in `.` + auto-space stores `&nbsp;` in the `contenteditable` editor's `innerHTML`; `plainTextToNoteHtml` (`public/app.js`) then `escapeHtml`d the already-escaped entity, saving visible `&amp;nbsp;` on every note. The plain-text branch now decodes entities (`decodeHtmlEntities` + NBSP-to-space) *before* escaping. One fix covers preview ADD NOTE, quick-note, deal-edit, and project-page notes (all share the helper). Old corrupted notes intentionally left untouched.
+- **Bot invite codes no longer "lost" when the Admin Console closes.** Codes already persisted server-side (`crm_bot_store.py`, 48h expiry) — only the UI forgot them (in-memory draft, box never re-shown on tab reopen, only `codes[0]` ever displayed). New **Pending Invites** section (`#bot-pending-list`) lists every outstanding code with contact/employee name, nickname, expiry, per-row Copy + Cancel (existing `POST /api/bot-customers/cancel-code` by value). Bot tab now re-renders the list and the single-code box on every open.
+- `public/index.html`: cache-bust `app.js?v=3.7.16` → `3.7.17`.
+- `tests/test_contact_and_mail_attach_fixes.py`: `test_cache_bust_bumped` was stale (expected `3.7.15`, failing on HEAD) — updated to `3.7.17`.
+
+### Verified
+
+- 6-case node harness for the new `plainTextToNoteHtml` logic (trailing `&nbsp;`, `&amp;` passthrough, multiline, whitespace-only).
+- Full suites green: 17 JS suites, `test_telegram_bot.py` (102), `test_contact_and_mail_attach_fixes.py` (32), `test_search_modal.py` (24).
+
 ## Per-bundle JSON importer: no longer silently drops rows (2026-10-17)
 
 Found while migrating the CRM to a new droplet. A fresh install + per-bundle import reported `{"ok": true, "rows_skipped": 816873}` while **6,597 history events were rejected** and every event that *did* import was labelled with the wrong history category. The restore looked successful.

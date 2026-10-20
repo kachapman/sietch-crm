@@ -11,6 +11,20 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-20
+
+**Topic:** Two user-reported fixes — note `&amp;nbsp;` junk on Add Note + bot invite code lost when Admin Console closes.
+
+**Status: COMPLETE — both fixed, all tests green.**
+
+- **Fix 1 — Add Note `&amp;nbsp;`:** typing `test.` + auto-space in a `contenteditable` note editor stores `&nbsp;` in `innerHTML`; `noteContentToHtml` → `plainTextToNoteHtml` (`public/app.js`) then ran `escapeHtml` over the already-escaped entity, saving visible `&amp;nbsp;`. Fix: decode entities (`decodeHtmlEntities` + NBSP-to-space) BEFORE escaping in the plain-text branch. Covers preview ADD NOTE, quick-note, deal-edit, project page (all share the helper). Existing corrupted notes left as-is per user. Verified with a 6-case node harness.
+- **Fix 2 — Bot invite survives closing the window:** codes were already persisted server-side (`crm_bot_store.py`, 48h expiry) — the UI just hid them. The code box is driven by in-memory `_botCustomersDraft`, and `switchAdminTab("bot")` never re-showed it after reload. Fix: new **Pending Invites** section (`#bot-pending-list` in `public/index.html`) rendering ALL `pendingCodes` with per-row Copy + Cancel (existing `cancel-code` by value, no backend change); `_botPendingCodes` state refreshed on every bot-tab open; null-guard on `_botCustomersDraft` in the loader.
+- **Cache-bust:** `app.js?v=3.7.16` → `3.7.17`; fixed the stale `test_cache_bust_bumped` assertion (expected `3.7.15`, failing on HEAD before this session).
+- **Tests:** all 17 JS suites pass, `test_telegram_bot.py` (102) OK, `test_contact_and_mail_attach_fixes.py` (32) OK, `test_search_modal.py` (24) OK.
+- **Deploy note:** dashboard container serves `public/` — after `git pull` on production, `docker compose build && docker compose up -d`; no DB migration, no `.env` change.
+
+## Previous session summary (2026-10-17, demoted)
+
 **Date:** 2026-10-17
 
 **Topic:** CRM deploy from home dev to new droplet `147.182.164.19` — steps 4-6 + history-attachments migration.
