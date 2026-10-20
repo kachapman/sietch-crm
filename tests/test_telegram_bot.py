@@ -532,27 +532,29 @@ class TestDealDetailKeyboard(unittest.TestCase):
 
     def test_customer_gets_call_address_search_no_crm_link(self):
         telegram_bot._build_deal_detail_keyboard(
-            72, False, phone="(630) 639-6041",
-            address="1498 Pier Drive, Davis, IL 61019", project_number=72)
+            72, False, address="1498 Pier Drive, Davis, IL 61019", project_number=72)
         specs = self._button_specs()
         texts = [s[0] for s in specs]
-        self.assertIn("📞 Call", texts)
         self.assertIn("📍 Address", texts)
         self.assertIn("🔍 New Search", texts)
-        # No CRM link button anywhere for customers.
+        # No CRM link button anywhere for customers, and NO tel: button
+        # URLs at all — Telegram 400s the whole sendMessage on those
+        # ("wrong port number specified in the url"), silencing the reply.
         for text, url, _cb in specs:
             self.assertNotIn("/project/", url)
+            self.assertFalse(url.startswith("tel:"))
             self.assertNotEqual(text, "🔗")
-        call = [s for s in specs if s[0] == "📞 Call"][0]
-        self.assertEqual(call[1], "tel:+16306396041")
+            self.assertNotEqual(text, "📞 Call")
 
     def test_employee_keeps_info_stage_note_and_crm_link(self):
         telegram_bot._build_deal_detail_keyboard(
-            72, True, phone="(630) 639-6041", address="Somewhere", project_number=72)
+            72, True, address="Somewhere", project_number=72)
         specs = self._button_specs()
         texts = [s[0] for s in specs]
-        for t in ("📋 Info", "📊 Stage", "📝 Note", "📞 Call", "📍 Address", "🔗", "🔍 New Search"):
+        for t in ("📋 Info", "📊 Stage", "📝 Note", "📍 Address", "🔗", "🔍 New Search"):
             self.assertIn(t, texts)
+        for _text, url, _cb in specs:
+            self.assertFalse(url.startswith("tel:"))
         link = [s for s in specs if s[0] == "🔗"][0]
         self.assertIn("/project/72", link[1])
 

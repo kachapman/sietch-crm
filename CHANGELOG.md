@@ -2,6 +2,25 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Bot: drop tel: keyboard button that 400-silenced replies (2026-10-20)
+
+Live-fire bug from the bot log: `Inline keyboard button url 'tel:+16306396041' is invalid`.
+Telegram rejects `tel:` in inline-keyboard buttons, 400ing the whole `sendMessage`
+(and the plain-text retry with the same keyboard) — the Flinchum search got silence.
+
+### Fixed
+
+- `_build_deal_detail_keyboard` no longer takes/emits a phone button at all (any
+  `tel:` button URL kills message delivery — regression-guarded in tests). The
+  tappable phone remains the `tel:+1…` text link; 📍 Address / New Search /
+  employee rows unchanged. Call sites now pull only the address (userFields
+  fallback kept).
+
+### Verified
+
+- `tests/test_telegram_bot.py` (124) green: no `tel:`/CRM URLs in customer
+  keyboards, employee rows intact. Full JS + Python suites green.
+
 ## Bot card polish + reply attribution/notify (2026-10-20)
 
 Follow-up to the bot package, from live-testing feedback. No DB migration, no `.env` change.

@@ -11,7 +11,16 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-20 (bot card polish + reply attribution)
+**Date:** 2026-10-20 (tel-button 400 fix)
+
+**Topic:** Flinchum search got silence — `tel:` inline button 400s sendMessage.
+
+**Status: DEPLOYED (bot restart only — no server.py/frontend changes, no rebuild).**
+
+- Dropped the 📞 tel: button (API rejects tel: in keyboards); text tel:+1 link kept; call sites address-only.
+- Tests: keyboard no-tel regression guards; all suites green.
+
+## Previous session summary (2026-10-20, bot card polish + reply attribution)
 
 **Topic:** Customer-card refinements (CRM button, tappable phone, headers, divider) + reply author/notify fix.
 

@@ -960,8 +960,8 @@ def _deal_call_info(deal: dict) -> tuple[str, str]:
     return phone, address
 
 
-def _build_deal_detail_keyboard(deal_id: int, is_employee: bool, phone: str = "",
-                                address: str = "", project_number: int = 0):
+def _build_deal_detail_keyboard(deal_id: int, is_employee: bool, address: str = "",
+                                project_number: int = 0):
     """Inline buttons under a deal detail message. Module-level (was nested
     in main) so per-role contents are unit-testable. Callers pass the same
     args; the live bot imports python-telegram-bot in main(), tests stub it.
@@ -976,15 +976,13 @@ def _build_deal_detail_keyboard(deal_id: int, is_employee: bool, phone: str = ""
             InlineKeyboardButton("📊 Stage", callback_data=f"act:stage:{deal_id}"),
             InlineKeyboardButton("📝 Note", callback_data=f"act:note:{deal_id}"),
         ])
-    action_row: list = []
-    tel = _normalize_tel(phone)
-    if tel:
-        action_row.append(InlineKeyboardButton("📞 Call", url=f"tel:{tel}"))
+    # NOTE: no tel: URL button — Telegram's Bot API rejects tel: in inline
+    # keyboard buttons ("wrong port number specified in the url"), which 400s
+    # the entire sendMessage and the user gets silence. The tappable phone
+    # lives in the message text as <a href="tel:+1…"> instead.
     if address:
         maps_url = f"https://maps.google.com/?q={urllib.parse.quote(str(address))}"
-        action_row.append(InlineKeyboardButton("📍 Address", url=maps_url))
-    if action_row:
-        rows.append(action_row)
+        rows.append([InlineKeyboardButton("📍 Address", url=maps_url)])
     if deal_id:
         bottom: list = []
         if is_employee:
@@ -1475,8 +1473,8 @@ def main() -> None:
             emp = _last_employee.get(chat_id, False)
             msg = format_deal_detail(deals, idx, is_employee=emp)
             _last_viewed_project[chat_id] = deal_id
-            phone, address = _deal_call_info(deal)
-            keyboard = _build_deal_detail_keyboard(deal_id, emp, phone=phone, address=address, project_number=deal.get("project_number", 0))
+            _, address = _deal_call_info(deal)
+            keyboard = _build_deal_detail_keyboard(deal_id, emp, address=address, project_number=deal.get("project_number", 0))
             await query.edit_message_text(msg, parse_mode="HTML", reply_markup=keyboard)
             return
 
@@ -1758,8 +1756,8 @@ def main() -> None:
                     if 0 <= idx < len(deals):
                         msg = format_deal_detail(deals, idx, is_employee=emp)
                         deal_id = deals[idx].get("id") or deals[idx].get("ID")
-                        phone, address = _deal_call_info(deals[idx])
-                        kb = _build_deal_detail_keyboard(deal_id, emp, phone=phone, address=address, project_number=deals[idx].get("project_number", 0)) if deal_id else None
+                        _, address = _deal_call_info(deals[idx])
+                        kb = _build_deal_detail_keyboard(deal_id, emp, address=address, project_number=deals[idx].get("project_number", 0)) if deal_id else None
                         await _reply_html(update, msg, reply_markup=kb)
                     else:
                         search = _last_search.get(chat_id, "")
@@ -1778,8 +1776,8 @@ def main() -> None:
                 msg = format_search_result(deals, search, is_employee=is_employee)
                 if len(deals) == 1 and deals[0]:
                     deal_id = deals[0].get("id") or deals[0].get("ID")
-                    phone, address = _deal_call_info(deals[0])
-                    kb = _build_deal_detail_keyboard(deal_id, is_employee, phone=phone, address=address, project_number=deals[0].get("project_number", 0)) if deal_id else None
+                    _, address = _deal_call_info(deals[0])
+                    kb = _build_deal_detail_keyboard(deal_id, is_employee, address=address, project_number=deals[0].get("project_number", 0)) if deal_id else None
                 else:
                     kb = _build_search_results_keyboard(deals)
                 await _reply_html(update, msg, reply_markup=kb)
