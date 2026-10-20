@@ -13678,6 +13678,17 @@ button.calendar-more-events:hover {
   text-overflow: ellipsis;
 }
 
+/* Pending invite rows: name gets its own line so contact names are never
+   truncated to "A.." — the code + actions flow below it. */
+.bot-pending-row {
+  flex-wrap: wrap;
+}
+.bot-pending-row .bot-mapping-name {
+  flex-basis: 100%;
+  white-space: normal;
+  overflow: visible;
+}
+
 .bot-mapping-nickname {
   font-size: 0.75rem;
   color: var(--muted);

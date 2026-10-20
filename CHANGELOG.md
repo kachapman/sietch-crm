@@ -2,6 +2,23 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Bot package: customer card, invite codes, reply-401, help text (2026-10-20)
+
+Five related Telegram-bot fixes in one build (no DB migration, no `.env` change).
+
+### Fixed
+
+- **Customer project card now shows the pairing's update type.** `/api/bot/deals` (`server.py`) adds `recentUpdates`: the 3 most recent history events filtered to the mapping's `notesCategoryId`, falling back to the "Customer Update" category by title, unfiltered only if neither resolves. The customer card (`telegram_bot.py` `format_deal_detail`) renders all 3 with dates and no author names (existing convention), keeping `latestUpdate` as a back-compat fallback.
+- **Clickable phone/address, no CRM link for customers.** Customer Phone renders as a `tel:` link (digits/`+` only in the href), Address as a Google Maps link, preferring user fields with `contactPhone`/`contactMobile`/`address` fallback. "View project in CRM" removed from the customer view (employee views unchanged).
+- **Invite codes are mistype-proof and coexist.** `crm_bot_store.py` `_generate_code` alphabet drops `0/O/1/I` (the `461OZV8M`-read-as-`4610ZV8M` failure); `generate_code` no longer deletes outstanding sibling codes for the same contact, with a collision-retry guard instead. Admin Console: new **OK** button dismisses the generated-code box without cancelling (persists across reopen), box Cancel now cancels by code value, pending rows show full contact names on their own line.
+- **Reply-to-notification 401.** `_handle_history_reply_create` checked the bot Bearer token only *after* `_require_auth`, which sends 401 immediately without a session cookie (which the bot never has). Bearer is now checked first, matching `_handle_stages_get`.
+- **Help text:** "Need a new invite code? Contact Sietch CRM." → "Contact Vanguard Adjusting" (customer help + welcome-back + unlinked welcome).
+
+### Verified
+
+- `tests/test_telegram_bot.py` grew 102 → 113: customer card (3 updates, cap, no CRM link, tel/maps links, latestUpdate fallback, author hidden), code alphabet (200 samples), same-contact coexistence + independent redeem (isolated tmp `DATA_DIR`), reply-handler auth order guard.
+- Full suites green: 17 JS suites, attach-fixes (32), search-modal (24). `node --check public/app.js`, `ast` parse on all touched Python.
+
 ## Add Note `&amp;nbsp;` fix + bot Pending Invites survive console close (2026-10-20)
 
 Two user-reported fixes, no backend or migration changes.

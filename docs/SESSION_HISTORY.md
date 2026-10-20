@@ -11,7 +11,19 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-20
+**Date:** 2026-10-20 (bot package)
+
+**Topic:** 5-item Telegram bot package — customer card, invite codes, reply-401, help text.
+
+**Status: IMPLEMENTED + TESTED LOCALLY — push + droplet deploy (rebuild, bot restart) still to do at commit time.**
+
+- Customer card: `recentUpdates` (3, filtered by pairing update type) from `/api/bot/deals`; clickable tel:/Maps; CRM link employees-only.
+- Invite codes: unambiguous alphabet, coexistence, OK-to-dismiss, cancel-by-value, full names in pending rows.
+- Reply 401: Bearer-before-session reorder in `_handle_history_reply_create` + order-guard test.
+- Help text → Vanguard Adjusting (3 spots). Bre's `461OZV8M` code stays valid; nothing to regenerate.
+- Tests: test_telegram_bot 102→113, all suites green. Stray "—" in screenshot proven not formatter output (data artifact).
+
+## Previous session summary (2026-10-20, nbsp + pending invites)
 
 **Topic:** Two user-reported fixes — note `&amp;nbsp;` junk on Add Note + bot invite code lost when Admin Console closes.
 

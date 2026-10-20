@@ -401,6 +401,127 @@ class TestFormatDealDetail(unittest.TestCase):
         out = telegram_bot.format_deal_detail([deal], 0, is_employee=True)
         self.assertLess(len(out), 1000)  # well under 4000
 
+    def _make_customer_deal(self, **kwargs):
+        base = self._make_deal(
+            stage="Supplementing",
+            userFields={
+                "Address": "1498 Pier Drive, Davis, IL 61019",
+                "Customer Phone": "(630) 639-6041",
+                "Insurance Carrier": "Allstate",
+                "Claim #": "0825902562",
+            },
+        )
+        base.update(kwargs)
+        return base
+
+    def _make_update(self, n, cat="Customer Update"):
+        return {
+            "content": f"Update body {n}",
+            "created": f"2026-10-0{n}T12:00:00",
+            "categoryName": cat,
+        }
+
+    def test_customer_view_shows_three_recent_updates(self):
+        deal = self._make_customer_deal(
+            recentUpdates=[self._make_update(n) for n in (3, 2, 1)])
+        out = telegram_bot.format_deal_detail([deal], 0, is_employee=False)
+        for n in (1, 2, 3):
+            self.assertIn(f"Update body {n}", out)
+        self.assertIn("Oct 3, 2026", out)
+
+    def test_customer_view_caps_updates_at_three(self):
+        deal = self._make_customer_deal(
+            recentUpdates=[self._make_update(n % 9 + 1) for n in range(5)])
+        out = telegram_bot.format_deal_detail([deal], 0, is_employee=False)
+        self.assertEqual(out.count("Update body"), 3)
+
+    def test_customer_view_no_crm_link(self):
+        # Customers must never get a CRM link.
+        deal = self._make_customer_deal(
+            recentUpdates=[self._make_update(1)])
+        out = telegram_bot.format_deal_detail([deal], 0, is_employee=False)
+        self.assertNotIn("View project in CRM", out)
+        self.assertNotIn("/project/", out)
+
+    def test_employee_view_keeps_crm_link(self):
+        deal = self._make_deal()
+        out = telegram_bot.format_deal_detail([deal], 0, is_employee=True)
+        self.assertIn("View project in CRM", out)
+
+    def test_customer_phone_is_tel_link(self):
+        deal = self._make_customer_deal()
+        out = telegram_bot.format_deal_detail([deal], 0, is_employee=False)
+        self.assertIn('href="tel:6306396041"', out)
+        self.assertIn("(630) 639-6041", out)
+
+    def test_customer_address_is_maps_link(self):
+        deal = self._make_customer_deal()
+        out = telegram_bot.format_deal_detail([deal], 0, is_employee=False)
+        self.assertIn("google.com/maps/search", out)
+        self.assertIn("1498 Pier Drive", out)
+
+    def test_customer_view_falls_back_to_latest_update(self):
+        # Older dashboard builds only send latestUpdate.
+        deal = self._make_customer_deal(
+            latestUpdate=self._make_update(5))
+        out = telegram_bot.format_deal_detail([deal], 0, is_employee=False)
+        self.assertIn("Update body 5", out)
+
+    def test_customer_view_hides_update_authors(self):
+        # Author names stay in the employee view only (covered by the
+        # employee events branch); the customer update header carries
+        # category + date and no author.
+        deal = self._make_customer_deal(
+            recentUpdates=[dict(self._make_update(1), author="Ken Chapman")])
+        out = telegram_bot.format_deal_detail([deal], 0, is_employee=False)
+        self.assertNotIn("Ken Chapman", out)
+
+
+class TestBotInviteCodes(unittest.TestCase):
+    """crm_bot_store: unambiguous alphabet + coexisting pending codes."""
+
+    def test_generated_codes_avoid_ambiguous_chars(self):
+        import crm_bot_store
+        for _ in range(200):
+            code = crm_bot_store._generate_code()
+            self.assertEqual(len(code), crm_bot_store.CODE_LENGTH)
+            for ch in ("0", "O", "1", "I"):
+                self.assertNotIn(ch, code)
+
+    def test_pending_codes_coexist_for_same_contact(self):
+        # Generating a second code for the same contact must NOT delete
+        # the first (the Christian-invite vanished when Bre's was made).
+        import crm_bot_store
+        with tempfile.TemporaryDirectory() as tmp:
+            orig = crm_bot_store.DATA_DIR
+            crm_bot_store.DATA_DIR = Path(tmp)
+            try:
+                first = crm_bot_store.generate_code(
+                    "sietch", 17, "A+ Restoration GC", 16, nickname="Christian")
+                second = crm_bot_store.generate_code(
+                    "sietch", 17, "A+ Restoration GC", 16, nickname="Bre")
+                pending = crm_bot_store.get_pending_codes("sietch")
+                codes = {c["code"] for c in pending}
+                self.assertIn(first["code"], codes)
+                self.assertIn(second["code"], codes)
+                # Both redeem independently.
+                self.assertIsNotNone(crm_bot_store.verify_code("sietch", first["code"]))
+                self.assertIsNotNone(crm_bot_store.verify_code("sietch", second["code"]))
+            finally:
+                crm_bot_store.DATA_DIR = orig
+
+    def test_reply_create_checks_bot_token_before_session(self):
+        # Regression: _require_auth sends a 401 immediately when no session
+        # cookie exists, so the bot Bearer check must come FIRST in the
+        # threaded-reply handler (the bot never has a session cookie).
+        src = (HERE.parent / "server.py").read_text(encoding="utf-8")
+        start = src.index("def _handle_history_reply_create")
+        end = src.index("def _handle_history_reply_delete")
+        body = src[start:end]
+        bot_check = body.index("Bearer {bot_token}")
+        session_check = body.index("_require_auth(self)")
+        self.assertLess(bot_check, session_check)
+
 
 class TestFormatProjectInfo(unittest.TestCase):
     """format_project_info: audit round 8 fix #1 length caps."""

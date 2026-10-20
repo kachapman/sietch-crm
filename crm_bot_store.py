@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import re
 import secrets
-import string
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -146,7 +145,10 @@ def get_mapping_by_chat(portal: str, chat_id: int) -> dict[str, Any] | None:
 # ── Pending invite codes ──
 
 def _generate_code() -> str:
-    alphabet = string.ascii_uppercase + string.digits
+    # Ambiguous characters (0/O, 1/I) excluded: customers retype codes from
+    # a monospace UI font where 0/O are indistinguishable, and a mismatch
+    # reports as "invalid or expired". 32 chars, length 8.
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     return "".join(secrets.choice(alphabet) for _ in range(CODE_LENGTH))
 
 
@@ -171,9 +173,14 @@ def generate_code(portal: str, contact_id: int | None, contact_name: str,
     path = _store_path(portal)
     store = _load_file(path)
     codes = store.get("pendingCodes", [])
-    if not employee and contact_id is not None:
-        codes = [c for c in codes if c.get("contactId") != contact_id]
+    # Pending codes coexist: generating a new code must NOT delete outstanding
+    # codes for the same contact (previously the Christian-invite vanished when
+    # Bre's was generated for the same contact). Cancel per-row by value.
+    # Guard against the (unlikely) random collision instead.
+    existing = {str(c.get("code") or "") for c in codes}
     code = _generate_code()
+    while code in existing:
+        code = _generate_code()
     now = datetime.now(timezone.utc)
     expires = now + timedelta(hours=CODE_EXPIRE_HOURS)
     entry = {

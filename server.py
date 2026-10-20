@@ -6122,15 +6122,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         _json_response(self, 200, replies)
 
     def _handle_history_reply_create(self, opp_id: int, event_id: int) -> None:
-        user = _require_auth(self)
-        if not user:
-            # Check for bot token auth
-            bot_token = _get_bot_token()
-            auth_header = self.headers.get("Authorization", "").strip()
-            if bot_token and auth_header == f"Bearer {bot_token}":
-                # Bot auth — use system user (id=1) or resolve from chatId
-                user = {"id": 1, "display_name": "Bot"}
-            else:
+        # Bot Bearer token FIRST: _require_auth sends a 401 immediately when no
+        # session cookie exists, and the bot never has one (Bearer only), so a
+        # bot check after it can never succeed. Same order as _handle_stages_get.
+        bot_token = _get_bot_token()
+        auth_header = self.headers.get("Authorization", "").strip()
+        if bot_token and auth_header == f"Bearer {bot_token}":
+            # Bot auth — use system user (id=1) or resolve from chatId
+            user = {"id": 1, "display_name": "Bot"}
+        else:
+            user = _require_auth(self)
+            if not user:
                 return
         try:
             payload = json.loads(_read_body(self) or b"{}")
@@ -15683,6 +15685,45 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         deal["latestUpdate"] = None
                 except Exception:
                     deal["latestUpdate"] = None
+                # Enrich with recent updates filtered to the pairing's update
+                # type (e.g. Customer Update). The customer card shows the 3
+                # most recent; without the filter customers see whatever event
+                # happens to be newest (or nothing when its content is empty).
+                try:
+                    upd_cat_id = deals_mapping.get("notesCategoryId")
+                    if not upd_cat_id:
+                        fallback_row = db.query_one(
+                            "SELECT id FROM history_categories WHERE title ILIKE 'customer update'"
+                        )
+                        upd_cat_id = fallback_row[0] if fallback_row else None
+                    if upd_cat_id:
+                        upd_rows = db.query(
+                            """SELECT he.content, he.created_at, hc.title
+                               FROM history_events he
+                               LEFT JOIN history_categories hc ON hc.id = he.category_id
+                               WHERE he.opportunity_id = %s AND he.category_id = %s
+                               ORDER BY he.created_at DESC LIMIT 3""",
+                            (opp_id, int(upd_cat_id)),
+                        )
+                    else:
+                        upd_rows = db.query(
+                            """SELECT he.content, he.created_at, hc.title
+                               FROM history_events he
+                               LEFT JOIN history_categories hc ON hc.id = he.category_id
+                               WHERE he.opportunity_id = %s
+                               ORDER BY he.created_at DESC LIMIT 3""",
+                            (opp_id,),
+                        )
+                    deal["recentUpdates"] = [
+                        {
+                            "content": ur[0] or "",
+                            "created": ur[1].isoformat() if ur[1] else "",
+                            "categoryName": ur[2] or "",
+                        }
+                        for ur in upd_rows
+                    ]
+                except Exception:
+                    deal["recentUpdates"] = []
                 # Enrich with last 10 events (employee only)
                 if is_employee:
                     try:

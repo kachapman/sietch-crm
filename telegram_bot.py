@@ -21,6 +21,7 @@ from html.parser import HTMLParser
 import os
 import re
 import sys
+import urllib.parse
 
 import httpx
 
@@ -898,7 +899,7 @@ def _format_event_body(category: str, content: str, max_len: int = 500) -> str:
 HELP_TEXT_CUSTOMER = (
     "Send a project name (or part of it) to look it up.\n"
     "If several match, tap a button — or reply with the number — to see full details.\n"
-    "Need a new invite code? Contact Sietch CRM."
+    "Need a new invite code? Contact Vanguard Adjusting."
 )
 HELP_TEXT_EMPLOYEE = (
     "Send a project name to search across all projects.\n"
@@ -973,30 +974,49 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
         _esc(d["title"]),
         "─" * 30,
     ]
-    # Customer view: show key user fields below title
+    # Customer view: key user fields below title, clickable phone/address,
+    # 3 most recent updates of the pairing's update type. No CRM link —
+    # customers never go to the CRM.
     if not is_employee:
         uf = d.get("userFields") or {}
-        for field_name in ("Address", "Customer Phone", "Insurance Carrier", "Claim #"):
+        address = uf.get("Address", "") or d.get("address", "")
+        if address:
+            maps_url = "https://www.google.com/maps/search/?api=1&query=" + urllib.parse.quote_plus(address)
+            lines.append(f'Address: <a href="{maps_url}">{_esc(address)}</a>')
+        phone = uf.get("Customer Phone", "") or d.get("contactPhone", "") or d.get("contactMobile", "")
+        if phone:
+            tel_digits = re.sub(r"[^\d+]", "", phone)
+            if tel_digits:
+                lines.append(f'Customer Phone: <a href="tel:{tel_digits}">{_esc(phone)}</a>')
+            else:
+                lines.append(f"Customer Phone: {_esc(phone)}")
+        for field_name in ("Insurance Carrier", "Claim #"):
             val = uf.get(field_name, "")
             if val:
                 lines.append(f"{field_name}: {_esc(val)}")
         stage = d.get("stage", "")
         if stage:
             lines.append(f"Stage: {_esc(stage)}")
-        update = d.get("latestUpdate")
-        if update:
+        updates = d.get("recentUpdates") or []
+        if not updates and d.get("latestUpdate"):
+            # Back-compat with older dashboard builds that only send latestUpdate.
+            updates = [d.get("latestUpdate")]
+        shown = 0
+        for update in updates[:3]:
             content = update.get("content", "")
+            if not content:
+                continue
             created = _fmt_date(update.get("created", ""))
-            if content:
+            if shown > 0:
+                lines.append("───────────────")
+            else:
                 lines.append("")
-                header = "Latest customer update"
-                if created:
-                    header += f" — <i>{_esc(created)}</i>"
-                lines.append(header + ":")
-                lines.append(_sanitize_html(content))
-        if project_url:
-            lines.append("")
-            lines.append(f'<a href="{project_url}">View project in CRM</a>')
+            header = update.get("categoryName") or "Update"
+            if created:
+                header += f" — <i>{_esc(created)}</i>"
+            lines.append(header + ":")
+            lines.append(_sanitize_html(content))
+            shown += 1
         if lines and lines[-1] != "":
             lines.append("")
         lines.append("───────────────")
@@ -1309,12 +1329,12 @@ def main() -> None:
                 await _reply_html(
                     update,
                     f"{greeting} Send a project name to look up your project.\n\n"
-                    "Need a new invite code? Contact Sietch CRM.",
+                    "Need a new invite code? Contact Vanguard Adjusting.",
                 )
         else:
             await _reply_html(
                 update,
-                "Welcome! To get started, you need an invite code from Sietch CRM.\n\n"
+                "Welcome! To get started, you need an invite code from Vanguard Adjusting.\n\n"
                 "Send the invite code here to link your account, then you can search projects.",
             )
 

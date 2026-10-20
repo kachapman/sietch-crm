@@ -36869,6 +36869,9 @@ let _botCustomersMappings = [];
 // close/reopen — the code lives in store.json with a 48h expiry, not in
 // the in-memory draft). Rendered by renderBotPendingCodes().
 let _botPendingCodes = [];
+// Codes the admin dismissed with OK: stay pending server-side, but the big
+// generated-code box stays hidden for them (the list row remains).
+let _botCodeBoxDismissed = new Set();
 
 async function openBotCustomersModal() {
   // Consolidated into admin console per plan: no separate modal/button
@@ -37218,7 +37221,7 @@ function updateBotGeneratedCodeBox() {
   const expires = $("#bot-code-expires");
   if (!box || !val || !expires) return;
   const d = _botCustomersDraft;
-  if (d && d.pendingCode) {
+  if (d && d.pendingCode && !_botCodeBoxDismissed.has(String(d.pendingCode))) {
     box.classList.remove("hidden");
     val.textContent = d.pendingCode;
     if (d.pendingExpires) {
@@ -37259,8 +37262,8 @@ function renderBotPendingCodes() {
       expires = diff > 0 ? `Expires in ${Math.round(diff / 3600000)}h` : "Expired";
     }
     const code = String(c.code || "");
-    return `<div class="bot-mapping-row" data-bot-pending-code="${escapeHtml(code)}">` +
-      `<span class="bot-mapping-name">${escapeHtml(who)}${c.employee ? ' <span class="bot-mapping-employee-badge">Employee</span>' : ""}</span>` +
+    return `<div class="bot-mapping-row bot-pending-row" data-bot-pending-code="${escapeHtml(code)}">` +
+      `<span class="bot-mapping-name" title="${escapeHtml(who)}">${escapeHtml(who)}${c.employee ? ' <span class="bot-mapping-employee-badge">Employee</span>' : ""}</span>` +
       (nick ? `<span class="bot-mapping-nickname">${escapeHtml(nick)}</span>` : "") +
       `<span class="bot-code-value" style="font-size:1rem;">${escapeHtml(code)}</span>` +
       (expires ? `<span class="bot-code-expires">${escapeHtml(expires)}</span>` : "") +
@@ -37304,6 +37307,7 @@ async function handleCancelPendingCode(code) {
     }
     _botPendingCodes = _botPendingCodes.filter((c) => String(c.code || "") !== String(code));
     renderBotPendingCodes();
+    _botCodeBoxDismissed.delete(String(code));
     // Keep the single-code box in sync when its code was the one cancelled.
     if (_botCustomersDraft && _botCustomersDraft.pendingCode === code) {
       _botCustomersDraft.pendingCode = null;
@@ -37351,6 +37355,7 @@ async function handleGenerateCode() {
     draft.pendingExpires = data.expiresAt;
     draft.pendingContactId = data.contactId;
     draft.pendingContactName = data.contactName;
+    _botCodeBoxDismissed.delete(String(data.code));
     updateBotGeneratedCodeBox();
     showToast("Invite code generated!");
     await loadBotCustomersFromServer();
@@ -37366,9 +37371,11 @@ async function handleCancelCode() {
   if (!draft) return;
   if (!draft.pendingContactId && !draft.pendingCode) return;
   try {
-    const body = draft.pendingContactId
-      ? { contactId: draft.pendingContactId }
-      : { code: draft.pendingCode };
+    // Cancel by code value so sibling pending codes for the same contact
+    // survive (cancel_code by contactId wipes them all).
+    const body = draft.pendingCode
+      ? { code: draft.pendingCode }
+      : { contactId: draft.pendingContactId };
     const res = await fetch("/api/bot-customers/cancel-code", {
       method: "POST",
       credentials: "same-origin",
@@ -37380,6 +37387,7 @@ async function handleCancelCode() {
       showToast(data.error || "Failed to cancel code", true);
       return;
     }
+    _botCodeBoxDismissed.delete(String(draft.pendingCode || ""));
     draft.pendingCode = null;
     draft.pendingExpires = null;
     draft.pendingContactId = null;
@@ -37440,6 +37448,12 @@ function bindBotCustomersModal() {
   _botCustomersDraft = { contactId: null, contactLabel: "", notesCategoryId: null, employee: false, userId: null, userLabel: "" };
   $("#bot-generate-code-btn")?.addEventListener("click", handleGenerateCode);
   $("#bot-code-cancel-btn")?.addEventListener("click", handleCancelCode);
+  // OK dismisses the big box but leaves the code pending in the list.
+  $("#bot-code-ok-btn")?.addEventListener("click", () => {
+    const code = _botCustomersDraft?.pendingCode;
+    if (code) _botCodeBoxDismissed.add(String(code));
+    updateBotGeneratedCodeBox();
+  });
   $("#bot-code-copy-btn")?.addEventListener("click", () => {
     const val = $("#bot-code-value");
     if (!val || !val.textContent) return;
