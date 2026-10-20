@@ -15,7 +15,7 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Topic:** Due-date refresh inside supplemental mode; no-date-key visibility.
 
-**Status: IMPLEMENTED + TESTED, pushed — NOT deployed (awaiting explicit go).**
+**Status: DEPLOYED 2026-10-20 as 6824216** (pull + rebuild healthy; live bundle serves app.js?v=3.7.18 with both checkboxes). No migration, no bot restart. Ready for the user to run: supplemental checked + due-date checked.
 
 - refresh_columns allowlist (expected_close_date only); sub-option default OFF, greyed in full mode.
 - Tests: sync suite 8→12; contact guard adapted to dynamic UPDATE; all suites green.
