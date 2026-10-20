@@ -16,6 +16,7 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 **Topic:** 5-item Telegram bot package — customer card, invite codes, reply-401, help text.
 
 **Status: IMPLEMENTED + TESTED LOCALLY — push + droplet deploy (rebuild, bot restart) still to do at commit time.**
+**Deployed 2026-10-20 as b967456:** droplet pull + `docker compose build/up -d` (healthy) + `systemctl restart crm-telegram-bot` (active, polling 200s, no conflicts). Live bundle verified (OK button, Vanguard strings + recentUpdates on droplet).
 
 - Customer card: `recentUpdates` (3, filtered by pairing update type) from `/api/bot/deals`; clickable tel:/Maps; CRM link employees-only.
 - Invite codes: unambiguous alphabet, coexistence, OK-to-dismiss, cancel-by-value, full names in pending rows.
