@@ -11,7 +11,13 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-20 (tel-button 400 fix)
+**Date:** 2026-10-20 (phone plain text)
+
+**Topic:** `tel:` unrenderable on the clients — phone back to plain text, helper removed.
+
+**Status: DEPLOYED (bot restart only).**
+
+## Previous session summary (2026-10-20, tel-button 400 fix)
 
 **Topic:** Flinchum search got silence — `tel:` inline button 400s sendMessage.
 

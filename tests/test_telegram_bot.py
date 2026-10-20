@@ -448,13 +448,13 @@ class TestFormatDealDetail(unittest.TestCase):
         out = telegram_bot.format_deal_detail([deal], 0, is_employee=True)
         self.assertIn("View project in CRM", out)
 
-    def test_customer_phone_is_tel_link(self):
+    def test_customer_phone_is_plain_text(self):
+        # Plain text by request: the clients in use don't render tel:
+        # links, so no tel: URI is attempted anywhere in customer output.
         deal = self._make_customer_deal()
         out = telegram_bot.format_deal_detail([deal], 0, is_employee=False)
-        # E.164: bare 10-digit US numbers get +1 (a tel: URI without a
-        # leading + is invalid per RFC 3966 and clients drop the link).
-        self.assertIn('href="tel:+16306396041"', out)
-        self.assertIn("(630) 639-6041", out)
+        self.assertIn("Customer Phone: (630) 639-6041", out)
+        self.assertNotIn("tel:", out)
 
     def test_customer_address_is_maps_link(self):
         deal = self._make_customer_deal()
@@ -496,24 +496,6 @@ class TestFormatDealDetail(unittest.TestCase):
         plain = self._make_customer_deal()
         out2 = telegram_bot.format_deal_detail([plain], 0, is_employee=False)
         self.assertEqual(out2.count("─" * 30), 1)
-
-
-class TestNormalizeTel(unittest.TestCase):
-    """_normalize_tel: E.164-ish digits for tel: URIs."""
-
-    def test_bare_us_number_gets_plus_one(self):
-        self.assertEqual(telegram_bot._normalize_tel("(630) 639-6041"), "+16306396041")
-
-    def test_eleven_digit_leading_one(self):
-        self.assertEqual(telegram_bot._normalize_tel("1-630-639-6041"), "+16306396041")
-
-    def test_existing_plus_passes_through(self):
-        self.assertEqual(telegram_bot._normalize_tel("+44 20 7946 0018"), "+442079460018")
-
-    def test_empty_and_garbage(self):
-        self.assertEqual(telegram_bot._normalize_tel(""), "")
-        self.assertEqual(telegram_bot._normalize_tel(None), "")
-        self.assertEqual(telegram_bot._normalize_tel("abc"), "")
 
 
 class TestDealDetailKeyboard(unittest.TestCase):

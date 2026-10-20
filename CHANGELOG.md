@@ -2,6 +2,12 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Bot: phone back to plain text (2026-10-20)
+
+The clients in use render neither `tel:` buttons (API 400s those) nor `tel:`
+text links, so the phone number is plain text again — no link attempted
+anywhere. Removed the now-unused `_normalize_tel` helper and its tests.
+
 ## Bot: drop tel: keyboard button that 400-silenced replies (2026-10-20)
 
 Live-fire bug from the bot log: `Inline keyboard button url 'tel:+16306396041' is invalid`.

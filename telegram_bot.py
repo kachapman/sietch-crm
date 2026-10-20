@@ -929,26 +929,6 @@ HELP_TEXT_UNLINKED = (
 )
 
 
-def _normalize_tel(phone: str) -> str:
-    """Normalize a display phone number to tel: URI digits.
-
-    A tel: URI without a leading + is not a valid global-number (RFC 3966)
-    and Telegram clients silently drop the link — the Flinchum
-    `tel:6306396041` rendered as plain text. Bare 10-digit US numbers get
-    +1; an 11-digit leading-1 gets +; existing +numbers pass through.
-    """
-    digits = re.sub(r"[^\d+]", "", str(phone or ""))
-    if not digits:
-        return ""
-    if digits.startswith("+"):
-        return digits
-    if len(digits) == 11 and digits.startswith("1"):
-        return "+" + digits
-    if len(digits) == 10:
-        return "+1" + digits
-    return digits
-
-
 def _deal_call_info(deal: dict) -> tuple[str, str]:
     """Phone + address for Call/Address buttons, preferring the CRM
     contacts-table fields with the deal's user fields as fallback (the
@@ -976,10 +956,10 @@ def _build_deal_detail_keyboard(deal_id: int, is_employee: bool, address: str = 
             InlineKeyboardButton("📊 Stage", callback_data=f"act:stage:{deal_id}"),
             InlineKeyboardButton("📝 Note", callback_data=f"act:note:{deal_id}"),
         ])
-    # NOTE: no tel: URL button — Telegram's Bot API rejects tel: in inline
-    # keyboard buttons ("wrong port number specified in the url"), which 400s
-    # the entire sendMessage and the user gets silence. The tappable phone
-    # lives in the message text as <a href="tel:+1…"> instead.
+    # NOTE: no tel: phone button or link anywhere — Telegram's Bot API
+    # rejects tel: in inline keyboard buttons (400s the whole send), and the
+    # clients in use don't render tel: text links either. Phone stays plain
+    # text; the tappable contact action is the 📍 Address button below.
     if address:
         maps_url = f"https://maps.google.com/?q={urllib.parse.quote(str(address))}"
         rows.append([InlineKeyboardButton("📍 Address", url=maps_url)])
@@ -1051,11 +1031,9 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
             lines.append(f'Address: <a href="{maps_url}">{_esc(address)}</a>')
         phone = uf.get("Customer Phone", "") or d.get("contactPhone", "") or d.get("contactMobile", "")
         if phone:
-            tel = _normalize_tel(phone)
-            if tel:
-                lines.append(f'Customer Phone: <a href="tel:{tel}">{_esc(phone)}</a>')
-            else:
-                lines.append(f"Customer Phone: {_esc(phone)}")
+            # Plain text by request: the Telegram clients in use do not
+            # render tel: links (button or text), so don't attempt either.
+            lines.append(f"Customer Phone: {_esc(phone)}")
         for field_name in ("Insurance Carrier", "Claim #"):
             val = uf.get(field_name, "")
             if val:
