@@ -929,6 +929,74 @@ HELP_TEXT_UNLINKED = (
 )
 
 
+def _normalize_tel(phone: str) -> str:
+    """Normalize a display phone number to tel: URI digits.
+
+    A tel: URI without a leading + is not a valid global-number (RFC 3966)
+    and Telegram clients silently drop the link — the Flinchum
+    `tel:6306396041` rendered as plain text. Bare 10-digit US numbers get
+    +1; an 11-digit leading-1 gets +; existing +numbers pass through.
+    """
+    digits = re.sub(r"[^\d+]", "", str(phone or ""))
+    if not digits:
+        return ""
+    if digits.startswith("+"):
+        return digits
+    if len(digits) == 11 and digits.startswith("1"):
+        return "+" + digits
+    if len(digits) == 10:
+        return "+1" + digits
+    return digits
+
+
+def _deal_call_info(deal: dict) -> tuple[str, str]:
+    """Phone + address for Call/Address buttons, preferring the CRM
+    contacts-table fields with the deal's user fields as fallback (the
+    customer card shows userFields, which the keyboard call sites ignored)."""
+    uf = deal.get("userFields") or {}
+    phone = (deal.get("contactPhone") or deal.get("contactMobile")
+             or uf.get("Customer Phone", "") or "")
+    address = deal.get("address") or uf.get("Address", "") or ""
+    return phone, address
+
+
+def _build_deal_detail_keyboard(deal_id: int, is_employee: bool, phone: str = "",
+                                address: str = "", project_number: int = 0):
+    """Inline buttons under a deal detail message. Module-level (was nested
+    in main) so per-role contents are unit-testable. Callers pass the same
+    args; the live bot imports python-telegram-bot in main(), tests stub it.
+
+    Customers get Call / Address / New Search — never the CRM link button.
+    """
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    rows: list = []
+    if is_employee:
+        rows.append([
+            InlineKeyboardButton("📋 Info", callback_data=f"act:info:{deal_id}"),
+            InlineKeyboardButton("📊 Stage", callback_data=f"act:stage:{deal_id}"),
+            InlineKeyboardButton("📝 Note", callback_data=f"act:note:{deal_id}"),
+        ])
+    action_row: list = []
+    tel = _normalize_tel(phone)
+    if tel:
+        action_row.append(InlineKeyboardButton("📞 Call", url=f"tel:{tel}"))
+    if address:
+        maps_url = f"https://maps.google.com/?q={urllib.parse.quote(str(address))}"
+        action_row.append(InlineKeyboardButton("📍 Address", url=maps_url))
+    if action_row:
+        rows.append(action_row)
+    if deal_id:
+        bottom: list = []
+        if is_employee:
+            project_url = f"{_get_public_dashboard_url()}/project/{project_number or deal_id}"
+            bottom.append(InlineKeyboardButton("🔗", url=project_url))
+        bottom.append(InlineKeyboardButton("🔍 New Search", callback_data="act:home"))
+        rows.append(bottom)
+    else:
+        rows.append([InlineKeyboardButton("🔍 New Search", callback_data="act:home")])
+    return InlineKeyboardMarkup(rows)
+
+
 def format_search_result(deals: list[dict], search: str, is_employee: bool = False) -> str:
     if not deals:
         return f"No projects found matching '{_esc(search)}'."
@@ -985,9 +1053,9 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
             lines.append(f'Address: <a href="{maps_url}">{_esc(address)}</a>')
         phone = uf.get("Customer Phone", "") or d.get("contactPhone", "") or d.get("contactMobile", "")
         if phone:
-            tel_digits = re.sub(r"[^\d+]", "", phone)
-            if tel_digits:
-                lines.append(f'Customer Phone: <a href="tel:{tel_digits}">{_esc(phone)}</a>')
+            tel = _normalize_tel(phone)
+            if tel:
+                lines.append(f'Customer Phone: <a href="tel:{tel}">{_esc(phone)}</a>')
             else:
                 lines.append(f"Customer Phone: {_esc(phone)}")
         for field_name in ("Insurance Carrier", "Claim #"):
@@ -1010,8 +1078,11 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
             if shown > 0:
                 lines.append("───────────────")
             else:
-                lines.append("")
-            header = update.get("categoryName") or "Update"
+                # Close the project-details block so it reads as distinct
+                # from the updates below (Telegram has no boxes; rules do).
+                lines.append("─" * 30)
+            cat = update.get("categoryName") or "Update"
+            header = f"<b>[{_esc(cat)}]</b>"
             if created:
                 header += f" — <i>{_esc(created)}</i>"
             lines.append(header + ":")
@@ -1184,33 +1255,6 @@ def main() -> None:
                 title = title[:37] + "..."
             keyboard.append([InlineKeyboardButton(title, callback_data=f"sel:{deal_id}")])
         return InlineKeyboardMarkup(keyboard) if keyboard else None
-
-    def _build_deal_detail_keyboard(deal_id: int, is_employee: bool, phone: str = "", address: str = "", project_number: int = 0) -> InlineKeyboardMarkup:
-        rows: list[list[InlineKeyboardButton]] = []
-        if is_employee:
-            rows.append([
-                InlineKeyboardButton("📋 Info", callback_data=f"act:info:{deal_id}"),
-                InlineKeyboardButton("📊 Stage", callback_data=f"act:stage:{deal_id}"),
-                InlineKeyboardButton("📝 Note", callback_data=f"act:note:{deal_id}"),
-            ])
-            action_row: list[InlineKeyboardButton] = []
-            if phone:
-                action_row.append(InlineKeyboardButton("📞 Call", url=f"tel:{phone}"))
-            if address:
-                import urllib.parse
-                maps_url = f"https://maps.google.com/?q={urllib.parse.quote(address)}"
-                action_row.append(InlineKeyboardButton("📍 Address", url=maps_url))
-            if action_row:
-                rows.append(action_row)
-        if deal_id:
-            project_url = f"{_get_public_dashboard_url()}/project/{project_number or deal_id}"
-            rows.append([
-                InlineKeyboardButton("🔗", url=project_url),
-                InlineKeyboardButton("🔍 New Search", callback_data="act:home"),
-            ])
-        else:
-            rows.append([InlineKeyboardButton("🔍 New Search", callback_data="act:home")])
-        return InlineKeyboardMarkup(rows)
 
     def _build_reply_keyboard(is_employee: bool) -> ReplyKeyboardMarkup:
         """Persistent keyboard buttons below the chat input."""
@@ -1430,9 +1474,8 @@ def main() -> None:
                 return
             emp = _last_employee.get(chat_id, False)
             msg = format_deal_detail(deals, idx, is_employee=emp)
-            phone = deal.get("contactPhone") or deal.get("contactMobile") or ""
-            address = deal.get("address") or ""
             _last_viewed_project[chat_id] = deal_id
+            phone, address = _deal_call_info(deal)
             keyboard = _build_deal_detail_keyboard(deal_id, emp, phone=phone, address=address, project_number=deal.get("project_number", 0))
             await query.edit_message_text(msg, parse_mode="HTML", reply_markup=keyboard)
             return
@@ -1715,8 +1758,7 @@ def main() -> None:
                     if 0 <= idx < len(deals):
                         msg = format_deal_detail(deals, idx, is_employee=emp)
                         deal_id = deals[idx].get("id") or deals[idx].get("ID")
-                        phone = deals[idx].get("contactPhone") or deals[idx].get("contactMobile") or ""
-                        address = deals[idx].get("address") or ""
+                        phone, address = _deal_call_info(deals[idx])
                         kb = _build_deal_detail_keyboard(deal_id, emp, phone=phone, address=address, project_number=deals[idx].get("project_number", 0)) if deal_id else None
                         await _reply_html(update, msg, reply_markup=kb)
                     else:
@@ -1736,8 +1778,7 @@ def main() -> None:
                 msg = format_search_result(deals, search, is_employee=is_employee)
                 if len(deals) == 1 and deals[0]:
                     deal_id = deals[0].get("id") or deals[0].get("ID")
-                    phone = deals[0].get("contactPhone") or deals[0].get("contactMobile") or ""
-                    address = deals[0].get("address") or ""
+                    phone, address = _deal_call_info(deals[0])
                     kb = _build_deal_detail_keyboard(deal_id, is_employee, phone=phone, address=address, project_number=deals[0].get("project_number", 0)) if deal_id else None
                 else:
                     kb = _build_search_results_keyboard(deals)
@@ -1907,11 +1948,14 @@ def main() -> None:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 if event_id:
-                    # Threaded reply to the original event
+                    # Threaded reply to the original event. chatId lets the
+                    # server attribute the reply to the linked CRM user
+                    # (instead of a hardcoded id), and notifyUserList tells
+                    # it who to notify (the notification's actor by default).
                     resp = await client.post(
                         f"{_get_dashboard_url()}/api/v2/projects/{opp_id}/history/{event_id}/replies",
                         headers=_auth_headers(),
-                        json={"content": content},
+                        json={"content": content, "chatId": chat_id, "notifyUserList": notify_list},
                     )
                 else:
                     # Fallback: standalone note (no parent event)

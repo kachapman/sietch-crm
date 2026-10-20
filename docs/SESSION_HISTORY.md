@@ -11,7 +11,19 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-20 (bot package)
+**Date:** 2026-10-20 (bot card polish + reply attribution)
+
+**Topic:** Customer-card refinements (CRM button, tappable phone, headers, divider) + reply author/notify fix.
+
+**Status: IMPLEMENTED + TESTED LOCALLY — push + droplet deploy (rebuild, bot restart) still to do at commit time.**
+
+- Keyboard: 🔗 employees-only; 📞/📍 for customers with userFields fallback; extracted to module level for tests.
+- `tel:` normalized to +1 (RFC 3966 — the invalid bare URI is why it rendered plain).
+- Headers `<b>[Cat]</b> — date:`; details block closed by a rule. Stray "—" proven not formatter output.
+- Replies: threaded POST sends chatId + notifyUserList; server resolves author from mapping; 400 when unresolvable. Old dup rows under Breanna: delete via UI ×.
+- Tests: test_telegram_bot 113→124, all suites green.
+
+## Previous session summary (2026-10-20, bot package)
 
 **Topic:** 5-item Telegram bot package — customer card, invite codes, reply-401, help text.
 

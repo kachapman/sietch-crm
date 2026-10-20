@@ -2,6 +2,25 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Bot card polish + reply attribution/notify (2026-10-20)
+
+Follow-up to the bot package, from live-testing feedback. No DB migration, no `.env` change.
+
+### Fixed
+
+- **CRM 🔗 button no longer shown to customers.** `_build_deal_detail_keyboard` appended the project-URL button for every role; it is now employees-only. Customers get Call / Address / New Search.
+- **📞 Call + 📍 Address buttons for customers too** (were employee-only), with phone/address falling back to the deal's user fields at all three call sites (they previously read only the contacts-table fields the card doesn't show).
+- **Phone actually tappable.** `tel:` URIs now go through `_normalize_tel`: bare 10-digit US numbers become `+1…` (a `tel:` URI without `+` is invalid per RFC 3966, which is why clients rendered it as plain text). Applies to the text link and the 📞 button.
+- **Update headers match the employee side:** `<b>[Category]</b> — <i>date</i>:` instead of plain text.
+- **Details block visibly separated:** the title-matching rule now also closes the details block above the updates (Telegram has no boxes; rules are the border).
+- **Replies post as the replier, and notify the poster.** The threaded-reply POST now sends `chatId` + `notifyUserList` (the notification's actor); `_handle_history_reply_create` resolves `chatId` → mapping → `userId` for `created_by` instead of hardcoded id 1 (which posted every bot reply as the wrong person), and unresolvable chats get a clear 400. This also explains the earlier duplicate: the pre-reorder code wrote the 401 yet still committed the INSERT.
+- `_build_deal_detail_keyboard` extracted from `main()` to module level (pure given its args) so role contents are unit-testable; call sites unchanged.
+
+### Verified
+
+- `tests/test_telegram_bot.py` 113 → 124: tel normalization, bracket headers, divider placement, keyboard contents per role (via telegram stubs), threaded-POST fields + author-resolution source guards.
+- Full suites green: 17 JS suites, attach-fixes (32), search-modal (24).
+
 ## Bot package: customer card, invite codes, reply-401, help text (2026-10-20)
 
 Five related Telegram-bot fixes in one build (no DB migration, no `.env` change).

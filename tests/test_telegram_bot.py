@@ -451,7 +451,9 @@ class TestFormatDealDetail(unittest.TestCase):
     def test_customer_phone_is_tel_link(self):
         deal = self._make_customer_deal()
         out = telegram_bot.format_deal_detail([deal], 0, is_employee=False)
-        self.assertIn('href="tel:6306396041"', out)
+        # E.164: bare 10-digit US numbers get +1 (a tel: URI without a
+        # leading + is invalid per RFC 3966 and clients drop the link).
+        self.assertIn('href="tel:+16306396041"', out)
         self.assertIn("(630) 639-6041", out)
 
     def test_customer_address_is_maps_link(self):
@@ -475,6 +477,110 @@ class TestFormatDealDetail(unittest.TestCase):
             recentUpdates=[dict(self._make_update(1), author="Ken Chapman")])
         out = telegram_bot.format_deal_detail([deal], 0, is_employee=False)
         self.assertNotIn("Ken Chapman", out)
+
+    def test_customer_update_header_matches_employee_style(self):
+        # Bold bracketed category + italic date, like the employee side.
+        deal = self._make_customer_deal(
+            recentUpdates=[self._make_update(1)])
+        out = telegram_bot.format_deal_detail([deal], 0, is_employee=False)
+        self.assertIn("<b>[Customer Update]</b> — <i>Oct 1, 2026</i>:", out)
+
+    def test_customer_details_closed_off_by_divider(self):
+        # A rule sits between the details block and the updates so the
+        # two read as distinct sections (plus the title rule = 2 total).
+        deal = self._make_customer_deal(
+            recentUpdates=[self._make_update(1)])
+        out = telegram_bot.format_deal_detail([deal], 0, is_employee=False)
+        self.assertEqual(out.count("─" * 30), 2)
+        # No updates: only the title rule.
+        plain = self._make_customer_deal()
+        out2 = telegram_bot.format_deal_detail([plain], 0, is_employee=False)
+        self.assertEqual(out2.count("─" * 30), 1)
+
+
+class TestNormalizeTel(unittest.TestCase):
+    """_normalize_tel: E.164-ish digits for tel: URIs."""
+
+    def test_bare_us_number_gets_plus_one(self):
+        self.assertEqual(telegram_bot._normalize_tel("(630) 639-6041"), "+16306396041")
+
+    def test_eleven_digit_leading_one(self):
+        self.assertEqual(telegram_bot._normalize_tel("1-630-639-6041"), "+16306396041")
+
+    def test_existing_plus_passes_through(self):
+        self.assertEqual(telegram_bot._normalize_tel("+44 20 7946 0018"), "+442079460018")
+
+    def test_empty_and_garbage(self):
+        self.assertEqual(telegram_bot._normalize_tel(""), "")
+        self.assertEqual(telegram_bot._normalize_tel(None), "")
+        self.assertEqual(telegram_bot._normalize_tel("abc"), "")
+
+
+class TestDealDetailKeyboard(unittest.TestCase):
+    """_build_deal_detail_keyboard: per-role buttons (module-level, testable)."""
+
+    def setUp(self):
+        TELEGRAM_STUB.InlineKeyboardButton.reset_mock()
+        TELEGRAM_STUB.InlineKeyboardMarkup.reset_mock()
+
+    def _button_specs(self):
+        specs = []
+        for call in TELEGRAM_STUB.InlineKeyboardButton.call_args_list:
+            text = call.args[0] if call.args else ""
+            specs.append((text, call.kwargs.get("url", ""), call.kwargs.get("callback_data", "")))
+        return specs
+
+    def test_customer_gets_call_address_search_no_crm_link(self):
+        telegram_bot._build_deal_detail_keyboard(
+            72, False, phone="(630) 639-6041",
+            address="1498 Pier Drive, Davis, IL 61019", project_number=72)
+        specs = self._button_specs()
+        texts = [s[0] for s in specs]
+        self.assertIn("📞 Call", texts)
+        self.assertIn("📍 Address", texts)
+        self.assertIn("🔍 New Search", texts)
+        # No CRM link button anywhere for customers.
+        for text, url, _cb in specs:
+            self.assertNotIn("/project/", url)
+            self.assertNotEqual(text, "🔗")
+        call = [s for s in specs if s[0] == "📞 Call"][0]
+        self.assertEqual(call[1], "tel:+16306396041")
+
+    def test_employee_keeps_info_stage_note_and_crm_link(self):
+        telegram_bot._build_deal_detail_keyboard(
+            72, True, phone="(630) 639-6041", address="Somewhere", project_number=72)
+        specs = self._button_specs()
+        texts = [s[0] for s in specs]
+        for t in ("📋 Info", "📊 Stage", "📝 Note", "📞 Call", "📍 Address", "🔗", "🔍 New Search"):
+            self.assertIn(t, texts)
+        link = [s for s in specs if s[0] == "🔗"][0]
+        self.assertIn("/project/72", link[1])
+
+    def test_no_deal_id_yields_search_only(self):
+        telegram_bot._build_deal_detail_keyboard(0, False)
+        specs = self._button_specs()
+        self.assertEqual([(s[0]) for s in specs], ["🔍 New Search"])
+
+
+class TestBotReplyAttribution(unittest.TestCase):
+    """Threaded replies: correct author + poster notification (source guards —
+    handle_reply is nested in main() and the endpoint needs a live DB)."""
+
+    def _bot_src(self):
+        return (HERE.parent / "telegram_bot.py").read_text(encoding="utf-8")
+
+    def test_threaded_post_sends_chat_and_notify_list(self):
+        src = self._bot_src()
+        region = src[src.index("async def handle_reply"):src.index("async def handle_document")]
+        self.assertIn('"chatId": chat_id', region)
+        self.assertIn('"notifyUserList": notify_list', region)
+
+    def test_reply_handler_resolves_author_from_chat(self):
+        src = (HERE.parent / "server.py").read_text(encoding="utf-8")
+        body = src[src.index("def _handle_history_reply_create"):src.index("def _handle_history_reply_delete")]
+        self.assertIn("get_mapping_by_chat", body)
+        # The hardcoded id that posted every bot reply as the wrong person.
+        self.assertNotIn('"id": 1', body)
 
 
 class TestBotInviteCodes(unittest.TestCase):

@@ -6122,23 +6122,35 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         _json_response(self, 200, replies)
 
     def _handle_history_reply_create(self, opp_id: int, event_id: int) -> None:
-        # Bot Bearer token FIRST: _require_auth sends a 401 immediately when no
-        # session cookie exists, and the bot never has one (Bearer only), so a
-        # bot check after it can never succeed. Same order as _handle_stages_get.
-        bot_token = _get_bot_token()
-        auth_header = self.headers.get("Authorization", "").strip()
-        if bot_token and auth_header == f"Bearer {bot_token}":
-            # Bot auth — use system user (id=1) or resolve from chatId
-            user = {"id": 1, "display_name": "Bot"}
-        else:
-            user = _require_auth(self)
-            if not user:
-                return
         try:
             payload = json.loads(_read_body(self) or b"{}")
         except json.JSONDecodeError:
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
+        bot_token = _get_bot_token()
+        auth_header = self.headers.get("Authorization", "").strip()
+        if bot_token and auth_header == f"Bearer {bot_token}":
+            # Bot auth — no session cookie (checked BEFORE _require_auth,
+            # which sends a 401 immediately when the cookie is absent).
+            # Attribute to the chat's linked CRM user: a hardcoded id posted
+            # every bot reply as the wrong person.
+            bot_user_id = None
+            chat_id = payload.get("chatId")
+            if chat_id:
+                try:
+                    mapping = get_mapping_by_chat("sietch", int(chat_id))
+                    if mapping and mapping.get("userId"):
+                        bot_user_id = int(mapping["userId"])
+                except (TypeError, ValueError):
+                    pass
+            if not bot_user_id:
+                _json_response(self, 400, {"error": "Chat is not linked to a CRM user"})
+                return
+            user = {"id": bot_user_id, "display_name": "Bot"}
+        else:
+            user = _require_auth(self)
+            if not user:
+                return
         content = str(payload.get("content") or "").strip()
         if not content:
             _json_response(self, 400, {"error": "Content is required"})
