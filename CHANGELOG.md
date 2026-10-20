@@ -136,6 +136,31 @@ the customer-update color following the category setting.
 
 Full suite: **526 Python + 189 JS, 0 failures.**
 
+## Fix: Follow-up Due always shown + due/stage saves respect preview context (2026-10-20)
+
+### Follow-up Due is now always visible and settable
+
+The Details panel hid the entire Follow-up Due section when
+`expected_close_date` was NULL, so a deal like Barbara O'Malley (whose
+OnlyOffice record genuinely has no due date) offered no way to set one.
+The section now always renders with "Not set" + click-to-edit date picker,
+PATCHing `{ expectedCloseDate }` like before.
+
+### Due-date and stage saves no longer pop the main modal
+
+Both save paths unconditionally called `openOpportunityPreviewModal`, which
+popped `#opp-preview-modal` over bookmark and search previews. They now
+branch on the render context like the note submit already does:
+`bookmark` -> `refreshBookmarkTab(oppId, false)`,
+`search` -> `refreshSearchPreviewTab(oppId)` (with main-modal fallback),
+else the main modal.
+
+### Tests
+
+`TestFollowUpDueAlwaysShown` (3) in `tests/test_sync_pull_deals_fields.py`:
+the section is not gated on `dueDateRow`, and both save paths branch on
+context. Cache-bust assertion updated to `app.js?v=3.7.15`.
+
 ## Fix: note attachment buttons + bookmark Post popup (2026-10-20)
 
 ### 1. Paperclip button left of the calendar in all note editors

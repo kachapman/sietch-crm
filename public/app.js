@@ -38602,6 +38602,12 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
           addEventLogEntry("update", oppId, opp.title || opp.Title || "", `Stage changed to ${stageName}`, true);
           if (context === "bookmark") {
             if (typeof refreshBookmarkTab === "function") refreshBookmarkTab(oppId, false);
+          } else if (context === "search") {
+            if (typeof refreshSearchPreviewTab === "function") {
+              refreshSearchPreviewTab(oppId);
+            } else {
+              openOpportunityPreviewModal(oppId, opp.title || opp.Title || "", oppPreviewContext?.group || null).catch(() => {});
+            }
           } else {
             openOpportunityPreviewModal(oppId, opp.title || opp.Title || "", oppPreviewContext?.group || null).catch(() => {});
           }
@@ -38749,8 +38755,10 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     section.appendChild(tagList);
   });
 
-  // 3.5. Follow-up Due Date — static section, click-editable, inline with title
-  if (dueDateRow) {
+  // 3.5. Follow-up Due Date — always rendered (even when unset) so the
+  // date is settable from the panel. When empty the display reads "Not set".
+  {
+    const dueRow = dueDateRow || { label: "Follow-up Due Date", value: "", _rawDate: null };
     const dueSection = document.createElement("section");
     dueSection.className = "opp-preview-section";
     const dueHead = document.createElement("div");
@@ -38761,9 +38769,9 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     dueHead.appendChild(dueTitle);
     const dueDisplay = document.createElement("span");
     dueDisplay.className = "opp-preview-due-date-display";
-    dueDisplay.textContent = dueDateRow.value || "Not set";
-    if (dueDateRow._rawDate) {
-      const d = parseCrmDateOnly(dueDateRow._rawDate);
+    dueDisplay.textContent = dueRow.value || "Not set";
+    if (dueRow._rawDate) {
+      const d = parseCrmDateOnly(dueRow._rawDate);
       if (d && !Number.isNaN(d.getTime()) && d < new Date(new Date().toDateString())) {
         dueDisplay.classList.add("opp-preview-field-overdue");
       }
@@ -38775,13 +38783,13 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       const input = document.createElement("input");
       input.type = "date";
       input.className = "opp-preview-due-date-input";
-      input.value = dueDateToInputValue(dueDateRow._rawDate || null);
+      input.value = dueDateToInputValue(dueRow._rawDate || null);
       dueHead.replaceChild(input, dueDisplay);
       input.focus();
 
       const save = async () => {
         const newVal = input.value || null;
-        if (newVal === (dueDateRow._rawDate || null)) {
+        if (newVal === (dueRow._rawDate || null)) {
           dueHead.replaceChild(dueDisplay, input);
           return;
         }
@@ -38792,7 +38800,19 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
             body: JSON.stringify({ expectedCloseDate: newVal }),
           });
           showToast("Due date updated");
-          openOpportunityPreviewModal(oppId, opp.title || opp.Title || "", oppPreviewContext?.group || null);
+          // Refresh the preview this edit was made from — never pop the main
+          // project modal over a bookmark or search preview.
+          if (context === "bookmark") {
+            if (typeof refreshBookmarkTab === "function") refreshBookmarkTab(oppId, false);
+          } else if (context === "search") {
+            if (typeof refreshSearchPreviewTab === "function") {
+              refreshSearchPreviewTab(oppId);
+            } else {
+              openOpportunityPreviewModal(oppId, opp.title || opp.Title || "", oppPreviewContext?.group || null);
+            }
+          } else {
+            openOpportunityPreviewModal(oppId, opp.title || opp.Title || "", oppPreviewContext?.group || null);
+          }
         } catch (err) { showToast(err.message, true); }
       };
 

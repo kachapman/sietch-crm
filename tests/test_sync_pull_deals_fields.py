@@ -173,5 +173,32 @@ class TestFrontendCollisionGuard(unittest.TestCase):
         self.assertIn("predates the CRM mail archive", APPJS)
 
 
+class TestFollowUpDueAlwaysShown(unittest.TestCase):
+    """Follow-up Due must render even when expected_close_date is NULL, so the
+    date is settable from the panel. The due-date and stage saves must refresh
+    in place for bookmark/search instead of popping the main modal."""
+
+    def test_due_section_not_gated_on_row(self):
+        self.assertNotIn(
+            "if (dueDateRow) {",
+            APPJS,
+            "due section must not be gated on dueDateRow existing",
+        )
+        self.assertIn("dueRow = dueDateRow ||", APPJS)
+
+    def test_due_save_branches_on_context(self):
+        i = APPJS.index("opp-preview-due-date-input");
+        block = APPJS[i: i + 4000]
+        self.assertIn('if (context === "bookmark")', block)
+        self.assertIn('} else if (context === "search") {', block)
+        self.assertIn("refreshBookmarkTab", block)
+        self.assertIn("refreshSearchPreviewTab", block)
+
+    def test_stage_save_branches_on_search(self):
+        i = APPJS.index("opp-preview-stage-select");
+        block = APPJS[i: i + 3000]
+        self.assertIn('} else if (context === "search") {', block)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
