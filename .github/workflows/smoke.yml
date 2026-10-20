@@ -88,6 +88,9 @@ jobs:
       - name: Run contact sync + mail attachment OnlyOffice-first tests
         run: python3 tests/test_contact_and_mail_attach_fixes.py
 
+      - name: Run sync pull-deals field + email body backfill tests
+        run: python3 tests/test_sync_pull_deals_fields.py
+
       - name: Run infrastructure tests
         run: python3 tests/test_infrastructure.py
 

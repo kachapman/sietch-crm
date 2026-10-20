@@ -136,6 +136,95 @@ the customer-update color following the category setting.
 
 Full suite: **526 Python + 189 JS, 0 failures.**
 
+## Fix: missing email bodies (6,854), missing deal fields on 13 deals, id-collision guard (2026-10-20)
+
+### 1. 7,521 email events had no body
+
+`history_events` (category 9 "Mail Message") was missing `body_html` /
+`body_text` for **7,521 of 11,394** events. The UI then rendered
+*"Linked email no longer available (deleted or access changed in CRM)"* —
+which was wrong: the emails were archived the whole time.
+
+**Where the bodies actually live.** The CRM history event content does NOT
+contain the body (only subject / from / to / chain_id / message_id and a
+200-char introduction). The bodies live in **OnlyOffice's `mail_mail`
+Elasticsearch index** — 32,806 messages, back to 2024.
+
+The route the kanban dashboard used (`filehandler.ashx?action=mailmessage`)
+only serves **recent** ids; it 500s for anything older:
+
+```
+2025-12-19 "Ramada interior"  crm event 30273 -> message_id 21481
+  filehandler.ashx?action=mailmessage&message_id=21481  ->  HTTP 500
+  ES  mail_mail/_doc/21481                             ->  1348 bytes of HTML  ✓
+```
+
+**Fix:** `scripts/backfill_email_bodies.py` (runs on the Sietch droplet) pulls
+bodies from the OnlyOffice ES over SSH and writes them into the event
+content. `scripts/oo_fetch_bodies.py` runs on the OnlyOffice droplet and
+bulk-queries ES (one query per 400 events, not 9 SSH round-trips per event).
+The CRM event's `message_id` is off-by-one from the ES doc id for many rows,
+so the resolver tries the id then ±1..±4.
+
+**Result: 6,854 of 7,521 restored in 24 seconds.** 10,727 of 11,394 email
+events now carry a body. The remaining **667 are 2022-2024** (89 + 274 +
+304) — they predate OnlyOffice's mail archive (ES starts 2024-01-01) and
+their CRM event content is ~689 chars with no body field. Not recoverable.
+
+### 2. 13 deals had no stage, no owner, no dates
+
+The 13 opportunities created 2026-10-19 (ids 1235-1247) were missing
+`stage_id`, `stage_type`, `responsible_user_id`, `actual_close_date`,
+`actual_close_value`, `bid_value` and `expected_close_date` — all NULL.
+
+Three bugs in the same pull-deals sync path:
+
+1. **The stage lookup never matched.** `stage_map` was keyed by
+   `title.lower()` but looked up with `crm_stage_id.lower()`. The OnlyOffice
+   stage ids and the Sietch stage ids are *different namespaces* (OO goes to
+   21+, Sietch to 19), so the title is the only valid join key. Every
+   newly-synced deal got `stage_id = NULL`.
+2. **`responsible_user_id` was never written.** The sync built `user_id_map`
+   (OnlyOffice UUID -> Sietch users.id) but only used it for history-event
+   authors, never for the deal's responsible user.
+3. **The INSERT dropped columns.** It listed 7; the other 5 were never
+   written at all.
+
+**Fix:** the sync now joins stages on title, resolves `responsible.id`
+through `user_id_map`, and writes all 12 columns on INSERT and UPDATE (every
+field COALESCE'd so a partial sync can't wipe existing data).
+`scripts/backfill_deal_fields.py` backfills the 13 existing deals from the
+OnlyOffice API (dry-run by default).
+
+**Result:** all 13 now have stage, stage_type, responsible user and expected
+close date. Joe Knoll correctly lands in "Closed Paid" (stage_type 1); Tony
+Gosz and Jesus Casique in "Negotiations/Supplementing". Judy Osier has no
+contact because OnlyOffice has none for her either (`contact: null`).
+
+### 3. Message-id collision guard (found while verifying)
+
+608 events carry a `message_id` that coincides with a *different* Sietch
+`mail_messages.id` (max 1,648). The UI fetched by that id, so
+"H74219 - Manchester/Jessen" would have rendered "Here's your AccuLynx
+login code". The UI now renders the event's own body first and validates the
+subject of any fetched message before accepting it.
+
+The misleading error text was replaced with: *"Email body unavailable — this
+email predates the CRM mail archive (pre-2024). Attachments below are still
+available."*
+
+### Tests
+
+`tests/test_sync_pull_deals_fields.py` (15) — stage-map keying, the
+responsible-user resolution, the INSERT/UPDATE column lists, the backfill
+scripts, and the collision guard. Mutation-checked (reverting the stage
+lookup or dropping `responsible_user_id` from the INSERT fails the suite).
+
+`tests/test_contact_and_mail_attach_fixes.py` updated to assert structurally
+(the exact arg lists changed when the new columns were added).
+
+Full suite: **541 Python + 189 JS, 0 failures.**
+
 ## Fix: contacts NULL, Event Note icon/style, mail attachments OnlyOffice-first (2026-10-19)
 
 ### Three regressions surfaced after deployment

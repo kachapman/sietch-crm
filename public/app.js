@@ -27495,6 +27495,29 @@ function renderHistoryEventItem(ev) {
         return;
       }
 
+      if (mailPayload && (mailPayload.body_html || mailPayload.body_text)) {
+        // The event carries its own body (backfilled from the OnlyOffice mail
+        // archive). Render it directly instead of fetching by message_id.
+        //
+        // Why not fetch: content.message_id is an ONLYOFFICE mail id, NOT a
+        // Sietch mail_messages.id. They overlap (max sietch id = 1648), so
+        // fetchMailMessage(messageId) can return a completely different
+        // email. Always prefer the body that belongs to this event.
+        const snapshotMail = {
+          subject: mailPayload.subject,
+          from: mailPayload.from,
+          to: mailPayload.to,
+          cc: mailPayload.cc,
+          dateSent: mailPayload.date,
+          htmlBody: mailPayload.body_html || "",
+          textBody: mailPayload.body_text || "",
+          attachments: mailPayload.attachments || [],
+        };
+        renderMailEmbedPanel(mailPanel, snapshotMail, messageId, { crmPayload: mailPayload });
+        mailPanel.dataset.loaded = "body:" + String(messageId);
+        return;
+      }
+
       if (!messageId) {
         mailPanel.innerHTML =
           '<p class="opp-preview-mail-error">No mail message id on this event. Open the deal in CRM to view this email.</p>';
@@ -27506,11 +27529,35 @@ function renderHistoryEventItem(ev) {
       mailPanel.innerHTML = '<p class="opp-preview-mail-loading">Loading email…</p>';
       try {
         const mail = await fetchMailMessage(messageId);
+        // Guard against an id collision: content.message_id is an ONLYOFFICE
+        // mail id, but it can coincidentally equal a Sietch mail_messages.id
+        // for a completely different email. Only accept the fetched message if
+        // its subject actually matches this event's subject.
+        const wantSubj = (mailPayload?.subject || "").trim().toLowerCase();
+        const gotSubj = String(mail?.subject || "").trim().toLowerCase();
+        if (wantSubj && gotSubj && wantSubj !== gotSubj) {
+          // Wrong email (collision). Fall back to whatever this event has.
+          if (mailPayload && (mailPayload.body_html || mailPayload.body_text)) {
+            renderMailEmbedPanel(mailPanel, {
+              subject: mailPayload.subject,
+              from: mailPayload.from,
+              to: mailPayload.to,
+              cc: mailPayload.cc,
+              dateSent: mailPayload.date,
+              htmlBody: mailPayload.body_html || "",
+              textBody: mailPayload.body_text || "",
+              attachments: mailPayload.attachments || [],
+            }, messageId, { crmPayload: mailPayload });
+            mailPanel.dataset.loaded = "body:" + String(messageId);
+            return;
+          }
+          throw new Error("Linked email subject mismatch");
+        }
         renderMailEmbedPanel(mailPanel, mail, messageId, { crmPayload: mailPayload });
         mailPanel.dataset.loaded = String(messageId);
       } catch (err) {
         const rawMsg = err && err.message ? String(err.message) : "";
-        if (/wasn['']t found|not found|404/i.test(rawMsg)) {
+        if (/wasn['']t found|not found|404|mismatch/i.test(rawMsg)) {
           // Message deleted (account removed / auto-delete retention). Fall back to the
           // full-body snapshot stored on the history event so the email stays viewable.
           if (mailPayload && (mailPayload.body_html || mailPayload.body_text)) {
@@ -27525,10 +27572,10 @@ function renderHistoryEventItem(ev) {
               attachments: mailPayload.attachments || [],
             };
             renderMailEmbedPanel(mailPanel, snapshotMail, messageId, { crmPayload: mailPayload });
-            mailPanel.dataset.loaded = String(messageId);
+            mailPanel.dataset.loaded = "body:" + String(messageId);
             return;
           }
-          const nice = "Linked email no longer available (deleted or access changed in CRM).";
+          const nice = "Email body unavailable — this email predates the CRM mail archive (pre-2024). Attachments below are still available.";
           mailPanel.innerHTML = `<p class="opp-preview-mail-error">${nice}</p>`;
           const retry = document.createElement("a");
           retry.href =

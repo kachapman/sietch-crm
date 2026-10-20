@@ -297,6 +297,63 @@ def _fetch_onlyoffice_file(url: str, timeout: int = 30) -> bytes | None:
     return None
 
 
+# --- OnlyOffice mail archive (Elasticsearch) body fetcher ----------------------
+# The CRM's filehandler.ashx?action=mailmessage only serves RECENT message ids
+# (it 500s for anything older). The complete archive lives in the OnlyOffice
+# mail_mail Elasticsearch index on the OnlyOffice droplet, reachable only from
+# inside that droplet's docker network — so we reach it over SSH.
+OO_MAIL_ES_SSH_KEY = os.environ.get("OO_MAIL_ES_SSH_KEY", "/app/data/keys/id_ed25519_sietch_to_oo")
+OO_MAIL_ES_HOST = os.environ.get("OO_MAIL_ES_HOST", "office.publicadjustermidwest.com")
+_OO_MAIL_ES_CACHE: dict[int, str] = {}
+
+
+def _fetch_onlyoffice_mail_body(message_id: int) -> str | None:
+    """Fetch an email body from OnlyOffice's mail_mail ES index.
+
+    Returns the raw HTML body, or None if the message isn't in the archive
+    (pre-2024 emails) or the archive is unreachable.
+
+    Uses a small in-process cache because the same message id is often
+    requested repeatedly (every history event that references it).
+    """
+    if not message_id or message_id <= 0:
+        return None
+    cached = _OO_MAIL_ES_CACHE.get(message_id)
+    if cached is not None:
+        return cached
+    key_path = OO_MAIL_ES_SSH_KEY
+    if not os.path.exists(key_path):
+        logger.debug("OnlyOffice mail ES key missing at %s — cannot fetch bodies", key_path)
+        return None
+    import base64 as _b64
+    import subprocess as _sp
+    try:
+        cmd = [
+            "ssh", "-i", key_path, "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=20",
+            f"root@{OO_MAIL_ES_HOST}",
+            "docker exec onlyoffice-elasticsearch curl -fsS -m 20 "
+            f"'http://onlyoffice-elasticsearch:9200/mail_mail/_doc/{int(message_id)}' 2>/dev/null",
+        ]
+        out = _sp.run(cmd, capture_output=True, timeout=45).stdout
+        if not out:
+            return None
+        d = json.loads(out.decode("utf-8", errors="replace"))
+        if not d.get("found"):
+            return None
+        raw = ((d.get("_source") or {}).get("document") or {}).get("data") or ""
+        if not raw:
+            return None
+        html = _b64.b64decode(raw).decode("utf-8", errors="replace")
+        if len(_OO_MAIL_ES_CACHE) > 500:
+            _OO_MAIL_ES_CACHE.clear()
+        _OO_MAIL_ES_CACHE[int(message_id)] = html
+        return html
+    except Exception as e:
+        logger.debug("OnlyOffice mail body fetch failed for message_id=%s: %s", message_id, e)
+        return None
+
+
 def _crm_fetch_user_id_map(portal: str, token: str) -> dict[str, int]:
     """Map OnlyOffice user UUID -> Sietch user.id (matched by email)."""
     oo_users = []
@@ -11632,8 +11689,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 numeric_id = row["field_key"].replace("field_", "")
                 cf_map[numeric_id] = row["id"]
             stage_map = {}
-            for row in db.query_dicts("SELECT id, title FROM stages"):
-                stage_map[row["title"].lower()] = row["id"]
+            for row in db.query_dicts("SELECT id, title, stage_type FROM stages"):
+                # Key by TITLE, not by id. The OnlyOffice stage ids and the
+                # Sietch stage ids are DIFFERENT namespaces (OO goes to 21+,
+                # Sietch to 19), so the only stable join key is the title.
+                #
+                # The old code keyed by title.lower() but LOOKED UP by
+                # crm_stage_id.lower() — so the lookup never matched and every
+                # newly-synced deal got stage_id = NULL. (Bug 2026-10-19: 13
+                # deals had no stage, no owner, no close date, no bid value.)
+                key = str(row["title"] or "").strip().lower()
+                if key:
+                    stage_map[key] = {
+                        "id": row["id"],
+                        "stage_type": row.get("stage_type") or 0,
+                    }
 
             # Build title → id map for existing Sietch deals
             existing_deals = db.query_dicts("SELECT id, title FROM opportunities")
@@ -11677,10 +11747,30 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 crm_id = str(o.get("id") or o.get("ID") or "")
                 title = str(o.get("title") or o.get("Title") or "Untitled").strip()
 
-                # Stage mapping
+                # Stage mapping — join on the stage TITLE.
+                # The OnlyOffice stage id and the Sietch stage id are different
+                # namespaces, so the title is the only reliable join key.
+                # stage_type comes from the stage row so the kanban column
+                # grouping stays correct (0 = open, 1 = closed, 2 = lost).
                 stage_data = o.get("stage") or o.get("Stage") or {}
-                crm_stage_id = str(stage_data.get("id") or stage_data.get("ID") or "")
-                v3_stage_id = stage_map.get(crm_stage_id.lower() if crm_stage_id else "")
+                stage_title = str(
+                    stage_data.get("title") or stage_data.get("Title") or ""
+                ).strip().lower()
+                stage_info = stage_map.get(stage_title) if stage_title else None
+                v3_stage_id = stage_info["id"] if stage_info else None
+                v3_stage_type = 0
+                if stage_info:
+                    try:
+                        v3_stage_type = int(stage_info.get("stage_type") or 0)
+                    except (TypeError, ValueError):
+                        v3_stage_type = 0
+                # The CRM's stage payload also carries stageType directly; use
+                # it when the local stages row hasn't been annotated yet.
+                if stage_data:
+                    try:
+                        v3_stage_type = int(stage_data.get("stageType") or stage_data.get("StageType") or v3_stage_type)
+                    except (TypeError, ValueError):
+                        pass
 
                 # Bid value
                 bid_value = None
@@ -11695,6 +11785,30 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
                 # Description
                 description = str(o.get("description") or o.get("Description") or "").strip() or None
+
+                # Expected close date (due date) — the CRM sends it as an ISO
+                # string. The sync never wrote this column (Bug 2026-10-19:
+                # 13 newly-synced deals had no expected_close_date).
+                expected_close_date = None
+                for dd_key in ("expectedCloseDate", "ExpectedCloseDate", "dueDate"):
+                    raw = o.get(dd_key)
+                    if raw:
+                        try:
+                            expected_close_date = str(raw)[:10]
+                        except Exception:
+                            expected_close_date = None
+                        if expected_close_date:
+                            break
+
+                # Responsible user — the CRM's responsible.id is a user UUID.
+                # user_id_map (built above) maps OnlyOffice UUID -> Sietch
+                # users.id. The sync never wrote this column either.
+                v3_responsible_id = None
+                resp_data = o.get("responsible") or o.get("Responsible") or {}
+                if isinstance(resp_data, dict):
+                    resp_crm_id = str(resp_data.get("id") or resp_data.get("ID") or "")
+                    if resp_crm_id:
+                        v3_responsible_id = user_id_map.get(resp_crm_id)
 
                 # Actual close date — ignore the .NET sentinel
                 actual_close_date = None
@@ -11739,35 +11853,48 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 is_new = v3_opp_id is None
 
                 if is_new:
-                    # Insert new opportunity with onlyoffice_id + actual_close_date + contact_id
+                    # Insert new opportunity with the full set of standard deal
+                    # fields. Bug fix 2026-10-19: the old INSERT wrote only 7
+                    # columns and dropped stage_id / stage_type /
+                    # responsible_user_id / expected_close_date, so 13 deals
+                    # synced on 2026-10-19 came out with no stage, no owner,
+                    # no close date and no bid value.
                     db.execute(
                         """INSERT INTO opportunities
-                               (title, description, stage_id, bid_value,
-                                actual_close_date, actual_close_value,
-                                contact_id,
+                               (title, description, stage_id, stage_type, bid_value,
+                                expected_close_date, actual_close_date, actual_close_value,
+                                contact_id, responsible_user_id,
                                 created_at, onlyoffice_id)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
                            RETURNING id""",
-                        (title, description, v3_stage_id, bid_value,
-                         actual_close_date, actual_close_value, v3_contact_id, crm_id or None),
+                        (title, description, v3_stage_id, v3_stage_type, bid_value,
+                         expected_close_date, actual_close_date, actual_close_value,
+                         v3_contact_id, v3_responsible_id, crm_id or None),
                     )
                     v3_opp_id = db.query_one("SELECT id FROM opportunities WHERE onlyoffice_id = %s", (crm_id,))["id"]
                     existing_by_title[title.lower().strip()] = v3_opp_id
                     created += 1
                 else:
                     skipped += 1
-                    # Always update actual_close_date + stage + contact_id for existing ones (idempotent).
-                    # contact_id is COALESCE'd so a sync that returns a deal without a contact
-                    # doesn't wipe the link we already have.
+                    # Always update the standard deal fields for existing ones
+                    # (idempotent). Every field is COALESCE'd so a sync that
+                    # returns a deal without a value doesn't wipe what we have.
                     try:
                         db.execute(
                             """UPDATE opportunities
                                SET actual_close_date = COALESCE(%s, actual_close_date),
                                    actual_close_value = COALESCE(%s, actual_close_value),
                                    stage_id = COALESCE(%s, stage_id),
-                                   contact_id = COALESCE(%s, contact_id)
+                                   stage_type = CASE WHEN %s IS NULL THEN stage_type ELSE %s END,
+                                   bid_value = COALESCE(%s, bid_value),
+                                   expected_close_date = COALESCE(%s, expected_close_date),
+                                   contact_id = COALESCE(%s, contact_id),
+                                   responsible_user_id = COALESCE(%s, responsible_user_id)
                                WHERE id = %s""",
-                            (actual_close_date, actual_close_value, v3_stage_id, v3_contact_id, v3_opp_id),
+                            (actual_close_date, actual_close_value, v3_stage_id,
+                             v3_stage_type, v3_stage_type,
+                             bid_value, expected_close_date,
+                             v3_contact_id, v3_responsible_id, v3_opp_id),
                         )
                     except Exception:
                         pass

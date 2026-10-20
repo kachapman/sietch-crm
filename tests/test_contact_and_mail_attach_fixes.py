@@ -34,7 +34,7 @@ class TestContactSyncPatches(unittest.TestCase):
     def _server_sync_body(self) -> str:
         # the pull-deals handler
         i = SERVER.index("def _handle_sync_pull_deals")
-        return SERVER[i: i + 12000]
+        return SERVER[i: i + 30000]
 
     def test_sync_resolves_contact_by_onlyoffice_id(self):
         """The sync must look up contacts by onlyoffice_id to populate contact_id."""
@@ -43,14 +43,33 @@ class TestContactSyncPatches(unittest.TestCase):
 
     def test_sync_insert_writes_contact_id(self):
         body = self._server_sync_body()
-        # The INSERT columns must include contact_id and the INSERT params must include v3_contact_id
-        self.assertRegex(body, r"INSERT INTO opportunities\s*\([^)]*contact_id", re.DOTALL)
-        self.assertIn("v3_contact_id, crm_id or None", body)
+        # The INSERT columns must include contact_id, and the Python argument
+        # list that follows the SQL must pass v3_contact_id. (Assert
+        # structurally — the exact arg list changed when stage_type and
+        # responsible_user_id were added.)
+        m = re.search(
+            r"INSERT INTO opportunities\s*\((?P<cols>.*?)\)\s*VALUES\s*\((?P<vals>.*?)\)\s*RETURNING",
+            body, re.DOTALL,
+        )
+        self.assertIsNotNone(m, "opportunities INSERT not found")
+        self.assertIn("contact_id", m.group("cols"))
+        # The db.execute(...) args follow the SQL string.
+        after = body[m.end(): m.end() + 500]
+        self.assertIn("v3_contact_id", after)
 
     def test_sync_update_writes_contact_id(self):
         body = self._server_sync_body()
         # The UPDATE must include contact_id and use COALESCE so an empty sync doesn't wipe it
-        self.assertIn("contact_id = COALESCE(%s, contact_id)", body)
+        m = re.search(
+            r"UPDATE opportunities\s+SET(?P<sets>.*?)WHERE id = %s",
+            body, re.DOTALL,
+        )
+        self.assertIsNotNone(m, "opportunities UPDATE not found")
+        sets = m.group("sets")
+        self.assertIn("contact_id = COALESCE(%s, contact_id)", sets)
+        # And the args tuple must pass the resolved contact.
+        after = body[m.end(): m.end() + 300]
+        self.assertIn("v3_contact_id", after)
 
     def test_import_json_export_on_conflict_includes_contact_id(self):
         """import_json_export.py ON CONFLICT DO UPDATE must write contact_id."""
