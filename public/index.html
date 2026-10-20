@@ -3113,7 +3113,8 @@
               </div>
               <div class="field">
                 <label for="branding-header-eyebrow">Header Eyebrow Text</label>
-                <input type="text" id="branding-header-eyebrow" placeholder="Sietch CRM" maxlength="100" />
+                <input type="text" id="branding-header-eyebrow" placeholder="Defaults to Company Name" maxlength="100" />
+                <span class="field-hint">Small text above the header. Empty = Company Name. Clear a stale value by emptying this field and saving.</span>
               </div>
               <div class="field">
                 <label for="branding-header-title">Header Title (HTML allowed)</label>
@@ -3747,6 +3748,11 @@
           document.title = b.companyName;
           var lt = document.querySelector(".login-title");
           if (lt) lt.textContent = b.loginTitle || b.companyName;
+          var eb = document.querySelector(".eyebrow");
+          if (eb) eb.textContent = b.headerEyebrow || b.companyName || eb.textContent;
+        } else if (b && b.headerEyebrow) {
+          var eb2 = document.querySelector(".eyebrow");
+          if (eb2) eb2.textContent = b.headerEyebrow;
         }
       }
     } catch(_) {}
@@ -3840,6 +3846,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3.7.15" type="module"></script>
+  <script src="app.js?v=3.7.16" type="module"></script>
 </body>
 </html>

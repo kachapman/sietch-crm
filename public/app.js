@@ -42824,6 +42824,27 @@ function bindChangelogModal(version) {
   });
 }
 
+function sanitizeBrandingHtml(html) {
+  // Allow only em/strong/span markup in the header title; strip everything
+  // else (scripts, event handlers, links) since this renders unsanitized HTML.
+  const tmp = document.createElement("div");
+  tmp.innerHTML = String(html || "");
+  const allowed = new Set(["EM", "STRONG", "SPAN"]);
+  const walker = document.createTreeWalker(tmp, NodeFilter.SHOW_ELEMENT);
+  const els = [];
+  while (walker.nextNode()) els.push(walker.currentNode);
+  for (const el of els) {
+    if (!allowed.has(el.tagName)) {
+      const parent = el.parentNode;
+      while (el.firstChild) parent.insertBefore(el.firstChild, el);
+      parent.removeChild(el);
+    } else {
+      for (const attr of Array.from(el.attributes)) el.removeAttribute(attr.name);
+    }
+  }
+  return tmp.innerHTML;
+}
+
 function applyBranding(branding) {
   // Apply company name to title
   if (branding.companyName) {
@@ -42831,12 +42852,25 @@ function applyBranding(branding) {
     // Update login title
     const loginTitle = $(".login-title");
     if (loginTitle) loginTitle.textContent = branding.loginTitle || branding.companyName;
-    // Update header eyebrow
+    // Update header eyebrow: explicit Header Eyebrow wins, else Company Name,
+    // else the hardcoded default. (A stale stored "Sietch CRM" used to shadow
+    // the company name — the server now returns null when unset so this
+    // fallback actually runs.)
     const eyebrow = $(".eyebrow");
-    if (eyebrow) eyebrow.textContent = branding.headerEyebrow || branding.companyName;
+    if (eyebrow) eyebrow.textContent = branding.headerEyebrow || branding.companyName || "Sietch CRM Dashboard";
+    // Update hero title from its own field; Company Name never touches it.
+    // headerTitle allows limited rich text (em/strong/span) per the form hint.
+    const heroTitle = $(".hero-title");
+    if (heroTitle && branding.headerTitle) heroTitle.innerHTML = sanitizeBrandingHtml(branding.headerTitle);
     // Update noscript message
     const noscript = $("noscript div");
     if (noscript) noscript.textContent = `JavaScript is required for the ${branding.companyName}. Please enable it and reload.`;
+  } else {
+    // No company name stored: still honor explicit eyebrow/title overrides.
+    const eyebrow = $(".eyebrow");
+    if (eyebrow && branding.headerEyebrow) eyebrow.textContent = branding.headerEyebrow;
+    const heroTitle = $(".hero-title");
+    if (heroTitle && branding.headerTitle) heroTitle.innerHTML = sanitizeBrandingHtml(branding.headerTitle);
   }
   // Apply custom logo
   if (branding.logoPath) {
@@ -42937,10 +42971,14 @@ async function saveBranding() {
   errorEl?.classList.add("hidden");
 
   const payload = {
-    companyName: $("#branding-company-name").value.trim() || null,
-    loginTitle: $("#branding-login-title").value.trim() || null,
-    headerEyebrow: $("#branding-header-eyebrow").value.trim() || null,
-    headerTitle: $("#branding-header-title").value.trim() || null,
+    // Empty string on the clearable text fields means "clear back to
+    // default"; the server converts "" to NULL. (Previously empty sent null
+    // and the server kept the stale value, so a stored eyebrow could never
+    // be cleared.)
+    companyName: $("#branding-company-name").value.trim(),
+    loginTitle: $("#branding-login-title").value.trim(),
+    headerEyebrow: $("#branding-header-eyebrow").value.trim(),
+    headerTitle: $("#branding-header-title").value.trim(),
     primaryColor: $("#branding-primary-color").value || null,
     emailHeaderColor: $("#branding-email-header-color").value || null,
     emailFooterText: $("#branding-email-footer-text").value.trim() || null,

@@ -91,6 +91,9 @@ jobs:
       - name: Run sync pull-deals field + email body backfill tests
         run: python3 tests/test_sync_pull_deals_fields.py
 
+      - name: Run branding header tests
+        run: python3 tests/test_branding_header.py
+
       - name: Run infrastructure tests
         run: python3 tests/test_infrastructure.py
 

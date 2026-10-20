@@ -136,6 +136,39 @@ the customer-update color following the category setting.
 
 Full suite: **526 Python + 189 JS, 0 failures.**
 
+## Fix: Company Name change now reaches the dashboard header (2026-10-20)
+
+### The bug
+
+Changing Company Name did nothing visible on the dashboard. Verified causes,
+all confirmed against the live droplet (company_name = "Vanguard Adjusting"):
+
+1. `applyBranding()` never applied `headerTitle` anywhere — `.hero-title`
+   ("Workspace dashboard") stayed hardcoded even though the branding tab has
+   a Header Title field for it.
+2. A stale stored `header_eyebrow = "Sietch CRM"` shadowed Company Name via
+   `headerEyebrow || companyName`, so the eyebrow above the hero title never
+   moved. Only the browser tab title changed.
+3. The admin form could never clear the stale value: empty sent null and the
+   server's `COALESCE(%s, header_eyebrow)` kept the old row.
+4. The server GET defaulted an unset eyebrow to "Sietch CRM", shadowing
+   Company Name a second time even with a clean row.
+
+### The contract now
+
+- `.eyebrow` <- Header Eyebrow (explicit) else Company Name else hardcoded default
+- `.hero-title` <- Header Title (sanitized em/strong/span) else hardcoded default;
+  Company Name never touches it (it has its own field)
+- `.sietch-name` version line + footer stay static, never touched
+- Empty form fields clear back to default ("" -> NULL on the server)
+
+### Tests
+
+`tests/test_branding_header.py` (8 guards): eyebrow fallback order,
+hero-title from its own field, sanitizer presence, version/footer untouched,
+nullable GET, clearable POST, form hint + empty-string payload.
+Wired into CI. Cache-bust `app.js?v=3.7.16`.
+
 ## Fix: Follow-up Due always shown + due/stage saves respect preview context (2026-10-20)
 
 ### Follow-up Due is now always visible and settable

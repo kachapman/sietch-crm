@@ -3191,7 +3191,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         "logoPath": row["logo_path"] or "/assets/sietch-logo-2-nobg2.png",
                         "watermarkPath": row["watermark_path"],
                         "loginTitle": row["login_title"] or "Sietch CRM",
-                        "headerEyebrow": row["header_eyebrow"] or "Sietch CRM",
+                        # Return raw NULLs for eyebrow/title so the client can
+                        # fall back to companyName (a stored stale "Sietch CRM"
+                        # used to shadow it forever).
+                        "headerEyebrow": row["header_eyebrow"] or None,
                         "headerTitle": row["header_title"] or "Workspace <em>dashboard</em>",
                         "primaryColor": row["primary_color"] or "#3b82f6",
                         "faviconPath": row["favicon_path"] or "/favicon.ico",
@@ -4018,15 +4021,32 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             try:
                 existing = db.query_one("SELECT id FROM branding LIMIT 1")
+                # Empty string means "clear back to default" for the nullable
+                # text fields; None (key absent) means "leave unchanged".
+                # Previously the form sent null for empty, and COALESCE kept
+                # the stale value forever — a stored "Sietch CRM" eyebrow could
+                # never be cleared, shadowing Company Name.
+                def _clearable(key):
+                    if key not in payload:
+                        return "__keep__"
+                    v = payload.get(key)
+                    if isinstance(v, str) and not v.strip():
+                        return None
+                    return v
+
+                _ce = _clearable("headerEyebrow")
+                _ct = _clearable("headerTitle")
+                _lt = _clearable("loginTitle")
+                _cn = _clearable("companyName")
                 if existing:
                     db.execute(
                         """UPDATE branding SET
-                            company_name = COALESCE(%s, company_name),
+                            company_name = CASE WHEN %s = '__keep__' THEN company_name ELSE %s END,
                             logo_path = COALESCE(%s, logo_path),
                             watermark_path = %s,
-                            login_title = COALESCE(%s, login_title),
-                            header_eyebrow = COALESCE(%s, header_eyebrow),
-                            header_title = COALESCE(%s, header_title),
+                            login_title = CASE WHEN %s = '__keep__' THEN login_title ELSE %s END,
+                            header_eyebrow = CASE WHEN %s = '__keep__' THEN header_eyebrow ELSE %s END,
+                            header_title = CASE WHEN %s = '__keep__' THEN header_title ELSE %s END,
                             primary_color = COALESCE(%s, primary_color),
                             favicon_path = COALESCE(%s, favicon_path),
                             email_header_color = COALESCE(%s, email_header_color),
@@ -4034,9 +4054,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             email_from_name = COALESCE(%s, email_from_name),
                             updated_at = NOW()
                         WHERE id = %s""",
-                        (payload.get("companyName"), payload.get("logoPath"),
-                         payload.get("watermarkPath"), payload.get("loginTitle"),
-                         payload.get("headerEyebrow"), payload.get("headerTitle"),
+                        (_cn, _cn,
+                         payload.get("logoPath"),
+                         payload.get("watermarkPath"), _lt, _lt, _ce, _ce,
+                         _ct, _ct,
                          payload.get("primaryColor"), payload.get("faviconPath"),
                          payload.get("emailHeaderColor"), payload.get("emailFooterText"),
                          payload.get("emailFromName"),
