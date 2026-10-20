@@ -15,7 +15,7 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Topic:** Linked emails missing from History & Notes (1648→opp 43) + wrong Email category.
 
-**Status: IMPLEMENTED + TESTED — push + droplet deploy (rebuild; migration 037 auto-applies) still to do.**
+**Status: DEPLOYED 2026-10-20 as 5381b7e** (rebuild healthy; migration 037 applied + recorded; all 7 email_snapshot rows now cat 13). No bot restart needed.
 
 - `_create_email_history_event` idempotent helper; called on fresh + already-linked + sent-mail paths.
 - Constant 16→13; migration 037 recategorizes old snapshots. Frontend "Already linked" honesty.
