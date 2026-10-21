@@ -11,6 +11,20 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-21 (Create Project save crash fix)
+
+**Topic:** `unwrapCreatedEntity is not defined` blocked all project creation.
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+
+- Restored helper (identical semantics) above `createCrmOpportunity`; swept all
+  other functions removed in ae31547 — no other dangling refs.
+- Tests: 4 node tests (envelope shapes + orphan guard), fail-on-old verified.
+- Warned user: crash post-dated the server POST, so retries likely duplicated
+  projects — check for and delete spares.
+
+## Previous session summary (2026-10-21, note-type Phone call fix)
+
 **Date:** 2026-10-21 (note-type Phone call fix)
 
 **Topic:** Dropdown hid Phone call via stale hardcoded category IDs.

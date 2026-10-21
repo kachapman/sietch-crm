@@ -142,6 +142,9 @@ jobs:
       - name: Run note type filter tests
         run: node --test tests/test_note_type_filter.mjs
 
+      - name: Run create-project unwrap tests
+        run: node --test tests/test_create_opp_unwrap.mjs
+
       - name: Run supplemental sync tests
         run: python3 tests/test_sync_supplemental.py -v
 

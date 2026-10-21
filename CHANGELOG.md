@@ -2,6 +2,16 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Create Project save crash — `unwrapCreatedEntity` restored (2026-10-21)
+
+Every Create Project save threw `unwrapCreatedEntity is not defined`: the helper
+was deleted in `ae31547` (Aug tasks refactor) while `submitCreateOpportunityForm`
+still calls it. Crash hit AFTER the server-side POST, so retries made ghost
+duplicates (check for and delete spares). Restored with identical semantics;
+only other call sites verified clean. `tests/test_create_opp_unwrap.mjs`
+(4 tests: envelope shapes + orphaned-helper source guard, discriminating).
+Cache-bust 3.7.29→3.7.30.
+
 ## Note-type dropdown: Phone call back, system rows hidden by flag (2026-10-21)
 
 The dropdown excluded hardcoded numeric category IDs whose comment mapping did

@@ -16410,6 +16410,16 @@ function buildOpportunityCreateBody(form) {
   return body;
 }
 
+// Restored 2026-10-21: deleted in ae31547 (tasks refactor) while
+// submitCreateOpportunityForm still calls it — every Create Project save
+// crashed with "unwrapCreatedEntity is not defined" AFTER the server-side
+// POST succeeded (ghost duplicates on retry). Same semantics as pre-August.
+function unwrapCreatedEntity(data) {
+  const r = data?.response ?? data?.result ?? data;
+  if (r && typeof r === "object") return r;
+  return data;
+}
+
 async function createCrmOpportunity(body) {
   const res = await withCrmQueueOnTransient(
     () => api("/api/v2/projects", {
