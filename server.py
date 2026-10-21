@@ -3540,7 +3540,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 404, {"error": "Project not found"})
             return
         m = re.match(r"^/api/v2/projects/(\d+)/history/replies$", api_path)
-        if m and method == "GET":
+        if m:
             opp_id = _resolve_project_id(m.group(1))
             if opp_id:
                 self._handle_history_replies_batch(opp_id)
