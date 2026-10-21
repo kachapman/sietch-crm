@@ -2,6 +2,16 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Documents: multi-download as one zip (2026-10-21)
+
+The Documents tab Download action fired one dialog per file. Now 2+ files
+POST `POST /api/v2/documents/batch-download` and fetch a single zip
+(mirrors the existing photos batch endpoint: deduped names, skips
+missing-on-disk, `project-{id}-documents.zip`). Single-file downloads keep
+the instant direct path. `tests/test_documents_batch_download.py` (6 tests:
+real zip contents from temp files, mocked db; discriminating). Cache-bust
+app.js 3.7.25→3.7.26.
+
 ## Reply to deleted note fails cleanly (2026-10-21)
 
 Replying to a tag whose parent note was deleted FK-crashed (500) — the bot

@@ -4559,6 +4559,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/documents/batch-copy" and method == "POST":
             self._handle_documents_batch_copy()
             return
+        if api_path == "/api/v2/documents/batch-download" and method == "POST":
+            self._handle_documents_batch_download()
+            return
         if api_path == "/api/v2/photos/batch-download" and method == "POST":
             self._handle_photos_batch_download()
             return
@@ -13954,6 +13957,70 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 else:
                     result[name] = body.decode("utf-8", errors="replace")
         return result
+
+    def _handle_documents_batch_download(self) -> None:
+        """Return a ZIP of selected documents (mirrors _handle_photos_batch_download).
+
+        Multi-select Download in the Documents tab posts here instead of
+        firing one download dialog per file.
+        """
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            body = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        ids = body.get("ids", [])
+        if not ids:
+            _json_response(self, 400, {"error": "ids required"})
+            return
+        try:
+            id_list = [int(i) for i in ids]
+        except (TypeError, ValueError):
+            _json_response(self, 400, {"error": "ids must be integers"})
+            return
+        rows = db.query(
+            """SELECT id, opportunity_id, title, file_path, file_size, mime_type
+               FROM project_documents WHERE id = ANY(%s) AND is_deleted = FALSE""",
+            (id_list,),
+        )
+        if not rows:
+            _json_response(self, 404, {"error": "No documents found"})
+            return
+        buf = io.BytesIO()
+        seen_names: dict[str, int] = {}
+        common_opp_id = rows[0][1]
+        all_same_opp = all(r[1] == common_opp_id for r in rows)
+        skipped = 0
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for r in rows:
+                doc_id, opp_id, title, file_path, file_size, mime_type = r
+                src = ROOT / (file_path or "")
+                if not file_path or not src.exists():
+                    skipped += 1
+                    continue
+                name = title or f"document_{doc_id}"
+                if name in seen_names:
+                    seen_names[name] += 1
+                    stem = Path(name).stem
+                    ext = Path(name).suffix
+                    name = f"{stem} ({seen_names[name]}){ext}"
+                else:
+                    seen_names[name] = 0
+                zf.writestr(name, src.read_bytes())
+        if not seen_names:
+            _json_response(self, 404, {"error": "No files available on disk"})
+            return
+        zip_data = buf.getvalue()
+        zip_name = f"project-{common_opp_id}-documents.zip" if all_same_opp else "selected-documents.zip"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Length", str(len(zip_data)))
+        self.send_header("Content-Disposition", f'attachment; filename="{zip_name}"')
+        self.end_headers()
+        self.wfile.write(zip_data)
 
     def _handle_document_download(self, doc_id: int) -> None:
         row = db.query_one(

@@ -11,7 +11,16 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-21 (reply deleted-parent guard)
+**Date:** 2026-10-21 (batch doc download)
+
+**Topic:** Multi-select Download as one zip.
+
+**Status: IMPLEMENTED + TESTED, pushed — deploy still to do.**
+
+- Server batch endpoint mirroring photos; frontend single/batch branch.
+- Tests: 6 (real zip assertions), discriminating; all suites green.
+
+## Previous session summary (2026-10-21, reply deleted-parent guard)
 
 **Topic:** Reply-to-deleted-note 404 instead of FK 500.
 

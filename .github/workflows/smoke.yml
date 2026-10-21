@@ -130,6 +130,9 @@ jobs:
       - name: Run reply deleted-parent tests
         run: python3 tests/test_history_reply_deleted_parent.py -v
 
+      - name: Run documents batch download tests
+        run: python3 tests/test_documents_batch_download.py -v
+
       - name: Run supplemental sync tests
         run: python3 tests/test_sync_supplemental.py -v
 

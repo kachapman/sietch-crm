@@ -40245,20 +40245,50 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     updateDocsToolbar();
   });
 
-  actionsSelect.addEventListener("change", () => {
+  actionsSelect.addEventListener("change", async () => {
     const action = actionsSelect.value;
     actionsSelect.value = "";
     if (!action) return;
     const ids = Array.from(previewDocsState.selected);
     if (!ids.length) return;
     if (action === "download") {
-      ids.forEach(id => {
-        const doc = previewDocsState.documents.find(d => d.id === id);
+      if (ids.length === 1) {
+        // Single file: instant direct download, unchanged behavior.
+        const doc = previewDocsState.documents.find(d => d.id === ids[0]);
         const a = document.createElement("a");
-        a.href = `/api/v2/documents/${id}`;
+        a.href = `/api/v2/documents/${ids[0]}`;
         a.download = doc ? doc.title : "";
         a.click();
-      });
+      } else {
+        // Multiple files: one ZIP, one dialog (server builds it).
+        showToast("Preparing zip…");
+        try {
+          const res = await fetch("/api/v2/documents/batch-download", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ ids }),
+          });
+          if (!res.ok) {
+            let msg = `Download failed (${res.status})`;
+            try { msg = (await res.json()).error || msg; } catch {}
+            throw new Error(msg);
+          }
+          const blob = await res.blob();
+          let name = "selected-documents.zip";
+          const disp = res.headers.get("Content-Disposition") || "";
+          const m = disp.match(/filename="([^"]+)"/);
+          if (m) name = m[1];
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = name;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 60000);
+        } catch (err) {
+          showToast(err.message || "Download failed", true);
+        }
+      }
     } else if (action === "move") {
       showDocsDestPanel("move");
     } else if (action === "copy") {
