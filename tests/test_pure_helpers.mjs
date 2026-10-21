@@ -331,3 +331,26 @@ test('labelChipsHtml: empty labels render nothing', () => {
   assert.equal(labelChipsHtml({}), "");
   assert.equal(labelChipsHtml({ labels: "   " }), "");
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// _tablerContentValid mirror (public/app.js): ::before content probe for
+// webfont glyph existence. Missing classes compute to none/empty.
+function _tablerContentValid(content) {
+  if (content == null) return false;
+  const c = String(content).trim();
+  return c !== "" && c !== "none" && c !== "normal" && c !== '""' && c !== "''";
+}
+
+test('_tablerContentValid: real content passes', () => {
+  assert.equal(_tablerContentValid('"\\e001"'), true);
+  assert.equal(_tablerContentValid('  "\\e001"  '), true);
+});
+
+test('_tablerContentValid: missing-glyph markers fail', () => {
+  assert.equal(_tablerContentValid("none"), false);
+  assert.equal(_tablerContentValid("normal"), false);
+  assert.equal(_tablerContentValid('""'), false);
+  assert.equal(_tablerContentValid(""), false);
+  assert.equal(_tablerContentValid(null), false);
+  assert.equal(_tablerContentValid(undefined), false);
+});

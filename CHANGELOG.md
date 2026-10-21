@@ -2,6 +2,32 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Tabler icon pool cured + nbsp root fix (2026-10-21)
+
+Two unrelated fixes in one build.
+
+### Avatar/tab icons: 29 dead names replaced, font pinned
+- The pool carried 29 names absent from the served font (v3 renames under a
+  floating `@latest` URL), and width-based validation can't detect missing
+  glyphs (.notdef boxes measure nonzero). Result: blank selectable icons.
+- Font pinned `@latest` → `3.49.0`; 18 names remapped to verified v3 names,
+  11 dropped (no equivalent); validator probes `::before` content instead of
+  width; saved-but-invalid values keep falling back to initials (no migration).
+- `tests/tabler_pool_snapshot.txt` (220 names, verified against served CSS)
+  + `tests/test_tabler_icons.mjs` (5 guards) fail loudly on any future drift.
+
+### Notes: entity double-path fixed at both ends
+- Render: tagless notes decode entities before display (was: literal
+  "&nbsp;" on screen). Heals the Oct 21 row and all prior rows with zero
+  data changes. Same treatment on contact-history renders.
+- Save: `_normalize_note_content` choke point on project/contact history,
+  replies, and bot notes — raw editor entities and correct text converge to
+  one stored form (idempotent); rich HTML untouched.
+- Live-proven: event 49535 stored raw `&nbsp;` (project.html posts raw
+  innerHTML); quick-note/preview were already normalized.
+- `tests/test_note_normalize.py` (9 behavioral tests, discriminating).
+- Cache-bust app.js 3.7.22→3.7.23. CI node job now runs all test_*.mjs.
+
 ## Task chips, task project search anchor, drafts UX (2026-10-21)
 
 No task-project-link fix ever existed (verified across history) — the search

@@ -121,6 +121,9 @@ jobs:
       - name: Run mail drafts endpoint tests
         run: python3 tests/test_mail_drafts_endpoint.py -v
 
+      - name: Run note normalize tests
+        run: python3 tests/test_note_normalize.py -v
+
       - name: Run supplemental sync tests
         run: python3 tests/test_sync_supplemental.py -v
 
@@ -139,7 +142,7 @@ jobs:
           node-version: '22'
 
       - name: Run pure-helper tests
-        run: node --test tests/test_pure_helpers.mjs
+        run: node --test tests/test_*.mjs
 
   syntax:
     name: Server syntax checks

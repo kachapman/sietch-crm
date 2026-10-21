@@ -19,6 +19,7 @@ import errno
 import traceback
 import hashlib
 import hmac
+import html
 import io
 import json
 import os
@@ -979,6 +980,24 @@ except Exception:
 # that filed linked/imported emails as customer updates (and leaked raw email
 # dumps into the Telegram customer-updates feed, which filters on 16).
 EMAIL_HISTORY_CATEGORY_ID = 13
+
+
+def _normalize_note_content(content: str) -> str:
+    """Converge tagless note content to a single stored form.
+
+    Raw editor HTML carries entities (contenteditable emits &nbsp;), while
+    normalized clients send escaped text. Decode-then-escape makes both
+    converge: raw "&nbsp;" becomes a real NBSP char, correct "&amp;"
+    round-trips byte-identical (quote=False mirrors frontend escapeHtml).
+    Rich HTML (with tags) is left byte-identical — its entities already
+    render correctly via innerHTML, and re-escaping would corrupt markup.
+    """
+    text = str(content or "").strip()
+    if not text:
+        return text
+    if re.search(r"<[a-z]", text, re.IGNORECASE):
+        return text
+    return html.escape(html.unescape(text), quote=False)
 
 # ── Calendar system (migration 010) ──────────────────────────────────────────
 try:
@@ -5958,6 +5977,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not content:
             _json_response(self, 400, {"error": "Note content is required"})
             return
+        # Single choke point: unnormalized clients (raw editor HTML with
+        # &nbsp;) converge here so no editor can store display junk.
+        content = _normalize_note_content(content)
+        if not content:
+            _json_response(self, 400, {"error": "Note content is required"})
+            return
         try:
             category_id = int(payload.get("categoryId") or 1)
         except (TypeError, ValueError):
@@ -6165,6 +6190,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not user:
                 return
         content = str(payload.get("content") or "").strip()
+        if not content:
+            _json_response(self, 400, {"error": "Content is required"})
+            return
+        content = _normalize_note_content(content)
         if not content:
             _json_response(self, 400, {"error": "Content is required"})
             return
@@ -6954,6 +6983,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         content = str(payload.get("content") or "").strip()
         category_id = payload.get("categoryId") or 1
         backdated = str(payload.get("created") or "").strip() or None
+        # Same single-choke-point normalization as project history notes.
+        content = _normalize_note_content(content)
         event_id = db.insert_returning(
             """INSERT INTO history_events (contact_id, category_id, content, created_by, backdated_created_at)
                VALUES (%s, %s, %s, %s, %s) RETURNING id""",
@@ -16335,6 +16366,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             opp_id = payload.get("opportunityId") or payload.get("dealId")
             content = str(payload.get("content") or "").strip()
+            # Same normalization: Telegram text has no entities (no-op
+            # decode) and raw & becomes singly-escaped, matching the
+            # render-side decode.
+            content = _normalize_note_content(content)
             category_id = int(payload.get("categoryId") or 1)
             created_by = payload.get("createdBy")
             # Auto-resolve created_by from chatId mapping if not provided

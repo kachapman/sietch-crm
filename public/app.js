@@ -22578,31 +22578,30 @@ async function openReplyCompose(messageId, type = 'reply') {
 // the same shape (e.g. `user-plus` is excluded because `user` is already in
 // the list; `cloud-rain` excluded because `cloud` is in the list).
 const TABLER_ICON_OPTIONS = [
-  // People / characters (15)
+  // People / characters (14)
   'user', 'users', 'user-circle', 'user-pin', 'ghost', 'ghost-2', 'robot', 'robot-face',
-  'alien', 'mood-smile', 'mood-sad', 'mood-neutral', 'mood-tongue', 'mood-empty', 'baby',
-  // Animals (12)
+  'alien', 'mood-smile', 'mood-sad', 'mood-neutral', 'mood-tongue', 'mood-empty',
+  // Animals (8)
   'cat', 'dog', 'fish', 'horse', 'butterfly', 'paw', 'spider', 'bug',
-  'rabbit', 'cow', 'chicken', 'whale',
   // Nature / weather (14)
   'leaf', 'flower', 'cloud', 'sun', 'moon', 'flame', 'droplet',
   'snowflake', 'wind', 'rainbow', 'bolt', 'tornado', 'mountain', 'tree',
-  // Plants (6)
-  'cactus', 'mushroom', 'bamboo', 'plant', 'plant-2', 'seeds',
+  // Plants (5)
+  'cactus', 'mushroom', 'plant', 'plant-2', 'seedling',
   // Buildings / places (14)
   'building', 'home', 'home-2', 'building-skyscraper', 'map-pin', 'map',
-  'church', 'mosque', 'hospital', 'school', 'tent', 'windmill', 'lamp', 'door',
+  'building-church', 'mosque', 'hospital', 'school', 'tent', 'windmill', 'lamp', 'door',
   // Transport (11)
   'car', 'truck', 'bus', 'bike', 'plane', 'plane-departure', 'ship', 'anchor',
   'train', 'helicopter', 'scooter',
   // Media / entertainment (14)
   'music', 'disc', 'video', 'microphone', 'headphones', 'radio',
   'camera', 'photo', 'movie', 'book', 'playlist', 'aperture', 'palette', 'brush',
-  // Sports (12)
-  'basketball', 'football', 'baseball', 'volleyball', 'tennis', 'badminton',
+  // Sports (11)
+  'ball-basketball', 'ball-football', 'ball-baseball', 'ball-volleyball', 'ball-tennis',
   'golf', 'swimming', 'medal', 'trophy', 'crown', 'run',
   // Board games (6)
-  'chess-bishop', 'chess-king', 'chess-knight', 'chess-pawn', 'chess-queen', 'chess-rook',
+  'chess-bishop', 'chess-king', 'chess-knight', 'chess', 'chess-queen', 'chess-rook',
   // Food / drink (12)
   'cup', 'coffee', 'beer', 'pizza', 'bread', 'apple', 'cherry', 'lemon',
   'cookie', 'ice-cream', 'salad', 'soup',
@@ -22613,10 +22612,10 @@ const TABLER_ICON_OPTIONS = [
   // Office / business (12)
   'briefcase', 'mail', 'mail-opened', 'inbox', 'send', 'rocket', 'at',
   'phone', 'calendar', 'chart-bar', 'chart-line', 'chart-pie',
-  // Office supplies (8)
-  'pencil', 'pen', 'highlighter', 'eraser', 'ruler', 'scissors', 'paperclip', 'stamp',
-  // Tools (10)
-  'hammer', 'screwdriver', 'wrench', 'tool', 'shovel', 'axe', 'knife', 'fork', 'spoon', 'ladder',
+  // Office supplies (7)
+  'pencil', 'ballpen', 'eraser', 'ruler', 'scissors', 'paperclip', 'rubber-stamp',
+  // Tools (8)
+  'hammer', 'tools', 'tool', 'shovel', 'axe', 'tools-kitchen', 'bowl-spoon', 'ladder',
   // Security / status (10)
   'shield', 'lock', 'key', 'badge', 'certificate', 'fingerprint', 'license',
   'eye', 'eye-closed', 'scan',
@@ -22624,7 +22623,7 @@ const TABLER_ICON_OPTIONS = [
   'alarm', 'clock', 'hourglass', 'hourglass-low', 'hourglass-high',
   'calendar-event', 'sun-moon', 'history',
   // Numbers / symbols (12)
-  '123', 'ab', 'hash', 'asterisk', 'plus', 'minus', 'equal', 'slash',
+  '123', 'abc', 'hash', 'asterisk', 'plus', 'minus', 'equal', 'slash',
   'circle', 'square', 'triangle', 'percentage',
   // Currency (6)
   'currency-bitcoin', 'currency-euro', 'currency-pound', 'currency-yen', 'currency-dollar', 'coin',
@@ -22632,34 +22631,38 @@ const TABLER_ICON_OPTIONS = [
   'brand-twitter', 'brand-facebook', 'brand-instagram', 'brand-linkedin',
   'brand-youtube', 'brand-github', 'brand-slack', 'brand-discord',
   'brand-tiktok', 'brand-reddit', 'brand-spotify', 'brand-twitch',
-  // Navigation / direction (9)
-  'compass', 'map-2', 'route', 'signpost', 'navigation',
+  // Navigation / direction (8)
+  'compass', 'map-2', 'route', 'navigation',
   'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right',
-  // Halloween (5)
-  'pumpkin', 'witch-hat', 'skull', 'bat', 'candy',
-  // Misc / fun (12)
+  // Halloween (4)
+  'pumpkin-scary', 'skull', 'bat', 'candy',
+  // Misc / fun (10)
   'diamond', 'gift', 'star', 'sparkles', 'heart',
-  'flag', 'magnet', 'yin-yang', 'peace', 'peace-2', 'target', 'flame-2',
+  'flag', 'magnet', 'yin-yang', 'peace', 'target',
 ];
 // Keep legacy alias so mail-account picker still works.
 const MAIL_TAB_ICON_OPTIONS = TABLER_ICON_OPTIONS;
 const MAIL_TAB_COLOR_OPTIONS = ['var(--accent)', '#e74c3c', '#e67e22', '#f1c40f', '#2ecc71', '#3498db', '#9b59b6', '#e91e63', '#795548', '#607d8b', '#8b95a8'];
 
-// Runtime cache: subset of TABLER_ICON_OPTIONS that actually render a glyph in
-// the loaded Tabler webfont. The webfont is loaded from a CDN and gets
-// updated over time, so some names we ship may not exist in the current
-// version. openTablerIconPicker validates the set on first open and caches
-// the result here so subsequent opens are O(1).
+// Pure predicate for the check below (mirrored in tests/test_pure_helpers.mjs).
+function _tablerContentValid(content) {
+  if (content == null) return false;
+  const c = String(content).trim();
+  return c !== "" && c !== "none" && c !== "normal" && c !== '""' && c !== "''";
+}
+
+// Runtime cache: subset of TABLER_ICON_OPTIONS present in the loaded Tabler
+// webfont. Detection probes the ::before CONTENT (missing classes compute to
+// "none") — never element width, which cannot distinguish a real glyph from
+// a .notdef fallback box and once blanked valid icons fleet-wide.
 let _validTablerIconSet = null;
 function _getValidTablerIconSet() {
   if (_validTablerIconSet) return _validTablerIconSet;
-  if (typeof document === "undefined") {
+  if (typeof document === "undefined" || typeof window === "undefined" || !window.getComputedStyle) {
     _validTablerIconSet = new Set(TABLER_ICON_OPTIONS);
     return _validTablerIconSet;
   }
-  // Render every candidate into a hidden test container, measure each.
-  // The Tabler webfont uses ::before pseudo-elements with unicode content;
-  // an icon that doesn't exist in the font renders with zero width.
+  // Render every candidate into a hidden test container, probe each.
   const test = document.createElement("div");
   test.style.cssText = "position:absolute;visibility:hidden;left:-9999px;top:-9999px;pointer-events:none;";
   document.body.appendChild(test);
@@ -22669,9 +22672,15 @@ function _getValidTablerIconSet() {
       const el = document.createElement("i");
       el.className = `ti ti-${ic}`;
       test.appendChild(el);
-      // Force layout, then measure.
-      const w = el.getBoundingClientRect().width;
-      if (w > 0) valid.add(ic);
+      // Force layout, then read the pseudo-element's content.
+      void el.offsetWidth;
+      let content = "";
+      try {
+        content = window.getComputedStyle(el, "::before").getPropertyValue("content");
+      } catch {
+        content = "";
+      }
+      if (_tablerContentValid(content)) valid.add(ic);
       el.remove();
     }
   } finally {
@@ -26613,7 +26622,10 @@ function renderHistoryNoteBody(container, ev) {
     container.innerHTML = sanitizeHistoryHtml(raw);
     return;
   }
-  container.textContent = raw;
+  // Tagless content goes in as text — but it may carry HTML entities from
+  // unnormalized save paths (raw contenteditable innerHTML with &nbsp;) or
+  // imports. Decode first or entities display literally ("&nbsp;" on screen).
+  container.textContent = decodeHtmlEntities(raw);
 }
 
 function openEmailPreviewModal(messageId) {
@@ -29681,7 +29693,7 @@ function renderSearchContactDetail(container, contact, history) {
       const content = (ev.content || '').replace(/<[^>]+>/g, '').substring(0, 300);
       return `<div class="contact-history-item">
         <div class="contact-history-meta"><strong>${escapeHtml(catTitle)}</strong> &mdash; ${escapeHtml(ev.author || '')} &mdash; ${escapeHtml(date)}</div>
-        <div class="contact-history-content">${escapeHtml(content)}</div>
+        <div class="contact-history-content">${escapeHtml(decodeHtmlEntities(content))}</div>
       </div>`;
     }).join("");
   } else {
@@ -29751,7 +29763,7 @@ function renderSearchContactDetail(container, contact, history) {
           const content = (ev.content || '').replace(/<[^>]+>/g, '').substring(0, 300);
           return `<div class="contact-history-item">
             <div class="contact-history-meta"><strong>${escapeHtml(catTitle)}</strong> &mdash; ${escapeHtml(ev.author || '')} &mdash; ${escapeHtml(date)}</div>
-            <div class="contact-history-content">${escapeHtml(content)}</div>
+            <div class="contact-history-content">${escapeHtml(decodeHtmlEntities(content))}</div>
           </div>`;
         }).join("");
       }

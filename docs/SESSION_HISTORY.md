@@ -11,7 +11,17 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-21 (tasks + drafts UX)
+**Date:** 2026-10-21 (icons + nbsp)
+
+**Topic:** Tabler pool cure + nbsp render/save fix.
+
+**Status: IMPLEMENTED + TESTED, pushed — deploy still to do.**
+
+- 220/220 names verified vs served 3.49.0 CSS; validator content-probing.
+- Render decode + server normalize on 4 endpoints; event 49535 forensics.
+- Tests: tabler (5), pure_helpers +2, note_normalize (9, discriminating); all suites green.
+
+## Previous session summary (2026-10-21, tasks + drafts UX)
 
 **Topic:** Task chips/icons, project search anchor, drafts routing + visibility.
 
