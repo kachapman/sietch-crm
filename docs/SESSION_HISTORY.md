@@ -15,7 +15,7 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Topic:** Multi-select Download as one zip.
 
-**Status: IMPLEMENTED + TESTED, pushed — deploy still to do.**
+**Status: DEPLOYED 2026-10-21 as b9c63db** (rebuild healthy; live bundle 3.7.26). This deploy also shipped the held reply-404 commit. No migration, no bot restart.
 
 - Server batch endpoint mirroring photos; frontend single/batch branch.
 - Tests: 6 (real zip assertions), discriminating; all suites green.
