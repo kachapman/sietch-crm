@@ -21719,7 +21719,8 @@ async function openComposeModal(opts = {}) {
         });
         if (statusEl) { statusEl.textContent = 'Saved'; statusEl.style.color = '#3fb950'; }
         addEventLogEntry("email", null, "", `Draft saved`, true);
-        showToast('Draft saved');
+        const savedAcct = (mailState.accounts || []).find(a => String(a.id) === String(accountId));
+        showToast('Draft saved' + (savedAcct?.email ? ` under ${savedAcct.email}` : ''));
         modal.classList.add('hidden');
       } catch (e) {
         if (statusEl) { statusEl.textContent = 'Save failed'; statusEl.style.color = '#f85149'; }
@@ -24204,6 +24205,32 @@ async function loadMailMessagesForModal(background) {
         snippet: (d.body_text || '').slice(0, 80),
       }));
       renderMailList(mailState.messages);
+      // The footer belongs to this view: INBOX totals must not linger here.
+      mailState.total = mailState.messages.length;
+      mailState.pages = 1;
+      mailState.page = 1;
+      renderMailPagination();
+      // Cross-account hint: drafts are per-account; point at the tab that
+      // actually holds them instead of a bare empty list.
+      const hintAnchor = $("#mail-list");
+      hintAnchor?.querySelector(".mail-drafts-hint")?.remove();
+      const others = (data.other_accounts || []).filter(o => {
+        if (mailState.activeAccount === 'crm') return !o.crm;
+        if (mailState.activeAccount != null) return String(o.id) !== String(mailState.activeAccount);
+        return false;
+      });
+      if (!drafts.length && others.length && hintAnchor) {
+        const hint = document.createElement("div");
+        hint.className = "mail-drafts-hint";
+        hint.style.cssText = "padding:0.6rem 0.8rem;color:var(--muted);font-size:0.82rem;border-bottom:1px solid var(--border);";
+        hint.innerHTML = `No drafts here. ${others.map(o => `<button type="button" class="btn btn-ghost btn-sm" data-goto-account="${escapeHtml(String(o.id))}">${escapeHtml(String(o.n))} under ${escapeHtml(o.email || "another account")}</button>`).join(" ")}`;
+        hintAnchor.prepend(hint);
+        hint.querySelectorAll("[data-goto-account]").forEach(btn => {
+          btn.addEventListener("click", () => {
+            document.querySelector(`.mail-inbox-tab[data-account-id="${btn.dataset.gotoAccount}"]`)?.click();
+          });
+        });
+      }
       if (background) { restoreExpandedState(); if (scrollContainer) scrollContainer.scrollTop = savedScrollTop; }
     } catch (e) {
       if (!background) list.innerHTML = `<div class="mail-empty">Failed to load drafts: ${escapeHtml(e.message)}</div>`;
@@ -25026,7 +25053,14 @@ function renderMailList(msgs) {
 
     row.addEventListener("click", (e) => {
       if (e.target.tagName === "INPUT" || e.target.closest('.mail-expand-btn')) return;
-      // Clicking row expands the email inline
+      // Clicking row expands the email inline. Drafts live in mail_outgoing,
+      // not mail_messages — fetching them as messages 404s (or worse, renders
+      // a colliding old email). Route drafts to compose like the expand
+      // button does.
+      if (m.isDraft) {
+        openDraftInComposeById(id);
+        return;
+      }
       const isHidden = detail.classList.contains("hidden");
       detail.classList.toggle("hidden");
       if (!isHidden) {
@@ -25178,18 +25212,9 @@ function renderMailList(msgs) {
 
     expBtn.addEventListener("click", async (e) => {
       e.stopImmediatePropagation();
-      // Drafts: open compose pre-filled
+      // Drafts: open compose pre-filled (shared with row-click routing).
       if (m.isDraft) {
-        try {
-          const draft = await api(`/api/v2/mail/drafts/${id}`);
-          openComposeModal({
-            to: draft.to_addr || '',
-            subject: draft.subject || '',
-            body: draft.body_html || draft.body_text || '',
-            title: 'Edit Draft',
-            draftId: draft.id,
-          });
-        } catch (err) { showToast('Failed to load draft: ' + err.message, true); }
+        openDraftInComposeById(id);
         return;
       }
       // Open the full email preview modal
@@ -26974,6 +26999,22 @@ function bindEmailPreviewActionButtons(modal, norm, fullMail, messageId, close, 
       }
     }, { signal: ctrl.signal });
   });
+}
+
+async function openDraftInComposeById(id) {
+  // Single routing point for opening a draft: row click and the expand
+  // button share it so drafts can never fall through to the inbox-message
+  // fetch (which 404s, or renders a colliding old message).
+  try {
+    const draft = await api(`/api/v2/mail/drafts/${id}`);
+    openComposeModal({
+      to: draft.to_addr || '',
+      subject: draft.subject || '',
+      body: draft.body_html || draft.body_text || '',
+      title: 'Edit Draft',
+      draftId: draft.id,
+    });
+  } catch (err) { showToast('Failed to load draft: ' + (err.message || err), true); }
 }
 
 async function fetchMailMessage(messageId) {
@@ -42018,8 +42059,10 @@ function createTaskRow(task) {
     const ent = document.createElement("button");
     ent.type = "button";
     ent.className = "task-chip task-chip-project";
-    ent.title = "Open project";
     const projName = task.opportunity?.title || `Project #${task.opportunityId}`;
+    // Ellipsis CSS caps the width; the full name lives here since the row
+    // gives the title its horizontal space back.
+    ent.title = `${projName} — open project`;
     ent.innerHTML = `<i class="ti ti-link" style="font-size:0.65rem;flex-shrink:0;"></i><span class="task-chip-project-text">${escapeHtml(projName)}</span>`;
     ent.addEventListener("click", (ev) => {
       ev.preventDefault();
@@ -42250,6 +42293,9 @@ function toggleTaskPin(task) {
   }).catch((err) => showToast(err.message, true));
 }
 
+const TASK_OVERDUE_ICON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 21h-9a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v5"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M11 15h1"/><path d="M12 15v3"/><path d="M19 16v3"/><path d="M19 22v.01"/></svg>`;
+const TASK_LABELS_ICON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 8v4.172a2 2 0 0 0 .586 1.414l5.71 5.71a2.41 2.41 0 0 0 3.408 0l3.592 -3.592a2.41 2.41 0 0 0 0 -3.408l-5.71 -5.71a2 2 0 0 0 -1.414 -.586h-4.172a2 2 0 0 0 -2 2"/><path d="M18 19l1.592 -1.592a4.82 4.82 0 0 0 0 -6.816l-4.592 -4.592"/><path d="M7 10h-.01"/></svg>`;
+
 function dueChipHtml(task) {
   const due = task.dueDate || task.deadLine?.value || task.deadLine;
   if (!due) return "";
@@ -42259,17 +42305,20 @@ function dueChipHtml(task) {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const day = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   const cls = day < today ? "overdue" : day === today ? "today" : "";
-  const label =
-    cls === "overdue" ? `Overdue ${d.toLocaleDateString()}`
-    : cls === "today" ? "Today"
-    : d.toLocaleDateString();
+  if (cls === "overdue") {
+    // Icon only — never the "Overdue <date>" text. The date survives in
+    // the hover tooltip.
+    return `<span class="task-chip task-chip-due task-chip--overdue" title="Overdue ${escapeHtml(d.toLocaleDateString())}">${TASK_OVERDUE_ICON}</span>`;
+  }
+  const label = cls === "today" ? "Today" : d.toLocaleDateString();
   return `<span class="task-chip task-chip-due ${cls ? "task-chip--" + cls : ""}">${escapeHtml(label)}</span>`;
 }
 
 function labelChipsHtml(task) {
   const labels = String(task.labels || "").split(/\s+/).filter(Boolean);
   if (!labels.length) return "";
-  return labels.map((l) => `<span class="task-chip task-chip-label">${escapeHtml(l)}</span>`).join("");
+  // One icon for all labels (row space); hover lists them.
+  return `<span class="task-chip task-chip-label" title="${escapeHtml(labels.join(", "))}">${TASK_LABELS_ICON}</span>`;
 }
 
 

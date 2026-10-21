@@ -2,6 +2,31 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Task chips, task project search anchor, drafts UX (2026-10-21)
+
+No task-project-link fix ever existed (verified across history) — the search
+itself works server-side, but its dropdown is absolutely positioned against
+an unpositioned ancestor and renders detached/invisible.
+
+### Fixed
+
+- `#task-edit-project` is now `position: relative`, anchoring the project
+  search dropdown under the search box.
+- Overdue task pill is icon-only (calendar-exclamation, red), date kept in
+  the hover tooltip; Today/dated pills unchanged.
+- Task labels collapse to one tags icon with the full list in its tooltip.
+- Project chip tooltip carries the project name (ellipsis CSS already capped
+  the visual width; narrow screens already collapse to link-icon-only).
+- Draft row clicks route to compose via the drafts endpoint (shared helper
+  with the expand button): fixes both phantom old-email renders (id
+  collision with mail_messages) and "Failed to load" 404s.
+- Drafts view: cross-account hint banner ("N under X — switch tabs"),
+  own pagination totals (no more stale inbox counts), account-naming save
+  toast; `_handle_mail_drafts_get` returns `other_accounts` counts.
+- Tests: pure-helper chip cases (6), source guards (8), mocked drafts
+  endpoint (3), all wired into CI. Cache-bust app.js 3.7.21→3.7.22,
+  styles.css 3.7.18→3.7.19.
+
 ## Mail: claim-code toggle split, search fix, NUL safety, skip logging (2026-10-20)
 
 Claim-code auto-linking fired with only "[#PROJECTID]" checked: the claim

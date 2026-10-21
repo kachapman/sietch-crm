@@ -14,7 +14,34 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 // ──────────────────────────────────────────────────────────────────────
-// Mirror of public/app.js#userInitials (line 21174)
+// Mirror of public/app.js#dueChipHtml / labelChipsHtml (task row chips).
+// escapeHtml is DOM-backed in app.js; the mirror uses a minimal equivalent
+// sufficient for these assertions (attributes come from dates/labels).
+function esc(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+const TASK_OVERDUE_ICON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 21h-9a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v5"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M11 15h1"/><path d="M12 15v3"/><path d="M19 16v3"/><path d="M19 22v.01"/></svg>`;
+const TASK_LABELS_ICON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 8v4.172a2 2 0 0 0 .586 1.414l5.71 5.71a2.41 2.41 0 0 0 3.408 0l3.592 -3.592a2.41 2.41 0 0 0 0 -3.408l-5.71 -5.71a2 2 0 0 0 -1.414 -.586h-4.172a2 2 0 0 0 -2 2"/><path d="M18 19l1.592 -1.592a4.82 4.82 0 0 0 0 -6.816l-4.592 -4.592"/><path d="M7 10h-.01"/></svg>`;
+function dueChipHtml(task) {
+  const due = task.dueDate || task.deadLine?.value || task.deadLine;
+  if (!due) return "";
+  const d = new Date(due);
+  if (Number.isNaN(d.getTime())) return "";
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const cls = day < today ? "overdue" : day === today ? "today" : "";
+  if (cls === "overdue") {
+    return `<span class="task-chip task-chip-due task-chip--overdue" title="Overdue ${esc(d.toLocaleDateString())}">${TASK_OVERDUE_ICON}</span>`;
+  }
+  const label = cls === "today" ? "Today" : d.toLocaleDateString();
+  return `<span class="task-chip task-chip-due ${cls ? "task-chip--" + cls : ""}">${esc(label)}</span>`;
+}
+function labelChipsHtml(task) {
+  const labels = String(task.labels || "").split(/\s+/).filter(Boolean);
+  if (!labels.length) return "";
+  return `<span class="task-chip task-chip-label" title="${esc(labels.join(", "))}">${TASK_LABELS_ICON}</span>`;
+}
 function userInitials(u) {
   const f = (u && (u.first_name || u.firstName) || '').toString().trim();
   const l = (u && (u.last_name || u.lastName) || '').toString().trim();
@@ -260,4 +287,47 @@ test('collectNumericIdsFromValue: HTML-encoded ampersand', () => {
   const out = new Set();
   collectNumericIdsFromValue('action=mailmessage&amp;message_id=29914', out);
   assert.deepEqual([...out], [29914]);
+});
+// ──────────────────────────────────────────────────────────────────────
+// dueChipHtml tests (mirror of public/app.js)
+test('dueChipHtml: overdue renders icon only, never "Overdue <date>" text', () => {
+  const yesterday = new Date(Date.now() - 86400000).toISOString();
+  const out = dueChipHtml({ dueDate: yesterday });
+  assert.ok(out.includes("task-chip--overdue"));
+  assert.ok(out.includes("<svg"));
+  assert.ok(!out.includes(">Overdue "), `must not contain text pill, got: ${out}`);
+  assert.ok(out.includes('title="Overdue '), "date must survive in the tooltip");
+});
+
+test('dueChipHtml: today renders "Today" text, no icon', () => {
+  const out = dueChipHtml({ dueDate: new Date().toISOString() });
+  assert.ok(out.includes(">Today<"));
+  assert.ok(!out.includes("<svg"));
+});
+
+test('dueChipHtml: future date renders date text, no icon', () => {
+  const future = new Date(Date.now() + 30 * 86400000).toISOString();
+  const out = dueChipHtml({ dueDate: future });
+  assert.ok(out.includes("task-chip-due"));
+  assert.ok(!out.includes("<svg"));
+  assert.ok(!out.includes("task-chip--overdue"));
+});
+
+test('dueChipHtml: missing/bad date renders nothing', () => {
+  assert.equal(dueChipHtml({}), "");
+  assert.equal(dueChipHtml({ dueDate: "not-a-date" }), "");
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// labelChipsHtml tests (mirror of public/app.js)
+test('labelChipsHtml: collapses N labels into one icon with tooltip list', () => {
+  const out = labelChipsHtml({ labels: "estimate inspection appointment note" });
+  assert.equal((out.match(/<svg/g) || []).length, 1);
+  assert.ok(!out.includes(">estimate<"), "no per-label pills");
+  assert.ok(out.includes('title="estimate, inspection, appointment, note"'));
+});
+
+test('labelChipsHtml: empty labels render nothing', () => {
+  assert.equal(labelChipsHtml({}), "");
+  assert.equal(labelChipsHtml({ labels: "   " }), "");
 });

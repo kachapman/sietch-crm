@@ -11,7 +11,17 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-20 (mail behaviors bundle)
+**Date:** 2026-10-21 (tasks + drafts UX)
+
+**Topic:** Task chips/icons, project search anchor, drafts routing + visibility.
+
+**Status: IMPLEMENTED + TESTED, pushed — deploy still to do.**
+
+- Dropdown anchor CSS; icon-only overdue/labels; project tooltip name.
+- Draft open helper shared by row click + expand; banner/pagination/toast; other_accounts.
+- Tests: pure_helpers +6, new guards mjs (8), drafts endpoint (3); all suites green.
+
+## Previous session summary (2026-10-20, mail behaviors bundle)
 
 **Topic:** Claim-code toggle split, search fix, NUL safety, skip logging.
 

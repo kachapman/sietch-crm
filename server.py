@@ -19104,7 +19104,24 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 f"SELECT * FROM mail_outgoing WHERE {where} ORDER BY created_at DESC LIMIT 50",
                 params,
             )
-            _json_response(self, 200, {"drafts": rows})
+            # Cross-account hint: drafts live per-account and there is no
+            # all-accounts drafts view, so tell the client where the others
+            # are instead of showing a bare empty list.
+            try:
+                other = db.query_dicts(
+                    "SELECT o.account_id AS id, a.email AS email, "
+                    "BOOL_OR(a.is_crm_mail) AS crm, COUNT(*) AS n "
+                    "FROM mail_outgoing o JOIN mail_accounts a ON a.id = o.account_id "
+                    f"WHERE o.status = 'draft' AND o.account_id IN (SELECT id FROM mail_accounts WHERE {_mail_visible_accounts_sql(user['id'])}) "
+                    "GROUP BY o.account_id, a.email",
+                    (user["id"], user["id"]),
+                )
+            except Exception:
+                other = []
+            _json_response(self, 200, {"drafts": rows, "other_accounts": [
+                {"id": r["id"], "email": r["email"], "crm": bool(r["crm"]), "n": int(r["n"])}
+                for r in (other or [])
+            ]})
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 

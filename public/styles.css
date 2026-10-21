@@ -2475,6 +2475,13 @@ body {
   cursor: pointer;
 }
 
+/* Anchor for the absolutely-positioned project search dropdown
+   (.contact-results uses top:100%). Without this the dropdown positions
+   against a distant ancestor and appears detached/invisible. */
+#task-edit-project {
+  position: relative;
+}
+
 .task-edit-project-none {
   font-size: 0.8rem;
   color: var(--muted);

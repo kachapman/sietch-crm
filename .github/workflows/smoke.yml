@@ -118,6 +118,9 @@ jobs:
       - name: Run mail behavior gating tests
         run: python3 tests/test_mail_behaviors.py -v
 
+      - name: Run mail drafts endpoint tests
+        run: python3 tests/test_mail_drafts_endpoint.py -v
+
       - name: Run supplemental sync tests
         run: python3 tests/test_sync_supplemental.py -v
 
