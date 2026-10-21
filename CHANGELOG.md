@@ -2,6 +2,26 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Note paste: allowlist sanitizer, inline insertion (2026-10-21)
+
+Pasted text jumped to a new line, and backspace-merging it surfaced green
+highlighting the source never visibly had: the sanitizer unwrapped only
+literal mark/span (highlight in any other wrapper survived invisibly), and
+content was inserted wrapped in a div (a forced block split).
+
+### Fixed
+
+- Paste sanitizer is allowlist-based (b/strong/i/em/u/ins/s/strike/del/a/
+  br/img only); scripts/styles dropped with content; event handlers
+  stripped; links scrubbed to http(s)/mailto/tel; block elements (div/p/li/
+  tables/headers) become line breaks.
+- Insertion spreads children at the cursor — no wrapper div, no forced
+  newline; cursor lands after the last inserted node as before.
+- `tests/test_note_paste.mjs` (5 structural guards). Interactive editor
+  behavior can't execute under node: verify by hand (paste rich text →
+  inline landing → backspace-merge → DevTools-inspect for mark/background
+  before saving). Cache-bust app.js 3.7.23→3.7.24.
+
 ## Tabler icon pool cured + nbsp root fix (2026-10-21)
 
 Two unrelated fixes in one build.

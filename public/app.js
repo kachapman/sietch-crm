@@ -15077,27 +15077,50 @@ function initNoteEditorPasteHandlers() {
 
     let content;
     if (html) {
-      // Strip all formatting from HTML: remove tags that carry styles
+      // Allowlist: keep only inline formatting the editor supports. Anything
+      // else (mark/span/font/table bits, background styling in ANY wrapper)
+      // is unwrapped so highlight coloring can never survive a paste and
+      // resurface on a later backspace-merge.
       const tmp = document.createElement("div");
       tmp.innerHTML = html;
-      // Remove all style attributes, class attributes, and <mark>/<span> wrapper tags
-      tmp.querySelectorAll("[style]").forEach((el) => el.removeAttribute("style"));
-      tmp.querySelectorAll("[class]").forEach((el) => el.removeAttribute("class"));
-      // Unwrap <mark> tags (keep text)
-      tmp.querySelectorAll("mark").forEach((el) => {
+      // Drop scripts/styles entirely (content included).
+      tmp.querySelectorAll("script, style").forEach((el) => el.remove());
+      const PASTE_ALLOW = new Set(["b", "strong", "i", "em", "u", "ins", "s", "strike", "del", "a", "br", "img"]);
+      const PASTE_BLOCKS = new Set(["address", "article", "aside", "blockquote", "dd", "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section", "table", "td", "th", "tr", "ul"]);
+      tmp.querySelectorAll("*").forEach((el) => {
+        if (!el.isConnected) return; // ancestor already removed/unwrapped
+        const tag = el.tagName.toLowerCase();
+        // Strip event handlers everywhere (pasted HTML hygiene).
+        for (const attr of [...el.attributes]) {
+          if (attr.name.toLowerCase().startsWith("on")) el.removeAttribute(attr.name);
+        }
+        if (tag === "br") return;
+        if (tag === "img") return; // keep pasted web images as today
+        if (tag === "a") {
+          const href = (el.getAttribute("href") || "").trim();
+          for (const attr of [...el.attributes]) {
+            if (!["href", "target", "rel"].includes(attr.name.toLowerCase())) el.removeAttribute(attr.name);
+          }
+          if (/^(https?:|mailto:|tel:)/i.test(href)) {
+            el.setAttribute("href", href);
+            el.setAttribute("target", "_blank");
+            el.setAttribute("rel", "noopener noreferrer");
+          } else {
+            el.removeAttribute("href");
+          }
+          return;
+        }
+        if (PASTE_BLOCKS.has(tag)) {
+          // Block boundary becomes a line break; children stay inline.
+          el.replaceWith(document.createElement("br"), ...el.childNodes);
+          return;
+        }
+        // Everything else: unwrap, keep text.
         el.replaceWith(...el.childNodes);
       });
-      // Unwrap <span> tags that were used for highlighting (keep text)
-      tmp.querySelectorAll("span").forEach((el) => {
-        el.replaceWith(...el.childNodes);
-      });
-      // Normalize divs to line breaks
-      let inner = tmp.innerHTML;
-      inner = inner
-        .replace(/<\/div>\s*<div[^>]*>/gi, "<br/>")
-        .replace(/<div[^>]*>/gi, "")
-        .replace(/<\/div>/gi, "");
-      content = inner;
+      content = tmp.innerHTML
+        .replace(/^(?:\s*<br\s*\/?>\s*)+/i, "")
+        .replace(/(?:\s*<br\s*\/?>\s*){3,}/gi, "<br/><br/>");
     } else if (text) {
       // Plain text: preserve line breaks as <br>
       content = text
@@ -15108,22 +15131,23 @@ function initNoteEditorPasteHandlers() {
       return; // No content, let browser handle it
     }
 
-    // Insert at cursor position
+    // Insert children, NOT a wrapper div: inserting the div itself would
+    // split the current block and force the paste onto a new line.
     const sel = window.getSelection();
     if (sel && sel.rangeCount) {
       const range = sel.getRangeAt(0);
       range.deleteContents();
       const frag = document.createElement("div");
       frag.innerHTML = content;
-      const lastNode = frag.lastChild;
-      range.insertNode(frag);
-      // Move cursor to end of inserted content
-      if (lastNode) {
-        range.setStartAfter(lastNode);
-        range.setEndAfter(lastNode);
-        sel.removeAllRanges();
-        sel.addRange(range);
+      const kids = [...frag.childNodes];
+      for (const kid of kids) {
+        range.insertNode(kid);
+        range.setStartAfter(kid);
       }
+      // Move cursor to end of inserted content
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
     } else {
       target.innerHTML += content;
     }

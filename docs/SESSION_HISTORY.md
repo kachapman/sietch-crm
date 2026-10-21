@@ -11,7 +11,17 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-21 (icons + nbsp)
+**Date:** 2026-10-21 (paste sanitizer)
+
+**Topic:** Pasted highlight resurfacing green; wrapper-div newline jump.
+
+**Status: IMPLEMENTED + GUARDED, pushed — deploy still to do.**
+
+- Allowlist sanitizer + children insertion in initNoteEditorPasteHandlers.
+- Tests: new test_note_paste.mjs (5 guards); node syntax OK; all mjs green.
+- NOT machine-verifiable: needs 30s manual browser check (see CHANGELOG).
+
+## Previous session summary (2026-10-21, icons + nbsp)
 
 **Topic:** Tabler pool cure + nbsp render/save fix.
 
