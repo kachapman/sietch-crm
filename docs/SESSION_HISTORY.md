@@ -15,7 +15,12 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Topic:** History +4h EDT root fix; deploy correction dry-run build.
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying now with correction dry-run.**
+**Status: DEPLOYED 2026-10-21 as a3a2176** (rebuild healthy, live bundle 3.7.28,
+60 `_ts(` + 11 `skip_recent_hours` refs confirmed in the running container, zero
+errors in logs). This deploy also shipped the held correction mode (0f967cd).
+Timestamp proof: refresh the browser (new tab — bundle is cached) and the Kevin
+Hilko 8:01 PM EDT note reads 4:01 PM EDT. Dry run: NOT yet run — needs OO creds
+from the user's browser (see next entry).
 
 - `_ts()` UTC serializer; 59 emitters converted; `parseFeedDate` naive-as-UTC guard.
 - Tests: 6 (handler emits `+00:00`, no bare emitters, frontend guard), discriminating.
