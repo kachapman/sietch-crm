@@ -59,7 +59,7 @@ class Shim:
     wfile = MagicMock()
 
 
-def _run_pull(payload, fresh=False, deals=None):
+def _run_pull(payload, fresh=False, deals=None, local_row_update=None):
     import datetime as _dt
     import json as _json
 
@@ -70,6 +70,8 @@ def _run_pull(payload, fresh=False, deals=None):
                   "expected_close_date": "2026-11-01", "actual_close_date": None,
                   "actual_close_value": None, "contact_id": None,
                   "responsible_user_id": None}
+    if local_row_update:
+        base_local.update(local_row_update)
 
     responses = []
     executes = []
@@ -188,6 +190,32 @@ class TestCorrectionDryRun(unittest.TestCase):
             self.assertNotIn("history_attachments", sql2)
             self.assertNotIn("INSERT INTO opportunities", sql2)
             self.assertNotIn("project_documents", sql2)
+        self.assertEqual(body["correction_updates"], 1)
+
+class TestDueDateSentinel(unittest.TestCase):
+    """OnlyOffice sends 0001-01-01 (.NET MinValue) for 'no date'.
+
+    Live catch 2026-10-21 dry run: Kruschel + ONeill showed real dues morphing
+    to year 1. The sentinel must read as absent in every mode — never written.
+    """
+
+    def test_minvalue_triggers_no_correction_update(self):
+        oo = dict(OO_EXISTING, expectedCloseDate="0001-01-01T00:00:00")
+        # Local stage already equals the mapped OO stage (Bidding -> 3).
+        body, ctx = _run_pull(dict(CORR), deals=[oo], local_row_update={"stage_id": 3})
+        self.assertEqual(body["correction_updates"], 0)
+        writes = [s for s, _ in ctx["executes"] if s.strip().upper().startswith(("UPDATE ", "INSERT "))]
+        self.assertEqual(writes, [])
+
+    def test_minvalue_never_gapfills_in_supplemental(self):
+        oo = dict(OO_EXISTING, expectedCloseDate="0001-01-01T00:00:00")
+        payload = dict(BASE, supplemental=True)
+        body, ctx = _run_pull(payload, deals=[oo],
+                              local_row_update={"expected_close_date": None})
+        self.assertEqual(body["fields_filled"], 0)
+
+    def test_sane_date_still_updates(self):
+        body, ctx = _run_pull(dict(CORR))
         self.assertEqual(body["correction_updates"], 1)
 
     def test_stage_id_supported_and_ui_wired(self):

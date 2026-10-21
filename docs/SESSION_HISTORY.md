@@ -22,6 +22,11 @@ Timestamp proof: refresh the browser (new tab — bundle is cached) and the Kevi
 Hilko 8:01 PM EDT note reads 4:01 PM EDT. Dry run: NOT yet run — needs OO creds
 from the user's browser (see next entry).
 
+Dry-run result 2026-10-21: 1242 OO deals, 9 diffs, 57 fresh-skipped, 0 writes
+elsewhere — BUT 2 deals showed due → 0001-01-01 (.NET MinValue). Sentinel guard
+added (pre-1900 = absent, all modes); redeploying for a clean re-run before any
+real correction.
+
 - `_ts()` UTC serializer; 59 emitters converted; `parseFeedDate` naive-as-UTC guard.
 - Tests: 6 (handler emits `+00:00`, no bare emitters, frontend guard), discriminating.
 - This deploy also ships correction mode (0f967cd, held). Dry run next via admin UI.

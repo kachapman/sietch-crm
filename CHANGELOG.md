@@ -26,6 +26,10 @@ with zero writes. Admin UI gains Stage-refresh + Dry-run checkboxes. `stage_id` 
 `SUPPORTED_REFRESH_COLUMNS`. `tests/test_sync_correction_dryrun.py` (4 tests,
 discriminating). Cache-bust app.js 3.7.26→3.7.27. NOT YET DEPLOYED — dry run first.
 
+Dry-run catch same day: OO sends `0001-01-01` (.NET MinValue) for "no date" — two
+deals would have taken year-1 due dates. Pre-1900 years now read as absent in every
+sync mode (preserve local, never write). 3 sentinel tests added (7 total, discriminating).
+
 ## Documents: multi-download as one zip (2026-10-21)
 
 The Documents tab Download action fired one dialog per file. Now 2+ files

@@ -12032,6 +12032,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             expected_close_date = None
                         if expected_close_date:
                             break
+                # .NET DateTime.MinValue ("0001-01-01") means "no date" in
+                # OnlyOffice — never a real due date. Live catch 2026-10-21:
+                # the dry run showed due 2026-10-05 → 0001-01-01, which would
+                # have poisoned the tiles. Treat any pre-1900 year as absent
+                # so every mode (correction, supplemental, full) preserves.
+                if expected_close_date:
+                    try:
+                        if int(str(expected_close_date)[:4]) < 1900:
+                            expected_close_date = None
+                    except (TypeError, ValueError):
+                        expected_close_date = None
                 if not oo_date_keys_present:
                     # Visibility, not silence: a payload shape change upstream
                     # would otherwise look exactly like "no date changes".
