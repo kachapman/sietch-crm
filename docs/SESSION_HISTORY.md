@@ -15,7 +15,7 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Topic:** Batch replies endpoint, composer-close on post, muted mentions.
 
-**Status: IMPLEMENTED + TESTED, pushed — deploy still to do.**
+**Status: DEPLOYED 2026-10-21 as 1c39e69 + route fix ba6d03e** (rebuild healthy; live bundle 3.7.25/3.7.20; batch endpoint 401-parity verified live). No migration, no bot restart.
 
 - Pool-exhaustion root cause proven via traceback (getconn), not handler logic.
 - Tests: batch (3) + guards (6); all suites green.
