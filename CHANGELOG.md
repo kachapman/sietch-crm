@@ -2,6 +2,15 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Reply to deleted note fails cleanly (2026-10-21)
+
+Replying to a tag whose parent note was deleted FK-crashed (500) — the bot
+reported "Server error" (live: Claudiu → event 49503). The handler now checks
+the parent first and 404s "The original note was deleted", which the bot
+already surfaces verbatim; same guard protects dashboard/project replies.
+`tests/test_history_reply_deleted_parent.py` (2 mocked tests, discriminating).
+NOT YET DEPLOYED — held with the upcoming batch.
+
 ## Reply threads: batch endpoint, composer closes, muted mentions (2026-10-21)
 
 Opening a preview fired one thread-fetch per event against the 20-connection

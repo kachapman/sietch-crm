@@ -127,6 +127,9 @@ jobs:
       - name: Run history replies batch tests
         run: python3 tests/test_history_replies_batch.py -v
 
+      - name: Run reply deleted-parent tests
+        run: python3 tests/test_history_reply_deleted_parent.py -v
+
       - name: Run supplemental sync tests
         run: python3 tests/test_sync_supplemental.py -v
 

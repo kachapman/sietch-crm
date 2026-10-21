@@ -6245,6 +6245,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not content:
             _json_response(self, 400, {"error": "Content is required"})
             return
+        # The parent note may have been deleted after the notification went
+        # out (live case: reply to event 49503 FK-crashed with a 500). Fail
+        # cleanly so every client reports "deleted" instead of "Server error".
+        parent = db.query_one("SELECT id FROM history_events WHERE id = %s", (event_id,))
+        if not parent:
+            _json_response(self, 404, {"error": "The original note was deleted"})
+            return
         parent_reply_id = payload.get("parentReplyId")
         reply_id = db.insert_returning(
             """INSERT INTO history_replies (event_id, parent_reply_id, content, created_by)

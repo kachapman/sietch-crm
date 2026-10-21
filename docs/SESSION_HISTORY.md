@@ -11,7 +11,16 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-21 (reply threads + mentions)
+**Date:** 2026-10-21 (reply deleted-parent guard)
+
+**Topic:** Reply-to-deleted-note 404 instead of FK 500.
+
+**Status: COMMITTED + PUSHED, NOT DEPLOYED (user holding for a batch).**
+
+- Parent-existence check; 2 mocked tests (discriminating); CI wired.
+- Next deploy will include this + anything else queued.
+
+## Previous session summary (2026-10-21, reply threads + mentions)
 
 **Topic:** Batch replies endpoint, composer-close on post, muted mentions.
 
