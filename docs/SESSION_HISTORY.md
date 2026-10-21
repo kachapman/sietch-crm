@@ -15,7 +15,7 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Topic:** Pasted highlight resurfacing green; wrapper-div newline jump.
 
-**Status: IMPLEMENTED + GUARDED, pushed — deploy still to do.**
+**Status: DEPLOYED 2026-10-21 as aadadfa** (rebuild healthy; live bundle 3.7.24). No migration, no bot restart. Manual browser check still owed (see CHANGELOG).
 
 - Allowlist sanitizer + children insertion in initNoteEditorPasteHandlers.
 - Tests: new test_note_paste.mjs (5 guards); node syntax OK; all mjs green.
