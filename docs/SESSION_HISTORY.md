@@ -15,7 +15,7 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Topic:** Task chips/icons, project search anchor, drafts routing + visibility.
 
-**Status: IMPLEMENTED + TESTED, pushed — deploy still to do.**
+**Status: DEPLOYED 2026-10-21 as 0b34cfc** (rebuild healthy; live bundle app.js 3.7.22 + styles 3.7.19). No migration, no bot restart.
 
 - Dropdown anchor CSS; icon-only overdue/labels; project tooltip name.
 - Draft open helper shared by row click + expand; banner/pagination/toast; other_accounts.
