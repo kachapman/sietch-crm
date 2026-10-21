@@ -14568,7 +14568,8 @@ function _mentionColor(name) {
   let h = 0;
   for (let i = 0; i < (name || "").length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
   const hue = Math.abs(h) % 360;
-  return `hsl(${hue}, 55%, 42%)`;
+  // Muted for dark backgrounds: the old 55%/42% violet vibrated (hue 301).
+  return `hsl(${hue}, 45%, 60%)`;
 }
 
 function _mentionInsertChip(dropdownEl, name, userId) {
@@ -27758,8 +27759,11 @@ function renderHistoryEventItem(ev) {
     replyBtn.addEventListener("click", async () => {
       const existing = replyWrap.querySelector(".opp-preview-history-reply-editor");
       if (existing) { existing.remove(); return; }
-      // Load existing replies if not yet loaded
-      if (!replyWrap.dataset.loaded) {
+      // Thread loader shared by the toggle, post, and delete paths: refreshes
+      // the thread WITHOUT opening the composer (post/delete must close the
+      // composer instead of re-opening it via replyBtn.click()).
+      const loadThread = async () => {
+        if (replyWrap.dataset.loaded) return;
         try {
           const replies = await api(`/api/v2/projects/${oppPreviewContext?.oppId}/history/${eventId}/replies`);
           const list = unwrap(replies) || replies || [];
@@ -27807,11 +27811,11 @@ function renderHistoryEventItem(ev) {
                       showCrashBanner: false,
                     });
                     showToast("Reply deleted");
-                    // Reload the thread by re-clicking the reply button.
+                    // Reload the thread in place (composer stays closed).
                     const threadEl = replyWrap.querySelector(".opp-preview-history-thread");
                     if (threadEl) threadEl.remove();
                     replyWrap.dataset.loaded = "";
-                    replyBtn.click();
+                    await loadThread();
                   } catch (err) {
                     showToast(err.message || "Failed to delete reply", true);
                   }
@@ -27842,7 +27846,10 @@ function renderHistoryEventItem(ev) {
           }
         } catch { /* ignore */ }
         replyWrap.dataset.loaded = "1";
-      }
+      };
+      // Load existing replies when opening the composer (toggle path only;
+      // post/delete call loadThread() directly so the editor stays closed).
+      await loadThread();
       // Open reply editor — rich text + @-mention, mirrors the main preview
       // "Add Note" editor. Toolbar buttons and the @-mention dropdown are
       // picked up by the document-level delegates (initNoteEditorPasteHandlers
@@ -27928,7 +27935,7 @@ function renderHistoryEventItem(ev) {
           // Re-render thread by clearing and reloading
           const threadEl = replyWrap.querySelector(".opp-preview-history-thread");
           if (threadEl) threadEl.remove();
-          replyBtn.click(); // Re-open to reload
+          await loadThread();
           showToast("Reply added");
         } catch (err) {
           showToast(err.message || "Failed to add reply", true);
@@ -39722,16 +39729,20 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
 
     detailsContent.appendChild(section);
 
-    // Auto-load threaded replies for all events
+    // Auto-load threaded replies for all events: ONE batch request for the
+    // whole deal. Per-event fetches burst N concurrent connections against
+    // the pool and 500 (live incident).
     if (history.length && oppPreviewContext?.oppId) {
-      section.querySelectorAll(".opp-preview-history-item").forEach(li => {
-        const eventId = li.dataset.eventId;
-        if (!eventId) return;
-        const replyWrap = li.querySelector(".opp-preview-history-replies");
-        if (!replyWrap) return;
-        api(`/api/v2/projects/${oppPreviewContext.oppId}/history/${eventId}/replies`).then(replies => {
-          const list = unwrap(replies) || replies || [];
-          if (!list.length) return;
+      const threadItems = [...section.querySelectorAll(".opp-preview-history-item")];
+      api(`/api/v2/projects/${oppPreviewContext.oppId}/history/replies`).then(all => {
+        const threads = (all && all.replies) || {};
+        threadItems.forEach(li => {
+          const eventId = li.dataset.eventId;
+          if (!eventId) return;
+          const replyWrap = li.querySelector(".opp-preview-history-replies");
+          if (!replyWrap) return;
+          const list = threads[eventId] || [];
+          if (!Array.isArray(list) || !list.length) return;
           const threadEl = document.createElement("div");
           threadEl.className = "opp-preview-history-thread";
           for (const r of list) {
@@ -39812,8 +39823,8 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
           }
           replyWrap.insertBefore(threadEl, replyWrap.querySelector(".opp-preview-history-reply-btn"));
           replyWrap.dataset.loaded = "1";
-        }).catch(() => {});
-      });
+        });
+      }).catch(() => {});
     }
   })();
 

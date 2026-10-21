@@ -3539,6 +3539,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             else:
                 _json_response(self, 404, {"error": "Project not found"})
             return
+        m = re.match(r"^/api/v2/projects/(\d+)/history/replies$", api_path)
+        if m and method == "GET":
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_history_replies_batch(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
+            return
         m = re.match(r"^/api/v2/projects/(\d+)/documents$", api_path)
         if m:
             opp_id = _resolve_project_id(m.group(1))
@@ -6158,6 +6166,46 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "notifyUserIds": notify_by_reply.get(rid, []),
             })
         _json_response(self, 200, replies)
+
+    def _handle_history_replies_batch(self, opp_id: int) -> None:
+        """All reply threads for a deal in one request (N+1 saver).
+
+        Opening a preview auto-fetches one thread per event; against a pool
+        of 20 those bursts 500 (live incident). Response {"replies":
+        {eventId: [...]}}, each thread shaped exactly like the single-event
+        GET. Single-event GET stays for on-click lazy loads.
+        """
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query(
+            """SELECT r.id, r.parent_reply_id, r.content, r.created_by, r.created_at,
+                      r.is_deleted, u.display_name, r.event_id
+               FROM history_replies r
+               LEFT JOIN users u ON r.created_by = u.id
+               WHERE r.event_id IN (SELECT id FROM history_events WHERE opportunity_id = %s)
+               ORDER BY r.event_id, r.created_at ASC""",
+            (opp_id,),
+        )
+        reply_ids = [int(r[0]) for r in rows]
+        notify_by_reply: dict[int, list[int]] = {}
+        if reply_ids:
+            nrows = db.query(
+                "SELECT reply_id, user_id FROM history_reply_notify_users WHERE reply_id = ANY(%s)",
+                (reply_ids,),
+            )
+            for nr in nrows:
+                notify_by_reply.setdefault(int(nr[0]), []).append(int(nr[1]))
+        grouped: dict[str, list] = {}
+        for r in rows:
+            rid = int(r[0])
+            grouped.setdefault(str(int(r[7])), []).append({
+                "id": rid, "parentReplyId": r[1], "content": "" if r[5] else r[2],
+                "createdBy": r[3], "created": r[4].isoformat() if r[4] else None,
+                "isDeleted": r[5], "author": r[6] or "",
+                "notifyUserIds": notify_by_reply.get(rid, []),
+            })
+        _json_response(self, 200, {"replies": grouped})
 
     def _handle_history_reply_create(self, opp_id: int, event_id: int) -> None:
         try:

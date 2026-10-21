@@ -16618,7 +16618,7 @@ select.form-control {
   display: inline-flex;
   align-items: center;
   gap: 0.15rem;
-  background: var(--mention-color, hsl(200, 55%, 42%));
+  background: var(--mention-color, hsl(200, 45%, 60%));
   color: #fff;
   border-radius: 12px;
   padding: 0.15rem 0.5rem 0.15rem 0.3rem;

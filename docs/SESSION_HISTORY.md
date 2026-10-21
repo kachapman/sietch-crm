@@ -11,7 +11,16 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-21 (paste sanitizer)
+**Date:** 2026-10-21 (reply threads + mentions)
+
+**Topic:** Batch replies endpoint, composer-close on post, muted mentions.
+
+**Status: IMPLEMENTED + TESTED, pushed — deploy still to do.**
+
+- Pool-exhaustion root cause proven via traceback (getconn), not handler logic.
+- Tests: batch (3) + guards (6); all suites green.
+
+## Previous session summary (2026-10-21, paste sanitizer)
 
 **Topic:** Pasted highlight resurfacing green; wrapper-div newline jump.
 

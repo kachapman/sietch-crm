@@ -2,6 +2,27 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Reply threads: batch endpoint, composer closes, muted mentions (2026-10-21)
+
+Opening a preview fired one thread-fetch per event against the 20-connection
+pool and 500'd, so threads never loaded and replies vanished into a void.
+Posting then re-clicked Reply to reload, reopening the composer every time.
+
+### Fixed
+
+- New `GET /api/v2/projects/{id}/history/replies`: all threads in one
+  request, same per-thread shape as the single-event GET (kept for on-click
+  lazy loads). Both auto-load paths (dashboard preview, project page) use it.
+- Post/delete refresh the thread with the composer closed: shared
+  `loadThread` (dashboard) / `renderReplyThread` (project page) instead of
+  `replyBtn.click()`, which toggled a fresh editor open.
+- Mention chips muted for dark mode (`hsl(H,45%,60%)`, was neon 55%/42% —
+  hue 301 for Claudiu was the worst corner). Applied to both mention-color
+  functions and both chip CSS fallbacks. Longstanding since July, changed as
+  a preference, not a regression fix.
+- Tests: mocked batch endpoint (3) + guards (6); full suites green.
+  Cache-bust app.js 3.7.24→3.7.25, styles.css 3.7.19→3.7.20.
+
 ## Note paste: allowlist sanitizer, inline insertion (2026-10-21)
 
 Pasted text jumped to a new line, and backspace-merging it surfaced green

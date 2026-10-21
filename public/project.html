@@ -226,7 +226,7 @@
     .phtml-mention-dropdown.open { display: block; }
     .phtml-mention-item { padding: 0.35rem 0.6rem; cursor: pointer; font-size: 0.85rem; color: var(--text, #e0e0e0); }
     .phtml-mention-item:hover, .phtml-mention-item.selected { background: var(--surface-2, #1f2430); }
-    .phtml-mention-chip { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 10px; font-size: 0.82rem; font-weight: 500; color: #fff; background: var(--mention-color, hsl(200, 55%, 42%)); }
+    .phtml-mention-chip { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 10px; font-size: 0.82rem; font-weight: 500; color: #fff; background: var(--mention-color, hsl(200, 45%, 60%)); }
     .phtml-mention-inline { color: var(--mention-color, var(--accent, #4f8cff)); font-weight: 500; cursor: default; }
     @media (max-width: 600px) {
       .project-page { padding: 0 0.5rem; margin: 1rem auto; }
@@ -547,6 +547,7 @@
         return;
       }
       list.innerHTML = "";
+      var pendingThreads = [];
       for (var i = 0; i < events.length; i++) {
         var ev = events[i];
         var li = document.createElement("li");
@@ -649,12 +650,14 @@
           replyBtn.textContent = "Reply";
           replyWrap.appendChild(replyBtn);
 
-          // Auto-load replies
-          fetch("/api/v2/projects/" + projectId + "/history/" + ev.id + "/replies", { credentials: "same-origin" })
-            .then(function(r) { return r.ok ? r.json() : []; })
-            .then(function(replies) {
-              let list = Array.isArray(replies) ? replies : [];
-              if (!list.length) return;
+          // Render a reply thread WITHOUT opening the composer. Shared by
+          // auto-load and post-success: posting must CLOSE the editor and
+          // refresh only the thread (replyBtn.click() would reopen it).
+          var renderReplyThread = function(replyWrap, replyBtn, replies) {
+            var oldThread = replyWrap.querySelector(".event-thread");
+            if (oldThread) oldThread.remove();
+              var list = Array.isArray(replies) ? replies : [];
+              if (!list.length) { replyWrap.dataset.loaded = "1"; return; }
               let threadEl = document.createElement("div");
               threadEl.className = "event-thread";
               for (let j = 0; j < list.length; j++) {
@@ -715,7 +718,11 @@
               }
               replyWrap.insertBefore(threadEl, replyBtn);
               replyWrap.dataset.loaded = "1";
-            }).catch(function() {});
+          };
+
+          // Defer thread load: collected below into ONE batch request (per-
+          // event fetches burst against the pool and 500 on deals like this).
+          pendingThreads.push({ wrap: replyWrap, btn: replyBtn, id: ev.id });
 
           // Reply button click handler — rich-text editor with @-mention
           // (mirrors the standalone "Add Note" editor's structure).
@@ -926,7 +933,10 @@
                 replyWrap.dataset.loaded = "";
                 var oldThread = replyWrap.querySelector(".event-thread");
                 if (oldThread) oldThread.remove();
-                replyBtn.click(); // Reload replies
+                fetch("/api/v2/projects/" + projectId + "/history/" + ev.id + "/replies", { credentials: "same-origin" })
+                  .then(function(r2) { return r2.ok ? r2.json() : []; })
+                  .then(function(replies2) { renderReplyThread(replyWrap, replyBtn, replies2); })
+                  .catch(function() {});
               }).catch(function() {
                 postBtn.disabled = false;
                 alert("Failed to post reply.");
@@ -940,6 +950,17 @@
             setTimeout(function() { el.scrollIntoView({ behavior: "smooth", block: "center" }); }, 100);
           })(li);
         }
+      }
+      // Thread auto-load: ONE batch request for the whole deal.
+      if (pendingThreads.length) {
+        fetch("/api/v2/projects/" + projectId + "/history/replies", { credentials: "same-origin" })
+          .then(function(r) { return r.ok ? r.json() : {}; })
+          .then(function(data) {
+            var threads = (data && data.replies) || {};
+            pendingThreads.forEach(function(p) {
+              renderReplyThread(p.wrap, p.btn, threads[p.id] || []);
+            });
+          }).catch(function() {});
       }
     }
 
@@ -961,7 +982,8 @@
     function mentionColor(name) {
       var h = 0;
       for (var i = 0; i < (name || "").length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
-      return "hsl(" + (Math.abs(h) % 360) + ", 55%, 42%)";
+      // Muted for dark backgrounds (see app.js _mentionColor).
+      return "hsl(" + (Math.abs(h) % 360) + ", 45%, 60%)";
     }
 
     function mentionInsertChip(dropdownEl, name, userId) {
