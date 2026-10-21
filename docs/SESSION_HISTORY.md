@@ -15,7 +15,9 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Topic:** Dropdown hid Phone call via stale hardcoded category IDs.
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying for visual check.**
+**Status: DEPLOYED 2026-10-21 as 9a3fb8e** (rebuild healthy, live bundle 3.7.29
+verified). Open a fresh tab → deal modal → ADD NOTE → type dropdown now lists
+Phone call; system rows hidden.
 
 - `isUserNoteCategory()` flag-based filter at both app.js dropdown sites;
   project.html has no ID filtering (untouched).
