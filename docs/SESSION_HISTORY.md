@@ -11,6 +11,19 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-21 (note-type Phone call fix)
+
+**Topic:** Dropdown hid Phone call via stale hardcoded category IDs.
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying for visual check.**
+
+- `isUserNoteCategory()` flag-based filter at both app.js dropdown sites;
+  project.html has no ID filtering (untouched).
+- Tests: 5 node tests (mirror + source guard), fail-on-old verified.
+- Real correction run completed earlier: 10 updates / 57 skipped, matched dry run.
+
+## Previous session summary (2026-10-21, timestamp UTC fix + dry run deploy)
+
 **Date:** 2026-10-21 (timestamp UTC fix + stage/due dry-run deploy)
 
 **Topic:** History +4h EDT root fix; deploy correction dry-run build.

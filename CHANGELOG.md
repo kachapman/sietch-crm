@@ -2,6 +2,16 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Note-type dropdown: Phone call back, system rows hidden by flag (2026-10-21)
+
+The dropdown excluded hardcoded numeric category IDs whose comment mapping did
+not match prod (ID 12 = Phone call), so the option vanished — while rows it
+meant to hide showed up. Both dropdown sites now filter on the `isSystem` flag
+the API already sends (`isUserNoteCategory()`; synthetic `Action` fallback
+excluded by title). No sync impact (sync resolves categories by title only).
+Phone call's 794 existing history events were never missing — display-only.
+`tests/test_note_type_filter.mjs` (5 tests). Cache-bust 3.7.28→3.7.29.
+
 ## History timestamps +4h in EDT — fixed at the root (2026-10-21)
 
 Droplet Postgres runs UTC; `timestamp without time zone` values hit the browser

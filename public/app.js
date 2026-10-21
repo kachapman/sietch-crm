@@ -11480,6 +11480,22 @@ function resolveHistoryCategoryId(selectedValue) {
   );
 }
 
+function isUserNoteCategory(cat) {
+  // System categories (Mail Message, Files uploaded, task-vocabulary rows
+  // like Stage Estimate, …) are never manually filed notes. Filter by the
+  // isSystem flag the API sends — never by numeric id. Ids drift between
+  // environments; a hardcoded set hid "Phone call" (id 12) on prod while
+  // showing rows it meant to hide (live bug 2026-10-21). The synthetic
+  // Action fallback in loadHistoryCategories carries no flag, so exclude it
+  // by title. Categories without flags (degraded fallback path) stay visible
+  // rather than risk hiding a real note type.
+  if (!cat) return false;
+  const title = String(cat.title || cat.Title || "");
+  if (title === "Action") return false;
+  if (cat.isSystem === true || cat.is_system === true) return false;
+  return true;
+}
+
 function populateHistoryCategorySelect(selectEl, fieldWrapEl) {
   if (!selectEl) return;
 
@@ -11490,9 +11506,8 @@ function populateHistoryCategorySelect(selectEl, fieldWrapEl) {
     return;
   }
 
-  // Filter out system-only types not suitable for manual note creation
-  const excludedIds = new Set([9, 11, 12, 18, 23, 24, 25]);
-  const filtered = cats.filter(c => !excludedIds.has(c.id));
+  // Filter out system-only types not suitable for manual note creation.
+  const filtered = cats.filter(isUserNoteCategory);
 
   if (filtered.length <= 1) {
     if (fieldWrapEl) fieldWrapEl.classList.add("hidden");
@@ -39533,12 +39548,12 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       _previewDirty = true;
     });
 
-    // Populate note type dropdown (exclude system-only types)
+    // Populate note type dropdown (exclude system-only types by flag —
+    // numeric ids drift between environments, see isUserNoteCategory).
     const noteTypeSelect = editorWrap.querySelector(".preview-note-type-select");
     if (noteTypeSelect && state.historyCategories?.length) {
-      const excludedIds = new Set([9, 11, 12, 18, 23, 24, 25]); // Task closed, Mail Message, Files uploaded, Quick Context, Opportunity, Stage Estimate, Action
       for (const cat of state.historyCategories) {
-        if (excludedIds.has(cat.id)) continue;
+        if (!isUserNoteCategory(cat)) continue;
         const opt = document.createElement("option");
         opt.value = cat.id;
         opt.textContent = cat.title || `Category ${cat.id}`;
