@@ -15,7 +15,7 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Topic:** Tabler pool cure + nbsp render/save fix.
 
-**Status: IMPLEMENTED + TESTED, pushed — deploy still to do.**
+**Status: DEPLOYED 2026-10-21 as fbb728a** (rebuild healthy; live bundle 3.7.23 + pinned font verified serving). No migration, no bot restart.
 
 - 220/220 names verified vs served 3.49.0 CSS; validator content-probing.
 - Render decode + server normalize on 4 endpoints; event 49535 forensics.
