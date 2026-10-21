@@ -15,7 +15,7 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Topic:** Claim-code toggle split, search fix, NUL safety, skip logging.
 
-**Status: IMPLEMENTED + TESTED, pushed — deploy still to do.**
+**Status: DEPLOYED 2026-10-20 as 7865cc2** (rebuild healthy; live bundle 3.7.21 with claim checkbox). No migration, no bot restart.
 
 - Claim paths gated (link_method + helper); UI row default OFF; behavior-change noted (silent claim-link dependents lose it).
 - Tests: new test_mail_behaviors.py (14, discriminating vs unpatched); all suites green.
