@@ -11,7 +11,18 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-21 (batch doc download)
+**Date:** 2026-10-21 (stage+due correction + dry run)
+
+**Topic:** Correction mode: stage/due only, 30h fresh guard, dry run.
+
+**Status: IMPLEMENTED + TESTED, pushed — DRY RUN happens on the droplet via the admin UI (needs live code + OO creds, which only exist in the browser). NOT yet deployed.**
+
+- Server: `stage_id` allowlisted; correction branch (scoped UPDATE, new-deal skip, 30h guard, dry_run zero-write); response gains correction_* counters.
+- UI: Stage-refresh + Dry-run checkboxes; refresh_columns + dry_run + skip_recent_hours=30 in payload.
+- Tests: 4 (dry-run zero writes, fresh guard, scoped UPDATE, UI wiring), discriminating; full suites green.
+- Next: deploy, then user runs DRY RUN from Admin → OnlyOffice Import (check Supplemental + both Also-refresh + Dry run) and eyeballs the log before any real run.
+
+## Previous session summary (2026-10-21, batch doc download)
 
 **Topic:** Multi-select Download as one zip.
 

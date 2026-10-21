@@ -2,6 +2,18 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Stage+due correction mode with dry run + 30h fresh guard (2026-10-21)
+
+Supplemental sync preserved stage/due diffs by design (`stage_id = COALESCE(stage_id, %s)`),
+so Sietch and the OO dashboard disagreed on nearly every deal. New correction mode:
+supplemental + `stage_id` in `refresh_columns` touches ONLY `stage_id` (+coupled
+`stage_type`) and `expected_close_date`, skips new-deal creation, gap-fills nothing else,
+and skips tags/custom/history/attachments. Required guard: deals touched in Sietch in
+the last 30h (or with fresh history) are skipped — Sietch wins. `dry_run` reports diffs
+with zero writes. Admin UI gains Stage-refresh + Dry-run checkboxes. `stage_id` added to
+`SUPPORTED_REFRESH_COLUMNS`. `tests/test_sync_correction_dryrun.py` (4 tests,
+discriminating). Cache-bust app.js 3.7.26→3.7.27. NOT YET DEPLOYED — dry run first.
+
 ## Documents: multi-download as one zip (2026-10-21)
 
 The Documents tab Download action fired one dialog per file. Now 2+ files

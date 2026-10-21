@@ -11814,12 +11814,31 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             # Explicit overwrite allowlist for supplemental mode: only these
             # columns may use the overwrite form; everything else stays
             # fill-gaps. Unknown names are ignored loudly, never applied.
-            SUPPORTED_REFRESH_COLUMNS = {"expected_close_date"}
+            SUPPORTED_REFRESH_COLUMNS = {"expected_close_date", "stage_id"}
             requested_refresh = payload.get("refresh_columns") or []
             if not isinstance(requested_refresh, list):
                 requested_refresh = [requested_refresh]
             refresh_columns = [c for c in requested_refresh if c in SUPPORTED_REFRESH_COLUMNS]
             unknown_refresh = [c for c in requested_refresh if c not in SUPPORTED_REFRESH_COLUMNS]
+            # Dry-run: report what WOULD change with zero writes. Used for
+            # the stage+due correction review (user eyeballs diffs first).
+            dry_run = bool(payload.get("dry_run"))
+            try:
+                skip_recent_hours = int(payload.get("skip_recent_hours", 30))
+            except (TypeError, ValueError):
+                skip_recent_hours = 30
+            if skip_recent_hours < 0:
+                skip_recent_hours = 0
+            # Correction mode: supplemental + stage refresh requested. The
+            # run touches ONLY stage_id (+coupled stage_type) and
+            # expected_close_date, skips new-deal creation, gap-fills nothing
+            # else, and skips tags/custom/history/attachments entirely.
+            correction_mode = bool(supplemental and "stage_id" in refresh_columns)
+            locally_fresh_skipped = 0
+            correction_updates = 0
+            correction_new_skipped = 0
+            dry_run_would_create = 0
+            dry_run_examples: list = []
             email = payload.get("email", "").strip()
             password = payload.get("password", "").strip()
             if not portal or not email or not password:
@@ -11828,6 +11847,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             if supplemental:
                 _append_sync_log("info", "Supplemental (add-only) mode: existing values are never overwritten.")
+                if correction_mode:
+                    _append_sync_log("info", "Correction mode: ONLY stage + Follow-up Due Date will be compared/updated; all other columns, new deals, tags, custom fields, history and attachments are skipped.")
+                    if skip_recent_hours:
+                        _append_sync_log("info", f"Fresh-local guard: deals touched in Sietch in the last {skip_recent_hours}h (or with history in that window) are skipped.")
+                    if dry_run:
+                        _append_sync_log("info", "DRY RUN: zero writes — reporting diffs only.")
                 if refresh_columns:
                     _append_sync_log("info", f"Refresh allowlist (explicit overwrite): {', '.join(sorted(refresh_columns))}")
                 if unknown_refresh:
@@ -12076,6 +12101,80 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         filtered_out += 1
                         continue
                 is_new = v3_opp_id is None
+
+                if correction_mode:
+                    # Correction runs never create deals and never touch
+                    # anything but stage + due date. New OO deals are
+                    # reported, not inserted (a new row would be a change
+                    # beyond stage/due). Fresh-local deals are skipped via
+                    # the required guard (Sietch newer than OO wins).
+                    if is_new:
+                        correction_new_skipped += 1
+                        if dry_run:
+                            dry_run_would_create += 1
+                        continue
+                    if skip_recent_hours:
+                        try:
+                            fresh_row = db.query_one(
+                                "SELECT updated_at FROM opportunities WHERE id = %s",
+                                (v3_opp_id,),
+                            )
+                            fresh_hit = False
+                            if fresh_row and fresh_row.get("updated_at"):
+                                try:
+                                    import datetime as _dt
+                                    upd = fresh_row["updated_at"]
+                                    now = _dt.datetime.now(upd.tzinfo) if getattr(upd, "tzinfo", None) else _dt.datetime.now()
+                                    if (now - upd).total_seconds() < skip_recent_hours * 3600:
+                                        fresh_hit = True
+                                except Exception:
+                                    pass
+                            if not fresh_hit:
+                                hist_hit = db.query_one(
+                                    "SELECT 1 AS hit FROM history_events WHERE opportunity_id = %s AND created_at >= NOW() - (%s * INTERVAL '1 hour') LIMIT 1",
+                                    (v3_opp_id, skip_recent_hours),
+                                )
+                                if hist_hit:
+                                    fresh_hit = True
+                            if fresh_hit:
+                                locally_fresh_skipped += 1
+                                continue
+                        except Exception:
+                            pass
+                    cur = current_row or {}
+                    cur_stage = cur.get("stage_id")
+                    cur_due = str(cur.get("expected_close_date")) if cur.get("expected_close_date") else None
+                    oo_due = str(expected_close_date) if expected_close_date else None
+                    stage_diff = (v3_stage_id is not None and str(cur_stage) != str(v3_stage_id))
+                    due_diff = (oo_due is not None and (cur_due or None) != oo_due)
+                    if not stage_diff and not due_diff:
+                        skipped += 1
+                        continue
+                    if dry_run:
+                        correction_updates += 1
+                        full_fields_overwritten += (1 if stage_diff else 0) + (1 if due_diff else 0)
+                        if len(dry_run_examples) < 40:
+                            dry_run_examples.append(
+                                f"DRY '{title}': stage {cur_stage}->{v3_stage_id} due {cur_due}->{oo_due}"
+                            )
+                        skipped += 1
+                        continue
+                    try:
+                        eff_stage_type = v3_stage_type if v3_stage_id is not None else None
+                        db.execute(
+                            """UPDATE opportunities
+                                SET stage_id = COALESCE(%s, stage_id),
+                                    stage_type = CASE WHEN %s IS NULL THEN stage_type ELSE %s END,
+                                    expected_close_date = COALESCE(%s, expected_close_date)
+                                WHERE id = %s""",
+                            (v3_stage_id, eff_stage_type, eff_stage_type, expected_close_date, v3_opp_id),
+                        )
+                        correction_updates += 1
+                        full_fields_overwritten += (1 if stage_diff else 0) + (1 if due_diff else 0)
+                    except Exception:
+                        pass
+                    skipped += 1
+                    continue
 
                 if is_new:
                     # Insert new opportunity with the full set of standard deal
@@ -12413,10 +12512,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _append_sync_log("info", f"Full mode overwrote {full_fields_overwritten} existing field values")
             if filtered_out:
                 _append_sync_log("info", f"{filtered_out} deals skipped by stage/responsible filter")
+            if correction_mode:
+                _append_sync_log("info", f"Correction report: {correction_updates} stage/due updates{ ' (DRY RUN — zero writes)' if dry_run else ''}, {locally_fresh_skipped} skipped (touched in Sietch in last {skip_recent_hours}h), {correction_new_skipped} new OO deals skipped (not created)")
+                for _ex in dry_run_examples:
+                    _append_sync_log("info", _ex)
             if deals_without_date_key:
                 _append_sync_log("warn", f"{deals_without_date_key} OO deals carried no recognizable due-date key (expectedCloseDate/ExpectedCloseDate/dueDate)")
             _json_response(self, 200, {"ok": True, "created": created, "skipped": skipped, "tags": tag_count, "custom_fields": cf_count, "history": history_count, "history_synced": history_synced, "history_skipped": history_skipped, "attachments": attachments_synced, "total": len(all_opps), "elapsed_seconds": int(elapsed), "log": list(_sync_log),
-                                       "supplemental": supplemental, "refresh_columns": sorted(refresh_columns), "fields_filled": sup_fields_filled, "fields_preserved": sup_fields_preserved, "fields_overwritten": full_fields_overwritten, "custom_fields_preserved": cf_preserved, "filtered_out": filtered_out, "deals_without_date_key": deals_without_date_key})
+                                       "supplemental": supplemental, "refresh_columns": sorted(refresh_columns), "fields_filled": sup_fields_filled, "fields_preserved": sup_fields_preserved, "fields_overwritten": full_fields_overwritten, "custom_fields_preserved": cf_preserved, "filtered_out": filtered_out, "deals_without_date_key": deals_without_date_key,
+                                       "correction_mode": correction_mode, "dry_run": dry_run, "correction_updates": correction_updates, "locally_fresh_skipped": locally_fresh_skipped, "correction_new_skipped": correction_new_skipped, "skip_recent_hours": skip_recent_hours, "dry_run_examples": list(dry_run_examples)})
         except Exception as e:
             _append_sync_log("error", f"Deals sync failed: {e}")
             _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})

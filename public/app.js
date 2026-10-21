@@ -32255,9 +32255,11 @@ function openAdminConsoleModal() {
     });
 
     $("#sync-supplemental")?.addEventListener("change", (e) => {
-      // The due-date refresh only means something in supplemental mode.
-      const wrap = $("#sync-refresh-due-wrap");
-      if (wrap) wrap.style.opacity = e.target.checked ? "" : "0.45";
+      // Refresh options only mean something in supplemental mode.
+      for (const id of ["#sync-refresh-due-wrap", "#sync-refresh-stage-wrap", "#sync-dryrun-wrap"]) {
+        const wrap = $(id);
+        if (wrap) wrap.style.opacity = e.target.checked ? "" : "0.45";
+      }
     });
 
     $("#sync-deals-btn")?.addEventListener("click", async () => {
@@ -32281,11 +32283,15 @@ function openAdminConsoleModal() {
         // full mode, where everything overwrites already.
         const supplemental = $("#sync-supplemental")?.checked !== false;
         const refreshDue = $("#sync-refresh-due-date")?.checked === true;
-        const refresh_columns = (supplemental && refreshDue) ? ["expected_close_date"] : [];
-        const data = await api("/api/v2/admin/sync/pull-deals", { method: "POST", body: JSON.stringify({ ...getSyncPayload(), supplemental, refresh_columns }) });
+        const refreshStage = $("#sync-refresh-stage")?.checked === true;
+        const dryRun = $("#sync-dry-run")?.checked === true;
+        const refresh_columns = [];
+        if (supplemental && refreshDue) refresh_columns.push("expected_close_date");
+        if (supplemental && refreshStage) refresh_columns.push("stage_id");
+        const data = await api("/api/v2/admin/sync/pull-deals", { method: "POST", body: JSON.stringify({ ...getSyncPayload(), supplemental, refresh_columns, dry_run: dryRun, skip_recent_hours: 30 }) });
         clearInterval(pollInterval);
         if (data.log) renderSyncLog(data.log);
-        let msg = `Deals: ${data.created || 0} created, ${data.skipped || 0} skipped | Tags: ${data.tags || 0} | History: ${data.history || 0}`;
+        let msg = dryRun ? `DRY RUN — would update: ${data.correction_updates || 0} | Fresh-skipped: ${data.locally_fresh_skipped || 0} | New-skipped: ${data.correction_new_skipped || 0}` : `Deals: ${data.created || 0} created, ${data.skipped || 0} skipped | Tags: ${data.tags || 0} | History: ${data.history || 0}`;
         if (data.supplemental) {
           msg += ` | Gap-filled: ${data.fields_filled || 0} fields, preserved: ${data.fields_preserved || 0} (+${data.custom_fields_preserved || 0} custom)`;
         }

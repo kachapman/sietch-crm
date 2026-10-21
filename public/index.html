@@ -2469,6 +2469,8 @@
             <label style="margin-top:0.5rem;" title="Admin password for the OnlyOffice CRM account">Password<br><input id="sync-password" type="password" style="width:100%;"></label>
             <label style="display:flex; gap:0.4rem; align-items:center; margin-top:0.5rem; font-size:0.82rem;" title="Add-only: create new rows and fill empty fields, never overwrite an existing value. Applies to Pull New Deals."><input type="checkbox" id="sync-supplemental" checked> Supplemental (add-only — never overwrite)</label>
             <label id="sync-refresh-due-wrap" style="display:flex; gap:0.4rem; align-items:center; margin-top:0.25rem; margin-left:1.2rem; font-size:0.8rem; color:var(--muted);" title="In supplemental mode, also overwrite Follow-up Due Date from OnlyOffice (for stale dates). Everything else stays add-only."><input type="checkbox" id="sync-refresh-due-date"> Also refresh: Follow-up Due Date</label>
+            <label id="sync-refresh-stage-wrap" style="display:flex; gap:0.4rem; align-items:center; margin-top:0.25rem; margin-left:1.2rem; font-size:0.8rem; color:var(--muted);" title="In supplemental mode, also overwrite Stage from OnlyOffice (correction mode: ONLY stage + due date are touched; deals edited in Sietch in the last 30h are skipped)."><input type="checkbox" id="sync-refresh-stage"> Also refresh: Stage (correction mode)</label>
+            <label id="sync-dryrun-wrap" style="display:flex; gap:0.4rem; align-items:center; margin-top:0.25rem; margin-left:1.2rem; font-size:0.8rem; color:var(--muted);" title="Report what WOULD change with zero writes."><input type="checkbox" id="sync-dry-run"> Dry run (report only, no writes)</label>
             <div style="margin-top:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
               <button id="sync-test-btn" class="btn btn-secondary">Test Connection</button>
               <button id="sync-deal-tags-btn" class="btn btn-primary">Sync Deal Tags + Fields</button>
@@ -3865,6 +3867,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3.7.26" type="module"></script>
+  <script src="app.js?v=3.7.27" type="module"></script>
 </body>
 </html>
