@@ -1128,6 +1128,22 @@ def _json_default(obj: Any) -> str:
     return str(obj)
 
 
+def _ts(dt: Any) -> str | None:
+    """Format a DB datetime for JSON: naive values are UTC (droplet PG is UTC).
+
+    Live bug 2026-10-21: inline `r[n].isoformat()` on naive UTC timestamps emits
+    offset-less ISO, which browsers parse as LOCAL time — history notes showed
+    +4h in EDT. Route every DB timestamp through here instead.
+    """
+    if dt is None:
+        return None
+    if isinstance(dt, datetime):
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc).isoformat()
+        return dt.astimezone(timezone.utc).isoformat()
+    return str(dt)
+
+
 def _json_response(handler: SimpleHTTPRequestHandler, status: int, payload: dict | list) -> None:
     body = json.dumps(payload, default=_json_default).encode("utf-8")
     handler.send_response(status)
@@ -5226,7 +5242,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "stageId": r[3], "stageType": r[4], "bidValue": float(r[5]) if r[5] else None,
                 "expectedCloseDate": str(r[6]) if r[6] else None, "probability": r[7],
                 "contactId": r[8], "responsibleUserId": r[9], "isPrivate": r[10],
-                "created": r[11].isoformat() if r[11] else None,
+                "created": _ts(r[11]),
                 "stage": {"title": r[14], "color": r[15]} if r[14] else None,
                 "contact": {"displayName": f"{r[16] or ''} {r[17] or ''}".strip(), "company": r[18]} if r[16] or r[17] else None,
             })
@@ -5268,8 +5284,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "stageId": row[3], "stageType": row[4], "bidValue": float(row[5]) if row[5] else None,
             "expectedCloseDate": str(row[6]) if row[6] else None, "probability": row[7],
             "contactId": row[8], "responsibleUserId": row[9], "isPrivate": row[10],
-            "created": row[11].isoformat() if row[11] else None,
-            "createdBy": row[12], "updatedAt": row[13].isoformat() if row[13] else None,
+            "created": _ts(row[11]),
+            "createdBy": row[12], "updatedAt": _ts(row[13]),
             "stage": {"title": row[14], "color": row[15]} if row[14] else None,
             "responsible": {"displayName": row[17]} if row[17] else None,
             "contact": {"displayName": (f"{row[18] or ''} {row[19] or ''}".strip() or row[20] or f"Contact {row[8]}"), "company": row[20], "email": row[21], "phone": row[22], "addressStreet": row[24], "addressCity": row[25], "addressState": row[26], "addressZip": row[27]} if row[8] else None,
@@ -5968,8 +5984,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             events.append({
                 "id": r[0], "categoryId": r[1],                 "category": {"id": r[1], "title": r[2]},
                 "title": r[3], "content": r[4], "createdBy": r[5],
-                "created": r[6].isoformat() if r[6] else None,
-                "backdatedCreated": r[7].isoformat() if r[7] else None,
+                "created": _ts(r[6]),
+                "backdatedCreated": _ts(r[7]),
                 "author": r[8] or "",
                 "attachments": attachments_by_event.get(r[0], []),
             })
@@ -6160,7 +6176,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             rid = int(r[0])
             replies.append({
                 "id": rid, "parentReplyId": r[1], "content": "" if r[5] else r[2],
-                "createdBy": r[3], "created": r[4].isoformat() if r[4] else None,
+                "createdBy": r[3], "created": _ts(r[4]),
                 "isDeleted": r[5], "author": r[6] or "",
                 # Tagged (mentioned) user IDs on this reply — parallel to the
                 # notifyUserList the client sends on POST. Useful for future
@@ -6204,7 +6220,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             rid = int(r[0])
             grouped.setdefault(str(int(r[7])), []).append({
                 "id": rid, "parentReplyId": r[1], "content": "" if r[5] else r[2],
-                "createdBy": r[3], "created": r[4].isoformat() if r[4] else None,
+                "createdBy": r[3], "created": _ts(r[4]),
                 "isDeleted": r[5], "author": r[6] or "",
                 "notifyUserIds": notify_by_reply.get(rid, []),
             })
@@ -6823,7 +6839,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
              "addressCity": r[14], "addressState": r[15], "addressZip": r[16],
              "addressCountry": r[17], "jobTitle": r[18], "onlyofficeId": r[19],
              "contactStatus": r[20], "avatarUrl": f"/api/v2/contacts/{r[0]}/photo" if r[21] else None, "mobilePhone": r[22],
-             "createdAt": r[23].isoformat() if r[23] else None,
+             "createdAt": _ts(r[23]),
              "displayName": (r[5] if r[6] else f"{r[1] or ''} {r[2] or ''}".strip()) or r[3] or "Contact"}
             for r in rows
         ])
@@ -6945,7 +6961,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             writer.writerow([r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8],
                              r[9], r[10], r[11], r[12], r[13], r[14], r[15], r[16],
                              r[17], r[18], r[19], r[20],
-                             r[21].isoformat() if r[21] else ""])
+                             (_ts(r[21]) or "")])
         self.send_response(200)
         self.send_header("Content-Type", "text/csv; charset=utf-8")
         self.send_header("Content-Disposition", "attachment; filename=\"contacts_export.csv\"")
@@ -7023,8 +7039,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "category": {"title": r[2], "color": r[3]} if r[2] else None,
                 "title": r[4], "content": r[5],
                 "createdBy": r[6],
-                "created": r[7].isoformat() if r[7] else None,
-                "backdatedCreated": r[8].isoformat() if r[8] else None,
+                "created": _ts(r[7]),
+                "backdatedCreated": _ts(r[8]),
                 "author": r[9],
             })
         _json_response(self, 200, events)
@@ -7681,16 +7697,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         )
         _json_response(self, 200, [
             {"id": r[0], "title": r[1], "description": r[2], "opportunityId": r[3],
-             "responsibleUserId": r[4], "dueDate": r[5].isoformat() if r[5] else None,
-             "priority": r[6], "isClosed": r[7], "closedAt": r[8].isoformat() if r[8] else None,
-             "created": r[9].isoformat() if r[9] else None,
+             "responsibleUserId": r[4], "dueDate": _ts(r[5]),
+             "priority": r[6], "isClosed": r[7], "closedAt": _ts(r[8]),
+             "created": _ts(r[9]),
              "responsible": {"id": r[4], "displayName": r[10]} if r[10] else None,
              "opportunity": {"title": r[11]} if r[11] else None,
              "entity": {"entityType": "opportunity", "entityId": r[3], "entityTitle": r[11]} if r[11] else None,
              "items": r[12] or [], "labels": r[13] or "", "repeat": r[14] or "none",
              "color": r[15] or "", "pinned": bool(r[16]), "archived": bool(r[17]),
-             "sortOrder": r[18] or 0, "updatedAt": r[19].isoformat() if r[19] else None,
-             "ownerUserId": r[20], "remindAt": r[21].isoformat() if r[21] else None,
+             "sortOrder": r[18] or 0, "updatedAt": _ts(r[19]),
+             "ownerUserId": r[20], "remindAt": _ts(r[21]),
              "categoryId": r[22],
              "category": {"id": r[22], "title": r[23], "color": r[24], "iconKey": r[25]} if r[22] else None}
             for r in rows
@@ -7890,7 +7906,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             # Serialize timestamps
             for key in ("created_at", "updated_at", "archived_at"):
                 if r.get(key):
-                    r[key] = r[key].isoformat() if hasattr(r[key], "isoformat") else str(r[key])
+                    r[key] = _ts(r[key]) if hasattr(r[key], "isoformat") else str(r[key])
 
         _json_response(self, 200, {"notes": rows})
 
@@ -8086,10 +8102,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         versions = [{"label": "Current", "content": row.get("content") or "", "at": None}]
         if row.get("content_prev") is not None:
-            at = row["content_prev_at"].isoformat() if hasattr(row.get("content_prev_at"), "isoformat") else str(row.get("content_prev_at")) if row.get("content_prev_at") else None
+            at = _ts(row["content_prev_at"]) if hasattr(row.get("content_prev_at"), "isoformat") else str(row.get("content_prev_at")) if row.get("content_prev_at") else None
             versions.append({"label": "Previous", "content": row["content_prev"] or "", "at": at})
         if row.get("content_prev2") is not None:
-            at = row["content_prev2_at"].isoformat() if hasattr(row.get("content_prev2_at"), "isoformat") else str(row.get("content_prev2_at")) if row.get("content_prev2_at") else None
+            at = _ts(row["content_prev2_at"]) if hasattr(row.get("content_prev2_at"), "isoformat") else str(row.get("content_prev2_at")) if row.get("content_prev2_at") else None
             versions.append({"label": "Older", "content": row["content_prev2"] or "", "at": at})
         _json_response(self, 200, {"versions": versions})
 
@@ -8162,8 +8178,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
              "avatarIcon": r[8],
              "role": r[9] or "member",
              "twofaMethod": r[10],
-             "createdAt": r[11].isoformat() if r[11] else None,
-             "lastLogin": r[12].isoformat() if r[12] else None,
+             "createdAt": _ts(r[11]),
+             "lastLogin": _ts(r[12]),
              "mustChangePassword": r[13]}
             for r in rows
         ])
@@ -8677,8 +8693,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             (user_id,),
         )
         _json_response(self, 200, [
-            {"token": r[0][:8] + "...", "createdAt": r[1].isoformat() if r[1] else None,
-             "expiresAt": r[2].isoformat() if r[2] else None, "ipAddress": r[3]}
+            {"token": r[0][:8] + "...", "createdAt": _ts(r[1]),
+             "expiresAt": _ts(r[2]), "ipAddress": r[3]}
             for r in rows
         ])
 
@@ -8740,8 +8756,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "avatarIcon": row["avatar_icon"] or "",
             "role": row["role"] or "member",
             "mustChangePassword": bool(row["must_change_password"]),
-            "createdAt": row["created_at"].isoformat() if row["created_at"] else None,
-            "lastLogin": row["last_login"].isoformat() if row["last_login"] else None,
+            "createdAt": _ts(row["created_at"]),
+            "lastLogin": _ts(row["last_login"]),
         })
 
     def _handle_user_delete_personal_data(self, user_id: int) -> None:
@@ -8857,7 +8873,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         )
         _json_response(self, 200, [
             {"id": r[0], "type": r[1], "opportunityId": r[2], "message": r[3],
-             "payload": r[4], "isRead": r[5], "created": r[6].isoformat() if r[6] else None,
+             "payload": r[4], "isRead": r[5], "created": _ts(r[6]),
              "actor": r[7], "projectTitle": r[8],
              "snippet": (r[4] or {}).get("snippet", "") if isinstance(r[4], dict) else ""}
             for r in rows
@@ -8925,7 +8941,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "id": photo_id, "filename": r[1], "filePath": r[2],
                 "fileSize": r[3], "mimeType": r[4], "exifData": r[5],
                 "thumbnailPath": r[6], "altDescription": r[7],
-                "uploadedBy": r[8], "uploadedAt": r[9].isoformat() if r[9] else None,
+                "uploadedBy": r[8], "uploadedAt": _ts(r[9]),
                 "url": f"/api/v2/photos/{photo_id}",
                 "thumbnailUrl": f"/api/v2/photos/{photo_id}?thumbnail=1",
             })
@@ -9137,7 +9153,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         for r in rows:
             for k in ("created_at", "updated_at"):
                 if r.get(k):
-                    r[k] = r[k].isoformat() if hasattr(r[k], "isoformat") else str(r[k])
+                    r[k] = _ts(r[k]) if hasattr(r[k], "isoformat") else str(r[k])
         _json_response(self, 200, rows)
 
     def _handle_logo_serve(self, requested_path: str) -> None:
@@ -9353,7 +9369,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         for r in rows:
             for k in ("created_at", "updated_at"):
                 if r.get(k):
-                    r[k] = r[k].isoformat() if hasattr(r[k], "isoformat") else str(r[k])
+                    r[k] = _ts(r[k]) if hasattr(r[k], "isoformat") else str(r[k])
             if r.get("default_line_items") is None:
                 r["default_line_items"] = []
         _json_response(self, 200, rows)
@@ -9609,7 +9625,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         for r in rows:
             for k in ("last_polled_at", "created_at", "updated_at"):
                 if r.get(k):
-                    r[k] = r[k].isoformat() if hasattr(r[k], "isoformat") else str(r[k])
+                    r[k] = _ts(r[k]) if hasattr(r[k], "isoformat") else str(r[k])
         _json_response(self, 200, rows)
 
     def _handle_service_feed_create(self) -> None:
@@ -9740,7 +9756,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             (feed_id,),
         )
         if fresh and fresh.get("last_polled_at"):
-            fresh["last_polled_at"] = fresh["last_polled_at"].isoformat() if hasattr(fresh["last_polled_at"], "isoformat") else str(fresh["last_polled_at"])
+            fresh["last_polled_at"] = _ts(fresh["last_polled_at"]) if hasattr(fresh["last_polled_at"], "isoformat") else str(fresh["last_polled_at"])
         _json_response(self, 200, {"ok": True, "feed": fresh})
 
     def _handle_service_feed_webhook(self, secret: str) -> None:
@@ -10957,7 +10973,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         )
         _json_response(self, 200, [
             {"id": r[0], "folderType": r[1], "label": r[2], "externalUrl": r[3],
-             "externalProvider": r[4], "createdAt": r[5].isoformat() if r[5] else None}
+             "externalProvider": r[4], "createdAt": _ts(r[5])}
             for r in rows
         ])
 
@@ -11243,7 +11259,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 docs.append({
                     "id": r[0], "title": r[1], "filePath": r[2],
                     "fileSize": r[3], "mimeType": r[4], "uploadedBy": r[5],
-                    "uploadedAt": r[6].isoformat() if r[6] else None,
+                    "uploadedAt": _ts(r[6]),
                     "companyScope": r[7],
                     "editUrl": f"/doc-editor.html?id={r[0]}",
                 })
@@ -11272,7 +11288,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     docs.append({
                         "id": r[0], "title": r[1], "filePath": r[2],
                         "fileSize": r[3], "mimeType": r[4], "uploadedBy": r[5],
-                        "uploadedAt": r[6].isoformat() if r[6] else None,
+                        "uploadedAt": _ts(r[6]),
                         "companyScope": False,
                         "editUrl": f"/doc-editor.html?id={r[0]}",
                         "fromHistoryAttachment": True,
@@ -13206,7 +13222,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                     # Convert datetime objects to strings for JSON serialization
                                     for k, v in clean.items():
                                         if isinstance(v, datetime):
-                                            clean[k] = v.isoformat()
+                                            clean[k] = _ts(v)
                                     clean_rows.append(clean)
                                 manifest["tables"][table_name] = {"row_count": len(clean_rows)}
                                 zf.writestr(f"{table_name}.json", json.dumps(clean_rows, default=str, ensure_ascii=False))
@@ -14319,7 +14335,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "userAvatar": r.get("avatar_url"),
                 "action": r["action"],
                 "meta": meta,
-                "createdAt": r["created_at"].isoformat() if r.get("created_at") else None,
+                "createdAt": _ts(r.get("created_at")),
             })
         _json_response(self, 200, {"events": events, "count": len(events)})
 
@@ -14969,7 +14985,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "filePath": file_path,
             "fileSize": file_size,
             "mimeType": mime_type,
-            "uploadedAt": uploaded_at.isoformat() if uploaded_at else None,
+            "uploadedAt": _ts(uploaded_at),
             "opportunityId": opportunity_id,
             "companyScope": company_scope,
             "folderId": folder_id,
@@ -15651,7 +15667,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "SELECT created_at FROM bot_activity_log WHERE action = 'heartbeat' ORDER BY created_at DESC LIMIT 1"
             )
             if hb:
-                last_heartbeat = hb["created_at"].isoformat() if hb.get("created_at") else None
+                last_heartbeat = _ts(hb.get("created_at"))
                 # Consider running if heartbeat within last 120s
                 # created_at is TIMESTAMP (naive), so compare with naive utcnow
                 from datetime import datetime, timedelta
@@ -15666,7 +15682,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                    WHERE is_error = TRUE ORDER BY created_at DESC LIMIT 10"""
             )
             recent_errors = [
-                {"action": e[0], "detail": e[1], "time": e[2].isoformat() if e[2] else ""}
+                {"action": e[0], "detail": e[1], "time": (_ts(e[2]) or "")}
                 for e in recent
             ]
         except Exception:
@@ -15717,7 +15733,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 {
                     "chatId": r[0], "userName": r[1] or "", "action": r[2],
                     "detail": r[3] or "", "projectId": r[4],
-                    "isError": bool(r[5]), "time": r[6].isoformat() if r[6] else "",
+                    "isError": bool(r[5]), "time": (_ts(r[6]) or ""),
                 }
                 for r in rows
             ]
@@ -16056,8 +16072,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     "id": opp_id, "title": r[1],
                     "amount": float(r[2]) if r[2] else 0,
                     "description": r[3] or "",
-                    "created": r[4].isoformat() if r[4] else "",
-                    "dueDate": r[5].isoformat() if r[5] else "",
+                    "created": (_ts(r[4]) or ""),
+                    "dueDate": (_ts(r[5]) or ""),
                     "isPrivate": bool(r[6]),
                     "project_number": r[7],
                     "stage": r[8] or "",
@@ -16120,7 +16136,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     if ev_row:
                         deal["latestUpdate"] = {
                             "content": ev_row[0] or "",
-                            "created": ev_row[1].isoformat() if ev_row[1] else "",
+                            "created": (_ts(ev_row[1]) or ""),
                             "categoryName": ev_row[2] or "",
                         }
                     else:
@@ -16159,7 +16175,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     deal["recentUpdates"] = [
                         {
                             "content": ur[0] or "",
-                            "created": ur[1].isoformat() if ur[1] else "",
+                            "created": (_ts(ur[1]) or ""),
                             "categoryName": ur[2] or "",
                         }
                         for ur in upd_rows
@@ -16181,7 +16197,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         deal["events"] = [
                             {
                                 "content": ev[0] or "",
-                                "created": ev[1].isoformat() if ev[1] else "",
+                                "created": (_ts(ev[1]) or ""),
                                 "categoryName": ev[2] or "",
                                 "author": ev[3] or "",
                             }
@@ -16262,10 +16278,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             for r in rows:
                 tasks.append({
                     "id": r[0], "title": r[1], "description": r[2] or "",
-                    "dueDate": r[3].isoformat() if r[3] else None,
+                    "dueDate": _ts(r[3]),
                     "priority": r[4], "isClosed": r[5],
-                    "closedAt": r[6].isoformat() if r[6] else None,
-                    "createdAt": r[7].isoformat() if r[7] else None,
+                    "closedAt": _ts(r[6]),
+                    "createdAt": _ts(r[7]),
                     "labels": r[8] or "", "color": r[9] or "",
                     "projectTitle": r[10] or None,
                     "opportunityId": r[11],
@@ -16303,8 +16319,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 projects.append({
                     "id": r[0], "title": r[1], "amount": float(r[2] or 0),
                     "stage": r[3] or "",
-                    "dueDate": r[4].isoformat() if r[4] else None,
-                    "created": r[5].isoformat() if r[5] else None,
+                    "dueDate": _ts(r[4]),
+                    "created": _ts(r[5]),
                     "contact": r[7] or "",
                 })
             _json_response(self, 200, projects)
@@ -16341,7 +16357,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 projects.append({
                     "id": r[0], "title": r[1], "amount": float(r[2] or 0),
                     "stage": r[3] or "",
-                    "dueDate": r[4].isoformat() if r[4] else None,
+                    "dueDate": _ts(r[4]),
                     "contact": r[6] or "",
                 })
             _json_response(self, 200, projects)
@@ -16379,7 +16395,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 projects.append({
                     "id": r[0], "title": r[1], "amount": float(r[2] or 0),
                     "stage": r[3] or "",
-                    "dueDate": r[4].isoformat() if r[4] else None,
+                    "dueDate": _ts(r[4]),
                     "contact": r[6] or "",
                 })
             _json_response(self, 200, projects)
@@ -16435,8 +16451,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 events.append({
                     "id": r[0], "summary": r[1] or "Event",
                     "description": r[2] or "", "location": r[3] or "",
-                    "dtstart": r[4].isoformat() if r[4] else None,
-                    "dtend": r[5].isoformat() if r[5] else None,
+                    "dtstart": _ts(r[4]),
+                    "dtend": _ts(r[5]),
                 })
             _json_response(self, 200, events)
             return
@@ -16471,11 +16487,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 (user_id,),
             )
             _json_response(self, 200, {
-                "tasks": [{"id": r[0], "title": r[1], "dueDate": r[2].isoformat() if r[2] else None,
+                "tasks": [{"id": r[0], "title": r[1], "dueDate": _ts(r[2]),
                            "projectTitle": r[3], "opportunityId": r[4]} for r in tasks],
                 "events": [{"id": r[0], "summary": r[1],
-                            "dtstart": r[2].isoformat() if r[2] else None,
-                            "dtend": r[3].isoformat() if r[3] else None} for r in events],
+                            "dtstart": _ts(r[2]),
+                            "dtend": _ts(r[3])} for r in events],
             })
             return
 
@@ -16518,7 +16534,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             events = []
             for r in rows:
                 events.append({
-                    "id": r[0], "createdAt": r[1].isoformat() if r[1] else None,
+                    "id": r[0], "createdAt": _ts(r[1]),
                     "content": r[2] or "", "projectTitle": r[3] or "",
                     "opportunityId": r[4], "category": r[5] or "",
                 })
@@ -18480,7 +18496,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "UPDATE calendar_events SET snoozed_until = %s, last_modified = NOW() WHERE id = %s",
             (until, event_id),
         )
-        _json_response(self, 200, {"ok": True, "snoozed_until": until.isoformat()})
+        _json_response(self, 200, {"ok": True, "snoozed_until": _ts(until)})
 
     def _handle_calendar_event_dismiss_reminder(self, event_id: int) -> None:
         """Permanently dismiss the next reminder for this event (one-shot)."""

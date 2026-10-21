@@ -136,6 +136,9 @@ jobs:
       - name: Run stage+due correction dry-run tests
         run: python3 tests/test_sync_correction_dryrun.py -v
 
+      - name: Run timestamp UTC tests
+        run: python3 tests/test_timestamp_utc.py -v
+
       - name: Run supplemental sync tests
         run: python3 tests/test_sync_supplemental.py -v
 

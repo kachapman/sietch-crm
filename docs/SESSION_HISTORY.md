@@ -11,7 +11,17 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-21 (stage+due correction + dry run)
+**Date:** 2026-10-21 (timestamp UTC fix + stage/due dry-run deploy)
+
+**Topic:** History +4h EDT root fix; deploy correction dry-run build.
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying now with correction dry-run.**
+
+- `_ts()` UTC serializer; 59 emitters converted; `parseFeedDate` naive-as-UTC guard.
+- Tests: 6 (handler emits `+00:00`, no bare emitters, frontend guard), discriminating.
+- This deploy also ships correction mode (0f967cd, held). Dry run next via admin UI.
+
+## Previous session summary (2026-10-21, stage+due correction + dry run)
 
 **Topic:** Correction mode: stage/due only, 30h fresh guard, dry run.
 

@@ -13661,6 +13661,13 @@ function parseFeedDate(value) {
     const d = new Date(ms);
     return Number.isNaN(d.getTime()) ? null : d.toISOString();
   }
+  if (typeof value === "string") {
+    // Naive "YYYY-MM-DD HH:mm:ss" from the API is UTC (droplet PG is UTC).
+    // Without this, `new Date` parses it as browser-local — live bug 2026-10-21
+    // showed history notes +4h in EDT. Date-only strings already parse as UTC.
+    const m = value.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)$/);
+    if (m) value = `${m[1]}T${m[2]}Z`;
+  }
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }

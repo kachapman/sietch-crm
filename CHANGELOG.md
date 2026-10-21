@@ -2,6 +2,18 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## History timestamps +4h in EDT — fixed at the root (2026-10-21)
+
+Droplet Postgres runs UTC; `timestamp without time zone` values hit the browser
+as naive ISO, which `new Date()` parses as LOCAL — Ken's 4:01 PM EDT note rendered
+"8:01 PM EDT". The dev-server audit passed only because dev PG runs local time
+(naive == wall clock by coincidence). All 59 inline `.isoformat()` emitters now
+route through `_ts()` (naive assumed UTC, `+00:00` attached, aware converted);
+frontend `parseFeedDate` treats naive `"YYYY-MM-DD HH:mm:ss"` as UTC as a guard
+rail. Stored moments were always true UTC — display-only, no migration.
+`tests/test_timestamp_utc.py` (6 tests, discriminating). Cache-bust 3.7.27→3.7.28.
+Deployed with the stage+due correction dry-run build.
+
 ## Stage+due correction mode with dry run + 30h fresh guard (2026-10-21)
 
 Supplemental sync preserved stage/due diffs by design (`stage_id = COALESCE(stage_id, %s)`),
