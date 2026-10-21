@@ -11,7 +11,17 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-10-20 (mail polling + reply actor)
+**Date:** 2026-10-20 (mail behaviors bundle)
+
+**Topic:** Claim-code toggle split, search fix, NUL safety, skip logging.
+
+**Status: IMPLEMENTED + TESTED, pushed — deploy still to do.**
+
+- Claim paths gated (link_method + helper); UI row default OFF; behavior-change noted (silent claim-link dependents lose it).
+- Tests: new test_mail_behaviors.py (14, discriminating vs unpatched); all suites green.
+- Still pending (scoped, unapproved): OAuth Test button, last-error display in account modal.
+
+## Previous session summary (2026-10-20, mail polling + reply actor)
 
 **Topic:** Newest-first fetch, polling refresh button, reply notification names actor.
 

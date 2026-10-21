@@ -803,6 +803,16 @@
                       <input type="checkbox" id="scanner-dry-auto-link">
                     </div>
                   </div>
+                  <!-- Built-in: Auto-link by claim code -->
+                  <div class="behavior-row">
+                    <label style="display:flex; gap:0.5rem; align-items:center; font-weight:600;"><input type="checkbox" id="scanner-toggle-auto-link-claim"> Auto-link by claim code in subject/body (secondary classifier)</label>
+                    <div class="behavior-config">
+                      <label class="behavior-config-label">Scope:</label>
+                      <select id="scanner-scope-auto-link-claim" class="behavior-scope"><option value="crm">CRM Only</option><option value="all">All accounts</option><option value="custom">Custom…</option></select>
+                      <label class="behavior-config-label" style="margin-left:0.5rem;">Dry run:</label>
+                      <input type="checkbox" id="scanner-dry-auto-link-claim" checked>
+                    </div>
+                  </div>
                   <!-- Built-in: Post notes -->
                   <div class="behavior-row">
                     <label style="display:flex; gap:0.5rem; align-items:center; font-weight:600;"><input type="checkbox" id="scanner-toggle-post-notes"> Post email body as note to linked deal</label>
@@ -3855,6 +3865,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3.7.20" type="module"></script>
+  <script src="app.js?v=3.7.21" type="module"></script>
 </body>
 </html>

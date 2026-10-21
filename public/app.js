@@ -21251,6 +21251,10 @@ async function switchMailTab(btn) {
     mailState.activeAccount = btn.dataset.accountId || 'crm';
     mailState.activeFolder = 'INBOX';
     mailState.page = 1;
+    // A new mailbox is a new universe: drop any stale search text.
+    mailState.search = '';
+    const _msi = $("#mail-search-input");
+    if (_msi) _msi.value = '';
     await renderMailFolderList();
     const folderList = $('#mail-folder-list');
     if (folderList) {
@@ -23588,13 +23592,16 @@ function attachMailModalListeners() {
   // minimize
   $("#mail-inbox-minimize")?.addEventListener("click", minimizeEmailModal);
 
-  // search
+  // search — the query MUST be stored: loadMailMessagesForModal only sends
+  // mailState.search, so reloading without this line silently ignores typing.
   const searchIn = $("#mail-search-input");
   let searchT = null;
   if (searchIn) {
     searchIn.addEventListener("input", () => {
       clearTimeout(searchT);
       searchT = setTimeout(() => {
+        mailState.search = searchIn.value.trim();
+        mailState.page = 1;
         loadMailMessagesForModal();
       }, 350);
     });
@@ -24062,6 +24069,10 @@ function attachMailModalListeners() {
       btn.classList.add("active");
       mailState.activeFolder = btn.dataset.folder || "INBOX";
       mailState.page = 1;
+      // Folder switch drops the search (it belongs to the previous view).
+      mailState.search = "";
+      const _msi2 = $("#mail-search-input");
+      if (_msi2) _msi2.value = "";
       loadMailMessagesForModal();
     });
     // Folder context menu
@@ -33569,6 +33580,10 @@ async function populateEmailScannerTab() {
       set("#scanner-dry-auto-link", getDryRun(sb.auto_link_project_id));
       const scopeEl = $("#scanner-scope-auto-link");
       if (scopeEl) scopeEl.value = getScope(sb.auto_link_project_id);
+      set("#scanner-toggle-auto-link-claim", getEnabled(sb.auto_link_claim_code));
+      set("#scanner-dry-auto-link-claim", getDryRun(sb.auto_link_claim_code));
+      const scopeClaim = $("#scanner-scope-auto-link-claim");
+      if (scopeClaim) scopeClaim.value = getScope(sb.auto_link_claim_code);
       set("#scanner-toggle-post-notes", getEnabled(sb.post_notes));
       set("#scanner-dry-post-notes", getDryRun(sb.post_notes));
       const scopePost = $("#scanner-scope-post-notes");
@@ -34028,6 +34043,11 @@ function bindScannerAdminButtons() {
                 enabled: $("#scanner-toggle-auto-link")?.checked !== false,
                 dry_run: $("#scanner-dry-auto-link")?.checked || false,
                 accounts: getScope("#scanner-scope-auto-link"),
+              },
+              auto_link_claim_code: {
+                enabled: $("#scanner-toggle-auto-link-claim")?.checked || false,
+                dry_run: $("#scanner-dry-auto-link-claim")?.checked || false,
+                accounts: getScope("#scanner-scope-auto-link-claim"),
               },
               post_notes: {
                 enabled: $("#scanner-toggle-post-notes")?.checked || false,

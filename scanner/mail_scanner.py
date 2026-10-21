@@ -64,6 +64,7 @@ DEFAULT_CONTRACTORS = {
     ],
     "scanner_behavior": {
         "auto_link_project_id": {"enabled": True, "dry_run": False, "accounts": "all"},
+        "auto_link_claim_code": {"enabled": False, "dry_run": True, "accounts": "all"},
         "auto_link_by_content": {"enabled": False, "dry_run": True, "accounts": "all"},
         "create_deals": {"enabled": False, "dry_run": True, "accounts": []},
         "create_tasks": {"enabled": False, "dry_run": True, "accounts": []},
@@ -161,6 +162,23 @@ def _is_behavior_enabled(behavior_cfg: dict[str, Any], account_id: int | None = 
     if isinstance(accounts, list) and account_id is not None:
         return account_id in accounts
     return False
+
+
+def _link_toggle_allows(classification: dict[str, Any] | None, toggles: dict[str, Any] | None,
+                        account_id: int | None = None) -> tuple[bool, bool]:
+    """Decide whether a classified link may execute: (allowed, dry_run).
+
+    The toggle is chosen by the classification's link_method — "project_id"
+    ([#123]) vs "claim_code" (claim # matching) — so each checkbox governs
+    exactly its own matches. Classifications without a method (e.g. custom
+    rules) fall back to the project-ID toggle, preserving historical behavior.
+    """
+    method = ((classification or {}).get("link_method") or "project_id")
+    key = "auto_link_project_id" if method == "project_id" else "auto_link_claim_code"
+    cfg = (toggles or {}).get(key) or {}
+    if not _is_behavior_enabled(cfg, account_id):
+        return (False, False)
+    return (True, bool(_is_dry_run(cfg, account_id)))
 
 
 def _is_dry_run(behavior_cfg: dict[str, Any], account_id: int | None = None) -> bool:
@@ -1047,6 +1065,8 @@ def _get_mailboxes() -> list[dict[str, Any]]:
         results = []
         for row in rows:
             if not row.get("imap_host") or not row.get("email"):
+                logger.warning("Skipping mail account %s (%s): missing host or email",
+                               row.get("id"), row.get("email") or "?")
                 continue
             raw = (row.get("monitored_folders") or "").strip()
             folders = [f.strip() for f in raw.split(",") if f.strip()] if raw else ["INBOX"]
@@ -1079,6 +1099,8 @@ def _get_mailboxes() -> list[dict[str, Any]]:
             else:
                 pwd = row.get("password_encrypted", "")
                 if not pwd:
+                    logger.warning("Skipping mail account %s (%s): no password stored",
+                                   row.get("id"), row.get("email") or "?")
                     continue
                 results.append({
                     "host": row["imap_host"],
@@ -1431,6 +1453,11 @@ def _classify_message(msg: dict[str, Any]) -> dict[str, Any]:
     match_strength = "weak"
     action = "link_only"
     linked_deal_id: int | None = None
+    # Which sub-pipeline produced the link: "project_id" ([#123]) or
+    # "claim_code" (claim # matching). The link-application step honors the
+    # matching toggle — a checked [#PROJECTID] box must never license claim
+    # matching and vice versa.
+    link_method: str | None = None
     deal = None
 
     # Evaluate user-defined classification rules first
@@ -1449,6 +1476,12 @@ def _classify_message(msg: dict[str, Any]) -> dict[str, Any]:
     auto_link_enabled = bool(
         (toggles.get("auto_link_project_id") or {}).get("enabled", False)
     )
+    # Claim-code matching is a SEPARATE behavior with its own toggle
+    # (auto_link_claim_code, default off). It must never ride along with the
+    # [#PROJECTID] box.
+    claim_link_enabled = bool(
+        (toggles.get("auto_link_claim_code") or {}).get("enabled", False)
+    )
 
     # Try [#PROJECTID] format first (DEAL_LINK_RE)
     if auto_link_enabled and classification == "uncertain":
@@ -1463,9 +1496,10 @@ def _classify_message(msg: dict[str, Any]) -> dict[str, Any]:
                 match_strength = "strong"
                 action = "link_deal"
                 linked_deal_id = deal["id"]
+                link_method = "project_id"
 
-    # Try [#DEAL-NNN] format (DEAL_ID_RE)
-    if auto_link_enabled and classification == "uncertain":
+    # Try [#DEAL-NNN] format (DEAL_ID_RE) — claim-code behavior only.
+    if claim_link_enabled and classification == "uncertain":
         claim_match = None
         for m in DEAL_ID_RE.finditer(subject):
             claim_match = m.group(1)
@@ -1478,6 +1512,7 @@ def _classify_message(msg: dict[str, Any]) -> dict[str, Any]:
                 match_strength = "strong"
                 action = "link_deal"
                 linked_deal_id = deal["id"]
+                link_method = "claim_code"
             else:
                 for m in DEAL_ID_RE.finditer(body):
                     deal = _find_opportunity_by_claim_code(m.group(1))
@@ -1486,20 +1521,26 @@ def _classify_message(msg: dict[str, Any]) -> dict[str, Any]:
                         match_strength = "strong"
                         action = "link_deal"
                         linked_deal_id = deal["id"]
+                        link_method = "claim_code"
                         break
 
-    if classification == "uncertain" and DEAL_ID_RE.search(subject):
+    # These two fallthroughs previously ran with NO toggle gate at all — any
+    # bare claim-like subject linked whenever ANY link behavior was on. They
+    # belong to the claim-code behavior.
+    if claim_link_enabled and classification == "uncertain" and DEAL_ID_RE.search(subject):
         classification = "claim_code_deal_link"
         match_strength = "medium"
         action = "link_deal"
+        link_method = "claim_code"
 
-    if classification == "uncertain" and CLAIM_CODE_RE.match(subject.strip()):
+    if claim_link_enabled and classification == "uncertain" and CLAIM_CODE_RE.match(subject.strip()):
         deal = _find_opportunity_by_claim_code(subject.strip())
         if deal:
             classification = "claim_code_deal_link"
             match_strength = "strong"
             action = "link_deal"
             linked_deal_id = deal["id"]
+            link_method = "claim_code"
         else:
             classification = "claim_code_no_deal"
             match_strength = "medium"
@@ -1523,6 +1564,7 @@ def _classify_message(msg: dict[str, Any]) -> dict[str, Any]:
         "match_strength": match_strength,
         "action": action,
         "linked_deal_id": linked_deal_id,
+        "link_method": link_method,
         "ml_result": ml_result,
         "ml_applied": ml_applied,
         "subject": subject,
@@ -1531,6 +1573,15 @@ def _classify_message(msg: dict[str, Any]) -> dict[str, Any]:
         "uid": uid,
         "body_preview": body[:500],
     }
+
+
+def _clean_nul_str(value: Any) -> Any:
+    """Strip NUL bytes: Postgres text cannot store \\x00 and the whole INSERT
+    dies on a single contaminated field (live case: crm@ messages silently
+    skipped every cycle). Non-strings pass through untouched."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    return value
 
 
 def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | None:
@@ -1567,19 +1618,19 @@ def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | No
                RETURNING id""",
             (
                 account_id,
-                str(msg.get("uid") or ""),
-                msg.get("message_id") or "",
-                msg.get("from") or "",
-                msg.get("to") or "",
-                msg.get("subject") or "",
-                msg.get("body_text") or "",
-                msg.get("body_html") or "",
+                _clean_nul_str(str(msg.get("uid") or "")),
+                _clean_nul_str(msg.get("message_id") or ""),
+                _clean_nul_str(msg.get("from") or ""),
+                _clean_nul_str(msg.get("to") or ""),
+                _clean_nul_str(msg.get("subject") or ""),
+                _clean_nul_str(msg.get("body_text") or ""),
+                _clean_nul_str(msg.get("body_html") or ""),
                 msg.get("date") or None,
                 folder,
                 is_read,
                 False,
-                attachments_json,
-                msg.get("raw_headers"),
+                _clean_nul_str(attachments_json) if attachments_json else None,
+                _clean_nul_str(msg.get("raw_headers")),
             ),
         )
         msg_id = result["id"] if result else None
@@ -1601,8 +1652,8 @@ def _store_attachments(message_id: int, account_id: int, attachments: list[dict]
             db.execute(
                 "INSERT INTO mail_attachments (message_id, filename, mime_type, size_bytes, imap_part_id) "
                 "VALUES (%s, %s, %s, %s, %s)",
-                (message_id, att.get("filename", "unnamed"), att.get("mime_type", "application/octet/octet-stream"),
-                 att.get("size_bytes", 0), att.get("part_id", "")),
+                (message_id, _clean_nul_str(att.get("filename", "unnamed")), _clean_nul_str(att.get("mime_type", "application/octet/octet-stream")),
+                 att.get("size_bytes", 0), _clean_nul_str(att.get("part_id", ""))),
             )
         except Exception as e:
             logger.error("Failed to store attachment metadata: %s", e)
@@ -1663,11 +1714,15 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
     config = get_contractors()
     toggles = config.get("scanner_behavior", {})
 
-    # --- Auto-link by project ID (primary classifier) ---
+    # --- Auto-link by project ID / claim code ---
+    # Each checkbox governs exactly its own matches (link_method): a checked
+    # [#PROJECTID] box can never license claim-code links and vice versa.
+    # Custom-rule links carry no method and fall back to the project toggle
+    # (historical behavior).
+    link_allowed, link_dry = _link_toggle_allows(classification, toggles, account_id)
     if (classification["action"] == "link_deal" and classification["linked_deal_id"]
-            and _is_behavior_enabled(toggles.get("auto_link_project_id", {}), account_id)):
-        dry = _is_dry_run(toggles.get("auto_link_project_id", {}), account_id)
-        if dry:
+            and link_allowed):
+        if link_dry:
             log_entry["status"] = "dry_run"
             log_entry["dry_run_action"] = "link_deal"
             log_entry["dry_run_target"] = classification["linked_deal_id"]

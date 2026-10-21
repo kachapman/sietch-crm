@@ -2,6 +2,29 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Mail: claim-code toggle split, search fix, NUL safety, skip logging (2026-10-20)
+
+Claim-code auto-linking fired with only "[#PROJECTID]" checked: the claim
+sub-pipeline had no toggle of its own, and two fallthroughs had no gate at
+all. Separately, inbox search typed but never filtered, NUL bytes crashed
+message stores, and credential-less accounts were skipped silently.
+
+### Fixed
+
+- New `auto_link_claim_code` behavior (default OFF, dry-run capable): every
+  claim path (`[#DEAL-NNN]`, subject/body fallthroughs, whole-subject match)
+  gated behind it; bare `[#123]` stays under the existing box. Each match
+  tags `link_method`, and link execution keys off it via `_link_toggle_allows`
+  (own dry-run + scope per toggle; custom-rule links keep project-toggle
+  fallback). UI checkbox + dry-run + scope + save/load wired.
+- Inbox search stores the query + resets to page 1 (was reloading unfiltered);
+  search resets on account/folder navigation.
+- `_clean_nul_str` on all stored message/attachment strings (Postgres
+  rejects NUL); previously crashed rows now store and self-heal next cycle.
+- Loader warns per skipped account (missing host/email/password/token).
+- `tests/test_mail_behaviors.py` (14 tests: gating matrix, helper, NUL
+  store, skip warnings, UI wiring), wired into CI. Cache-bust 3.7.20→3.7.21.
+
 ## Mail: newest-first fetch, polling refresh, reply actor fix (2026-10-20)
 
 First syncs filled oldest-first (90-day window, one slow round-trip per
