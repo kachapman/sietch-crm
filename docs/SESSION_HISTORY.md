@@ -15,7 +15,8 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Topic:** `unwrapCreatedEntity is not defined` blocked all project creation.
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+**Status: DEPLOYED 2026-10-21 as 157e06b** (rebuild healthy, live bundle 3.7.30
+verified). Retry the create in a fresh tab; delete any ghost duplicates first.
 
 - Restored helper (identical semantics) above `createCrmOpportunity`; swept all
   other functions removed in ae31547 — no other dangling refs.
