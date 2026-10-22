@@ -13,7 +13,9 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-22 (mail snippet `&nbsp;` + missing previews)
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+**Status: DEPLOYED 2026-10-22 as 55d5400** (rebuild healthy, live bundle 3.7.32
+verified). Fresh tab → mail list: Allstate rows read cleanly, HTML-only rows
+recover previews.
 
 - `mailSnippetText()` in app.js; both mail-row snippet sites route through it.
 - Tests: 4 node tests (Allstate entities, HTML fallback, empty/empty, source
