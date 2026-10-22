@@ -15,7 +15,9 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Topic:** Per-inbox Graph status never acknowledged; wrong-mailbox token risk.
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+**Status: DEPLOYED 2026-10-22 as 9711a41** (rebuild healthy, live bundle 3.7.31
+verified). Open a fresh tab → mail inbox settings: Graph block now shows a real
+dot + status.
 
 - Accounts SELECT gains `has_graph_token` presence flag + expiry (no secrets shipped);
   `graphStatus` now connected/expired/None; status dots via `innerHTML`.
