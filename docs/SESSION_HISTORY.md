@@ -13,7 +13,9 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-22 (forward quote + linked-email attachments, folded build)
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+**Status: DEPLOYED 2026-10-22 as bb0f867** (rebuild healthy, live bundle 3.7.34
+verified). Fresh tab → forward shows rendered quote; preview shows inline
+images; relink the State Farm mail → PDF appears in history with download.
 
 - `mailQuotedBody()`: HTML quotes keep markup (sanitized), text quotes escape.
   CID→blob via authed fetch + `data:` embed (works in sandboxed iframe).
