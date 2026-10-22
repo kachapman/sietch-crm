@@ -13,7 +13,9 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-22 (team custom status + ownership theft)
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+**Status: DEPLOYED 2026-10-22 as 1aa6844** (rebuild healthy, live bundle 3.7.35
+verified). Fresh tab → Team tile → Custom... sets status cleanly; edit any
+project → owner no longer changes; Responsible picker reassigns on demand.
 
 - Team tile: scoped input query + full ✓/✕/Enter/Escape wiring.
 - PUT builder honors flat owner keys; edit modal gains Responsible picker.
