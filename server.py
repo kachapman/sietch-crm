@@ -1012,6 +1012,12 @@ except Exception:
 # dumps into the Telegram customer-updates feed, which filters on 16).
 EMAIL_HISTORY_CATEGORY_ID = 13
 
+# Tag-notification preview length. Telegram allows 4096 chars/message and the
+# notification shell (header + project link + dividers + CTA) runs ~200 chars,
+# so 1500 keeps the composed message comfortably under half the limit while
+# showing real note content instead of a stub (raised 2026-10-22 from 120).
+NOTIFICATION_SNIPPET_LEN = 1500
+
 
 def _normalize_note_content(content: str) -> str:
     """Converge tagless note content to a single stored form.
@@ -6108,7 +6114,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # history_notify_users was populated).
         if notify_list and int(category_id) in (1, 8, 10):  # Note or Comment (1/8 old OnlyOffice, 10=new DB)
             import re, html as _html_mod
-            snippet = _html_mod.unescape(re.sub(r'<[^>]+>', '', content))[:120].strip()
+            snippet = _html_mod.unescape(re.sub(r'<[^>]+>', '', content))[:NOTIFICATION_SNIPPET_LEN].strip()
             for uid in notify_list:
                 try:
                     db.execute(
@@ -6364,8 +6370,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 pass
         if notify_list:
             import re as _re, html as _html_mod
-            # Strip tags to a 120-char preview for the notification body.
-            snippet = _html_mod.unescape(_re.sub(r'<[^>]+>', '', content))[:120].strip()
+            # Strip tags to a preview for the notification body (see
+            # NOTIFICATION_SNIPPET_LEN — sized for Telegram's 4096 limit).
+            snippet = _html_mod.unescape(_re.sub(r'<[^>]+>', '', content))[:NOTIFICATION_SNIPPET_LEN].strip()
             for uid in notify_list:
                 try:
                     # Reuse the same notifications table; payload carries
@@ -16719,7 +16726,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     pass
             if notify_list and category_id in (1, 8, 10):
                 import re as _re
-                snippet = _re.sub(r'<[^>]+>', '', content)[:120].strip()
+                snippet = _re.sub(r'<[^>]+>', '', content)[:NOTIFICATION_SNIPPET_LEN].strip()
                 for uid in notify_list:
                     try:
                         db.execute(

@@ -73,7 +73,7 @@ def _get_bot_token() -> str:
     return fallback
 
 
-def _truncate(text: str, max_len: int = 500) -> str:
+def _truncate(text: str, max_len: int = 1500) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 3] + "..."

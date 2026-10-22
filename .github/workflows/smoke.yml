@@ -160,6 +160,9 @@ jobs:
       - name: Run mail forward quote tests
         run: node --test tests/test_mail_forward_quote.mjs
 
+      - name: Run notification snippet tests
+        run: python3 tests/test_notification_snippet.py -v
+
       - name: Run supplemental sync tests
         run: python3 tests/test_sync_supplemental.py -v
 

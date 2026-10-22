@@ -2,6 +2,16 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Telegram tag-notification preview 120 → 1500 chars (2026-10-22)
+
+Previews cut off mid-sentence: snippets were capped at 120 chars at creation
+(3 sites) and 500 at format time, against Telegram's 4096/message limit. Now
+`NOTIFICATION_SNIPPET_LEN = 1500` at all creation sites + dispatcher default
+1500; composed messages stay under half the limit. Applies to new tags (stored
+payloads keep their short snippets). Dispatcher runs inside the dashboard
+process — single rebuild deploys both. `tests/test_notification_snippet.py`
+(5 tests, discriminating).
+
 ## Forward quoting fixed + linked-email attachments in history (2026-10-22)
 
 Two overdue email fixes in one build. (1) Forward/reply showed raw HTML tags:

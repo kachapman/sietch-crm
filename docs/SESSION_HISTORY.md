@@ -11,6 +11,16 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-22 (Telegram snippet 120→1500)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+
+- Constant + 3 creation sites + dispatcher default; composed message <2500 chars.
+- Tests: 5 (constant, behavior, no-120-site, format passthrough, limit guard).
+- Dispatcher runs inside server process (server.py:21535) — no bot restart needed.
+
+## Previous session summary (2026-10-22, forward quote + linked-email attachments)
+
 **Date:** 2026-10-22 (forward quote + linked-email attachments, folded build)
 
 **Status: DEPLOYED 2026-10-22 as bb0f867** (rebuild healthy, live bundle 3.7.34
