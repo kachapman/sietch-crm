@@ -883,7 +883,8 @@ CREATE TABLE mail_outgoing (
     sent_at TIMESTAMP,
     created_by INTEGER REFERENCES users(id),
     created_at TIMESTAMP DEFAULT NOW(),
-    attachments_json JSONB
+    attachments_json JSONB,
+    send_method TEXT
 );
 
 CREATE INDEX idx_mail_outgoing_deal ON mail_outgoing(deal_id);
