@@ -145,6 +145,9 @@ jobs:
       - name: Run create-project unwrap tests
         run: node --test tests/test_create_opp_unwrap.mjs
 
+      - name: Run Graph OAuth status tests
+        run: python3 tests/test_graph_oauth_status.py -v
+
       - name: Run supplemental sync tests
         run: python3 tests/test_sync_supplemental.py -v
 

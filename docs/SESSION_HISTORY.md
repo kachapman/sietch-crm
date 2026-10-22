@@ -11,6 +11,23 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-22 (Graph status ack + callback identity check)
+
+**Topic:** Per-inbox Graph status never acknowledged; wrong-mailbox token risk.
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+
+- Accounts SELECT gains `has_graph_token` presence flag + expiry (no secrets shipped);
+  `graphStatus` now connected/expired/None; status dots via `innerHTML`.
+- Callback refuses when Microsoft identity != account email (id_token surfaced
+  from exchange; MSA `live.com#` prefix stripped). Live check: aplus + mdm tokens
+  both expired → current sends fall back to SMTP-as-self; past exposure = Sent
+  folder audit.
+- Tests: 12 (status matrix, no-leak, mismatch/match/unverifiable, id_token
+  extraction, markup guard), 8 fail on old code.
+
+## Previous session summary (2026-10-21, Create Project save crash fix)
+
 **Date:** 2026-10-21 (Create Project save crash fix)
 
 **Topic:** `unwrapCreatedEntity is not defined` blocked all project creation.

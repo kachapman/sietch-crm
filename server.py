@@ -18831,7 +18831,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # user_id/account_id; checking ownership here prevents CSRF where a
         # leaked callback URL is replayed to a different authenticated session.
         acct = db.query_one(
-            "SELECT id FROM mail_accounts WHERE id = %s AND owner_user_id = %s",
+            "SELECT id, email FROM mail_accounts WHERE id = %s AND owner_user_id = %s",
             (account_id, user_id),
         )
         if not acct:
@@ -18849,6 +18849,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         refresh_token = token_data.get("refresh_token", "")
         if not access_token:
             self._oauth_redirect_with_status("error", "Graph OAuth returned no access token")
+            return
+
+        # Identity check: the Microsoft user who just signed in must be the
+        # mail account being connected. Without this, signing in as mailbox A
+        # while connecting account B stores A's token on B — and Graph
+        # /me/sendMail then silently sends B's mail as A (2026-10-21).
+        ms_email = (token_data.get("email") or "").strip().lower()
+        acct_email = (acct.get("email") or "").strip().lower()
+        if ms_email and acct_email and ms_email != acct_email:
+            logger.warning("Graph OAuth identity mismatch: signed in as %s, account %s is %s — refusing",
+                           ms_email, account_id, acct_email)
+            self._oauth_redirect_with_status(
+                "error",
+                f"You signed in as {ms_email}, but this connects {acct_email}. "
+                f"Disconnect first, then reconnect while signed in as {acct_email}.")
             return
 
         expires_ts = datetime.now(timezone.utc).timestamp() + token_data.get("expires_in", 3600)
@@ -19715,7 +19730,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                           sync_enabled, monitored_folders, oauth_provider,
                           oauth_token_expires, oauth_scopes, is_crm_mail,
                           auto_bcc_addr, retention_days, tab_icon, tab_color,
-                          last_sync, owner_user_id, created_at
+                          last_sync, owner_user_id, created_at,
+                          oauth_graph_access_token IS NOT NULL AS has_graph_token,
+                          oauth_graph_token_expires
                    FROM mail_accounts
                    WHERE {_mail_visible_accounts_sql(user["id"])}
                    ORDER BY email""",
@@ -19740,9 +19757,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     r["oauthStatus"] = None
                 # Graph sendMail status (Microsoft-only). Used by the
                 # connect/disconnect UI and the compose-window banner.
+                # has_graph_token is a presence flag — the token itself is
+                # never selected, so nothing secret leaves the server.
                 if r.get("oauth_provider") == "microsoft":
                     g_expires = r.get("oauth_graph_token_expires")
-                    if r.get("oauth_graph_access_token"):
+                    if r.get("has_graph_token"):
                         if g_expires and isinstance(g_expires, datetime):
                             r["graphStatus"] = "connected" if g_expires.timestamp() > now_ts else "expired"
                         else:
@@ -19751,6 +19770,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         r["graphStatus"] = None
                 else:
                     r["graphStatus"] = None
+                r.pop("has_graph_token", None)
             # Attach shared-with users for each visible account
             acct_ids = [r["id"] for r in rows]
             shares: dict[int, list[dict]] = {}

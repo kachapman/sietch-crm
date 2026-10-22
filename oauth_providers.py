@@ -121,34 +121,7 @@ class MicrosoftProvider(OAuthProvider):
             "grant_type": "authorization_code",
         }
         result = _post_json(cls._TOKEN.format(tenant=cls._tenant()), data)
-        email = ""
-        # Try id_token first
-        id_token = result.get("id_token", "")
-        if id_token and isinstance(id_token, str):
-            parts = id_token.split(".")
-            if len(parts) == 3:
-                try:
-                    import base64
-                    padded = parts[1] + "=" * (4 - len(parts[1]) % 4)
-                    payload = json.loads(base64.urlsafe_b64decode(padded))
-                    # Prefer the verified email claim; MSA id_tokens use preferred_username like "live.com#user@outlook.com"
-                    email = payload.get("email") or payload.get("preferred_username") or ""
-                    if email and "#" in email:
-                        email = email.split("#")[-1]
-                except Exception:
-                    pass
-        # Fallback: fetch email from Microsoft Graph API
-        if not email and result.get("access_token"):
-            try:
-                req = urllib.request.Request(
-                    "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName",
-                    headers={"Authorization": f"Bearer {result['access_token']}"},
-                )
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    me = json.loads(resp.read())
-                    email = me.get("mail") or me.get("userPrincipalName") or ""
-            except Exception:
-                pass
+        email = cls.account_email_from_token_result(result)
         return {
             "access_token": result.get("access_token", ""),
             "refresh_token": result.get("refresh_token", ""),
@@ -215,7 +188,48 @@ class MicrosoftProvider(OAuthProvider):
             "access_token": result.get("access_token", ""),
             "refresh_token": result.get("refresh_token", ""),
             "expires_in": result.get("expires_in", 3600),
+            # Identity of the Microsoft user who just signed in. The Graph
+            # callback MUST compare this to the mail account email and refuse
+            # on mismatch — otherwise a token for mailbox A lands on account B
+            # and /me/sendMail silently sends as A (live risk 2026-10-21).
+            "email": cls.account_email_from_token_result(result),
         }
+
+    @staticmethod
+    def account_email_from_token_result(result: dict[str, Any]) -> str:
+        """Extract the signed-in Microsoft identity from a token response.
+
+        Shared by the IMAP/SMTP and Graph code exchanges. Tries the id_token
+        (free, no extra scope) then falls back to Graph /me. Returns "" when
+        neither yields an address — callers treat that as unverifiable.
+        """
+        email = ""
+        id_token = result.get("id_token", "")
+        if id_token and isinstance(id_token, str):
+            parts = id_token.split(".")
+            if len(parts) == 3:
+                try:
+                    import base64
+                    padded = parts[1] + "=" * (4 - len(parts[1]) % 4)
+                    payload = json.loads(base64.urlsafe_b64decode(padded))
+                    # Prefer the verified email claim; MSA id_tokens use preferred_username like "live.com#user@outlook.com"
+                    email = payload.get("email") or payload.get("preferred_username") or ""
+                    if email and "#" in email:
+                        email = email.split("#")[-1]
+                except Exception:
+                    pass
+        if not email and result.get("access_token"):
+            try:
+                req = urllib.request.Request(
+                    "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName",
+                    headers={"Authorization": f"Bearer {result['access_token']}"},
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    me = json.loads(resp.read())
+                    email = me.get("mail") or me.get("userPrincipalName") or ""
+            except Exception:
+                pass
+        return email if isinstance(email, str) else ""
 
     @classmethod
     def graph_refresh_token(cls, refresh_token: str) -> dict[str, Any]:

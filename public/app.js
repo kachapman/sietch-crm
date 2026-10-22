@@ -23336,18 +23336,18 @@ function updateGraphStatusBlock(acct, accountId) {
   if (!statusEl || !connectBtn || !disconnectBtn) return;
   const graphStatus = acct.graphStatus;
   if (graphStatus === 'connected') {
-    statusEl.textContent = '<span style="color:#22c55e;">●</span> Connected via Microsoft Graph';
+    statusEl.innerHTML = '<span style="color:#22c55e;">●</span> Connected via Microsoft Graph';
     statusEl.style.color = 'var(--text)';
     connectBtn.classList.add('hidden');
     disconnectBtn.classList.remove('hidden');
   } else if (graphStatus === 'expired') {
-    statusEl.textContent = '<span style="color:#ff9800;">●</span> Token expired — reconnect';
+    statusEl.innerHTML = '<span style="color:#ff9800;">●</span> Token expired — reconnect';
     statusEl.style.color = 'var(--text)';
     connectBtn.classList.remove('hidden');
     connectBtn.textContent = 'Reconnect Graph';
     disconnectBtn.classList.remove('hidden');
   } else {
-    statusEl.textContent = '<span style="color:var(--muted);">●</span> Not connected';
+    statusEl.innerHTML = '<span style="color:var(--muted);">●</span> Not connected';
     statusEl.style.color = 'var(--text)';
     connectBtn.classList.remove('hidden');
     connectBtn.textContent = 'Connect Graph';

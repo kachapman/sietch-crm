@@ -2,6 +2,19 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Graph Send status acknowledged + callback identity check (2026-10-22)
+
+Per-inbox Graph status always showed "Not connected" (and the compose banner never
+cleared): the accounts SELECT never fetched the `oauth_graph_*` columns, so
+`graphStatus` was always None. The SELECT now fetches a presence flag + expiry
+(token material never leaves the server). The status dot HTML was set via
+`textContent`, rendering literal markup — now `innerHTML`. Separately, the Graph
+callback stored tokens with no identity check: signing in as mailbox A while
+connecting account B silently reassigned B's sender (Graph `/me/sendMail`
+derives the sender from the token). The exchange now surfaces the `id_token`
+identity and the callback refuses on mismatch. `tests/test_graph_oauth_status.py`
+(12 tests, discriminating). Cache-bust 3.7.30→3.7.31.
+
 ## Create Project save crash — `unwrapCreatedEntity` restored (2026-10-21)
 
 Every Create Project save threw `unwrapCreatedEntity is not defined`: the helper
