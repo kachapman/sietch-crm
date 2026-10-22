@@ -13,7 +13,11 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-22 (Graph truthfulness: SMTP memory, states, identity, method)
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+**Status: DEPLOYED 2026-10-22 as f7c99e6+8bef4bd** (rebuild healthy, live bundle
+3.7.33 verified; new DB columns confirmed on droplet:
+`oauth_graph_identity`, `oauth_graph_last_error[_at]`, `smtp_auth_disabled`,
+`mail_outgoing.send_method`). Fresh tab → inbox settings shows named Graph
+identity once reconnected; sends toast the actual path.
 
 - `smtp_auth_disabled` memory: set on 5.7.139, skips SMTP with loud failure;
   sticky by design (single 250 proves nothing for these mailboxes).
