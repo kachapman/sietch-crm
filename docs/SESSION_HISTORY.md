@@ -13,7 +13,9 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-22 (Telegram snippet 120→1500)
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+**Status: DEPLOYED 2026-10-22 as bd7b4b4** (rebuild healthy; dispatcher runs
+inside the server process so this one deploy covers it — no bot restart).
+Next tag notification carries the long preview.
 
 - Constant + 3 creation sites + dispatcher default; composed message <2500 chars.
 - Tests: 5 (constant, behavior, no-120-site, format passthrough, limit guard).
