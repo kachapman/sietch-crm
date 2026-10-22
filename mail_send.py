@@ -26,6 +26,33 @@ from typing import Any
 logger = logging.getLogger("sietch.mailsend")
 
 
+def _looks_like_smtp_auth_disabled(err: str | None) -> bool:
+    """True when an SMTP error means Microsoft disabled SMTP AUTH (5.7.139).
+
+    Matches both the raw server code and our friendly rewrite of it, so the
+    memory flag is set no matter which layer produced the message.
+    """
+    if not err:
+        return False
+    return ("5.7.139" in err
+            or "SmtpClientAuthentication is disabled" in err
+            or "has disabled SMTP sending for this Outlook account" in err)
+
+
+def _set_smtp_auth_disabled(account_id: Any, value: bool) -> None:
+    """Persist/clear the per-account SMTP-AUTH-disabled memory. Best-effort."""
+    if account_id is None:
+        return
+    try:
+        import db as db_mod
+        db_mod.execute(
+            "UPDATE mail_accounts SET smtp_auth_disabled = %s WHERE id = %s",
+            (bool(value), account_id),
+        )
+    except Exception:
+        logger.exception("Failed to persist smtp_auth_disabled=%s for account %s", value, account_id)
+
+
 def try_send_for_account(
     acct: dict,
     *,
@@ -98,6 +125,16 @@ def try_send_for_account(
 
     # Step 2: SMTP path (works for Google OAuth, app passwords, Microsoft
     # accounts without a Graph token, and any account with manual SMTP).
+    # KNOWN-DEAD SKIP (2026-10-22): a Microsoft mailbox that previously failed
+    # with 5.7.139 has SMTP AUTH disabled server-side. SMTP "success" (250) is
+    # not proof of delivery for these mailboxes, so the dead path is never
+    # retried silently — fail loudly unless Graph already delivered above.
+    if oauth_provider == "microsoft" and acct.get("smtp_auth_disabled"):
+        return False, (
+            "Microsoft disabled SMTP sending for this Outlook mailbox (previously observed), "
+            f"and Graph send is unavailable ({graph_err or 'no Graph token connected'}). "
+            "Nothing was sent — reconnect Graph from mail account settings."
+        ), "graph" if graph_token else "smtp_password"
     smtp_host = acct.get("smtp_host") or ""
     if not smtp_host:
         return False, graph_err or "SMTP not configured for this account", "graph" if graph_token else "smtp_password"
@@ -129,8 +166,11 @@ def try_send_for_account(
     # Step 3: if SMTP failed with the canonical "SMTP AUTH disabled" error
     # AND a Graph token is available, retry Graph. Covers the case where the
     # routing above skipped Graph (e.g. the token expired between step 1 and
-    # step 2).
-    if err and ("5.7.139" in err or "SmtpClientAuthentication is disabled" in err):
+    # step 2). The failure is also memorized per account so future sends for
+    # a Microsoft mailbox skip the dead SMTP path entirely.
+    if err and _looks_like_smtp_auth_disabled(err):
+        if oauth_provider == "microsoft":
+            _set_smtp_auth_disabled(account_id, True)
         if oauth_provider == "microsoft" and refresh_graph_token is not None:
             retry_token, _retry_err = refresh_graph_token(account_id)
             if retry_token:

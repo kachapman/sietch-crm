@@ -21717,7 +21717,10 @@ async function openComposeModal(opts = {}) {
           method: 'POST',
           body: JSON.stringify(payload)
         });
-        showToast('Email sent');
+        const viaLabel = result.method === 'graph' ? 'via Microsoft Graph'
+          : result.method === 'smtp_oauth' ? 'via SMTP (OAuth)'
+          : result.method === 'smtp_password' ? 'via SMTP' : '';
+        showToast(viaLabel ? `Email sent ${viaLabel}` : 'Email sent');
         addEventLogEntry("email", dealId || null, "", `Email sent to ${to}`, true);
         modal.classList.add('hidden');
         // Reset form
@@ -22096,8 +22099,11 @@ function renderComposeTabContent(container, tabId, opts = {}) {
       }
       const payload = { account_id: accountId, to, cc, bcc, subject, body, deal_id: dealId };
       if (attachments.length > 0) payload.attachments = attachments;
-      await api('/api/v2/mail/send', { method: 'POST', body: JSON.stringify(payload) });
-      showToast('Email sent');
+      const tabResult = await api('/api/v2/mail/send', { method: 'POST', body: JSON.stringify(payload) });
+      const tabVia = tabResult.method === 'graph' ? 'via Microsoft Graph'
+        : tabResult.method === 'smtp_oauth' ? 'via SMTP (OAuth)'
+        : tabResult.method === 'smtp_password' ? 'via SMTP' : '';
+      showToast(tabVia ? `Email sent ${tabVia}` : 'Email sent');
       addEventLogEntry("email", dealId || null, "", `Email sent to ${to}`, true);
       closeComposeTabNoConfirm(tabId);
     } catch (e) { showToast('Send failed: ' + e.message, true); }
@@ -23335,13 +23341,19 @@ function updateGraphStatusBlock(acct, accountId) {
   const disconnectBtn = $('#account-settings-graph-disconnect');
   if (!statusEl || !connectBtn || !disconnectBtn) return;
   const graphStatus = acct.graphStatus;
-  if (graphStatus === 'connected') {
-    statusEl.innerHTML = '<span style="color:#22c55e;">●</span> Connected via Microsoft Graph';
+  const graphId = acct.graphIdentity ? ` as ${escapeHtml(acct.graphIdentity)}` : '';
+  if (graphStatus === 'connected' || graphStatus === 'auto-renew') {
+    // Hourly access-token expiry is by Microsoft design — with a refresh
+    // token on file the next send renews transparently, so auto-renew is
+    // shown green, not as a problem.
+    const renewNote = graphStatus === 'auto-renew' ? ' (renews automatically on send)' : '';
+    statusEl.innerHTML = `<span style="color:#22c55e;">●</span> Connected${graphId} via Microsoft Graph${renewNote}`;
     statusEl.style.color = 'var(--text)';
     connectBtn.classList.add('hidden');
     disconnectBtn.classList.remove('hidden');
-  } else if (graphStatus === 'expired') {
-    statusEl.innerHTML = '<span style="color:#ff9800;">●</span> Token expired — reconnect';
+  } else if (graphStatus === 'expired' || graphStatus === 'action-needed') {
+    const why = acct.oauth_graph_last_error ? ` — ${escapeHtml(acct.oauth_graph_last_error)}` : '';
+    statusEl.innerHTML = `<span style="color:#ff9800;">●</span> Reconnect needed${why}`;
     statusEl.style.color = 'var(--text)';
     connectBtn.classList.remove('hidden');
     connectBtn.textContent = 'Reconnect Graph';
@@ -23352,6 +23364,12 @@ function updateGraphStatusBlock(acct, accountId) {
     connectBtn.classList.remove('hidden');
     connectBtn.textContent = 'Connect Graph';
     disconnectBtn.classList.add('hidden');
+  }
+  if (acct.smtp_auth_disabled) {
+    // Microsoft refused SMTP AUTH for this mailbox before: SMTP is never
+    // retried for it, so say so — otherwise the status reads as if any
+    // send path might work.
+    statusEl.innerHTML += '<br><span style="color:var(--muted); font-size:0.8rem;">SMTP disabled by Microsoft for this mailbox — sending via Graph only.</span>';
   }
   // Wire click handlers (idempotent — safe to re-call on each modal open).
   if (!connectBtn.dataset.bound) {
@@ -23437,7 +23455,7 @@ function updateComposeGraphBanner() {
       banner.classList.add('hidden');
       return;
     }
-    if (acct.graphStatus === 'connected') {
+    if (acct.graphStatus === 'connected' || acct.graphStatus === 'auto-renew') {
       banner.classList.add('hidden');
     } else {
       banner.classList.remove('hidden');
@@ -27227,11 +27245,13 @@ function renderInlineReply(panel, type, messageId, norm) {
       const accounts = mailState.accounts || [];
       const accountId = accounts.length > 0 ? accounts[0].id : null;
       if (!accountId) { showToast("No mail account configured for sending", true); return; }
-      await api("/api/v2/mail/send", {
+      const inlineResult = await api("/api/v2/mail/send", {
         method: "POST",
         body: JSON.stringify({ account_id: accountId, to: toVal, subject: subjectVal, body: bodyHtml })
       });
-      showToast("Reply sent");
+      const inlineVia = inlineResult.method === 'graph' ? 'via Microsoft Graph'
+        : inlineResult.method && inlineResult.method.startsWith('smtp') ? 'via SMTP' : '';
+      showToast(inlineVia ? `Reply sent ${inlineVia}` : "Reply sent");
       addEventLogEntry("email", null, "", `Reply sent to ${toVal}`, true);
       replyDiv.remove();
     } catch (e) { showToast("Send failed: " + e.message, true); }

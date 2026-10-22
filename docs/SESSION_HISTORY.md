@@ -11,6 +11,20 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-22 (Graph truthfulness: SMTP memory, states, identity, method)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+
+- `smtp_auth_disabled` memory: set on 5.7.139, skips SMTP with loud failure;
+  sticky by design (single 250 proves nothing for these mailboxes).
+- Three token states + named identity in settings; last refresh error persisted.
+- `send_method` persisted on mail_outgoing + returned; toasts name the path.
+- Tests: 14 (states, identity lifecycle, routing memory, frontend guards),
+  9F/1E on old code. NOTE: foreign stash@{0} (42174d3 Calendar parity) found on
+  this machine during the session — NOT ours, left untouched.
+
+## Previous session summary (2026-10-22, mail snippet entities + fallback)
+
 **Date:** 2026-10-22 (mail snippet `&nbsp;` + missing previews)
 
 **Status: DEPLOYED 2026-10-22 as 55d5400** (rebuild healthy, live bundle 3.7.32

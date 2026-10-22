@@ -2,6 +2,19 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Graph truthfulness: SMTP-disable memory, honest states, named identity (2026-10-22)
+
+SMTP 250-accept is not proof of delivery for Outlook mailboxes, so silent SMTP
+fallback is gone for known-dead ones: a 5.7.139 failure sets a sticky
+`smtp_auth_disabled` memory — future sends skip SMTP entirely and fail LOUDLY
+("nothing was sent — reconnect Graph") unless Graph delivers. Token states are
+honest: Connected / Connected-auto-renew (hourly expiry is normal) /
+Action-needed (refresh observably failed), with the connected mailbox named
+(`oauth_graph_identity`, stored at verified connect). Send toasts and the
+`mail_outgoing` row now record *how* it went out (`graph`/`smtp_oauth`/
+`smtp_password`). `tests/test_graph_truthfulness.py` (14 tests, discriminating).
+Cache-bust 3.7.32→3.7.33.
+
 ## Mail list snippets: entities decoded, HTML-only fallback (2026-10-22)
 
 List rows showed literal `&nbsp;&nbsp;` (tag-strip without entity decode) and rows

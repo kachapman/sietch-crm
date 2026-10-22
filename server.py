@@ -969,6 +969,37 @@ try:
     db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS oauth_graph_scope TEXT")
 except Exception:
     pass
+# Identity the Graph token was issued to (stored at connect; verified against
+# the account email). Lets settings show WHO is connected, not just that a
+# token exists (2026-10-21 wrong-mailbox risk).
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS oauth_graph_identity TEXT")
+except Exception:
+    pass
+# Last Graph refresh failure (reason). Drives the "action needed" token state;
+# cleared on successful connect/refresh. Hourly access expiry is normal and
+# must NOT read as broken.
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS oauth_graph_last_error TEXT")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS oauth_graph_last_error_at TIMESTAMP")
+except Exception:
+    pass
+# Memory of observed SMTP AUTH disable (5.7.139). Microsoft accepts-then-drops
+# or refuses unpredictably for these mailboxes; SMTP "success" (250) is not
+# proof of delivery, so flagged accounts skip SMTP entirely and fail loudly
+# unless Graph delivers (2026-10-22). Cleared automatically on SMTP success.
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS smtp_auth_disabled BOOLEAN DEFAULT FALSE")
+except Exception:
+    pass
+# Audit of how each outgoing mail actually went out.
+try:
+    db.execute("ALTER TABLE mail_outgoing ADD COLUMN IF NOT EXISTS send_method TEXT")
+except Exception:
+    pass
 try:
     db.execute("ALTER TABLE history_events ADD COLUMN IF NOT EXISTS contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE")
 except Exception:
@@ -18872,10 +18903,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                oauth_graph_access_token = %s,
                oauth_graph_refresh_token = %s,
                oauth_graph_token_expires = to_timestamp(%s),
-               oauth_graph_scope = %s
+               oauth_graph_scope = %s,
+               oauth_graph_identity = %s,
+               oauth_graph_last_error = NULL,
+               oauth_graph_last_error_at = NULL
                WHERE id = %s""",
             (access_token, refresh_token, expires_ts,
-             oauth_providers.MicrosoftProvider._GRAPH_SCOPE, account_id),
+             oauth_providers.MicrosoftProvider._GRAPH_SCOPE, ms_email or None, account_id),
         )
         self._oauth_redirect_with_status("graph_success", "")
 
@@ -18895,7 +18929,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                oauth_graph_access_token = NULL,
                oauth_graph_refresh_token = NULL,
                oauth_graph_token_expires = NULL,
-               oauth_graph_scope = NULL
+               oauth_graph_scope = NULL,
+               oauth_graph_identity = NULL,
+               oauth_graph_last_error = NULL,
+               oauth_graph_last_error_at = NULL
                WHERE id = %s""",
             (account_id,),
         )
@@ -18925,12 +18962,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not new_token:
                 return None, "Graph token refresh returned no access token"
             db.execute(
-                "UPDATE mail_accounts SET oauth_graph_access_token = %s, oauth_graph_refresh_token = %s, oauth_graph_token_expires = to_timestamp(%s) WHERE id = %s",
+                "UPDATE mail_accounts SET oauth_graph_access_token = %s, oauth_graph_refresh_token = %s, oauth_graph_token_expires = to_timestamp(%s), oauth_graph_last_error = NULL, oauth_graph_last_error_at = NULL WHERE id = %s",
                 (new_token, new_refresh, new_expires_ts, account_id),
             )
             return new_token, None
         except Exception as e:
             logger.exception("Graph token refresh failed for account %d", account_id)
+            # Remember the failure (reason + time) so settings can show an
+            # honest "action needed" state instead of a bare "expired". The
+            # hourly access-token expiry itself is normal and must not read
+            # as broken — only an observed refresh failure does.
+            try:
+                db.execute(
+                    "UPDATE mail_accounts SET oauth_graph_last_error = %s, oauth_graph_last_error_at = NOW() WHERE id = %s",
+                    (str(e)[:300], account_id),
+                )
+            except Exception:
+                pass
             return None, f"Graph token refresh failed: {e}"
 
     def _try_send_for_account(
@@ -19732,7 +19780,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                           auto_bcc_addr, retention_days, tab_icon, tab_color,
                           last_sync, owner_user_id, created_at,
                           oauth_graph_access_token IS NOT NULL AS has_graph_token,
-                          oauth_graph_token_expires
+                          oauth_graph_token_expires,
+                          oauth_graph_identity,
+                          oauth_graph_refresh_token IS NOT NULL AS has_graph_refresh,
+                          oauth_graph_last_error, oauth_graph_last_error_at,
+                          smtp_auth_disabled
                    FROM mail_accounts
                    WHERE {_mail_visible_accounts_sql(user["id"])}
                    ORDER BY email""",
@@ -19759,18 +19811,30 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 # connect/disconnect UI and the compose-window banner.
                 # has_graph_token is a presence flag — the token itself is
                 # never selected, so nothing secret leaves the server.
+                # Three honest states: live access token / access expired but
+                # auto-renewable on send (normal — hourly expiry is by design)
+                # / action needed (refresh observably failed or no refresh
+                # token). Only the last one means "reconnect".
                 if r.get("oauth_provider") == "microsoft":
+                    r["graphIdentity"] = r.get("oauth_graph_identity")
                     g_expires = r.get("oauth_graph_token_expires")
                     if r.get("has_graph_token"):
                         if g_expires and isinstance(g_expires, datetime):
-                            r["graphStatus"] = "connected" if g_expires.timestamp() > now_ts else "expired"
+                            if g_expires.timestamp() > now_ts:
+                                r["graphStatus"] = "connected"
+                            elif r.get("has_graph_refresh") and not r.get("oauth_graph_last_error"):
+                                r["graphStatus"] = "auto-renew"
+                            else:
+                                r["graphStatus"] = "action-needed"
                         else:
                             r["graphStatus"] = "connected"
                     else:
                         r["graphStatus"] = None
                 else:
                     r["graphStatus"] = None
+                    r["graphIdentity"] = None
                 r.pop("has_graph_token", None)
+                r.pop("has_graph_refresh", None)
             # Attach shared-with users for each visible account
             acct_ids = [r["id"] for r in rows]
             shares: dict[int, list[dict]] = {}
@@ -20277,8 +20341,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             outgoing = db.query_one(
                 """INSERT INTO mail_outgoing
                    (account_id, from_addr, to_addr, cc_addr, bcc_addr, subject,
-                    body_text, body_html, deal_id, attachments_json, status, sent_at, created_by)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    body_text, body_html, deal_id, attachments_json, status, sent_at, created_by, send_method)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
                     account_id, acct["email"], to_addr, cc_addr, bcc_addr,
@@ -20286,6 +20350,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     "sent" if ok else "failed",
                     datetime.now(timezone.utc) if ok else None,
                     user["id"] if user else None,
+                    send_method,
                 ),
             )
 
@@ -20327,9 +20392,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 self._create_email_history_event(int(deal_id), int(message_id), user["id"] if user else None)
 
             if ok:
-                _json_response(self, 200, {"ok": True, "id": outgoing["id"] if outgoing else None})
+                _json_response(self, 200, {"ok": True, "id": outgoing["id"] if outgoing else None, "method": send_method})
             else:
-                _json_response(self, 500, {"ok": False, "error": err or "Send failed"})
+                _json_response(self, 500, {"ok": False, "error": err or "Send failed", "method": send_method})
         except Exception as e:
             logger.exception("Failed to send mail")
             _json_response(self, 500, {"error": str(e)})
