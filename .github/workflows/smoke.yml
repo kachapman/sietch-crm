@@ -148,6 +148,9 @@ jobs:
       - name: Run Graph OAuth status tests
         run: python3 tests/test_graph_oauth_status.py -v
 
+      - name: Run mail snippet tests
+        run: node --test tests/test_mail_snippet.mjs
+
       - name: Run supplemental sync tests
         run: python3 tests/test_sync_supplemental.py -v
 

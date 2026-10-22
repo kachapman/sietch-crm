@@ -2,6 +2,16 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Mail list snippets: entities decoded, HTML-only fallback (2026-10-22)
+
+List rows showed literal `&nbsp;&nbsp;` (tag-strip without entity decode) and rows
+with empty `body_text` showed no preview at all. New `mailSnippetText()` helper:
+prefers `body_text`, falls back to tag-stripped `body_html` (already in the list
+response), then `decodeHtmlEntities` + nbsp/whitespace/punctuation cleanup. Both
+snippet sites route through it. Rows empty in both fields genuinely have no stored
+body (scanner gap, not display). `tests/test_mail_snippet.mjs` (4 tests,
+discriminating). Cache-bust 3.7.31→3.7.32.
+
 ## Graph Send status acknowledged + callback identity check (2026-10-22)
 
 Per-inbox Graph status always showed "Not connected" (and the compose banner never

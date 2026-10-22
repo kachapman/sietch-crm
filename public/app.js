@@ -24951,6 +24951,21 @@ async function updateTrashCount() {
   } catch { badge.style.display = 'none'; }
 }
 
+// Plain-text preview for a mail list row. Prefers body_text, falls back to
+// tag-stripped body_html (the list API returns m.* so both are present), then
+// decodes entities — tag-stripping alone leaves "&nbsp;" literals on screen
+// (live bug 2026-10-22, Allstate rows). Uses the shared decodeHtmlEntities.
+function mailSnippetText(m) {
+  if (!m) return "";
+  let raw = m.body_text || m.snippet || "";
+  if (!String(raw).trim() && m.body_html) {
+    raw = String(m.body_html).replace(/<[^>]+>/g, " ");
+  }
+  let text = String(raw).replace(/<[^>]+>/g, " ");
+  try { text = decodeHtmlEntities(text); } catch { /* keep raw */ }
+  return text.replace(/\u00A0/g, " ").replace(/\s+/g, " ").replace(/\s+([,.;:!?])/g, "$1").trim();
+}
+
 function renderMailList(msgs) {
   const list = $("#mail-list");
   if (!list) return;
@@ -25038,7 +25053,7 @@ function renderMailList(msgs) {
     const subjDiv = document.createElement("div");
     subjDiv.className = "mail-subject";
     const draftBadge = m.isDraft ? '<span style="background:var(--warning-subtle,#fef3c7); color:var(--warning,#d97706); padding:0.1rem 0.3rem; border-radius:3px; font-size:0.7rem; margin-right:0.3rem;">Draft</span>' : '';
-    const bodySnippet = (m.body_text || m.snippet || '').replace(/<[^>]+>/g, '').trim().slice(0, 100);
+    const bodySnippet = mailSnippetText(m).slice(0, 100);
     subjDiv.title = `${from}\n${subj}\n${bodySnippet}`;
     // Subject text (wrapped for ellipsis)
     const subjText = document.createElement('span');
@@ -25048,7 +25063,7 @@ function renderMailList(msgs) {
     row.appendChild(subjDiv);
 
     // Body snippet
-    const snippet = (m.body_text || "").replace(/<[^>]+>/g, "").trim().slice(0, 60);
+    const snippet = mailSnippetText(m).slice(0, 60);
     if (snippet) {
       const snippetDiv = document.createElement("div");
       snippetDiv.className = "mail-snippet";

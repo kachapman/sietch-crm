@@ -11,6 +11,18 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-22 (mail snippet `&nbsp;` + missing previews)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+
+- `mailSnippetText()` in app.js; both mail-row snippet sites route through it.
+- Tests: 4 node tests (Allstate entities, HTML fallback, empty/empty, source
+  guard), fail-on-old verified.
+- Note-type fix confirmed live (bundle already contains it) — stale tab was the
+  issue, not the deploy.
+
+## Previous session summary (2026-10-22, Graph status ack + callback identity check)
+
 **Date:** 2026-10-22 (Graph status ack + callback identity check)
 
 **Topic:** Per-inbox Graph status never acknowledged; wrong-mailbox token risk.
