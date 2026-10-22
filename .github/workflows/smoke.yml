@@ -154,6 +154,12 @@ jobs:
       - name: Run Graph truthfulness tests
         run: python3 tests/test_graph_truthfulness.py -v
 
+      - name: Run linked email attachment tests
+        run: python3 tests/test_linked_email_attachments.py -v
+
+      - name: Run mail forward quote tests
+        run: node --test tests/test_mail_forward_quote.mjs
+
       - name: Run supplemental sync tests
         run: python3 tests/test_sync_supplemental.py -v
 

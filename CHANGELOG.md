@@ -2,6 +2,22 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Forward quoting fixed + linked-email attachments in history (2026-10-22)
+
+Two overdue email fixes in one build. (1) Forward/reply showed raw HTML tags:
+all three compose branches wrapped the original in `escapeHtml`. New
+`mailQuotedBody()` helper: HTML originals keep markup (sanitized for the live
+composer), plain-text originals escape with `<br/>`. (2) Inline `cid:` images
+were broken (sandboxed preview iframe can't send cookies → 401): attachments
+now fetch with credentials and embed as `data:` URLs. (3) Linked emails showed
+no files in project history: compose-send now persists attachment bytes +
+`mail_attachments` rows, the download endpoint serves stored bytes with IMAP
+fallback, and history GET resolves email snapshots to live download URLs
+(stale snapshots self-heal on read). Previously-sent mail with no stored bytes
+is unrecoverable and stays file-less. `tests/test_mail_forward_quote.mjs`
+(5 tests) + `tests/test_linked_email_attachments.py` (5 tests), both
+discriminating. Cache-bust 3.7.33→3.7.34.
+
 ## Graph truthfulness: SMTP-disable memory, honest states, named identity (2026-10-22)
 
 SMTP 250-accept is not proof of delivery for Outlook mailboxes, so silent SMTP

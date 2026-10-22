@@ -11,6 +11,19 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-22 (forward quote + linked-email attachments, folded build)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+
+- `mailQuotedBody()`: HTML quotes keep markup (sanitized), text quotes escape.
+  CID→blob via authed fetch + `data:` embed (works in sandboxed iframe).
+- Send flow persists attachment bytes + rows; download serves stored bytes
+  with IMAP fallback; history GET resolves snapshots to live download URLs.
+- Tests: 5 node + 5 python, both discriminating (old: 2F + 4F).
+- Pre-existing sent mail without stored bytes is unrecoverable — noted, not fixed.
+
+## Previous session summary (2026-10-22, Graph truthfulness)
+
 **Date:** 2026-10-22 (Graph truthfulness: SMTP memory, states, identity, method)
 
 **Status: DEPLOYED 2026-10-22 as f7c99e6+8bef4bd** (rebuild healthy, live bundle

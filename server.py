@@ -6020,6 +6020,42 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "author": r[8] or "",
                 "attachments": attachments_by_event.get(r[0], []),
             })
+        # Linked-email attachments: email_snapshot content carries filenames
+        # but no downloadable refs, and history_attachments has no rows for
+        # mail — so the timeline never showed linked files (2026-10-22).
+        # Resolve live mail_attachments per snapshot message_id and emit
+        # entries with direct download URLs (the renderer prefers file.url
+        # when there is no history id). One batched query; display-only, and
+        # it makes stale snapshots self-heal on read.
+        try:
+            snap_mids: dict[int, int] = {}
+            for _ev in events:
+                try:
+                    _c = json.loads(_ev.get("content") or "")
+                except Exception:
+                    continue
+                if isinstance(_c, dict) and _c.get("type") == "email_snapshot" and _c.get("message_id"):
+                    try:
+                        snap_mids[_ev["id"]] = int(_c["message_id"])
+                    except (TypeError, ValueError):
+                        pass
+            if snap_mids:
+                mail_att_rows = db.query(
+                    "SELECT message_id, id, filename FROM mail_attachments WHERE message_id = ANY(%s) ORDER BY filename",
+                    (list(set(snap_mids.values())),),
+                )
+                mail_by_msg: dict[int, list] = {}
+                for _mr in mail_att_rows:
+                    mail_by_msg.setdefault(_mr[0], []).append(_mr)
+                for _ev in events:
+                    _mid = snap_mids.get(_ev["id"])
+                    for _mma, _maa, _mfn in [(_m[0], _m[1], _m[2]) for _m in mail_by_msg.get(_mid, [])]:
+                        _ev["attachments"].append({
+                            "id": "", "filename": _mfn,
+                            "url": f"/api/v2/mail/messages/{_mid}/attachments/{_maa}/download",
+                        })
+        except Exception:
+            logger.exception("Email snapshot attachment resolution failed for opp %d", opp_id)
         _json_response(self, 200, events)
 
     def _handle_project_history_create(self, opp_id: int) -> None:
@@ -20381,6 +20417,33 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     ),
                 )
                 message_id = msg_row["id"] if msg_row else None
+                # Persist sent attachment bytes to disk + mail_attachments rows.
+                # Without this, sent mail has attachments_json metadata only:
+                # no mail_attachments rows means no history snapshot content
+                # and no working download (the download endpoint is IMAP-only
+                # and Sent copies have no IMAP row). Failures here must not
+                # fail the send itself — the mail already went out.
+                if message_id and decoded_attachments:
+                    try:
+                        sent_dir = ROOT / "data" / "mail-attachments" / str(message_id)
+                        sent_dir.mkdir(parents=True, exist_ok=True)
+                        for _att in decoded_attachments:
+                            try:
+                                _safe = _crm_safe_filename(_att.get("filename") or "attachment")
+                                _content = _att.get("content") or b""
+                                (sent_dir / _safe).write_bytes(_content)
+                                db.execute(
+                                    "INSERT INTO mail_attachments (message_id, filename, mime_type, size_bytes, stored_path) "
+                                    "VALUES (%s, %s, %s, %s, %s)",
+                                    (message_id, _att.get("filename") or "attachment",
+                                     _att.get("mime_type") or "application/octet-stream",
+                                     len(_content),
+                                     f"data/mail-attachments/{message_id}/{_safe}"),
+                                )
+                            except Exception:
+                                logger.exception("Failed to persist sent attachment for message %d", message_id)
+                    except Exception:
+                        logger.exception("Failed to persist sent attachments dir for message %d", message_id)
 
             if ok and deal_id and message_id:
                 db.execute(
@@ -20815,6 +20878,27 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not acct:
                 _json_response(self, 404, {"error": "Account not found"})
                 return
+            # Stored-bytes fast path (sent mail + mirrored inbound): the IMAP
+            # lazy-fetch below cannot resolve Sent copies (synthetic UIDs, no
+            # IMAP row) or archived-away messages. Serve from disk when present.
+            try:
+                _stored = (att.get("stored_path") or "").strip()
+            except Exception:
+                _stored = ""
+            if _stored:
+                try:
+                    _full = ROOT / _stored
+                    if _full.is_file():
+                        _content = _full.read_bytes()
+                        self.send_response(200)
+                        self.send_header("Content-Type", att.get("mime_type") or "application/octet-stream")
+                        self.send_header("Content-Disposition", f'attachment; filename="{att["filename"]}"')
+                        self.send_header("Content-Length", str(len(_content)))
+                        self.end_headers()
+                        self.wfile.write(_content)
+                        return
+                except Exception:
+                    logger.exception("Stored attachment read failed for %d, trying IMAP", attachment_id)
             # Lazy-fetch attachment content from IMAP
             try:
                 from imap_tools import A as _ImapA

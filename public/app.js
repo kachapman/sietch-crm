@@ -26840,22 +26840,30 @@ function renderEmailPreviewBody(bodyEl, norm, fullMail, messageId) {
   if (!bodyEl) return;
   const bodyPick = pickMailBodyForDisplay(norm, { allowIntroFallback: false });
   if (bodyPick.mode === 'html' && bodyPick.content) {
-    // Replace cid: references with attachment download URLs for inline images
+    // Replace cid: references with inline image data. A plain <img src="/api/…">
+    // does NOT work here: the preview iframe is sandboxed to an opaque origin
+    // (no allow-same-origin, deliberate), so the session cookie is not sent and
+    // the endpoint 401s (live bug 2026-10-21: every inline image broken).
+    // Instead fetch with credentials and embed as data: URLs (allowed by the
+    // srcdoc CSP's img-src). Auth failures keep the original cid: (old look,
+    // no crash). Renders immediately; upgrades in place when fetches land.
     let htmlBody = bodyPick.content;
     const attsForCid = Array.isArray(fullMail.attachments) ? fullMail.attachments : [];
+    const cidJobs = [];
     if (attsForCid.length && /cid:/i.test(htmlBody)) {
       const cidMap = {};
       attsForCid.forEach(a => {
         const cid = (a.content_id || a.contentId || a.cid || a.imap_part_id || "").replace(/^</, "").replace(/>$/, "").toLowerCase();
         const aid = a.id || a.attachment_id;
-        if (cid && aid) cidMap[cid] = aid;
+        const sizeBytes = a.size_bytes || a.size || 0;
+        if (cid && aid) cidMap[cid] = { aid, sizeBytes };
       });
       if (Object.keys(cidMap).length) {
-        htmlBody = htmlBody.replace(/(["']?)cid:([^"'\s>]+)/gi, (match, quote, cid) => {
+        const seen = new Set();
+        htmlBody.replace(/(["']?)cid:([^"'\s>]+)/gi, (match, quote, cid) => {
           const key = cid.replace(/^</, "").replace(/>$/, "").toLowerCase();
-          const aid = cidMap[key];
-          if (!aid || !messageId) return match;
-          return `${quote}/api/v2/mail/messages/${encodeURIComponent(messageId)}/attachments/${aid}/download`;
+          if (cidMap[key] && !seen.has(key)) { seen.add(key); cidJobs.push(key); }
+          return match;
         });
       }
     }
@@ -26871,6 +26879,41 @@ function renderEmailPreviewBody(bodyEl, norm, fullMail, messageId) {
     iframe.setAttribute('title', 'Email body');
     iframe.srcdoc = mailBodyIframeSrcdoc(htmlBody);
     bodyEl.appendChild(iframe);
+    if (cidJobs.length && messageId) {
+      const cidMap = {};
+      attsForCid.forEach(a => {
+        const cid = (a.content_id || a.contentId || a.cid || a.imap_part_id || "").replace(/^</, "").replace(/>$/, "").toLowerCase();
+        const aid = a.id || a.attachment_id;
+        const sizeBytes = a.size_bytes || a.size || 0;
+        if (cid && aid) cidMap[cid] = { aid, sizeBytes };
+      });
+      const MAX_INLINE_BYTES = 5 * 1024 * 1024;
+      Promise.all(cidJobs.map(key => {
+        const { aid, sizeBytes } = cidMap[key];
+        if (sizeBytes > MAX_INLINE_BYTES) return null;
+        return fetch(`/api/v2/mail/messages/${encodeURIComponent(messageId)}/attachments/${aid}/download`, { credentials: 'same-origin' })
+          .then(res => {
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.blob();
+          })
+          .then(blob => new Promise(resolve => {
+            const fr = new FileReader();
+            fr.onload = () => resolve({ key, url: fr.result });
+            fr.onerror = () => resolve(null);
+            fr.readAsDataURL(blob);
+          }))
+          .catch(() => null);
+      })).then(results => {
+        const good = (results || []).filter(Boolean);
+        if (!good.length || !iframe.isConnected) return;
+        let upgraded = htmlBody;
+        good.forEach(({ key, url }) => {
+          const esc = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          upgraded = upgraded.replace(new RegExp(`(["']?)cid:${esc}(?=["'\\s>])`, 'gi'), `$1${url}`);
+        });
+        if (upgraded !== htmlBody) iframe.srcdoc = mailBodyIframeSrcdoc(upgraded);
+      });
+    }
   } else if (bodyPick.mode === 'text' && bodyPick.content) {
     bodyEl.innerHTML = `<pre class="opp-preview-mail-text">${escapeHtml(bodyPick.content)}</pre>`;
   } else {
@@ -27043,6 +27086,19 @@ function renderEmailPreviewLinkedDeals(linkedEl, fullMail, messageId, ctrl) {
   }
 }
 
+function mailQuotedBody(bodyPick) {
+  // Quoted original for reply/forward compose. HTML mode keeps markup so the
+  // quote renders instead of showing tags (live bug 2026-10-21: escapeHtml
+  // turned the whole original into literal text) — but it must go through
+  // the sanitizer because compose is a live contentEditable (the preview
+  // iframe is sandboxed; this is not). Text mode is escaped with <br/>s.
+  if (bodyPick && bodyPick.mode === "html" && bodyPick.content) {
+    try { return sanitizeHistoryHtml(bodyPick.content); } catch { /* fall through */ }
+  }
+  const text = bodyPick?.content || "";
+  return text ? escapeHtml(text).replace(/\r?\n/g, "<br>") : "";
+}
+
 function bindEmailPreviewActionButtons(modal, norm, fullMail, messageId, close, ctrl) {
   modal.querySelectorAll('.email-preview-action').forEach(btn => {
     const action = btn.dataset.action;
@@ -27054,21 +27110,21 @@ function bindEmailPreviewActionButtons(modal, norm, fullMail, messageId, close, 
         const subject = norm.subject || '';
         const date = norm.date ? formatPreviewDateTime(norm.date) || norm.date : '';
         const bodyPick = pickMailBodyForDisplay(norm);
-        const bodyText = bodyPick?.content || '';
+        const quoted = mailQuotedBody(bodyPick);
 
         let to = '', subjectLine = '', quotedBody = '';
         if (action === 'reply') {
           to = from;
           subjectLine = 'Re: ' + (subject.startsWith('Re:') ? subject.slice(3).trim() : subject);
-          quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${escapeHtml(bodyText)}</blockquote></div>`;
+          quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${quoted}</blockquote></div>`;
         } else if (action === 'reply-all') {
           to = from;
           subjectLine = 'Re: ' + (subject.startsWith('Re:') ? subject.slice(3).trim() : subject);
-          quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${escapeHtml(bodyText)}</blockquote></div>`;
+          quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">On ${escapeHtml(date)}, ${escapeHtml(from)} wrote:</p><blockquote style="margin:0; padding-left:0.5rem;">${quoted}</blockquote></div>`;
         } else { // forward
           to = '';
           subjectLine = 'Fwd: ' + (subject.startsWith('Fwd:') ? subject.slice(4).trim() : subject);
-          quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">---------- Forwarded message ----------</p><blockquote style="margin:0; padding-left:0.5rem;">${escapeHtml(bodyText)}</blockquote></div>`;
+          quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">---------- Forwarded message ----------</p><blockquote style="margin:0; padding-left:0.5rem;">${quoted}</blockquote></div>`;
         }
 
         openComposeModal({
