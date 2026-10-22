@@ -11254,7 +11254,11 @@ async function fetchOpportunityForUpdate(oppId) {
 }
 
 function buildOpportunityPutBody(opp, overrides = {}) {
-  const responsible = opp.responsible?.id ?? opp.responsible?.ID ?? state.currentUserId;
+  // Flat-id fallbacks are load-bearing: the project GET nests `responsible`
+  // as {displayName} with NO id, so without them every PUT restamped the
+  // deal to whoever edited last (live bug 2026-10-22). currentUserId stays
+  // only as a last resort for shapes carrying no owner at all.
+  const responsible = opp.responsible?.id ?? opp.responsible?.ID ?? opp.responsibleUserId ?? opp.responsibleId ?? opp.responsibleid ?? opp.responsibleID ?? state.currentUserId;
 
   const body = {
     title: opp.title || opp.Title || "",
@@ -14781,6 +14785,51 @@ async function openDealEditModal(opp, group) {
   const titleInput = $("#deal-edit-title");
   if (titleInput) titleInput.value = state.dealEdit.initialTitle;
 
+  // Responsible picker (previously missing — the modal had no way to view or
+  // change ownership, while every save restamped it to the editor).
+  // Pre-select the current owner; "" means unassigned.
+  const respSel = $("#deal-edit-responsible");
+  if (respSel) {
+    respSel.innerHTML = "";
+    const users = new Map();
+    for (const u of state.portalUsers) {
+      if (u.id != null) users.set(String(u.id), String(u.displayName || u.userName || u.id));
+    }
+    if (state.currentUserId != null) {
+      users.set(String(state.currentUserId), String(state.currentUserName || state.currentUserId));
+    }
+    const unassigned = document.createElement("option");
+    unassigned.value = "";
+    unassigned.textContent = "— Unassigned —";
+    respSel.appendChild(unassigned);
+    for (const [uid, name] of [...users.entries()].sort((a, b) => String(a[1] || "").localeCompare(String(b[1] || "")))) {
+      const opt = document.createElement("option");
+      opt.value = uid;
+      opt.textContent = name;
+      respSel.appendChild(opt);
+    }
+    let currentResp = opp.responsibleUserId ?? opp.responsibleId ?? opp.responsibleid ?? opp.responsibleID ?? opp.responsible?.id ?? opp.responsible?.ID ?? "";
+    if ((currentResp === "" || currentResp == null) && !respSel.dataset.fetchedOwner) {
+      // Tile rows don't always carry the owner id — fetch authoritative value once.
+      respSel.dataset.fetchedOwner = "1";
+      try {
+        const full = await fetchOpportunityForUpdate(Number(id));
+        const flat = full?.responsibleUserId ?? full?.responsibleId ?? full?.responsible?.id ?? full?.responsible?.ID ?? "";
+        if (flat !== "" && flat != null) {
+          currentResp = String(flat);
+          if (![...respSel.options].some(o => o.value === String(flat))) {
+            const opt = document.createElement("option");
+            opt.value = String(flat);
+            opt.textContent = `User #${flat}`;
+            respSel.appendChild(opt);
+          }
+        }
+      } catch { /* keep unassigned default */ }
+    }
+    respSel.value = currentResp != null ? String(currentResp) : "";
+    state.dealEdit.initialResponsibleId = respSel.value;
+  }
+
   // The modal title bar no longer shows the project name (it's already in
   // the editable Project Name field below) and the "Open Project" hyperlink
   // has been replaced with a close (X) button matching the project preview
@@ -15295,6 +15344,17 @@ async function submitDealEditForm(e) {
         await updateOpportunityBulk(oppId, { title: titleVal });
       } catch (err) {
         throw dealEditStepError("Project title", err);
+      }
+    }
+
+    // Save responsible if changed (previously no UI for this, while every
+    // save restamped ownership to the editor — 2026-10-22).
+    const respVal = $("#deal-edit-responsible")?.value ?? "";
+    if (respVal !== (ctx.initialResponsibleId ?? "")) {
+      try {
+        await updateOpportunityBulk(oppId, { responsibleUserId: respVal });
+      } catch (err) {
+        throw dealEditStepError("Responsible", err);
       }
     }
 
@@ -19281,7 +19341,11 @@ function renderPresenceTile() {
             statusDropdown.classList.add("hidden");
             if (opt.value === "__custom__") {
               customWrap.style.display = "flex";
-              customInput.focus();
+              // NOTE: there is no bare `customInput` in this scope (that
+              // reference crashed the whole dashboard — 2026-10-22). Query it
+              // from its wrapper like the ok/cancel buttons below.
+              const customInputEl = customWrap.querySelector("#presence-tile-custom-input");
+              if (customInputEl) customInputEl.focus();
             } else {
               statusBtn.querySelector(".status-dot-indicator").className = `status-dot-indicator ${opt.dotClass}`;
               presenceFetch("/api/presence/status", {
@@ -19320,6 +19384,33 @@ function renderPresenceTile() {
           <button type="button" id="presence-tile-custom-ok" class="presence-custom-ok">✓</button>
           <button type="button" id="presence-tile-custom-cancel" class="presence-custom-cancel">✕</button>
         `;
+        // Wire the custom-status controls (this tile builder never had them —
+        // without these the ✓/✕ buttons are dead even once the input shows).
+        const customInputEl = customWrap.querySelector("#presence-tile-custom-input");
+        const customOkBtn = customWrap.querySelector("#presence-tile-custom-ok");
+        const customCancelBtn = customWrap.querySelector("#presence-tile-custom-cancel");
+        const submitTileCustomStatus = () => {
+          const val = (customInputEl?.value || "").trim().slice(0, PRESENCE_CUSTOM_MAX);
+          if (!val) { customWrap.style.display = "none"; return; }
+          statusBtn.querySelector(".status-dot-indicator").className = "status-dot-indicator custom";
+          state._suppressAutoStatus = true;
+          presenceFetch("/api/presence/status", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: val, inferred: false, autoStatus: "" }),
+          }).then(() => {
+            fetchPresenceSnapshot().then(snap => {
+              renderPresenceTileCompact(snap);
+              syncTileStatusSelect(snap);
+            });
+          }).catch(() => {});
+        };
+        customOkBtn?.addEventListener("click", submitTileCustomStatus);
+        customCancelBtn?.addEventListener("click", () => { customWrap.style.display = "none"; });
+        customInputEl?.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") submitTileCustomStatus();
+          else if (e.key === "Escape") customWrap.style.display = "none";
+        });
         const adminBtn = document.createElement("button");
         adminBtn.type = "button";
         adminBtn.id = "presence-tile-admin-btn";

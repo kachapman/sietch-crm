@@ -11,6 +11,17 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-22 (team custom status + ownership theft)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+
+- Team tile: scoped input query + full ✓/✕/Enter/Escape wiring.
+- PUT builder honors flat owner keys; edit modal gains Responsible picker.
+- Tests: 4 + 5 node, 3 python (contract pin); fail-old verified.
+- Past thefts may be recoverable from change-tracking logs — follow-up, not done.
+
+## Previous session summary (2026-10-22, forward quote + linked-email attachments)
+
 **Date:** 2026-10-22 (Telegram snippet 120→1500)
 
 **Status: DEPLOYED 2026-10-22 as bd7b4b4** (rebuild healthy; dispatcher runs

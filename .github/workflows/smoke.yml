@@ -160,6 +160,15 @@ jobs:
       - name: Run mail forward quote tests
         run: node --test tests/test_mail_forward_quote.mjs
 
+      - name: Run presence custom status tests
+        run: node --test tests/test_presence_custom_status.mjs
+
+      - name: Run responsible-keep tests
+        run: node --test tests/test_responsible_keep.mjs
+
+      - name: Run project partial-update tests
+        run: python3 tests/test_project_update_partial.py -v
+
       - name: Run notification snippet tests
         run: python3 tests/test_notification_snippet.py -v
 

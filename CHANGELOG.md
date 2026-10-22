@@ -2,6 +2,22 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Team-tile custom status crash + project ownership theft (2026-10-22)
+
+Two fixes. (1) Clicking Custom... in the Team tile status dropdown threw
+`ReferenceError: customInput is not defined` (name exists only in an unrelated
+builder) and tripped the global boot-error page; the ✓/✕ buttons were also
+unwired in this builder. Input is now queried from its wrapper and all
+controls (✓/✕/Enter/Escape) submit like the other status paths.
+(2) Every project edit reassigned ownership to the editor: the PUT builder
+fell back to `state.currentUserId` because the GET nests `responsible` without
+an id while ignoring the flat `responsibleUserId` the server does send. Flat
+keys are now honored (last-resort fallback kept), and the edit modal gains the
+missing Responsible picker (pre-selected, unassigned allowed). No server change
+(PUT was already partial). `tests/test_presence_custom_status.mjs` (4),
+`tests/test_responsible_keep.mjs` (5), `tests/test_project_update_partial.py`
+(3) — all discriminating. Cache-bust 3.7.34→3.7.35.
+
 ## Telegram tag-notification preview 120 → 1500 chars (2026-10-22)
 
 Previews cut off mid-sentence: snippets were capped at 120 chars at creation
