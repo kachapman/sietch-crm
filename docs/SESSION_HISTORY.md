@@ -13,7 +13,9 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-23 (photo report dep + upload progress)
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+**Status: DEPLOYED 2026-10-23 as 040ba39** (rebuild healthy; `fpdf2 2.8.9`
+confirmed inside the running container; live bundle 3.7.36). Generate a photo
+report to confirm; upload a batch to see the strobing bar.
 
 - Dockerfile gains fpdf2 (requirements.txt was never installed by the build).
 - Shared strobing progress UI wired into all three batch uploaders.
