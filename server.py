@@ -2684,6 +2684,29 @@ def _ics_dump(events: list[dict]) -> str:
     return "\r\n".join(lines) + "\r\n"
 
 
+def _photo_report_header_identity(template: dict | None, brand_name: str) -> tuple[list, str]:
+    """Resolve the PDF header identity: template values win, branding fallback.
+
+    Never emits a hardcoded "Company" placeholder (live bug 2026-10-23:
+    reports printed the literal word "Company" when no template existed or
+    its text logo was unconfigured). Empty values render as blank header
+    space, which the PDF layout already tolerates.
+    """
+    template = template or {}
+    lines = template.get("text_logo_lines") or "[]"
+    if isinstance(lines, str):
+        try:
+            lines = json.loads(lines)
+        except Exception:
+            lines = []
+    if not isinstance(lines, list):
+        lines = []
+    lines = [str(x) for x in lines if x]
+    if not lines and brand_name:
+        lines = [brand_name]
+    return lines, (template.get("company_name") or brand_name or "")
+
+
 class KanbanHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(PUBLIC), **kwargs)
@@ -9893,28 +9916,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         _insert_feed_notification(feed, entry)
 
     # ── Photo Report Generation ──────────────────────────────────────────
-
-def _photo_report_header_identity(template: dict | None, brand_name: str) -> tuple[list, str]:
-    """Resolve the PDF header identity: template values win, branding fallback.
-
-    Never emits a hardcoded "Company" placeholder (live bug 2026-10-23:
-    reports printed the literal word "Company" when no template existed or
-    its text logo was unconfigured). Empty values render as blank header
-    space, which the PDF layout already tolerates.
-    """
-    template = template or {}
-    lines = template.get("text_logo_lines") or "[]"
-    if isinstance(lines, str):
-        try:
-            lines = json.loads(lines)
-        except Exception:
-            lines = []
-    if not isinstance(lines, list):
-        lines = []
-    lines = [str(x) for x in lines if x]
-    if not lines and brand_name:
-        lines = [brand_name]
-    return lines, (template.get("company_name") or brand_name or "")
 
     def _handle_project_photo_report(self, opp_id: int) -> None:
         user = _require_auth(self)

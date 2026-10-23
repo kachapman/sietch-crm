@@ -57,6 +57,19 @@ class TestHeaderIdentity(unittest.TestCase):
         self.assertNotIn("['Company']", region)
         self.assertNotIn('["Company"]', region)
 
+    def test_class_body_intact(self):
+        # Regression 2026-10-23: a column-0 helper inserted mid-file ended the
+        # KanbanHandler body — every endpoint defined after it 500'd with
+        # AttributeError (first seen: presence heartbeat). Pin the methods.
+        import server as _s
+        for name in ("_handle_presence_heartbeat", "_handle_presence_get",
+                     "_handle_project_photo_report", "_handle_mail_send",
+                     "_handle_sync_pull_deals", "_handle_mail_accounts",
+                     "_handle_project_history_get", "_handle_project_update"):
+            self.assertTrue(hasattr(_s.KanbanHandler, name), name)
+        for name in ("_photo_report_header_identity", "_ts", "_json_default"):
+            self.assertTrue(hasattr(_s, name), name)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)
