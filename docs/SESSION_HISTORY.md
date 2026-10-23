@@ -13,7 +13,14 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-23 (photo grid rows + report prefill + COMPANY)
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+**Status: DEPLOYED 2026-10-23 as 2d1c350 — THEN HOTFIXED as b322219.**
+Deploy 2d1c350 broke the backend: the new `_photo_report_header_identity`
+helper was inserted at column 0 mid-file, ending the KanbanHandler class body —
+every endpoint defined after it 500'd (first seen: presence heartbeat). Caught
+via droplet log check minutes after deploy; fixed by moving the helper above
+the class + a `test_class_body_intact` regression pin. b322219 verified live
+(hasattr True in container, zero tracebacks in 4m watch). Bundles 3.7.37/3.7.21
+live. Fresh tab → tight photo rows; Jill Carpenter report form + PDF header.
 
 - Grid `align-content: start`; both cache pins bumped (app + styles).
 - Prefill: customer = project title, address = deal field → contact fallback,
