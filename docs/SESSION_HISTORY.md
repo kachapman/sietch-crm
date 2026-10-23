@@ -11,6 +11,18 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-23 (photo grid rows + report prefill + COMPANY)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+
+- Grid `align-content: start`; both cache pins bumped (app + styles).
+- Prefill: customer = project title, address = deal field → contact fallback,
+  explicit custom-fields fetch; File Name follows.
+- Header identity helper: template → branding, placeholder-free.
+- Tests: 6 node + 6 python, discriminating.
+
+## Previous session summary (2026-10-23, photo report dep + upload progress)
+
 **Date:** 2026-10-23 (photo report dep + upload progress)
 
 **Status: DEPLOYED 2026-10-23 as 040ba39** (rebuild healthy; `fpdf2 2.8.9`

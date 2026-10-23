@@ -2,6 +2,19 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Photo grid rows pack + report prefill mapping + COMPANY fallback (2026-10-23)
+
+Three photo fixes. (1) Grid rows stretched to fill the modal (`align-content`
+default) — now `start`, tight at any count. (2) Report form took Customer Name
++ Address from the linked contact (often the GC): Customer Name is now the
+project title, Address prefers the deal's own address custom field with contact
+fallback, File Name follows; the form now fetches deal custom fields (the
+project GET never embedded them, so claim lookup was dead too). (3) Reports
+printed a literal "Company" with no/unconfigured template — header identity is
+now template → branding company, never a placeholder.
+`tests/test_photo_report_prefill.mjs` (6) + `tests/test_photo_report_identity.py`
+(6), discriminating. Cache-bust app 3.7.36→3.7.37, styles 3.7.20→3.7.21.
+
 ## Photo report PDF dep + batch upload progress bar (2026-10-23)
 
 Photo Report generation 500'd ("fpdf2 not installed"): requirements.txt lists

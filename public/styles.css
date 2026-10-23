@@ -8258,6 +8258,10 @@ body {
   overflow-y: auto;
   flex: 1;
   padding-bottom: 0.5rem;
+  /* Pack rows at the top: without this the default stretch distribution
+     spreads leftover modal height between rows when there are few photos
+     (2026-10-23). Overflowing grids are unaffected. */
+  align-content: start;
 }
 
 .opp-photos-empty {

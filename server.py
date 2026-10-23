@@ -9894,6 +9894,28 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     # ── Photo Report Generation ──────────────────────────────────────────
 
+def _photo_report_header_identity(template: dict | None, brand_name: str) -> tuple[list, str]:
+    """Resolve the PDF header identity: template values win, branding fallback.
+
+    Never emits a hardcoded "Company" placeholder (live bug 2026-10-23:
+    reports printed the literal word "Company" when no template existed or
+    its text logo was unconfigured). Empty values render as blank header
+    space, which the PDF layout already tolerates.
+    """
+    template = template or {}
+    lines = template.get("text_logo_lines") or "[]"
+    if isinstance(lines, str):
+        try:
+            lines = json.loads(lines)
+        except Exception:
+            lines = []
+    if not isinstance(lines, list):
+        lines = []
+    lines = [str(x) for x in lines if x]
+    if not lines and brand_name:
+        lines = [brand_name]
+    return lines, (template.get("company_name") or brand_name or "")
+
     def _handle_project_photo_report(self, opp_id: int) -> None:
         user = _require_auth(self)
         if not user:
@@ -9917,9 +9939,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             template = db.query_one("SELECT * FROM photo_report_templates WHERE id = %s", (template_id,))
         if not template:
             template = db.query_one("SELECT * FROM photo_report_templates WHERE is_default = TRUE")
+        # Company identity for the header: template first, then the branding
+        # company — never a hardcoded placeholder word (live bug
+        # 2026-10-23: reports printed a literal placeholder when no
+        # template existed or its text logo was unconfigured).
+        try:
+            _brand = db.query_one("SELECT company_name FROM branding ORDER BY id LIMIT 1")
+            brand_name = (_brand["company_name"] if _brand and _brand.get("company_name") else "").strip()
+        except Exception:
+            brand_name = ""
         if not template:
-            template = {"company_name": "Company", "address": "", "city_state_zip": "", "phone": "",
-                        "primary_color": "#1a1a1a", "text_logo_lines": '["Company"]',
+            template = {"company_name": brand_name, "address": "", "city_state_zip": "", "phone": "",
+                        "primary_color": "#1a1a1a", "text_logo_lines": json.dumps([brand_name] if brand_name else []),
                         "text_logo_font_size": 16, "text_logo_tagline_size": 8,
                         "logo_path": None, "max_image_width_inches": 6.5, "image_alignment": "center",
                         "show_photo_date": True, "title_includes_claim": True, "show_captions": True}
@@ -9954,19 +9985,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             lp = ROOT / template["logo_path"]
             if lp.exists():
                 logo_path = str(lp)
-        text_logo_lines = template.get("text_logo_lines", '["Company"]')
-        if isinstance(text_logo_lines, str):
-            try:
-                text_logo_lines = json.loads(text_logo_lines)
-            except Exception:
-                text_logo_lines = ["Company"]
+        text_logo_lines, company_name = _photo_report_header_identity(template, brand_name)
         max_img_w = float(template.get("max_image_width_inches", 6.5))
         img_align = template.get("image_alignment", "center")
         show_date = template.get("show_photo_date", True)
         show_claim = template.get("title_includes_claim", True)
         show_captions = template.get("show_captions", True)
         primary_color = template.get("primary_color", "#1a1a1a")
-        company_name = template.get("company_name", "Company")
         comp_address = template.get("address", "")
         comp_city = template.get("city_state_zip", "")
         comp_phone = template.get("phone", "")

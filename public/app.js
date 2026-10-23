@@ -46213,22 +46213,32 @@ function openPhotoReportModal(photoIds, oppId) {
     api(`/api/v2/projects/${oppId}`),
     api("/api/v2/admin/photo-report-templates").catch(() => []),
     api(`/api/v2/projects/${oppId}/photos`),
-  ]).then(([proj, tmpl, photoData]) => {
+    api(`/api/v2/projects/${oppId}/custom-fields`).catch(() => []),
+  ]).then(([proj, tmpl, photoData, dealFields]) => {
     projectData = proj;
     templates = tmpl || [];
     photos = (photoData && photoData.photos) ? photoData.photos : [];
     selectedPhotos = photos.filter(p => photoIds.includes(p.id ?? p.ID));
-    renderPhotoReportForm(body, projectData, templates, selectedPhotos, oppId);
+    renderPhotoReportForm(body, projectData, templates, selectedPhotos, oppId, dealFields || []);
   }).catch(err => {
     body.innerHTML = `<div style="padding:2rem;color:var(--danger)">Failed to load: ${escapeHtml(err.message)}</div>`;
   });
 }
 
-function renderPhotoReportForm(body, project, templates, selPhotos, oppId) {
+function renderPhotoReportForm(body, project, templates, selPhotos, oppId, dealFields) {
   const contact = project.contact || {};
-  const addressParts = [contact.addressStreet, contact.addressCity, contact.addressState, contact.addressZip].filter(Boolean);
-  const fullAddress = addressParts.join(", ");
-  const customFields = project.customFields || [];
+  const customFields = Array.isArray(dealFields) && dealFields.length ? dealFields : (project.customFields || []);
+  const fieldText = (match) => {
+    for (const cf of customFields) {
+      const label = String(cf.label || "").toLowerCase();
+      if (cf.value != null && String(cf.value).trim() && match.test(label)) return String(cf.value).trim();
+    }
+    return "";
+  };
+  // Job address lives on the deal (custom field), NOT on the linked contact —
+  // the contact is often the GC, whose address is not the job site.
+  const fullAddress = fieldText(/address|location|site|property|street/) ||
+    [contact.addressStreet, contact.addressCity, contact.addressState, contact.addressZip].filter(Boolean).join(", ");
   let claimNumber = "";
   for (const cf of customFields) {
     if ((cf.key === "field_11") || (cf.label && cf.label.toLowerCase().includes("claim"))) {
@@ -46238,7 +46248,9 @@ function renderPhotoReportForm(body, project, templates, selPhotos, oppId) {
   }
   const projectTitle = project.title || "Project";
   const defaultTitle = `Photo Report - ${projectTitle}`;
-  const customerName = contact.displayName || "";
+  // Customer is the homeowner (the project), not the linked contact — the
+  // contact is frequently the contractor/GC (live fix 2026-10-23).
+  const customerName = projectTitle;
   const defaultFileName = `${defaultTitle} - ${customerName}`;
   const defaultDate = new Date().toISOString().split("T")[0];
   const reportTitle = defaultTitle;

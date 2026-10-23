@@ -178,6 +178,12 @@ jobs:
       - name: Run PDF dependency test
         run: python3 tests/test_pdf_dependency.py -v
 
+      - name: Run photo report identity tests
+        run: python3 tests/test_photo_report_identity.py -v
+
+      - name: Run photo report prefill tests
+        run: node --test tests/test_photo_report_prefill.mjs
+
       - name: Run supplemental sync tests
         run: python3 tests/test_sync_supplemental.py -v
 
