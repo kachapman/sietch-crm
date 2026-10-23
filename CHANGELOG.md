@@ -2,6 +2,18 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Photo report PDF dep + batch upload progress bar (2026-10-23)
+
+Photo Report generation 500'd ("fpdf2 not installed"): requirements.txt lists
+it, but the image builds from a hardcoded Dockerfile pip line that never
+included it. Added `fpdf2>=2.7.0` to the Dockerfile. Batch uploads (project
+Photos/Documents tabs, standalone Documents modal) showed nothing until the
+final toast — new shared progress UI per the mockup (strobing bar +
+`Uploading i/n` + confirmed/total bytes, per completed file since fetch
+exposes no byte events; `prefers-reduced-motion` respected). `tests/\
+test_upload_progress.mjs` (5) + `tests/test_pdf_dependency.py` (2).
+Cache-bust 3.7.35→3.7.36.
+
 ## Team-tile custom status crash + project ownership theft (2026-10-22)
 
 Two fixes. (1) Clicking Custom... in the Team tile status dropdown threw

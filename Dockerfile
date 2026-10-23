@@ -4,7 +4,7 @@ WORKDIR /app
 
 RUN useradd --create-home --uid 10001 appuser
 
-RUN pip install --no-cache-dir psycopg2-binary Pillow ExifRead httpx imap_tools
+RUN pip install --no-cache-dir psycopg2-binary Pillow ExifRead httpx imap_tools "fpdf2>=2.7.0"
 # Base tools (curl is required by the docker-cli install step below; otherwise
 # `python:3.12-slim-bookworm` ships without it and the build fails).
 # PostgreSQL client tools (pg_dump, psql) for database backup/restore.

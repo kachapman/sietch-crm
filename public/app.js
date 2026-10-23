@@ -5510,13 +5510,61 @@ function downloadDoc(docId, title) {
   a.click();
 }
 
+// Batch upload progress (project Photos tab, project Documents tab,
+// standalone Documents modal). fetch() exposes no byte-level upload events,
+// so granularity is per completed file: the bar + "Uploading i/n" advance as
+// each POST resolves and confirmed bytes accumulate. The strobing fill (CSS
+// animation) shows the in-flight file is still working between completions.
+function formatUploadBytes(n) {
+  const units = ["B", "KB", "MB", "GB"];
+  let v = Math.max(0, Number(n) || 0), u = 0;
+  while (v >= 1024 && u < units.length - 1) { v /= 1024; u++; }
+  return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[u]}`;
+}
+
+function uploadProgressFrame(done, total, doneBytes, totalBytes) {
+  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  return {
+    pct,
+    label: total > 0 ? `Uploading ${done}/${total}` : "Uploading…",
+    bytes: `${formatUploadBytes(doneBytes)} / ${formatUploadBytes(totalBytes)}`,
+  };
+}
+
+function renderUploadProgress(host, frame, bytesEl) {
+  if (!host) return null;
+  let block = host.querySelector(":scope > .upload-progress");
+  if (!block) {
+    block = document.createElement("div");
+    block.className = "upload-progress";
+    block.innerHTML = `<div class="upload-progress-track"><div class="upload-progress-fill"></div></div><div class="upload-progress-label"></div><div class="upload-progress-bytes"></div>`;
+    host.prepend(block);
+  }
+  const fill = block.querySelector(".upload-progress-fill");
+  const label = block.querySelector(".upload-progress-label");
+  const bytes = block.querySelector(".upload-progress-bytes");
+  if (fill) fill.style.width = frame.pct + "%";
+  if (label) label.textContent = frame.label;
+  if (bytes) bytes.textContent = frame.bytes;
+  if (bytesEl) bytesEl.textContent = frame.bytes;
+  return block;
+}
+
+function clearUploadProgress(host, bytesEl, restoreBytes) {
+  if (host) host.querySelector(":scope > .upload-progress")?.remove();
+  if (bytesEl && restoreBytes != null) bytesEl.textContent = restoreBytes;
+}
+
 async function uploadDocsToCurrentScope(files) {
   if (!files || !files.length) return;
   const isCompany = docsState.scope === "company";
   const isPersonal = docsState.scope === "mydocs";
   const uploadEndpoint = isCompany ? "/api/v2/documents/company/upload" : isPersonal ? "/api/v2/documents/personal/upload" : docsState.currentProjectId ? `/api/v2/projects/${docsState.currentProjectId}/documents` : null;
   if (!uploadEndpoint) { showToast("Select a project first", true); return; }
-  let ok = 0, fail = 0;
+  const totalBytes = files.reduce((s, f) => s + (f.size || 0), 0);
+  const host = document.getElementById("documents-list");
+  let ok = 0, fail = 0, doneBytes = 0;
+  renderUploadProgress(host, uploadProgressFrame(0, files.length, 0, totalBytes));
   for (const file of files) {
     const formData = new FormData();
     formData.append("file", file);
@@ -5526,10 +5574,13 @@ async function uploadDocsToCurrentScope(files) {
     try {
       await fetch(uploadEndpoint, { method: "POST", credentials: "same-origin", body: formData });
       ok++;
+      doneBytes += file.size || 0;
     } catch {
       fail++;
     }
+    renderUploadProgress(host, uploadProgressFrame(ok + fail, files.length, doneBytes, totalBytes));
   }
+  clearUploadProgress(host);
   if (ok) showToast(`Uploaded ${ok} file${ok > 1 ? "s" : ""}`);
   if (fail) showToast(`Failed to upload ${fail} file${fail > 1 ? "s" : ""}`, true);
   loadDocumentsList();
@@ -40088,14 +40139,21 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     const files = Array.from(uploadInput.files).filter(f => f.size > 0);
     if (!files.length) return;
     uploadBtn.disabled = true;
-    let ok = 0, fail = 0;
-    for (const file of files) {
-      const formData = new FormData();
-      formData.append("file", file);
-      try {
-        const res = await fetch(`/api/v2/projects/${oppId}/documents`, { method: "POST", credentials: "same-origin", body: formData });
-        if (res.ok) ok++; else fail++;
-      } catch { fail++; }
+    const totalBytes = files.reduce((s, f) => s + (f.size || 0), 0);
+    let ok = 0, fail = 0, doneBytes = 0;
+    try {
+      renderUploadProgress(docsContent, uploadProgressFrame(0, files.length, 0, totalBytes));
+      for (const file of files) {
+        const formData = new FormData();
+        formData.append("file", file);
+        try {
+          const res = await fetch(`/api/v2/projects/${oppId}/documents`, { method: "POST", credentials: "same-origin", body: formData });
+          if (res.ok) { ok++; doneBytes += file.size || 0; } else fail++;
+        } catch { fail++; }
+        renderUploadProgress(docsContent, uploadProgressFrame(ok + fail, files.length, doneBytes, totalBytes));
+      }
+    } finally {
+      clearUploadProgress(docsContent);
     }
     uploadBtn.disabled = false;
     if (ok) showToast(`Uploaded ${ok} file${ok > 1 ? "s" : ""}`);
@@ -41262,23 +41320,31 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
     const files = Array.from(uploadInput.files).filter(f => f.size > 0);
     if (!files.length) return;
     uploadBtn.disabled = true;
-    let ok = 0, fail = 0, lastErr = "";
-    for (const file of files) {
-      if (!file.type.startsWith("image/")) {
-        fail++;
-        lastErr = `${file.name} is not an image`;
-        continue;
-      }
-      const formData = new FormData();
-      formData.append("file", file);
-      try {
-        const res = await fetch(`/api/v2/projects/${oppId}/photos`, { method: "POST", credentials: "same-origin", body: formData });
-        if (res.ok) { ok++; }
-        else {
+    const totalBytes = files.reduce((s, f) => s + (f.size || 0), 0);
+    let ok = 0, fail = 0, lastErr = "", doneBytes = 0;
+    const quotaBefore = quotaEl ? quotaEl.textContent : null;
+    try {
+      renderUploadProgress(container, uploadProgressFrame(0, files.length, 0, totalBytes), quotaEl);
+      for (const file of files) {
+        if (!file.type.startsWith("image/")) {
           fail++;
-          try { const j = await res.json(); lastErr = j.error || res.statusText; } catch { lastErr = res.statusText; }
+          lastErr = `${file.name} is not an image`;
+        } else {
+          const formData = new FormData();
+          formData.append("file", file);
+          try {
+            const res = await fetch(`/api/v2/projects/${oppId}/photos`, { method: "POST", credentials: "same-origin", body: formData });
+            if (res.ok) { ok++; doneBytes += file.size || 0; }
+            else {
+              fail++;
+              try { const j = await res.json(); lastErr = j.error || res.statusText; } catch { lastErr = res.statusText; }
+            }
+          } catch (err) { fail++; lastErr = err.message; }
         }
-      } catch (err) { fail++; lastErr = err.message; }
+        renderUploadProgress(container, uploadProgressFrame(ok + fail, files.length, doneBytes, totalBytes), quotaEl);
+      }
+    } finally {
+      clearUploadProgress(container, quotaEl, quotaBefore);
     }
     uploadBtn.disabled = false;
     if (ok) showToast(`Uploaded ${ok} photo${ok > 1 ? "s" : ""}`);

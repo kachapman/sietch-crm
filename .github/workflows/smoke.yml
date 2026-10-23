@@ -172,6 +172,12 @@ jobs:
       - name: Run notification snippet tests
         run: python3 tests/test_notification_snippet.py -v
 
+      - name: Run upload progress tests
+        run: node --test tests/test_upload_progress.mjs
+
+      - name: Run PDF dependency test
+        run: python3 tests/test_pdf_dependency.py -v
+
       - name: Run supplemental sync tests
         run: python3 tests/test_sync_supplemental.py -v
 

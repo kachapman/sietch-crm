@@ -11,6 +11,16 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-23 (photo report dep + upload progress)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+
+- Dockerfile gains fpdf2 (requirements.txt was never installed by the build).
+- Shared strobing progress UI wired into all three batch uploaders.
+- Tests: 5 node + 2 python, discriminating (helpers fail-old verified).
+
+## Previous session summary (2026-10-22, team custom status + ownership)
+
 **Date:** 2026-10-22 (team custom status + ownership theft)
 
 **Status: DEPLOYED 2026-10-22 as 1aa6844** (rebuild healthy, live bundle 3.7.35

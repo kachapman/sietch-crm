@@ -1097,6 +1097,50 @@ body {
   100% { transform: translateX(300%); }
 }
 
+/* Batch upload progress (photos + documents). Per-file granularity: the fill
+   advances as each file completes (fetch gives no byte events). The strobing
+   stripes show the current file is still in flight between completions. */
+.upload-progress {
+  max-width: 420px;
+  margin: 1.5rem auto;
+  text-align: center;
+}
+.upload-progress-track {
+  height: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  overflow: hidden;
+}
+.upload-progress-fill {
+  height: 100%;
+  width: 0%;
+  background-color: var(--accent);
+  background-image: repeating-linear-gradient(
+    -55deg,
+    rgba(255, 255, 255, 0.28) 0 10px,
+    transparent 10px 20px
+  );
+  background-size: 28px 100%;
+  animation: upload-strobe 0.9s linear infinite;
+  transition: width 0.25s ease;
+}
+@keyframes upload-strobe {
+  to { background-position: 28px 0; }
+}
+.upload-progress-label {
+  margin-top: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+.upload-progress-bytes {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+@media (prefers-reduced-motion: reduce) {
+  .upload-progress-fill { animation: none; }
+}
+
 .refreshing-spinner {
   display: inline-block;
   width: 12px;
