@@ -151,6 +151,9 @@ jobs:
       - name: Run mail snippet tests
         run: node --test tests/test_mail_snippet.mjs
 
+      - name: Run note paste-target tests
+        run: node --test tests/test_note_paste_target.mjs
+
       - name: Run Graph truthfulness tests
         run: python3 tests/test_graph_truthfulness.py -v
 

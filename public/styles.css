@@ -6915,6 +6915,15 @@ body {
   min-width: 0;
 }
 
+/* Read-only preview fields are static text, not inputs: never show the
+   text-entry affordance over them. Links inside keep the pointer cursor
+   via the UA stylesheet. Text stays selectable for copy. */
+.opp-preview-field,
+.opp-preview-field dt,
+.opp-preview-field dd {
+  cursor: default;
+}
+
 .opp-preview-field-full {
   grid-column: 1 / -1;
 }

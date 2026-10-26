@@ -2,6 +2,21 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Note paste-highlight root fix + read-only field cursor (2026-10-26)
+
+Two root-cause fixes. (1) Paste highlight returned because the sanitizer never
+ran for pastes into non-empty content: paste events target the deepest node
+under the caret, but the gate required e.target itself to carry .note-editor —
+raw clipboard HTML (source background styles) was inserted natively and
+resurfaced on backspace-merge. The gate now resolves via closest()
+(`resolveNoteEditorFromEventTarget`). (2) Read-only Details fields showed a
+text cursor: `.opp-preview-field` dt/dd now use `cursor: default` (links keep
+pointer; text stays selectable). Note: a persistent blinking caret inside
+plain text with altered keyboard behavior is the browser's caret browsing
+(F7), not app code — no editable/focusable element exists on those fields.
+`tests/test_note_paste_target.mjs` (5 tests, discriminating). Cache-bust app
+3.7.37→3.7.38, styles 3.7.21→3.7.22.
+
 ## Photo grid rows pack + report prefill mapping + COMPANY fallback (2026-10-23)
 
 Three photo fixes. (1) Grid rows stretched to fill the modal (`align-content`

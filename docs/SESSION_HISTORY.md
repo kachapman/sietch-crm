@@ -11,6 +11,20 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-26 (note paste-highlight root fix + read-only cursor)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+
+- Paste gate resolves editor via `closest()` (was dead for non-empty content);
+  verified no other paste/drop rich-text bypass exists (other drop handlers
+  are file/folder only).
+- Read-only preview fields: `cursor: default`; blinking-caret symptom
+  attributed to browser caret browsing (F7) — no code path can edit those
+  nodes (verified: no contenteditable/tabindex/inputs).
+- Tests: 5 node (3 behavioral + 2 source guards), fail-old verified.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-10-23 (photo grid rows + report prefill + COMPANY)
 
 **Status: DEPLOYED 2026-10-23 as 2d1c350 — THEN HOTFIXED as b322219.**

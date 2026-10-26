@@ -15153,10 +15153,24 @@ function plainTextToNoteHtml(text) {
 
 // Strip formatting from pasted content in note editors.
 // Prevents highlighted/colored text from source and preserves line breaks.
+function resolveNoteEditorFromEventTarget(target) {
+  // Paste/drop events target the deepest node under the caret (often a
+  // <div>/<b>/<span> INSIDE the editor), not the editor element itself.
+  // Resolving via closest() is load-bearing: a direct class check on
+  // e.target silently bypassed sanitization for nearly every paste into
+  // non-empty content, letting source background styles through (the
+  // highlight then resurfaced on backspace-merge). Returns null outside
+  // any note editor.
+  if (!target) return null;
+  if (target.classList && target.classList.contains("note-editor")) return target;
+  if (typeof target.closest === "function") return target.closest(".note-editor");
+  return null;
+}
+
 function initNoteEditorPasteHandlers() {
   document.addEventListener("paste", (e) => {
-    const target = e.target;
-    if (!target || !target.classList || !target.classList.contains("note-editor")) return;
+    const ed = resolveNoteEditorFromEventTarget(e.target);
+    if (!ed) return;
     const clipboardData = e.clipboardData || window.clipboardData;
     if (!clipboardData) return;
 
@@ -15170,8 +15184,8 @@ function initNoteEditorPasteHandlers() {
           if (!file) continue;
           if (file.size > 20 * 1024 * 1024) { showToast("Image too large (max 20 MB)", true); return; }
           // Store pending image on the editor element
-          if (!target._pendingImages) target._pendingImages = [];
-          target._pendingImages.push(file);
+          if (!ed._pendingImages) ed._pendingImages = [];
+          ed._pendingImages.push(file);
           // Insert a placeholder thumbnail at cursor
           const placeholder = document.createElement("img");
           placeholder.className = "note-inline-img note-img-pending";
@@ -15272,7 +15286,7 @@ function initNoteEditorPasteHandlers() {
       sel.removeAllRanges();
       sel.addRange(range);
     } else {
-      target.innerHTML += content;
+      ed.innerHTML += content;
     }
   });
 }
