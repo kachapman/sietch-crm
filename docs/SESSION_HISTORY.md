@@ -13,7 +13,12 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-26 (incremental IMAP sync + manual poll workers)
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying (incl. droplet .env).**
+**Status: DEPLOYED 2026-10-26 as 274f8da** (rebuild healthy; migration 038
+applied live; droplet .env interval 300→120; live bundle 3.7.39). Verified live:
+22 incremental `UID>n` fetches in 10 min, watermarks on 13+ folders, 4-way
+concurrent polls, 240s timeout isolation on crm@, zero non-transient errors.
+First post-deploy cycle is full by design (watermark seeding); steady state is
+seconds. Refresh button now waits on worker status — try it.
 
 - UID watermarks (migration 038 + init.sql parity); worker-thread manual polls
   with status; concurrent cycles with 240s per-account timeout; interval→120.
