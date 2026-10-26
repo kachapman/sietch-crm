@@ -13,7 +13,9 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-26 (note paste-highlight root fix + read-only cursor)
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+**Status: DEPLOYED 2026-10-26 as 27eaeaf** (rebuild healthy, handlers intact,
+zero non-scanner errors, live bundles 3.7.38/3.7.22). Fresh tab → paste into a
+non-empty note sanitizes; Details fields show default cursor.
 
 - Paste gate resolves editor via `closest()` (was dead for non-empty content);
   verified no other paste/drop rich-text bypass exists (other drop handlers
