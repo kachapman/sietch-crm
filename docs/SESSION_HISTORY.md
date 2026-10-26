@@ -11,6 +11,19 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-26 (incremental IMAP sync + manual poll workers)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying (incl. droplet .env).**
+
+- UID watermarks (migration 038 + init.sql parity); worker-thread manual polls
+  with status; concurrent cycles with 240s per-account timeout; interval→120.
+- Tests: 15 (watermark, criterion, worker, isolation, UI guard); old code
+  fails 1+13. Existing test_mail_polling still green.
+- Droplet .env SCANNER_POLL_INTERVAL=300 overrides the new default — must be
+  lowered during deploy for the interval change to take effect.
+
+## Previous session summary (2026-10-26, paste gate + read-only cursor)
+
 **Date:** 2026-10-26 (note paste-highlight root fix + read-only cursor)
 
 **Status: DEPLOYED 2026-10-26 as 27eaeaf** (rebuild healthy, handlers intact,

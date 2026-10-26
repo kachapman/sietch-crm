@@ -28,7 +28,7 @@ try:
 except ImportError:
     _HAVE_FCNTL = False  # Windows: in-process lock only
 
-from imap_tools import A, MailBox, MailMessage, MailBoxFolderManager
+from imap_tools import A, MailBox, MailMessage, MailBoxFolderManager, UidRange
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -1120,20 +1120,94 @@ def _get_mailboxes() -> list[dict[str, Any]]:
         return []
 
 
-def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None, since: datetime | None = None) -> list[dict[str, Any]]:
+def _login_mailbox(mailbox_cfg: dict[str, Any]):
+    """Open + authenticate one IMAP connection (shared by fetch and STATUS)."""
+    mailbox = MailBox(mailbox_cfg["host"], port=mailbox_cfg["port"])
+    if mailbox_cfg.get("auth_type") == "xoauth2":
+        mailbox.xoauth2(mailbox_cfg["user"], mailbox_cfg["oauth_token"])
+    else:
+        mailbox.login(mailbox_cfg["user"], mailbox_cfg["password"])
+    return mailbox
+
+
+def _get_folder_watermark(account_id: int | None, folder: str) -> tuple[int | None, int | None]:
+    """Return (uid_validity, last_seen_uid) for incremental fetch, or (None, None)
+    to force the legacy full-window fetch (first run, unknown validity, or
+    pre-migration schema — the SELECT fails safe)."""
+    if account_id is None:
+        return None, None
+    try:
+        row = db.query_one(
+            "SELECT uid_validity, last_seen_uid FROM mail_folders "
+            "WHERE imap_account_id = %s AND (imap_path = %s OR name = %s)",
+            (account_id, folder, folder),
+        )
+        if row and row.get("last_seen_uid") is not None:
+            return row.get("uid_validity"), int(row["last_seen_uid"])
+    except Exception:
+        logger.exception("Folder watermark read failed for account %s folder %s", account_id, folder)
+    return None, None
+
+
+def _save_folder_watermark(account_id: int | None, folder: str, validity: int | None, last_uid: int) -> None:
+    if account_id is None:
+        return
+    try:
+        row = db.query_one(
+            "SELECT id FROM mail_folders WHERE imap_account_id = %s AND (imap_path = %s OR name = %s)",
+            (account_id, folder, folder),
+        )
+        if row:
+            db.execute(
+                "UPDATE mail_folders SET last_seen_uid = %s, uid_validity = %s, last_sync = NOW() WHERE id = %s",
+                (int(last_uid), validity, row["id"]),
+            )
+        else:
+            db.execute(
+                "INSERT INTO mail_folders (name, imap_account_id, imap_path, last_seen_uid, uid_validity, last_sync) "
+                "VALUES (%s, %s, %s, %s, %s, NOW())",
+                (folder, account_id, folder, int(last_uid), validity),
+            )
+    except Exception:
+        logger.exception("Folder watermark save failed for account %s folder %s", account_id, folder)
+
+
+def _read_folder_status(mailbox_cfg: dict[str, Any], folder: str) -> tuple[int | None, int | None]:
+    """Cheap STATUS call: returns (UIDVALIDITY, UIDNEXT) or (None, None)."""
+    try:
+        mailbox = _login_mailbox(mailbox_cfg)
+        try:
+            mailbox.folder.set(folder)
+            st = mailbox.folder.status()
+        finally:
+            try:
+                mailbox.logout()
+            except Exception:
+                pass
+        return st.get("UIDVALIDITY"), st.get("UIDNEXT")
+    except Exception:
+        logger.warning("Folder STATUS failed for %s folder %s", mailbox_cfg.get("user"), folder)
+        return None, None
+
+
+def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None, since: datetime | None = None, uid_min: int | None = None) -> list[dict[str, Any]]:
+    """Fetch messages, newest handling unchanged. When uid_min is given, only
+    UID > uid_min are fetched (incremental path — seconds, not minutes). The
+    IMAP `uid_min:*` range always includes the mailbox's highest UID even when
+    nothing is new; that overlap row is dropped by _process_message's
+    already_processed guard, so it can never double-notify or double-link."""
     messages: list[dict[str, Any]] = []
     try:
-        mailbox = MailBox(mailbox_cfg["host"], port=mailbox_cfg["port"])
-        if mailbox_cfg.get("auth_type") == "xoauth2":
-            mailbox.xoauth2(mailbox_cfg["user"], mailbox_cfg["oauth_token"])
-        else:
-            mailbox.login(mailbox_cfg["user"], mailbox_cfg["password"])
-        
+        mailbox = _login_mailbox(mailbox_cfg)
+
         folder = _normalize_folder_name(folder or mailbox_cfg.get("inbox", "INBOX"))
         mailbox.folder.set(folder)
-        
-        criterion = A() if since is None else A(date_gte=since.date())
-        
+
+        if uid_min is not None:
+            criterion = A(uid=UidRange(str(int(uid_min)), "*"))
+        else:
+            criterion = A() if since is None else A(date_gte=since.date())
+
         for msg in mailbox.fetch(criteria=criterion, mark_seen=False, bulk=False):
             attachments = []
             if msg.attachments:
@@ -1179,7 +1253,7 @@ def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None, sinc
                 "attachments": attachments,
                 "raw_headers": raw_headers,
             })
-        
+
         mailbox.logout()
     except Exception as e:
         logger.error("IMAP fetch error: %s", e)
@@ -1847,7 +1921,37 @@ def _poll_mailbox_cfg(cfg: dict[str, Any]) -> list[dict[str, Any]]:
             since = datetime.now(timezone.utc) - timedelta(days=sync_days) if sync_days and sync_days > 0 else None
         for folder in folders:
             logger.info("Fetching folder %s for %s", folder, cfg["user"])
-            msgs = _fetch_messages(cfg, folder, since=since)
+            # Key the watermark + STATUS on the normalized name — the same
+            # mailbox _fetch_messages actually SELECTs.
+            imap_folder = _normalize_folder_name(folder)
+            # Incremental path: when UIDVALIDITY matches the watermark, fetch
+            # only UID > last_seen (seconds). Otherwise the legacy full-window
+            # fetch (first run, renumbered mailbox, unknown validity).
+            uid_min = None
+            cur_validity, cur_uidnext = None, None
+            stored_validity, last_seen = _get_folder_watermark(cfg.get("account_id"), imap_folder)
+            if last_seen is not None:
+                cur_validity, cur_uidnext = _read_folder_status(cfg, imap_folder)
+                if (cur_validity is not None and stored_validity is not None
+                        and cur_validity == stored_validity):
+                    uid_min = int(last_seen)
+                    logger.info("Incremental fetch UID>%d for %s folder %s", uid_min, cfg["user"], folder)
+            msgs = _fetch_messages(cfg, folder, since=since, uid_min=uid_min)
+            max_uid = 0
+            for m in msgs:
+                try:
+                    max_uid = max(max_uid, int(m.get("uid") or 0))
+                except (TypeError, ValueError):
+                    pass
+            # Advance the watermark: max fetched UID, or UIDNEXT-1 when nothing
+            # new (empty folder converges to incremental on the next cycle).
+            # Never move it backwards.
+            floor = max(int(last_seen or 0),
+                        int(cur_uidnext or 1) - 1 if not msgs and cur_uidnext else 0)
+            new_last = max(max_uid, floor)
+            _save_folder_watermark(cfg.get("account_id"), imap_folder,
+                                   cur_validity if cur_validity is not None else stored_validity,
+                                   new_last)
             for msg in msgs:
                 result = _process_message(msg, cfg)
                 results.append(result)
@@ -1869,30 +1973,98 @@ def _poll_mailboxes() -> list[dict[str, Any]]:
     if config.get("scanner_behavior", {}).get("auto_link_by_content", {}).get("enabled", False):
         _build_deal_index()
 
-    for cfg in mailboxes:
-        results.extend(_poll_mailbox_cfg(cfg))
+    # Fault isolation: accounts poll concurrently so one slow Outlook mailbox
+    # cannot stall the rest. A hung account is abandoned after the timeout
+    # (its daemon worker eventually finishes or dies); the cycle continues.
+    import concurrent.futures as _cf
+    try:
+        timeout_s = int(os.environ.get("SCANNER_ACCOUNT_TIMEOUT", "240"))
+    except (TypeError, ValueError):
+        timeout_s = 240
+    workers = max(1, min(4, len(mailboxes)))
+    with _cf.ThreadPoolExecutor(max_workers=workers, thread_name_prefix="mailpoll") as ex:
+        futs = {ex.submit(_poll_mailbox_cfg, cfg): cfg for cfg in mailboxes}
+        for fut, cfg in futs.items():
+            try:
+                results.extend(fut.result(timeout=timeout_s))
+            except _cf.TimeoutError:
+                logger.warning("Mail poll timed out for %s after %ds — continuing with other accounts",
+                               cfg.get("user"), timeout_s)
+            except Exception as e:
+                logger.error("Mail poll failed for %s: %s", cfg.get("user"), e)
 
     return results
 
 
 # Manual per-account polls, triggered by the UI refresh button via
-# POST /api/v2/mail/accounts/{id}/sync-now. Requests accumulate in a set
-# consumed by the scanner loop (woken immediately), so no second thread
-# races the cycle and rapid multi-account refreshes are all honored.
+# POST /api/v2/mail/accounts/{id}/sync-now. Requests run immediately in a
+# dedicated worker thread (never queued behind a running full cycle) AND stay
+# queued for the loop as a fallback, so rapid multi-account refreshes are all
+# honored and none is lost if the worker hits an error first.
 _manual_poll_ids: set[int] = set()
 _wakeup = threading.Event()
+_manual_lock = threading.Lock()
+_manual_in_progress: dict[int, float] = {}
+_manual_last_done: dict[int, float] = {}
+_manual_last_error: dict[int, str] = {}
 
 
 def request_manual_poll(account_id: int) -> bool:
-    """Queue a one-account poll. Returns False for a bad id; the loop picks
-    accepted requests up immediately (even mid-interval). Never lost: queued
-    ids persist until the loop consumes them."""
+    """Queue a one-account poll and start its worker immediately. Returns False
+    for a bad id. Duplicate requests for an already-running poll are accepted
+    (set semantics) without spawning extra workers."""
     try:
-        _manual_poll_ids.add(int(account_id))
+        aid = int(account_id)
     except (TypeError, ValueError):
         return False
+    with _manual_lock:
+        _manual_poll_ids.add(aid)
+        already = aid in _manual_in_progress
     _wakeup.set()
+    if not already:
+        t = threading.Thread(target=_manual_poll_worker, args=(aid,),
+                             daemon=True, name=f"mail-manual-{aid}")
+        t.start()
     return True
+
+
+def _manual_poll_worker(aid: int) -> None:
+    with _manual_lock:
+        if aid in _manual_in_progress:
+            return
+        _manual_in_progress[aid] = time.time()
+    try:
+        cfgs = [c for c in _get_mailboxes() if c.get("account_id") == aid]
+        if not cfgs:
+            with _manual_lock:
+                _manual_last_error[aid] = "account not syncable (disabled or missing credentials)"
+            logger.warning("Manual poll: account %d not syncable (disabled or missing credentials)", aid)
+            return
+        for cfg in cfgs:
+            _poll_mailbox_cfg(cfg)
+        with _manual_lock:
+            _manual_poll_ids.discard(aid)
+            _manual_last_done[aid] = time.time()
+            _manual_last_error.pop(aid, None)
+    except Exception as e:
+        logger.exception("Manual poll failed for account %d", aid)
+        with _manual_lock:
+            _manual_last_error[aid] = str(e)[:300]
+    finally:
+        with _manual_lock:
+            _manual_in_progress.pop(aid, None)
+
+
+def manual_poll_state(account_id: int) -> str:
+    """idle | running | done | error — for the UI status poll."""
+    with _manual_lock:
+        if account_id in _manual_in_progress:
+            return "running"
+        if account_id in _manual_last_error:
+            return "error"
+        if account_id in _manual_last_done:
+            return "done"
+    return "idle"
 
 
 def _enforce_retention() -> None:
@@ -1943,7 +2115,7 @@ def _scanner_loop() -> None:
     logger.info("Scanner loop started")
     while True:
         try:
-            interval = int(os.environ.get("SCANNER_POLL_INTERVAL", "300"))
+            interval = int(os.environ.get("SCANNER_POLL_INTERVAL", "120"))
             env_enabled = os.environ.get("SCANNER_ENABLED", "false").lower() in ("true", "1", "yes")
             db_enabled = False
             try:
@@ -1974,7 +2146,7 @@ def _scanner_loop() -> None:
             logger.error("Scanner loop error: %s", e)
             infra_log.log_infra_event("error", f"Mail scanner loop error: {e}", source="mail_scanner")
         _wakeup.clear()
-        _wakeup.wait(int(os.environ.get("SCANNER_POLL_INTERVAL", "300")))
+        _wakeup.wait(int(os.environ.get("SCANNER_POLL_INTERVAL", "120")))
 
 
 def start_scanner() -> threading.Thread:
@@ -2055,9 +2227,12 @@ def get_scanner_status() -> dict[str, Any]:
     return {
         "enabled": enabled,
         "accounts": account_list,
-        "poll_interval": int(os.environ.get("SCANNER_POLL_INTERVAL", "300")),
+        "poll_interval": int(os.environ.get("SCANNER_POLL_INTERVAL", "120")),
         "processed_count": len(_load_processed_ids()),
         "running": threading.active_count() > 0,
+        "manual_in_progress": sorted(_manual_in_progress),
+        "manual_last_done": {str(k): v for k, v in _manual_last_done.items()},
+        "manual_last_error": {str(k): v for k, v in _manual_last_error.items()},
     }
 
 

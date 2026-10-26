@@ -2,6 +2,19 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Incremental IMAP sync + working manual poll (2026-10-26)
+
+Mail took ~10 min to appear: every cycle re-downloaded full bodies for the
+whole 90-day window (single-threaded, sequential) and deduped only afterwards,
+on a 300s interval; the manual button waited a fixed 8s then reloaded stale
+data. Now: per-folder UID watermarks (migration 038) fetch only UID>last seen
+when UIDVALIDITY matches, with date-window fallback; full cycles poll accounts
+concurrently with per-account timeouts; manual polls run immediately in a
+worker with in-progress/done/error status the refresh button actually waits on;
+default interval 300→120s. `tests/test_mail_incremental.py` (15 tests,
+discriminating). Cache-bust app 3.7.38→3.7.39. NOTE: droplet .env still pins
+SCANNER_POLL_INTERVAL=300 — update on deploy.
+
 ## Note paste-highlight root fix + read-only field cursor (2026-10-26)
 
 Two root-cause fixes. (1) Paste highlight returned because the sanitizer never

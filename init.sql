@@ -902,6 +902,8 @@ CREATE TABLE mail_folders (
     imap_account_id INTEGER REFERENCES mail_accounts(id) ON DELETE CASCADE,
     imap_path TEXT,
     last_sync TIMESTAMP,
+    last_seen_uid BIGINT,
+    uid_validity BIGINT,
     user_id INTEGER REFERENCES users(id),
     is_system BOOLEAN DEFAULT FALSE,
     sort_order INTEGER DEFAULT 0,

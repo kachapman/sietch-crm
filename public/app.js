@@ -24005,7 +24005,22 @@ function attachMailModalListeners() {
         await Promise.all(ids.map((id) =>
           api(`/api/v2/mail/accounts/${encodeURIComponent(id)}/sync-now`, { method: "POST" }).catch(() => null)
         ));
-        await new Promise((r) => setTimeout(r, 8000));
+        // Wait for the worker threads to finish instead of a fixed sleep:
+        // poll scanner status until none of our accounts report in-progress
+        // (or a 90s cap). Falls back to an immediate reload on old servers
+        // that don't report manual_in_progress.
+        const deadline = Date.now() + 90000;
+        for (;;) {
+          let busy = false;
+          try {
+            const st = await api("/api/v2/mail/status");
+            const running = Array.isArray(st?.manual_in_progress) ? st.manual_in_progress.map(Number) : null;
+            busy = running != null && ids.some((id) => running.includes(Number(id)));
+            if (running == null) break; // status shape unknown — just reload below
+          } catch { break; }
+          if (!busy || Date.now() > deadline) break;
+          await new Promise((r) => setTimeout(r, 2000));
+        }
       } catch { /* fall through to reload */ }
       refreshing = false;
       loadMailMessagesForModal();
