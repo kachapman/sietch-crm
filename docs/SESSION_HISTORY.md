@@ -11,6 +11,17 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-26 (invoice/COC shared prefill helper)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+
+- `docGenCustomerAddress()` shared by photo/invoice/COC; modals fetch deal
+  fields; claim lookup revived; photo form unified with no behavior change.
+- Tests: prefill suite extended to 6 (all three forms asserted), fail-old
+  verified (5/1 against previous build).
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-10-26 (incremental IMAP sync + manual poll workers)
 
 **Status: DEPLOYED 2026-10-26 as 274f8da** (rebuild healthy; migration 038

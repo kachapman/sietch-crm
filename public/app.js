@@ -46255,31 +46255,13 @@ function openPhotoReportModal(photoIds, oppId) {
 }
 
 function renderPhotoReportForm(body, project, templates, selPhotos, oppId, dealFields) {
-  const contact = project.contact || {};
-  const customFields = Array.isArray(dealFields) && dealFields.length ? dealFields : (project.customFields || []);
-  const fieldText = (match) => {
-    for (const cf of customFields) {
-      const label = String(cf.label || "").toLowerCase();
-      if (cf.value != null && String(cf.value).trim() && match.test(label)) return String(cf.value).trim();
-    }
-    return "";
-  };
-  // Job address lives on the deal (custom field), NOT on the linked contact —
-  // the contact is often the GC, whose address is not the job site.
-  const fullAddress = fieldText(/address|location|site|property|street/) ||
-    [contact.addressStreet, contact.addressCity, contact.addressState, contact.addressZip].filter(Boolean).join(", ");
-  let claimNumber = "";
-  for (const cf of customFields) {
-    if ((cf.key === "field_11") || (cf.label && cf.label.toLowerCase().includes("claim"))) {
-      claimNumber = cf.value || "";
-      break;
-    }
-  }
+  // Same shared mapping as invoice/COC: customer = project, address = deal
+  // field first (contact only as last resort, never mixed).
+  const { customerName, street, cityStateZip } = docGenCustomerAddress(project, dealFields);
+  const fullAddress = [street, cityStateZip].filter(Boolean).join(", ");
+  const claimNumber = _docGenResolveClaimNumber(project, dealFields);
   const projectTitle = project.title || "Project";
   const defaultTitle = `Photo Report - ${projectTitle}`;
-  // Customer is the homeowner (the project), not the linked contact — the
-  // contact is frequently the contractor/GC (live fix 2026-10-23).
-  const customerName = projectTitle;
   const defaultFileName = `${defaultTitle} - ${customerName}`;
   const defaultDate = new Date().toISOString().split("T")[0];
   const reportTitle = defaultTitle;
@@ -46527,14 +46509,43 @@ generateBtn.addEventListener("click", () => {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 // Resolve a project's claim number (field_11, fallback to label-includes-"claim")
-function _docGenResolveClaimNumber(project) {
-  const customFields = (project && project.customFields) || [];
+function _docGenResolveClaimNumber(project, dealFields) {
+  const customFields = (Array.isArray(dealFields) && dealFields.length)
+    ? dealFields : ((project && project.customFields) || []);
   for (const cf of customFields) {
     if ((cf.key === "field_11") || (cf.label && String(cf.label).toLowerCase().includes("claim"))) {
       return (cf.value || "").toString();
     }
   }
   return "";
+}
+
+// Shared customer/address resolution for all document generators (photo
+// report, invoice, COC). The linked contact is frequently the contractor/GC,
+// so it must NEVER source the customer identity: customer = project title,
+// address = the deal's own address custom field, contact parts only when no
+// deal field matched at all (never mix sources across lines — blank beats
+// wrong, and every field stays editable). dealFields comes from
+// /api/v2/projects/{id}/custom-fields (the project GET never embeds them).
+function docGenCustomerAddress(project, dealFields) {
+  project = project || {};
+  const contact = project.contact || {};
+  const customFields = Array.isArray(dealFields) && dealFields.length ? dealFields : (project.customFields || []);
+  const fieldText = (match) => {
+    for (const cf of customFields) {
+      const label = String(cf.label || "").toLowerCase();
+      if (cf.value != null && String(cf.value).trim() && match.test(label)) return String(cf.value).trim();
+    }
+    return "";
+  };
+  const street = fieldText(/street|address|site|location|property/) ||
+    (contact.addressStreet || "");
+  let cityStateZip = fieldText(/city|state|zip|country|county/) || "";
+  if (!cityStateZip && !fieldText(/street|address|site|location|property/)) {
+    cityStateZip = [contact.addressCity, contact.addressState, contact.addressZip].filter(Boolean).join(", ");
+  }
+  const customerName = project.title || "Project";
+  return { customerName, street, cityStateZip };
 }
 
 function _docGenToday() {
@@ -46561,8 +46572,11 @@ function openInvoiceModal(oppId, mode) {
     ? api(`/api/v2/projects/${oppId}`).catch(() => null)
     : Promise.resolve(null);
   const tmplP = api("/api/v2/admin/document-templates").catch(() => []);
-  Promise.all([projP, tmplP]).then(([project, templates]) => {
-    renderInvoiceForm(body, project || null, templates || [], oppId || null, mode);
+  const fieldsP = mode === "project" && oppId
+    ? api(`/api/v2/projects/${oppId}/custom-fields`).catch(() => [])
+    : Promise.resolve([]);
+  Promise.all([projP, tmplP, fieldsP]).then(([project, templates, dealFields]) => {
+    renderInvoiceForm(body, project || null, templates || [], oppId || null, mode, dealFields || []);
   }).catch(err => {
     body.innerHTML = `<div style="padding:2rem;color:var(--danger)">Failed to load: ${escapeHtml(err.message)}</div>`;
   });
@@ -46585,8 +46599,11 @@ function openCocModal(oppId, mode) {
     ? api(`/api/v2/projects/${oppId}`).catch(() => null)
     : Promise.resolve(null);
   const tmplP = api("/api/v2/admin/document-templates").catch(() => []);
-  Promise.all([projP, tmplP]).then(([project, templates]) => {
-    renderCocForm(body, project || null, templates || [], oppId || null, mode);
+  const fieldsP = mode === "project" && oppId
+    ? api(`/api/v2/projects/${oppId}/custom-fields`).catch(() => [])
+    : Promise.resolve([]);
+  Promise.all([projP, tmplP, fieldsP]).then(([project, templates, dealFields]) => {
+    renderCocForm(body, project || null, templates || [], oppId || null, mode, dealFields || []);
   }).catch(err => {
     body.innerHTML = `<div style="padding:2rem;color:var(--danger)">Failed to load: ${escapeHtml(err.message)}</div>`;
   });
@@ -46644,9 +46661,8 @@ function _docGenSection(title) {
   return sec;
 }
 
-function renderInvoiceForm(body, project, templates, oppId, mode) {
+function renderInvoiceForm(body, project, templates, oppId, mode, dealFields) {
   body.innerHTML = "";
-  const contact = (project && project.contact) || {};
   const isProject = mode === "project" && !!project;
   // Default template (first default, else first)
   let defaultTpl = templates.find(t => t.is_default) || templates[0] || null;
@@ -46683,15 +46699,11 @@ function renderInvoiceForm(body, project, templates, oppId, mode) {
   const infoSec = _docGenSection("Invoice Info");
   const infoGrid = document.createElement("div");
   infoGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;";
-  const claimNumber = isProject ? _docGenResolveClaimNumber(project) : "";
-  const customerName = isProject ? (contact.displayName || project.title || "") : "";
+  const claimNumber = isProject ? _docGenResolveClaimNumber(project, dealFields) : "";
   const projectNumber = isProject ? (project.project_number || "") : "";
-  const street = isProject ? (contact.addressStreet || "") : "";
-  const cityStateZip = isProject ? [
-    contact.addressCity || "",
-    contact.addressState || "",
-    contact.addressZip || "",
-  ].filter(Boolean).join(", ") : "";
+  const { customerName, street, cityStateZip } = isProject
+    ? docGenCustomerAddress(project, dealFields)
+    : { customerName: "", street: "", cityStateZip: "" };
   const fInvoiceNum = _docGenField("Invoice #", projectNumber, "Defaults to job #");
   const fInvoiceDate = _docGenField("Date", today, "MM/DD/YYYY");
   const fTerms = _docGenField("Terms", (defaultTpl && defaultTpl.default_terms) || "Due on receipt");
@@ -46881,9 +46893,8 @@ function addInvoiceLineRow(tbody, onChange, desc, amt) {
   });
 }
 
-function renderCocForm(body, project, templates, oppId, mode) {
+function renderCocForm(body, project, templates, oppId, mode, dealFields) {
   body.innerHTML = "";
-  const contact = (project && project.contact) || {};
   const isProject = mode === "project" && !!project;
   let defaultTpl = templates.find(t => t.is_default) || templates[0] || null;
   const today = _docGenToday();
@@ -46918,15 +46929,11 @@ function renderCocForm(body, project, templates, oppId, mode) {
   const custSec = _docGenSection("Customer / Job");
   const custGrid = document.createElement("div");
   custGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;";
-  const claimNumber = isProject ? _docGenResolveClaimNumber(project) : "";
+  const claimNumber = isProject ? _docGenResolveClaimNumber(project, dealFields) : "";
   const projectNumber = isProject ? (project.project_number || "") : "";
-  const customerName = isProject ? (contact.displayName || project.title || "") : "";
-  const street = isProject ? (contact.addressStreet || "") : "";
-  const cityStateZip = isProject ? [
-    contact.addressCity || "",
-    contact.addressState || "",
-    contact.addressZip || "",
-  ].filter(Boolean).join(", ") : "";
+  const { customerName, street, cityStateZip } = isProject
+    ? docGenCustomerAddress(project, dealFields)
+    : { customerName: "", street: "", cityStateZip: "" };
   const fCustomer = _docGenField("Customer Name", customerName);
   const fJobNum = _docGenField("Job #", projectNumber);
   const fClaimNum = _docGenField("Claim #", claimNumber);

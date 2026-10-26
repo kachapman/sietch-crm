@@ -2,6 +2,16 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Invoice/COC prefill uses project fields via shared helper (2026-10-26)
+
+Same GC-contact bug as the photo report: invoice and COC forms took Customer
+Name + address from the linked contact. New shared `docGenCustomerAddress()`
+(customer = project title, address = deal field → contact fallback, never
+mixed); all three generators route through it, both modals fetch deal custom
+fields (claim lookup was dead without them), and the photo form is refactored
+onto it with no behavior change. Extended `tests/test_photo_report_prefill.mjs`
+(6 tests, discriminating). Cache-bust app 3.7.39→3.7.40.
+
 ## Incremental IMAP sync + working manual poll (2026-10-26)
 
 Mail took ~10 min to appear: every cycle re-downloaded full bodies for the
