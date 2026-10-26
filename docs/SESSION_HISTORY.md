@@ -13,7 +13,9 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-26 (invoice/COC shared prefill helper)
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+**Status: DEPLOYED 2026-10-26 as 6809804** (rebuild healthy, handlers intact,
+zero non-scanner errors, live bundle 3.7.40). Fresh tab → invoice/COC forms
+prefill customer + address from the deal.
 
 - `docGenCustomerAddress()` shared by photo/invoice/COC; modals fetch deal
   fields; claim lookup revived; photo form unified with no behavior change.
