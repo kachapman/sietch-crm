@@ -259,6 +259,7 @@ function handleSSEEvent(type, data) {
   switch (type) {
     case "dm:new": handleNewDM(data); break;
     case "dm:read": handleDMRead(data); break;
+    case "notification:read": handleNotificationRead(data); break;
     case "backup:completed":
       // Scheduled JSON export finished (success, partial, or failed).
       // Refresh the admin backup log if the console is open.
@@ -293,6 +294,13 @@ case "notification:new":
       // Browser notification for calendar reminders
       if (data.type === "calendar_reminder" && document.hidden && Notification.permission === "granted") {
         new Notification("Calendar Reminder", { body: data.message || "Event starting soon", tag: "cal-reminder" });
+      }
+      // Browser ping for tag/reply notifications: Notification (permission
+      // already granted), title flash until focus returns, and a short
+      // WebAudio chime. Skipped when muted or the drawer is already open
+      // (the user is looking at it).
+      if ((data.type === "note_tagged" || data.type === "reply_tagged")) {
+        _pingTagNotification(data);
       }
       break;
     case "mail:new":
@@ -356,6 +364,20 @@ function handleNewDM(data) {
       });
     } catch (_) {}
   }
+}
+
+function handleNotificationRead(data) {
+  // A notification answered elsewhere (Telegram reply) arrives here via SSE:
+  // drop it from the local cache, re-render the drawer, and re-poll the
+  // badge so the count clears without a manual refresh.
+  const d = data.data || data;
+  const nid = d.id ?? d.notification_id ?? d.notificationId;
+  if (nid == null) return;
+  if (Array.isArray(_notificationCache)) {
+    _notificationCache = _notificationCache.filter((n) => String(n.id) !== String(nid));
+    if (typeof _renderNotificationDrawerList === "function") _renderNotificationDrawerList();
+  }
+  if (typeof _pollNotificationBadge === "function") _pollNotificationBadge();
 }
 
 function handleDMRead(data) {
@@ -45209,6 +45231,89 @@ let _notificationDrawerOpen = false;
 let _notificationPopout = false;
 let _notificationBadgePollTimer = null;
 let _notificationCache = [];
+let _notifTitleFlashTimer = null;
+let _notifTitleFlashBase = null;
+
+function _notifPingMuted() {
+  try {
+    return localStorage.getItem("sietch_notif_ping_muted") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setNotifPingMuted(muted) {
+  try {
+    localStorage.setItem("sietch_notif_ping_muted", muted ? "1" : "0");
+  } catch { /* private mode */ }
+}
+
+function _flashDocTitlePing(label) {
+  // Blink "(•) <title>" until the tab regains focus. No-op if the tab is
+  // already visible — the badge pulse + drawer are signal enough.
+  if (!document.hidden) return;
+  if (_notifTitleFlashTimer) return; // already flashing
+  _notifTitleFlashBase = document.title;
+  let on = false;
+  _notifTitleFlashTimer = setInterval(() => {
+    on = !on;
+    document.title = on ? `(•) ${label || _notifTitleFlashBase}` : _notifTitleFlashBase;
+  }, 1000);
+  const stop = () => {
+    if (_notifTitleFlashTimer) {
+      clearInterval(_notifTitleFlashTimer);
+      _notifTitleFlashTimer = null;
+      document.title = _notifTitleFlashBase || document.title;
+    }
+    window.removeEventListener("focus", stop);
+    document.removeEventListener("visibilitychange", visStop);
+  };
+  const visStop = () => { if (!document.hidden) stop(); };
+  window.addEventListener("focus", stop);
+  document.addEventListener("visibilitychange", visStop);
+}
+
+function _chimeNotifPing() {
+  // Short two-tone chime via WebAudio — no asset file to cache-bust.
+  // Autoplay policy: creating the context inside the SSE handler can start
+  // suspended; resume() is best-effort and a rejection simply means silence.
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    const play = (freq, at, dur) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + at);
+      gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + at + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + at + dur);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(ctx.currentTime + at);
+      osc.stop(ctx.currentTime + at + dur + 0.05);
+    };
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    play(660, 0, 0.18);
+    play(880, 0.2, 0.22);
+    setTimeout(() => { try { ctx.close(); } catch {} }, 1200);
+  } catch { /* audio unsupported — visual ping still fires */ }
+}
+
+function _pingTagNotification(data) {
+  // Browser ping for tag/reply notifications. Skipped when muted or when the
+  // drawer is open (the user is already looking at notifications).
+  if (_notifPingMuted() || _notificationDrawerOpen) return;
+  const d = data.data || data;
+  const label = d.message || (d.type === "reply_tagged" ? "New reply on a tagged note" : "You were tagged in a note");
+  if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+    try {
+      new Notification("Sietch CRM", { body: String(label).slice(0, 200), tag: `tag-${d.type || "note"}-${Date.now()}` });
+    } catch { /* blocked — title flash + chime still fire */ }
+  }
+  _flashDocTitlePing();
+  _chimeNotifPing();
+}
 
 function openNotificationDrawer() {
   const drawer = $("#notification-drawer");
@@ -45556,6 +45661,17 @@ function bindNotificationDrawer() {
   if (backdrop) backdrop.addEventListener("click", closeNotificationDrawer);
   if (markAllBtn) markAllBtn.addEventListener("click", _markAllNotificationsRead);
   if (popoutBtn) popoutBtn.addEventListener("click", toggleNotificationPopout);
+  const pingBtn = $("#notification-ping-toggle");
+  const syncPingBtn = () => {
+    if (pingBtn) pingBtn.textContent = _notifPingMuted() ? "🔕" : "🔔";
+  };
+  if (pingBtn) {
+    syncPingBtn();
+    pingBtn.addEventListener("click", () => {
+      setNotifPingMuted(!_notifPingMuted());
+      syncPingBtn();
+    });
+  }
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && _notificationDrawerOpen) closeNotificationDrawer();

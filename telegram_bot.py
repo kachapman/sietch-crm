@@ -1952,6 +1952,18 @@ def main() -> None:
                         update,
                         f"\u2705 <b>{label}</b>\nProject: {_esc(project_title)}",
                     )
+                    # The replier has now seen this notification's content —
+                    # mark it read so the drawer badge clears without a manual
+                    # visit. Best-effort: a failure here must not fail the reply.
+                    try:
+                        async with httpx.AsyncClient(timeout=10) as rclient:
+                            await rclient.post(
+                                f"{_get_dashboard_url()}/api/bot/notification-read",
+                                headers=_auth_headers(),
+                                json={"notificationId": notification_id, "chatId": chat_id},
+                            )
+                    except Exception:
+                        logger.exception("Failed to mark notification %s read after reply", notification_id)
                 else:
                     err = resp.json().get("error", "Failed") if resp.status_code < 500 else "Server error"
                     await _reply_html(update, f"\u274c Failed to add reply: {_esc(err)}")

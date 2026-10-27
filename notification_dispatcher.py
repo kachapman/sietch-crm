@@ -127,6 +127,19 @@ def _format_note_tagged(notification: dict, project_title: str, actor_name: str,
     return _build_tg("\U0001f4cb", f"{actor} tagged you in a note", project_title, project_id, project_number, content, cta_reply=True)
 
 
+def _format_reply_tagged(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
+    """Thread reply by someone else on a note thread you're part of. Same
+    shape as note_tagged (actor + snippet + reply CTA) so it renders and —
+    critically — so _format_notification returns text instead of None (live
+    bug 2026-10-27: reply rows reached the drawer but never Telegram)."""
+    actor = _resolve_actor(notification, actor_name)
+    snippet = _escape_html((notification.get("payload") or {}).get("snippet") or "")
+    content = []
+    if snippet:
+        content.append(f"<blockquote>{_truncate(snippet)}</blockquote>")
+    return _build_tg("\U0001f4ac", f"{actor} replied to a note you're tagged on", project_title, project_id, project_number, content, cta_reply=True)
+
+
 def _format_task_assigned(notification: dict, project_title: str, actor_name: str, project_id: int | None = None, project_number: int | None = None) -> str:
     payload = notification.get("payload") or {}
     task_title = _escape_html(payload.get("task_title") or "")
@@ -236,6 +249,8 @@ def _format_notification(notification: dict, project_title: str, actor_name: str
     ntype = notification.get("type")
     if ntype == "note_tagged":
         return _format_note_tagged(notification, project_title, actor_name, project_id, project_number)
+    elif ntype == "reply_tagged":
+        return _format_reply_tagged(notification, project_title, actor_name, project_id, project_number)
     elif ntype == "task_assigned":
         return _format_task_assigned(notification, project_title, actor_name, project_id, project_number)
     elif ntype == "task_reminder":
@@ -302,6 +317,12 @@ def _format_email_notification(notification: dict, project_title: str, actor_nam
     if ntype == "note_tagged":
         subject = f"{actor} tagged you on {project_title}"
         body = notification.get("message") or "You were tagged in a note."
+    elif ntype == "reply_tagged":
+        subject = f"{actor} replied on {project_title}"
+        snippet = (payload.get("snippet") or "")[:200]
+        body = notification.get("message") or "Someone replied to a note you're tagged on."
+        if snippet:
+            body += f" {snippet}"
     elif ntype == "task_assigned":
         task_title = payload.get("task_title", "")
         subject = f"Task assigned: {task_title}"

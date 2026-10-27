@@ -16701,12 +16701,48 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 500, {"error": "Internal error"})
             return
 
-        self.send_error(404)
-
     def _handle_bot_api_post(self, method: str) -> None:
         api_path = urlparse(self.path).path
         bot_token = _get_bot_token()
         auth_header = self.headers.get("Authorization", "").strip()
+
+        if api_path == "/api/bot/notification-read":
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            notif_id = payload.get("notificationId")
+            chat_id = payload.get("chatId")
+            if not notif_id or not chat_id:
+                _json_response(self, 400, {"error": "notificationId and chatId are required"})
+                return
+            try:
+                # Trust boundary: the mapping (chatId -> CRM user) is
+                # authoritative — the bot token authenticates the process,
+                # never the individual. Employee mappings carry userId.
+                from crm_bot_store import get_mapping_by_chat as _mapping_by_chat
+                mapping = _mapping_by_chat("sietch", int(chat_id))
+                linked_uid = (mapping or {}).get("userId")
+                if not linked_uid:
+                    _json_response(self, 403, {"error": "No linked account for this chat"})
+                    return
+                db.execute(
+                    "UPDATE notifications SET is_read = TRUE WHERE id = %s AND user_id = %s",
+                    (int(notif_id), int(linked_uid)),
+                )
+                try:
+                    event_bus.publish("notification:read", {"id": int(notif_id)},
+                                      user_ids=[str(int(linked_uid))])
+                except Exception:
+                    pass
+                _json_response(self, 200, {"ok": True})
+            except Exception:
+                logger.exception("Failed to mark notification read from bot")
+                _json_response(self, 500, {"error": "Internal error"})
+            return
+
+        self.send_error(404)
 
         if api_path == "/api/bot/note" and method == "POST":
             if not bot_token or auth_header != f"Bearer {bot_token}":

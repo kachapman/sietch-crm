@@ -2,6 +2,20 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Reply notifications reach Telegram + browser ping + Telegram-read sync (2026-10-27)
+
+Three notification gaps closed. (1) `reply_tagged` rows reached the drawer but
+never Telegram: the dispatcher formatter had no branch and returned None — new
+`_format_reply_tagged` (actor + snippet + reply CTA) in both Telegram and email
+formatters. (2) Browser tab never signaled anything: `notification:new` now
+fires an OS Notification, title flash until focus, and a WebAudio chime for
+tag/reply events (skipped when muted via the new drawer 🔔 toggle or the
+drawer is open). (3) Replying in Telegram now marks that notification read
+(new `POST /api/bot/notification-read`, mapping-scoped) and pushes
+`notification:read` over SSE so the badge clears live.
+`tests/test_reply_tagged_telegram.py` (5 tests, discriminating). Cache-bust
+app 3.7.41→3.7.42. Bot restart required (`telegram_bot.py` changed).
+
 ## Outlook-style forward header with working From/Sent/To (2026-10-26)
 
 Forwarded mail showed blank From/Date: `normalizeMailMessage` didn't know the

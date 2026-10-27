@@ -181,6 +181,9 @@ jobs:
       - name: Run notification snippet tests
         run: python3 tests/test_notification_snippet.py -v
 
+      - name: Run reply_tagged Telegram tests
+        run: python3 tests/test_reply_tagged_telegram.py -v
+
       - name: Run upload progress tests
         run: node --test tests/test_upload_progress.mjs
 

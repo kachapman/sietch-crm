@@ -11,6 +11,18 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-27 (reply Telegram + browser ping + read sync)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying (incl. bot restart).**
+
+- Dispatcher `reply_tagged` in both formatters; bot mark-read on 201;
+  frontend Notification + title flash + chime with mute toggle;
+  `notification:read` SSE clears badge live.
+- Tests: 5 (formats, endpoint trust boundary, no-write-on-403), fail-old
+  verified (5F on old code).
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-10-26 (Outlook forward header)
 
 **Status: DEPLOYED 2026-10-26 as e378405** (rebuild healthy, handlers intact,
