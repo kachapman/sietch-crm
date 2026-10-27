@@ -1,5 +1,52 @@
 # Known issues
 
+## ISSUE-015 — Fresh databases don't self-build schema (failed migrations recorded as applied)
+
+**Status:** 🟡 Open (observed + repaired live 2026-10-26, proper fix pending)
+**Priority:** High
+**Area:** Backend boot (`db.py`, `init.sql`, `migrations/`)
+
+### Summary
+
+`init.sql` is only ever applied by the postgres docker entrypoint
+(`docker-compose.yml` mounts it into `/docker-entrypoint-initdb.d`), which
+runs solely against a brand-new database volume. `db.init_db()` at server boot
+runs only the `migrations/*.sql` runner — never the base schema. On a truly
+fresh database (e.g. dev `sietch_crm` dropped + recreated 2026-10-26), every
+migration fails against missing base tables, and worse, the runner **records
+each failed migration as applied** (`db.py` "record as applied to prevent
+retry loop"), so subsequent boots never retry them. The server then runs with
+~5 tables and 500s across most endpoints.
+
+### Repro (dev, 2026-10-26)
+
+1. `DROP DATABASE sietch_crm; CREATE DATABASE sietch_crm;`
+2. Boot server → ~38 `Migration *.sql failed (relation ... does not exist)` warnings, all recorded.
+3. `GET /api/v2/mail/unread-count` (and most other endpoints) → 500.
+
+### Repair performed live
+
+Applied `init.sql` manually via `docker cp` + `psql -f` (62 tables, zero
+errors), cleared the bogus `_applied_migrations` rows so the boot runner
+re-applied 001–038 cleanly (one benign 031 already-exists warning), verified
+login/create/history/delete end-to-end, deleted the verification deal.
+
+### Proper fix (pending)
+
+Make a fresh boot self-sufficient: apply `init.sql` (or an equivalent
+base-schema step) from `db.init_db()` when the database is empty, BEFORE the
+migration runner — and/or stop recording failed migrations as applied (retry
+next boot instead). Verify with: fresh DB → boot → zero migration failures →
+smoke test green.
+
+### Files involved
+
+| File | Role |
+|------|------|
+| `db.py` | `_run_pending_migrations` records failures as applied; no base-schema step |
+| `init.sql` | Base schema, only wired to the postgres entrypoint |
+| `docker-compose.yml` | Mounts init.sql into initdb.d (first-volume-boot only) |
+
 ## ISSUE-014 — Tile toolbar uniformity, click-to-edit titles, height resize
 
 **Status:** ✅ Implemented 2026-07-21 (Phase 2D-3 follow-up; committed, NOT pushed)  
