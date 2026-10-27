@@ -27295,7 +27295,7 @@ function bindEmailPreviewActionButtons(modal, norm, fullMail, messageId, close, 
         } else { // forward
           to = '';
           subjectLine = 'Fwd: ' + (subject.startsWith('Fwd:') ? subject.slice(4).trim() : subject);
-          quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">---------- Forwarded message ----------</p><blockquote style="margin:0; padding-left:0.5rem;">${quoted}</blockquote></div>`;
+          quotedBody = `<br>${mailForwardHeader(norm, fullMail)}${quoted}`;
         }
 
         openComposeModal({
@@ -27354,11 +27354,14 @@ async function fetchMailMessage(messageId) {
 function normalizeMailMessage(mail) {
   if (!mail || typeof mail !== "object") return null;
   const subject = mail.subject || mail.Subject || "";
-  const fromRaw = mail.from || mail.From || mail.fromEmail || mail.FromEmail;
+  const fromRaw = mail.from || mail.From || mail.fromEmail || mail.FromEmail
+    || mail.from_addr || mail.fromAddr || mail.FromAddr;
   const from =
     typeof fromRaw === "string"
       ? fromRaw
       : fromRaw?.displayName || fromRaw?.title || fromRaw?.email || fromRaw?.Email || "";
+  const fromNameRaw = mail.from_name || mail.fromName || mail.FromName || mail.fromDisplayName;
+  const fromName = typeof fromNameRaw === "string" ? fromNameRaw : "";
   const htmlBody =
     mail.htmlBody ||
     mail.HtmlBody ||
@@ -27385,9 +27388,66 @@ function normalizeMailMessage(mail) {
     mail.DateSent?.value ??
     mail.DateSent ??
     mail.receivedDate?.value ??
-    mail.receivedDate;
-  const toList = mailAddressesFromMessage(mail).join(", ");
-  return { subject, from, toList, htmlBody, textBody, date };
+    mail.receivedDate ??
+    mail.date_received?.value ??
+    mail.date_received ??
+    mail.dateReceived?.value ??
+    mail.dateReceived ??
+    mail.date?.value ??
+    mail.date ??
+    mail.Date?.value ??
+    mail.Date ??
+    mail.created?.value ??
+    mail.created ??
+    "";
+  const toRaw = mail.to_addr || mail.toAddr || mail.ToAddr
+    || mail.to || mail.To || mail.cc_addr || mail.ccAddr || "";
+  const toList = (typeof toRaw === "string" && toRaw.trim()
+    ? toRaw
+    : mailAddressesFromMessage(mail).join(", "));
+  return { subject, from, fromName, toList, htmlBody, textBody, date };
+}
+
+function formatMailHeaderDate(raw) {
+  // Outlook long form: "Monday, October 26, 2026 5:45 PM". Falls back to the
+  // raw string (or the short preview format) when unparseable.
+  if (raw == null || raw === "") return "";
+  try {
+    const iso = parseFeedDate(crmDateTimeFromApi(raw) || raw);
+    const d = new Date(iso || raw);
+    if (!Number.isNaN(d.getTime())) {
+      return d.toLocaleString(undefined, {
+        weekday: "long", year: "numeric", month: "long", day: "numeric",
+        hour: "numeric", minute: "2-digit",
+      });
+    }
+  } catch { /* fall through */ }
+  return formatPreviewDateTime(raw) || String(raw);
+}
+
+function mailForwardHeader(norm, fullMail) {
+  // Outlook-style forward block (single choke point for both forward paths):
+  // rule + From / Sent / To / Subject, then the quoted original follows.
+  // Falls back to the raw message row because normalizeMailMessage predates
+  // some shapes — belt and suspenders so the header is never blank.
+  const mail = fullMail || {};
+  const fromName = norm.fromName || mail.from_name || mail.fromName || "";
+  const fromAddr = norm.from || mail.from || mail.from_addr || mail.fromAddr || "";
+  let fromLine = fromAddr;
+  if (fromName && fromAddr && fromName !== fromAddr && !fromAddr.includes(fromName)) {
+    fromLine = `${fromName} <${fromAddr}>`;
+  } else if (fromName && !fromAddr) {
+    fromLine = fromName;
+  }
+  const to = norm.toList || mail.to_addr || mail.toAddr || mail.to || "";
+  const sentRaw = norm.date || mail.date_received || mail.dateReceived || mail.date || "";
+  const sent = formatMailHeaderDate(sentRaw);
+  const subject = norm.subject || mail.subject || "";
+  return `<hr style="border:none; border-top:1px solid var(--border); margin:0.75rem 0;">`
+    + `<p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(fromLine)}</p>`
+    + `<p style="margin:0 0 0.3rem;"><strong>Sent:</strong> ${escapeHtml(sent)}</p>`
+    + `<p style="margin:0 0 0.3rem;"><strong>To:</strong> ${escapeHtml(to)}</p>`
+    + `<p style="margin:0 0 0.6rem;"><strong>Subject:</strong> ${escapeHtml(subject)}</p>`;
 }
 
 function renderInlineReply(panel, type, messageId, norm) {
@@ -27417,7 +27477,7 @@ function renderInlineReply(panel, type, messageId, norm) {
   } else {
     to = "";
     subjectLine = "Fwd: " + (subject.startsWith("Fwd:") ? subject.slice(4).trim() : subject);
-    quotedBody = `<br><br><div style="border-left:2px solid var(--border); padding-left:0.75rem; margin-top:0.75rem; color:var(--muted); font-size:0.85rem;"><p style="margin:0 0 0.3rem;"><strong>From:</strong> ${escapeHtml(from)}</p><p style="margin:0 0 0.3rem;"><strong>Date:</strong> ${escapeHtml(date)}</p><p style="margin:0 0 0.3rem;">---------- Forwarded message ----------</p><blockquote style="margin:0; padding-left:0.5rem;">${bodyText}</blockquote></div>`;
+    quotedBody = `<br>${mailForwardHeader(norm, null)}${mailQuotedBody(bodyPick)}`;
   }
 
   replyDiv.innerHTML = `

@@ -2,6 +2,18 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Outlook-style forward header with working From/Sent/To (2026-10-26)
+
+Forwarded mail showed blank From/Date: `normalizeMailMessage` didn't know the
+app's native row keys (`from_addr`/`date_received`/`to_addr`), and the two
+forward paths used bare `norm.*` with no fallback (the preview header worked
+only via hand-applied fallbacks). The normalizer now reads Sietch keys, and a
+single `mailForwardHeader()` choke point emits the Outlook block (rule + From
+/ Sent long-form / To / Subject, `Name <email>` when both known) in both
+compose-forward and inline-forward, replacing the dashed label. Reply lines
+populate via the same fix. `tests/test_mail_forward_header.mjs` (4 tests,
+discriminating). Cache-bust app 3.7.40→3.7.41.
+
 ## Invoice/COC prefill uses project fields via shared helper (2026-10-26)
 
 Same GC-contact bug as the photo report: invoice and COC forms took Customer

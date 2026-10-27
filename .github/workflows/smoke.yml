@@ -166,6 +166,9 @@ jobs:
       - name: Run mail forward quote tests
         run: node --test tests/test_mail_forward_quote.mjs
 
+      - name: Run mail forward header tests
+        run: node --test tests/test_mail_forward_header.mjs
+
       - name: Run presence custom status tests
         run: node --test tests/test_presence_custom_status.mjs
 

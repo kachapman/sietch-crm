@@ -11,6 +11,16 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-26 (Outlook forward header)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+
+- Normalizer learns Sietch row keys; shared `mailForwardHeader()` in both
+  forward paths; reply lines fixed by the same root cause.
+- Tests: 4 node (row shape, 4-line block, guards), fail-old verified.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-10-26 (invoice/COC shared prefill helper)
 
 **Status: DEPLOYED 2026-10-26 as 6809804** (rebuild healthy, handlers intact,
