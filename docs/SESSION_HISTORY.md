@@ -13,7 +13,10 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-27 (reply Telegram + browser ping + read sync)
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying (incl. bot restart).**
+**Status: DEPLOYED 2026-10-27 as ecd70bb** (rebuild healthy, handlers intact,
+zero non-scanner errors, live bundle 3.7.42, bot restarted and polling).
+The two asyncio ERROR lines at restart are shutdown noise from the old
+process, not the new one.
 
 - Dispatcher `reply_tagged` in both formatters; bot mark-read on 201;
   frontend Notification + title flash + chime with mute toggle;
