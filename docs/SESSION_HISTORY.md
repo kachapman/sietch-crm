@@ -13,7 +13,9 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-26 (Outlook forward header)
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+**Status: DEPLOYED 2026-10-26 as e378405** (rebuild healthy, handlers intact,
+zero non-scanner errors, live bundle 3.7.41). Fresh tab → forward shows the
+Outlook From/Sent/To/Subject block.
 
 - Normalizer learns Sietch row keys; shared `mailForwardHeader()` in both
   forward paths; reply lines fixed by the same root cause.
