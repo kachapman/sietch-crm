@@ -2684,6 +2684,79 @@ def _ics_dump(events: list[dict]) -> str:
     return "\r\n".join(lines) + "\r\n"
 
 
+def _store_note_image_to_gallery(opp_id: int, filename: str, data: bytes,
+                              mime_type: str, uploaded_by: int | None) -> int | None:
+    """Copy an explicit note-attachment image into project_photos (gallery).
+
+    Same pipeline as the photo upload endpoint (EXIF + JPEG thumbnail +
+    content-hash dedup): the same bytes on two notes yield one gallery row.
+    Returns the photo id, or None for non-images / failures. Failures are
+    logged, never raised — a gallery miss must not fail the note save.
+    """
+    try:
+        if not (mime_type or "").startswith("image/"):
+            return None
+        if not Image:
+            logger.warning("Gallery mirror skipped (Pillow unavailable): %s", filename)
+            return None
+        import hashlib as _hashlib
+        content_hash = _hashlib.md5(data).hexdigest()
+        existing = db.query_one(
+            "SELECT id FROM project_photos WHERE opportunity_id = %s AND content_hash = %s AND is_deleted = FALSE",
+            (opp_id, content_hash),
+        )
+        if existing:
+            return existing["id"]
+        safe_name = re.sub(r'[^\w.\-]', '_', filename or "") or "image.jpg"
+        opp_dir = PHOTO_STORAGE_PATH / str(opp_id)
+        opp_dir.mkdir(parents=True, exist_ok=True)
+        unique_name = f"{int(time.time())}_{safe_name}"
+        file_path = opp_dir / unique_name
+        file_path.write_bytes(data)
+        exif_data = None
+        thumb_path = None
+        try:
+            with Image.open(io.BytesIO(data)) as img:
+                exif_data = _extract_exif(img)
+                thumb_name = f"thumb_{unique_name}"
+                thumb_path = opp_dir / thumb_name
+                img.thumbnail((400, 400), Image.Resampling.LANCZOS)
+                if img.mode in ("RGBA", "P"):
+                    bg = Image.new("RGB", img.size, (255, 255, 255))
+                    if img.mode == "P":
+                        img = img.convert("RGBA")
+                    bg.paste(img, mask=img.split()[3])
+                    img = bg
+                elif img.mode != "RGB":
+                    img = img.convert("RGB")
+                img.save(thumb_path, "JPEG", quality=85)
+        except Exception as exc:
+            logger.warning("Gallery mirror thumbnail/EXIF failed for %s: %s", filename, exc)
+            thumb_path = None
+        try:
+            photo_id = db.insert_returning(
+                """INSERT INTO project_photos (opportunity_id, filename, file_path, file_size, mime_type, exif_data, thumbnail_path, uploaded_by, content_hash)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                (opp_id, filename, str(file_path.relative_to(ROOT)), len(data), mime_type,
+                 json.dumps(exif_data) if exif_data else None,
+                 str(thumb_path.relative_to(ROOT)) if thumb_path else None,
+                 uploaded_by, content_hash),
+            )
+        except Exception as exc:
+            try:
+                file_path.unlink(missing_ok=True)
+                if thumb_path:
+                    thumb_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            logger.warning("Gallery mirror DB insert failed for %s: %s", filename, exc)
+            return None
+        return photo_id
+    except Exception:
+        logger.exception("Gallery mirror failed for %s", filename)
+        return None
+
+
 def _photo_report_header_identity(template: dict | None, brand_name: str) -> tuple[list, str]:
     """Resolve the PDF header identity: template values win, branding fallback.
 
@@ -6178,6 +6251,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                    VALUES (%s, %s, %s, %s, %s, %s)""",
                 (event_id, doc[1], doc[2], doc[3], doc[4], doc[5]),
             )
+            # Gallery mirror: an explicit image attachment on a note also
+            # lists in the Photos tab (live request 2026-10-27). Copy bytes
+            # into project_photos (independent lifecycle, deduped); scoping
+            # is the sig/logo protection — only this explicit-attachment path
+            # mirrors, never mail/scanner/sync.
+            try:
+                _d_mime = doc[4] or ""
+                if _d_mime.startswith("image/"):
+                    _d_full = ROOT / doc[2]
+                    if _d_full.is_file():
+                        _store_note_image_to_gallery(
+                            opp_id, doc[1], _d_full.read_bytes(), _d_mime, doc[5])
+            except Exception:
+                logger.exception("Gallery mirror failed for note attachment %s", doc[1])
         _json_response(self, 201, {"id": event_id, "ok": True})
 
     def _handle_history_event_delete(self, event_id: int) -> None:

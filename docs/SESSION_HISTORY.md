@@ -11,6 +11,16 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-27 (gallery mirror + rename + history editor links)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+
+- `_store_note_image_to_gallery` at the fileIds link point; inline rename in
+  the shared tab builder; twin-aware history links.
+- Tests: 4 python + 5 node, both fail-old verified (2F + 5F).
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-10-27 (reply Telegram + browser ping + read sync)
 
 **Status: DEPLOYED 2026-10-27 as ecd70bb** (rebuild healthy, handlers intact,

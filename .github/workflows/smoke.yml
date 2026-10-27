@@ -184,6 +184,12 @@ jobs:
       - name: Run reply_tagged Telegram tests
         run: python3 tests/test_reply_tagged_telegram.py -v
 
+      - name: Run note gallery mirror tests
+        run: python3 tests/test_note_gallery_mirror.py -v
+
+      - name: Run docs rename + history editor-link tests
+        run: node --test tests/test_docs_rename_links.mjs
+
       - name: Run upload progress tests
         run: node --test tests/test_upload_progress.mjs
 

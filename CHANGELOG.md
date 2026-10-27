@@ -2,6 +2,20 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Note images mirror to gallery + docs Rename + history opens editor (2026-10-27)
+
+Three-item batch. (1) Paperclip image attachments on a note now copy into
+`project_photos` (same EXIF/thumbnail/hash-dedup pipeline as uploads) at the
+note-link point — explicit attachments only, so mail/scanner imports can never
+clog the gallery. (2) Rename joins the shared project-tab Documents Actions
+menu (single-selection inline rename via existing PATCH; covers regular,
+search, and bookmark modals). (3) History note attachments with a
+project-documents twin now open `/doc-editor.html` like the Documents tab
+(which falls back to download for unsupported types); untwinned files keep
+direct download. `tests/test_note_gallery_mirror.py` (4) +
+`tests/test_docs_rename_links.mjs` (5), both discriminating. Cache-bust app
+3.7.42→3.7.43. No migration, no bot restart.
+
 ## Reply notifications reach Telegram + browser ping + Telegram-read sync (2026-10-27)
 
 Three notification gaps closed. (1) `reply_tagged` rows reached the drawer but

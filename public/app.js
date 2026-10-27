@@ -26582,6 +26582,7 @@ function extractHistoryAttachments(ev) {
       filename: filename,
       title: String(title || "Attachment").trim(),
       url: url ? (url.startsWith("/") ? url : portalAbsoluteUrl(url)) : "",
+      projectDocumentsId: raw.projectDocumentsId ?? raw.project_documents_id ?? raw.ProjectDocumentsId ?? null,
     };
     const key = attachmentDedupeKey(file);
     if (!key || seen.has(key)) return;
@@ -27797,9 +27798,18 @@ function renderHistoryAttachmentsAside(parent, attachments) {
     }
     const a = document.createElement("a");
     a.className = "opp-preview-attachment-link";
-    a.href = url || "#";
-    a.download = filename;
-    a.rel = "noopener noreferrer";
+    const twinId = file.projectDocumentsId ?? file.project_documents_id ?? null;
+    if (twinId) {
+      // Same behavior as the Documents tab: open in the editor (which falls
+      // back to download for unsupported types), not a forced download.
+      a.href = `/doc-editor.html?id=${encodeURIComponent(twinId)}`;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+    } else {
+      a.href = url || "#";
+      a.download = filename;
+      a.rel = "noopener noreferrer";
+    }
     a.title = filename;
     a.textContent = filename;
     aside.appendChild(a);
@@ -40221,6 +40231,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
   const previewDocsState = {
     selected: new Set(),
     documents: documents || [],
+    renamingId: null,
     sort: "recent",
     previewOpen: false,
     previewDocId: null,
@@ -40341,6 +40352,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
   actionsSelect.innerHTML = `
     <option value="">Actions…</option>
     <option value="download">Download</option>
+    <option value="rename">Rename</option>
     <option value="move">Move to…</option>
     <option value="copy">Copy to…</option>
     <option value="delete">Delete</option>
@@ -40512,8 +40524,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
   function renderPreviewDocsList() {
     const list = docsContent.querySelector(".opp-preview-docs-list");
     if (!list) return;
-    const { selected } = previewDocsState;
-    // Sort documents based on current sort mode
+    const { selected } = previewDocsState;    // Sort documents based on current sort mode
     const ds = [...previewDocsState.documents].sort((a, b) => {
       switch (previewDocsState.sort) {
         case "recent": return new Date(b.uploadedAt || 0) - new Date(a.uploadedAt || 0);
@@ -40555,14 +40566,31 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
 
       const titleWrap = document.createElement("div");
       titleWrap.className = "opp-doc-title-wrap";
-      const titleLink = document.createElement("a");
-      titleLink.className = "opp-doc-title";
-      titleLink.href = docId ? `/doc-editor.html?id=${docId}` : "#";
-      titleLink.target = "_blank";
-      titleLink.rel = "noopener noreferrer";
-      titleLink.textContent = title;
-      titleLink.title = title;
-      titleWrap.appendChild(titleLink);
+      if (previewDocsState.renamingId != null && String(previewDocsState.renamingId) === String(docId)) {
+        const renameInput = document.createElement("input");
+        renameInput.type = "text";
+        renameInput.className = "opp-doc-title-input";
+        renameInput.value = title;
+        renameInput.setAttribute("aria-label", `Rename ${title}`);
+        titleWrap.appendChild(renameInput);
+        // Focus after paint so the row exists in layout.
+        setTimeout(() => { try { renameInput.focus(); renameInput.select(); } catch {} }, 0);
+        renameInput.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter") commitPreviewDocRename(docId, renameInput.value);
+          else if (ev.key === "Escape") { previewDocsState.renamingId = null; renderPreviewDocsList(); }
+          ev.stopPropagation();
+        });
+        renameInput.addEventListener("blur", () => commitPreviewDocRename(docId, renameInput.value));
+      } else {
+        const titleLink = document.createElement("a");
+        titleLink.className = "opp-doc-title";
+        titleLink.href = docId ? `/doc-editor.html?id=${docId}` : "#";
+        titleLink.target = "_blank";
+        titleLink.rel = "noopener noreferrer";
+        titleLink.textContent = title;
+        titleLink.title = title;
+        titleWrap.appendChild(titleLink);
+      }
       li.appendChild(titleWrap);
 
       const meta = document.createElement("div");
@@ -40640,6 +40668,17 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     if (!action) return;
     const ids = Array.from(previewDocsState.selected);
     if (!ids.length) return;
+    if (action === "rename") {
+      // Single-file only: prompt-style inline rename in the row (mirrors the
+      // standalone Documents modal pattern). Multi-select rename is refused
+      // loudly rather than renaming only the first.
+      if (ids.length !== 1) {
+        showToast(ids.length === 0 ? "Select one document to rename" : "Rename works on one document at a time", true);
+        return;
+      }
+      startPreviewDocRename(ids[0]);
+      return;
+    }
     if (action === "download") {
       if (ids.length === 1) {
         // Single file: instant direct download, unchanged behavior.
@@ -40686,6 +40725,42 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
       deleteSelectedDocs(ids);
     }
   });
+
+  // Inline rename for the project-tab Documents list (mirrors the
+  // standalone Documents modal startRenameDoc/confirmRenameDoc pattern).
+  // Single-selection only; the Actions handler enforces that.
+  let _previewRenameCommitting = false;
+  function startPreviewDocRename(docId) {
+    previewDocsState.renamingId = docId;
+    renderPreviewDocsList();
+  }
+  async function commitPreviewDocRename(docId, newTitle) {
+    if (_previewRenameCommitting) return;
+    const title = (newTitle || "").trim();
+    if (!title) { showToast("File name is required", true); return; }
+    const cur = previewDocsState.documents.find(d => String(d.id ?? d.ID ?? "") === String(docId));
+    const curTitle = cur ? (cur.title || cur.Title || "") : "";
+    if (title === curTitle) {
+      previewDocsState.renamingId = null;
+      renderPreviewDocsList();
+      return;
+    }
+    _previewRenameCommitting = true;
+    try {
+      await api(`/api/v2/documents/${docId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      previewDocsState.renamingId = null;
+      showToast("Document renamed");
+      await refreshDocs();
+    } catch (err) {
+      showToast(err.message || "Rename failed", true);
+    } finally {
+      _previewRenameCommitting = false;
+    }
+  }
 
   async function deleteSelectedDocs(ids) {
     if (!confirm(`Delete ${ids.length} document${ids.length > 1 ? "s" : ""}?`)) return;
