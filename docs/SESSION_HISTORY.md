@@ -13,7 +13,10 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-27 (gallery mirror + rename + history editor links)
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+**Status: DEPLOYED 2026-10-27 as 0008822** (rebuild healthy, helper + handlers
+confirmed in container, zero non-scanner errors, live bundle 3.7.43). Fresh
+tab → paperclip photo lists in Photos; Actions… has Rename; note files open
+the editor.
 
 - `_store_note_image_to_gallery` at the fileIds link point; inline rename in
   the shared tab builder; twin-aware history links.
