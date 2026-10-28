@@ -1459,6 +1459,67 @@ def _add_tag_to_message(message_id: int, tag_title: str, assigned_by: int | None
         return False
 
 
+# Mirrors server.py:EMAIL_HISTORY_CATEGORY_ID. The scanner cannot import
+# server (server imports this module), so the two constants must be kept in
+# sync by hand. Both are the "Email" history category.
+EMAIL_HISTORY_CATEGORY_ID = 13
+
+
+def create_email_history_snapshot(opp_id: int, message_id: int, user_id: int | None = None) -> bool:
+    """Create the project-timeline event for a linked email (idempotent).
+
+    Shared by the server's manual-link path and every scanner auto-link path
+    (live gap 2026-10-28: auto-links wrote only mail_deal_links, so linked
+    mail never appeared in project history). Returns True when an event now
+    exists (created or already present).
+    """
+    try:
+        existing = db.query_one(
+            "SELECT id FROM history_events WHERE opportunity_id = %s AND content LIKE %s",
+            (opp_id, f'%"message_id": {int(message_id)}%'),
+        )
+        if existing:
+            return True
+        msg = db.query_one(
+            "SELECT subject, from_addr, to_addr, cc_addr, body_html, body_text, date_received FROM mail_messages WHERE id = %s",
+            (message_id,),
+        )
+        if not msg:
+            return False
+        try:
+            att_rows = db.query_dicts(
+                "SELECT filename, size_bytes, mime_type FROM mail_attachments WHERE message_id = %s",
+                (message_id,),
+            )
+            att_snapshot = [
+                {"filename": a["filename"], "size_bytes": a["size_bytes"] or 0, "mime_type": a["mime_type"] or ""}
+                for a in att_rows
+            ]
+        except Exception:
+            att_snapshot = []
+        snapshot = {
+            "type": "email_snapshot",
+            "message_id": message_id,
+            "from": msg["from_addr"] or "",
+            "to": msg["to_addr"] or "",
+            "cc": msg["cc_addr"] or "",
+            "subject": msg["subject"] or "",
+            "date_sent": str(msg["date_received"]) if msg["date_received"] else "",
+            "body_html": msg["body_html"] or "",
+            "body_text": msg["body_text"] or "",
+            "attachments": att_snapshot,
+        }
+        db.execute(
+            "INSERT INTO history_events (opportunity_id, category_id, content, created_by) "
+            "VALUES (%s, %s, %s, %s)",
+            (opp_id, EMAIL_HISTORY_CATEGORY_ID, json.dumps(snapshot), user_id),
+        )
+        return True
+    except Exception:
+        logger.exception("Failed to create history event for email %d", message_id)
+        return False
+
+
 def _post_note_to_deal(opp_id: int, content: str, notify_users: list[str] | None = None, category_id: int = 16) -> bool:
     try:
         db.execute(
@@ -1805,6 +1866,9 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
         else:
             linked = _link_email_to_deal(msg_id, classification["linked_deal_id"])
             log_entry["deal_linked"] = linked
+            if linked:
+                log_entry["history_created"] = create_email_history_snapshot(
+                    classification["linked_deal_id"], msg_id)
 
     # --- Auto-link by content (secondary classifier) ---
     if (classification["linked_deal_id"] is None
@@ -1828,6 +1892,9 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
             else:
                 linked = _link_email_to_deal(msg_id, best["deal_id"])
                 log_entry["deal_linked"] = linked
+                if linked:
+                    log_entry["history_created"] = create_email_history_snapshot(
+                        best["deal_id"], msg_id)
                 classification["linked_deal_id"] = best["deal_id"]
         elif not classification["linked_deal_id"]:
             log_entry["unlinked_reason"] = "No unique identifier found"

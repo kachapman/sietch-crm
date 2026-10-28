@@ -32574,7 +32574,7 @@ function openAdminConsoleModal() {
     // Load saved credentials on tab open
     loadSyncCredentials();
     // Save credentials when any sync button is clicked
-    ["sync-test-btn", "sync-deal-tags-btn", "sync-deals-btn", "sync-tags-btn", "sync-tasks-btn", "sync-email-bodies-btn", "sync-full-btn"].forEach(id => {
+    ["sync-test-btn", "sync-deal-tags-btn", "sync-backfill-email-history-btn", "sync-deals-btn", "sync-tags-btn", "sync-tasks-btn", "sync-email-bodies-btn", "sync-full-btn"].forEach(id => {
       $(`#${id}`)?.addEventListener("click", saveSyncCredentials);
     });
     function renderSyncLog(log) {
@@ -32629,6 +32629,37 @@ function openAdminConsoleModal() {
         clearInterval(pollInterval);
         if (data.log) renderSyncLog(data.log);
         showSyncResult({ message: `Deals updated: ${data.deals_updated || 0} | Tags: ${data.tags_linked || 0} | Custom fields: ${data.custom_fields || 0}` });
+      } catch (e) {
+        if (e.status === 409) {
+          showSyncProgress("Sync already running — showing live log...");
+          return;
+        }
+        clearInterval(pollInterval);
+        showSyncError(e.message);
+        try { const s = await api("/api/v2/admin/sync/status"); if (s.log) renderSyncLog(s.log); } catch {}
+      }
+    });
+
+    $("#sync-backfill-email-history-btn")?.addEventListener("click", async () => {
+      showSyncProgress("Backfilling project history for linked emails (one-time repair)...");
+      let lastLogLen = 0;
+      const pollInterval = setInterval(async () => {
+        try {
+          const status = await api("/api/v2/admin/sync/status");
+          if (status.log && status.log.length > lastLogLen) {
+            renderSyncLog(status.log);
+            lastLogLen = status.log.length;
+          }
+          if (!status.running && lastLogLen > 0) {
+            clearInterval(pollInterval);
+          }
+        } catch (e) { console.error("Sync poll error:", e); }
+      }, 3000);
+      try {
+        const data = await api("/api/v2/admin/sync/backfill-email-history", { method: "POST", body: JSON.stringify({}) });
+        clearInterval(pollInterval);
+        if (data.log) renderSyncLog(data.log);
+        showSyncResult({ message: `Email history backfill: ${data.created || 0} created, ${data.skipped || 0} skipped (${data.missing || 0} were missing)` });
       } catch (e) {
         if (e.status === 409) {
           showSyncProgress("Sync already running — showing live log...");

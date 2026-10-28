@@ -2,6 +2,16 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Auto-linked mail now reaches project history + backfill (2026-10-26)
+
+Auto-links by `[#id]`/content wrote only `mail_deal_links` — linked mail
+showed in the email modal but never in project timelines (181/236 affected).
+New shared `create_email_history_snapshot` in the scanner (the server's manual
+path delegates to it); every real auto-link creates the event; new admin
+"Backfill Email History" button repairs the backlog (idempotent).
+`tests/test_mail_link_history.py` (9 tests, discriminating). Cache-bust app
+3.7.43→3.7.44. No migration, no bot restart.
+
 ## Document rename no longer reverts + editor tab shows file name (2026-10-28)
 
 A Sietch-side rename stuck, then "went back" after opening the file. Cause:

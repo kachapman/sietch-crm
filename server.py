@@ -4376,6 +4376,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             self._handle_sync_pull_deal_tags()
             return
+        if api_path == "/api/v2/admin/sync/backfill-email-history" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_sync_backfill_email_history()
+            return
         if api_path == "/api/v2/admin/sync/pull-deals" and method == "POST":
             user = _require_admin(self)
             if not user:
@@ -11817,6 +11823,57 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"ok": True, "created": count, "linked": linked_count, "total": len(all_tasks), "log": list(_sync_log)})
         except Exception as e:
             _append_sync_log("error", f"Tasks sync failed: {e}")
+            _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
+        finally:
+            _sync_running = False
+
+    def _handle_sync_backfill_email_history(self) -> None:
+        """One-time repair: create history snapshots for linked mail missing them.
+
+        Live gap 2026-10-28: 181 of 236 linked mails (mostly scanner
+        auto-links) have a mail_deal_links row but no email_snapshot history
+        event, so they never appear in project timelines. Idempotent —
+        re-running only fills what is still missing.
+        """
+        global _sync_log, _sync_running
+        if _sync_running:
+            _json_response(self, 409, {"error": "Sync already running"})
+            return
+        _sync_running = True
+        _sync_log.clear()
+        try:
+            _append_sync_log("info", "Scanning linked mails missing history snapshots...")
+            rows = db.query_dicts(
+                """SELECT l.message_id, l.opportunity_id FROM mail_deal_links l
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM history_events he
+                       WHERE he.opportunity_id = l.opportunity_id
+                         AND he.content LIKE '%"message_id": ' || l.message_id || '%'
+                   )
+                   ORDER BY l.message_id"""
+            )
+            _append_sync_log("info", f"Found {len(rows)} linked mails missing history")
+            created = 0
+            skipped = 0
+            if mail_scanner is not None and hasattr(mail_scanner, "create_email_history_snapshot"):
+                for r in rows:
+                    try:
+                        if mail_scanner.create_email_history_snapshot(r["opportunity_id"], r["message_id"]):
+                            created += 1
+                        else:
+                            skipped += 1
+                    except Exception as e:
+                        skipped += 1
+                        _append_sync_log("warn", f"Backfill failed for message {r['message_id']}: {e}")
+                    if (created + skipped) % 50 == 0:
+                        _append_sync_log("info", f"Progress: {created} created, {skipped} skipped...")
+            else:
+                _append_sync_log("error", "Mail scanner module unavailable — cannot backfill")
+            _append_sync_log("info", f"Email history backfill complete: {created} created, {skipped} skipped")
+            _json_response(self, 200, {"ok": True, "created": created, "skipped": skipped,
+                                       "missing": len(rows), "log": list(_sync_log)})
+        except Exception as e:
+            _append_sync_log("error", f"Email history backfill failed: {e}")
             _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
         finally:
             _sync_running = False
@@ -19416,52 +19473,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         Mail-link callers must use this on BOTH fresh and already-linked
         paths: link rows can predate the event (older builds, send flow),
         and without the event nothing appears in project history.
+
+        Delegates to the scanner's shared helper so manual links and
+        auto-links share one implementation (no drift).
         """
         try:
-            existing = db.query_one(
-                "SELECT id FROM history_events WHERE opportunity_id = %s AND content LIKE %s",
-                (opp_id, f'%"message_id": {int(message_id)}%'),
-            )
-            if existing:
-                return True
-            msg = db.query_one(
-                "SELECT subject, from_addr, to_addr, cc_addr, body_html, body_text, date_received FROM mail_messages WHERE id = %s",
-                (message_id,),
-            )
-            if not msg:
-                return False
-            try:
-                att_rows = db.query_dicts(
-                    "SELECT filename, size_bytes, mime_type FROM mail_attachments WHERE message_id = %s",
-                    (message_id,),
-                )
-                att_snapshot = [
-                    {"filename": a["filename"], "size_bytes": a["size_bytes"] or 0, "mime_type": a["mime_type"] or ""}
-                    for a in att_rows
-                ]
-            except Exception:
-                att_snapshot = []
-            snapshot = {
-                "type": "email_snapshot",
-                "message_id": message_id,
-                "from": msg["from_addr"] or "",
-                "to": msg["to_addr"] or "",
-                "cc": msg["cc_addr"] or "",
-                "subject": msg["subject"] or "",
-                "date_sent": str(msg["date_received"]) if msg["date_received"] else "",
-                "body_html": msg["body_html"] or "",
-                "body_text": msg["body_text"] or "",
-                "attachments": att_snapshot,
-            }
-            db.execute(
-                "INSERT INTO history_events (opportunity_id, category_id, content, created_by) "
-                "VALUES (%s, %s, %s, %s)",
-                (opp_id, EMAIL_HISTORY_CATEGORY_ID, json.dumps(snapshot), user_id),
-            )
-            return True
+            if mail_scanner is not None and hasattr(mail_scanner, "create_email_history_snapshot"):
+                return bool(mail_scanner.create_email_history_snapshot(opp_id, message_id, user_id))
         except Exception:
-            logger.exception("Failed to create history event for email %d", message_id)
-            return False
+            logger.exception("Shared email snapshot helper failed for email %d", message_id)
+        return False
 
     def _handle_mail_link(self, message_id: int) -> None:
         try:

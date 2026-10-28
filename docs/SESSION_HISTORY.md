@@ -11,6 +11,18 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-26 (auto-link history snapshots + backfill)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying, then backfill.**
+
+- Shared helper in scanner (circular-import safe); server delegates; both
+  auto-link sites create events; admin backfill endpoint + button.
+- Tests: 9 (helper, autolink incl. dry-run, backfill, delegate, UI),
+  fail-old verified. Deploy first, then run Backfill Email History from
+  Admin → OnlyOffice Import and confirm ~181 created.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-10-28 (rename revert fix + editor tab title)
 
 **Status: DEPLOYED 2026-10-28 as 1442681** (rebuild healthy, zero non-scanner

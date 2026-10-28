@@ -160,6 +160,9 @@ jobs:
       - name: Run linked email attachment tests
         run: python3 tests/test_linked_email_attachments.py -v
 
+      - name: Run mail link history tests
+        run: python3 tests/test_mail_link_history.py -v
+
       - name: Run incremental mail sync tests
         run: python3 tests/test_mail_incremental.py -v
 
