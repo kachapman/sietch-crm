@@ -13,7 +13,9 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-26 (backfill dry-run crash fix)
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying, then user re-runs.**
+**Status: DEPLOYED 2026-10-26 as e67ffe2** (rebuild healthy, zero non-scanner
+errors). Re-run Backfill Email History from the button — dry run lists
+subjects, confirm writes. Nothing was ever written by the crashed run.
 
 - LIKE→strpos in backfill existence test; comment + source-guard test;
   other literal-% queries audited safe (no params). My bug, my fix.
