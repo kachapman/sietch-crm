@@ -11,6 +11,17 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-26 (backfill dry-run crash fix)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying, then user re-runs.**
+
+- LIKE→strpos in backfill existence test; comment + source-guard test;
+  other literal-% queries audited safe (no params). My bug, my fix.
+- Tests: 13 (was 12), fail-old verified. Deploy, then user re-runs the
+  dry run from the button (nothing was ever written — safe to retry).
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-10-26 (backfill dry-run + 9-day scope)
 
 **Status: DEPLOYED 2026-10-26 as f3767ed** (rebuild healthy, handler confirmed

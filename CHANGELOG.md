@@ -2,6 +2,16 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Backfill dry-run crash fixed (strpos, no literal %) (2026-10-26)
+
+The dry run 500'd with "tuple index out of range": the backfill SQL mixed a
+literal `%` (LIKE wildcards) with the new `%s` day-window parameter, and
+psycopg2 miscounted placeholders (reproduced exactly against dev Postgres).
+The existence test now uses `strpos()` — identical semantics on the TEXT
+column, zero `%` in the SQL — with an explanatory comment and a source-guard
+test. Audited: all other literal-`%` queries take no params and are safe.
+Server-only → rebuild. Re-run Backfill Email History afterward.
+
 ## Backfill dry-run + 9-day scope with confirm gate (2026-10-26)
 
 The Backfill Email History button now dry-runs first (reports subjects, zero

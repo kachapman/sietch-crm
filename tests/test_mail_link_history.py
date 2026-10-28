@@ -289,5 +289,25 @@ class TestUiWiring(unittest.TestCase):
         self.assertIn("sync-backfill-email-history-btn", idx)
 
 
+class TestBackfillSqlPlaceholders(unittest.TestCase):
+    def test_no_literal_percent_in_backfill_query(self):
+        # Live crash 2026-10-28: the backfill SQL mixed a literal % (LIKE
+        # wildcards) with a %s parameter; psycopg2 then miscounted
+        # placeholders ("tuple index out of range"). The existence test must
+        # use strpos() so the only % in the SQL is the placeholder itself.
+        import re
+        src = open("/home/chapman-server/Projects/new-crm/server.py", encoding="utf-8").read()
+        at = src.index("def _handle_sync_backfill_email_history")
+        region = src[at:at + 8000]
+        self.assertIn("strpos(", region)
+        # Check the SQL string itself, not comments (which may mention %
+        # freely when explaining this exact rule).
+        m = re.search(r'sql = """(.*?)"""', region, re.S)
+        self.assertIsNotNone(m, "backfill SQL string not found")
+        bare = [ln for ln in m.group(1).splitlines()
+                if re.search(r"(?<!%)%(?!s)", ln)]
+        self.assertEqual(bare, [], f"literal % in backfill SQL: {bare[:3]}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

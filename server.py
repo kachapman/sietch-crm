@@ -11859,6 +11859,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _append_sync_log("info", "DRY RUN — reporting only, zero writes.")
             scope = f" (last {since_days} days)" if since_days > 0 else ""
             _append_sync_log("info", f"Scanning linked mails missing history snapshots{scope}...")
+            # NOTE: the "already has a snapshot" test uses strpos(), NOT LIKE
+            # with literal '%' wildcards. This query also carries a %s
+            # parameter (the day window); psycopg2 then treats every literal %
+            # in the SQL as a placeholder and fails with "tuple index out of
+            # range" (live crash 2026-10-26). strpos avoids % entirely.
             sql = """SELECT l.message_id, l.opportunity_id, m.subject, m.from_addr,
                            m.date_received, o.title AS opp_title
                      FROM mail_deal_links l
@@ -11867,7 +11872,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                      WHERE NOT EXISTS (
                          SELECT 1 FROM history_events he
                          WHERE he.opportunity_id = l.opportunity_id
-                           AND he.content LIKE '%"message_id": ' || l.message_id || '%'
+                           AND strpos(he.content, '"message_id": ' || l.message_id) > 0
                      )"""
             params: list = []
             if since_days > 0:
