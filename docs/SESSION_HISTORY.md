@@ -13,7 +13,10 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-26 (backfill dry-run + 9-day scope)
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying, then user runs it.**
+**Status: DEPLOYED 2026-10-26 as f3767ed** (rebuild healthy, handler confirmed
+in container, zero non-scanner errors, live bundle 3.7.45). Next: Admin →
+OnlyOffice Import → Backfill Email History → review the dry-run subjects →
+confirm. Scoped to last 9 days; nothing written until you confirm.
 
 - Endpoint: `dry_run` + `since_days`, per-item subjects in response/log.
 - Button: dry-run → confirm dialog → real run, scoped to 9 days.
