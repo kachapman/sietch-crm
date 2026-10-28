@@ -11834,6 +11834,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         auto-links) have a mail_deal_links row but no email_snapshot history
         event, so they never appear in project timelines. Idempotent —
         re-running only fills what is still missing.
+
+        Optional payload: {"dry_run": true, "since_days": N} — reports what
+        would be created (with subjects) and writes nothing; since_days scopes
+        to mail received in the last N days.
         """
         global _sync_log, _sync_running
         if _sync_running:
@@ -11842,20 +11846,52 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         _sync_running = True
         _sync_log.clear()
         try:
-            _append_sync_log("info", "Scanning linked mails missing history snapshots...")
-            rows = db.query_dicts(
-                """SELECT l.message_id, l.opportunity_id FROM mail_deal_links l
-                   WHERE NOT EXISTS (
-                       SELECT 1 FROM history_events he
-                       WHERE he.opportunity_id = l.opportunity_id
-                         AND he.content LIKE '%"message_id": ' || l.message_id || '%'
-                   )
-                   ORDER BY l.message_id"""
-            )
-            _append_sync_log("info", f"Found {len(rows)} linked mails missing history")
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except Exception:
+                payload = {}
+            dry_run = bool(payload.get("dry_run"))
+            try:
+                since_days = int(payload.get("since_days") or 0)
+            except (TypeError, ValueError):
+                since_days = 0
+            if dry_run:
+                _append_sync_log("info", "DRY RUN — reporting only, zero writes.")
+            scope = f" (last {since_days} days)" if since_days > 0 else ""
+            _append_sync_log("info", f"Scanning linked mails missing history snapshots{scope}...")
+            sql = """SELECT l.message_id, l.opportunity_id, m.subject, m.from_addr,
+                           m.date_received, o.title AS opp_title
+                     FROM mail_deal_links l
+                     JOIN mail_messages m ON m.id = l.message_id
+                     JOIN opportunities o ON o.id = l.opportunity_id
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM history_events he
+                         WHERE he.opportunity_id = l.opportunity_id
+                           AND he.content LIKE '%"message_id": ' || l.message_id || '%'
+                     )"""
+            params: list = []
+            if since_days > 0:
+                sql += " AND m.date_received >= NOW() - (%s * INTERVAL '1 day')"
+                params.append(since_days)
+            sql += " ORDER BY l.message_id"
+            rows = db.query_dicts(sql, tuple(params))
+            _append_sync_log("info", f"Found {len(rows)} linked mails missing history{scope}")
+            items = [{
+                "message_id": r["message_id"], "opportunity_id": r["opportunity_id"],
+                "subject": r.get("subject") or "", "from": r.get("from_addr") or "",
+                "date": str(r.get("date_received") or ""),
+                "project": r.get("opp_title") or "",
+            } for r in rows]
+            for it in items:
+                _append_sync_log(
+                    "info",
+                    f"{'DRY' if dry_run else 'QUEUED'} '{(it['subject'] or '(no subject)')[:80]}' "
+                    f"-> {it['project'] or ('#' + str(it['opportunity_id']))}")
             created = 0
             skipped = 0
-            if mail_scanner is not None and hasattr(mail_scanner, "create_email_history_snapshot"):
+            if dry_run:
+                _append_sync_log("info", f"Dry run complete: {len(rows)} would be created, 0 written")
+            elif mail_scanner is not None and hasattr(mail_scanner, "create_email_history_snapshot"):
                 for r in rows:
                     try:
                         if mail_scanner.create_email_history_snapshot(r["opportunity_id"], r["message_id"]):
@@ -11867,11 +11903,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         _append_sync_log("warn", f"Backfill failed for message {r['message_id']}: {e}")
                     if (created + skipped) % 50 == 0:
                         _append_sync_log("info", f"Progress: {created} created, {skipped} skipped...")
+                _append_sync_log("info", f"Email history backfill complete: {created} created, {skipped} skipped")
             else:
                 _append_sync_log("error", "Mail scanner module unavailable — cannot backfill")
-            _append_sync_log("info", f"Email history backfill complete: {created} created, {skipped} skipped")
-            _json_response(self, 200, {"ok": True, "created": created, "skipped": skipped,
-                                       "missing": len(rows), "log": list(_sync_log)})
+            _json_response(self, 200, {"ok": True, "dry_run": dry_run, "since_days": since_days,
+                                       "created": created, "skipped": skipped,
+                                       "missing": len(rows), "items": items, "log": list(_sync_log)})
         except Exception as e:
             _append_sync_log("error", f"Email history backfill failed: {e}")
             _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})

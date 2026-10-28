@@ -73,9 +73,13 @@ def _mock_db(msg_row=None, link_exists=False, snapshot_exists=False):
 
     def fake_query_dicts(sql, params=None, *a, **k):
         if "FROM mail_deal_links l" in sql:
-            return [] if snapshot_exists else [
-                {"message_id": 7560, "opportunity_id": 67},
-                {"message_id": 7561, "opportunity_id": 44},
+            if snapshot_exists:
+                return []
+            return [
+                {"message_id": 7560, "opportunity_id": 67, "subject": "Fw: estimate [#67]",
+                 "from_addr": "rob@x.com", "date_received": "2026-10-26 12:00:00", "opp_title": "Robin Appel"},
+                {"message_id": 7561, "opportunity_id": 44, "subject": "Re: Jill Carpenter",
+                 "from_addr": "rob@x.com", "date_received": "2026-10-26 13:00:00", "opp_title": "Jill Carpenter"},
             ]
         if "FROM mail_attachments" in sql:
             return [{"filename": "est.pdf", "size_bytes": 10,
@@ -184,11 +188,14 @@ class TestScannerAutoLinkCreatesHistory(unittest.TestCase):
 
 
 class TestBackfillEndpoint(unittest.TestCase):
-    def _call(self, snapshot_exists):
+    def _call(self, snapshot_exists, body_extra=None):
         import server as _server
         mock_db, writes = _mock_db(msg_row=dict(MSG), snapshot_exists=snapshot_exists)
         responses = []
+        body = {"dry_run": False}
+        body.update(body_extra or {})
         with patch.object(_server, "_require_admin", lambda h: ADMIN), \
+            patch.object(_server, "_read_body", lambda h: json.dumps(body).encode()), \
             patch.object(_server, "_json_response", lambda h, s, b: responses.append((s, b))), \
             patch.object(_server, "db", mock_db), \
             patch.object(_server, "logger"):
@@ -212,6 +219,51 @@ class TestBackfillEndpoint(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body["missing"], 0)
         self.assertEqual(body["created"], 0)
+
+    def test_dry_run_reports_without_writing(self):
+        (status, body), writes = self._call(snapshot_exists=False, body_extra={"dry_run": True})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["dry_run"])
+        self.assertEqual(body["missing"], 2)
+        self.assertEqual(body["created"], 0)
+        self.assertEqual(len(body["items"]), 2)
+        self.assertIn("Fw: estimate", body["items"][0]["subject"])
+        self.assertEqual([w for w in writes if w[0].startswith("INSERT INTO history_events")], [])
+
+    def test_since_days_scopes_the_query(self):
+        import server as _server
+        seen_sql = []
+        mock_db, _ = _mock_db(msg_row=dict(MSG))
+        orig_dicts = mock_db.query_dicts.side_effect
+
+        def spy_dicts(sql, params=None, *a, **k):
+            seen_sql.append((sql, params))
+            return orig_dicts(sql, params, *a, **k)
+
+        mock_db.query_dicts.side_effect = spy_dicts
+        responses = []
+        with patch.object(_server, "_require_admin", lambda h: ADMIN), \
+            patch.object(_server, "_read_body", lambda h: json.dumps({"dry_run": True, "since_days": 9}).encode()), \
+            patch.object(_server, "_json_response", lambda h, s, b: responses.append((s, b))), \
+            patch.object(_server, "db", mock_db), \
+            patch.object(_server, "logger"):
+            import scanner.mail_scanner as ms
+            with patch.object(_server, "mail_scanner", ms):
+                with patch.object(ms, "db", mock_db), patch.object(ms, "logger"):
+                    _server.KanbanHandler._handle_sync_backfill_email_history(Shim())
+        self.assertEqual(responses[0][0], 200)
+        self.assertEqual(responses[0][1]["since_days"], 9)
+        link_sql = [q for q, _ in seen_sql if "FROM mail_deal_links l" in q]
+        self.assertTrue(link_sql)
+        self.assertIn("date_received", link_sql[0])
+
+    def test_button_dry_runs_then_confirms(self):
+        src = open("/home/chapman-server/Projects/new-crm/public/app.js", encoding="utf-8").read()
+        at = src.index('$("#sync-backfill-email-history-btn")')
+        region = src[at:at + 3500]
+        self.assertIn("dry_run", region)
+        self.assertIn("since_days", region)
+        self.assertIn("confirmDialog", region)
 
 
 class TestServerDelegates(unittest.TestCase):

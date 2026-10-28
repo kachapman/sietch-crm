@@ -32641,7 +32641,11 @@ function openAdminConsoleModal() {
     });
 
     $("#sync-backfill-email-history-btn")?.addEventListener("click", async () => {
-      showSyncProgress("Backfilling project history for linked emails (one-time repair)...");
+      // Two-step: dry-run first (reports subjects, writes nothing), then a
+      // confirm dialog gates the real run. Scoped to recent mail by default
+      // so old auto-link noise stays out of timelines.
+      const SINCE_DAYS = 9;
+      showSyncProgress("Checking which linked emails are missing history (dry run, no writes)...");
       let lastLogLen = 0;
       const pollInterval = setInterval(async () => {
         try {
@@ -32656,10 +32660,27 @@ function openAdminConsoleModal() {
         } catch (e) { console.error("Sync poll error:", e); }
       }, 3000);
       try {
-        const data = await api("/api/v2/admin/sync/backfill-email-history", { method: "POST", body: JSON.stringify({}) });
+        const dry = await api("/api/v2/admin/sync/backfill-email-history", { method: "POST", body: JSON.stringify({ dry_run: true, since_days: SINCE_DAYS }) });
         clearInterval(pollInterval);
+        if (dry.log) renderSyncLog(dry.log);
+        const n = dry.missing || 0;
+        if (!n) {
+          showSyncResult({ message: `Email history backfill: nothing missing in the last ${SINCE_DAYS} days.` });
+          return;
+        }
+        const ok = await confirmDialog({
+          title: "Backfill email history?",
+          message: `${n} linked email${n === 1 ? "" : "s"} from the last ${SINCE_DAYS} days ${n === 1 ? "is" : "are"} missing from project timelines (see log above for subjects). Add ${n === 1 ? "it" : "them"} now?`,
+          confirmLabel: `Backfill ${n}`,
+        });
+        if (!ok) {
+          showSyncResult({ message: `Email history backfill cancelled — nothing written.` });
+          return;
+        }
+        showSyncProgress("Backfilling project history for linked emails...");
+        const data = await api("/api/v2/admin/sync/backfill-email-history", { method: "POST", body: JSON.stringify({ dry_run: false, since_days: SINCE_DAYS }) });
         if (data.log) renderSyncLog(data.log);
-        showSyncResult({ message: `Email history backfill: ${data.created || 0} created, ${data.skipped || 0} skipped (${data.missing || 0} were missing)` });
+        showSyncResult({ message: `Email history backfill: ${data.created || 0} created, ${data.skipped || 0} skipped.` });
       } catch (e) {
         if (e.status === 409) {
           showSyncProgress("Sync already running — showing live log...");

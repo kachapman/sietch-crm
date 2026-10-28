@@ -2,6 +2,15 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Backfill dry-run + 9-day scope with confirm gate (2026-10-26)
+
+The Backfill Email History button now dry-runs first (reports subjects, zero
+writes), shows a confirm dialog with the count, and only then writes — scoped
+to the last 9 days by default so old auto-link noise stays out of timelines.
+Endpoint accepts `dry_run` + `since_days` and returns per-item subjects. Tests
+extended (dry-run zero-write, since-scoping, two-step UI wiring). Cache-bust
+app 3.7.44→3.7.45.
+
 ## Auto-linked mail now reaches project history + backfill (2026-10-26)
 
 Auto-links by `[#id]`/content wrote only `mail_deal_links` — linked mail

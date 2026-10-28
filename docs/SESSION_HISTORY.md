@@ -11,6 +11,17 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-26 (backfill dry-run + 9-day scope)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying, then user runs it.**
+
+- Endpoint: `dry_run` + `since_days`, per-item subjects in response/log.
+- Button: dry-run → confirm dialog → real run, scoped to 9 days.
+- Tests: 12 (was 9), fail-old verified. Deploy, then user clicks Backfill
+  Email History, reviews subjects, confirms.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-10-26 (auto-link history snapshots + backfill)
 
 **Status: DEPLOYED 2026-10-26 as 5fc4c56** (rebuild healthy, backfill handler
