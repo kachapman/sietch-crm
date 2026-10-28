@@ -47398,7 +47398,10 @@ function openAdminPREditor(template) {
   $("#pr-admin-color").value = template ? (template.primary_color || "#1a1a1a") : "#1a1a1a";
   $("#pr-admin-maxwidth").value = template ? (template.max_image_width_inches || 6.5) : 6.5;
   $("#pr-admin-align").value = template ? (template.image_alignment || "center") : "center";
-  const lines = template && template.text_logo_lines ? (typeof template.text_logo_lines === "string" ? JSON.parse(template.text_logo_lines) : template.text_logo_lines) : ["Company"];
+  // No default wordmark: an empty field must store NOTHING, not the literal
+  // "Company" (live bug 2026-10-23 — the placeholder was persisted and the
+  // report faithfully printed it).
+  const lines = template && template.text_logo_lines ? (typeof template.text_logo_lines === "string" ? JSON.parse(template.text_logo_lines) : template.text_logo_lines) : [];
   $("#pr-admin-text1").value = lines[0] || "";
   $("#pr-admin-text2").value = lines[1] || "";
   $("#pr-admin-showdate").checked = template ? !!template.show_photo_date : true;
@@ -47427,7 +47430,9 @@ function saveAdminPRTemplate() {
     primary_color: ($("#pr-admin-color") || {}).value,
     max_image_width_inches: parseFloat((($("#pr-admin-maxwidth") || {}).value) || "6.5"),
     image_alignment: ($("#pr-admin-align") || {}).value,
-    text_logo_lines: [($("#pr-admin-text1") || {}).value.trim() || "Company", ($("#pr-admin-text2") || {}).value.trim()],
+    // Only what was actually typed: empty lines are dropped, never replaced
+    // with a placeholder word (live bug 2026-10-23).
+    text_logo_lines: [(($("#pr-admin-text1") || {}).value || "").trim(), (($("#pr-admin-text2") || {}).value || "").trim()].filter(Boolean),
     show_photo_date: ($("#pr-admin-showdate") || {}).checked,
     title_includes_claim: ($("#pr-admin-showclaim") || {}).checked,
     show_captions: ($("#pr-admin-showcaptions") || {}).checked,

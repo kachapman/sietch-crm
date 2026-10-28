@@ -11,6 +11,18 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-23 (photo report wordmark placeholder)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+
+- Write paths default to [] (editor, save, server create, schema + migration
+  039 default-only, no data change); renderer left = stored lines only.
+- Tests: 8 (write paths, migration no-data-change, generator left/right split),
+  fail-old verified (6F). Deploy, then user deletes/recreates templates and
+  regenerates a report.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-10-26 (backfill dry-run crash fix)
 
 **Status: DEPLOYED 2026-10-26 as e67ffe2** (rebuild healthy, zero non-scanner

@@ -205,6 +205,9 @@ jobs:
       - name: Run photo report identity tests
         run: python3 tests/test_photo_report_identity.py -v
 
+      - name: Run photo report no-placeholder tests
+        run: python3 tests/test_photo_report_no_placeholder.py -v
+
       - name: Run photo report prefill tests
         run: node --test tests/test_photo_report_prefill.mjs
 

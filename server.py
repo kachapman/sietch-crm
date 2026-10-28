@@ -2764,6 +2764,12 @@ def _photo_report_header_identity(template: dict | None, brand_name: str) -> tup
     reports printed the literal word "Company" when no template existed or
     its text logo was unconfigured). Empty values render as blank header
     space, which the PDF layout already tolerates.
+
+    LEFT (wordmark) = ONLY what the template stores — never a branding
+    fallback, because the workspace/vendor name does not belong on a
+    customer-facing report and would duplicate the right-hand identity
+    (2026-10-23 decision). RIGHT (company) = template company_name, else
+    branding so an untemplated report still identifies its origin.
     """
     template = template or {}
     lines = template.get("text_logo_lines") or "[]"
@@ -2775,8 +2781,6 @@ def _photo_report_header_identity(template: dict | None, brand_name: str) -> tup
     if not isinstance(lines, list):
         lines = []
     lines = [str(x) for x in lines if x]
-    if not lines and brand_name:
-        lines = [brand_name]
     return lines, (template.get("company_name") or brand_name or "")
 
 
@@ -9449,7 +9453,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             (data["name"], data.get("company_name", ""), data.get("address", ""),
              data.get("city_state_zip", ""), data.get("phone", ""),
              data.get("primary_color", "#1a1a1a"),
-             json.dumps(data.get("text_logo_lines", ["Company"])),
+             json.dumps(data.get("text_logo_lines", [])),
              data.get("text_logo_font_size", 16), data.get("text_logo_tagline_size", 8),
              data.get("max_image_width_inches", 6.5), data.get("image_alignment", "center"),
              data.get("show_photo_date", True), data.get("title_includes_claim", True),

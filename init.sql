@@ -649,7 +649,7 @@ CREATE TABLE IF NOT EXISTS photo_report_templates (
     city_state_zip TEXT NOT NULL DEFAULT '',
     phone TEXT NOT NULL DEFAULT '',
     primary_color TEXT NOT NULL DEFAULT '#1a1a1a',
-    text_logo_lines JSONB DEFAULT '["Company"]',
+    text_logo_lines JSONB DEFAULT '[]',
     text_logo_font_size INTEGER DEFAULT 16,
     text_logo_tagline_size INTEGER DEFAULT 8,
     max_image_width_inches NUMERIC(3,1) DEFAULT 6.5,

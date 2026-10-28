@@ -2,6 +2,18 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Photo report: no invented "Company" wordmark (2026-10-23)
+
+The 10/23 generator fix stopped the renderer from synthesizing "Company", but
+every WRITE path still injected it: editor default, save payload (`|| "Company"`),
+server create default, and the schema column default. Stored rows kept the
+literal and reports printed it. Now: editor/save/server/schema default to no
+wordmark, the renderer's LEFT side shows only what the template stores (no
+branding fallback — that belongs on the right-hand company line), and migration
+039 changes the column default only (no data rewrite; templates are recreated
+by the user). `tests/test_photo_report_no_placeholder.py` (8 tests,
+discriminating). Cache-bust app 3.7.45→3.7.46.
+
 ## Backfill dry-run crash fixed (strpos, no literal %) (2026-10-26)
 
 The dry run 500'd with "tuple index out of range": the backfill SQL mixed a

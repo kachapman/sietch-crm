@@ -19,10 +19,14 @@ import server as _server
 
 
 class TestHeaderIdentity(unittest.TestCase):
-    def test_no_template_uses_branding(self):
+    def test_no_template_uses_branding_on_the_right_only(self):
+        # 2026-10-23 decision: the LEFT wordmark renders ONLY what the
+        # template stores; branding is the RIGHT-hand company fallback. Putting
+        # branding on the left would print the workspace/vendor name on a
+        # customer-facing report and duplicate the right side.
         lines, name = _server._photo_report_header_identity(None, "MDM Construction")
         self.assertEqual(name, "MDM Construction")
-        self.assertEqual(lines, ["MDM Construction"])
+        self.assertEqual(lines, [])
 
     def test_no_template_no_brand_is_blank_never_company(self):
         lines, name = _server._photo_report_header_identity(None, "")
@@ -37,11 +41,11 @@ class TestHeaderIdentity(unittest.TestCase):
         self.assertEqual(name, "A+ Restoration")
         self.assertEqual(lines, ["A+", "Roofing"])
 
-    def test_unconfigured_template_falls_back_to_brand(self):
+    def test_unconfigured_template_keeps_left_blank(self):
         t = {"company_name": "", "text_logo_lines": None}
         lines, name = _server._photo_report_header_identity(t, "MDM Construction")
         self.assertEqual(name, "MDM Construction")
-        self.assertEqual(lines, ["MDM Construction"])
+        self.assertEqual(lines, [])
 
     def test_garbage_logo_json_is_blank(self):
         t = {"company_name": "", "text_logo_lines": "{broken"}
