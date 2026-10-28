@@ -13,7 +13,10 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-28 (rename revert fix + editor tab title)
 
-**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+**Status: DEPLOYED 2026-10-28 as 1442681** (rebuild healthy, zero non-scanner
+errors, live doc-editor.html confirmed serving the new handlers). Verify:
+rename a document → open it in the editor → close → refresh the list → name
+stays; browser tab shows the file name.
 
 - Proof before fixing: DB showed the rename persisted (17324 = "…garage.pdf");
   ONE PATCH 200 in logs; nothing overwrites titles server-side. Revert came
