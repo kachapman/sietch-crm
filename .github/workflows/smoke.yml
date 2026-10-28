@@ -190,6 +190,9 @@ jobs:
       - name: Run docs rename + history editor-link tests
         run: node --test tests/test_docs_rename_links.mjs
 
+      - name: Run doc editor title tests
+        run: node --test tests/test_doc_editor_title.mjs
+
       - name: Run upload progress tests
         run: node --test tests/test_upload_progress.mjs
 

@@ -11,6 +11,19 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-28 (rename revert fix + editor tab title)
+
+**Status: IMPLEMENTED + TESTED, pushed — deploying.**
+
+- Proof before fixing: DB showed the rename persisted (17324 = "…garage.pdf");
+  ONE PATCH 200 in logs; nothing overwrites titles server-side. Revert came
+  from the editor's meta broadcast (stable session key ⇒ stale title).
+- `doc-editor.html`: meta broadcast no longer PATCHes; onDocumentReady pushes
+  our title to the session; `document.title` = file name.
+- Tests: 5 node (fail-old 2/3 verified). Frontend only.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-10-27 (gallery mirror + rename + history editor links)
 
 **Status: DEPLOYED 2026-10-27 as 0008822** (rebuild healthy, helper + handlers

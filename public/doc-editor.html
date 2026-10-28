@@ -142,16 +142,37 @@
           if (!isMailAttachment) {
             config.events = config.events || {};
 
-            // onMetaChange: receive title renames broadcast from OnlyOffice (from any user)
+            // Browser tab title = the file name (was always "Document Editor").
+            const fileName = (config.document && config.document.title) || "";
+            if (fileName) {
+              try { document.title = fileName; } catch (e) {}
+            }
+
+            // onMetaChange: OnlyOffice BROADCASTS the title of the editing
+            // session. Because the session key is stable per document
+            // (sietch-doc-{id}), a session opened BEFORE a rename keeps the
+            // OLD title and re-broadcasts it on every later open — which
+            // silently reverted Sietch-side renames (live bug 2026-10-27:
+            // rename stuck, then "went back" after opening the file).
+            // The DB title is authoritative, so a broadcast is NOT applied.
+            // Explicit renames still sync via onRequestRename, and
+            // onDocumentReady re-aligns the live session with our title.
             config.events.onMetaChange = function(e) {
               if (e && e.data && e.data.title) {
-                fetch(`/api/v2/documents/${docId}`, {
-                  method: "PATCH",
-                  credentials: "same-origin",
-                  headers: {"Content-Type": "application/json"},
-                  body: JSON.stringify({ title: e.data.title }),
-                }).catch(() => {});
+                console.log("[doc-editor] meta title broadcast (ignored):", e.data.title);
               }
+            };
+
+            // onDocumentReady: push our title into the live session so the
+            // editor's own title bar matches the Sietch name (best-effort).
+            config.events.onDocumentReady = function() {
+              if (!fileName) return;
+              fetch(`/api/v2/documents/${docId}/command`, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({ c: "meta", meta: { title: fileName } }),
+              }).catch(() => {});
             };
 
             // onRequestRename: user clicked "Rename..." in editor title bar

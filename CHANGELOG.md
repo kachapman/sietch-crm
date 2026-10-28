@@ -2,6 +2,19 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Document rename no longer reverts + editor tab shows file name (2026-10-28)
+
+A Sietch-side rename stuck, then "went back" after opening the file. Cause:
+the editor's `onMetaChange` PATCHed the title from OnlyOffice's session
+broadcast; the session key is stable per document (`sietch-doc-{id}`), so a
+session opened before the rename re-broadcast the OLD title and overwrote it.
+The DB title is now authoritative — broadcasts are ignored (logged), explicit
+renames inside OnlyOffice still sync via `onRequestRename`, and a new
+`onDocumentReady` pushes our title into the live session so the editor's title
+bar matches. The browser tab now shows the file name instead of "Document
+Editor". `tests/test_doc_editor_title.mjs` (5 tests, discriminating). Frontend
+only — no migration, no bot restart.
+
 ## Note images mirror to gallery + docs Rename + history opens editor (2026-10-27)
 
 Three-item batch. (1) Paperclip image attachments on a note now copy into
