@@ -136,26 +136,34 @@ def try_send_for_account(
         # belongs to another mailbox sends as THAT mailbox no matter what we
         # pass as from_addr. Refuse rather than send from the wrong account.
         # Checked BEFORE the send so nothing goes out.
-        if acct.get("oauth_graph_access_token") or acct.get("oauth_graph_refresh_token"):
-            state, detail = _graph_identity_state(acct)
-            if state == "mismatch":
-                logger.warning(
-                    "Refusing Graph send for account=%s: token belongs to %s, mailbox is %s",
-                    account_id, detail, acct.get("email"))
-                return False, (
-                    f"Refusing to send: this mailbox's Graph connection belongs to {detail}, "
-                    f"not {acct.get('email')}. Disconnect Graph for this account and reconnect "
-                    f"while signed in as {acct.get('email')}. Nothing was sent."
-                ), "graph"
-            if state == "unverified":
-                logger.warning(
-                    "Refusing Graph send for account=%s: identity unverified (%s)",
-                    account_id, detail)
-                return False, (
-                    f"Refusing to send: {detail} ({acct.get('email')}). "
-                    "Disconnect Graph for this account and reconnect while signed in as "
-                    f"{acct.get('email')}. Nothing was sent."
-                ), "graph"
+        #
+        # The guard is unconditional for Microsoft accounts: if the Graph
+        # connection is not identity-verified we must not use the Graph path
+        # at all (a live check on 2026-10-29 showed an account with no Graph
+        # token still reaching the Graph/SMTP attempts before failing).
+        state, detail = _graph_identity_state(acct)
+        if state == "mismatch":
+            logger.warning(
+                "Refusing Graph send for account=%s: token belongs to %s, mailbox is %s",
+                account_id, detail, acct.get("email"))
+            return False, (
+                f"Refusing to send: this mailbox's Graph connection belongs to {detail}, "
+                f"not {acct.get('email')}. Disconnect Graph for this account and reconnect "
+                f"while signed in as {acct.get('email')}. Nothing was sent."
+            ), "graph"
+        if state == "unverified" and (acct.get("oauth_graph_access_token")
+                                      or acct.get("oauth_graph_refresh_token")):
+            # A Graph token exists but we cannot prove which mailbox it
+            # belongs to → refuse (this is the exact state that sent Aplus
+            # mail as MDM).
+            logger.warning(
+                "Refusing Graph send for account=%s: identity unverified (%s)",
+                account_id, detail)
+            return False, (
+                f"Refusing to send: {detail} ({acct.get('email')}). "
+                "Disconnect Graph for this account and reconnect while signed in as "
+                f"{acct.get('email')}. Nothing was sent."
+            ), "graph"
         graph_token, graph_err = refresh_graph_token(account_id)
         if graph_token:
             # The refresher may have rotated the token; re-check identity

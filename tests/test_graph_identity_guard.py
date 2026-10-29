@@ -190,6 +190,35 @@ class TestSendTimeGuard(unittest.TestCase):
         self.assertIn("Refusing to send", err)
         send.assert_not_called()
 
+    def test_graph_token_without_identity_is_refused(self):
+        """The exact incident state: a Graph token exists, but we cannot
+        prove which mailbox it belongs to."""
+        acct = self._acct(oauth_graph_identity=None)
+        with patch("mail_graph_client.send_email_via_graph") as send:
+            ok, err, method = ms.try_send_for_account(
+                acct, to_addr="x@y.com", subject="s",
+                refresh_graph_token=lambda aid: ("TOKEN", None))
+        self.assertFalse(ok)
+        self.assertIn("Refusing to send", err)
+        send.assert_not_called()
+
+    def test_account_without_graph_token_may_use_smtp(self):
+        """An SMTP-only Microsoft account is legitimate — it has no Graph
+        token, so there is no token identity to verify. The SMTP path is
+        separately guarded on smtp_user == account email."""
+        acct = self._acct(
+            oauth_graph_access_token=None,
+            oauth_graph_refresh_token=None,
+            oauth_graph_identity=None,
+        )
+        with patch("smtp_client.send_email_from_account",
+                   return_value=(True, None)) as send:
+            ok, err, method = ms.try_send_for_account(
+                acct, to_addr="x@y.com", subject="s",
+                refresh_graph_token=lambda aid: (None, None))
+        self.assertTrue(ok, err)
+        send.assert_called_once()
+
     def test_matching_smtp_user_is_allowed(self):
         acct = self._acct(
             oauth_graph_access_token=None,
