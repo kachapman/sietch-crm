@@ -19,7 +19,14 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 `POST /api/v2/admin/sync/relink-orphan-email-snapshots` + admin
 "Relink Orphan Snapshots" button (dry-run -> confirm -> apply).
 Tests: `tests/test_relink_orphan_snapshots.py` (13; 12 errors + 1 failure
-against the old code). Cache-bust app 3.7.48→3.7.49. No migration.**
+against the old code). Cache-bust app 3.7.48→3.7.49. No migration.
+
+**Follow-up fix (same day):** the dry-run died instantly with
+`tuple index out of range` — the orphan scan used `LIKE '%email_snapshot%'`
+next to a `%s` LIMIT param (same psycopg2 trap as the 2026-10-26 backfill
+crash). Fixed to `strpos(content, 'email_snapshot') > 0` in `483dab2`,
+plus a source-guard test (14 tests, fails on old code). Deployed and
+healthy; no app.js change so no cache-bust.**
 
 Deployed as `2128442` (+ `6c709ed` for the Postgres shm size). Verified on
 production:
