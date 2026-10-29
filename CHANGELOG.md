@@ -2,6 +2,23 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Notifications: poller reads filter columns, per-item dismiss (2026-10-29)
+
+Two follow-ups to the service-feed work, both verified against the live
+drawer. First, the poller's feed query omitted `target_mode`,
+`target_user_ids` and `notify_keywords`, so the new admin console settings
+(audience, keyword filter) were saved but never read — the live drawer
+proved it: maintenance entries that the keyword filter should have excluded
+were delivered to all users. Second, the drawer had no way to clear a
+notification at all (only calendar items had buttons), and clicking a
+status item tab-spammed its article on every click. Now: the poller loads
+all three columns; each row has a hover × that DELETEs it
+(`DELETE /api/v2/notifications/{id}`, owner-scoped); the article opens
+only via an explicit "Open article" link; and a failed mark-as-read now
+shows an error instead of failing silently.
+Tests: +7 in `tests/test_service_feed_delivery.py` (6 fail against the old
+code). Cache-bust app 3.7.49→3.7.50.
+
 ## Orphaned email snapshots: dry-run-first relink (2026-10-29)
 
 Deleting the Aplus/MDM mail accounts cascaded their `mail_messages` rows

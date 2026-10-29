@@ -197,7 +197,7 @@ class TestEventNoteIconStyle(unittest.TestCase):
 
     def test_cache_bust_bumped(self):
         idx_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-        self.assertIn("app.js?v=3.7.49", idx_html)
+        self.assertIn("app.js?v=3.7.50", idx_html)
         self.assertIn("styles.css?v=3.7.22", idx_html)
 
     def test_wash_radio_button_exists_in_admin_form(self):

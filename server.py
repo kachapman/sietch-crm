@@ -5127,6 +5127,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if m and method == "PUT":
             self._handle_notification_mark_read(int(m.group(1)))
             return
+        m = re.match(r"^/api/v2/notifications/(\d+)$", api_path)
+        if m and method == "DELETE":
+            self._handle_notification_delete(int(m.group(1)))
+            return
         if api_path == "/api/v2/notifications/read-all" and method == "PUT":
             self._handle_notifications_mark_all_read()
             return
@@ -9348,6 +9352,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not user:
             return
         db.execute("UPDATE notifications SET is_read = TRUE WHERE user_id = %s AND is_read = FALSE", (user["id"],))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_notification_delete(self, notif_id: int) -> None:
+        """Dismiss one notification. Scoped to the owner: a user can only
+        delete their own rows (live 2026-10-29: the drawer had no way to
+        clear status alerts at all)."""
+        user = _require_auth(self)
+        if not user:
+            return
+        db.execute("DELETE FROM notifications WHERE id = %s AND user_id = %s",
+                   (notif_id, user["id"]))
         _json_response(self, 200, {"ok": True})
 
     # ── History Categories ──────────────────────────────────────────────────

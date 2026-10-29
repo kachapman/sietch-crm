@@ -39,6 +39,11 @@ sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
 ROOT = Path('/home/chapman-server/Projects/new-crm')
 
 
+class Shim:
+    def __init__(self, path="/"):
+        self.path = path
+
+
 class TestNotificationHasAnOwner(unittest.TestCase):
     """Defect 1 — the row must belong to the recipient."""
 
@@ -221,6 +226,76 @@ class TestPerUserOptOut(unittest.TestCase):
     def test_audience_check_none(self):
         self.assertFalse(self.server._user_is_feed_audience(
             {"target_mode": "none"}, {"id": 1, "is_admin": True}))
+
+
+class TestPollerReadsFilterColumns(unittest.TestCase):
+    """Live bug 2026-10-29: the poller's feed query omitted target_mode /
+    target_user_ids / notify_keywords, so the admin console settings were
+    saved but never read — every feed notified all users about everything
+    (200 rows, maintenance noise included)."""
+
+    def test_poller_selects_audience_and_keyword_columns(self):
+        import re
+        src = (ROOT / "service_feed_poller.py").read_text(encoding="utf-8")
+        at = src.index("def _poll_due_feeds")
+        region = src[at:at + 1200]
+        for col in ("target_mode", "target_user_ids", "notify_keywords"):
+            self.assertIn(col, region,
+                          f"the poller must load {col} or the admin setting is dead")
+
+    def test_poller_query_has_no_literal_percent(self):
+        src = (ROOT / "service_feed_poller.py").read_text(encoding="utf-8")
+        at = src.index("def _poll_due_feeds")
+        region = src[at:at + 1200]
+        self.assertNotIn("LIKE '%", region)
+
+
+class TestNotificationDismiss(unittest.TestCase):
+    def test_delete_route_registered(self):
+        src = (ROOT / "server.py").read_text(encoding="utf-8")
+        self.assertIn('re.match(r"^/api/v2/notifications/(\\d+)$", api_path)', src)
+        self.assertIn("_handle_notification_delete", src)
+
+    def test_delete_is_scoped_to_owner(self):
+        import server as _server
+        mock_db = MagicMock()
+        writes = []
+        mock_db.execute.side_effect = lambda sql, params=None, *a, **k: writes.append((sql, params))
+        responses = []
+        with patch.object(_server, "_require_auth", lambda h: {"id": 7, "is_admin": True}), \
+             patch.object(_server, "_json_response",
+                          lambda h, s, b: responses.append((s, b))), \
+             patch.object(_server, "db", mock_db):
+            _server.KanbanHandler._handle_notification_delete(Shim(), 4242)
+        self.assertEqual(responses[0][0], 200)
+        self.assertEqual(len(writes), 1)
+        sql, params = writes[0]
+        self.assertIn("DELETE FROM notifications", sql)
+        self.assertIn("user_id = %s", sql)
+        self.assertEqual(params, (4242, 7))
+
+    def test_delete_requires_auth(self):
+        import server as _server
+        mock_db = MagicMock()
+        with patch.object(_server, "_require_auth", lambda h: None), \
+             patch.object(_server, "db", mock_db):
+            _server.KanbanHandler._handle_notification_delete(Shim(), 1)
+        mock_db.execute.assert_not_called()
+
+    def test_drawer_has_dismiss_and_article_link_not_popup(self):
+        app = (ROOT / "public" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("data-notif-dismiss", app)
+        self.assertIn('method: "DELETE"', app)
+        self.assertIn("notif-article-link", app)
+        at = app.index("Mark as read on click")
+        region = app[at:at + 1500]
+        self.assertNotIn("window.open", region,
+                         "row clicks must not tab-spam the article")
+        self.assertIn("Failed to mark notification as read", region)
+
+    def test_dismiss_button_styled(self):
+        css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn(".notification-drawer-item-dismiss", css)
 
 
 class TestPollerDedup(unittest.TestCase):

@@ -1227,3 +1227,38 @@ IMAP INTERNALDATE, which does not change on re-import.
 | `public/index.html` | "Relink Orphan Snapshots" admin button. |
 | `public/app.js` | Dry-run -> confirm -> apply handler mirroring the history backfill. |
 | `tests/test_relink_orphan_snapshots.py` (new) | 13 tests (12 errors + 1 failure against the old code). |
+
+
+---
+
+## ISSUE-023 — Poller ignored feed audience/filter columns; drawer had no dismiss (2026-10-29)
+
+**Severity: medium (settings silently dead + missing clear).**
+
+Follow-up to ISSUE-020, found from the user's live drawer screenshot. The
+admin console saved `target_mode` / `notify_keywords` correctly, but
+`service_feed_poller._poll_due_feeds` selected an explicit column list
+without them — so every poll behaved as audience `all` + no keyword
+filter. Proof in the screenshot: "Service Maintenance" entries the keyword
+filter should have excluded, delivered to everyone.
+
+Separately, the drawer offered no way to dismiss a notification (only
+calendar items had buttons), and clicking a status row opened its article
+in a new tab on every click.
+
+### Fix
+
+- Poller SELECT gains `target_mode, target_user_ids, notify_keywords`.
+- `DELETE /api/v2/notifications/{id}` (owner-scoped) + hover × per row.
+- Article opens only via an explicit "Open article" link.
+- Failed mark-as-read now toasts instead of failing silently.
+
+### Files
+
+| File | Change |
+|---|---|
+| `service_feed_poller.py` | Feed query selects the three columns. |
+| `server.py` | `DELETE` route + `_handle_notification_delete`. |
+| `public/app.js` | Dismiss × + DELETE wiring, article link, no tab-spam, loud mark-read errors. |
+| `public/styles.css` | `.notification-drawer-item-dismiss` (hover-reveal). |
+| `tests/test_service_feed_delivery.py` | +7 tests. |

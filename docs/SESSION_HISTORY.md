@@ -21,6 +21,14 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 Tests: `tests/test_relink_orphan_snapshots.py` (13; 12 errors + 1 failure
 against the old code). Cache-bust app 3.7.48→3.7.49. No migration.
 
+**Follow-up (same day):** notification drawer fixes — the poller's feed
+query omitted `target_mode`/`target_user_ids`/`notify_keywords`, so the new
+admin settings were saved but never read (live drawer proved it); added
+per-item dismiss (`DELETE /api/v2/notifications/{id}`, owner-scoped),
+explicit "Open article" link instead of tab-spam on row click, and loud
+mark-read errors. Tests +7 in `test_service_feed_delivery.py` (6 fail on
+old code). Cache-bust app 3.7.49→3.7.50. No migration.
+
 **Follow-up fix (same day):** the dry-run died instantly with
 `tuple index out of range` — the orphan scan used `LIKE '%email_snapshot%'`
 next to a `%s` LIMIT param (same psycopg2 trap as the 2026-10-26 backfill

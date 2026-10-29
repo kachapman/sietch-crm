@@ -45827,12 +45827,18 @@ function _renderNotificationDrawerItem(n) {
     msgHtml = msgHtml.replace(escapedTitle, link);
   }
 
+  // Service-feed article link: opened explicitly via its own link below,
+  // never as a side effect of clicking the row (live 2026-10-29: every
+  // click tab-spammed the Proton article, which made marking read feel
+  // broken).
+  const articleUrl = (n.type === "service_feed" && n.payload && n.payload.url) ? n.payload.url : "";
   el.innerHTML = `
     <div class="notification-drawer-item-row">
       <div class="notification-drawer-item-icon">${typeIcon}</div>
       <div class="notification-drawer-item-body">
         <div class="notification-drawer-item-actor">${msgHtml}</div>
         ${snippet ? `<div class="notification-drawer-item-message">${snippet}…</div>` : ""}
+        ${articleUrl ? `<div class="notification-drawer-item-actions"><a class="notification-drawer-action notif-article-link" href="${escapeHtml(articleUrl)}" target="_blank" rel="noopener noreferrer">Open article</a></div>` : ""}
         ${n.type === "calendar_reminder" && n.payload && n.payload.event_id ? `
           <div class="notification-drawer-item-actions">
             <button class="notification-drawer-action" data-cal-snooze="${n.payload.event_id}" data-cal-snooze-minutes="10">Snooze 10m</button>
@@ -45841,17 +45847,27 @@ function _renderNotificationDrawerItem(n) {
           </div>` : ""}
       </div>
       <div class="notification-drawer-item-time">${time}</div>
+      <button class="notification-drawer-item-dismiss" data-notif-dismiss="${n.id}" title="Dismiss" aria-label="Dismiss notification">&times;</button>
     </div>
     ${hasPayload ? `<button class="notification-drawer-item-expand" data-notif-expand="${n.id}" data-notif-event="${n.payload.event_id}" data-notif-opp="${n.opportunityId}">Show note</button>` : ""}
   `;
 
+  // Dismiss (clear) one notification — removes the row and deletes it.
+  el.querySelector("[data-notif-dismiss]")?.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    try {
+      await api(`/api/v2/notifications/${n.id}`, { method: "DELETE" });
+      _notificationCache = _notificationCache.filter((x) => String(x.id) !== String(n.id));
+      el.remove();
+      _updateNotificationBadge();
+    } catch (err) {
+      showToast("Failed to dismiss notification: " + (err.message || err), true);
+    }
+  });
+
   // Mark as read on click
   el.addEventListener("click", (e) => {
-    if (e.target.closest(".notification-drawer-item-expand") || e.target.closest(".notif-inline-link")) return;
-    // Service-feed notifications: if the payload includes a URL, open it in a new tab.
-    if (n.type === "service_feed" && n.payload && n.payload.url) {
-      try { window.open(n.payload.url, "_blank", "noopener,noreferrer"); } catch (e) {}
-    }
+    if (e.target.closest(".notification-drawer-item-expand") || e.target.closest(".notif-inline-link") || e.target.closest(".notif-article-link") || e.target.closest("[data-notif-dismiss]")) return;
     // Timesheet-overdue notifications: open the Activity / Time Sheet
     // modal so the user can immediately clock out. We close the
     // notifications drawer first so the modal isn't stacked on top of
@@ -45868,7 +45884,14 @@ function _renderNotificationDrawerItem(n) {
     if (!n.isRead) {
       n.isRead = true;
       el.classList.remove("unread");
-      api(`/api/v2/notifications/${n.id}/read`, { method: "PUT" }).catch(() => {});
+      // Failures surface loudly (live 2026-10-29: the old silent catch
+      // left users unsure whether marking read had worked at all).
+      api(`/api/v2/notifications/${n.id}/read`, { method: "PUT" })
+        .catch((err) => {
+          n.isRead = false;
+          el.classList.add("unread");
+          showToast("Failed to mark notification as read: " + (err.message || err), true);
+        });
       _updateNotificationBadge();
     }
   });

@@ -64,7 +64,8 @@ def _poller_loop(server_module) -> None:
 def _poll_due_feeds(server_module) -> None:
     """Poll each enabled feed whose poll_interval_sec has elapsed since last_polled_at."""
     rows = db.query_dicts(
-        """SELECT id, name, kind, url, poll_interval_sec, last_polled_at, last_item_id, enabled, accent_color
+        """SELECT id, name, kind, url, poll_interval_sec, last_polled_at, last_item_id, enabled, accent_color,
+                  target_mode, target_user_ids, notify_keywords
            FROM service_feeds
            WHERE enabled = TRUE AND kind = 'rss' AND url IS NOT NULL"""
     )
