@@ -12225,9 +12225,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _append_sync_log("info", "DRY RUN — reporting only, zero writes.")
             _append_sync_log("info", "Scanning project timelines for orphaned email snapshots...")
 
+            # NOTE: the content test uses strpos(), NOT LIKE with literal
+            # '%' wildcards. This query also carries a %s parameter; psycopg2
+            # then treats every literal % in the SQL as a placeholder and
+            # fails with "tuple index out of range" (same live crash as the
+            # 2026-10-26 backfill strpos fix).
             rows = db.query(
                 "SELECT id, opportunity_id, content FROM history_events "
-                "WHERE content LIKE '%email_snapshot%' ORDER BY id LIMIT %s",
+                "WHERE strpos(content, 'email_snapshot') > 0 ORDER BY id LIMIT %s",
                 (limit * 10,),
             )
             orphans: list[dict] = []

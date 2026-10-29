@@ -262,6 +262,21 @@ class TestDryRunWritesNothing(unittest.TestCase):
         self.assertEqual(responses[0][1]["ambiguous"], 0)
 
 
+class TestNoLiteralPercentInScanSql(unittest.TestCase):
+    def test_scan_query_uses_strpos_not_like(self):
+        """Live bug 2026-10-29: the scan used LIKE '%email_snapshot%' next to
+        a %s param, and psycopg2 raised 'tuple index out of range' — the dry
+        run died before reporting anything. Literal % wildcards must never
+        appear in a parameterized query (same class as the 2026-10-26
+        backfill strpos fix)."""
+        import server as _server
+        import inspect
+        src = inspect.getsource(
+            _server.KanbanHandler._handle_sync_relink_orphan_email_snapshots)
+        self.assertNotIn("LIKE '%", src)
+        self.assertIn("strpos(content, 'email_snapshot')", src)
+
+
 class TestUiWiring(unittest.TestCase):
     def test_button_route_and_confirm_flow(self):
         src = open("/home/chapman-server/Projects/new-crm/public/app.js", encoding="utf-8").read()
