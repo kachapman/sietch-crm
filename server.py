@@ -4549,6 +4549,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             self._handle_sync_backfill_email_history()
             return
+        if api_path == "/api/v2/admin/sync/relink-orphan-email-snapshots" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_sync_relink_orphan_email_snapshots()
+            return
         if api_path == "/api/v2/admin/sync/pull-deals" and method == "POST":
             user = _require_admin(self)
             if not user:
@@ -12173,6 +12179,281 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
         finally:
             _sync_running = False
+
+    def _handle_sync_relink_orphan_email_snapshots(self) -> None:
+        """Relink orphaned email_snapshot timeline events to re-synced mail.
+
+        Live repair 2026-10-29: deleting the Aplus/MDM mail accounts
+        cascaded their mail_messages rows away (ON DELETE CASCADE), but the
+        project timeline events survived (history_events has no FK to
+        mail_messages). 35 email_snapshot events now point at message ids
+        that no longer exist. Their bodies are intact inline; only the
+        pointer (content.message_id) and the mail_deal_links rows died.
+
+        After the mailboxes re-sync, each message returns with a NEW id but
+        an IDENTICAL (from_addr, subject, date_received) — date_sent in the
+        snapshot is the IMAP INTERNALDATE, which does not change on
+        re-import. So each orphan is matched exactly and repointed.
+
+        Dry-run first (default): reports every pair and writes nothing.
+        Apply mode rewrites content.message_id, recreates the
+        mail_deal_links row, and backfills project attachment copies only
+        when the event has none. Repointing also restores the auto-link
+        dedup key, so the re-sync creates no duplicate timeline entries.
+        One old message linked to two projects (id 3856 -> opps 35 and 46)
+        is repointed on BOTH events to the same new id.
+        """
+        global _sync_log, _sync_running
+        if _sync_running:
+            _json_response(self, 409, {"error": "Sync already running"})
+            return
+        _sync_running = True
+        _sync_log.clear()
+        try:
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except Exception:
+                payload = {}
+            dry_run = bool(payload.get("dry_run", True))
+            include_sent = bool(payload.get("include_sent", True))
+            try:
+                limit = int(payload.get("limit") or 500)
+            except (TypeError, ValueError):
+                limit = 500
+            limit = max(1, min(limit, 2000))
+            if dry_run:
+                _append_sync_log("info", "DRY RUN — reporting only, zero writes.")
+            _append_sync_log("info", "Scanning project timelines for orphaned email snapshots...")
+
+            rows = db.query(
+                "SELECT id, opportunity_id, content FROM history_events "
+                "WHERE content LIKE '%email_snapshot%' ORDER BY id LIMIT %s",
+                (limit * 10,),
+            )
+            orphans: list[dict] = []
+            live_ids: set[int] = set()
+            old_ids: list[int] = []
+            snaps: dict[int, dict] = {}
+            for r in rows or []:
+                event_id = r[0]
+                opp_id = r[1]
+                try:
+                    snap = json.loads(r[2] or "")
+                except Exception:
+                    continue
+                if not isinstance(snap, dict) or snap.get("type") != "email_snapshot":
+                    continue
+                try:
+                    mid = int(snap.get("message_id") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if not mid:
+                    continue
+                snaps[event_id] = {"opp_id": opp_id, "snap": snap, "old_id": mid}
+                old_ids.append(mid)
+            if old_ids:
+                got = db.query(
+                    "SELECT id FROM mail_messages WHERE id = ANY(%s)",
+                    (list(set(old_ids)),))
+                live_ids = {g[0] for g in (got or [])}
+            for event_id, info in snaps.items():
+                if info["old_id"] in live_ids:
+                    continue
+                snap = info["snap"]
+                orphans.append({
+                    "event_id": event_id,
+                    "opportunity_id": info["opp_id"],
+                    "old_message_id": info["old_id"],
+                    "from": snap.get("from") or "",
+                    "subject": snap.get("subject") or "",
+                    "date_sent": snap.get("date_sent") or "",
+                })
+                if len(orphans) >= limit:
+                    break
+            _append_sync_log("info", f"Found {len(orphans)} orphaned email snapshots")
+
+            pairs: list[dict] = []
+            ambiguous = 0
+            unmatched = 0
+            for o in orphans:
+                cands = db.query_dicts(
+                    "SELECT id, account_id, from_addr, subject, date_received, folder "
+                    "FROM mail_messages WHERE from_addr = %s AND subject = %s ORDER BY id",
+                    (o["from"], o["subject"]),
+                ) or []
+                if not include_sent:
+                    cands = [c for c in cands if (c.get("folder") or "INBOX") != "Sent"]
+                match = KanbanHandler._match_relinked_message(o, cands)
+                if match is None:
+                    # Distinguish "no candidate at all" from "candidates but
+                    # none close enough / too many".
+                    if not cands:
+                        unmatched += 1
+                    else:
+                        ambiguous += 1
+                    _append_sync_log(
+                        "info",
+                        f"{'DRY' if dry_run else 'SKIP'} event {o['event_id']} "
+                        f"opp {o['opportunity_id']} msg {o['old_message_id']}: "
+                        f"no unique match ({len(cands)} candidate(s)) "
+                        f"'{(o['subject'] or '')[:60]}'")
+                    continue
+                try:
+                    opp_title = (db.query_one(
+                        "SELECT title FROM opportunities WHERE id = %s",
+                        (o["opportunity_id"],)) or {}).get("title") or ""
+                except Exception:
+                    opp_title = ""
+                pairs.append({
+                    "event_id": o["event_id"],
+                    "opportunity_id": o["opportunity_id"],
+                    "project": opp_title,
+                    "old_message_id": o["old_message_id"],
+                    "new_message_id": match["id"],
+                    "subject": o["subject"],
+                    "from": o["from"],
+                    "date_sent": o["date_sent"],
+                })
+                _append_sync_log(
+                    "info",
+                    f"{'DRY' if dry_run else 'QUEUED'} event {o['event_id']} "
+                    f"opp {o['opportunity_id']} msg {o['old_message_id']} -> {match['id']} "
+                    f"'{(o['subject'] or '')[:60]}'")
+            if dry_run:
+                _append_sync_log(
+                    "info",
+                    f"Dry run complete: {len(pairs)} relinkable, "
+                    f"{ambiguous} ambiguous, {unmatched} unmatched, 0 written")
+                _json_response(self, 200, {"ok": True, "dry_run": True,
+                                           "relinkable": len(pairs),
+                                           "ambiguous": ambiguous,
+                                           "unmatched": unmatched,
+                                           "items": pairs, "log": list(_sync_log)})
+                return
+            applied = 0
+            skipped = 0
+            for p in pairs:
+                try:
+                    if KanbanHandler._apply_snapshot_relink(p):
+                        applied += 1
+                    else:
+                        skipped += 1
+                except Exception as e:
+                    skipped += 1
+                    _append_sync_log(
+                        "warn",
+                        f"Relink failed for event {p['event_id']}: {e}")
+            _append_sync_log(
+                "info",
+                f"Orphan snapshot relink complete: {applied} applied, "
+                f"{skipped} skipped, {ambiguous} ambiguous, {unmatched} unmatched")
+            _json_response(self, 200, {"ok": True, "dry_run": False,
+                                       "applied": applied, "skipped": skipped,
+                                       "ambiguous": ambiguous, "unmatched": unmatched,
+                                       "items": pairs, "log": list(_sync_log)})
+        except Exception as e:
+            _append_sync_log("error", f"Orphan snapshot relink failed: {e}")
+            _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
+        finally:
+            _sync_running = False
+
+    @staticmethod
+    def _parse_snapshot_ts(raw: str | None):
+        """Parse a snapshot date_sent back to a datetime (IMAP INTERNALDATE)."""
+        if not raw:
+            return None
+        from datetime import datetime as _dt
+        for fmt in ("%Y-%m-%d %H:%M:%S.%f%z", "%Y-%m-%d %H:%M:%S%z",
+                    "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return _dt.strptime(str(raw).strip(), fmt)
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _match_relinked_message(orphan: dict, cands: list[dict]) -> dict | None:
+        """Pick the re-synced message for one orphaned snapshot, or None.
+
+        Exact rule: same (from_addr, subject) already enforced by the query;
+        the timestamp must match the snapshot's date_sent exactly
+        (str equality covers the microsecond INTERNALDATE), else within 60
+        seconds. More than one in-tolerance candidate -> ambiguous -> None.
+        """
+        if not cands:
+            return None
+        target = KanbanHandler._parse_snapshot_ts(orphan.get("date_sent"))
+        exact = [c for c in cands
+                 if str(c.get("date_received") or "") == str(orphan.get("date_sent") or "")]
+        if len(exact) == 1:
+            return exact[0]
+        if len(exact) > 1:
+            return None
+        if target is None:
+            return None
+        close = []
+        for c in cands:
+            dr = c.get("date_received")
+            try:
+                delta = abs((dr - target).total_seconds()) if dr is not None else None
+            except Exception:
+                delta = None
+            if delta is not None and delta <= 60:
+                close.append(c)
+        if len(close) == 1:
+            return close[0]
+        return None
+
+    @staticmethod
+    def _apply_snapshot_relink(pair: dict) -> bool:
+        """Repoint one orphaned snapshot at its re-synced message id.
+
+        Updates content.message_id in place (the event id and timeline order
+        are preserved), recreates the mail_deal_links row, and backfills
+        project attachment copies only when the event has none. Returns True
+        when the event now points at a live message.
+        """
+        event_id = int(pair["event_id"])
+        opp_id = int(pair["opportunity_id"])
+        new_id = int(pair["new_message_id"])
+        row = db.query_one(
+            "SELECT id, opportunity_id, content FROM history_events WHERE id = %s",
+            (event_id,))
+        if not row:
+            return False
+        try:
+            snap = json.loads(row.get("content") or "")
+        except Exception:
+            return False
+        if not isinstance(snap, dict) or snap.get("type") != "email_snapshot":
+            return False
+        live = db.query_one("SELECT id FROM mail_messages WHERE id = %s", (new_id,))
+        if not live:
+            return False
+        opp = db.query_one("SELECT id FROM opportunities WHERE id = %s", (opp_id,))
+        if not opp:
+            return False
+        snap["message_id"] = new_id
+        db.execute("UPDATE history_events SET content = %s WHERE id = %s",
+                   (json.dumps(snap), event_id))
+        try:
+            db.execute(
+                "INSERT INTO mail_deal_links (message_id, opportunity_id, linked_by_user_id) "
+                "VALUES (%s, %s, NULL) ON CONFLICT DO NOTHING",
+                (new_id, opp_id))
+        except Exception:
+            logger.exception("Relink: mail_deal_links insert failed for event %d", event_id)
+            return False
+        try:
+            has_files = db.query_one(
+                "SELECT id FROM history_attachments WHERE event_id = %s LIMIT 1",
+                (event_id,))
+            if not has_files and mail_scanner is not None and hasattr(
+                    mail_scanner, "_copy_mail_attachments_to_project"):
+                mail_scanner._copy_mail_attachments_to_project(opp_id, event_id, new_id)
+        except Exception:
+            logger.exception("Relink: attachment backfill failed for event %d", event_id)
+        return True
 
     def _handle_sync_pull_deal_tags(self) -> None:
         """Sync tags and custom fields for existing deals from OnlyOffice."""

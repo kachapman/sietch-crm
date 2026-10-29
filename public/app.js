@@ -32732,7 +32732,7 @@ function openAdminConsoleModal() {
     // Load saved credentials on tab open
     loadSyncCredentials();
     // Save credentials when any sync button is clicked
-    ["sync-test-btn", "sync-deal-tags-btn", "sync-backfill-email-history-btn", "sync-deals-btn", "sync-tags-btn", "sync-tasks-btn", "sync-email-bodies-btn", "sync-full-btn"].forEach(id => {
+    ["sync-test-btn", "sync-deal-tags-btn", "sync-backfill-email-history-btn", "sync-relink-orphan-snapshots-btn", "sync-deals-btn", "sync-tags-btn", "sync-tasks-btn", "sync-email-bodies-btn", "sync-full-btn"].forEach(id => {
       $(`#${id}`)?.addEventListener("click", saveSyncCredentials);
     });
     function renderSyncLog(log) {
@@ -32839,6 +32839,59 @@ function openAdminConsoleModal() {
         const data = await api("/api/v2/admin/sync/backfill-email-history", { method: "POST", body: JSON.stringify({ dry_run: false, since_days: SINCE_DAYS }) });
         if (data.log) renderSyncLog(data.log);
         showSyncResult({ message: `Email history backfill: ${data.created || 0} created, ${data.skipped || 0} skipped.` });
+      } catch (e) {
+        if (e.status === 409) {
+          showSyncProgress("Sync already running — showing live log...");
+          return;
+        }
+        clearInterval(pollInterval);
+        showSyncError(e.message);
+        try { const s = await api("/api/v2/admin/sync/status"); if (s.log) renderSyncLog(s.log); } catch {}
+      }
+    });
+
+    $("#sync-relink-orphan-snapshots-btn")?.addEventListener("click", async () => {
+      // Two-step like the history backfill: dry-run first (reports every
+      // event old_id -> new_id pair, writes nothing), then a confirm dialog
+      // gates the real run. Orphaned = timeline email snapshot whose mail
+      // row is gone (account removal); matching is exact on
+      // (from, subject, date_received).
+      showSyncProgress("Checking project timelines for orphaned email snapshots (dry run, no writes)...");
+      let lastLogLen = 0;
+      const pollInterval = setInterval(async () => {
+        try {
+          const status = await api("/api/v2/admin/sync/status");
+          if (status.log && status.log.length > lastLogLen) {
+            renderSyncLog(status.log);
+            lastLogLen = status.log.length;
+          }
+          if (!status.running && lastLogLen > 0) {
+            clearInterval(pollInterval);
+          }
+        } catch (e) { console.error("Sync poll error:", e); }
+      }, 3000);
+      try {
+        const dry = await api("/api/v2/admin/sync/relink-orphan-email-snapshots", { method: "POST", body: JSON.stringify({ dry_run: true, include_sent: true }) });
+        clearInterval(pollInterval);
+        if (dry.log) renderSyncLog(dry.log);
+        const n = dry.relinkable || 0;
+        if (!n) {
+          showSyncResult({ message: `Orphan snapshot relink: nothing relinkable (${dry.ambiguous || 0} ambiguous, ${dry.unmatched || 0} unmatched).` });
+          return;
+        }
+        const ok = await confirmDialog({
+          title: "Relink orphaned email snapshots?",
+          message: `${n} timeline email snapshot${n === 1 ? "" : "s"} can be repointed at re-synced mail (see log above for event old_id -> new_id pairs). Rewrite the pointers and recreate the deal links now?`,
+          confirmLabel: `Relink ${n}`,
+        });
+        if (!ok) {
+          showSyncResult({ message: `Orphan snapshot relink cancelled — nothing written.` });
+          return;
+        }
+        showSyncProgress("Relinking orphaned email snapshots...");
+        const data = await api("/api/v2/admin/sync/relink-orphan-email-snapshots", { method: "POST", body: JSON.stringify({ dry_run: false, include_sent: true }) });
+        if (data.log) renderSyncLog(data.log);
+        showSyncResult({ message: `Orphan snapshot relink: ${data.applied || 0} applied, ${data.skipped || 0} skipped, ${data.ambiguous || 0} ambiguous, ${data.unmatched || 0} unmatched.` });
       } catch (e) {
         if (e.status === 409) {
           showSyncProgress("Sync already running — showing live log...");

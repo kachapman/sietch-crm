@@ -223,6 +223,9 @@ jobs:
       - name: Run backup streaming tests
         run: python3 tests/test_backup_streaming.py -v
 
+      - name: Run orphan snapshot relink tests
+        run: python3 tests/test_relink_orphan_snapshots.py -v
+
       - name: Run photo report prefill tests
         run: node --test tests/test_photo_report_prefill.mjs
 

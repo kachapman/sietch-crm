@@ -2,6 +2,25 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Orphaned email snapshots: dry-run-first relink (2026-10-29)
+
+Deleting the Aplus/MDM mail accounts cascaded their `mail_messages` rows
+away, but the 35 project timeline `email_snapshot` events survived
+(`history_events` has no FK to `mail_messages`). New admin action
+**Relink Orphan Snapshots** repoints each orphan at its re-synced message:
+exact match on `(from_addr, subject, date_received)` — the snapshot's
+`date_sent` is the IMAP INTERNALDATE, unchanged by re-import. Dry-run
+reports every `event old_id -> new_id` pair and writes nothing; apply mode
+rewrites `content.message_id` in place (event id and timeline order
+preserved), recreates the `mail_deal_links` row `ON CONFLICT DO NOTHING`,
+and backfills project attachment copies only when the event has none.
+The dual-linked message (old id 3856 -> projects 35 and 46) repoints on
+both events to the same new id, and repointing restores the auto-link
+dedup key so the re-sync creates no duplicates. Sent-folder messages are
+included (9 of the 35 orphans are sent mail).
+Tests: `tests/test_relink_orphan_snapshots.py` (13, 12 errors + 1 failure
+against the old code). Cache-bust app 3.7.48→3.7.49.
+
 ## Service feeds: notifications nobody could see, delivered 1.4M times (2026-10-29)
 
 Three defects, all found while diagnosing a backup outage and all verified

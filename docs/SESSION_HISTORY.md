@@ -13,7 +13,13 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-29 (service feeds + backup hardening)
 
-**Status: DEPLOYED 2026-10-29 17:18 — verified live.**
+**Status: DEPLOYED 2026-10-29 17:18 — verified live.
+
+**Follow-up (same day):** orphaned-snapshot relink shipped as
+`POST /api/v2/admin/sync/relink-orphan-email-snapshots` + admin
+"Relink Orphan Snapshots" button (dry-run -> confirm -> apply).
+Tests: `tests/test_relink_orphan_snapshots.py` (13; 12 errors + 1 failure
+against the old code). Cache-bust app 3.7.48→3.7.49. No migration.**
 
 Deployed as `2128442` (+ `6c709ed` for the Postgres shm size). Verified on
 production:

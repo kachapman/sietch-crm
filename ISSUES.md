@@ -1185,3 +1185,45 @@ address-space cap.
 | `docker-compose.yml` | Mounts `/mnt/sietch_backup:/backup`. |
 | `config.example.env` | `BACKUP_DIR=/backup`, `BACKUP_DIR_HOST=/mnt/sietch_backup`. |
 | `tests/test_backup_streaming.py` (new) | 12 tests, synthetic data only (10 fail against the old code). |
+
+---
+
+## ISSUE-022 — Orphaned project timeline email snapshots after account deletion (2026-10-29)
+
+**Severity: medium (data pointers dead, bodies intact).**
+
+Deleting the Aplus/MDM mail accounts cascaded their `mail_messages` rows
+away (`mail_accounts.id ON DELETE CASCADE` -> `mail_messages.account_id` ->
+`mail_attachments` / `mail_deal_links` / `mail_tag_assignments`). The 35
+project timeline `email_snapshot` events survived — `history_events` has
+no FK to `mail_messages` — so every affected project still shows the full
+email inline, but each event's `content.message_id` points at a row that
+no longer exists and the `mail_deal_links` rows are gone.
+
+### Fix
+
+New admin action **Relink Orphan Snapshots**
+(`POST /api/v2/admin/sync/relink-orphan-email-snapshots`): exact match on
+`(from_addr, subject, date_received)` — the snapshot's `date_sent` is the
+IMAP INTERNALDATE, which does not change on re-import.
+
+- Dry-run first (default): reports every `event old_id -> new_id` pair
+  plus ambiguous/unmatched counts, writes nothing.
+- Apply mode rewrites `content.message_id` in place (event id and timeline
+  order preserved), recreates the `mail_deal_links` row
+  `ON CONFLICT DO NOTHING`, and backfills project attachment copies only
+  when the event has none.
+- The dual-linked message (old id 3856 -> projects 35 and 46) repoints on
+  both events to the same new id; repointing restores the auto-link dedup
+  key, so the re-sync creates no duplicate timeline entries.
+- Sent-folder messages included (9 of the 35 orphans are sent mail), with
+  an `include_sent: false` option to exclude them.
+
+### Files
+
+| File | Change |
+|---|---|
+| `server.py` | Route + `_handle_sync_relink_orphan_email_snapshots` (+ `_match_relinked_message`, `_apply_snapshot_relink`, `_parse_snapshot_ts` helpers). |
+| `public/index.html` | "Relink Orphan Snapshots" admin button. |
+| `public/app.js` | Dry-run -> confirm -> apply handler mirroring the history backfill. |
+| `tests/test_relink_orphan_snapshots.py` (new) | 13 tests (12 errors + 1 failure against the old code). |
