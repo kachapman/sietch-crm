@@ -867,7 +867,12 @@ def _cleanup_old_backups() -> None:
     """Remove backup files older than retention period."""
     try:
         import db
-        config = _load_config_from_db()
+        # _load_config_from_db() returns (config, configured) — unpack it.
+        # Passing the tuple straight through crashed this function with
+        # "'tuple' object has no attribute 'get'" (live 2026-10-29: the
+        # backup scheduler died at startup and production ran with
+        # backup=disabled, so no automated backup had ever been written).
+        config, _ = _load_config_from_db()
         days = config.get("retention_days", BACKUP_RETENTION_DAYS)
         cutoff = time.time() - (days * 86400)
         # Per-part export zips are the only thing we keep on disk now.
@@ -902,7 +907,7 @@ def _backup_loop(stop_event: threading.Event) -> None:
     logger.info("Backup scheduler started (interval=%ds)", BACKUP_INTERVAL)
     while not stop_event.is_set():
         try:
-            config = _load_config_from_db()
+            config, _ = _load_config_from_db()
             if config.get("enabled", BACKUP_ENABLED):
                 result = run_backup()
                 logger.info("Scheduled backup: %s", result)
@@ -921,7 +926,11 @@ def _backup_loop(stop_event: threading.Event) -> None:
 def start_backup_scheduler() -> threading.Event:
     """Start the backup scheduler thread. Returns a stop event."""
     stop_event = threading.Event()
-    config = _load_config_from_db()
+    # Unpack (config, configured) — see _load_config_from_db. Passing the
+    # tuple through killed the scheduler at startup ("'tuple' object has no
+    # attribute 'get'") and production ran with backup=disabled since this
+    # file was first committed (live 2026-10-29).
+    config, _ = _load_config_from_db()
     if not config.get("enabled", BACKUP_ENABLED):
         logger.info("Backup scheduler disabled")
         return stop_event

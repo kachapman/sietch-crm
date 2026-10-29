@@ -91,10 +91,19 @@ def _mock_db(msg_row=None, link_exists=False, snapshot_exists=False):
         if sql.startswith("INSERT INTO history_events") and params:
             seen_snapshots.add(params[0])
 
+    def _recording_insert_returning(sql, params=None, *a, **k):
+        # The snapshot insert uses RETURNING id so the attachment copy can
+        # attach the files to the new event (live 2026-10-29).
+        writes.append((sql, params))
+        if sql.startswith("INSERT INTO history_events") and params:
+            seen_snapshots.add(params[0])
+        return 4242
+
     mock_db.query_one.side_effect = fake_query_one
     mock_db.query_dicts.side_effect = fake_query_dicts
     mock_db.query.side_effect = lambda *a, **k: []
     mock_db.execute.side_effect = _recording_execute
+    mock_db.insert_returning.side_effect = _recording_insert_returning
     return mock_db, writes
 
 

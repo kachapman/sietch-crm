@@ -6132,13 +6132,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "author": r[8] or "",
                 "attachments": attachments_by_event.get(r[0], []),
             })
-        # Linked-email attachments: email_snapshot content carries filenames
-        # but no downloadable refs, and history_attachments has no rows for
-        # mail — so the timeline never showed linked files (2026-10-22).
-        # Resolve live mail_attachments per snapshot message_id and emit
-        # entries with direct download URLs (the renderer prefers file.url
-        # when there is no history id). One batched query; display-only, and
-        # it makes stale snapshots self-heal on read.
+        # Linked-email attachments: an email linked to a project now carries a COPY
+        # of its files in the project's own storage (history_attachments,
+        # data/history-attachments/<opp>/<event>/) — OnlyOffice parity, and
+        # what makes the project independent of the mail account (live
+        # requirement 2026-10-29). Those copies are already loaded above as
+        # "attachments" with a real id, and the renderer prefers them.
+        #
+        # For snapshots that predate the copy (legacy), fall back to
+        # resolving the live mail attachments so the timeline still shows
+        # the files. Those links die with the mail account, which is exactly
+        # why the copy exists.
         try:
             snap_mids: dict[int, int] = {}
             for _ev in events:
@@ -6161,6 +6165,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     mail_by_msg.setdefault(_mr[0], []).append(_mr)
                 for _ev in events:
                     _mid = snap_mids.get(_ev["id"])
+                    # Only fall back for events that have NO project copy.
+                    if _ev["attachments"]:
+                        continue
                     for _mma, _maa, _mfn in [(_m[0], _m[1], _m[2]) for _m in mail_by_msg.get(_mid, [])]:
                         _ev["attachments"].append({
                             "id": "", "filename": _mfn,
@@ -19121,7 +19128,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not user:
             return
         acct = db.query_one(
-            "SELECT id, oauth_provider FROM mail_accounts WHERE id = %s AND owner_user_id = %s",
+            "SELECT id, email, oauth_provider FROM mail_accounts WHERE id = %s AND owner_user_id = %s",
             (account_id, user["id"]),
         )
         if not acct:
@@ -19132,7 +19139,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         state = oauth_providers.generate_state()
         _oauth_graph_states[state] = (user["id"], account_id, time.time() + 600)
-        _json_response(self, 200, {"authUrl": oauth_providers.MicrosoftProvider.graph_authorize_url(state)})
+        _json_response(self, 200, {"authUrl": oauth_providers.MicrosoftProvider.graph_authorize_url(
+            state, login_hint=acct.get("email") or None)})
 
     def _handle_oauth_graph_callback(self) -> None:
         qs = parse_qs(urlparse(self.path).query)
@@ -19177,13 +19185,33 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._oauth_redirect_with_status("error", "Graph OAuth returned no access token")
             return
 
-        # Identity check: the Microsoft user who just signed in must be the
+        # Identity check: the Microsoft user who just signed in MUST be the
         # mail account being connected. Without this, signing in as mailbox A
         # while connecting account B stores A's token on B — and Graph
         # /me/sendMail then silently sends B's mail as A (2026-10-21).
+        #
+        # The check FAILS CLOSED (live bug 2026-10-29): the Graph scope used
+        # to omit `openid`, so the token response carried no id_token and
+        # the identity could not be read. The fallback probe (Graph /me)
+        # needs User.Read and answered HTTP 403, so ms_email came back
+        # empty and the old `if ms_email and ...` guard skipped the check
+        # entirely — which is exactly how MDM's token ended up on the Aplus
+        # account and every send went out as MDM Construction.
         ms_email = (token_data.get("email") or "").strip().lower()
         acct_email = (acct.get("email") or "").strip().lower()
-        if ms_email and acct_email and ms_email != acct_email:
+        if not ms_email:
+            # Unverifiable = refuse. Storing an unverified token is what
+            # caused the wrong-sender incident; better to make the admin
+            # reconnect than to silently accept an unknown mailbox.
+            logger.warning("Graph OAuth identity unverifiable for account %s (%s) — refusing to store the token",
+                           account_id, acct_email)
+            self._oauth_redirect_with_status(
+                "error",
+                "Could not verify which Microsoft account signed in, so the connection was not saved. "
+                "Disconnect Graph for this mailbox and reconnect while signed in as "
+                f"{acct_email or 'the correct account'}.")
+            return
+        if acct_email and ms_email != acct_email:
             logger.warning("Graph OAuth identity mismatch: signed in as %s, account %s is %s — refusing",
                            ms_email, account_id, acct_email)
             self._oauth_redirect_with_status(
@@ -19233,12 +19261,31 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         )
         _json_response(self, 200, {"ok": True})
 
+    def _record_graph_error(self, account_id: int, message: str) -> None:
+        """Persist a Graph problem so the settings UI shows it honestly."""
+        try:
+            db.execute(
+                "UPDATE mail_accounts SET oauth_graph_last_error = %s, oauth_graph_last_error_at = NOW() WHERE id = %s",
+                (str(message)[:300], account_id),
+            )
+        except Exception:
+            logger.exception("Failed to persist graph error for account %s", account_id)
+
     def _refresh_graph_token_if_needed(self, account_id: int) -> tuple[str | None, str | None]:
         """Returns (graph_access_token, error_message). Refreshes and persists
         the Graph access token if expired. None token means no Graph token
-        configured (not an error)."""
+        configured (not an error).
+
+        The refreshed token's identity is re-verified against the account
+        email on every mint (live bug 2026-10-29): a refresh token is bound
+        to the account that granted it, so the id_token in the refresh
+        response is the authoritative "which mailbox will this send as".
+        A mismatch means the stored token belongs to another mailbox and the
+        send must be refused, not silently redirected.
+        """
         row = db.query_one(
-            "SELECT oauth_graph_access_token, oauth_graph_refresh_token, oauth_graph_token_expires FROM mail_accounts WHERE id = %s",
+            "SELECT email, oauth_graph_access_token, oauth_graph_refresh_token, oauth_graph_token_expires "
+            "FROM mail_accounts WHERE id = %s",
             (account_id,),
         )
         if not row or not row.get("oauth_graph_access_token"):
@@ -19249,6 +19296,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return token, None
         if not row.get("oauth_graph_refresh_token"):
             return None, "Graph token expired and no refresh token stored — reconnect from mail account settings"
+        acct_email = (row.get("email") or "").strip().lower()
         try:
             tok = oauth_providers.MicrosoftProvider.graph_refresh_token(row["oauth_graph_refresh_token"])
             new_token = tok.get("access_token", "")
@@ -19256,9 +19304,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             new_expires_ts = datetime.now(timezone.utc).timestamp() + tok.get("expires_in", 3600)
             if not new_token:
                 return None, "Graph token refresh returned no access token"
+            # Identity of the refreshed token (empty when the grant predates
+            # `openid` and the identity cannot be read).
+            ms_email = (tok.get("email") or "").strip().lower()
+            if ms_email and acct_email and ms_email != acct_email:
+                err = (f"Graph token belongs to {ms_email}, but this mailbox is {acct_email}. "
+                       f"Disconnect Graph and reconnect while signed in as {acct_email}.")
+                logger.warning("Graph token identity mismatch on refresh for account %s: %s", account_id, err)
+                self._record_graph_error(account_id, err)
+                return None, err
             db.execute(
-                "UPDATE mail_accounts SET oauth_graph_access_token = %s, oauth_graph_refresh_token = %s, oauth_graph_token_expires = to_timestamp(%s), oauth_graph_last_error = NULL, oauth_graph_last_error_at = NULL WHERE id = %s",
-                (new_token, new_refresh, new_expires_ts, account_id),
+                "UPDATE mail_accounts SET oauth_graph_access_token = %s, oauth_graph_refresh_token = %s, oauth_graph_token_expires = to_timestamp(%s), oauth_graph_identity = COALESCE(%s, oauth_graph_identity), oauth_graph_last_error = NULL, oauth_graph_last_error_at = NULL WHERE id = %s",
+                (new_token, new_refresh, new_expires_ts, ms_email or None, account_id),
             )
             return new_token, None
         except Exception as e:
@@ -20092,6 +20149,26 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 else:
                     r["graphStatus"] = None
                     r["graphIdentity"] = None
+                # Send-verification state (live bug 2026-10-29). Graph derives
+                # the sender from the access token, so the ONLY thing that
+                # stops a send going out as the wrong Outlook account is
+                # knowing which mailbox the token belongs to. Surface that
+                # state so the compose UI can warn BEFORE the user sends:
+                #   ok         — token verified, it is this mailbox
+                #   mismatch   — token provably belongs to another mailbox
+                #   unverified — identity could not be determined (reconnect)
+                #   n/a        — not a Microsoft Graph account
+                if r.get("oauth_provider") == "microsoft" and r.get("has_graph_token"):
+                    _ident = (r.get("oauth_graph_identity") or "").strip().lower()
+                    _email = (r.get("email") or "").strip().lower()
+                    if not _ident:
+                        r["sendVerification"] = "unverified"
+                    elif _email and _ident != _email:
+                        r["sendVerification"] = "mismatch"
+                    else:
+                        r["sendVerification"] = "ok"
+                else:
+                    r["sendVerification"] = "n/a"
                 r.pop("has_graph_token", None)
                 r.pop("has_graph_refresh", None)
             # Attach shared-with users for each visible account
@@ -20678,7 +20755,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 self._create_email_history_event(int(deal_id), int(message_id), user["id"] if user else None)
 
             if ok:
-                _json_response(self, 200, {"ok": True, "id": outgoing["id"] if outgoing else None, "method": send_method})
+                _json_response(self, 200, {"ok": True, "id": outgoing["id"] if outgoing else None, "method": send_method,
+                                           # The mailbox the mail ACTUALLY went out as. After the
+                                           # identity guard this equals the account email, but
+                                           # returning it lets the UI state it plainly instead of
+                                           # implying (live bug 2026-10-29: the CRM recorded
+                                           # "aplus.estimates@outlook.com" while Outlook showed
+                                           # "MC MDM Construction").
+                                           "sentAs": acct.get("email") or ""})
             else:
                 _json_response(self, 500, {"ok": False, "error": err or "Send failed", "method": send_method})
         except Exception as e:

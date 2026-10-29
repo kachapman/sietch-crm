@@ -1590,7 +1590,7 @@ function attachTileCollapseButton(tileEl, tileId) {
   }
 }
 
-function confirmDialog({ title, message, confirmLabel = "OK", danger = true }) {
+function confirmDialog({ title, message, messageHtml = null, confirmLabel = "OK", danger = true }) {
   return new Promise((resolve) => {
     const modal = $("#confirm-modal");
     const titleEl = $("#confirm-modal-title");
@@ -1598,12 +1598,19 @@ function confirmDialog({ title, message, confirmLabel = "OK", danger = true }) {
     const okBtn = $("#confirm-modal-ok");
     const cancelBtn = $("#confirm-modal-cancel");
     if (!modal || !titleEl || !msgEl || !okBtn || !cancelBtn) {
-      resolve(window.confirm(message));
+      resolve(window.confirm(message || ""));
       return;
     }
 
     titleEl.textContent = title;
-    msgEl.textContent = message;
+    // messageHtml is caller-provided markup (already escaped by the caller).
+    // Used to accent specific values (e.g. the sending account) inside the
+    // dialog; plain `message` stays text-only.
+    if (messageHtml) {
+      msgEl.innerHTML = messageHtml;
+    } else {
+      msgEl.textContent = message || "";
+    }
     okBtn.textContent = confirmLabel;
     okBtn.classList.toggle("btn-danger", danger);
     okBtn.classList.toggle("btn-primary", !danger);
@@ -1633,6 +1640,103 @@ function confirmDialog({ title, message, confirmLabel = "OK", danger = true }) {
     });
     document.addEventListener("keydown", onKey);
     cancelBtn.focus();
+  });
+}
+
+/**
+ * Accent the compose modal's From field so the sending mailbox is visually
+ * distinct from the other inputs (live bug 2026-10-29 — the wrong account
+ * was easy to miss). Adds an accent left-bar/tint on the field wrapper and
+ * a bold accent-coloured readout of the resolved address.
+ */
+function applyComposeFromAccent() {
+  const select = $('#compose-from-account');
+  if (!select) return;
+  const wrap = select.closest('.compose-from-accent') || select.parentElement;
+  if (wrap && !wrap.classList.contains('compose-from-accent')) {
+    wrap.classList.add('compose-from-accent');
+    wrap.style.cssText = "padding:0.3rem 0.5rem; border:1px solid var(--border); border-left:4px solid var(--accent); border-radius:4px; background:linear-gradient(90deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent 60%);";
+  }
+  const acct = (mailState.accounts || []).find(a => a.id === parseInt(select.value, 10));
+  let label = wrap ? wrap.querySelector('.compose-from-accent-label') : null;
+  if (!acct) {
+    if (label) label.remove();
+    return;
+  }
+  if (!label) {
+    label = document.createElement('div');
+    label.className = 'compose-from-accent-label';
+    label.style.cssText = "margin-top:0.2rem; font-size:0.78rem; font-weight:600; color:var(--accent);";
+    if (wrap) wrap.appendChild(label);
+  }
+  const name = acct.smtp_from_name || acct.display_name || '';
+  const email = acct.email || '';
+  label.textContent = (name && name !== email) ? `${name} — ${email}` : email;
+  if (acct.tab_color) {
+    if (wrap) wrap.style.borderLeftColor = acct.tab_color;
+    label.style.color = acct.tab_color;
+  }
+}
+
+/**
+ * Confirmation dialog shown before sending mail.
+ *
+ * The account the mail will go out from is ACCENTED (bold, accent color,
+ * monospace, left accent bar) so it cannot be missed — picking the wrong
+ * sending mailbox is what caused the "sent from the wrong Outlook account"
+ * incident of 2026-10-29.
+ *
+ * When the account's Graph connection is not identity-verified the dialog
+ * escalates to a warning, because that is precisely the state in which a
+ * send can go out as a different Outlook account than the one displayed.
+ *
+ * @param {object} opts
+ * @param {object|null} opts.account  the mail account row (id, email, display name)
+ * @param {string} opts.to
+ * @param {string} opts.subject
+ * @returns {Promise<boolean>} true when the user confirmed
+ */
+async function confirmMailSend({ account, to = "", subject = "" }) {
+  const email = (account && account.email) || "";
+  const label = (account && (account.smtp_from_name || account.display_name)) || "";
+  const accent = (account && account.tab_color) || "var(--accent)";
+  const verification = (account && account.sendVerification) || "n/a";
+  const identityMismatch = verification === "mismatch";
+  const unverified = verification === "unverified";
+
+  let warning = "";
+  if (identityMismatch) {
+    warning = `<div style="margin-top:0.6rem; padding:0.5rem 0.6rem; border:1px solid #ef4444; border-left:4px solid #ef4444; border-radius:4px; background:rgba(239,68,68,0.10); color:#ef4444; font-size:0.85rem;">
+      <strong>Wrong mailbox connected.</strong> This account's Microsoft Graph connection belongs to
+      <strong>${escapeHtml(String((account && account.graphIdentity) || "another mailbox"))}</strong>, not ${escapeHtml(email)}.
+      Disconnect and reconnect Graph for this mailbox before sending.</div>`;
+  } else if (unverified) {
+    warning = `<div style="margin-top:0.6rem; padding:0.5rem 0.6rem; border:1px solid #f59e0b; border-left:4px solid #f59e0b; border-radius:4px; background:rgba(245,158,11,0.10); color:#b45309; font-size:0.85rem;">
+      <strong>Not identity-verified.</strong> This mailbox's Graph connection has not been verified
+      against the Outlook account it sends as. The server refuses the send if it cannot confirm
+      the mailbox — disconnect and reconnect Graph for this account.</div>`;
+  }
+
+  const html = `
+    <div style="display:flex; align-items:center; gap:0.6rem; padding:0.5rem 0.65rem; border:1px solid var(--border); border-left:4px solid ${accent}; border-radius:4px; background:linear-gradient(90deg, color-mix(in srgb, ${accent} 14%, transparent), transparent 65%);">
+      <div style="flex:1; min-width:0;">
+        <div style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted);">Sending from</div>
+        <div style="font-size:1rem; font-weight:700; color:${accent}; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-all;">${escapeHtml(email)}</div>
+        ${label && label !== email ? `<div style="font-size:0.8rem; color:var(--muted); margin-top:0.1rem;">${escapeHtml(label)}</div>` : ''}
+      </div>
+    </div>
+    <div style="margin-top:0.6rem; font-size:0.85rem; color:var(--text);">
+      <div style="margin-bottom:0.2rem;"><strong>To:</strong> ${escapeHtml(to)}</div>
+      <div><strong>Subject:</strong> ${escapeHtml(subject)}</div>
+    </div>
+    ${warning}`;
+
+  return await confirmDialog({
+    title: "Send this email?",
+    messageHtml: html,
+    message: `Send this email from ${email}?`,
+    confirmLabel: "Send now",
+    danger: !!(warning && identityMismatch),
   });
 }
 
@@ -21597,7 +21701,17 @@ async function openComposeModal(opts = {}) {
     fromSelect.innerHTML = mailState.accounts.map(a =>
       `<option value="${a.id}">${escapeHtml(a.smtp_from_name || a.email)} &lt;${escapeHtml(a.email)}&gt;</option>`
     ).join('');
+    // Default to the account of the message being replied to / forwarded
+    // (live bug 2026-10-29: the dropdown defaulted to accounts[0], so a
+    // reply to an MDM message offered the Aplus mailbox).
+    if (opts.fromAccountId) {
+      const wanted = parseInt(opts.fromAccountId, 10);
+      if (!Number.isNaN(wanted) && mailState.accounts.some(a => a.id === wanted)) {
+        fromSelect.value = String(wanted);
+      }
+    }
   }
+  applyComposeFromAccent();
 
   // Show the Graph sendMail banner if the active from-account is a
   // Microsoft OAuth account without a connected Graph token.
@@ -21877,6 +21991,9 @@ async function openComposeModal(opts = {}) {
       const dealSearchText = $('#compose-deal-search')?.value?.trim() || '';
       if (!accountId || !to || !subject) { showToast('From, To, and Subject are required', true); return; }
       if (!dealId && dealSearchText && !confirm(`You typed "${dealSearchText}" in the deal search but didn't select a deal. Send without linking to a deal?`)) { return; }
+      // Confirm the sending mailbox (the account is accented in the dialog).
+      const _acct = (mailState.accounts || []).find(a => a.id === accountId) || null;
+      if (!await confirmMailSend({ account: _acct, to, subject })) { return; }
       sendBtn.disabled = true;
       sendBtn.innerHTML = '<i class="ti ti-loader" style="margin-right:0.3rem;"></i>Sending...';
       try {
@@ -22265,6 +22382,9 @@ function renderComposeTabContent(container, tabId, opts = {}) {
     const body = container.querySelector('.compose-tab-body')?.innerHTML || '';
     const dealId = parseInt(container.querySelector('.compose-tab-deal-selected')?.dataset?.dealId) || null;
     if (!accountId || !to || !subject) { showToast('From, To, and Subject are required', true); return; }
+    // Confirm the sending mailbox (the account is accented in the dialog).
+    const _tabAcct = (mailState.accounts || []).find(a => a.id === accountId) || null;
+    if (!await confirmMailSend({ account: _tabAcct, to, subject })) { return; }
     const sendBtn = container.querySelector('.compose-tab-send');
     sendBtn.disabled = true;
     sendBtn.innerHTML = '<i class="ti ti-loader" style="margin-right:0.3rem;"></i>Sending...';
@@ -23730,7 +23850,10 @@ function bindComposeEmailModal() {
   }
   if (fromSelect && !fromSelect.dataset.graphBannerBound) {
     fromSelect.dataset.graphBannerBound = '1';
-    fromSelect.addEventListener('change', () => updateComposeGraphBanner());
+    fromSelect.addEventListener('change', () => {
+      updateComposeGraphBanner();
+      applyComposeFromAccent();
+    });
   }
 
   // Reload signature when the From account changes
@@ -27324,6 +27447,10 @@ function bindEmailPreviewActionButtons(modal, norm, fullMail, messageId, close, 
         openComposeModal({
           to, subject: subjectLine, body: quotedBody,
           title: action === 'forward' ? 'Forward Email' : 'Reply to Email',
+          // Default the From dropdown to THIS message's mailbox (live bug
+          // 2026-10-29: it defaulted to accounts[0], so replying to an MDM
+          // message offered the Aplus mailbox).
+          fromAccountId: fullMail && (fullMail.account_id ?? fullMail.accountId) ? (fullMail.account_id ?? fullMail.accountId) : null,
         });
       } else if (action === 'archive') {
         api(`/api/v2/mail/messages/${encodeURIComponent(messageId)}/move`, { method: 'POST', body: JSON.stringify({ folder: 'Archive' }) })
@@ -27473,7 +27600,7 @@ function mailForwardHeader(norm, fullMail) {
     + `<p style="margin:0 0 0.6rem;"><strong>Subject:</strong> ${escapeHtml(subject)}</p>`;
 }
 
-function renderInlineReply(panel, type, messageId, norm) {
+function renderInlineReply(panel, type, messageId, norm, messageAccountId) {
   // Remove any existing inline reply
   const existing = panel.querySelector('.mail-inline-reply');
   if (existing) { existing.remove(); return; }
@@ -27484,6 +27611,23 @@ function renderInlineReply(panel, type, messageId, norm) {
   const date = norm.date || "";
   const bodyPick = pickMailBodyForDisplay(norm);
   const bodyText = bodyPick?.content || "";
+
+  // Which mailbox does this reply go out from? It MUST be the mailbox the
+  // message belongs to — the old code used accounts[0] (i.e. the first
+  // account by email), so every inline reply in the mail modal went out
+  // through the same account regardless of the tab it was sent from
+  // (live bug 2026-10-29).
+  const accounts = mailState.accounts || [];
+  const fallbackAccountId = (() => {
+    const active = mailState.activeAccount;
+    if (active && active !== 'crm' && !Number.isNaN(parseInt(active, 10))) return parseInt(active, 10);
+    return accounts.length ? accounts[0].id : null;
+  })();
+  let fromAccountId = parseInt(messageAccountId, 10);
+  if (Number.isNaN(fromAccountId)) fromAccountId = fallbackAccountId;
+  const fromAccount = accounts.find(a => a.id === fromAccountId) || null;
+  const fromAccountEmail = fromAccount ? (fromAccount.email || '') : '';
+  const fromAccountName = fromAccount ? (fromAccount.smtp_from_name || fromAccount.email || '') : '';
 
   const replyDiv = document.createElement("div");
   replyDiv.className = "mail-inline-reply";
@@ -27504,6 +27648,11 @@ function renderInlineReply(panel, type, messageId, norm) {
   }
 
   replyDiv.innerHTML = `
+    <div class="mail-from-accent" style="display:flex; gap:0.5rem; margin-bottom:0.4rem; align-items:center; padding:0.3rem 0.5rem; border:1px solid var(--border); border-left:4px solid var(--accent); border-radius:4px; background:linear-gradient(90deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent 60%);">
+      <label style="font-size:0.8rem; color:var(--muted); width:2rem;">From</label>
+      <select class="inline-reply-from" style="flex:1; padding:0.3rem 0.4rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem; background:var(--bg); color:var(--text);">${accounts.map(a => `<option value="${a.id}"${a.id === fromAccountId ? ' selected' : ''}>${escapeHtml(a.smtp_from_name || a.email || '')} &lt;${escapeHtml(a.email || '')}&gt;</option>`).join('')}</select>
+    </div>
+    ${fromAccountEmail ? `<div class="mail-from-accent-label" style="margin:-0.2rem 0 0.4rem 2.5rem; font-size:0.78rem; color:var(--accent); font-weight:600;">${escapeHtml(fromAccountName)}${fromAccountName && fromAccountName !== fromAccountEmail ? ' — ' : ''}${escapeHtml(fromAccountEmail)}</div>` : ''}
     <div style="display:flex; gap:0.5rem; margin-bottom:0.4rem;">
       <label style="font-size:0.8rem; color:var(--muted); width:2rem;">To</label>
       <input type="email" class="inline-reply-to" value="${escapeHtml(to)}" style="flex:1; padding:0.3rem 0.4rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem; background:var(--bg); color:var(--text);">
@@ -27551,10 +27700,19 @@ function renderInlineReply(panel, type, messageId, norm) {
     const bodyHtml = replyDiv.querySelector('.inline-reply-body').innerHTML;
     if (!toVal || !subjectVal) { showToast("To and Subject are required", true); return; }
     try {
-      // Find first available account for sending
-      const accounts = mailState.accounts || [];
-      const accountId = accounts.length > 0 ? accounts[0].id : null;
+      // Send from the account chosen in the accented From field — NOT
+      // accounts[0] (that sent every inline reply through one mailbox
+      // regardless of which tab it came from; live bug 2026-10-29).
+      const fromSelect = replyDiv.querySelector('.inline-reply-from');
+      const accountId = fromSelect ? parseInt(fromSelect.value, 10) : fromAccountId;
       if (!accountId) { showToast("No mail account configured for sending", true); return; }
+      const acct = (mailState.accounts || []).find(a => a.id === accountId);
+      const confirmed = await confirmMailSend({
+        account: acct,
+        to: toVal,
+        subject: subjectVal,
+      });
+      if (!confirmed) return;
       const inlineResult = await api("/api/v2/mail/send", {
         method: "POST",
         body: JSON.stringify({ account_id: accountId, to: toVal, subject: subjectVal, body: bodyHtml })
@@ -27721,7 +27879,7 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
     replyBtn.title = "Reply";
     replyBtn.innerHTML = '<i class="ti ti-arrow-back-up"></i><span class="btn-label"> Reply</span>';
     replyBtn.addEventListener("click", () => {
-      renderInlineReply(panel, "reply", messageId, norm);
+      renderInlineReply(panel, "reply", messageId, norm, mail.account_id);
     });
     actionBtns.appendChild(replyBtn);
 
@@ -27731,7 +27889,7 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
     replyAllBtn.title = "Reply all";
     replyAllBtn.innerHTML = '<i class="ti ti-arrow-back-up"></i><span class="btn-label"> All</span>';
     replyAllBtn.addEventListener("click", () => {
-      renderInlineReply(panel, "reply-all", messageId, norm);
+      renderInlineReply(panel, "reply-all", messageId, norm, mail.account_id);
     });
     actionBtns.appendChild(replyAllBtn);
 
@@ -27741,7 +27899,7 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
     fwdBtn.title = "Forward";
     fwdBtn.innerHTML = '<i class="ti ti-arrow-forward-up"></i><span class="btn-label"> Forward</span>';
     fwdBtn.addEventListener("click", () => {
-      renderInlineReply(panel, "forward", messageId, norm);
+      renderInlineReply(panel, "forward", messageId, norm, mail.account_id);
     });
     actionBtns.appendChild(fwdBtn);
 

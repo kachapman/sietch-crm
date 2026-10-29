@@ -243,7 +243,8 @@ def _build_graph_token_refresher():
 
     def _refresh(account_id: int) -> tuple[str | None, str | None]:
         row = db.query_one(
-            "SELECT oauth_graph_access_token, oauth_graph_refresh_token, oauth_graph_token_expires FROM mail_accounts WHERE id = %s",
+            "SELECT email, oauth_graph_access_token, oauth_graph_refresh_token, oauth_graph_token_expires "
+            "FROM mail_accounts WHERE id = %s",
             (account_id,),
         )
         if not row or not row.get("oauth_graph_access_token"):
@@ -254,6 +255,7 @@ def _build_graph_token_refresher():
             return token, None
         if not row.get("oauth_graph_refresh_token"):
             return None, "Graph token expired and no refresh token stored — reconnect from mail account settings"
+        acct_email = (row.get("email") or "").strip().lower()
         try:
             import oauth_providers
             tok = oauth_providers.MicrosoftProvider.graph_refresh_token(row["oauth_graph_refresh_token"])
@@ -262,9 +264,28 @@ def _build_graph_token_refresher():
             new_expires_ts = time.time() + tok.get("expires_in", 3600)
             if not new_token:
                 return None, "Graph token refresh returned no access token"
+            # Verify the refreshed token's identity (live bug 2026-10-29):
+            # a refresh token is bound to the granting mailbox, so the
+            # id_token in the refresh response is authoritative. A mismatch
+            # means this account holds another mailbox's token.
+            ms_email = (tok.get("email") or "").strip().lower()
+            if ms_email and acct_email and ms_email != acct_email:
+                err = (f"Graph token belongs to {ms_email}, but this mailbox is {acct_email}. "
+                       f"Disconnect Graph and reconnect while signed in as {acct_email}.")
+                logger.warning("Graph token identity mismatch on refresh for account %s: %s", account_id, err)
+                try:
+                    db.execute(
+                        "UPDATE mail_accounts SET oauth_graph_last_error = %s, oauth_graph_last_error_at = NOW() WHERE id = %s",
+                        (err[:300], account_id),
+                    )
+                except Exception:
+                    pass
+                return None, err
             db.execute(
-                "UPDATE mail_accounts SET oauth_graph_access_token = %s, oauth_graph_refresh_token = %s, oauth_graph_token_expires = to_timestamp(%s) WHERE id = %s",
-                (new_token, new_refresh, new_expires_ts, account_id),
+                "UPDATE mail_accounts SET oauth_graph_access_token = %s, oauth_graph_refresh_token = %s, "
+                "oauth_graph_token_expires = to_timestamp(%s), oauth_graph_identity = COALESCE(%s, oauth_graph_identity) "
+                "WHERE id = %s",
+                (new_token, new_refresh, new_expires_ts, ms_email or None, account_id),
             )
             return new_token, None
         except Exception as e:
@@ -1465,6 +1486,161 @@ def _add_tag_to_message(message_id: int, tag_title: str, assigned_by: int | None
 EMAIL_HISTORY_CATEGORY_ID = 13
 
 
+def _copy_mail_attachments_to_project(opp_id: int, event_id: int, message_id: int) -> int:
+    """Copy a linked email's attachments into the PROJECT's own storage.
+
+    OnlyOffice parity (live requirement 2026-10-29): linking an email to a
+    project must MATERIALIZE the email and its files in the project, so
+    removing the mail account later does not remove access to them, and every
+    user who can open the project can read them — whether or not the account
+    is in their mail modal.
+
+    Before this, the timeline only REFERENCED the mail attachments: they were
+    resolved live from mail_attachments at read time and served through the
+    mail download route (gated by mail-account access). Deleting the mail
+    account cascaded mail_attachments away and the project's files vanished.
+
+    Source of the bytes, in order:
+      1. the local mirror (data/mail-attachments/<message_id>/<file>) — used
+         by sent mail and by anything already cached locally
+      2. a live IMAP fetch — inbound attachment bytes were never persisted
+         locally, so they are pulled from the mailbox on demand
+    A failure to copy one file never fails the link.
+
+    Returns the number of files copied.
+    """
+    import re as _re
+    from pathlib import Path
+
+    try:
+        att_rows = db.query_dicts(
+            "SELECT id, filename, mime_type, size_bytes, stored_path FROM mail_attachments "
+            "WHERE message_id = %s ORDER BY filename",
+            (message_id,),
+        )
+    except Exception:
+        logger.exception("Failed to list attachments for message %d", message_id)
+        return 0
+    if not att_rows:
+        return 0
+
+    root = Path(__file__).resolve().parent.parent
+    dest_dir = root / "data" / "history-attachments" / str(opp_id) / str(event_id)
+    copied = 0
+    for att in att_rows:
+        filename = att.get("filename") or "attachment"
+        data: bytes | None = None
+        stored = (att.get("stored_path") or "").strip()
+        if stored:
+            full = root / stored
+            if full.is_file():
+                try:
+                    data = full.read_bytes()
+                except Exception:
+                    data = None
+        if data is None:
+            data = _fetch_mail_attachment_bytes(message_id, att.get("id"))
+        if not data:
+            continue
+        safe = _re.sub(r"[^\w.\- ]+", "_", filename).strip("._") or "attachment"
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / f"{int(att['id'])}_{safe}"
+            dest.write_bytes(data)
+            rel = dest.relative_to(root)
+            rel_str = str(rel)
+            mime = att.get("mime_type") or "application/octet-stream"
+            db.execute(
+                "INSERT INTO history_attachments (event_id, filename, file_path, file_size, mime_type, uploaded_by) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (event_id, filename, rel_str, len(data), mime, None),
+            )
+            # Also register the file as a project document so it opens in the
+            # document editor and appears in the project's Documents tab —
+            # the same shape the imported attachments have.
+            try:
+                db.execute(
+                    "INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (opp_id, filename, rel_str, len(data), mime, None),
+                )
+            except Exception:
+                logger.exception("Failed to register project document for %s", filename)
+            copied += 1
+        except Exception:
+            logger.exception("Failed to copy mail attachment %s into project %s",
+                             filename, opp_id)
+    return copied
+
+
+def _fetch_mail_attachment_bytes(message_id: int, attachment_id: int | None) -> bytes | None:
+    """Pull attachment bytes straight from the mailbox (live IMAP fetch).
+
+    Inbound attachment bytes are not persisted in the CRM, so this is the
+    only way to materialize them into project storage. Returns None when the
+    mailbox cannot be reached or the file is gone.
+
+    The scanner cannot import server (server imports this module), so the
+    IMAP connection is made here from the same mail_accounts row.
+    """
+    try:
+        msg = db.query_one(
+            "SELECT m.imap_uid, m.folder, m.account_id FROM mail_messages m WHERE m.id = %s",
+            (message_id,),
+        )
+        if not msg:
+            return None
+        att = db.query_one(
+            "SELECT filename, imap_part_id FROM mail_attachments WHERE id = %s",
+            (attachment_id,),
+        )
+        if not att:
+            return None
+        acct = db.query_one(
+            "SELECT email, imap_host, imap_port, password_encrypted, oauth_provider, oauth_access_token "
+            "FROM mail_accounts WHERE id = %s",
+            (msg["account_id"],),
+        )
+        if not acct or not acct.get("imap_host"):
+            return None
+        from imap_tools import A, MailBox
+        port = int(acct.get("imap_port") or 993)
+        mailbox = MailBox(acct["imap_host"], port=port)
+        try:
+            if acct.get("oauth_provider"):
+                token = acct.get("oauth_access_token") or ""
+                if not token:
+                    return None
+                mailbox.xoauth2(acct["email"], token)
+            else:
+                pwd = acct.get("password_encrypted") or ""
+                if not pwd:
+                    return None
+                mailbox.login(acct["email"], pwd)
+            mailbox.folder.set(msg["folder"] or "INBOX")
+            uid = str(msg["imap_uid"])
+            msgs = list(mailbox.fetch(criteria=A(uid=uid), mark_seen=False, bulk=False))
+            if not msgs:
+                return None
+            imap_msg = msgs[0]
+            part_id = str(att.get("imap_part_id") or "")
+            for att_obj in (imap_msg.attachments or []):
+                if part_id and str(att_obj.part or "") == part_id:
+                    return att_obj.payload
+                if att_obj.filename == att["filename"]:
+                    return att_obj.payload
+            return None
+        finally:
+            try:
+                mailbox.logout()
+            except Exception:
+                pass
+    except Exception:
+        logger.exception("Live IMAP fetch failed for message %d attachment %s",
+                         message_id, attachment_id)
+        return None
+
+
 def create_email_history_snapshot(opp_id: int, message_id: int, user_id: int | None = None) -> bool:
     """Create the project-timeline event for a linked email (idempotent).
 
@@ -1472,6 +1648,10 @@ def create_email_history_snapshot(opp_id: int, message_id: int, user_id: int | N
     (live gap 2026-10-28: auto-links wrote only mail_deal_links, so linked
     mail never appeared in project history). Returns True when an event now
     exists (created or already present).
+
+    The event carries the full email body inline (so every project user can
+    read it without the mail account) AND copies the attachments into the
+    project's own storage (so the files survive the mail account going away).
     """
     try:
         existing = db.query_one(
@@ -1509,11 +1689,18 @@ def create_email_history_snapshot(opp_id: int, message_id: int, user_id: int | N
             "body_text": msg["body_text"] or "",
             "attachments": att_snapshot,
         }
-        db.execute(
+        event_id = db.insert_returning(
             "INSERT INTO history_events (opportunity_id, category_id, content, created_by) "
-            "VALUES (%s, %s, %s, %s)",
+            "VALUES (%s, %s, %s, %s) RETURNING id",
             (opp_id, EMAIL_HISTORY_CATEGORY_ID, json.dumps(snapshot), user_id),
         )
+        if event_id:
+            # Materialize the files in the project (see the helper docstring).
+            try:
+                _copy_mail_attachments_to_project(opp_id, event_id, message_id)
+            except Exception:
+                logger.exception("Failed to copy attachments for email %d into project %s",
+                                 message_id, opp_id)
         return True
     except Exception:
         logger.exception("Failed to create history event for email %d", message_id)

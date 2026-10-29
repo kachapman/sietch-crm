@@ -53,6 +53,37 @@ def _set_smtp_auth_disabled(account_id: Any, value: bool) -> None:
         logger.exception("Failed to persist smtp_auth_disabled=%s for account %s", value, account_id)
 
 
+def _graph_identity_state(acct: dict) -> tuple[str, str]:
+    """Classify a mail account's Graph identity for send-time safety.
+
+    Returns (state, detail) where state is:
+      - "ok"         the Graph token is verified and belongs to this mailbox
+      - "mismatch"   the token provably belongs to a DIFFERENT mailbox
+      - "unverified" the token's identity could not be determined
+
+    Graph derives the sender from the access token, NOT from any From
+    address we pass ("from_addr is informational only — Graph derives the
+    sender from the access token"). So the only thing that stops a send
+    going out as the wrong Outlook account is knowing which mailbox the
+    token belongs to. Live incident 2026-10-29: the Aplus account held an
+    MDM token (the connect-time identity check silently no-opped because
+    the Graph scope had no `openid`), and every Graph send went out as
+    "MDM Construction" while the CRM recorded "aplus.estimates@outlook.com".
+    """
+    acct_email = (acct.get("email") or "").strip().lower()
+    identity = (acct.get("oauth_graph_identity") or "").strip().lower()
+    if not acct_email:
+        return "unverified", "this mail account has no email address"
+    if not identity:
+        return "unverified", (
+            "the Graph connection is not identity-verified — reconnect Graph "
+            "for this mailbox so we can confirm which Outlook account sends"
+        )
+    if identity != acct_email:
+        return "mismatch", identity
+    return "ok", identity
+
+
 def try_send_for_account(
     acct: dict,
     *,
@@ -100,8 +131,46 @@ def try_send_for_account(
     # Step 1: try Graph if this is a Microsoft OAuth account with a token.
     graph_token, graph_err = (None, None)
     if oauth_provider == "microsoft" and refresh_graph_token is not None:
+        # SEND-TIME IDENTITY GUARD (live bug 2026-10-29).
+        # Graph picks the sender from the access token, so a token that
+        # belongs to another mailbox sends as THAT mailbox no matter what we
+        # pass as from_addr. Refuse rather than send from the wrong account.
+        # Checked BEFORE the send so nothing goes out.
+        if acct.get("oauth_graph_access_token") or acct.get("oauth_graph_refresh_token"):
+            state, detail = _graph_identity_state(acct)
+            if state == "mismatch":
+                logger.warning(
+                    "Refusing Graph send for account=%s: token belongs to %s, mailbox is %s",
+                    account_id, detail, acct.get("email"))
+                return False, (
+                    f"Refusing to send: this mailbox's Graph connection belongs to {detail}, "
+                    f"not {acct.get('email')}. Disconnect Graph for this account and reconnect "
+                    f"while signed in as {acct.get('email')}. Nothing was sent."
+                ), "graph"
+            if state == "unverified":
+                logger.warning(
+                    "Refusing Graph send for account=%s: identity unverified (%s)",
+                    account_id, detail)
+                return False, (
+                    f"Refusing to send: {detail} ({acct.get('email')}). "
+                    "Disconnect Graph for this account and reconnect while signed in as "
+                    f"{acct.get('email')}. Nothing was sent."
+                ), "graph"
         graph_token, graph_err = refresh_graph_token(account_id)
         if graph_token:
+            # The refresher may have rotated the token; re-check identity
+            # against the freshly minted token's verified identity.
+            if oauth_provider == "microsoft":
+                state, detail = _graph_identity_state(acct)
+                if state == "mismatch":
+                    logger.warning(
+                        "Refusing Graph send for account=%s: refreshed token belongs to %s",
+                        account_id, detail)
+                    return False, (
+                        f"Refusing to send: the refreshed Graph token belongs to {detail}, "
+                        f"not {acct.get('email')}. Disconnect Graph for this account and "
+                        f"reconnect while signed in as {acct.get('email')}. Nothing was sent."
+                    ), "graph"
             from mail_graph_client import send_email_via_graph
             try:
                 ok, err = send_email_via_graph(
@@ -135,6 +204,20 @@ def try_send_for_account(
             f"and Graph send is unavailable ({graph_err or 'no Graph token connected'}). "
             "Nothing was sent — reconnect Graph from mail account settings."
         ), "graph" if graph_token else "smtp_password"
+    # SMTP SPOOFING GUARD (live bug 2026-10-29): the sender of an SMTP
+    # message is the authenticated smtp_user, not the From header we set.
+    # If they differ, the mail goes out as smtp_user while we record the
+    # account email — the same class of lie as the Graph bug. Refuse.
+    smtp_user = (acct.get("smtp_user") or "").strip().lower()
+    acct_email = (acct.get("email") or "").strip().lower()
+    if smtp_user and acct_email and smtp_user != acct_email:
+        logger.warning("Refusing SMTP send for account=%s: smtp_user=%s != account email=%s",
+                       account_id, smtp_user, acct_email)
+        return False, (
+            f"Refusing to send: this account authenticates as {smtp_user} but is listed as "
+            f"{acct.get('email')}. Fix the account's SMTP user, or reconnect Graph for it. "
+            "Nothing was sent."
+        ), "smtp_password"
     smtp_host = acct.get("smtp_host") or ""
     if not smtp_host:
         return False, graph_err or "SMTP not configured for this account", "graph" if graph_token else "smtp_password"

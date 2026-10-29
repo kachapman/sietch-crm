@@ -86,7 +86,23 @@ class MicrosoftProvider(OAuthProvider):
     # alongside the Exchange token (oauth_graph_*) and used only when the SMTP
     # AUTH path is unavailable (e.g. Microsoft disabled SMTP AUTH on the
     # mailbox: 5.7.139 "SmtpClientAuthentication is disabled").
-    _GRAPH_SCOPE = "offline_access https://graph.microsoft.com/Mail.Send"
+    #
+    # openid/email/profile are REQUIRED for the identity check (live bug
+    # 2026-10-29): without `openid` the token response carries NO id_token,
+    # so the signed-in Microsoft account cannot be read from the token. The
+    # fallback probe (Graph /me) needs User.Read, which was not granted
+    # either, so it answered HTTP 403 and the identity check silently
+    # no-opped — which is how mailbox A's token ended up stored on mailbox
+    # B and every Graph send went out as the wrong account.
+    # OIDC scopes need no extra consent, so adding them is free.
+    _GRAPH_SCOPE = ("offline_access openid email profile "
+                    "https://graph.microsoft.com/Mail.Send")
+
+    # Legacy Graph scope for refresh tokens granted before openid was added.
+    # Microsoft rejects a scope upgrade on an old grant (AADSTS70000), so the
+    # refresh falls back to this — but it mints no id_token, so the identity
+    # of such a token cannot be verified and the account must be reconnected.
+    _GRAPH_SCOPE_LEGACY = "offline_access https://graph.microsoft.com/Mail.Send"
 
     @classmethod
     def _tenant(cls) -> str:
@@ -99,7 +115,7 @@ class MicrosoftProvider(OAuthProvider):
         return "common"
 
     @classmethod
-    def authorize_url(cls, state: str) -> str:
+    def authorize_url(cls, state: str, login_hint: str | None = None) -> str:
         params = urllib.parse.urlencode({
             "client_id": MICROSOFT_CLIENT_ID,
             "response_type": "code",
@@ -107,6 +123,13 @@ class MicrosoftProvider(OAuthProvider):
             "scope": cls._SCOPE,
             "state": state,
             "response_mode": "query",
+            # Always ask WHICH Microsoft account is signing in (live bug
+            # 2026-10-29: without this, Microsoft silently reused the
+            # browser's existing session, so connecting "Aplus" while signed
+            # in as MDM minted an MDM token). login_hint pre-filters the
+            # picker to the intended mailbox.
+            "prompt": "select_account",
+            **({"login_hint": login_hint} if login_hint else {}),
         })
         url = cls._AUTHORIZE.format(tenant=cls._tenant())
         return f"{url}?{params}"
@@ -162,7 +185,7 @@ class MicrosoftProvider(OAuthProvider):
         return {"host": "smtp.office365.com", "port": 587}
 
     @classmethod
-    def graph_authorize_url(cls, state: str) -> str:
+    def graph_authorize_url(cls, state: str, login_hint: str | None = None) -> str:
         params = urllib.parse.urlencode({
             "client_id": MICROSOFT_CLIENT_ID,
             "response_type": "code",
@@ -170,6 +193,13 @@ class MicrosoftProvider(OAuthProvider):
             "scope": cls._GRAPH_SCOPE,
             "state": state,
             "response_mode": "query",
+            # Force the account picker. Without it Microsoft silently reused
+            # the browser's existing Microsoft session, so "Connect Graph"
+            # for the Aplus account minted an MDM token when MDM happened to
+            # be signed in — and every send then went out as MDM
+            # (live bug 2026-10-29).
+            "prompt": "select_account",
+            **({"login_hint": login_hint} if login_hint else {}),
         })
         url = cls._AUTHORIZE.format(tenant=cls._tenant())
         return f"{url}?{params}"
@@ -233,18 +263,50 @@ class MicrosoftProvider(OAuthProvider):
 
     @classmethod
     def graph_refresh_token(cls, refresh_token: str) -> dict[str, Any]:
-        data = {
-            "client_id": MICROSOFT_CLIENT_ID,
-            "client_secret": MICROSOFT_CLIENT_SECRET,
-            "refresh_token": refresh_token,
-            "grant_type": "refresh_token",
-            "scope": cls._GRAPH_SCOPE,
-        }
-        result = _post_json(cls._TOKEN.format(tenant=cls._tenant()), data)
+        """Refresh a Graph token, returning the identity it belongs to.
+
+        Returns:
+            access_token, expires_in, refresh_token, email, identity_unavailable
+
+        `email` is the signed-in Microsoft account, read from the id_token
+        (the Graph scope now includes `openid`). It is the ONLY way to know
+        which mailbox the token will actually send as — Graph derives the
+        sender from the token, not from any From address we pass.
+
+        `identity_unavailable` is True when the refresh had to fall back to
+        the legacy scope: tokens granted before `openid` was added cannot be
+        upgraded (Microsoft answers AADSTS70000) and the legacy scope mints
+        no id_token, so such a token cannot be verified and the account must
+        be reconnected.
+        """
+        result = None
+        identity_unavailable = False
+        for scope in (cls._GRAPH_SCOPE, cls._GRAPH_SCOPE_LEGACY):
+            data = {
+                "client_id": MICROSOFT_CLIENT_ID,
+                "client_secret": MICROSOFT_CLIENT_SECRET,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+                "scope": scope,
+            }
+            try:
+                result = _post_json(cls._TOKEN.format(tenant=cls._tenant()), data)
+                identity_unavailable = (scope == cls._GRAPH_SCOPE_LEGACY)
+                break
+            except Exception as e:
+                # AADSTS70000: the requested scopes are unauthorized for this
+                # grant (old refresh token). Try the legacy scope.
+                if "70000" in str(e) or "invalid_scope" in str(e).lower():
+                    continue
+                raise
+        if result is None:
+            raise RuntimeError("Graph token refresh failed")
         return {
             "access_token": result.get("access_token", ""),
             "expires_in": result.get("expires_in", 3600),
             "refresh_token": result.get("refresh_token", refresh_token),
+            "email": cls.account_email_from_token_result(result),
+            "identity_unavailable": identity_unavailable,
         }
 
 

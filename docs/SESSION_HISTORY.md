@@ -11,6 +11,60 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-29 (mail sent from the wrong Outlook account)
+
+**Status: IMPLEMENTED + TESTED — committing, then deploy.**
+
+Three work items, all verified against the live production database.
+
+1. **Wrong-sender (critical).** The Aplus account held an MDM **Graph**
+   token, so every Graph send went out as "MC MDM Construction" while the
+   CRM recorded `aplus.estimates@outlook.com`. Graph derives the sender
+   from the token (no `from` property is sent at all). The connect-time
+   identity check **silently no-opped**: the Graph scope had no `openid`
+   (no id_token) and the `/me` fallback 403'd (no User.Read) → the
+   identity was always `""` → the check never ran. Compounded by no
+   `prompt=select_account` (Microsoft reused the browser session) and by
+   the inline reply using `accounts[0]` (always aplus, ORDER BY email).
+   **Fixed**: scope + openid, account picker + login_hint, fail-closed
+   connect/refresh, send-time Graph + SMTP guards, inline reply uses the
+   message's own account, accented From selector, send-confirmation
+   dialog naming the accented account, `sendVerification` in the payload.
+2. **Backups never ran (critical, silent).** `_load_config_from_db()`
+   returns `(config, configured)`; 3 call sites used it as a dict →
+   `start_backup_scheduler()` died at startup → production ran
+   `backup=disabled` since the file was written. Fixed by unpacking.
+3. **Mail → project copy.** Bodies were already copied inline into
+   `history_events` (no FK to mail_messages) but attachments were only
+   *referenced* live from `mail_attachments` (and gated by mail-account
+   access) → deleting the mail account destroyed the project's files.
+   Now the bytes are copied into `data/history-attachments/<opp>/<event>/`
+   + `history_attachments` + `project_documents` rows.
+
+- Tests: +22 graph identity (17 fail on old code), +5 backup startup (3F),
+  +7 project copy (6F). `test_graph_oauth_status` updated: its
+  `test_unverifiable_identity_still_connects` pinned the exact policy
+  that caused the incident. `test_mail_link_history` mock updated for
+  `insert_returning`.
+- Pre-existing failures NOT caused by this work (fail on clean HEAD):
+  `test_scanner_toggle_gating` (1), `test_sync_pull_deals_fields` (1).
+- Cache-bust 3.7.46→3.7.47. No migration.
+
+**Next (user):** after deploy, re-add Aplus + MDM and re-authorize Graph
+— the account picker now appears and the identity is verified (the admin UI
+shows "Connected as <address>"). Include the **Sent** folder in the
+monitored folders (9 of the 35 orphaned snapshots are sent mail).
+Do NOT re-authorize before the fix is deployed.
+
+**Next (dev):** relink the 35 orphaned `email_snapshot` events from the
+re-synced mailboxes — match on (from_addr, subject, date_received); the
+snapshot's `date_sent` is the IMAP INTERNALDATE and matches the deleted
+rows to the microsecond. One message (old id 3856) was linked to two
+projects (35 and 46) — repoint both. Repointing also restores the
+auto-link dedup key, so the re-sync creates no duplicate timeline entries.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-10-23 (photo report wordmark placeholder)
 
 **Status: IMPLEMENTED + TESTED, pushed — deploying.**

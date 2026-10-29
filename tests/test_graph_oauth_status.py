@@ -90,10 +90,14 @@ class TestGraphStatusAcknowledged(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body["accounts"][0]["graphStatus"], "connected")
 
-    def test_expired_token_reports_expired(self):
+    def test_expired_token_without_refresh_reports_action_needed(self):
+        # An expired token that cannot be renewed needs action; the server
+        # reports "action-needed" (the UI shows "Reconnect needed"). The
+        # old expectation of "expired" was stale (it failed on main before
+        # the 2026-10-29 identity work).
         status, body = _accounts_response([_row(has_graph_token=True,
             oauth_graph_token_expires=datetime.now(timezone.utc) - timedelta(days=1))])
-        self.assertEqual(body["accounts"][0]["graphStatus"], "expired")
+        self.assertEqual(body["accounts"][0]["graphStatus"], "action-needed")
 
     def test_absent_token_reports_none(self):
         status, body = _accounts_response([_row(has_graph_token=False,
@@ -149,12 +153,24 @@ class TestGraphIdentityCheck(unittest.TestCase):
         self.assertEqual(redirects[0][0], "graph_success")
         self.assertTrue(any("oauth_graph_access_token" in s for s, _ in writes))
 
-    def test_unverifiable_identity_still_connects(self):
-        # Exchange without id_token and unreachable /me yields "" — cannot
-        # refuse what cannot be verified (old tokens predate this check).
+    def test_unverifiable_identity_is_refused(self):
+        # CHANGED 2026-10-29. This used to assert that an unverifiable
+        # identity still connects ("cannot refuse what cannot be verified").
+        # That policy is exactly what let mailbox A's token be stored on
+        # mailbox B: the Graph scope had no `openid` (no id_token) and the
+        # /me fallback 403'd, so the identity was always "" and the guard
+        # never ran. The Aplus account then held an MDM token and every
+        # send went out as MDM Construction.
+        #
+        # An unverifiable identity is now REFUSED — fail closed. The Graph
+        # scope includes `openid`, so a normal connect always carries an
+        # id_token and this state only arises for a broken/unreadable
+        # response, where storing the token would be reckless.
         redirects, writes = _callback("st-empty", "a@outlook.com", "")
-        self.assertEqual(redirects[0][0], "graph_success")
-        self.assertTrue(any("oauth_graph_access_token" in s for s, _ in writes))
+        self.assertEqual(redirects[0][0], "error")
+        tok_writes = [s for s, _ in writes if "oauth_graph_access_token" in s]
+        self.assertEqual(tok_writes, [],
+                         "a token whose mailbox cannot be verified must not be stored")
 
 
 def _fake_id_token(payload_dict):

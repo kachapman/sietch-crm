@@ -984,7 +984,9 @@
         <div style="flex-shrink:0; padding:0.3rem 0.75rem; overflow-y:auto; max-height:25%;">
           <div style="display:flex; gap:0.5rem; margin-bottom:0.4rem;">
             <div style="flex:1;">
-              <select id="compose-from-account" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font-size:0.85rem;"></select>
+              <div class="compose-from-accent" style="padding:0.3rem 0.5rem; border:1px solid var(--border); border-left:4px solid var(--accent); border-radius:4px; background:linear-gradient(90deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent 60%);">
+                <select id="compose-from-account" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font-size:0.85rem;"></select>
+              </div>
             </div>
             <div style="flex:1;">
               <input type="search" id="compose-deal-search" style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font-size:0.85rem;" placeholder="Link to deal..." autocomplete="off">
@@ -3873,6 +3875,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3.7.46" type="module"></script>
+  <script src="app.js?v=3.7.47" type="module"></script>
 </body>
 </html>

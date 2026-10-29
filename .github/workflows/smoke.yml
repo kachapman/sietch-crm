@@ -208,6 +208,15 @@ jobs:
       - name: Run photo report no-placeholder tests
         run: python3 tests/test_photo_report_no_placeholder.py -v
 
+      - name: Run graph identity guard tests
+        run: python3 tests/test_graph_identity_guard.py -v
+
+      - name: Run backup scheduler startup tests
+        run: python3 tests/test_backup_scheduler_startup.py -v
+
+      - name: Run email project copy tests
+        run: python3 tests/test_email_project_copy.py -v
+
       - name: Run photo report prefill tests
         run: node --test tests/test_photo_report_prefill.mjs
 

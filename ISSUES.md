@@ -888,3 +888,128 @@ These were masked by the dead tile-version code (round 1, `48e29df`) and only be
 | `tests/test_timesheet_audit_admin_tab.mjs` (new) | 7 source-grep tests for the admin tab. |
 | `tests/test_timesheet_overdue_notifications.mjs` (new) | 5 source-grep tests for the overdue notification. |
 | `tests/test_timesheet_overdue_checker.py` (new) | 5 Python unit tests for `scan_once()`. |
+
+---
+
+## ISSUE-018 — Mail sent from the wrong Outlook account (2026-10-29)
+
+**Severity: critical (business-impacting).** Emails sent from the Aplus
+account went out as **"MC MDM Construction"** while the CRM recorded
+`aplus.estimates@outlook.com`. The recipient saw MDM; our records and the
+CRM's Sent list said Aplus. Operational impact on the business.
+
+### Root cause
+
+Graph derives the sender from the **access token**, not from any From
+address. `mail_graph_client.send_email_via_graph` sends no `from` property
+("`from_addr` is informational only"), and `saveToSentItems: True` writes
+the copy into the token principal's Sent folder. So whichever mailbox the
+token belongs to is the mailbox that sends.
+
+The Aplus account (`mail_accounts` id 5) held a Graph token belonging to
+the **MDM** mailbox. Two independent defects let that happen:
+
+1. **The identity check silently no-opped.** `server.py` had a check on the
+   Graph OAuth callback, but it read:
+   ```python
+   if ms_email and acct_email and ms_email != acct_email:   # refuse
+   ```
+   `ms_email` came from the token response. The Graph scope was
+   `offline_access https://graph.microsoft.com/Mail.Send` — **no `openid`**,
+   so the token response carried **no id_token** and the identity could not
+   be read. The fallback probe (Graph `/me`) needs `User.Read`, which was
+   not granted, and answered **HTTP 403** (verified live). `ms_email` was
+   therefore always `""` and the check **never ran**. Proof in the data:
+   `oauth_graph_identity` was empty on both Graph accounts.
+2. **The account picker was never shown.** `graph_authorize_url` sent no
+   `prompt=select_account` and no `login_hint`, so Microsoft silently
+   reused the browser's existing Microsoft session. Connecting "Aplus"
+   while signed in as MDM minted an MDM token.
+
+A third defect made every reply go through that row: the inline reply used
+`accounts[0]`, and `/api/v2/mail/accounts` is `ORDER BY email`, so
+`accounts[0]` was **always** the Aplus account regardless of the tab the
+message came from.
+
+A fourth defect hid it: `mail_outgoing.from_addr` / `mail_messages.from_addr`
+record `acct["email"]` — what we *believe* — not the true sender.
+
+### Fix
+
+- Graph scope gains `openid email profile` (OIDC scopes need no extra
+  consent) → the identity is readable from the token.
+- Authorize URL gains `prompt=select_account` + `login_hint`.
+- The connect callback **fails closed**: unverifiable → refuse (never
+  store); mismatch → refuse + record in `oauth_graph_last_error`.
+- Every refresh re-verifies the identity (a refresh token is bound to the
+  granting mailbox).
+- **Send-time guard** in `mail_send.try_send_for_account` — a token that
+  belongs to another mailbox, or an unknown identity, is refused BEFORE any
+  network call. An SMTP login that differs from the account email is
+  refused too.
+- Inline reply sends from the message's own account, with an accented From
+  selector; the compose modal defaults From to the replied-to mailbox.
+- A send-confirmation dialog names the accented sending account and warns
+  when the mailbox is not identity-verified.
+
+### Files
+
+| File | Change |
+|---|---|
+| `oauth_providers.py` | `_GRAPH_SCOPE` + `openid email profile`; `_GRAPH_SCOPE_LEGACY`; `prompt=select_account` + `login_hint` on both authorize URLs; `graph_refresh_token` returns the identity and falls back to the legacy scope on `AADSTS70000`. |
+| `server.py` | Fail-closed Graph callback; identity re-verification on refresh; `_record_graph_error`; `sendVerification` in the accounts payload; `sentAs` in the send response. |
+| `mail_send.py` | `_graph_identity_state()` + the send-time Graph and SMTP guards. |
+| `scanner/mail_scanner.py` | Identity verification in the scanner's token refresher. |
+| `public/app.js` | Inline reply uses the message's account + accented From selector; `confirmMailSend()`; `confirmDialog` accepts `messageHtml`; compose From accent. |
+| `public/index.html` | Accented From wrapper; cache-bust 3.7.47. |
+| `tests/test_graph_identity_guard.py` (new) | 22 tests (17 fail against the old code). |
+| `tests/test_graph_oauth_status.py` | `test_unverifiable_identity_still_connects` → `test_unverifiable_identity_is_refused` (it pinned the policy that caused the incident). |
+
+### Data impact
+
+The Aplus + MDM accounts were deleted (by the user) and re-added with fresh
+credentials, so the mis-bound token is gone. `ON DELETE CASCADE` removed
+their `mail_messages` (338), `mail_outgoing`, `mail_attachments`,
+`mail_deal_links` and `mail_tag_assignments`. The **deal timeline survived**
+(`history_events` has no FK to `mail_messages`), as did accounts 2/6/8 and
+all their mail. 35 `email_snapshot` events are now orphaned (their mail row
+is gone); their bodies are intact inline, 22 had attachments, and 3 still
+have their bytes on disk. They can be relinked from the re-synced mailboxes
+by `(from_addr, subject, date_received)` — `date_sent` in the snapshot is
+the IMAP INTERNALDATE and matches the deleted rows to the microsecond.
+
+---
+
+## ISSUE-019 — Automated backups never ran (2026-10-29)
+
+**Severity: high (silent, total).** Production has had **no automated
+backup since the backup service was first written**.
+
+`_load_config_from_db()` returns `(config, configured)` — a tuple — but
+three call sites used it as a dict:
+
+- `backup_service.py:870` `_cleanup_old_backups()`
+- `backup_service.py:905` the scheduler loop
+- `backup_service.py:924` `start_backup_scheduler()`
+
+The startup one raised `'tuple' object has no attribute 'get'`, which
+`server.main()` catches and only prints:
+
+```
+Backup scheduler not started: 'tuple' object has no attribute 'get'
+[READY] ... subsystems=... backup=disabled ...
+```
+
+The other two failed inside their own try/except, so the scheduler thread
+never ran and the retention cleanup never ran either.
+
+This is why the ISSUE-018 cascade could not be restored from a dump: there
+were no dumps on the host.
+
+### Fix
+
+Unpack the tuple at all three call sites. Verified live against the
+production DB: `start_backup_scheduler()` and `_cleanup_old_backups()` now
+succeed. Tests: `tests/test_backup_scheduler_startup.py` (5, 3 fail against
+the old code) — it pins the tuple-unpack at every call site via AST and
+exercises the real start path with a stubbed loader.

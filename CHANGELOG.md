@@ -2,6 +2,86 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Mail: stop sending from the wrong Outlook account (2026-10-29)
+
+**The Aplus account held an MDM Graph token, so every Graph send went out as
+"MC MDM Construction" while the CRM recorded "aplus.estimates@outlook.com".**
+
+Root cause (all verified on production): Graph derives the sender from the
+access token — `mail_graph_client.send_email_via_graph` sends no `from`
+property at all ("from_addr is informational only"). The connect-time
+identity check existed but **silently no-opped**: the Graph scope
+(`offline_access https://graph.microsoft.com/Mail.Send`) carried no
+`openid`, so the token response had no id_token, and the fallback probe
+(Graph `/me`, needs `User.Read`) answered **HTTP 403**. The identity came
+back empty, so `if ms_email and acct_email and ...` skipped the check and
+ANY Microsoft account's token could be stored on ANY row. Proof:
+`oauth_graph_identity` was empty on both Graph accounts.
+
+Two compounding defects: the authorize URL sent no `prompt=select_account`,
+so Microsoft silently reused the browser's existing session (connecting
+"Aplus" while signed in as MDM minted an MDM token); and the inline reply
+used `accounts[0]` (`ORDER BY email` → always aplus), so every reply in the
+mail modal went through that one row regardless of the tab.
+
+Now:
+- Graph scope includes `openid email profile` → the identity is readable.
+- The authorize URL forces the account picker (+ `login_hint`).
+- The connect callback **fails closed**: an unverifiable identity is refused
+  (never stored); a mismatch is refused and recorded in the UI.
+- Every token refresh re-verifies the identity (refresh tokens are bound to
+  the granting mailbox).
+- **Send-time guard** in `mail_send.try_send_for_account` (covers compose,
+  inline reply and the scanner auto-reply): a Graph token that belongs to
+  another mailbox, or whose identity is unknown, is refused before any
+  network call. An SMTP login that differs from the account email is
+  refused too (the sender is the authenticated user, not the From header).
+- The inline reply sends from the message's own account and shows an
+  accented **From** selector; the compose modal defaults From to the
+  replied-to message's mailbox.
+- A **send confirmation dialog** names the sending account, accented (bold,
+  monospace, accent left-bar), and escalates to a warning when the mailbox
+  is not identity-verified.
+- The accounts payload exposes `sendVerification` (ok/mismatch/unverified).
+
+Tests: `tests/test_graph_identity_guard.py` (22, 17 fail against the old
+code), `tests/test_graph_oauth_status.py` updated — its
+`test_unverifiable_identity_still_connects` pinned the policy that caused
+the incident.
+
+## Backups: the scheduler never started (2026-10-29)
+
+`_load_config_from_db()` returns `(config, configured)` but three call sites
+used it as a dict, so `start_backup_scheduler()` died at startup with
+`'tuple' object has no attribute 'get'` — swallowed by server.main()'s
+try/except. Production has run with `backup=disabled` and **no automated
+backup since the file was first committed**. Verified live: the fix makes
+`start_backup_scheduler()` and `_cleanup_old_backups()` succeed against the
+production DB. Tests: `tests/test_backup_scheduler_startup.py` (5, 3 fail
+against the old code).
+
+## Mail → project: linked emails are copied, files included (2026-10-29)
+
+OnlyOffice parity, and the requirement that removing a mail account must not
+remove access to the emails. The email BODY was already copied into the
+project (inline in `history_events.content`, no FK to `mail_messages`), but
+the ATTACHMENTS were only *referenced*: resolved live from `mail_attachments`
+and served through the mail download route, which is gated by mail-account
+access. Deleting the mail account cascaded the rows away and the project's
+files vanished — exactly what happened to the Aplus/MDM mail.
+
+Now a link materializes the files in the project: bytes are copied to
+`data/history-attachments/<opp>/<event>/`, `history_attachments` rows are
+written, and each file is registered as a `project_documents` row so it
+opens in the document editor and appears in the project's Documents tab.
+Source of the bytes: the local mirror, else a live IMAP fetch (inbound
+attachment bytes were never persisted locally). The timeline read path
+prefers the project copy and falls back to live mail only for legacy
+snapshots. Tests: `tests/test_email_project_copy.py` (7, 6 fail against the
+old code).
+
+Cache-bust app 3.7.46→3.7.47.
+
 ## Photo report: no invented "Company" wordmark (2026-10-23)
 
 The 10/23 generator fix stopped the renderer from synthesizing "Company", but
