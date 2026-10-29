@@ -13,7 +13,26 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-10-29 (service feeds + backup hardening)
 
-**Status: IMPLEMENTED + TESTED — committing, then deploy.**
+**Status: DEPLOYED 2026-10-29 17:18 — verified live.**
+
+Deployed as `2128442` (+ `6c709ed` for the Postgres shm size). Verified on
+production:
+- notifications: 1,438,873 -> 200 service_feed rows (the 200 are from the
+  poller since the deploy), `user_id IS NULL` count = **0** — the new rows
+  have real owners (Breanna Chapman, Claudiu Chereji, Derek Chapman, Rebeca
+  Chereji).
+- `service_feed_items` ledger: **25 rows** — each feed entry recorded once,
+  so the re-delivery loop is gone.
+- Proton feed: `target_mode=admins`, `notify_keywords=["outage","disruption",
+  "incident"]` — only admins, and only the outage entry ("Server outage on
+  Proton VPN servers…"); the maintenance windows are filtered out.
+- `notifications` table: 1021MB -> **504 kB** (VACUUM FULL, after raising
+  the db container's shm_size to 512mb — the 64MB Docker default made
+  VACUUM fail with "could not resize shared memory segment").
+- Backup volume mounted at `/backup` (95GB free, chowned 10001:10001);
+  `.env` now has `BACKUP_DIR=/backup`, `BACKUP_DIR_HOST=/mnt/sietch_backup`.
+- Scheduler log: "Backup scheduler disabled" — **no backup has been run**.
+- Site: HTTP 200 ~0.55s. Load average 0.10, 2.9GB RAM available.
 
 1. **Service feed notifications had no owner.** `_insert_feed_notification`
    looped the target users but the INSERT omitted `user_id` -> every row was
