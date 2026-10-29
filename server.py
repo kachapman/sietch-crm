@@ -1485,12 +1485,63 @@ def _server_now() -> "datetime":
         return datetime.now()
 
 
+def _feed_entry_is_notifiable(feed: dict, title: str, snippet: str) -> bool:
+    """True when a feed entry should produce a notification.
+
+    Per-feed keyword filter (service_feeds.notify_keywords): a JSON array of
+    case-insensitive substrings. Empty / unset = notify about every entry.
+
+    Why this exists (live 2026-10-29): the Proton Status feed is mostly
+    "Service Maintenance, <date>" entries, and the user only wants outage
+    news. With no filter every maintenance window became a notification.
+    """
+    keywords = _feed_notify_keywords(feed)
+    if not keywords:
+        return True
+    haystack = f"{title} {snippet}".lower()
+    return any(k in haystack for k in keywords)
+
+
+def _feed_notify_keywords(feed: dict) -> list[str]:
+    """Parse service_feeds.notify_keywords into a lowercase list."""
+    raw = feed.get("notify_keywords") if isinstance(feed, dict) else None
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return []
+        if raw.startswith("["):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = [p.strip() for p in raw.strip("[]").split(",")]
+        else:
+            raw = [p.strip() for p in raw.split(",")]
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for k in raw:
+        k = str(k or "").strip().lower()
+        if k and k not in out:
+            out.append(k)
+    return out
+
+
 def _insert_feed_notification(feed: dict, entry: dict) -> None:
     """Insert a notification row for every user targeted by the feed.
 
     Module-level wrapper so the background poller (which runs in its own
     thread context) can call us directly without needing a KanbanHandler
     instance. The class method on KanbanHandler just delegates here.
+
+    LIVE BUG 2026-10-29 — the row had no owner. The INSERT omitted
+    `user_id`, so every feed notification was written with user_id = NULL.
+    The drawer query filters `WHERE n.user_id = %s`, so NOT ONE of them was
+    ever visible to anyone — 1,438,873 rows that nobody could read, still
+    costing 822MB and a month of pointless dispatcher UPDATE churn. The
+    recipient loop below already knew the right user ids; it just never
+    wrote them into the row.
     """
     feed_id = feed.get("id") if isinstance(feed, dict) else feed["id"]
     feed_name = (feed.get("name") if isinstance(feed, dict) else feed.get("name")) or "Service"
@@ -1511,10 +1562,21 @@ def _insert_feed_notification(feed: dict, entry: dict) -> None:
         "feed_id": feed_id,
         "feed_name": feed_name,
     }
+    # Keyword filter: only notify about entries the admin asked for.
+    if not _feed_entry_is_notifiable(feed, title, snippet_plain):
+        return
     target_user_ids = _resolve_feed_target_user_ids(feed if isinstance(feed, dict) else {
         "target_mode": feed.get("target_mode"),
         "target_user_ids": feed.get("target_user_ids"),
     })
+    if not target_user_ids:
+        return
+    # Per-user subscription: a user who switched a feed off gets no row
+    # even when the feed's audience includes them.
+    try:
+        target_user_ids = _filter_feed_subscribers(feed_id, target_user_ids)
+    except Exception:
+        logger.exception("Failed to read service feed subscriptions for feed %s", feed_id)
     if not target_user_ids:
         return
     try:
@@ -1522,14 +1584,45 @@ def _insert_feed_notification(feed: dict, entry: dict) -> None:
             try:
                 db.execute(
                     """INSERT INTO notifications
-                       (type, opportunity_id, actor_user_id, message, payload)
-                       VALUES (%s, NULL, NULL, %s, %s::jsonb)""",
-                    ("service_feed", message, json.dumps(payload)),
+                       (user_id, type, opportunity_id, actor_user_id, message, payload)
+                       VALUES (%s, 'service_feed', NULL, NULL, %s, %s::jsonb)""",
+                    (int(uid), message, json.dumps(payload)),
                 )
             except Exception:
                 pass
     except Exception:
         pass
+
+
+def _normalize_notify_keywords(raw) -> str:
+    """Coerce notify_keywords into a JSON array string.
+
+    Accepts a list, a JSON-encoded list, or a comma-separated string.
+    Stored as TEXT so the filter stays a simple, admin-editable list of
+    case-insensitive substrings (live 2026-10-29: the user wants to choose
+    which updates from an RSS/Atom feed actually reach them).
+    """
+    if raw is None:
+        return "[]"
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return "[]"
+        if raw.startswith("["):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = [p.strip() for p in raw.strip("[]").split(",")]
+        else:
+            raw = [p.strip() for p in raw.split(",")]
+    if not isinstance(raw, list):
+        return "[]"
+    out: list[str] = []
+    for k in raw:
+        k = str(k or "").strip()
+        if k and k not in out:
+            out.append(k)
+    return json.dumps(out)
 
 
 def _normalize_target_user_ids(raw) -> str:
@@ -1557,9 +1650,15 @@ def _resolve_feed_target_user_ids(feed: dict) -> list[int]:
     """Resolve the list of user IDs to notify for a service feed.
 
     target_mode='all'      → every active user.
+    target_mode='admins'   → only admin accounts (live 2026-10-29: the safe
+                             default — a status feed should not notify every
+                             adjuster by default).
     target_mode='specific' → only users whose id is in feed.target_user_ids.
+    target_mode='none'     → nobody (the feed is tracked but silent).
     """
     mode = feed.get("target_mode") or "all"
+    if mode == "none":
+        return []
     if mode == "specific":
         raw = feed.get("target_user_ids")
         if raw is None:
@@ -1577,12 +1676,68 @@ def _resolve_feed_target_user_ids(feed: dict) -> list[int]:
             except Exception:
                 return []
         return []
+    if mode == "admins":
+        try:
+            rows = db.query("SELECT id FROM users WHERE is_active = TRUE AND is_admin = TRUE")
+            return [int(r[0]) for r in rows] if rows else []
+        except Exception:
+            return []
     # 'all' — every active user (including admins).
     try:
         rows = db.query("SELECT id FROM users WHERE is_active = TRUE")
         return [int(r[0]) for r in rows] if rows else []
     except Exception:
         return []
+
+
+def _user_is_feed_audience(feed: dict, user: dict) -> bool:
+    """True when this user is in the feed's target audience.
+
+    target_mode: 'all' (every active user) / 'admins' (admins only) /
+    'specific' (the listed users) / 'none' (nobody).
+    """
+    mode = (feed.get("target_mode") or "all")
+    if mode == "none":
+        return False
+    if mode == "admins":
+        return bool(user.get("is_admin"))
+    if mode == "specific":
+        raw = feed.get("target_user_ids")
+        if isinstance(raw, str):
+            try:
+                raw = [int(x) for x in raw.strip("{}").split(",") if x.strip()]
+            except Exception:
+                raw = []
+        if not isinstance(raw, list):
+            raw = []
+        try:
+            return int(user.get("id")) in [int(x) for x in raw]
+        except Exception:
+            return False
+    # 'all'
+    return True
+
+
+def _filter_feed_subscribers(feed_id, user_ids: list[int]) -> list[int]:
+    """Drop users who switched this feed off in their own preferences.
+
+    A user with NO subscription row is not excluded (the feed's audience
+    decides by default); a row with enabled = FALSE means the user opted
+    out and must not be notified.
+    """
+    if not user_ids:
+        return []
+    try:
+        rows = db.query(
+            "SELECT user_id FROM service_feed_subscriptions WHERE feed_id = %s AND enabled = FALSE",
+            (feed_id,),
+        )
+    except Exception:
+        return list(user_ids)
+    muted = {int(r[0]) for r in rows} if rows else set()
+    if not muted:
+        return list(user_ids)
+    return [u for u in user_ids if int(u) not in muted]
 
 
 def _resolve_document_template(template_id) -> dict | None:
@@ -3785,6 +3940,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/me/notification-prefs":
             self._handle_notification_prefs_get()
             return
+        if api_path == "/api/v2/me/service-feed-subscriptions":
+            self._handle_feed_subscriptions_get()
+            return
         if api_path == "/api/v2/notifications":
             self._handle_notifications_get(qs)
             return
@@ -4142,6 +4300,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # ── User profile (local) ──
         if api_path == "/api/user-profile" and method in ("PUT", "POST"):
             self._handle_user_profile_put()
+            return
+
+        # ── Per-user status feed subscriptions ──
+        if api_path == "/api/v2/me/service-feed-subscriptions" and method == "PUT":
+            self._handle_feed_subscriptions_put()
             return
 
         # ── Persistent minimized modal state (cross-device) ──
@@ -8608,6 +8771,79 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             result[f"tg_{ntype}"] = val if val is not None else True
         _json_response(self, 200, result)
 
+    def _handle_feed_subscriptions_get(self) -> None:
+        """List the status feeds and whether THIS user is subscribed.
+
+        Per-user opt-out (live 2026-10-29): a feed's target_mode decides who
+        CAN be notified; this decides who WANTS it. A user with no
+        subscription row follows the feed's audience by default.
+        """
+        user = _require_auth(self)
+        if not user:
+            return
+        feeds = db.query_dicts(
+            """SELECT sf.id, sf.name, sf.kind, sf.accent_color, sf.target_mode,
+                      sf.notify_keywords
+                 FROM service_feeds sf
+                WHERE sf.enabled = TRUE
+                ORDER BY sf.name"""
+        )
+        subs = db.query_dicts(
+            "SELECT feed_id, enabled FROM service_feed_subscriptions WHERE user_id = %s",
+            (user["id"],),
+        )
+        by_feed = {int(s["feed_id"]): bool(s["enabled"]) for s in subs}
+        out = []
+        for f in feeds:
+            eligible = _user_is_feed_audience(f, user)
+            enabled = by_feed.get(int(f["id"]))
+            if enabled is None:
+                enabled = eligible  # follow the feed's audience by default
+            out.append({
+                "id": f["id"],
+                "name": f["name"],
+                "kind": f["kind"],
+                "accentColor": f.get("accent_color") or "#e6a700",
+                "eligible": eligible,
+                "enabled": bool(enabled) and eligible,
+                "subscribed": bool(enabled),
+            })
+        _json_response(self, 200, {"feeds": out})
+
+    def _handle_feed_subscriptions_put(self) -> None:
+        """Subscribe/unsubscribe this user from a status feed."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        try:
+            feed_id = int(payload.get("feed_id"))
+        except (TypeError, ValueError):
+            _json_response(self, 400, {"error": "feed_id is required"})
+            return
+        enabled = bool(payload.get("enabled", True))
+        feed = db.query_one(
+            "SELECT id, target_mode FROM service_feeds WHERE id = %s AND enabled = TRUE",
+            (feed_id,),
+        )
+        if not feed:
+            _json_response(self, 404, {"error": "Feed not found"})
+            return
+        if not _user_is_feed_audience(feed, user):
+            _json_response(self, 403, {"error": "You are not in this feed's audience"})
+            return
+        db.execute(
+            "INSERT INTO service_feed_subscriptions (feed_id, user_id, enabled, updated_at) "
+            "VALUES (%s, %s, %s, NOW()) ON CONFLICT (feed_id, user_id) "
+            "DO UPDATE SET enabled = EXCLUDED.enabled, updated_at = NOW()",
+            (feed_id, user["id"], enabled),
+        )
+        _json_response(self, 200, {"ok": True, "feed_id": feed_id, "enabled": enabled})
+
     def _handle_notification_prefs_put(self) -> None:
         user = _require_auth(self)
         if not user:
@@ -9820,7 +10056,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         rows = db.query_dicts(
             """SELECT id, name, kind, url, poll_interval_sec, last_polled_at, last_item_id,
-                      enabled, target_mode, target_user_ids, accent_color, created_at, updated_at
+                      enabled, target_mode, target_user_ids, accent_color, created_at, updated_at,
+                      notify_keywords
                FROM service_feeds ORDER BY name"""
         )
         for r in rows:
@@ -9853,17 +10090,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         row = db.query_one(
             """INSERT INTO service_feeds
                (name, kind, url, webhook_secret, poll_interval_sec, enabled,
-                target_mode, target_user_ids, accent_color)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                target_mode, target_user_ids, accent_color, notify_keywords)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING id""",
             (data["name"].strip(), kind,
              (data.get("url") or "").strip() or None,
              webhook_secret,
              max(60, int(data.get("poll_interval_sec") or 300)),
              bool(data.get("enabled", True)),
-             data.get("target_mode", "all") if data.get("target_mode") in ("all", "specific") else "all",
+             # 'admins' is the safe default (live 2026-10-29): a status feed
+             # must not notify every user unless someone asks for it.
+             data.get("target_mode", "admins") if data.get("target_mode") in ("all", "admins", "specific", "none") else "admins",
              _normalize_target_user_ids(data.get("target_user_ids")),
              (data.get("accent_color") or "#e6a700").strip() or "#e6a700",
+             _normalize_notify_keywords(data.get("notify_keywords")),
             ),
         )
         _json_response(self, 201, {"id": row["id"], "webhookSecret": webhook_secret})
@@ -9899,12 +10139,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 else:
                     fields.append(f"{key} = %s")
                     params.append(data[key] if data[key] is not None else None)
-        if "target_mode" in data and data["target_mode"] in ("all", "specific"):
+        if "target_mode" in data and data["target_mode"] in ("all", "admins", "specific", "none"):
             fields.append("target_mode = %s")
             params.append(data["target_mode"])
         if "target_user_ids" in data:
             fields.append("target_user_ids = %s")
             params.append(_normalize_target_user_ids(data["target_user_ids"]))
+        if "notify_keywords" in data:
+            fields.append("notify_keywords = %s")
+            params.append(_normalize_notify_keywords(data["notify_keywords"]))
         if fields:
             fields.append("updated_at = NOW()")
             params.append(feed_id)

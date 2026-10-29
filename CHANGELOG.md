@@ -2,6 +2,63 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Service feeds: notifications nobody could see, delivered 1.4M times (2026-10-29)
+
+Three defects, all found while diagnosing a backup outage and all verified
+on production.
+
+1. **The notifications had no owner.** `_insert_feed_notification` looped
+   over the target user ids but the INSERT omitted `user_id`, so every
+   `service_feed` row was written with `user_id = NULL`. The drawer query
+   filters `WHERE n.user_id = %s`, so **not one** of them was ever visible to
+   anyone — 1,438,873 rows costing 822MB and a month of pointless dispatcher
+   UPDATE churn (the dispatcher queried notifications with no `user_id`
+   filter). The row now carries its recipient.
+2. **Every entry was re-delivered on every poll.** The dedup compared each
+   entry id against ONE remembered id (`service_feeds.last_item_id`). The
+   Proton feed has 25 entries with stable ids and only the newest ever
+   matched, so the other 24 were re-delivered every 5 minutes to 8 users
+   each: 192 rows per poll, ~2,300/hour, ~55k/day. New
+   `service_feed_items` ledger records each `(feed_id, item_id)` once.
+3. **Feeds notified everybody about everything.** Added three per-feed
+   customizations:
+   - **"Only notify about updates containing…"** (`notify_keywords`) — the
+     Proton feed is mostly "Service Maintenance" entries; with
+     `outage, disruption, incident` 10 of its 25 entries qualify and every
+     maintenance window is skipped.
+   - **Audience** (`target_mode`): `admins` (new default), `all`,
+     `specific`, `none` — a feed no longer notifies every user by default.
+   - **Per-user opt-out** (`service_feed_subscriptions`) — each user picks
+     their own feeds in Profile → Notification preferences → Status Alerts.
+
+Migration 040 also deletes the 1,438,873 orphaned rows (invisible to every
+user by construction) and reclaims the space. Cache-bust app 3.7.47→3.7.48.
+
+## Backups: memory-safe export, dedicated volume, no startup run (2026-10-29)
+
+Starting the backup scheduler for the first time in production took the
+site down. The export loaded whole tables into memory three times over;
+measured against the real `notifications` table (1,439,331 rows, 822MB) that
+peaked at **4,142MB** against a 3,824MB container limit — the box thrashed
+at load average 37 and SSH stopped answering.
+
+- The export now **streams**: a server-side cursor feeds rows in batches
+  straight into the zip. Same table, measured: **25MB peak**.
+- **Backup destination** is now the dedicated 100GB volume
+  (`/mnt/sietch_backup` → `/backup`), because the history-attachments
+  bundle is ~29GB per run and does not fit on the 77GB root volume.
+- **Free-space pre-flight**: refuses to start rather than fill the disk.
+- **History-tar timeout** 900s → configurable, default 5400s. Measured on
+  production: gzip shrinks the 29GB tree only ~9% (PDFs are already
+  compressed) at ~15.5MB/s, so the tar needs ~31 minutes; the old 15-minute
+  timeout would have failed the run.
+- **Retention**: keeps the 2 most-recent history tars (age-based retention
+  does not fit: 7 runs = 192GB on a 95GB volume).
+- **The scheduler waits one full interval before its first run**, so a
+  container restart can never trigger a heavy run.
+
+Tests: `tests/test_backup_streaming.py` (12, 10 fail against the old code).
+
 ## Mail: stop sending from the wrong Outlook account (2026-10-29)
 
 **The Aplus account held an MDM Graph token, so every Graph send went out as

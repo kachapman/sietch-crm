@@ -375,10 +375,49 @@ class TestBuildExportZipToPath(unittest.TestCase):
              "created_at": __import__("datetime").datetime(2026, 1, 1)},
         ]
 
+        class FakeCursor:
+            """Minimal server-side-cursor stand-in for the streaming export.
+
+            The export no longer loads whole tables (that peaked at 4,142MB
+            on production and took the site down) — it streams rows through
+            a cursor in small batches. The fake mirrors that interface.
+            """
+
+            def __init__(self, rows):
+                self._rows = list(rows)
+                self.description = None
+                self._i = 0
+
+            def execute(self, sql):
+                self.description = [(k,) for k in self._rows[0].keys()] if self._rows else []
+
+            def fetchmany(self, n):
+                out = self._rows[self._i:self._i + n]
+                self._i += len(out)
+                return [tuple(r.values()) for r in out]
+
+            def close(self):
+                pass
+
+        class FakeConn:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def cursor(self, name=None):
+                return FakeCursor(self._rows)
+
         class FakeDB:
             @staticmethod
             def query_dicts(sql):
                 return [dict(r) for r in rows]
+
+            @staticmethod
+            def get_conn():
+                return FakeConn(rows)
+
+            @staticmethod
+            def put_conn(conn):
+                pass
 
         sys.modules.setdefault("db", FakeDB())
         # Patch the lazy `import db` inside the helper by pre-seeding it.

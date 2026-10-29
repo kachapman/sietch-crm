@@ -11,6 +11,65 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-10-29 (service feeds + backup hardening)
+
+**Status: IMPLEMENTED + TESTED — committing, then deploy.**
+
+1. **Service feed notifications had no owner.** `_insert_feed_notification`
+   looped the target users but the INSERT omitted `user_id` -> every row was
+   written with `user_id = NULL` -> the drawer (`WHERE n.user_id = %s`) never
+   showed ANY of them. 1,438,873 invisible rows, 822MB, and a month of
+   pointless dispatcher UPDATE churn (the dispatcher had no `user_id`
+   filter). Now each row carries its recipient.
+2. **Every entry re-delivered on every poll.** The dedup compared each id
+   against ONE remembered id; the Proton feed has 25 stable ids and only
+   the newest matched -> 24 re-delivered every 5 min x 8 users = 192 rows
+   per poll (~55k/day). New `service_feed_items` ledger -> delivered once.
+3. **Per-feed customizations** (the user's asks): `notify_keywords`
+   ("only notify about updates containing..."), `target_mode`
+   (admins/all/specific/none, default admins) and per-user opt-out
+   (`service_feed_subscriptions`, surfaced in Profile -> Status Alerts).
+   Migration 040 deletes the orphaned rows (invisible to everyone by
+   construction).
+4. **Backup hardening.** The export streamed 3 copies of every table into
+   RAM: measured 4,142MB projected vs a 3,824MB container limit -> that is
+   what took the site down (load 37, SSH dead). Now streamed via a
+   server-side cursor: measured 25MB peak on the same table. Backup dir
+   -> the new 100GB volume; free-space pre-flight; history-tar timeout
+   900s -> 5400s (the 29GB tar needs ~31 min); retention keeps the 2
+   most-recent tars; the scheduler waits one interval before its first
+   run. Migration 040 has NO vacuum (the runner wraps each file in one
+   transaction and "VACUUM cannot run inside a transaction block" aborted
+   the whole file — fixed).
+
+- Tests: +29 service feed (25 fail on old code), +12 backup streaming (10F).
+  `tests/test_backup.py` FakeDB extended with get_conn/put_conn + a
+  cursor stub for the streaming path.
+- Pre-existing failures NOT from this work (fail on clean HEAD):
+  `test_scanner_toggle_gating` (1), `test_sync_pull_deals_fields` (1).
+- Cache-bust 3.7.47->3.7.48. Migration 040.
+
+**Next (user):** set the backup schedule. The scheduler is still DISABLED
+(`backup_config.enabled=false` was set on the droplet during the outage).
+When enabling: `BACKUP_DIR=/backup` + `BACKUP_DIR_HOST=/mnt/sietch_backup`
+in .env, and `chown 10001:10001 /mnt/sietch_backup` (the container runs as
+uid 10001). Suggest `include_history: true` (the volume holds 2 tars =
+~55GB) with `history_keep_count: 2`.
+
+**Next (dev):** relink the 35 orphaned `email_snapshot` events from the
+re-synced mailboxes — match on (from_addr, subject, date_received); the
+snapshot's `date_sent` is the IMAP INTERNALDATE and matches the deleted
+rows to the microsecond. One message (old id 3856) was linked to two
+projects (35 and 46) — repoint both. Repointing also restores the
+auto-link dedup key, so the re-sync creates no duplicate timeline entries.
+
+**Also still open:** re-add Aplus + MDM mail accounts and re-authorize
+Graph (the account picker now appears and the identity is verified —
+"Connected as <address>"). Include the **Sent** folder in the monitored
+folders (9 of the 35 orphaned snapshots are sent mail).
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-10-29 (mail sent from the wrong Outlook account)
 
 **Status: IMPLEMENTED + TESTED — committing, then deploy.**

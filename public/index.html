@@ -2434,12 +2434,18 @@
                 </div>
                 <div style="margin-top:0.6rem;">
                   <label style="font-size:0.82rem; color:var(--muted); display:block; margin-bottom:0.25rem;">Recipients</label>
-                  <div style="display:flex; gap:1rem; align-items:center; margin-bottom:0.5rem;">
+                  <div style="display:flex; gap:1rem; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap;">
                     <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.85rem;">
-                      <input type="radio" name="sf-edit-target-mode" value="all" checked> All users (including admins)
+                      <input type="radio" name="sf-edit-target-mode" value="admins" checked> Admins only
+                    </label>
+                    <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.85rem;">
+                      <input type="radio" name="sf-edit-target-mode" value="all"> All users (including admins)
                     </label>
                     <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.85rem;">
                       <input type="radio" name="sf-edit-target-mode" value="specific"> Specific users
+                    </label>
+                    <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.85rem;">
+                      <input type="radio" name="sf-edit-target-mode" value="none"> Nobody (track only)
                     </label>
                   </div>
                   <div id="sf-edit-specific-wrap" class="hidden">
@@ -2449,6 +2455,16 @@
                     </div>
                     <div id="sf-edit-user-results" style="margin-top:0.3rem; max-height:120px; overflow-y:auto; border:1px solid var(--border); border-radius:4px;"></div>
                     <div id="sf-edit-user-chosen" style="margin-top:0.5rem; display:flex; flex-wrap:wrap; gap:0.3rem;"></div>
+                  </div>
+                  <div class="photo-report-field" style="margin-top:0.6rem;">
+                    <label>Only notify about updates containing…</label>
+                    <input type="text" id="sf-edit-notify-keywords" placeholder="outage, disruption, incident"
+                           style="width:100%; padding:0.4rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font-size:0.85rem;">
+                    <div style="font-size:0.75rem; color:var(--muted); margin-top:0.25rem;">
+                      Comma-separated keywords, matched against the update title. Leave empty to notify about every update.
+                      Use this to skip routine entries — e.g. <code>outage, disruption, incident</code> skips
+                      &ldquo;Service Maintenance&rdquo; windows.
+                    </div>
                   </div>
                 </div>
                 <div id="sf-edit-webhook-info" class="hidden" style="margin-top:0.6rem; padding:0.6rem; background:var(--surface); border:1px solid var(--border); border-radius:4px;">
@@ -3717,6 +3733,14 @@
         </fieldset>
 
         <fieldset class="profile-fieldset">
+          <legend class="profile-legend">Status Alerts</legend>
+          <p class="profile-field-hint">Choose which status feeds (outages, maintenance windows) you want to see in your notifications.</p>
+          <div id="pref-service-feeds" class="pref-service-feeds">
+            <div style="font-size:0.8rem; color:var(--muted);">Loading…</div>
+          </div>
+        </fieldset>
+
+        <fieldset class="profile-fieldset">
           <legend class="profile-legend">Two-Factor Authentication</legend>
           <p class="profile-field-hint">Add an extra layer of security to your account.</p>
           <div id="twofa-status" style="margin-bottom:0.5rem;"></div>
@@ -3875,6 +3899,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3.7.47" type="module"></script>
+  <script src="app.js?v=3.7.48" type="module"></script>
 </body>
 </html>

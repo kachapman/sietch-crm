@@ -119,25 +119,36 @@ def _poll_one_feed(server_module, feed: dict) -> None:
         except Exception:
             pass
         return
-    last_id = feed.get("last_item_id") or ""
+    # DEDUP (live fix 2026-10-29). The old check compared each entry id to a
+    # SINGLE remembered id (service_feeds.last_item_id). The Proton feed has
+    # 25 entries with stable ids, and only the newest one ever equalled
+    # last_item_id — so the other 24 were re-delivered on EVERY poll, every
+    # 5 minutes, to 8 users each: 192 rows per poll, ~2,300/hour, ~55k/day.
+    # That is where 1,438,873 duplicate rows came from.
+    #
+    # Now every entry id is recorded in service_feed_items and delivered at
+    # most once. The INSERT ... ON CONFLICT DO NOTHING tells us whether the
+    # entry was new, so no separate "seen" set is needed in memory.
     new_entries: list[dict] = []
     for entry in entries:
         eid = entry.get("id") or entry.get("link") or ""
         if not eid:
             continue
-        if eid == last_id:
-            continue
-        new_entries.append(entry)
-    # Only mark new as "the" first if it differs from last_id. If we already
-    # saw this id but it was the last seen, skip.
+        try:
+            inserted = db.insert_returning(
+                "INSERT INTO service_feed_items (feed_id, item_id) VALUES (%s, %s) "
+                "ON CONFLICT (feed_id, item_id) DO NOTHING RETURNING item_id",
+                (feed_id, eid),
+            )
+        except Exception as exc:
+            logger.warning("service_feed_items insert failed for feed %s: %s", feed_id, exc)
+            # Without the dedup table we must not fall back to re-delivering
+            # everything (that is the 1.4M-row bug). Skip this poll instead.
+            return
+        if inserted:
+            new_entries.append(entry)
     if new_entries:
-        # If last_id is empty, treat all entries as new EXCEPT keep the most
-        # recent one (so we don't deliver every historical entry on first poll).
-        if not last_id:
-            # Drop oldest ones: only notify on entries newer than what's already
-            # in the feed. Skip all except the most recent.
-            new_entries = new_entries[:1]
-        # Insert notifications for each new entry.
+        # Insert notifications for each genuinely new entry.
         for entry in new_entries:
             try:
                 # server_module may be the script-level module; the actual
@@ -147,7 +158,7 @@ def _poll_one_feed(server_module, feed: dict) -> None:
                 insert_fn(feed, entry)
             except Exception as exc:
                 logger.exception("Failed to insert feed notification: %s", exc)
-        # Update last_item_id to the most recent entry's id.
+        # Update last_item_id to the most recent entry's id (display only).
         latest_id = new_entries[0].get("id") or new_entries[0].get("link") or ""
         try:
             db.execute(

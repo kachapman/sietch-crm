@@ -475,7 +475,11 @@ def _process_pending_notifications() -> int:
     from smtp_client import send_email
 
     try:
-        # Find notifications that need at least one channel sent
+        # Find notifications that need at least one channel sent.
+        # user_id IS NOT NULL (live 2026-10-29): service_feed rows were
+        # inserted without an owner, so this query used to pull 1,438,873
+        # unreadable orphan rows and mark them sent one batch at a time —
+        # a month of pointless UPDATE churn. Orphans are not deliverable.
         rows = db.query_dicts(
             """SELECT n.id, n.user_id, n.type, n.message, n.payload,
                       n.opportunity_id, n.actor_user_id,
@@ -486,7 +490,8 @@ def _process_pending_notifications() -> int:
                FROM notifications n
                LEFT JOIN users u ON u.id = n.actor_user_id
                LEFT JOIN opportunities o ON o.id = n.opportunity_id
-               WHERE (n.telegram_sent IS NOT TRUE OR n.email_sent IS NOT TRUE)
+               WHERE n.user_id IS NOT NULL
+                 AND (n.telegram_sent IS NOT TRUE OR n.email_sent IS NOT TRUE)
                ORDER BY n.created_at ASC
                LIMIT %s""",
             (BATCH_SIZE,),

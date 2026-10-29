@@ -28,6 +28,11 @@ services:
       - dashboard-data:/app/data
       - dashboard-uploads:/app/uploads
       - /var/run/docker.sock:/var/run/docker.sock
+      # Backup destination. The history-attachments bundle alone is ~29GB
+      # per run, which does not fit on the 77GB root volume (26GB free) —
+      # a full disk takes the whole app down. The 100GB attached volume is
+      # mounted here and BACKUP_DIR points at it (see .env).
+      - /mnt/sietch_backup:/backup
     # The dashboard container runs as uid/gid 10001 (appuser), but the mounted
     # /var/run/docker.sock is srw-rw---- root:docker -- so without this
     # supplementary group the non-root runtime user gets "permission denied

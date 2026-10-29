@@ -44434,6 +44434,64 @@ async function _profileLoadPrefs() {
       if (tgTypes) tgTypes.classList.toggle("hidden", !tgEl.checked);
     });
   } catch { /* use defaults */ }
+  await _profileLoadFeedSubs();
+}
+
+/**
+ * Per-user status feed subscriptions (live 2026-10-29).
+ *
+ * The feed's target_mode decides who CAN be notified; this toggle decides
+ * who WANTS it. A feed the admin scoped to 'admins' is not offered here,
+ * and a user who switches one off stops getting it entirely.
+ */
+async function _profileLoadFeedSubs() {
+  const box = $("#pref-service-feeds");
+  if (!box) return;
+  try {
+    const data = await api("/api/v2/me/service-feed-subscriptions");
+    const feeds = (data && data.feeds) || [];
+    if (!feeds.length) {
+      box.innerHTML = '<div style="font-size:0.8rem; color:var(--muted);">No status feeds are available.</div>';
+      return;
+    }
+    box.innerHTML = "";
+    feeds.forEach(f => {
+      const row = document.createElement("div");
+      row.className = "profile-toggle-row profile-toggle-sub";
+      const accent = f.accentColor || "var(--accent)";
+      row.innerHTML = `
+        <label class="profile-toggle-label" for="pref-feed-${f.id}" style="display:flex; align-items:center; gap:0.4rem;">
+          <span style="display:inline-block; width:0.6rem; height:0.6rem; border-radius:50%; background:${escapeHtml(accent)};"></span>
+          ${escapeHtml(f.name)}
+        </label>`;
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.id = `pref-feed-${f.id}`;
+      cb.className = "toggle-input";
+      cb.checked = !!f.enabled;
+      cb.disabled = !f.eligible;
+      if (!f.eligible) {
+        cb.closest(".profile-toggle-row")?.setAttribute(
+          "title", "This feed is not addressed to you.");
+      }
+      cb.addEventListener("change", async () => {
+        try {
+          await api("/api/v2/me/service-feed-subscriptions", {
+            method: "PUT",
+            body: JSON.stringify({ feed_id: f.id, enabled: cb.checked }),
+          });
+          showToast(cb.checked ? "Subscribed" : "Unsubscribed");
+        } catch (e) {
+          showToast("Failed: " + (e.message || e), true);
+          cb.checked = !cb.checked; // revert
+        }
+      });
+      row.appendChild(cb);
+      box.appendChild(row);
+    });
+  } catch (e) {
+    box.innerHTML = `<div style="font-size:0.8rem; color:var(--muted);">Could not load status feeds.</div>`;
+  }
 }
 
 async function _profileSave() {
@@ -47929,7 +47987,18 @@ function populateServiceFeedsAdmin() {
       row.className = "admin-sf-card";
       const targetText = f.target_mode === "all"
         ? "All users"
-        : `${(f.target_user_ids || []).length} specific user(s)`;
+        : f.target_mode === "admins"
+          ? "Admins only"
+          : f.target_mode === "none"
+            ? "Nobody (track only)"
+            : `${(f.target_user_ids || []).length} specific user(s)`;
+      let kwText = "";
+      try {
+        const kws = typeof f.notify_keywords === "string"
+          ? JSON.parse(f.notify_keywords || "[]")
+          : (f.notify_keywords || []);
+        if (Array.isArray(kws) && kws.length) kwText = ` · only: ${kws.join(", ")}`;
+      } catch (_e) { /* ignore */ }
       const lastPolled = f.last_polled_at
         ? `Last polled: ${new Date(f.last_polled_at).toLocaleString()}`
         : "Never polled";
@@ -47939,7 +48008,7 @@ function populateServiceFeedsAdmin() {
         <div class="admin-sf-card-info">
           <div class="admin-sf-card-name">${escapeHtml(f.name)}<span class="admin-sf-kind-badge">${escapeHtml(f.kind)}</span></div>
           <div class="admin-sf-card-meta">
-            ${escapeHtml(targetText)} · ${escapeHtml(lastPolled)}${!f.enabled ? ' · disabled' : ''}
+            ${escapeHtml(targetText)}${escapeHtml(kwText)} · ${escapeHtml(lastPolled)}${!f.enabled ? ' · disabled' : ''}
           </div>
         </div>
         <div class="admin-sf-card-actions">
@@ -47980,8 +48049,20 @@ function openSFEditor(feed) {
   $("#sf-edit-interval").value = feed ? (feed.poll_interval_sec || 300) : 300;
   $("#sf-edit-color").value = feed ? (feed.accent_color || "#e6a700") : "#e6a700";
   $("#sf-edit-enabled").checked = feed ? !!feed.enabled : true;
+  // Per-feed keyword filter ("only notify about updates containing…")
+  let kwText = "";
+  if (feed && feed.notify_keywords) {
+    try {
+      const kws = typeof feed.notify_keywords === "string"
+        ? JSON.parse(feed.notify_keywords || "[]")
+        : (feed.notify_keywords || []);
+      if (Array.isArray(kws)) kwText = kws.join(", ");
+    } catch (_e) { kwText = ""; }
+  }
+  const kwInput = $("#sf-edit-notify-keywords");
+  if (kwInput) kwInput.value = kwText;
   // Target mode + chosen users
-  const mode = (feed && feed.target_mode) || "all";
+  const mode = (feed && feed.target_mode) || "admins";
   const modeRadio = document.querySelector(`input[name="sf-edit-target-mode"][value="${mode}"]`);
   if (modeRadio) modeRadio.checked = true;
   if (mode === "specific" && feed && Array.isArray(feed.target_user_ids)) {
@@ -48037,7 +48118,7 @@ function _sfUpdateKindUI() {
 }
 
 function _sfUpdateTargetModeUI() {
-  const mode = document.querySelector('input[name="sf-edit-target-mode"]:checked')?.value || "all";
+  const mode = document.querySelector('input[name="sf-edit-target-mode"]:checked')?.value || "admins";
   const wrap = $("#sf-edit-specific-wrap");
   if (wrap) wrap.classList.toggle("hidden", mode !== "specific");
   if (mode === "specific" && !_adminSFCachedUsers.length) {
@@ -48116,7 +48197,12 @@ function buildSFWebhookUrl(secret) {
 }
 
 function collectSFFormData() {
-  const mode = document.querySelector('input[name="sf-edit-target-mode"]:checked')?.value || "all";
+  const mode = document.querySelector('input[name="sf-edit-target-mode"]:checked')?.value || "admins";
+  // "Only notify about updates containing…" — comma separated keywords.
+  const kwRaw = ($("#sf-edit-notify-keywords")?.value || "").trim();
+  const notify_keywords = kwRaw
+    ? kwRaw.split(",").map(s => s.trim()).filter(Boolean)
+    : [];
   const payload = {
     name: ($("#sf-edit-name")?.value || "").trim(),
     kind: $("#sf-edit-kind")?.value || "rss",
@@ -48126,6 +48212,7 @@ function collectSFFormData() {
     accent_color: $("#sf-edit-color")?.value || "#e6a700",
     target_mode: mode,
     target_user_ids: mode === "specific" ? _adminSFChosenUsers.map(u => u.id) : [],
+    notify_keywords,
   };
   return payload;
 }

@@ -708,11 +708,37 @@ CREATE TABLE IF NOT EXISTS service_feeds (
     last_polled_at      TIMESTAMPTZ,
     last_item_id        TEXT,
     enabled             BOOLEAN NOT NULL DEFAULT TRUE,
-    target_mode         TEXT NOT NULL DEFAULT 'all',
+    target_mode         TEXT NOT NULL DEFAULT 'admins',
     target_user_ids     INTEGER[] NOT NULL DEFAULT '{}'::integer[],
     accent_color        TEXT NOT NULL DEFAULT '#e6a700',
+    -- Per-feed "only notify about updates containing..." filter (JSON array
+    -- of case-insensitive substrings). Empty = notify about everything.
+    notify_keywords     TEXT NOT NULL DEFAULT '[]',
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Per-entry delivery ledger. The poller records every feed entry id here so
+-- an entry is delivered exactly once (live fix 2026-10-29: a single-id
+-- comparison re-delivered 24 of 25 entries on every poll).
+CREATE TABLE IF NOT EXISTS service_feed_items (
+    feed_id      INTEGER NOT NULL REFERENCES service_feeds(id) ON DELETE CASCADE,
+    item_id      TEXT NOT NULL,
+    delivered_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (feed_id, item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_service_feed_items_delivered
+    ON service_feed_items(delivered_at);
+
+-- Per-user opt-out from a feed (enabled = FALSE means the user switched
+-- that feed off in their own notification preferences).
+CREATE TABLE IF NOT EXISTS service_feed_subscriptions (
+    feed_id    INTEGER NOT NULL REFERENCES service_feeds(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    enabled    BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (feed_id, user_id)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_service_feeds_webhook_secret

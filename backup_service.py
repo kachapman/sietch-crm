@@ -326,6 +326,63 @@ def _try_acquire_lock() -> bool:
 
 # ── Backup execution ─────────────────────────────────────────────────────────
 
+def _write_history_bundle(entry: dict, hist_src: Path, data_dir: Path,
+                          out_hist: Path, ts_slug: str, config: dict) -> None:
+    """Tar+gzip the history-attachments tree into BACKUP_DIR.
+
+    Atomic rename pattern: temp file in the same volume, then move into
+    place so a half-written tar is never visible to the Proton CLI scan.
+    """
+    # Atomic rename pattern: temp file in the same volume, then move into
+    # place so a half-written tar is never visible to the Proton CLI scan.
+    tmp = tempfile.NamedTemporaryFile(
+        delete=False, dir=BACKUP_DIR, prefix=".history-", suffix=".tmp"
+    )
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
+        logger.info("history-attachments: starting tar (%d bytes estimated)",
+                    sum(f.stat().st_size for f in hist_src.rglob("*")
+                        if f.is_file()))
+        history_timeout = int(config.get("history_timeout_sec", 5400))
+        proc = subprocess.run(
+            ["tar", "czf", str(tmp_path), "-C", str(data_dir),
+             HISTORY_ATTACHMENTS_SUBDIR],
+            capture_output=True, text=True, timeout=history_timeout,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"history-attachments tar failed ({proc.returncode}): "
+                f"{proc.stderr[:300]}"
+            )
+        size = tmp_path.stat().st_size
+        h = hashlib.sha256()
+        with open(tmp_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        shutil.move(str(tmp_path), str(out_hist))
+        entry["artifacts"]["files-history"] = {
+            "path": str(out_hist),
+            "size": size,
+            "sha256": h.hexdigest(),
+            "ok": True,
+            "error": None,
+        }
+        entry["size"] += size
+        logger.info("history-attachments: done, %d MB", size // (1024 * 1024))
+    except Exception as e:
+        logger.warning("history-attachments bundle failed: %s", e)
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
+        entry["artifacts"]["files-history"] = {
+            "path": "", "size": 0, "sha256": None,
+            "ok": False, "error": str(e)[:300],
+        }
+
+
 def run_backup() -> dict:
     """Execute one scheduled JSON export run: write the configured parts to disk,
     record history, push the admin-channel event for the live log, and notify.
@@ -404,56 +461,48 @@ def run_backup() -> dict:
         except Exception as e:
             logger.warning("Backup cleanup failed: %s", e)
 
-        # Files-history bundle (~33 GB blob — streamed as a tar.gz so
+        # Files-history bundle (~29 GB blob — streamed as a tar.gz so
         # we don't try to hold it in RAM; the Proton CLI picks it up
         # next to the JSON zips). The special-case source is the
-        # data/history-attachments/ subdir. Timeout is 15 min — a stuck
-        # tar (e.g. on a slow filesystem) shouldn't hold the lock for
-        # 30 min; if it really takes longer, the run is logged as
-        # failed and the operator can re-trigger manually. Opt-in via
-        # the `include_history` config key (default true) so operators
-        # running tight on disk can skip the 30 GB blob.
+        # data/history-attachments/ subdir. The tar is slow: gzip on
+        # already-compressed PDFs shrinks it only ~9%, measured on
+        # production at ~15.5MB/s of input → ~31 min for the full tree.
+        # The old 900s (15 min) timeout would have failed the run, so it
+        # is now configurable (history_timeout_sec, default 5400 = 90 min).
+        # Opt-in via the `include_history` config key (default true) so
+        # operators running tight on disk can skip the 29 GB blob.
         if include_history:
             out_hist = BACKUP_DIR / f"sietch-data-history-{ts_slug}.tar.gz"
             data_dir = Path("data")
             hist_src = data_dir / HISTORY_ATTACHMENTS_SUBDIR
             if hist_src.exists():
-                # Atomic rename pattern: temp file in the same volume,
-                # then move into place so a half-written tar is never
-                # visible to the Proton CLI scan.
-                tmp = tempfile.NamedTemporaryFile(
-                    delete=False, dir=BACKUP_DIR, prefix=".history-", suffix=".tmp"
-                )
-                tmp_path = Path(tmp.name)
-                tmp.close()
-                logger.info("history-attachments: starting tar (%d bytes estimated)",
-                            sum(f.stat().st_size for f in hist_src.rglob("*")
-                                if f.is_file()))
-                proc = subprocess.run(
-                    ["tar", "czf", str(tmp_path), "-C", str(data_dir),
-                     HISTORY_ATTACHMENTS_SUBDIR],
-                    capture_output=True, text=True, timeout=900,
-                )
-                if proc.returncode != 0:
-                    raise RuntimeError(
-                        f"history-attachments tar failed ({proc.returncode}): "
-                        f"{proc.stderr[:300]}"
-                    )
-                size = tmp_path.stat().st_size
-                h = hashlib.sha256()
-                with open(tmp_path, "rb") as f:
-                    for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                        h.update(chunk)
-                shutil.move(str(tmp_path), str(out_hist))
-                entry["artifacts"]["files-history"] = {
-                    "path": str(out_hist),
-                    "size": size,
-                    "sha256": h.hexdigest(),
-                    "ok": True,
-                    "error": None,
-                }
-                entry["size"] += size
-                logger.info("history-attachments: done, %d MB", size // (1024 * 1024))
+                # PRE-FLIGHT DISK CHECK (live 2026-10-29): the blob is ~29GB
+                # and the backup volume is 100GB with ~95GB free. Refuse to
+                # start rather than fill the disk — a full disk takes the
+                # whole app down, not just the backup.
+                try:
+                    hist_bytes = sum(f.stat().st_size for f in hist_src.rglob("*")
+                                     if f.is_file())
+                except Exception:
+                    hist_bytes = 0
+                try:
+                    free_bytes = shutil.disk_usage(BACKUP_DIR).free
+                except Exception:
+                    free_bytes = None
+                # gzip only shrinks it ~9%, but be generous: assume 100%.
+                needed = int(hist_bytes * 1.05) + (256 * 1024 * 1024)
+                if free_bytes is not None and free_bytes < needed:
+                    msg = (f"Not enough free space for the history bundle: need ~{needed // (1024 ** 3)}GB, "
+                           f"have {free_bytes // (1024 ** 3)}GB free at {BACKUP_DIR}. "
+                           "Skipping it — free some space or set include_history=false.")
+                    logger.warning(msg)
+                    entry["artifacts"]["files-history"] = {
+                        "path": "", "size": 0, "sha256": None,
+                        "ok": False, "error": msg,
+                    }
+                else:
+                    _write_history_bundle(entry, hist_src, data_dir, out_hist,
+                                          ts_slug, config)
             # else: silently skipped — the dir may not exist on a fresh install
         if "files-history" not in (entry.get("artifacts") or {}):
             entry["artifacts"]["files-history"] = {
@@ -631,6 +680,73 @@ _PART_FILE_DIRS: dict[str, list[tuple[str, str]]] = {
 }
 
 
+def _stream_table_to_zip(zf, table_name: str, sql: str, sensitive: set) -> int:
+    """Write one table into the zip as JSON, WITHOUT loading it in memory.
+
+    LIVE OUTAGE 2026-10-29: the export used to do
+
+        rows = db.query_dicts(sql)           # every row as a dict
+        clean_rows = [{...} for row in rows]  # a second copy
+        json.dumps(clean_rows)                # a third copy (one huge string)
+        zf.writestr(name, that_string)
+
+    For the `notifications` table (1.44M rows, 822MB of live data) that
+    peaked at ~4,142MB of RAM — more than the container's 3,824MB limit —
+    and took the whole site down. Measured on production: 2.9KB of Python
+    overhead per row.
+
+    This version streams: a server-side cursor fetches rows in small
+    batches and each batch is written straight into the zip. Measured peak
+    for the same table: 25MB.
+
+    Returns the number of rows written.
+    """
+    import db as db_mod
+
+    conn = db_mod.get_conn()
+    try:
+        cur = conn.cursor(name="backup_export_cursor")
+        try:
+            cur.execute(sql)
+            cols = [d[0] for d in cur.description]
+        except Exception:
+            cur.close()
+            raise
+        written = 0
+        # zf.open(..., "w") gives a stream handle — the JSON array is
+        # written incrementally so nothing large is ever held in memory.
+        with zf.open(f"{table_name}.json", "w") as out:
+            out.write(b"[")
+            while True:
+                batch = cur.fetchmany(1000)
+                if not batch:
+                    break
+                chunks = []
+                for row in batch:
+                    clean = {}
+                    for k, v in zip(cols, row):
+                        if k in sensitive:
+                            continue
+                        if hasattr(v, "isoformat"):
+                            v = v.isoformat()
+                        clean[k] = v
+                    chunks.append(json.dumps(clean, default=str, ensure_ascii=False))
+                payload = ("," if written else "") + ",".join(chunks)
+                out.write(payload.encode("utf-8"))
+                written += len(batch)
+            out.write(b"]")
+        try:
+            cur.close()
+        except Exception:
+            pass
+        return written
+    finally:
+        try:
+            db_mod.put_conn(conn)
+        except Exception:
+            pass
+
+
 def _build_export_zip_to_path(part: str, ts_slug: str, out_path: Path) -> tuple[int, str]:
     """Build a single export ZIP for ``part`` straight to disk. Returns (size, sha256).
 
@@ -684,17 +800,8 @@ def _build_export_zip_to_path(part: str, ts_slug: str, out_path: Path) -> tuple[
                 if part != "db-core":
                     continue  # only db-core carries tables
                 try:
-                    rows = db.query_dicts(sql)
-                    clean_rows = []
-                    for row in rows:
-                        clean = {k: v for k, v in row.items() if k not in _SENSITIVE}
-                        for k, v in clean.items():
-                            if hasattr(v, "isoformat"):
-                                clean[k] = v.isoformat()
-                        clean_rows.append(clean)
-                    manifest["tables"][table_name] = {"row_count": len(clean_rows)}
-                    zf.writestr(f"{table_name}.json",
-                                json.dumps(clean_rows, default=str, ensure_ascii=False))
+                    count = _stream_table_to_zip(zf, table_name, sql, _SENSITIVE)
+                    manifest["tables"][table_name] = {"row_count": count}
                 except Exception as e:
                     manifest["tables"][table_name] = {"row_count": 0, "error": str(e)}
 
@@ -881,9 +988,22 @@ def _cleanup_old_backups() -> None:
                 fpath.unlink()
         # Streamed history-attachments bundle (separate from the JSON
         # exports — lives in BACKUP_DIR for the Proton CLI scan).
-        for fpath in BACKUP_DIR.glob("sietch-data-history-*.tar.gz"):
-            if fpath.stat().st_mtime < cutoff:
-                fpath.unlink()
+        #
+        # LIVE 2026-10-29: this blob is ~29GB per run (measured), so an
+        # age-based window does not fit on a 100GB volume (7 runs = 192GB).
+        # Keep the N most-recent by mtime instead (default 2, configurable
+        # via history_keep_count) and delete the rest.
+        keep_count = int(config.get("history_keep_count", 2) or 2)
+        if keep_count < 1:
+            keep_count = 1
+        hist_files = sorted(BACKUP_DIR.glob("sietch-data-history-*.tar.gz"),
+                            key=lambda f: f.stat().st_mtime, reverse=True)
+        for stale in hist_files[keep_count:]:
+            try:
+                stale.unlink()
+                logger.info("Removed old history bundle: %s", stale.name)
+            except Exception:
+                pass
         # Stale partial-temp files from history-attachment writes that
         # crashed before the atomic rename. Same retention window.
         for pattern in (".history-*.tmp", "*.tmp"):
@@ -903,9 +1023,22 @@ def _cleanup_old_backups() -> None:
 # ── Scheduler ────────────────────────────────────────────────────────────────
 
 def _backup_loop(stop_event: threading.Event) -> None:
-    """Main backup scheduler loop."""
+    """Main backup scheduler loop.
+
+    The first run waits one full interval instead of firing at startup
+    (live 2026-10-29): a container restart must never trigger a heavy
+    backup run — that is how the box was pushed into memory thrash.
+    """
     logger.info("Backup scheduler started (interval=%ds)", BACKUP_INTERVAL)
     while not stop_event.is_set():
+        try:
+            config, _ = _load_config_from_db()
+            interval = int(config.get("interval", BACKUP_INTERVAL))
+        except (NameError, ValueError, TypeError, AttributeError):
+            interval = BACKUP_INTERVAL
+        # Wait first, then run. A restart does not trigger a run.
+        if stop_event.wait(max(60, interval)):
+            return
         try:
             config, _ = _load_config_from_db()
             if config.get("enabled", BACKUP_ENABLED):
@@ -913,14 +1046,10 @@ def _backup_loop(stop_event: threading.Event) -> None:
                 logger.info("Scheduled backup: %s", result)
         except Exception as e:
             logger.error("Backup loop error: %s", e)
-        # Honor the admin-console interval (DB-backed), not the import-time
-        # env default — otherwise the console setting is display-only.
-        # Clamp to >=60s so a zero/negative value can't hot-loop.
-        try:
-            interval = int(config.get("interval", BACKUP_INTERVAL))
-        except (NameError, ValueError, TypeError, AttributeError):
-            interval = BACKUP_INTERVAL
-        stop_event.wait(max(60, interval))
+        # The next wait happens at the top of the loop, so the interval is
+        # re-read from the DB-backed config each cycle (a console change
+        # takes effect without a restart). Clamp to >=60s so a zero or
+        # negative value can't hot-loop.
 
 
 def start_backup_scheduler() -> threading.Event:

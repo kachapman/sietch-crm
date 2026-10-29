@@ -217,6 +217,12 @@ jobs:
       - name: Run email project copy tests
         run: python3 tests/test_email_project_copy.py -v
 
+      - name: Run service feed delivery tests
+        run: python3 tests/test_service_feed_delivery.py -v
+
+      - name: Run backup streaming tests
+        run: python3 tests/test_backup_streaming.py -v
+
       - name: Run photo report prefill tests
         run: node --test tests/test_photo_report_prefill.mjs
 

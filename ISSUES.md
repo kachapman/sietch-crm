@@ -1013,3 +1013,175 @@ production DB: `start_backup_scheduler()` and `_cleanup_old_backups()` now
 succeed. Tests: `tests/test_backup_scheduler_startup.py` (5, 3 fail against
 the old code) — it pins the tuple-unpack at every call site via AST and
 exercises the real start path with a stubbed loader.
+
+---
+
+## ISSUE-020 — Status feed notifications invisible to everyone; delivered 1.4M times (2026-10-29)
+
+**Severity: high (silent data waste + a missed feature).**
+
+The user asked: *"Why is there not a single proton notification in my
+notifications drawer?"* Three separate defects, all verified on production.
+
+### 1. The rows had no owner
+
+`_insert_feed_notification` (server.py) resolved the recipient list and
+looped over it — but the INSERT omitted `user_id`:
+
+```sql
+INSERT INTO notifications (type, opportunity_id, actor_user_id, message, payload)
+VALUES (%s, NULL, NULL, %s, %s::jsonb)
+```
+
+`user_id` took its column default, `NULL`. The drawer query filters
+`WHERE n.user_id = %s`, and the unread badge does the same — so **not one**
+of the feed notifications was ever visible to anyone:
+
+| type | user_id IS NULL | rows |
+|---|---|---|
+| service_feed | **true** | **1,438,873** |
+| task_assigned | false | 837 |
+| note_tagged | false | 137 |
+| reply_tagged | false | 57 |
+| timesheet_overdue | false | 3 |
+
+Only 1,034 rows were visible to anyone at all.
+
+**Side effect:** `notification_dispatcher.py` queried notifications with NO
+`user_id` filter, so it pulled the orphans and marked them
+telegram_sent/email_sent — 1.44M pointless UPDATEs over a month, which is
+part of why the table was 1019MB on disk for 822MB of live data, and part
+of the box's load average of 37. No user-visible spam leaked (only 142
+rows in `telegram_notification_log`; a NULL user has no chat id).
+
+### 2. Every entry was re-delivered on every poll
+
+The poller's dedup compared each entry id against **one** remembered id
+(`service_feeds.last_item_id`):
+
+```python
+if eid == last_id:
+    continue
+new_entries.append(entry)
+```
+
+The Proton feed has 25 entries with **stable** ids (verified by fetching
+twice, 75s apart). Only the newest ever equalled `last_item_id`, so the
+other 24 were re-delivered on **every** poll — every 5 minutes, to 8
+targeted users:
+
+```
+24 entries x 8 users = 192 rows per poll
+192 x 12 polls/hour = 2,304 rows/hour
+~55,000 rows/day
+```
+
+1,438,873 rows in ~26 days. The five most-repeated alert titles had
+exactly 59,924 copies each.
+
+### 3. Feeds notified everybody about everything
+
+The default `target_mode` was `all` and there was no way to choose which
+updates reach you. The Proton feed is mostly maintenance noise:
+
+```
+[ 1] Service Maintenance, October 22nd
+[ 4] Service Maintenance, October 9th
+[ 7] Service Maintenance, September 6th      ... (11 of 25)
+[ 0] Partial outage on Proton VPN servers
+[11] Global Outage
+[24] Server outage on Proton VPN servers in Andorra
+```
+
+### Fix
+
+- The INSERT now writes `user_id`; each recipient gets their own row.
+- New `service_feed_items (feed_id, item_id)` ledger — `INSERT ... ON
+  CONFLICT DO NOTHING RETURNING` decides whether an entry is new, so it is
+  delivered exactly once.
+- `service_feeds.notify_keywords` — per-feed "only notify about updates
+  containing…" filter (case-insensitive substrings; empty = all). The
+  Proton feed uses `outage, disruption, incident` → 10 of 25 entries match.
+- `service_feeds.target_mode` — `admins` (new default) / `all` /
+  `specific` / `none`.
+- `service_feed_subscriptions` — per-user opt-out, surfaced in Profile →
+  Notification preferences → Status Alerts.
+- The dispatcher now skips `user_id IS NULL` rows.
+- Migration 040 deletes the 1,438,873 orphans (invisible to every user by
+  construction — deleting them removes nothing anyone has ever seen).
+
+**No VACUUM in migration 040:** the migration runner executes each file as
+one batch inside an implicit transaction, and `VACUUM cannot run inside a
+transaction block` aborted the whole file (caught locally before deploy).
+
+### Files
+
+| File | Change |
+|---|---|
+| `server.py` | `_insert_feed_notification` writes `user_id`; `_feed_entry_is_notifiable` / `_feed_notify_keywords` / `_normalize_notify_keywords`; `_resolve_feed_target_user_ids` gains `admins` / `none`; `_filter_feed_subscribers`; `_user_is_feed_audience`; `_handle_feed_subscriptions_get/put`; feed create/update accept `notify_keywords`; new default `admins`. |
+| `service_feed_poller.py` | Per-entry delivery ledger replaces the single-id comparison. |
+| `notification_dispatcher.py` | Skips `user_id IS NULL` rows. |
+| `public/index.html` | Admin feed form: admins/all/specific/none + keyword field; profile "Status Alerts" fieldset. |
+| `public/app.js` | Feed form wiring + `_profileLoadFeedSubs`. |
+| `migrations/040_service_feed_delivery_fixes.sql` (new) | Tables, columns, defaults, orphan cleanup. |
+| `tests/test_service_feed_delivery.py` (new) | 29 tests (25 fail against the old code). |
+
+---
+
+## ISSUE-021 — The backup export loaded whole tables into RAM (2026-10-29)
+
+**Severity: critical (took the production site down).**
+
+Starting the backup scheduler for the first time in production (it had
+never run — see ISSUE-019) exhausted the box: load average 37, 89MB free,
+SSH unresponsive, site 502 until a force restart.
+
+### Cause
+
+The export materialised each table three times over:
+
+```python
+rows = db.query_dicts(sql)           # every row as a dict
+clean_rows = [{...} for row in rows]  # a second copy
+json.dumps(clean_rows)                # a third copy (one huge string)
+zf.writestr(name, that_string)
+```
+
+Measured on production against the real `notifications` table (1,439,331
+rows, 822MB live): **2.9KB of Python overhead per row** → **4,142MB
+projected**, against the container's **3,824MB** limit.
+
+The same table streamed through a server-side cursor peaked at **25MB**
+(a 165x reduction), streaming all 1.44M rows in 98s under a hard 400MB
+address-space cap.
+
+### Two further latent failures found while diagnosing
+
+- **The history tar could not finish.** `data/history-attachments` is 29GB
+  across 1204 directories. Measured gzip throughput: 918MB → 838MB in 59s
+  (~15.5MB/s of input; gzip shrinks it only ~9% because PDFs are already
+  compressed) → the full tree needs ~31 minutes. The code's
+  `timeout=900` (15 min) **would have failed the run**.
+- **It did not fit on disk.** 29GB against 26GB free on the 77GB root
+  volume. Age-based retention (7 days) would have needed 192GB.
+
+### Fix
+
+- `_stream_table_to_zip()` — server-side cursor, rows written straight into
+  the zip via `zf.open(name, "w")`. 25MB peak instead of 4,142MB.
+- Backup destination is now a dedicated 100GB volume
+  (`/mnt/sietch_backup` → `/backup` in compose; `BACKUP_DIR=/backup`).
+- Free-space pre-flight: refuses to start rather than fill the disk.
+- History-tar timeout configurable, default 5400s.
+- Retention keeps the 2 most-recent history tars regardless of age.
+- The scheduler waits one full interval before its first run, so a
+  container restart can never trigger a heavy run.
+
+### Files
+
+| File | Change |
+|---|---|
+| `backup_service.py` | `_stream_table_to_zip()`; `_write_history_bundle()`; disk pre-flight; `history_timeout_sec`; `history_keep_count`; wait-before-first-run. |
+| `docker-compose.yml` | Mounts `/mnt/sietch_backup:/backup`. |
+| `config.example.env` | `BACKUP_DIR=/backup`, `BACKUP_DIR_HOST=/mnt/sietch_backup`. |
+| `tests/test_backup_streaming.py` (new) | 12 tests, synthetic data only (10 fail against the old code). |
