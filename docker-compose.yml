@@ -53,6 +53,10 @@ services:
     image: docker.io/library/postgres:16-alpine
     container_name: sietch-db
     restart: always
+    # Postgres needs more than Docker's 64MB default /dev/shm for parallel
+    # maintenance (VACUUM failed with "could not resize shared memory
+    # segment ... No space left on device" — live 2026-10-29).
+    shm_size: "512mb"
     env_file:
       - .env
     environment:
