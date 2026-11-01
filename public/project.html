@@ -293,6 +293,7 @@
           <div class="phtml-mention-dropdown" id="phtml-mention-dropdown"></div>
         </div>
         <div class="phtml-note-actions">
+          <select id="phtml-note-category" class="preview-note-type-select" title="Note type" aria-label="Note type"></select>
           <button type="button" class="btn btn-ghost btn-sm phtml-note-attach-btn" title="Attach files"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 7l-6.5 6.5a1.5 1.5 0 0 0 3 3l6.5 -6.5a3 3 0 0 0 -6 -6l-6.5 6.5a4.5 4.5 0 0 0 9 9l6.5 -6.5"/></svg></button>
           <input type="file" id="phtml-note-attachments" multiple hidden />
           <button type="button" class="btn btn-ghost btn-sm note-backdate-btn" title="Set event date"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M7 14h.013"/><path d="M10.01 14h.005"/><path d="M13.01 14h.005"/><path d="M16.015 14h.005"/><path d="M13.015 17h.005"/><path d="M7.01 17h.005"/><path d="M10.01 17h.005"/></svg></button>
@@ -328,6 +329,59 @@
       var d = document.createElement("div");
       d.textContent = s;
       return d.innerHTML;
+    }
+
+    // Note-type picker for the project-page composer. Lists user-note
+    // categories only — system types (Mail Message, Files are uploaded,
+    // Task is closed, Action) are never manually filed notes. Mirrors
+    // isUserNoteCategory / populateHistoryCategorySelect in app.js.
+    // (Live bug 2026-11-01: this composer hardcoded categoryId "10",
+    // filing every plain note as the non-deletable "Files are uploaded".)
+    function isPhtmlUserNoteCategory(cat) {
+      if (!cat) return false;
+      var title = String(cat.title || cat.Title || "");
+      if (title === "Action") return false;
+      if (cat.isSystem === true || cat.is_system === true) return false;
+      return true;
+    }
+    function populatePhtmlNoteCategorySelect() {
+      var sel = document.getElementById("phtml-note-category");
+      if (!sel) return;
+      sel.innerHTML = "";
+      var cats = window._phtmlNoteCategories || [];
+      var filtered = cats.filter(isPhtmlUserNoteCategory);
+      if (!filtered.length) { sel.style.display = "none"; return; }
+      sel.style.display = "";
+      for (var i = 0; i < filtered.length; i++) {
+        var c = filtered[i];
+        var opt = document.createElement("option");
+        opt.value = String(c.id ?? c.ID ?? "");
+        opt.textContent = c.title || c.Title || opt.value;
+        sel.appendChild(opt);
+      }
+      var preferred = -1;
+      for (var j = 0; j < filtered.length; j++) {
+        if (/note|event|comment/i.test(String(filtered[j].title || filtered[j].Title || ""))) { preferred = j; break; }
+      }
+      sel.selectedIndex = preferred >= 0 ? preferred : 0;
+    }
+    function resolvePhtmlNoteCategoryId() {
+      var sel = document.getElementById("phtml-note-category");
+      var picked = sel ? parseInt(sel.value, 10) : NaN;
+      if (isFinite(picked) && picked > 0) return picked;
+      var cats = window._phtmlNoteCategories || [];
+      var filtered = cats.filter(isPhtmlUserNoteCategory);
+      for (var i = 0; i < filtered.length; i++) {
+        if (/note|event|comment/i.test(String(filtered[i].title || filtered[i].Title || ""))) {
+          var id = Number(filtered[i].id ?? filtered[i].ID);
+          if (isFinite(id) && id > 0) return id;
+        }
+      }
+      if (filtered.length) {
+        var first = Number(filtered[0].id ?? filtered[0].ID);
+        if (isFinite(first) && first > 0) return first;
+      }
+      return 0;
     }
 
     // Audio extension matcher + player injector for the standalone project
@@ -1138,6 +1192,18 @@
       // Pre-fetch portal users for @mentions
       fetchUsers();
 
+      // Note-type picker options (user-note categories only — never the
+      // system "Files are uploaded" type). Populates the composer <select>.
+      window._phtmlNoteCategories = [];
+      fetch("/api/v2/history-categories", { credentials: "same-origin" })
+        .then(function(r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(function(raw) {
+          var cats = raw.data || raw.rows || raw || [];
+          window._phtmlNoteCategories = Array.isArray(cats) ? cats : [];
+          populatePhtmlNoteCategorySelect();
+        })
+        .catch(function() { /* picker stays hidden; submit aborts with a toast */ });
+
       // Load custom field definitions for user fields
       var cfDefs = [];
       var cfDefsById = {};
@@ -1633,7 +1699,12 @@
           }
           submitBtn.textContent = "Add note";
         }
-        var body = { content: content, categoryId: "10" };
+        var resolvedCategoryId = resolvePhtmlNoteCategoryId();
+        if (!resolvedCategoryId) {
+          showToast("Note categories unavailable — please reload and try again.", true);
+          return;
+        }
+        var body = { content: content, categoryId: String(resolvedCategoryId) };
         if (notifyUserList.length) body.notifyUserList = notifyUserList;
         if (createdIso) body.created = createdIso;
         if (fileIds.length) body.fileIds = fileIds;

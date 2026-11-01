@@ -2,6 +2,22 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Project-page notes: note-type picker, no more forced "Files are uploaded" (2026-11-01)
+
+Live bug 2026-11-01 (production v2.3.0, project "Barbra & Ronald Sydney" #41):
+the full project page composer hardcoded `categoryId "10"` ("Files are
+uploaded", a non-deletable system type) and offered no category choice, so
+every plain note filed there was mislabelled and permanent. The composer now
+has a note-type `<select>` (`#phtml-note-category`) populated from
+`/api/v2/history-categories` filtered to user-note categories only (same
+`isSystem`-flag rule as the dashboard's `isUserNoteCategory`, never numeric
+ids; prefers a Note-like title), and posts the selected id. If categories
+fail to load the submit aborts with a toast instead of guessing a fallback
+id. Existing notes already stored as category 10 are untouched (re-filing
+needs explicit sign-off).
+Tests: new `tests/test_project_page_note_category.mjs` (4 source guards,
+fail against the old page). No migration.
+
 ## Notifications: poller reads filter columns, per-item dismiss (2026-10-29)
 
 Two follow-ups to the service-feed work, both verified against the live

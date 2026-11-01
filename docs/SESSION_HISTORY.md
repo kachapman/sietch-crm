@@ -11,6 +11,25 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-01 (project-page note category fix)
+
+**Status: READY TO DEPLOY — not yet deployed. Fixed the live 2026-11-01 bug
+where the full project page composer hardcoded `categoryId "10"`, filing
+every plain note as the non-deletable system type "Files are uploaded" with
+no picker. `public/project.html` now has a `#phtml-note-category` select
+populated from `/api/v2/history-categories` (user-note categories only,
+`isSystem`-flag filter mirroring `isUserNoteCategory`, Note-like default);
+submit posts the selected id and aborts with a toast if categories failed to
+load. Existing cat-10 notes untouched. Files: `public/project.html` (+72/-1),
+new `tests/test_project_page_note_category.mjs` (4 tests). All Node suites
+green (0 failures, incl. full `tests/test_*.mjs` sweep). Docs: CHANGELOG entry
+added; bug doc at `~/.opencode/plan/sietch-crm-bugs-2026-11-01.md` updated
+(bug 1 not-a-bug, bug 2 confirmed high). No migration. Still open from that
+doc: due-date header off-by-one (medium), tags missing on full page (medium),
+no per-project URL (low).
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-10-29 (service feeds + backup hardening)
 
 **Status: DEPLOYED 2026-10-29 17:18 — verified live.
