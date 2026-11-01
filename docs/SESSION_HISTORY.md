@@ -11,6 +11,19 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-01 (branch `doc-auth-api-tokens`, follow-up — mail auth gaps)
+
+**Status: COMMITTED, NOT DEPLOYED, NOT PUSHED (both need user approval).
+Rebased onto `main` (`e4558e5` docs-only, clean). New commit gates 32
+`/api/v2/mail/*` endpoints (`_require_auth`; config+log `_require_admin` +
+token-blocked), adds `tests/test_mail_auth_gaps.py` (12 tests, 98 fail
+pre-fix), smoke.yml entry, CHANGELOG. Full suite: 55 Python files pass
+(only the 3 pre-existing baseline failures + 1 custom-output pass),
+282/282 JS. Branch ready to merge into main; deploy needs the usual droplet
+steps (no migration this time — server restart only).
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-11-01 (branch `doc-auth-api-tokens`, Part 2 — read-only API tokens)
 
 **Status: COMMITTED, NOT DEPLOYED (deploy needs user approval). Commit on

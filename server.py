@@ -1355,6 +1355,8 @@ _API_TOKEN_BLOCKED_PREFIXES = (
     "/api/v2/users",   # user management
     "/api/v2/me",      # own profile
     "/api/v2/my/",     # own avatar
+    "/api/v2/mail/config",  # scanner config: admins only (handler-gated)
+    "/api/v2/mail/log",     # scanner log: admins only (handler-gated)
 )
 
 
@@ -20741,6 +20743,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_tags(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         qs = parse_qs(urlparse(self.path).query)
         page = int(qs.get("page", ["1"])[0])
         page_size = int(qs.get("page_size", ["50"])[0])
@@ -20752,6 +20757,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_tag_get(self, tag_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             row = db.query_one("SELECT * FROM mail_tags WHERE id = %s", (tag_id,))
             if not row:
@@ -20784,6 +20792,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_tag_update(self, tag_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             title = (payload.get("title") or "").strip()
@@ -20804,6 +20815,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_tag_delete(self, tag_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             existing = db.query_one("SELECT id FROM mail_tags WHERE id = %s", (tag_id,))
             if not existing:
@@ -20829,6 +20843,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_templates(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         qs = parse_qs(urlparse(self.path).query)
         page = int(qs.get("page", ["1"])[0])
         page_size = int(qs.get("page_size", ["50"])[0])
@@ -20840,6 +20857,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_template_get(self, template_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             row = db.query_one("SELECT * FROM mail_templates WHERE id = %s", (template_id,))
             if not row:
@@ -20868,6 +20888,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_template_update(self, template_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             existing = db.query_one("SELECT id FROM mail_templates WHERE id = %s", (template_id,))
@@ -20897,6 +20920,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_template_delete(self, template_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             existing = db.query_one("SELECT id FROM mail_templates WHERE id = %s", (template_id,))
             if not existing:
@@ -21022,9 +21048,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_status(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         _json_response(self, 200, mail_scanner.get_scanner_status() if mail_scanner else {"enabled": False})
 
     def _handle_mail_log(self) -> None:
+        # Scanner config/log can expose account identifiers, error detail,
+        # and behavior toggles — admins only (and never API tokens: the
+        # /api/v2/mail/config + /api/v2/mail/log prefixes are blocked for
+        # tokens in _API_TOKEN_BLOCKED_PREFIXES).
+        user = _require_admin(self)
+        if not user:
+            return
         qs = parse_qs(urlparse(self.path).query)
         limit = int(qs.get("limit", ["500"])[0])
         account_id = qs.get("account_id", [None])[0]
@@ -21112,6 +21148,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_reprocess(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             entries = payload.get("entries") or []
@@ -21126,6 +21165,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_retrain(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             result = mail_scanner.retrain_classifier_head() if mail_scanner else {"ok": False, "message": "Scanner not available"}
             _json_response(self, 200, result)
@@ -21133,9 +21175,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_config(self) -> None:
+        # Scanner config/log can expose account identifiers, error detail,
+        # and behavior toggles — admins only (and never API tokens: the
+        # /api/v2/mail/config + /api/v2/mail/log prefixes are blocked for
+        # tokens in _API_TOKEN_BLOCKED_PREFIXES).
+        user = _require_admin(self)
+        if not user:
+            return
         _json_response(self, 200, mail_scanner.get_contractors() if mail_scanner else {})
 
     def _handle_mail_config_put(self) -> None:
+        # Scanner config/log can expose account identifiers, error detail,
+        # and behavior toggles — admins only (and never API tokens: the
+        # /api/v2/mail/config + /api/v2/mail/log prefixes are blocked for
+        # tokens in _API_TOKEN_BLOCKED_PREFIXES).
+        user = _require_admin(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             result = mail_scanner.update_contractors(payload) if mail_scanner else payload
@@ -21597,6 +21653,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_send_undo(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             outgoing_id = int(payload.get("id"))
@@ -21811,6 +21870,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_contact_get(self, contact_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             row = db.query_one("SELECT * FROM mail_contacts WHERE id = %s", (contact_id,))
             if not row:
@@ -21835,6 +21897,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_contact_update(self, contact_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             db.execute(
@@ -21847,6 +21912,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_contact_delete(self, contact_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             db.execute("DELETE FROM mail_contacts WHERE id = %s", (contact_id,))
             _json_response(self, 200, {"ok": True})
@@ -22324,6 +22392,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_folders(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             qs = parse_qs(urlparse(self.path).query)
             account_id = qs.get("account_id", [None])[0]
@@ -22363,6 +22434,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_folder_update(self, folder_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             name = payload.get("name", "").strip()
@@ -22384,6 +22458,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_folder_delete(self, folder_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             folder = db.query_one("SELECT name, is_system FROM mail_folders WHERE id = %s", (folder_id,))
             if not folder:
@@ -22402,6 +22479,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     # ── Contractors ───────────────────────────────────────────────────────
 
     def _handle_mail_contractors(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             rows = db.query_dicts("SELECT * FROM mail_contractors ORDER BY priority DESC, name")
             _json_response(self, 200, {"contractors": rows})
@@ -22409,6 +22489,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_contractor_get(self, contractor_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             row = db.query_one("SELECT * FROM mail_contractors WHERE id = %s", (contractor_id,))
             if not row:
@@ -22419,6 +22502,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_contractor_create(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             name = (payload.get("name") or "").strip()
@@ -22437,6 +22523,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_contractor_update(self, contractor_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             existing = db.query_one("SELECT id FROM mail_contractors WHERE id = %s", (contractor_id,))
@@ -22457,6 +22546,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_contractor_delete(self, contractor_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             existing = db.query_one("SELECT id FROM mail_contractors WHERE id = %s", (contractor_id,))
             if not existing:
@@ -22470,6 +22562,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     # ── Classification Rules ──────────────────────────────────────────────
 
     def _handle_mail_classification_rules(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             rows = db.query_dicts("SELECT * FROM mail_classification_rules ORDER BY priority DESC, rule_name")
             _json_response(self, 200, {"rules": rows})
@@ -22477,6 +22572,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_classification_rule_get(self, rule_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             row = db.query_one("SELECT * FROM mail_classification_rules WHERE id = %s", (rule_id,))
             if not row:
@@ -22487,6 +22585,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_classification_rule_create(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             rule_name = (payload.get("rule_name") or "").strip()
@@ -22511,6 +22612,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_classification_rule_update(self, rule_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             existing = db.query_one("SELECT id FROM mail_classification_rules WHERE id = %s", (rule_id,))
@@ -22549,6 +22653,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_classification_rule_delete(self, rule_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             existing = db.query_one("SELECT id FROM mail_classification_rules WHERE id = %s", (rule_id,))
             if not existing:
@@ -22562,6 +22669,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     # ── Feedback ──────────────────────────────────────────────────────────
 
     def _handle_mail_feedback(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             entries = mail_scanner.get_feedback_entries(200) if mail_scanner else []
             _json_response(self, 200, {"entries": entries})

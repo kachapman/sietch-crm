@@ -139,6 +139,9 @@ jobs:
       - name: Run API token tests
         run: python3 tests/test_api_tokens.py -v
 
+      - name: Run mail auth gap tests
+        run: python3 tests/test_mail_auth_gaps.py -v
+
       - name: Run stage+due correction dry-run tests
         run: python3 tests/test_sync_correction_dryrun.py -v
 

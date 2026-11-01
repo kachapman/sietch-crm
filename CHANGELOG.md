@@ -2,6 +2,23 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Mail-surface auth gaps closed (2026-11-01, branch `doc-auth-api-tokens`)
+
+Follow-up audit found 32 `/api/v2/mail/*` JSON endpoints with no login
+check at all — including writes (tag/template/contact/folder/contractor/
+classification-rule CRUD, reprocess, retrain, send-undo, config PUT). All
+now carry the same auth as the other /api/v2 routes: `_require_auth`,
+except scanner config (`/api/v2/mail/config` GET+PUT) and scanner log
+(`GET /api/v2/mail/log`), which are `_require_admin` and additionally
+blocked for API tokens via `_API_TOKEN_BLOCKED_PREFIXES`. Tags/status (and
+the other data routes) follow the normal GET-token rules. The mail UI's
+Admin tab is already admin-only, and `api()` sends cookies
+(`credentials: same-origin`), so logged-in flows are unaffected.
+Deliberately public, unchanged: daily-quote/live, calendar feed (allowlist-
+guarded proxy), OAuth callbacks, password reset, service-feed webhook.
+Tests: new `tests/test_mail_auth_gaps.py` (12 tests / 100+ assertions, 98
+fail pre-fix). No migration.
+
 ## Document download auth hole closed (2026-11-01, branch `doc-auth-api-tokens`)
 
 `GET /api/v2/documents/{id}` served any customer file with no auth check
