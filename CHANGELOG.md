@@ -2,6 +2,27 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Document download auth hole closed (2026-11-01, branch `doc-auth-api-tokens`)
+
+`GET /api/v2/documents/{id}` served any customer file with no auth check
+(sequential ids, `?token=` ignored). It now requires, in order: a logged-in
+session cookie, the per-document OnlyOffice JWT (`?token=`, HMAC-signed with
+`DOCS_JWT_SECRET`, bound to the doc id, 24h TTL via
+`DOCS_DOWNLOAD_TOKEN_TTL_SEC`), or a personal API token (Part 2). No
+credential → 401, bad credential → 403, and the check runs before the DB
+row or filesystem is touched. The OnlyOffice save callback
+`POST /api/v2/documents/{id}/callback` now verifies `body["token"]` against
+the same secret and requires it to be bound to the document — previously an
+unsigned POST could make the server download an arbitrary URL over the file
+on disk. Audited the other file-serving routes: history-attachment download,
+photo download/thumbnails, both batch ZIPs, mail attachment download +
+JWT serve, avatars, contact photos/avatars, and the logo proxy were already
+gated; export/import are admin-gated at the call site; static serving is
+rooted at `public/` so `data/` customer files are unreachable; the
+service-feed webhook stays public by design (random secret in URL).
+Tests: new `tests/test_doc_download_auth.py` (19 tests, 11 fail pre-fix).
+No migration, no behavior change for logged-in users.
+
 ## Project-page notes: note-type picker, no more forced "Files are uploaded" (2026-11-01)
 
 Live bug 2026-11-01 (production v2.3.0, project "Barbra & Ronald Sydney" #41):

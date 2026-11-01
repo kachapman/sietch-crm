@@ -11,6 +11,20 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-01 (branch `doc-auth-api-tokens`, Part 1 — document download auth hole)
+
+**Status: COMMITTED, NOT DEPLOYED (deploy needs user approval). Commit
+`doc-download-auth` on `doc-auth-api-tokens`: `GET /api/v2/documents/{id}`
+now requires session cookie / OnlyOffice per-doc JWT / (Part 2) API token;
+callback verifies OnlyOffice JWT. Files: `server.py` (+helpers
+`_bearer_token`, `_verify_document_token`, `_authorize_document_fetch`,
+`_verify_document_callback`, `DOCS_DOWNLOAD_TOKEN_TTL_SEC`),
+`tests/test_doc_download_auth.py` (19 tests, 11 fail pre-fix),
+`.github/workflows/smoke.yml`, `CHANGELOG.md`. Part 2 next: read-only API
+tokens (table + Bearer gate + CLI), second commit on same branch.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-11-01 (project-page note category fix)
 
 **Status: DEPLOYED 2026-11-01 — droplet sietch-crm-prod (147.182.164.19,

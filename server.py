@@ -505,6 +505,16 @@ AVATAR_STORAGE_PATH = Path(os.getenv("AVATAR_STORAGE_PATH", str(DATA_DIR / "avat
 CONTACT_PHOTO_STORAGE_PATH = Path(os.getenv("CONTACT_PHOTO_STORAGE_PATH", str(DATA_DIR / "contact-photos")))
 BRANDING_STORAGE_PATH = Path(os.getenv("BRANDING_STORAGE_PATH", str(DATA_DIR / "branding")))
 DOCS_JWT_SECRET = os.environ.get("DOCS_JWT_SECRET", "")
+# Max age (seconds) of the per-document ?token= JWT that the editor config
+# mints for the Document Server's download fetch. The server fetches the
+# file immediately after the editor loads, so a short window is enough;
+# 24h keeps long-lived editing sessions working. Bound per-document (the
+# token's "id" must equal the requested doc id), so a leaked token only
+# ever exposes that one file, and only briefly.
+try:
+    DOCS_DOWNLOAD_TOKEN_TTL_SEC = int(os.environ.get("DOCS_DOWNLOAD_TOKEN_TTL_SEC", "86400"))
+except ValueError:
+    DOCS_DOWNLOAD_TOKEN_TTL_SEC = 86400
 DOCS_INTERNAL_URL = os.environ.get("DOCS_INTERNAL_URL", "").rstrip("/")
 DOCS_PUBLIC_URL = os.environ.get("DOCS_PUBLIC_URL", "").rstrip("/")
 CRM_PUBLIC_URL = os.environ.get("CRM_PUBLIC_URL", "").rstrip("/") or DOCS_PUBLIC_URL
@@ -1318,6 +1328,111 @@ def _require_admin(handler: SimpleHTTPRequestHandler) -> dict | None:
 # intentional extra strictness, so admin gating is now uniformly `_require_admin`
 # and `role` is a descriptive/feature field only (badges, the `limited` CRM-Mail
 # restriction). Removed deliberately so a divergent gate can't creep back in.
+
+
+def _bearer_token(handler: SimpleHTTPRequestHandler) -> str | None:
+    """Return the raw `Authorization: Bearer <token>` value, or None.
+
+    Shared by the file-download auth (document/history-attachment fetches)
+    and the read-only API-token gate in `_require_auth`, so both read the
+    header exactly the same way.
+    """
+    authz = handler.headers.get("Authorization", "")
+    if authz.startswith("Bearer "):
+        token = authz[len("Bearer "):].strip()
+        return token or None
+    return None
+
+
+def _verify_document_token(token: str, doc_id: int) -> bool:
+    """Check the per-document OnlyOffice download JWT (`?token=`).
+
+    The editor config mints this token (HMAC-signed with DOCS_JWT_SECRET)
+    and the Document Server — which sends no cookies — presents it back
+    when fetching the file. Accept only a correctly signed token whose
+    "id" equals the requested document and whose "ts" is fresh: binding to
+    the id keeps a token for doc A from downloading doc B, and the TTL
+    keeps a leaked URL from working indefinitely. The stored `path` claim
+    is deliberately NOT compared — serving always uses the path currently
+    in the DB, so a rename/move between config load and fetch still works.
+    """
+    if not token or not DOCS_JWT_SECRET:
+        return False
+    payload = _verify_jwt(token, DOCS_JWT_SECRET)
+    if not payload or payload.get("id") != doc_id:
+        return False
+    try:
+        age = time.time() - float(payload.get("ts", 0))
+    except (TypeError, ValueError):
+        return False
+    # Small negative tolerance for clock skew between CRM and docserver.
+    return -300 <= age <= DOCS_DOWNLOAD_TOKEN_TTL_SEC
+
+
+def _authorize_document_fetch(handler: SimpleHTTPRequestHandler, doc_id: int) -> bool:
+    """Authorize `GET /api/v2/documents/{id}`; send 401/403 and return False on failure.
+
+    Accepted credentials, in order: (1) a logged-in session cookie —
+    the browser/app path, unchanged; (2) the per-document OnlyOffice JWT
+    (`?token=`) — the Document Server path, which sends no cookies.
+    (Part 2 adds a third: personal read-only API tokens via Bearer.)
+    No credential at all → 401; a wrong/expired credential → 403.
+    """
+    session = _session_token(handler)
+    if session and auth_mod.get_session_user(session):
+        return True
+    qs = parse_qs(urlparse(handler.path).query)
+    doc_token = (qs.get("token") or [""])[0]
+    if doc_token:
+        if _verify_document_token(doc_token, doc_id):
+            return True
+        _json_response(handler, 403, {"error": "Invalid or expired document token"})
+        return False
+    if session:
+        _json_response(handler, 401, {"error": "Invalid or expired session"})
+    else:
+        _json_response(handler, 401, {"error": "Not authenticated"})
+    return False
+
+
+def _verify_document_callback(doc_id: int, body: dict) -> bool:
+    """Check the OnlyOffice save-callback JWT (`body["token"]`).
+
+    The Document Server signs every callback with DOCS_JWT_SECRET (its
+    container is configured with the same JWT_SECRET). Without this check
+    anyone could POST `{"status": 2, "url": <attacker-url>}` and make the
+    server download an arbitrary URL over the file on disk. The decoded
+    token must be valid AND bound to this document: OnlyOffice echoes the
+    document key back, either as a top-level `key` (callback-style token)
+    or nested under `document.key` (config-style token) — either form is
+    accepted, anything else is rejected. A missing/unbound token is a loud
+    403, not a silent pass.
+    """
+    expected_key = f"sietch-doc-{doc_id}"
+    if not DOCS_JWT_SECRET:
+        # No secret configured → the editor flow can't mint tokens either
+        # (editor-config 503s), so there is nothing to verify against.
+        # Allowed for legacy dev setups, but logged so it can't hide.
+        logger.warning("Document callback for doc %s accepted without token check (DOCS_JWT_SECRET empty)", doc_id)
+        return True
+    if not isinstance(body, dict):
+        return False
+    token = body.get("token")
+    if not token:
+        logger.warning("Document callback for doc %s rejected: missing token", doc_id)
+        return False
+    decoded = _verify_jwt(token, DOCS_JWT_SECRET)
+    if not decoded:
+        logger.warning("Document callback for doc %s rejected: invalid token signature", doc_id)
+        return False
+    candidates = {body.get("key"), decoded.get("key")}
+    nested = decoded.get("document")
+    if isinstance(nested, dict):
+        candidates.add(nested.get("key"))
+    if expected_key not in candidates:
+        logger.warning("Document callback for doc %s rejected: token not bound to this document", doc_id)
+        return False
+    return True
 
 
 def _humanize_file_size(size_bytes) -> str:
@@ -14995,6 +15110,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         self.wfile.write(zip_data)
 
     def _handle_document_download(self, doc_id: int) -> None:
+        # Auth first (hole closed 2026-11: this route used to serve any
+        # customer file to anyone who could guess sequential ids, and it
+        # ignored ?token= entirely). Session cookie, per-document
+        # OnlyOffice JWT, or (Part 2) API token — see
+        # _authorize_document_fetch. Anything else is rejected before the
+        # DB row or the filesystem is touched.
+        if not _authorize_document_fetch(self, doc_id):
+            return
         row = db.query_one(
             "SELECT opportunity_id, title, file_path, file_size, mime_type FROM project_documents WHERE id = %s AND is_deleted = FALSE",
             (doc_id,),
@@ -16230,6 +16353,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             payload = json.loads(_read_body(self) or b"{}")
         except json.JSONDecodeError:
             _json_response(self, 200, {"error": 0})
+            return
+        # Auth (hole closed 2026-11, same trust boundary as the download
+        # route): the Document Server proves itself with the JWT in
+        # payload["token"]. Without this, an unauthenticated POST of
+        # {"status": 2, "url": ...} would make the server below download
+        # an arbitrary URL over the file on disk.
+        if not _verify_document_callback(doc_id, payload):
+            _json_response(self, 403, {"error": "Invalid callback token"})
             return
         status = payload.get("status")
         # OnlyOffice passes the acting user via payload['users'] (list) or payload['userdata'].
