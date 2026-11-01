@@ -312,6 +312,7 @@
 
   <div id="phtml-toast" class="toast-phtml"></div>
 
+  <script src="date-only.js?v=1.0.0"></script>
   <script>
   (function() {
     var params = new URLSearchParams(window.location.search);
@@ -512,11 +513,14 @@
       meta.innerHTML = '<span class="project-meta-item" style="color:var(--danger);">' + esc(msg) + '</span>';
     }
 
+    // Date-only strings ("YYYY-MM-DD" from the API DATE column) are parsed
+    // as local calendar dates via the shared parseDateSmart helper so the
+    // stored day renders in any timezone. Full datetimes keep new Date.
     function formatDate(s) {
       if (!s) return "";
       try {
-        var d = new Date(s);
-        if (isNaN(d.getTime())) return String(s);
+        var d = (typeof parseDateSmart === "function") ? parseDateSmart(s) : new Date(s);
+        if (!d || isNaN(d.getTime())) return String(s);
         var months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
         return months[d.getMonth()] + " " + d.getDate() + ", " + d.getFullYear();
       } catch(e) { return String(s); }

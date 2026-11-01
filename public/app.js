@@ -10847,7 +10847,7 @@ function buildLocalKanbanBoard(container, kanban, section) {
         let txt = dueInfo.label;
         if (card.due) {
           try {
-            const dstr = new Date(card.due).toLocaleDateString();
+            const dstr = parseDateSmart(card.due).toLocaleDateString();
             txt = `${dstr} — ${dueInfo.label}`;
           } catch {}
         }
@@ -10937,7 +10937,10 @@ function addLocalKanbanColumn(kanban, section) {
 function getCardDueInfo(due) {
   if (!due) return null;
   try {
-    const dueDate = new Date(due);
+    // Date-only input from <input type="date"> parses as a local calendar
+    // date (shared helper); datetimes keep native parsing.
+    const dueDate = parseDateSmart(due);
+    if (!dueDate || Number.isNaN(dueDate.getTime())) return null;
     const now = new Date();
     const diffMs = dueDate - now;
     const days = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
@@ -41931,7 +41934,15 @@ function renderOpportunityPreviewTasksTab(container, oppId, opp, openTasks, clos
       const meta = document.createElement("span");
       meta.className = "opp-preview-task-meta";
       const parts = [];
-      if (task.dueDate) parts.push("Due: " + new Date(task.dueDate).toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }));
+      if (task.dueDate) {
+        const dueRaw = String(task.dueDate).trim();
+        const dueParsed = parseDateSmart(task.dueDate);
+        // Date-only task values carry no time; datetimes keep hour/minute.
+        const dueOpts = /^\d{4}-\d{2}-\d{2}$/.test(dueRaw)
+          ? { month: "short", day: "numeric" }
+          : { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+        parts.push("Due: " + dueParsed.toLocaleDateString(undefined, dueOpts));
+      }
       if (task.responsible?.displayName) parts.push(task.responsible.displayName);
       meta.textContent = parts.join(" · ");
       info.appendChild(meta);
@@ -42170,7 +42181,7 @@ async function openTasksListModal() {
       if (task.dueDate || task.deadLine?.value || task.deadLine) {
         const dl = document.createElement("span");
         dl.className = "feed-meta";
-        dl.textContent = `Due ${new Date(task.dueDate || task.deadLine?.value || task.deadLine).toLocaleDateString()}`;
+        dl.textContent = `Due ${parseDateSmart(task.dueDate || task.deadLine?.value || task.deadLine).toLocaleDateString()}`;
         label.appendChild(dl);
       }
 
@@ -42247,6 +42258,9 @@ function openTaskPreviewModal(task, { isNew = false } = {}) {
 
   const toLocalDate = (iso) => {
     if (!iso) return "";
+    // Date-only values round-trip verbatim into <input type="date"> (no UTC
+    // shift); full timestamps format from local time as before.
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(iso).trim())) return String(iso).trim();
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return "";
     const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -42716,7 +42730,7 @@ function openTaskPreviewModal(task, { isNew = false } = {}) {
 function taskSortMs(task) {
   const due = task.dueDate ?? task.deadLine?.value ?? task.deadLine ?? task.deadline;
   if (due) {
-    const t = new Date(due).getTime();
+    const t = parseDateSmart(due).getTime();
     if (!Number.isNaN(t)) return t;
   }
   const created =
@@ -42737,7 +42751,7 @@ function taskTooltipHtml(task) {
   }
   const due = task.dueDate || task.deadLine?.value || task.deadLine;
   if (due) {
-    const d = new Date(due);
+    const d = parseDateSmart(due);
     if (!Number.isNaN(d.getTime())) {
       const dateStr = d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
       const timeStr = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
@@ -42813,7 +42827,7 @@ function hideTaskTooltip() {
 function isTaskOverdue(task) {
   const deadline = task.dueDate || task.deadLine?.value || task.deadLine;
   if (!deadline) return false;
-  const due = new Date(deadline);
+  const due = parseDateSmart(deadline);
   const now = new Date();
   const diffMs = now.getTime() - due.getTime();
   return diffMs > 3 * 24 * 60 * 60 * 1000;
@@ -43111,7 +43125,7 @@ const TASK_LABELS_ICON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="
 function dueChipHtml(task) {
   const due = task.dueDate || task.deadLine?.value || task.deadLine;
   if (!due) return "";
-  const d = new Date(due);
+  const d = parseDateSmart(due);
   if (Number.isNaN(d.getTime())) return "";
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();

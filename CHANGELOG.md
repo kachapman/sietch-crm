@@ -2,6 +2,28 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Follow-up due date off-by-one: date-only strings parse as local dates (2026-11-01)
+
+Live bug 2026-11-01 (project #30, stored `expected_close_date 2026-10-26`):
+the full project page showed Oct 25 while the dashboard showed Oct 26.
+`project.html`'s `formatDate` parsed the date-only API string with bare
+`new Date(s)` (UTC midnight → previous day in US timezones); the dashboard
+already used a local-midnight parser. New shared `public/date-only.js`
+(`parseDateSmart`: strict `YYYY-MM-DD` → local midnight, datetimes →
+native `new Date`; plus `toDateInputValue` for `<input type="date">`)
+loaded by both `index.html` (before `app.js`) and `project.html`. Fixed all
+7 places from the bug doc: project-page `formatDate`, local-kanban card due
+display + `getCardDueInfo` day math, task due labels (`:41934`, `:42173`),
+task-edit `toLocalDate` prefill (date-only round-trips verbatim), and the
+remaining task `new Date(due…)` sites (sort, tooltip, overdue, due chip —
+task `due_date` is TIMESTAMP so datetimes behave as before). Server
+`NOW()`-vs-DATE bot queries intentionally unchanged (behavior note only).
+Tests: new `tests/test_date_only.mjs` (18 tests, loads the real helper —
+no mirror drift — plus source guards for all 7 places; must pass under
+`TZ=America/Chicago` and `TZ=America/New_York`); `dueChipHtml` mirror in
+`tests/test_pure_helpers.mjs` updated to the fixed parser. No migration,
+no API/DB change. Not deployed, not merged (branch `fix-date-only-parsing`).
+
 ## Project-page notes: note-type picker, no more forced "Files are uploaded" (2026-11-01)
 
 Live bug 2026-11-01 (production v2.3.0, project "Barbra & Ronald Sydney" #41):
