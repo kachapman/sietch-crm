@@ -628,6 +628,7 @@ def _invalidate_bot_config_cache() -> None:
 # ── DB init ────────────────────────────────────────────────────────────────────
 import db
 import auth as auth_mod
+import api_tokens as api_tokens_mod
 
 db.init_db()
 
@@ -885,6 +886,30 @@ except Exception:
     pass
 try:
     db.execute("CREATE INDEX IF NOT EXISTS ix_personal_note_links_entity ON personal_note_links(entity_type, entity_id)")
+except Exception:
+    pass
+
+# Migration 041: api_tokens table — personal read-only API tokens (admin
+# minted, Bearer on /api/v2 GET routes). Mirrors migrations/041_api_tokens.sql
+# and init.sql so all three paths converge; idempotent.
+try:
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS api_tokens (
+            id            SERIAL PRIMARY KEY,
+            name          TEXT NOT NULL,
+            token_hash    TEXT NOT NULL UNIQUE,
+            token_prefix  TEXT NOT NULL DEFAULT '',
+            scope         TEXT NOT NULL DEFAULT 'read',
+            created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_used_at  TIMESTAMPTZ,
+            revoked_at    TIMESTAMPTZ
+        )
+    """)
+except Exception:
+    pass
+try:
+    db.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash) WHERE revoked_at IS NULL")
 except Exception:
     pass
 
@@ -1296,14 +1321,73 @@ def _session_token(handler: SimpleHTTPRequestHandler) -> str | None:
 
 
 def _require_auth(handler: SimpleHTTPRequestHandler) -> dict | None:
-    """Return user dict or None after sending error response."""
+    """Return user dict or None after sending error response.
+
+    Two credentials are accepted: the sietch_session cookie (normal
+    logged-in users — behavior unchanged) and a personal read-only API
+    token (`Authorization: Bearer`) on GET routes outside the blocked list
+    (see _auth_api_token). A Bearer token is tried even when a stale cookie
+    is also present (scripts send no cookies, browsers send no Bearer).
+    """
     token = _session_token(handler)
-    if not token:
-        _json_response(handler, 401, {"error": "Not authenticated"})
-        return None
-    user = auth_mod.get_session_user(token)
-    if not user:
+    if token:
+        user = auth_mod.get_session_user(token)
+        if user:
+            return user
+    bearer = _bearer_token(handler)
+    if bearer is not None:
+        return _auth_api_token(handler, bearer)
+    if token:
         _json_response(handler, 401, {"error": "Invalid or expired session"})
+    else:
+        _json_response(handler, 401, {"error": "Not authenticated"})
+    return None
+
+
+# Paths a Bearer API token must never reach, even for GET. Tokens exist for
+# bulk READS of CRM data — never for identity, session, admin, or settings
+# surfaces. Exact-or-subpath match (so "/api/v2/users" also covers
+# "/api/v2/users/1/avatar"); keep entries slash-precise — e.g. "/api/v2/me"
+# must not swallow "/api/v2/mail/...".
+_API_TOKEN_BLOCKED_PREFIXES = (
+    "/api/v2/auth",    # login/logout/sessions/password reset/2FA
+    "/api/v2/admin",   # settings/user/token management/backups/sync/exports
+    "/api/v2/users",   # user management
+    "/api/v2/me",      # own profile
+    "/api/v2/my/",     # own avatar
+)
+
+
+def _api_token_path_blocked(api_path: str) -> bool:
+    """True if a Bearer API token must be refused on this path (403)."""
+    for prefix in _API_TOKEN_BLOCKED_PREFIXES:
+        if prefix.endswith("/"):
+            # Directory-style entry ("/api/v2/my/"): block the exact dir
+            # and everything under it.
+            if api_path == prefix[:-1] or api_path.startswith(prefix):
+                return True
+        elif api_path == prefix or api_path.startswith(prefix + "/"):
+            return True
+    return False
+
+
+def _auth_api_token(handler: SimpleHTTPRequestHandler, raw: str) -> dict | None:
+    """Validate a personal API token; send 401/403 and return None on failure.
+
+    Read-only is enforced here, before routing: any non-GET request carrying
+    a token is rejected outright, so a handler that forgot its own write
+    gate still can't be used to mutate through a token.
+    """
+    if handler.command != "GET":
+        _json_response(handler, 403, {"error": "API tokens are read-only (GET only)"})
+        return None
+    api_path = urlparse(handler.path).path
+    if _api_token_path_blocked(api_path):
+        _json_response(handler, 403, {"error": "API tokens cannot access this route"})
+        return None
+    user = api_tokens_mod.verify_api_token(raw)
+    if user is None:
+        _json_response(handler, 401, {"error": "Invalid or revoked API token"})
         return None
     return user
 
@@ -1374,8 +1458,9 @@ def _authorize_document_fetch(handler: SimpleHTTPRequestHandler, doc_id: int) ->
 
     Accepted credentials, in order: (1) a logged-in session cookie —
     the browser/app path, unchanged; (2) the per-document OnlyOffice JWT
-    (`?token=`) — the Document Server path, which sends no cookies.
-    (Part 2 adds a third: personal read-only API tokens via Bearer.)
+    (`?token=`) — the Document Server path, which sends no cookies;
+    (3) a personal read-only API token (`Authorization: Bearer`) — the
+    bulk-pull path.
     No credential at all → 401; a wrong/expired credential → 403.
     """
     session = _session_token(handler)
@@ -1388,6 +1473,12 @@ def _authorize_document_fetch(handler: SimpleHTTPRequestHandler, doc_id: int) ->
             return True
         _json_response(handler, 403, {"error": "Invalid or expired document token"})
         return False
+    bearer = _bearer_token(handler)
+    if bearer is not None:
+        # Read-scoped token: _auth_api_token sends its own 401/403.
+        # Documents are data routes (not on the blocked list), so a valid
+        # token authorizes the fetch — this is what the bulk pull uses.
+        return _auth_api_token(handler, bearer) is not None
     if session:
         _json_response(handler, 401, {"error": "Invalid or expired session"})
     else:
@@ -3898,6 +3989,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/admin/timezone":
             self._handle_server_timezone_get()
             return
+        # ── API tokens (admin session only; Bearer tokens are refused here
+        # by the /api/v2/admin/ block in _auth_api_token → 403) ──
+        if api_path == "/api/v2/admin/api-tokens":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_api_tokens_list()
+            return
 
         # ── v2 API: Projects ──
         if api_path == "/api/v2/projects/count":
@@ -4737,6 +4836,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not user:
                 return
             self._handle_backup_config_post()
+            return
+        # ── API token management (admin session only; Bearer tokens are
+        # refused on all of /api/v2/admin/ by _auth_api_token → 403) ──
+        if api_path == "/api/v2/admin/api-tokens" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_api_token_create()
+            return
+        m = re.match(r"^/api/v2/admin/api-tokens/(\d+)/revoke$", api_path)
+        if m and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_api_token_revoke(int(m.group(1)))
             return
         if api_path == "/api/v2/admin/alternate-smtp" and method == "POST":
             user = _require_admin(self)
@@ -15113,7 +15227,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # Auth first (hole closed 2026-11: this route used to serve any
         # customer file to anyone who could guess sequential ids, and it
         # ignored ?token= entirely). Session cookie, per-document
-        # OnlyOffice JWT, or (Part 2) API token — see
+        # OnlyOffice JWT, or read-only API token — see
         # _authorize_document_fetch. Anything else is rejected before the
         # DB row or the filesystem is touched.
         if not _authorize_document_fetch(self, doc_id):
@@ -16426,6 +16540,44 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             )
             result[str(opp_id)] = [{"id": r[0], "title": r[1], "color": r[2], "isSystem": r[3]} for r in rows]
         _json_response(self, 200, result)
+
+    # ── API tokens (admin session only) ───────────────────────────────────
+
+    def _handle_api_tokens_list(self) -> None:
+        """List personal API tokens (hashes never leave the server)."""
+        user = _require_admin(self)
+        if not user:
+            return
+        _json_response(self, 200, {"tokens": api_tokens_mod.list_api_tokens()})
+
+    def _handle_api_token_create(self) -> None:
+        """Mint a token. The plaintext is returned ONCE — store it now."""
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        name = (payload.get("name") or "").strip()
+        scope = (payload.get("scope") or api_tokens_mod.SCOPE_READ).strip()
+        try:
+            rec = api_tokens_mod.create_api_token(name, user["id"], scope)
+        except ValueError as exc:
+            _json_response(self, 400, {"error": str(exc)})
+            return
+        rec["warning"] = "Store this token now — it is shown only once and cannot be recovered."
+        _json_response(self, 201, rec)
+
+    def _handle_api_token_revoke(self, token_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        if not api_tokens_mod.revoke_api_token(token_id):
+            _json_response(self, 404, {"error": "Token not found or already revoked"})
+            return
+        _json_response(self, 200, {"ok": True})
 
     # ── Admin check ─────────────────────────────────────────────────────────
 

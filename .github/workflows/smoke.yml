@@ -136,6 +136,9 @@ jobs:
       - name: Run document download auth tests
         run: python3 tests/test_doc_download_auth.py -v
 
+      - name: Run API token tests
+        run: python3 tests/test_api_tokens.py -v
+
       - name: Run stage+due correction dry-run tests
         run: python3 tests/test_sync_correction_dryrun.py -v
 

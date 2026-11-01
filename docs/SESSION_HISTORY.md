@@ -11,6 +11,19 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-01 (branch `doc-auth-api-tokens`, Part 2 — read-only API tokens)
+
+**Status: COMMITTED, NOT DEPLOYED (deploy needs user approval). Commit on
+`doc-auth-api-tokens`: `api_tokens` table (`migrations/041_api_tokens.sql`
++ `init.sql` + inline DDL), `api_tokens.py`, Bearer gate in `_require_auth`
+(GET-only, blocked prefixes), admin endpoints + `scripts/api_tokens.py`,
+`tests/test_api_tokens.py` (28 tests, 16 fail pre-change), smoke.yml,
+CHANGELOG. Live-verified on local dev DB (real boot, full 200/403/401
+matrix, OnlyOffice JWT + callback, revoke, last_used_at); all e2e rows
+cleaned up, no stray processes. Both commits ready; no merge, no deploy.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-11-01 (branch `doc-auth-api-tokens`, Part 1 — document download auth hole)
 
 **Status: COMMITTED, NOT DEPLOYED (deploy needs user approval). Commit

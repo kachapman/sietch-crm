@@ -23,6 +23,23 @@ service-feed webhook stays public by design (random secret in URL).
 Tests: new `tests/test_doc_download_auth.py` (19 tests, 11 fail pre-fix).
 No migration, no behavior change for logged-in users.
 
+## Read-only API tokens (2026-11-01, branch `doc-auth-api-tokens`)
+
+New `api_tokens` table (`migrations/041_api_tokens.sql`, mirrored in
+`init.sql` + inline server DDL; auto-applied at boot by `db.py`): admins can
+mint personal Bearer tokens (`scripts/api_tokens.py create/list/revoke`, or
+`GET/POST /api/v2/admin/api-tokens` + `POST .../{id}/revoke` with an admin
+session). Only a SHA-256 hash is stored; plaintext is shown once. A
+read-scoped token authorizes GETs on /api/v2 data and file routes (documents,
+history-attachments, photos, mail attachments — the bulk pull), inherits its
+creating admin's read visibility, and updates `last_used_at` at most once a
+minute. Any non-GET with a token is 403; auth (`/api/v2/auth/*`), users,
+`/api/v2/me`, `/api/v2/my/*`, all of `/api/v2/admin/*`, garbage and revoked
+tokens are 401/403 as appropriate. Tokens never reach token-management
+routes. Verified live against local dev DB (real boot: 200/403/401 matrix,
+OnlyOffice JWT fetch, callback 403→200, revoke→401, `last_used_at` write).
+Tests: new `tests/test_api_tokens.py` (28 tests, 16 fail pre-change).
+
 ## Project-page notes: note-type picker, no more forced "Files are uploaded" (2026-11-01)
 
 Live bug 2026-11-01 (production v2.3.0, project "Barbra & Ronald Sydney" #41):
