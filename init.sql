@@ -35,6 +35,21 @@ CREATE TABLE sessions (
     ip_address TEXT
 );
 
+-- Personal read-only API tokens (migration 041; mirrored there and in
+-- server.py's inline DDL so fresh and upgraded DBs converge). Only the
+-- SHA-256 hash is stored; plaintext is shown once at creation.
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id            SERIAL PRIMARY KEY,
+    name          TEXT NOT NULL,
+    token_hash    TEXT NOT NULL UNIQUE,
+    token_prefix  TEXT NOT NULL DEFAULT '',
+    scope         TEXT NOT NULL DEFAULT 'read',
+    created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_used_at  TIMESTAMPTZ,
+    revoked_at    TIMESTAMPTZ
+);
+
 CREATE TABLE user_roles (
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     role TEXT NOT NULL DEFAULT 'user',

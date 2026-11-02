@@ -2,6 +2,61 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Mail-surface auth gaps closed (2026-11-01, branch `doc-auth-api-tokens`)
+
+Follow-up audit found 32 `/api/v2/mail/*` JSON endpoints with no login
+check at all — including writes (tag/template/contact/folder/contractor/
+classification-rule CRUD, reprocess, retrain, send-undo, config PUT). All
+now carry the same auth as the other /api/v2 routes: `_require_auth`,
+except scanner config (`/api/v2/mail/config` GET+PUT) and scanner log
+(`GET /api/v2/mail/log`), which are `_require_admin` and additionally
+blocked for API tokens via `_API_TOKEN_BLOCKED_PREFIXES`. Tags/status (and
+the other data routes) follow the normal GET-token rules. The mail UI's
+Admin tab is already admin-only, and `api()` sends cookies
+(`credentials: same-origin`), so logged-in flows are unaffected.
+Deliberately public, unchanged: daily-quote/live, calendar feed (allowlist-
+guarded proxy), OAuth callbacks, password reset, service-feed webhook.
+Tests: new `tests/test_mail_auth_gaps.py` (12 tests / 100+ assertions, 98
+fail pre-fix). No migration.
+
+## Document download auth hole closed (2026-11-01, branch `doc-auth-api-tokens`)
+
+`GET /api/v2/documents/{id}` served any customer file with no auth check
+(sequential ids, `?token=` ignored). It now requires, in order: a logged-in
+session cookie, the per-document OnlyOffice JWT (`?token=`, HMAC-signed with
+`DOCS_JWT_SECRET`, bound to the doc id, 24h TTL via
+`DOCS_DOWNLOAD_TOKEN_TTL_SEC`), or a personal API token (Part 2). No
+credential → 401, bad credential → 403, and the check runs before the DB
+row or filesystem is touched. The OnlyOffice save callback
+`POST /api/v2/documents/{id}/callback` now verifies `body["token"]` against
+the same secret and requires it to be bound to the document — previously an
+unsigned POST could make the server download an arbitrary URL over the file
+on disk. Audited the other file-serving routes: history-attachment download,
+photo download/thumbnails, both batch ZIPs, mail attachment download +
+JWT serve, avatars, contact photos/avatars, and the logo proxy were already
+gated; export/import are admin-gated at the call site; static serving is
+rooted at `public/` so `data/` customer files are unreachable; the
+service-feed webhook stays public by design (random secret in URL).
+Tests: new `tests/test_doc_download_auth.py` (19 tests, 11 fail pre-fix).
+No migration, no behavior change for logged-in users.
+
+## Read-only API tokens (2026-11-01, branch `doc-auth-api-tokens`)
+
+New `api_tokens` table (`migrations/041_api_tokens.sql`, mirrored in
+`init.sql` + inline server DDL; auto-applied at boot by `db.py`): admins can
+mint personal Bearer tokens (`scripts/api_tokens.py create/list/revoke`, or
+`GET/POST /api/v2/admin/api-tokens` + `POST .../{id}/revoke` with an admin
+session). Only a SHA-256 hash is stored; plaintext is shown once. A
+read-scoped token authorizes GETs on /api/v2 data and file routes (documents,
+history-attachments, photos, mail attachments — the bulk pull), inherits its
+creating admin's read visibility, and updates `last_used_at` at most once a
+minute. Any non-GET with a token is 403; auth (`/api/v2/auth/*`), users,
+`/api/v2/me`, `/api/v2/my/*`, all of `/api/v2/admin/*`, garbage and revoked
+tokens are 401/403 as appropriate. Tokens never reach token-management
+routes. Verified live against local dev DB (real boot: 200/403/401 matrix,
+OnlyOffice JWT fetch, callback 403→200, revoke→401, `last_used_at` write).
+Tests: new `tests/test_api_tokens.py` (28 tests, 16 fail pre-change).
+
 ## Project-page notes: note-type picker, no more forced "Files are uploaded" (2026-11-01)
 
 Live bug 2026-11-01 (production v2.3.0, project "Barbra & Ronald Sydney" #41):

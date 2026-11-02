@@ -11,6 +11,46 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-01 (branch `doc-auth-api-tokens`, follow-up — mail auth gaps)
+
+**Status: COMMITTED, NOT DEPLOYED, NOT PUSHED (both need user approval).
+Rebased onto `main` (`e4558e5` docs-only, clean). New commit gates 32
+`/api/v2/mail/*` endpoints (`_require_auth`; config+log `_require_admin` +
+token-blocked), adds `tests/test_mail_auth_gaps.py` (12 tests, 98 fail
+pre-fix), smoke.yml entry, CHANGELOG. Full suite: 55 Python files pass
+(only the 3 pre-existing baseline failures + 1 custom-output pass),
+282/282 JS. Branch ready to merge into main; deploy needs the usual droplet
+steps (no migration this time — server restart only).
+
+## Previous session summary (for next resume)
+
+**Date:** 2026-11-01 (branch `doc-auth-api-tokens`, Part 2 — read-only API tokens)
+
+**Status: COMMITTED, NOT DEPLOYED (deploy needs user approval). Commit on
+`doc-auth-api-tokens`: `api_tokens` table (`migrations/041_api_tokens.sql`
++ `init.sql` + inline DDL), `api_tokens.py`, Bearer gate in `_require_auth`
+(GET-only, blocked prefixes), admin endpoints + `scripts/api_tokens.py`,
+`tests/test_api_tokens.py` (28 tests, 16 fail pre-change), smoke.yml,
+CHANGELOG. Live-verified on local dev DB (real boot, full 200/403/401
+matrix, OnlyOffice JWT + callback, revoke, last_used_at); all e2e rows
+cleaned up, no stray processes. Both commits ready; no merge, no deploy.
+
+## Previous session summary (for next resume)
+
+**Date:** 2026-11-01 (branch `doc-auth-api-tokens`, Part 1 — document download auth hole)
+
+**Status: COMMITTED, NOT DEPLOYED (deploy needs user approval). Commit
+`doc-download-auth` on `doc-auth-api-tokens`: `GET /api/v2/documents/{id}`
+now requires session cookie / OnlyOffice per-doc JWT / (Part 2) API token;
+callback verifies OnlyOffice JWT. Files: `server.py` (+helpers
+`_bearer_token`, `_verify_document_token`, `_authorize_document_fetch`,
+`_verify_document_callback`, `DOCS_DOWNLOAD_TOKEN_TTL_SEC`),
+`tests/test_doc_download_auth.py` (19 tests, 11 fail pre-fix),
+`.github/workflows/smoke.yml`, `CHANGELOG.md`. Part 2 next: read-only API
+tokens (table + Bearer gate + CLI), second commit on same branch.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-11-01 (project-page note category fix)
 
 **Status: DEPLOYED 2026-11-01 — droplet sietch-crm-prod (147.182.164.19,

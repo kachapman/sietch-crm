@@ -505,6 +505,16 @@ AVATAR_STORAGE_PATH = Path(os.getenv("AVATAR_STORAGE_PATH", str(DATA_DIR / "avat
 CONTACT_PHOTO_STORAGE_PATH = Path(os.getenv("CONTACT_PHOTO_STORAGE_PATH", str(DATA_DIR / "contact-photos")))
 BRANDING_STORAGE_PATH = Path(os.getenv("BRANDING_STORAGE_PATH", str(DATA_DIR / "branding")))
 DOCS_JWT_SECRET = os.environ.get("DOCS_JWT_SECRET", "")
+# Max age (seconds) of the per-document ?token= JWT that the editor config
+# mints for the Document Server's download fetch. The server fetches the
+# file immediately after the editor loads, so a short window is enough;
+# 24h keeps long-lived editing sessions working. Bound per-document (the
+# token's "id" must equal the requested doc id), so a leaked token only
+# ever exposes that one file, and only briefly.
+try:
+    DOCS_DOWNLOAD_TOKEN_TTL_SEC = int(os.environ.get("DOCS_DOWNLOAD_TOKEN_TTL_SEC", "86400"))
+except ValueError:
+    DOCS_DOWNLOAD_TOKEN_TTL_SEC = 86400
 DOCS_INTERNAL_URL = os.environ.get("DOCS_INTERNAL_URL", "").rstrip("/")
 DOCS_PUBLIC_URL = os.environ.get("DOCS_PUBLIC_URL", "").rstrip("/")
 CRM_PUBLIC_URL = os.environ.get("CRM_PUBLIC_URL", "").rstrip("/") or DOCS_PUBLIC_URL
@@ -618,6 +628,7 @@ def _invalidate_bot_config_cache() -> None:
 # ── DB init ────────────────────────────────────────────────────────────────────
 import db
 import auth as auth_mod
+import api_tokens as api_tokens_mod
 
 db.init_db()
 
@@ -875,6 +886,30 @@ except Exception:
     pass
 try:
     db.execute("CREATE INDEX IF NOT EXISTS ix_personal_note_links_entity ON personal_note_links(entity_type, entity_id)")
+except Exception:
+    pass
+
+# Migration 041: api_tokens table — personal read-only API tokens (admin
+# minted, Bearer on /api/v2 GET routes). Mirrors migrations/041_api_tokens.sql
+# and init.sql so all three paths converge; idempotent.
+try:
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS api_tokens (
+            id            SERIAL PRIMARY KEY,
+            name          TEXT NOT NULL,
+            token_hash    TEXT NOT NULL UNIQUE,
+            token_prefix  TEXT NOT NULL DEFAULT '',
+            scope         TEXT NOT NULL DEFAULT 'read',
+            created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_used_at  TIMESTAMPTZ,
+            revoked_at    TIMESTAMPTZ
+        )
+    """)
+except Exception:
+    pass
+try:
+    db.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash) WHERE revoked_at IS NULL")
 except Exception:
     pass
 
@@ -1286,14 +1321,75 @@ def _session_token(handler: SimpleHTTPRequestHandler) -> str | None:
 
 
 def _require_auth(handler: SimpleHTTPRequestHandler) -> dict | None:
-    """Return user dict or None after sending error response."""
+    """Return user dict or None after sending error response.
+
+    Two credentials are accepted: the sietch_session cookie (normal
+    logged-in users — behavior unchanged) and a personal read-only API
+    token (`Authorization: Bearer`) on GET routes outside the blocked list
+    (see _auth_api_token). A Bearer token is tried even when a stale cookie
+    is also present (scripts send no cookies, browsers send no Bearer).
+    """
     token = _session_token(handler)
-    if not token:
-        _json_response(handler, 401, {"error": "Not authenticated"})
-        return None
-    user = auth_mod.get_session_user(token)
-    if not user:
+    if token:
+        user = auth_mod.get_session_user(token)
+        if user:
+            return user
+    bearer = _bearer_token(handler)
+    if bearer is not None:
+        return _auth_api_token(handler, bearer)
+    if token:
         _json_response(handler, 401, {"error": "Invalid or expired session"})
+    else:
+        _json_response(handler, 401, {"error": "Not authenticated"})
+    return None
+
+
+# Paths a Bearer API token must never reach, even for GET. Tokens exist for
+# bulk READS of CRM data — never for identity, session, admin, or settings
+# surfaces. Exact-or-subpath match (so "/api/v2/users" also covers
+# "/api/v2/users/1/avatar"); keep entries slash-precise — e.g. "/api/v2/me"
+# must not swallow "/api/v2/mail/...".
+_API_TOKEN_BLOCKED_PREFIXES = (
+    "/api/v2/auth",    # login/logout/sessions/password reset/2FA
+    "/api/v2/admin",   # settings/user/token management/backups/sync/exports
+    "/api/v2/users",   # user management
+    "/api/v2/me",      # own profile
+    "/api/v2/my/",     # own avatar
+    "/api/v2/mail/config",  # scanner config: admins only (handler-gated)
+    "/api/v2/mail/log",     # scanner log: admins only (handler-gated)
+)
+
+
+def _api_token_path_blocked(api_path: str) -> bool:
+    """True if a Bearer API token must be refused on this path (403)."""
+    for prefix in _API_TOKEN_BLOCKED_PREFIXES:
+        if prefix.endswith("/"):
+            # Directory-style entry ("/api/v2/my/"): block the exact dir
+            # and everything under it.
+            if api_path == prefix[:-1] or api_path.startswith(prefix):
+                return True
+        elif api_path == prefix or api_path.startswith(prefix + "/"):
+            return True
+    return False
+
+
+def _auth_api_token(handler: SimpleHTTPRequestHandler, raw: str) -> dict | None:
+    """Validate a personal API token; send 401/403 and return None on failure.
+
+    Read-only is enforced here, before routing: any non-GET request carrying
+    a token is rejected outright, so a handler that forgot its own write
+    gate still can't be used to mutate through a token.
+    """
+    if handler.command != "GET":
+        _json_response(handler, 403, {"error": "API tokens are read-only (GET only)"})
+        return None
+    api_path = urlparse(handler.path).path
+    if _api_token_path_blocked(api_path):
+        _json_response(handler, 403, {"error": "API tokens cannot access this route"})
+        return None
+    user = api_tokens_mod.verify_api_token(raw)
+    if user is None:
+        _json_response(handler, 401, {"error": "Invalid or revoked API token"})
         return None
     return user
 
@@ -1318,6 +1414,118 @@ def _require_admin(handler: SimpleHTTPRequestHandler) -> dict | None:
 # intentional extra strictness, so admin gating is now uniformly `_require_admin`
 # and `role` is a descriptive/feature field only (badges, the `limited` CRM-Mail
 # restriction). Removed deliberately so a divergent gate can't creep back in.
+
+
+def _bearer_token(handler: SimpleHTTPRequestHandler) -> str | None:
+    """Return the raw `Authorization: Bearer <token>` value, or None.
+
+    Shared by the file-download auth (document/history-attachment fetches)
+    and the read-only API-token gate in `_require_auth`, so both read the
+    header exactly the same way.
+    """
+    authz = handler.headers.get("Authorization", "")
+    if authz.startswith("Bearer "):
+        token = authz[len("Bearer "):].strip()
+        return token or None
+    return None
+
+
+def _verify_document_token(token: str, doc_id: int) -> bool:
+    """Check the per-document OnlyOffice download JWT (`?token=`).
+
+    The editor config mints this token (HMAC-signed with DOCS_JWT_SECRET)
+    and the Document Server — which sends no cookies — presents it back
+    when fetching the file. Accept only a correctly signed token whose
+    "id" equals the requested document and whose "ts" is fresh: binding to
+    the id keeps a token for doc A from downloading doc B, and the TTL
+    keeps a leaked URL from working indefinitely. The stored `path` claim
+    is deliberately NOT compared — serving always uses the path currently
+    in the DB, so a rename/move between config load and fetch still works.
+    """
+    if not token or not DOCS_JWT_SECRET:
+        return False
+    payload = _verify_jwt(token, DOCS_JWT_SECRET)
+    if not payload or payload.get("id") != doc_id:
+        return False
+    try:
+        age = time.time() - float(payload.get("ts", 0))
+    except (TypeError, ValueError):
+        return False
+    # Small negative tolerance for clock skew between CRM and docserver.
+    return -300 <= age <= DOCS_DOWNLOAD_TOKEN_TTL_SEC
+
+
+def _authorize_document_fetch(handler: SimpleHTTPRequestHandler, doc_id: int) -> bool:
+    """Authorize `GET /api/v2/documents/{id}`; send 401/403 and return False on failure.
+
+    Accepted credentials, in order: (1) a logged-in session cookie —
+    the browser/app path, unchanged; (2) the per-document OnlyOffice JWT
+    (`?token=`) — the Document Server path, which sends no cookies;
+    (3) a personal read-only API token (`Authorization: Bearer`) — the
+    bulk-pull path.
+    No credential at all → 401; a wrong/expired credential → 403.
+    """
+    session = _session_token(handler)
+    if session and auth_mod.get_session_user(session):
+        return True
+    qs = parse_qs(urlparse(handler.path).query)
+    doc_token = (qs.get("token") or [""])[0]
+    if doc_token:
+        if _verify_document_token(doc_token, doc_id):
+            return True
+        _json_response(handler, 403, {"error": "Invalid or expired document token"})
+        return False
+    bearer = _bearer_token(handler)
+    if bearer is not None:
+        # Read-scoped token: _auth_api_token sends its own 401/403.
+        # Documents are data routes (not on the blocked list), so a valid
+        # token authorizes the fetch — this is what the bulk pull uses.
+        return _auth_api_token(handler, bearer) is not None
+    if session:
+        _json_response(handler, 401, {"error": "Invalid or expired session"})
+    else:
+        _json_response(handler, 401, {"error": "Not authenticated"})
+    return False
+
+
+def _verify_document_callback(doc_id: int, body: dict) -> bool:
+    """Check the OnlyOffice save-callback JWT (`body["token"]`).
+
+    The Document Server signs every callback with DOCS_JWT_SECRET (its
+    container is configured with the same JWT_SECRET). Without this check
+    anyone could POST `{"status": 2, "url": <attacker-url>}` and make the
+    server download an arbitrary URL over the file on disk. The decoded
+    token must be valid AND bound to this document: OnlyOffice echoes the
+    document key back, either as a top-level `key` (callback-style token)
+    or nested under `document.key` (config-style token) — either form is
+    accepted, anything else is rejected. A missing/unbound token is a loud
+    403, not a silent pass.
+    """
+    expected_key = f"sietch-doc-{doc_id}"
+    if not DOCS_JWT_SECRET:
+        # No secret configured → the editor flow can't mint tokens either
+        # (editor-config 503s), so there is nothing to verify against.
+        # Allowed for legacy dev setups, but logged so it can't hide.
+        logger.warning("Document callback for doc %s accepted without token check (DOCS_JWT_SECRET empty)", doc_id)
+        return True
+    if not isinstance(body, dict):
+        return False
+    token = body.get("token")
+    if not token:
+        logger.warning("Document callback for doc %s rejected: missing token", doc_id)
+        return False
+    decoded = _verify_jwt(token, DOCS_JWT_SECRET)
+    if not decoded:
+        logger.warning("Document callback for doc %s rejected: invalid token signature", doc_id)
+        return False
+    candidates = {body.get("key"), decoded.get("key")}
+    nested = decoded.get("document")
+    if isinstance(nested, dict):
+        candidates.add(nested.get("key"))
+    if expected_key not in candidates:
+        logger.warning("Document callback for doc %s rejected: token not bound to this document", doc_id)
+        return False
+    return True
 
 
 def _humanize_file_size(size_bytes) -> str:
@@ -3783,6 +3991,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/admin/timezone":
             self._handle_server_timezone_get()
             return
+        # ── API tokens (admin session only; Bearer tokens are refused here
+        # by the /api/v2/admin/ block in _auth_api_token → 403) ──
+        if api_path == "/api/v2/admin/api-tokens":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_api_tokens_list()
+            return
 
         # ── v2 API: Projects ──
         if api_path == "/api/v2/projects/count":
@@ -4622,6 +4838,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not user:
                 return
             self._handle_backup_config_post()
+            return
+        # ── API token management (admin session only; Bearer tokens are
+        # refused on all of /api/v2/admin/ by _auth_api_token → 403) ──
+        if api_path == "/api/v2/admin/api-tokens" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_api_token_create()
+            return
+        m = re.match(r"^/api/v2/admin/api-tokens/(\d+)/revoke$", api_path)
+        if m and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_api_token_revoke(int(m.group(1)))
             return
         if api_path == "/api/v2/admin/alternate-smtp" and method == "POST":
             user = _require_admin(self)
@@ -14995,6 +15226,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         self.wfile.write(zip_data)
 
     def _handle_document_download(self, doc_id: int) -> None:
+        # Auth first (hole closed 2026-11: this route used to serve any
+        # customer file to anyone who could guess sequential ids, and it
+        # ignored ?token= entirely). Session cookie, per-document
+        # OnlyOffice JWT, or read-only API token — see
+        # _authorize_document_fetch. Anything else is rejected before the
+        # DB row or the filesystem is touched.
+        if not _authorize_document_fetch(self, doc_id):
+            return
         row = db.query_one(
             "SELECT opportunity_id, title, file_path, file_size, mime_type FROM project_documents WHERE id = %s AND is_deleted = FALSE",
             (doc_id,),
@@ -16231,6 +16470,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except json.JSONDecodeError:
             _json_response(self, 200, {"error": 0})
             return
+        # Auth (hole closed 2026-11, same trust boundary as the download
+        # route): the Document Server proves itself with the JWT in
+        # payload["token"]. Without this, an unauthenticated POST of
+        # {"status": 2, "url": ...} would make the server below download
+        # an arbitrary URL over the file on disk.
+        if not _verify_document_callback(doc_id, payload):
+            _json_response(self, 403, {"error": "Invalid callback token"})
+            return
         status = payload.get("status")
         # OnlyOffice passes the acting user via payload['users'] (list) or payload['userdata'].
         # We best-effort resolve to a CRM user; falls through to None if we can't.
@@ -16295,6 +16542,44 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             )
             result[str(opp_id)] = [{"id": r[0], "title": r[1], "color": r[2], "isSystem": r[3]} for r in rows]
         _json_response(self, 200, result)
+
+    # ── API tokens (admin session only) ───────────────────────────────────
+
+    def _handle_api_tokens_list(self) -> None:
+        """List personal API tokens (hashes never leave the server)."""
+        user = _require_admin(self)
+        if not user:
+            return
+        _json_response(self, 200, {"tokens": api_tokens_mod.list_api_tokens()})
+
+    def _handle_api_token_create(self) -> None:
+        """Mint a token. The plaintext is returned ONCE — store it now."""
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        name = (payload.get("name") or "").strip()
+        scope = (payload.get("scope") or api_tokens_mod.SCOPE_READ).strip()
+        try:
+            rec = api_tokens_mod.create_api_token(name, user["id"], scope)
+        except ValueError as exc:
+            _json_response(self, 400, {"error": str(exc)})
+            return
+        rec["warning"] = "Store this token now — it is shown only once and cannot be recovered."
+        _json_response(self, 201, rec)
+
+    def _handle_api_token_revoke(self, token_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        if not api_tokens_mod.revoke_api_token(token_id):
+            _json_response(self, 404, {"error": "Token not found or already revoked"})
+            return
+        _json_response(self, 200, {"ok": True})
 
     # ── Admin check ─────────────────────────────────────────────────────────
 
@@ -20458,6 +20743,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_tags(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         qs = parse_qs(urlparse(self.path).query)
         page = int(qs.get("page", ["1"])[0])
         page_size = int(qs.get("page_size", ["50"])[0])
@@ -20469,6 +20757,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_tag_get(self, tag_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             row = db.query_one("SELECT * FROM mail_tags WHERE id = %s", (tag_id,))
             if not row:
@@ -20501,6 +20792,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_tag_update(self, tag_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             title = (payload.get("title") or "").strip()
@@ -20521,6 +20815,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_tag_delete(self, tag_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             existing = db.query_one("SELECT id FROM mail_tags WHERE id = %s", (tag_id,))
             if not existing:
@@ -20546,6 +20843,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_templates(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         qs = parse_qs(urlparse(self.path).query)
         page = int(qs.get("page", ["1"])[0])
         page_size = int(qs.get("page_size", ["50"])[0])
@@ -20557,6 +20857,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_template_get(self, template_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             row = db.query_one("SELECT * FROM mail_templates WHERE id = %s", (template_id,))
             if not row:
@@ -20585,6 +20888,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_template_update(self, template_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             existing = db.query_one("SELECT id FROM mail_templates WHERE id = %s", (template_id,))
@@ -20614,6 +20920,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_template_delete(self, template_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             existing = db.query_one("SELECT id FROM mail_templates WHERE id = %s", (template_id,))
             if not existing:
@@ -20739,9 +21048,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_status(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         _json_response(self, 200, mail_scanner.get_scanner_status() if mail_scanner else {"enabled": False})
 
     def _handle_mail_log(self) -> None:
+        # Scanner config/log can expose account identifiers, error detail,
+        # and behavior toggles — admins only (and never API tokens: the
+        # /api/v2/mail/config + /api/v2/mail/log prefixes are blocked for
+        # tokens in _API_TOKEN_BLOCKED_PREFIXES).
+        user = _require_admin(self)
+        if not user:
+            return
         qs = parse_qs(urlparse(self.path).query)
         limit = int(qs.get("limit", ["500"])[0])
         account_id = qs.get("account_id", [None])[0]
@@ -20829,6 +21148,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_reprocess(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             entries = payload.get("entries") or []
@@ -20843,6 +21165,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_retrain(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             result = mail_scanner.retrain_classifier_head() if mail_scanner else {"ok": False, "message": "Scanner not available"}
             _json_response(self, 200, result)
@@ -20850,9 +21175,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_config(self) -> None:
+        # Scanner config/log can expose account identifiers, error detail,
+        # and behavior toggles — admins only (and never API tokens: the
+        # /api/v2/mail/config + /api/v2/mail/log prefixes are blocked for
+        # tokens in _API_TOKEN_BLOCKED_PREFIXES).
+        user = _require_admin(self)
+        if not user:
+            return
         _json_response(self, 200, mail_scanner.get_contractors() if mail_scanner else {})
 
     def _handle_mail_config_put(self) -> None:
+        # Scanner config/log can expose account identifiers, error detail,
+        # and behavior toggles — admins only (and never API tokens: the
+        # /api/v2/mail/config + /api/v2/mail/log prefixes are blocked for
+        # tokens in _API_TOKEN_BLOCKED_PREFIXES).
+        user = _require_admin(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             result = mail_scanner.update_contractors(payload) if mail_scanner else payload
@@ -21314,6 +21653,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_send_undo(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             outgoing_id = int(payload.get("id"))
@@ -21528,6 +21870,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_contact_get(self, contact_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             row = db.query_one("SELECT * FROM mail_contacts WHERE id = %s", (contact_id,))
             if not row:
@@ -21552,6 +21897,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_contact_update(self, contact_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             db.execute(
@@ -21564,6 +21912,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_contact_delete(self, contact_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             db.execute("DELETE FROM mail_contacts WHERE id = %s", (contact_id,))
             _json_response(self, 200, {"ok": True})
@@ -22041,6 +22392,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_folders(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             qs = parse_qs(urlparse(self.path).query)
             account_id = qs.get("account_id", [None])[0]
@@ -22080,6 +22434,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_folder_update(self, folder_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             name = payload.get("name", "").strip()
@@ -22101,6 +22458,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_folder_delete(self, folder_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             folder = db.query_one("SELECT name, is_system FROM mail_folders WHERE id = %s", (folder_id,))
             if not folder:
@@ -22119,6 +22479,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     # ── Contractors ───────────────────────────────────────────────────────
 
     def _handle_mail_contractors(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             rows = db.query_dicts("SELECT * FROM mail_contractors ORDER BY priority DESC, name")
             _json_response(self, 200, {"contractors": rows})
@@ -22126,6 +22489,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_contractor_get(self, contractor_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             row = db.query_one("SELECT * FROM mail_contractors WHERE id = %s", (contractor_id,))
             if not row:
@@ -22136,6 +22502,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_contractor_create(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             name = (payload.get("name") or "").strip()
@@ -22154,6 +22523,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_contractor_update(self, contractor_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             existing = db.query_one("SELECT id FROM mail_contractors WHERE id = %s", (contractor_id,))
@@ -22174,6 +22546,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_contractor_delete(self, contractor_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             existing = db.query_one("SELECT id FROM mail_contractors WHERE id = %s", (contractor_id,))
             if not existing:
@@ -22187,6 +22562,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     # ── Classification Rules ──────────────────────────────────────────────
 
     def _handle_mail_classification_rules(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             rows = db.query_dicts("SELECT * FROM mail_classification_rules ORDER BY priority DESC, rule_name")
             _json_response(self, 200, {"rules": rows})
@@ -22194,6 +22572,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_classification_rule_get(self, rule_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             row = db.query_one("SELECT * FROM mail_classification_rules WHERE id = %s", (rule_id,))
             if not row:
@@ -22204,6 +22585,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_classification_rule_create(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             rule_name = (payload.get("rule_name") or "").strip()
@@ -22228,6 +22612,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_classification_rule_update(self, rule_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             existing = db.query_one("SELECT id FROM mail_classification_rules WHERE id = %s", (rule_id,))
@@ -22266,6 +22653,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_classification_rule_delete(self, rule_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             existing = db.query_one("SELECT id FROM mail_classification_rules WHERE id = %s", (rule_id,))
             if not existing:
@@ -22279,6 +22669,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     # ── Feedback ──────────────────────────────────────────────────────────
 
     def _handle_mail_feedback(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             entries = mail_scanner.get_feedback_entries(200) if mail_scanner else []
             _json_response(self, 200, {"entries": entries})
