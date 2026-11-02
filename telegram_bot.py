@@ -108,6 +108,24 @@ def _guess_mime(filename: str) -> str:
 
 # ── Helpers ──
 
+NOTIFY_TOGGLE_PREFIX = "notify_toggle:"
+
+
+def _parse_notify_toggle(data: str) -> int | None:
+    """Parse a 'notify_toggle:<user_id>' callback. Returns the uid or None.
+
+    Live 2026-11-02: the handler sliced off 13 chars but the prefix is
+    14 chars, so every tap parsed ":<uid>", raised ValueError, and silently
+    did nothing (picker stuck at "0 selected"). The width is derived from
+    the prefix here, never hard-coded.
+    """
+    if not isinstance(data, str) or not data.startswith(NOTIFY_TOGGLE_PREFIX):
+        return None
+    try:
+        return int(data[len(NOTIFY_TOGGLE_PREFIX):])
+    except (ValueError, TypeError):
+        return None
+
 BOT_AUTH_HEADERS: dict[str, str] = {}
 
 
@@ -1602,13 +1620,12 @@ def main() -> None:
             )
             return
 
-        if data.startswith("notify_toggle:"):
+        if data.startswith(NOTIFY_TOGGLE_PREFIX):
             pending = _pending_note.get(chat_id)
             if not pending or pending.get("step") != "awaiting_notify":
                 return
-            try:
-                uid = int(data[13:])
-            except (ValueError, IndexError):
+            uid = _parse_notify_toggle(data)
+            if uid is None:
                 return
             selected = pending.get("notifyUsers", [])
             if uid in selected:

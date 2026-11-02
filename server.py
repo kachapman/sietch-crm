@@ -17796,8 +17796,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 500, {"error": "Internal error"})
             return
 
-        self.send_error(404)
-
         if api_path == "/api/bot/note" and method == "POST":
             if not bot_token or auth_header != f"Bearer {bot_token}":
                 _json_response(self, 403, {"error": "Forbidden"})
@@ -18282,6 +18280,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 logger.exception("Failed to log bot activity")
                 _json_response(self, 500, {"error": "Failed to log activity"})
             return
+
+        # No bot route matched: 404. This MUST stay last in this function.
+        # send_error answers the request immediately, so a 404 placed above
+        # any route makes that route unreachable dead code that STILL runs
+        # server-side (live 2026-11-02: /api/bot/note ghost-created notes
+        # while the bot reported failure, and heartbeat/config-check/task-*
+        # below the stray 404 all returned 404 to the bot while executing).
+        self.send_error(404)
+        return
 
     # ── Presence (local store, ported from v2 — unchanged) ──────────────────
 

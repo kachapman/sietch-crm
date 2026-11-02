@@ -11,6 +11,35 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-02 (live bot-note failures, branch `fix-telegram-dupes`)
+
+**Status: DONE ON BRANCH, NOT DEPLOYED, NOT MERGED.** Read-only prod
+investigation (journalctl + `docker compose logs`, no restarts/writes;
+token redacted in all handling). Two live bugs, both on deployed `main`:
+
+1. **"Failed to add note" (9:21 AM ET):** bot journal 14:21:36 `POST
+   /api/bot/note -> 404`; dashboard log shows the same request then answered
+   200 — `self.send_error(404)` sat mid-function before the route (added by
+   `ecd70bb`), so the handler ghost-executed. Ken's 14:21:36 + 14:21:53
+   attempts likely both inserted ghost notes. Same stray 404 broke ALL bot
+   POSTs below it (heartbeat #5640 failing ~4 days, config-check, task-*, …).
+2. **Notify taps dead:** `int(data[13:])` vs 14-char prefix → ValueError →
+   silent return; journal shows taps (answerCallbackQuery 14:21:18/26) with
+   no follow-up action. Only wrong slice of its kind (audited all others).
+
+**Fix:** 404 moved to true fallthrough at end of `_handle_bot_api_post`;
+`_parse_notify_toggle()` helper + handler use. **042 safety:** UNIQUE key is
+notifications-only, keyed per type/event/reply/recipient; notes untouched,
+INSERTs guarded by try/except → safe together with f814d66 (disjoint paths).
+**Tests:** `tests/test_bot_note_flow.py` 11/11 (true negative: 11/11 fail on
+deployed 815d634 via temp worktree); all prior suites still green. Note:
+pre-existing unrelated stash `WIP on main: 42174d3` (2026-10-16) left alone.
+**Files:** `server.py` (404 move), `telegram_bot.py` (toggle parser),
+`tests/test_bot_note_flow.py`, CHANGELOG. Deploy together with f814d66;
+post-deploy check Ken's project for the two ghost notes from 14:21.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-11-02 (Telegram ~91x duplicate + token-in-journal, branch `fix-telegram-dupes`)
 
 **Status: DONE ON BRANCH, NOT DEPLOYED, NOT MERGED** — both fixes implemented
