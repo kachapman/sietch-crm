@@ -13,14 +13,22 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-11-01 (branch `doc-auth-api-tokens`, follow-up — mail auth gaps)
 
-**Status: COMMITTED, NOT DEPLOYED, NOT PUSHED (both need user approval).
-Rebased onto `main` (`e4558e5` docs-only, clean). New commit gates 32
-`/api/v2/mail/*` endpoints (`_require_auth`; config+log `_require_admin` +
-token-blocked), adds `tests/test_mail_auth_gaps.py` (12 tests, 98 fail
-pre-fix), smoke.yml entry, CHANGELOG. Full suite: 55 Python files pass
-(only the 3 pre-existing baseline failures + 1 custom-output pass),
-282/282 JS. Branch ready to merge into main; deploy needs the usual droplet
-steps (no migration this time — server restart only).
+**Status: DEPLOYED 2026-11-01 (~19:11 ET) — merged `doc-auth-api-tokens` into
+`main` as `72afc39` (`--no-ff`; tag `pre-auth-tokens-merge` = `e4558e5`),
+pushed to origin. Droplet sietch-crm-prod (147.182.164.19, /opt/sietch-crm):
+pre-deploy `pg_dump -Fc` to
+`backups/sietch_crm-pre-auth-tokens-20261102-001058.dump` (29.8 MB, 687 TOC
+entries), `git pull --ff-only` to `72afc39`, `docker compose build dashboard`
++ `up -d dashboard`. Migration `041_api_tokens.sql` auto-applied on boot.
+Verified: container healthy; unauthenticated `/api/v2/documents/{id}`,
+`/api/v2/mail/config`, `/api/v2/mail/log`, `/api/v2/mail/tags`,
+`/api/v2/projects/count` all 401; login page 200. Token id 1
+`estimate-training-pull` (read, owner kenc) minted via
+`scripts/api_tokens.py` (docker cp into container — `scripts/` is not in the
+image); Bearer GET projects/count + documents 200, mail/config + users 403,
+POST 403, bogus token 401. No app errors in logs (only pre-existing
+mail_scanner IMAP folder noise). OnlyOffice editing not exercised — needs a
+user check. No .env change. `fix-date-only-parsing` NOT included.
 
 ## Previous session summary (for next resume)
 
