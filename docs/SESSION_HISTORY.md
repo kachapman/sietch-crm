@@ -11,6 +11,28 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-01 (follow-up due-date off-by-one fix, branch `fix-date-only-parsing`)
+
+**Status: COMMITTED ON BRANCH, NOT DEPLOYED, NOT MERGED** (per instructions).
+
+**Fix:** new shared `public/date-only.js` (`parseDateSmart` + `toDateInputValue`);
+`project.html#formatDate` + 6 app.js sites from
+`docs/bugs/2026-11-01-follow-up-due-date-off-by-one.md` now parse date-only
+strings as local calendar dates (datetimes unchanged). `index.html` and
+`project.html` load `date-only.js`; `parseCrmDateOnly` left untouched.
+Server `NOW()` queries unchanged (doc: behavior note only). `tasks.due_date`
+is TIMESTAMP, so task fixes only affect date-only-shaped inputs.
+Tests: new `tests/test_date_only.mjs` 18/18 under Chicago/NY/UTC;
+`test_pure_helpers.mjs` mirror updated (37/37); full JS suite 301 pass
+0 fail; Python: 2 pre-existing failures on base commit
+(`test_scanner_toggle_gating`, `test_sync_pull_deals_fields` — verified via
+`git stash`, unrelated). Live project-#30 check impossible here (no DB
+creds in worktree); verified by extracting the real `formatDate` from
+`project.html` under `TZ=America/Chicago`: `2026-10-26` → Oct 26, 2026,
+datetimes intact.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-11-01 (branch `doc-auth-api-tokens`, follow-up — mail auth gaps)
 
 **Status: DEPLOYED 2026-11-01 (~19:11 ET) — merged `doc-auth-api-tokens` into

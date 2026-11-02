@@ -22,10 +22,19 @@ function esc(s) {
 }
 const TASK_OVERDUE_ICON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 21h-9a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v5"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M4 11h16"/><path d="M11 15h1"/><path d="M12 15v3"/><path d="M19 16v3"/><path d="M19 22v.01"/></svg>`;
 const TASK_LABELS_ICON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 8v4.172a2 2 0 0 0 .586 1.414l5.71 5.71a2.41 2.41 0 0 0 3.408 0l3.592 -3.592a2.41 2.41 0 0 0 0 -3.408l-5.71 -5.71a2 2 0 0 0 -1.414 -.586h-4.172a2 2 0 0 0 -2 2"/><path d="M18 19l1.592 -1.592a4.82 4.82 0 0 0 0 -6.816l-4.592 -4.592"/><path d="M7 10h-.01"/></svg>`;
+// Mirror of public/date-only.js#parseDateSmart (shared by app.js + project.html).
+// Date-only strings are local calendar dates, never UTC midnight.
+function parseDateSmart(raw) {
+  if (raw == null || raw === "") return null;
+  const s = String(raw).trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return new Date(raw);
+}
 function dueChipHtml(task) {
   const due = task.dueDate || task.deadLine?.value || task.deadLine;
   if (!due) return "";
-  const d = new Date(due);
+  const d = parseDateSmart(due);
   if (Number.isNaN(d.getTime())) return "";
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -316,6 +325,14 @@ test('dueChipHtml: future date renders date text, no icon', () => {
 test('dueChipHtml: missing/bad date renders nothing', () => {
   assert.equal(dueChipHtml({}), "");
   assert.equal(dueChipHtml({ dueDate: "not-a-date" }), "");
+});
+
+test('dueChipHtml: date-only string renders its own calendar day (no UTC shift)', () => {
+  // Regression for the 2026-11-01 follow-up-due-date off-by-one: under US
+  // timezones new Date("2026-10-26") is Oct 25. Run suite with TZ set.
+  const out = dueChipHtml({ dueDate: "2999-10-26" });
+  const expected = new Date(2999, 9, 26).toLocaleDateString();
+  assert.ok(out.includes(expected), `expected ${expected} in: ${out}`);
 });
 
 // ──────────────────────────────────────────────────────────────────────
