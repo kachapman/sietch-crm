@@ -13,7 +13,22 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-11-01 (follow-up due-date off-by-one fix, branch `fix-date-only-parsing`)
 
-**Status: COMMITTED ON BRANCH, NOT DEPLOYED, NOT MERGED** (per instructions).
+**Status: DEPLOYED 2026-11-01 (~20:29 ET)** — merged `fix-date-only-parsing`
+into `main` as `8e21335` (`--no-ff`; tag `pre-date-fix-merge` = `7dada8c`;
+CHANGELOG/SESSION_HISTORY conflicts resolved keeping both entries), pushed to
+origin. Post-merge: `test_date_only.mjs` 18/18 (Chicago/NY/UTC),
+`test_pure_helpers.mjs` 37/37, all 35 JS test files pass; 59 Python test
+files, only the 2 known pre-existing failures. Droplet sietch-crm-prod
+(147.182.164.19, /opt/sietch-crm): pre-deploy `pg_dump -Fc` to
+`backups/sietch_crm-pre-date-fix-20261102-012840.dump` (29.8 MB, 682 TOC
+entries), `git pull --ff-only` to `8e21335`, `docker compose build dashboard`
++ `up -d dashboard`. No migration, no .env change. Verified: container
+healthy, no app errors in logs; `/date-only.js` 200 and loaded by
+`index.html` (before `app.js`) and `project.html`; unauthenticated
+`/api/v2/documents/1`, `/api/v2/mail/config`, `/api/v2/projects/count` still
+401. Project #30 via read-only token: `expectedCloseDate` `2026-10-26`; the
+live-served `date-only.js` + `formatDate` render it as "Oct 26, 2026" under
+TZ=America/Chicago and America/New_York (old `new Date()` path gave Oct 25).
 
 **Fix:** new shared `public/date-only.js` (`parseDateSmart` + `toDateInputValue`);
 `project.html#formatDate` + 6 app.js sites from
