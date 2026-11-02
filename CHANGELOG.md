@@ -2,6 +2,35 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Telegram ~91x duplicate + bot token in journal (2026-11-02, branch `fix-telegram-dupes`)
+
+Live bug (Ken, ~2026-10-30): one `reply_tagged` notification ("Claudiu
+Chereji replied to a note you're tagged on / Project: Katherine Nelson")
+was delivered to Telegram ~91 times in a row. Root cause: the notification
+dispatcher (the sole sender) had no idempotency — SELECT-then-SEND-then-MARK
+in separate statements (overlapping passes double-sent), any row left
+unmarked was re-sent on EVERY 5s poll forever (no backoff, no cap, no
+dead-letter), and tag-notification INSERTs had no dedupe guard (a retried
+POST queued a second row for the same reply). Fix:
+`notification_dispatcher.py` claims each row with one atomic UPDATE
+(attempt bump + 5-min lease, only if unsent/under-cap/lease-expired) BEFORE
+any network call — losers never send; failed sends park behind exponential
+backoff (60s doubling, 1h cap); rows hitting 10 attempts are dead-lettered
+(marked sent, drawer copy untouched, error logged) instead of retried
+forever; `build_tag_dedupe_key()` + `dedupe_notify_list()` with a
+`dedupe_key` UNIQUE column (migration `042`) make creation idempotent
+(`ON CONFLICT DO NOTHING`) at all three sites (web note, reply, bot note).
+Known companion bug: httpx logged full Telegram API URLs — token included —
+at INFO into the service journal (919 token-bearing lines found in the bot
+log); both entry points (`telegram_bot.py`, `server.py`) now silence
+`httpx`/`httpcore` to WARNING. Tests: new `tests/test_telegram_dedupe.py`
+(17 tests: atomic claim, no-send-without-claim, lost-mark storm, backoff,
+cap/dead-letter, dedupe keys, SQL + log-silence guards; verified 0/17 pass
+on pre-fix code). ACTION REQUIRED (Ken, via BotFather): rotate the
+Telegram bot token — the old one is in shell-accessible journals — and put
+the new value in `.env` as `TELEGRAM_BOT_TOKEN` (server `bot_config` falls
+back to it). Not deployed, not merged.
+
 ## Follow-up due date off-by-one: date-only strings parse as local dates (2026-11-01)
 
 Live bug 2026-11-01 (project #30, stored `expected_close_date 2026-10-26`):

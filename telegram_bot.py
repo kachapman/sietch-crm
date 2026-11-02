@@ -31,6 +31,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger("crm_bot")
 
+# The bot token is part of every Telegram Bot API URL
+# (https://api.telegram.org/bot<TOKEN>/...). httpx logs each request URL at
+# INFO, which wrote the full token into the service journal on every call
+# (live 2026-11: token found verbatim in the bot log). Silence httpx/httpcore
+# to WARNING so request URLs — and the token inside them — are never logged.
+# (The boot log below intentionally prints only the first 10 chars.)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 # Load .env file like server.py does
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 if os.path.isfile(_env_path):

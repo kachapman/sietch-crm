@@ -51,6 +51,14 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("sietch_server")
 
+# Telegram Bot API URLs embed the bot token
+# (https://api.telegram.org/bot<TOKEN>/...), and httpx logs every request URL
+# at INFO. The notification dispatcher sends from this process, so without
+# this the full token lands in the server journal on every delivery (live
+# 2026-11: token found verbatim in bot-side logs via the same mechanism).
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 # ── Infrastructure ring buffer (shared module, rolling 500 events) ─────────────
 from infra_log import (  # noqa: E402
     log_infra_event,
@@ -460,7 +468,10 @@ from presence_store import (
     mark_messages_read, save_user_presence, set_last_read_dm,
     set_status, touch_crm_activity, touch_heartbeat,
 )
-from notification_dispatcher import start_dispatcher, stop_dispatcher
+from notification_dispatcher import (
+    start_dispatcher, stop_dispatcher,
+    build_tag_dedupe_key, dedupe_notify_list,
+)
 from calendar_sync import start_calendar_sync, stop_calendar_sync
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -6617,7 +6628,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": f"Failed to save note: {e}"})
             return
         # Insert notify users
-        notify_list = payload.get("notifyUserList") or []
+        notify_list = dedupe_notify_list(payload.get("notifyUserList"))
         for uid in notify_list:
             try:
                 db.execute(
@@ -6634,14 +6645,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             snippet = _html_mod.unescape(re.sub(r'<[^>]+>', '', content))[:NOTIFICATION_SNIPPET_LEN].strip()
             for uid in notify_list:
                 try:
-                    db.execute(
-                        """INSERT INTO notifications (user_id, type, opportunity_id, actor_user_id, message, payload)
+                    # dedupe_key (migration 042): a retried POST for the same
+                    # event+recipient hits the UNIQUE index and inserts
+                    # nothing instead of queueing a second Telegram delivery.
+                    inserted = db.execute(
+                        """INSERT INTO notifications (user_id, type, opportunity_id, actor_user_id, message, payload, dedupe_key)
                            SELECT %s, 'note_tagged', %s, %s,
                                   u.display_name || ' tagged you on ' || p.title,
-                                  jsonb_build_object('event_id', %s, 'event_category', 'note', 'snippet', %s)
-                           FROM users u, opportunities p WHERE p.id = %s AND u.id = %s""",
-                        (int(uid), opp_id, user["id"], event_id, snippet, opp_id, user["id"]),
+                                  jsonb_build_object('event_id', %s, 'event_category', 'note', 'snippet', %s),
+                                  %s
+                           FROM users u, opportunities p WHERE p.id = %s AND u.id = %s
+                           ON CONFLICT (dedupe_key) DO NOTHING""",
+                        (int(uid), opp_id, user["id"], event_id, snippet,
+                         build_tag_dedupe_key("note_tagged", int(uid), event_id),
+                         opp_id, user["id"]),
                     )
+                    if not inserted:
+                        continue
                     event_bus.publish("notification:new", {
                         "type": "note_tagged", "message": f"{user.get('display_name', 'Someone')} tagged you",
                         "payload": {"event_id": event_id, "snippet": snippet},
@@ -6887,10 +6907,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # 'note_tagged' notifications, but uses a new dedicated table
         # (history_reply_notify_users) and notification type ('reply_tagged')
         # so reply tags and event tags remain independent. Migration 031.
-        notify_list = payload.get("notifyUserList") or []
         # Don't notify the actor about their own reply.
         actor_id = int(user["id"])
-        notify_list = [int(uid) for uid in notify_list if uid and int(uid) != actor_id]
+        notify_list = dedupe_notify_list(payload.get("notifyUserList"), actor_id=actor_id)
         for uid in notify_list:
             try:
                 db.execute(
@@ -6911,14 +6930,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     # directly to the reply. The display string must name the
                     # ACTOR (replier), not the notified user: joining users on
                     # the recipient id reads as "X replied" to X themselves.
-                    db.execute(
-                        """INSERT INTO notifications (user_id, type, opportunity_id, actor_user_id, message, payload)
+                    # dedupe_key (migration 042): a retried POST for the same
+                    # reply+recipient hits the UNIQUE index and inserts
+                    # nothing instead of queueing a second Telegram delivery.
+                    inserted = db.execute(
+                        """INSERT INTO notifications (user_id, type, opportunity_id, actor_user_id, message, payload, dedupe_key)
                            SELECT %s, 'reply_tagged', %s, %s,
                                   u.display_name || ' replied on ' || p.title,
-                                  jsonb_build_object('event_id', %s, 'reply_id', %s, 'snippet', %s)
-                           FROM users u, opportunities p WHERE p.id = %s AND u.id = %s""",
-                        (int(uid), opp_id, actor_id, event_id, reply_id, snippet, opp_id, actor_id),
+                                  jsonb_build_object('event_id', %s, 'reply_id', %s, 'snippet', %s),
+                                  %s
+                           FROM users u, opportunities p WHERE p.id = %s AND u.id = %s
+                           ON CONFLICT (dedupe_key) DO NOTHING""",
+                        (int(uid), opp_id, actor_id, event_id, reply_id, snippet,
+                         build_tag_dedupe_key("reply_tagged", int(uid), event_id, reply_id),
+                         opp_id, actor_id),
                     )
+                    if not inserted:
+                        continue
                     event_bus.publish("notification:new", {
                         "type": "reply_tagged",
                         "message": f"{user.get('display_name', 'Someone')} replied to a note you're tagged on",
@@ -17803,7 +17831,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 (int(opp_id), category_id, content, int(created_by) if created_by else None),
             )
             # Process notifyUserList (same as web endpoint)
-            notify_list = payload.get("notifyUserList") or []
+            notify_list = dedupe_notify_list(payload.get("notifyUserList"))
             for uid in notify_list:
                 try:
                     db.execute(
@@ -17817,14 +17845,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 snippet = _re.sub(r'<[^>]+>', '', content)[:NOTIFICATION_SNIPPET_LEN].strip()
                 for uid in notify_list:
                     try:
+                        # dedupe_key (migration 042): same idempotency as the
+                        # web endpoint — a retried bot POST can't queue a
+                        # second delivery for the same event+recipient.
                         db.execute(
-                            """INSERT INTO notifications (user_id, type, opportunity_id, actor_user_id, message, payload)
+                            """INSERT INTO notifications (user_id, type, opportunity_id, actor_user_id, message, payload, dedupe_key)
                                SELECT %s, 'note_tagged', %s, %s,
                                       u.display_name || ' tagged you on ' || p.title,
-                                      jsonb_build_object('event_id', %s, 'event_category', 'note', 'snippet', %s)
-                               FROM users u, opportunities p WHERE p.id = %s AND u.id = %s""",
+                                      jsonb_build_object('event_id', %s, 'event_category', 'note', 'snippet', %s),
+                                      %s
+                               FROM users u, opportunities p WHERE p.id = %s AND u.id = %s
+                               ON CONFLICT (dedupe_key) DO NOTHING""",
                             (int(uid), int(opp_id), int(created_by) if created_by else None,
-                             event_id, snippet, int(opp_id), int(created_by) if created_by else None),
+                             event_id, snippet,
+                             build_tag_dedupe_key("note_tagged", int(uid), event_id),
+                             int(opp_id), int(created_by) if created_by else None),
                         )
                     except Exception:
                         pass

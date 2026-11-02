@@ -73,6 +73,138 @@ def _get_bot_token() -> str:
     return fallback
 
 
+# ── Idempotent delivery (fix 2026-11-02: the ~91x duplicate) ────────────────
+#
+# The dispatcher is the ONLY process that sends notification Telegram
+# messages, but it used to SELECT unsent rows and then SEND-then-MARK in
+# separate statements. Any of these re-delivered the same row:
+#   * two dispatcher passes overlapping (stacked server processes after the
+#     frequent restarts, or two threads) — both SELECTed before either
+#     MARKed, so both sent;
+#   * a send that reached Telegram but never marked (slow response past the
+#     10s timeout, crash/restart between send and mark, swallowed mark
+#     error) — the row stayed unsent and was re-sent on EVERY 5s poll,
+#     with no backoff, no attempt cap, and no dead-letter.
+# The claim below makes the SEND decision atomic (single UPDATE with a
+# rowcount check), gates retries behind exponential backoff, and parks
+# poison rows after TG_MAX_ATTEMPTS instead of hammering Telegram forever.
+
+# Attempts (claims) before a row is dead-lettered instead of retried.
+TG_MAX_ATTEMPTS = 10
+# Claim lease: a claimed row is invisible to other dispatchers for this long.
+# Covers a slow Telegram round-trip; a crash inside the lease delays (not
+# duplicates beyond the lease) the retry. Bounds the at-least-once window.
+TG_CLAIM_LEASE_SEC = 300
+
+
+def _tg_retry_delay_sec(attempts: int) -> int:
+    """Exponential backoff for the next Telegram retry, capped at 1h."""
+    return min(60 * (2 ** max(0, attempts - 1)), 3600)
+
+
+def _claim_telegram_notification(notification_id: int) -> bool:
+    """Atomically claim a notification for Telegram delivery.
+
+    Single UPDATE: bumps the attempt counter and sets a claim lease, but
+    only if the row is still unsent, under the attempt cap, and not inside
+    another claim/backoff lease. Returns True iff THIS caller won the row.
+    Concurrent dispatchers racing the same row get rowcount 0 and skip it.
+    """
+    try:
+        claimed = db.execute(
+            """UPDATE notifications
+                  SET telegram_attempts = telegram_attempts + 1,
+                      telegram_next_retry_at = NOW() + make_interval(secs => %s)
+                WHERE id = %s
+                  AND telegram_sent IS NOT TRUE
+                  AND telegram_attempts < %s
+                  AND (telegram_next_retry_at IS NULL OR telegram_next_retry_at <= NOW())""",
+            (TG_CLAIM_LEASE_SEC, notification_id, TG_MAX_ATTEMPTS),
+        )
+        return claimed > 0
+    except Exception:
+        logger.exception("Failed to claim Telegram notification %s", notification_id)
+        return False
+
+
+def _schedule_telegram_retry(notification_id: int, error: str = "") -> None:
+    """Park a failed send behind exponential backoff (row stays unsent)."""
+    try:
+        row = db.query_one("SELECT telegram_attempts FROM notifications WHERE id = %s", (notification_id,))
+        attempts = int((row or {}).get("telegram_attempts") or 1)
+        delay = _tg_retry_delay_sec(attempts)
+        db.execute(
+            """UPDATE notifications
+                  SET telegram_next_retry_at = NOW() + make_interval(secs => %s),
+                      telegram_last_error = %s
+                WHERE id = %s""",
+            (delay, error[:500], notification_id),
+        )
+    except Exception:
+        logger.exception("Failed to schedule Telegram retry for notification %s", notification_id)
+
+
+def _dead_letter_telegram_if_over_cap(notification_id: int) -> None:
+    """Stop retrying a poison row: mark it sent (drawer copy is unaffected).
+
+    Only fires when the attempt cap is reached — normal rows never match the
+    WHERE clause, so this is a no-op for them. Prevents the old behavior of
+    re-sending a failing notification on every 5s poll forever.
+    """
+    try:
+        parked = db.execute(
+            """UPDATE notifications
+                  SET telegram_sent = TRUE, telegram_sent_at = NOW(),
+                      telegram_last_error = COALESCE(telegram_last_error, '') || ' [dead-lettered: max attempts]'
+                WHERE id = %s AND telegram_sent IS NOT TRUE AND telegram_attempts >= %s""",
+            (notification_id, TG_MAX_ATTEMPTS),
+        )
+        if parked:
+            logger.error("Telegram notification %s dead-lettered after %d attempts", notification_id, TG_MAX_ATTEMPTS)
+    except Exception:
+        logger.exception("Failed to dead-letter Telegram notification %s", notification_id)
+
+
+def build_tag_dedupe_key(ntype: str, user_id: int, event_id: int | None,
+                          reply_id: int | None = None) -> str | None:
+    """Stable dedupe key for tag notifications, or None when not applicable.
+
+    One key per (type, event, reply, recipient): the same reply @-mentioning
+    the same user always maps to the same key, so a retried POST (double
+    submit, bot redelivery after a crash before offset commit) hits the
+    UNIQUE index and inserts nothing instead of queuing a second delivery.
+    Different events/replies/recipients always differ, so legitimate
+    notifications are never collapsed.
+    """
+    if ntype not in ("note_tagged", "reply_tagged"):
+        return None
+    try:
+        uid = int(user_id)
+        eid = int(event_id) if event_id is not None else 0
+        rid = int(reply_id) if reply_id is not None else 0
+    except (TypeError, ValueError):
+        return None
+    if not uid or not eid:
+        return None
+    return f"{ntype}:{eid}:{rid}:{uid}"
+
+
+def dedupe_notify_list(notify_list: list | None, actor_id: int | None = None) -> list[int]:
+    """Order-preserving int-dedupe of a notifyUserList, minus the actor."""
+    seen: set[int] = set()
+    out: list[int] = []
+    for uid in notify_list or []:
+        try:
+            i = int(uid)
+        except (TypeError, ValueError):
+            continue
+        if not i or i == actor_id or i in seen:
+            continue
+        seen.add(i)
+        out.append(i)
+    return out
+
+
 def _truncate(text: str, max_len: int = 1500) -> str:
     if len(text) <= max_len:
         return text
@@ -480,6 +612,9 @@ def _process_pending_notifications() -> int:
         # inserted without an owner, so this query used to pull 1,438,873
         # unreadable orphan rows and mark them sent one batch at a time —
         # a month of pointless UPDATE churn. Orphans are not deliverable.
+        # Telegram side additionally skips rows inside a claim/backoff lease
+        # (idempotency fix 2026-11-02): the atomic claim in _process_telegram
+        # is the final guard; this filter just avoids waking for them.
         rows = db.query_dicts(
             """SELECT n.id, n.user_id, n.type, n.message, n.payload,
                       n.opportunity_id, n.actor_user_id,
@@ -491,7 +626,9 @@ def _process_pending_notifications() -> int:
                LEFT JOIN users u ON u.id = n.actor_user_id
                LEFT JOIN opportunities o ON o.id = n.opportunity_id
                WHERE n.user_id IS NOT NULL
-                 AND (n.telegram_sent IS NOT TRUE OR n.email_sent IS NOT TRUE)
+                 AND ((n.telegram_sent IS NOT TRUE
+                       AND (n.telegram_next_retry_at IS NULL OR n.telegram_next_retry_at <= NOW()))
+                      OR n.email_sent IS NOT TRUE)
                ORDER BY n.created_at ASC
                LIMIT %s""",
             (BATCH_SIZE,),
@@ -511,14 +648,12 @@ def _process_pending_notifications() -> int:
 
         # ── Telegram channel ──
         if not row.get("telegram_sent"):
-            _process_telegram(notification_id, user_id, row, project_title, actor_name, project_id, project_number)
-            if row.get("telegram_sent"):
+            if _process_telegram(notification_id, user_id, row, project_title, actor_name, project_id, project_number):
                 sent_count += 1
 
         # ── Email channel ──
         if not row.get("email_sent"):
-            _process_email(notification_id, user_id, row, project_title, actor_name, project_id, project_number)
-            if row.get("email_sent"):
+            if _process_email(notification_id, user_id, row, project_title, actor_name, project_id, project_number):
                 sent_count += 1
 
     return sent_count
@@ -526,55 +661,69 @@ def _process_pending_notifications() -> int:
 
 def _process_telegram(notification_id: int, user_id: int, row: dict,
                        project_title: str, actor_name: str, project_id: int | None,
-                       project_number: int | None = None) -> None:
-    """Handle Telegram delivery for a single notification."""
+                       project_number: int | None = None) -> bool:
+    """Handle Telegram delivery for a single notification. Returns True if sent.
+
+    Idempotency (fix 2026-11-02): the row is claimed with a single atomic
+    UPDATE before any network call. A lost race, a backoff lease, or an
+    over-cap row all yield claim=False and NO send. A failed send parks the
+    row behind exponential backoff instead of retrying on the next 5s poll.
+    """
     ntype = row.get("type", "")
     if not _user_telegram_enabled(user_id, ntype):
         _mark_telegram_sent(notification_id)
-        return
+        return False
 
     if _is_customer(user_id):
         _mark_telegram_sent(notification_id)
-        return
+        return False
 
     chat_id = _get_employee_chat_id(user_id)
     if not chat_id:
         _mark_telegram_sent(notification_id)
-        return
+        return False
 
     text = _format_notification(row, project_title, actor_name, project_id, project_number)
     if not text:
         _mark_telegram_sent(notification_id)
-        return
+        return False
+
+    if not _claim_telegram_notification(notification_id):
+        # Claimed by a concurrent dispatcher, inside a backoff lease, or
+        # over the attempt cap. Never send without the claim.
+        _dead_letter_telegram_if_over_cap(notification_id)
+        return False
 
     message_id = _send_telegram_message(chat_id, text)
     if message_id:
         _log_telegram_message(notification_id, chat_id, message_id)
         _mark_telegram_sent(notification_id)
-    else:
-        logger.warning("Failed to send notification %s to chat %s", notification_id, chat_id)
+        return True
+    logger.warning("Failed to send notification %s to chat %s", notification_id, chat_id)
+    _schedule_telegram_retry(notification_id, "sendMessage failed")
+    return False
 
 
 def _process_email(notification_id: int, user_id: int, row: dict,
                     project_title: str, actor_name: str, project_id: int | None,
-                    project_number: int | None = None) -> None:
-    """Handle email delivery for a single notification."""
+                    project_number: int | None = None) -> bool:
+    """Handle email delivery for a single notification. Returns True if sent."""
     email_pref = _get_email_pref(user_id)
     if email_pref != "immediate":
         logger.debug("Skipping email for user %s: preference=%s", user_id, email_pref)
         _mark_email_sent(notification_id)
-        return
+        return False
 
     user_email = _get_user_email(user_id)
     if not user_email:
         logger.debug("Skipping email for user %s: no email address", user_id)
         _mark_email_sent(notification_id)
-        return
+        return False
 
     subject, text_body = _format_email_notification(row, project_title, actor_name, project_id, project_number)
     if not subject or not text_body:
         _mark_email_sent(notification_id)
-        return
+        return False
 
     branding = _get_branding()
     from_name = branding.get("email_from_name")
@@ -607,8 +756,10 @@ def _process_email(notification_id: int, user_id: int, row: dict,
 
     if success:
         _mark_email_sent(notification_id)
+        return True
     else:
         logger.warning("Failed to send email notification %s to %s", notification_id, user_email)
+        return False
 
 
 def _get_crm_smtp_account() -> dict | None:
