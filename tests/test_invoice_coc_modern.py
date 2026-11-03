@@ -553,6 +553,23 @@ class TestGenerationHandlers(unittest.TestCase):
         self.assertIn("10/31/2026", text)
         self.assertIn("Roof done", text)
 
+    def test_project_coc_modern_defaults_completion_date_to_today(self):
+        srv = self.server
+        root = self._tmp_root()
+        payload = dict(PAYLOAD, template_id=7)
+        payload.pop("completion_date", None)
+        response, _ = self._run("_handle_project_coc_generate", payload,
+                                opp_id=77, root=root)
+        self.assertEqual(response["status"], 201)
+        written = list((root / "data" / "documents" / "77").glob("*.pdf"))
+        self.assertEqual(len(written), 1)
+        text = pdf_text(written[0])
+        # The classic renderer always stamped today's date; the modern one
+        # falls back to today when the payload omits completion_date.
+        import datetime
+        today = datetime.datetime.now().strftime("%m/%d/%Y")
+        self.assertIn(today, text)
+
     def test_project_invoice_classic_layout_still_renders(self):
         srv = self.server
         root = self._tmp_root()

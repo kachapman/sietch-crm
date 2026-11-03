@@ -11082,7 +11082,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # Write the resolved defaults back onto the payload so the modern
         # (ReportLab) renderer sees exactly the same values as the classic one.
         payload = dict(payload or {})
-        payload.setdefault("customer_name", customer_name)
         payload["customer_name"] = customer_name
         payload["invoice_number"] = invoice_number
         payload["invoice_date"] = invoice_date
@@ -11107,7 +11106,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 self._create_invoice_pdf_modern(
                     output_path=str(output_path),
                     payload=payload, template=template, line_items=line_items,
-                    today=invoice_date,
+                    today=self._doc_today(),
                 )
             else:
                 self._create_invoice_pdf(
@@ -11337,7 +11336,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 self._create_invoice_pdf_modern(
                     output_path=str(output_path),
                     payload=payload, template=template, line_items=line_items,
-                    today=invoice_date,
+                    today=self._doc_today(),
                 )
             else:
                 self._create_invoice_pdf(
@@ -11481,6 +11480,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         job = doc_mapping.build_job(payload, today=today)
         opts = doc_mapping.build_coc_opts(payload, template, root=ROOT)
         build_coc(output_path, brand, job, opts, root=ROOT)
+
+    @staticmethod
+    def _doc_today() -> str:
+        """Today's date as MM/DD/YYYY (the format the modals use)."""
+        return datetime.now().strftime("%m/%d/%Y")
 
     def _create_invoice_pdf(self, output_path, invoice_number, invoice_date,
                              terms, customer_name, claim_number, project_number,
