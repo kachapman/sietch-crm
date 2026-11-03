@@ -50,6 +50,11 @@ FALLBACK_TEMPLATE = {
     "company_city_state_zip": "Columbus, OH 43219",
     "company_phone": "(614) 555-0142",
     "company_email": "claims@publicadjustermidwest.com",
+    # Branding extras (migration 045). Left blank in the fallback so the
+    # "no extras" variant is what the default sample renders.
+    "company_website": "",
+    "company_license": "",
+    "signature_title": "",
     "primary_color": "#1f4e79",
     "invoice_title": "INVOICE",
     "coc_title": "CERTIFICATE OF COMPLETION",
@@ -66,6 +71,17 @@ FALLBACK_TEMPLATE = {
     "show_branding_footer": True,
     "is_default": True,
 }
+
+# A second template with every branding extra filled in, so the review pack
+# shows both "no extras" (values omitted) and "with extras" (values printed).
+TEMPLATE_WITH_EXTRAS = dict(
+    FALLBACK_TEMPLATE,
+    id=2,
+    name="Public Adjustment Midwest (with website + license + signer title)",
+    company_website="www.publicadjustermidwest.com",
+    company_license="OH LIC 104.8872",
+    signature_title="Licensed Public Adjuster",
+)
 
 # Realistic stand-ins used when the local DB has no projects.
 FALLBACK_PROJECTS = [
@@ -242,8 +258,12 @@ def classic_invoice(out_path, payload, template):
     pdf.set_font("Helvetica", "B", 10)
     pdf.cell(2.5, 0.18, template.get("company_name") or "", align="R", ln=1)
     pdf.set_font("Helvetica", "", 9)
+    comp_license = (template.get("company_license") or "").strip()
+    if comp_license and not comp_license.lower().startswith(("lic", "#")):
+        comp_license = "License " + comp_license
     for value in (template.get("company_address"), template.get("company_city_state_zip"),
-                  template.get("company_phone"), template.get("company_email")):
+                  template.get("company_phone"), template.get("company_email"),
+                  template.get("company_website"), comp_license):
         if value:
             pdf.set_x(page_w - margin_r - 2.5)
             pdf.cell(2.5, 0.15, str(value), align="R", ln=1)
@@ -300,6 +320,9 @@ def classic_invoice(out_path, payload, template):
         desc = (li.get("description") or "").strip()
         amt = float(li.get("amount") or 0)
         if not desc and amt == 0:
+            continue
+        # $0.00 rows are hidden (Sietch decision 2026-11-03).
+        if amt == 0:
             continue
         if y + row_h + 0.6 > page_h - 0.5:
             pdf.add_page()
@@ -368,8 +391,12 @@ def classic_coc(out_path, payload, template):
     pdf.set_text_color(r_c, g_c, b_c)
     pdf.set_xy(margin_l, 1.55)
     pdf.set_font("Helvetica", "", 10)
+    comp_license = (template.get("company_license") or "").strip()
+    if comp_license and not comp_license.lower().startswith(("lic", "#")):
+        comp_license = "License " + comp_license
     for value in (template.get("company_address"), template.get("company_city_state_zip"),
-                  template.get("company_email"), template.get("company_phone")):
+                  template.get("company_email"), template.get("company_phone"),
+                  template.get("company_website"), comp_license):
         if value:
             pdf.cell(usable_w, 0.16, str(value), align="R", ln=1)
             pdf.set_x(margin_l)
@@ -451,33 +478,55 @@ def main():
         print(f"  Using {len(db_projects)} project(s) from the local DB.")
 
     made = []
-    for idx, project in enumerate(db_projects):
-        payload = build_payload(project, idx)
-        stem = f"project-{project.get('id')}-{project.get('project_number')}"
-        safe_stem = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in stem)
 
+    # The template under review, plus a variant with every branding extra
+    # filled in (website / license / signer title) so the pack shows both
+    # "extras omitted" and "extras printed".
+    template_extras = dict(template)
+    for key, value in (("company_website", TEMPLATE_WITH_EXTRAS["company_website"]),
+                       ("company_license", TEMPLATE_WITH_EXTRAS["company_license"]),
+                       ("signature_title", TEMPLATE_WITH_EXTRAS["signature_title"])):
+        if not (template_extras.get(key) or "").strip():
+            template_extras[key] = value
+
+    def _emit(payload, safe_stem, tpl, suffix):
+        """Render one project in both layouts with one template."""
         # Modern
-        brand = doc_mapping.build_brand(template, root=REPO)
+        brand = doc_mapping.build_brand(tpl, root=REPO)
         job = doc_mapping.build_job(payload, today="11/03/2026")
         items = doc_mapping.build_items(payload)
-        sig = doc_mapping.build_invoice_signature(payload, template, root=REPO)
-        inv_modern = out_dir / f"{safe_stem}-invoice-modern.pdf"
+        sig = doc_mapping.build_invoice_signature(payload, tpl, root=REPO)
+        inv_modern = out_dir / f"{safe_stem}-invoice-modern{suffix}.pdf"
         build_invoice(str(inv_modern), brand, job, items, signature=sig, root=REPO)
         made.append(inv_modern)
 
-        opts = doc_mapping.build_coc_opts(payload, template, root=REPO)
-        coc_modern = out_dir / f"{safe_stem}-coc-modern.pdf"
+        opts = doc_mapping.build_coc_opts(payload, tpl, root=REPO)
+        coc_modern = out_dir / f"{safe_stem}-coc-modern{suffix}.pdf"
         build_coc(str(coc_modern), brand, job, opts, root=REPO)
         made.append(coc_modern)
 
         # Classic
         if _HAVE_FPDF:
-            inv_classic = out_dir / f"{safe_stem}-invoice-classic.pdf"
-            classic_invoice(str(inv_classic), payload, template)
+            inv_classic = out_dir / f"{safe_stem}-invoice-classic{suffix}.pdf"
+            classic_invoice(str(inv_classic), payload, tpl)
             made.append(inv_classic)
-            coc_classic = out_dir / f"{safe_stem}-coc-classic.pdf"
-            classic_coc(str(coc_classic), payload, template)
+            coc_classic = out_dir / f"{safe_stem}-coc-classic{suffix}.pdf"
+            classic_coc(str(coc_classic), payload, tpl)
             made.append(coc_classic)
+
+    for idx, project in enumerate(db_projects):
+        payload = build_payload(project, idx)
+        stem = f"project-{project.get('id')}-{project.get('project_number')}"
+        safe_stem = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in stem)
+        # No suffix -> the template as-is (extras omitted when empty).
+        _emit(payload, safe_stem, template, "")
+
+    # One project rendered again with every branding extra filled in.
+    extra_payload = build_payload(db_projects[0], 0)
+    extra_stem = "with-extras-" + "".join(
+        ch if ch.isalnum() or ch in "-_." else "_"
+        for ch in f"project-{db_projects[0].get('id')}-{db_projects[0].get('project_number')}")
+    _emit(extra_payload, extra_stem, template_extras, "")
 
     # One long multi-page modern invoice.
     long_payload = build_payload(db_projects[0], 0)
@@ -490,6 +539,24 @@ def main():
     long_pdf = out_dir / "long-multipage-invoice-modern.pdf"
     build_invoice(str(long_pdf), brand, job, items, root=REPO)
     made.append(long_pdf)
+
+    # A $0.00 line item must NOT be printed (Sietch decision 2026-11-03).
+    zero_payload = build_payload(db_projects[0], 0)
+    zero_payload["line_items"] = list(zero_payload["line_items"]) + [
+        {"description": "Follow-up site visit (no charge)", "amount": "0.00"},
+        {"description": "Second zero row", "amount": "0"},
+    ]
+    zero_stem = "zero-line-hidden"
+    brand = doc_mapping.build_brand(template, root=REPO)
+    job = doc_mapping.build_job(zero_payload, today="11/03/2026")
+    items = doc_mapping.build_items(zero_payload)
+    zero_pdf = out_dir / f"{zero_stem}-invoice-modern.pdf"
+    build_invoice(str(zero_pdf), brand, job, items, root=REPO)
+    made.append(zero_pdf)
+    if _HAVE_FPDF:
+        zero_classic = out_dir / f"{zero_stem}-invoice-classic.pdf"
+        classic_invoice(str(zero_classic), zero_payload, template)
+        made.append(zero_classic)
 
     # Page-1 PNGs for a quick visual scan.
     for pdf in made:
