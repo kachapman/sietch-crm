@@ -187,6 +187,7 @@ bulk-link button aggregates the counts across the selected messages.
 | `MAIL_ATTACHMENT_FETCH_RETRIES` | `3` | Attempts for the link-time mailbox download. |
 | `MAIL_ATTACHMENT_FETCH_BACKOFF` | `2.0` | Base seconds for the retry backoff (attempt N waits `N × backoff`). A server `Retry-After` (429/503) overrides this; the wait is capped at 120 s. |
 | `MAIL_ATTACHMENT_DROP_STORED_ON_PURGE` | `false` | **Retention switch (see §5).** When the mail retention job purges old messages, also delete their stored attachment bytes. **Default `false` = keep the files** — the retention/backup policy for `data/mail-attachments/` is Ken's decision and is **not** made by this code. The setting exists so the policy can be flipped without another code change. |
+| `MAIL_ATTACHMENT_STAGING_MAX_AGE` | `3600` | How long a staging folder from a **crashed** run is kept before it is swept. A folder younger than this belongs to a **running** sync and is never touched (accounts poll concurrently). |
 
 All are read from the environment at import time by
 `scanner/mail_scanner.py`. They are **not** in `.env` by default — the
@@ -237,7 +238,7 @@ migration. See §9 for what is still open.
 
 ## 6. Migration
 
-`migrations/043_mail_attachment_storage.sql` (idempotent, `IF NOT EXISTS`):
+### 6.1 `migrations/043_mail_attachment_storage.sql` (idempotent, `IF NOT EXISTS`)
 
 - `mail_attachments.content_hash` — sha256 of the stored bytes.
 - `mail_attachments.stored_size` — bytes actually written.
@@ -253,13 +254,41 @@ migration. See §9 for what is still open.
   `mail_attachments(id)` **ON DELETE SET NULL** (see below).
 - `uq_history_attachments_mail_attachment` — UNIQUE
   `(event_id, mail_attachment_id) WHERE mail_attachment_id IS NOT NULL`.
-- `uq_project_documents_opp_file_path` — UNIQUE
-  `(opportunity_id, file_path) WHERE is_deleted = FALSE`; makes a
-  double-click (two concurrent link requests) unable to show the same PDF
-  twice in the Documents tab.
 - `idx_mail_attachments_content_hash` — partial index for hash lookups.
 
-### 6.1 Why `ON DELETE SET NULL` (and not CASCADE)
+### 6.2 `migrations/044_project_documents_unique_file_path.sql` (round 3)
+
+Creates `uq_project_documents_opp_file_path` — UNIQUE
+`(opportunity_id, file_path) WHERE is_deleted = FALSE`. It makes a
+double-click (two concurrent link requests) unable to show the same PDF
+twice in the Documents tab.
+
+⚠ **Why this is a SEPARATE migration.** A UNIQUE index cannot be created on
+a table that already holds duplicates — Postgres raises
+
+```
+ERROR:  could not create unique index "uq_project_documents_opp_file_path"
+DETAIL:  Key (opportunity_id, file_path)=(42, data/x.pdf) is duplicated.
+```
+
+and the whole migration file would then fail. `db.py`'s runner records a
+failed migration as "applied" (so it is never retried), so the index would
+silently never exist. Migration `044` therefore **checks first**:
+
+| Situation | What 044 does |
+|---|---|
+| **No duplicates** | Builds the index (a `NOTICE` says so). |
+| **Duplicates exist** | **Skips** the index and logs a loud `WARNING` with the **count** and a **sample of up to 10 offending keys** (`opportunity_id=… file_path=… (xN)`). |
+
+⚠ **It never deletes or modifies any data.** The duplicate rows are left
+exactly as they are — deduplicating them is a separate, explicit operator
+decision (they are visible in the admin console's Documents list).
+
+When the index is skipped, the link-time copy still works, but the
+double-click protection is gone (the `ON CONFLICT ... DO NOTHING` has no
+index to arbitrate against) — that is why the warning is loud.
+
+### 6.3 Why `ON DELETE SET NULL` (and not CASCADE)
 
 `mail_attachments` rows are deleted when the mail account is deleted, when
 a message is emptied from Trash, and when the mail retention job purges old
@@ -271,15 +300,42 @@ Documents row and the file on disk all survive; only the link back to the
 mail attachment is dropped (a later relink then recognises the file as a
 legacy copy by filename + size).
 
-### 6.2 State of the dev database
+### 6.4 Every `project_documents` INSERT is conflict-safe
 
-Migration `043` was already applied to the shared dev database
-`sietch_crm` (local, not prod) during the round-1 work. It has since been
-**corrected in place** to match the final migration:
-`history_attachments_mail_attachment_id_fkey` is now `ON DELETE SET NULL`,
-and `uq_project_documents_opp_file_path` has been created. The dev
-database holds **no test rows** (1 user = the original `dev@localhost`, 0
-test opportunities, 0 test mail accounts).
+The new unique index applies to **every** row in the table, not just the
+mail-attachment ones. The PDF generators name their file
+`"<epoch seconds>_<name>.pdf"`, so two generations in the same second with
+the same name would collide — and a plain `INSERT` would then raise and
+**break the generation**.
+
+`server.py` therefore routes every `project_documents` INSERT through
+`_insert_project_document_safely()`, which:
+
+1. inserts with `ON CONFLICT (opportunity_id, file_path) WHERE is_deleted = FALSE DO NOTHING`;
+2. if nothing was inserted (the row already exists), reuses the existing
+   row's id;
+3. if the index does not exist (migration `044` skipped it), falls back to
+   a plain INSERT.
+
+Rows with `opportunity_id = NULL` (the standalone/personal documents) are
+unaffected: NULLs never conflict in a Postgres UNIQUE index.
+
+### 6.5 State of the dev database
+
+Migrations `043` and `044` were applied to the shared dev database
+`sietch_crm` (local, **not** prod) during rounds 1–2 and have since been
+**corrected in place** to match the final migrations:
+`history_attachments_mail_attachment_id_fkey` is `ON DELETE SET NULL`, and
+`uq_project_documents_opp_file_path` exists. The dev database has **0
+duplicate** `(opportunity_id, file_path)` keys and holds **no test rows**
+(1 user = the original `dev@localhost`, 0 test opportunities, 0 test mail
+accounts).
+
+> ⚠ **On prod, migration `044` will report whether it built the index.**
+> If prod has duplicate `(opportunity_id, file_path)` rows among the active
+> `project_documents`, `044` will SKIP the index and log the count plus a
+> sample of the offending keys — nothing is changed. That is expected and
+> safe; the duplicates would then need an operator decision.
 
 The migration runner in `db.py` applies it automatically on boot (it records
 the filename in `_applied_migrations`). The code degrades gracefully if it
@@ -396,14 +452,32 @@ The CLI writes a JSON report to `backfill-mail-attachments-report.json`.
      `bid_value`; the current UPDATE does not.
    Both are **source-text guards** that drifted from the code. Not touched
    here (out of scope) — flagged so they are not mistaken for a regression.
+9. **The COC form's "Completion Date" is silently ignored** (found during
+   the round-3 verification, NOT caused by this work). The frontend sends
+   `completion_date` (`public/app.js:47634`) but no backend code reads it —
+   `_create_coc_pdf` hard-codes `datetime.now()`
+   (`server.py:11643`). The PDF therefore always shows today's date, not
+   the date the user typed. The round-3 instruction was to change this only
+   if the COC generator shared code with the mail-attachment path — **it
+   does not** (see §13), so the item was skipped as instructed. It is a
+   one-line fix (`_create_coc_pdf` gains a `completion_date` parameter,
+   the two COC handlers pass `payload.get("completion_date")`) but it
+   belongs to its own change, with its own test.
+10. **The COC / invoice / photo-report PDF file names use whole seconds**
+    (`<epoch seconds>_<name>.pdf`), so two generations in the same second
+    with the same name produce the same `file_path`. With the new unique
+    index this is now handled (the insert reuses the existing row) rather
+    than raising, but the second PDF still overwrites the first FILE on
+    disk. Using a higher-resolution timestamp (or a random suffix) would
+    fix the file-level collision. Not changed here — out of scope.
 
 ## 10. Tests
 
-`tests/test_mail_link_attachments.py` — **57 tests**, needs a **real
+`tests/test_mail_link_attachments.py` — **76 tests**, needs a **real
 PostgreSQL throwaway database** (it exercises INSERTs and the unique
 indexes).
 
-**The database safety check is MANDATORY** (round 2):
+**The database safety check is MANDATORY** (round 2, hardened in round 3):
 
 - `MAILATT_TEST_DB_NAME` is **required** — without it the suite refuses to
   run.
@@ -411,6 +485,10 @@ indexes).
 - A hard-coded denylist refuses `sietch_crm` (and `postgres` /
   `template0` / `template1` / `tg_dupe_scratch`) **even if**
   `MAILATT_TEST_DB_NAME` names them.
+- ⚠ **The name is checked BEFORE any migration can run** (round 3 / M4).
+  `db.init_db()` also runs `db.py`'s migration runner, so the check uses a
+  **raw psycopg2 connection** that does not touch the database; only after
+  the name is confirmed does the suite call `db.init_db()`.
 
 The suite SKIPs (exit 0) when the DB is unreachable, when it has no CRM
 schema, when migration `043` is not applied, or when the safety check
@@ -521,6 +599,9 @@ fail with the fix temporarily reverted:
 | H3 | re-create the FK as `ON DELETE CASCADE` | `test_deleting_the_mail_attachment_keeps_the_project_copy` |
 | H4 | make `_fetch_messages` return a list | `test_fetch_messages_is_a_generator`, `test_the_generator_yields_one_message_at_a_time` |
 | exact match | restore `content LIKE '%"message_id": 12%'` | `test_the_scanner_lookup_does_not_match_a_longer_id` |
+| **N1** | go back to a shared staging folder | `test_two_concurrent_account_syncs_keep_their_own_files` |
+| **N2** | put the index back into 043 | `test_the_index_is_not_in_migration_043` |
+| **M4** | call `init_db()` before the name check | `test_a_mismatched_name_is_refused` |
 | round 1 | remove the repair path | `test_relink_copies_files_onto_an_existing_timeline_entry` |
 | round 1 | remove the idempotency check | `test_linking_twice_adds_no_duplicate_documents` |
 | JS | remove the bulk-link file note | `the bulk mail-link handler shows "N of M files copied"` |
@@ -530,12 +611,13 @@ fail with the fix temporarily reverted:
 
 | File | What |
 |---|---|
-| `scanner/mail_scanner.py` | Sync-time storage (streaming, staged to disk), short MIME-part identifier, retry/token refresh + `Retry-After`, detailed copy report, multi-key idempotent copy (incl. legacy), repair path, `ON CONFLICT DO NOTHING`, retention switch, new settings. |
-| `server.py` | Link API file counts, `_create_email_history_event_detailed`, admin backfill endpoint + route (legacy-aware counts), `_pick_imap_attachment` / `_imap_part_id_str`, both IMAP download paths fixed, exact timeline matching. |
+| `scanner/mail_scanner.py` | Sync-time storage (streaming, staged to disk), **run-scoped staging folders**, short MIME-part identifier, retry/token refresh + `Retry-After`, detailed copy report, multi-key idempotent copy (incl. legacy), repair path, `ON CONFLICT DO NOTHING`, retention switch, new settings. |
+| `server.py` | Link API file counts, `_create_email_history_event_detailed`, admin backfill endpoint + route (legacy-aware counts), `_pick_imap_attachment` / `_imap_part_id_str`, both IMAP download paths fixed, exact timeline matching, `_insert_project_document_safely` (every `project_documents` INSERT is conflict-safe). |
 | `public/app.js` | "N of M files copied" in both link toasts (warning style on a partial copy). |
-| `migrations/043_mail_attachment_storage.sql` | New columns, the dedupe unique index, `uq_project_documents_opp_file_path`, and the FK corrected to `ON DELETE SET NULL`. |
+| `migrations/043_mail_attachment_storage.sql` | New columns + the dedupe unique index + the FK corrected to `ON DELETE SET NULL`. |
+| `migrations/044_project_documents_unique_file_path.sql` | **new** — the `project_documents` unique index, with a duplicate check that skips (and logs) instead of failing. |
 | `backfill_mail_attachments.py` | New CLI (dry-run by default); legacy-aware "already complete" counting; exact timeline matching. |
-| `tests/test_mail_link_attachments.py` | New suite (57 tests, needs a throwaway PostgreSQL; mandatory DB safety check). |
+| `tests/test_mail_link_attachments.py` | New suite (76 tests, needs a throwaway PostgreSQL; mandatory DB safety check before any migration). |
 | `tests/test_mail_link_files_toast.mjs` | New suite (6 tests, no DB): the link toasts must carry the file counts. |
 | `.github/workflows/smoke.yml` | Loads the CRM schema into the CI postgres service and runs the new Python suite. |
 
@@ -584,7 +666,8 @@ first (cheap), then fetches and yields **one message at a time**; each
 message's attachment bytes are written to a **staging file** on disk as it
 is fetched and the dict carries only the path. `_store_attachments` MOVES
 the staged file into place (never reads it into RAM) and hashes it in
-chunks. The staging directory is swept at the start of every poll.
+chunks. The staging directory is swept at the start of every poll — see
+§13 (round 3) for how that sweep was made run-scoped.
 
 ### MEDIUM
 
@@ -613,3 +696,98 @@ chunks. The staging directory is swept at the start of every poll.
   (default `false` = keep) makes the retention job delete the stored bytes
   of the messages it purges, with a containment check; the project's copy
   is never touched. The policy itself is Ken's call — see §5.1.
+
+## 13. Round-3 review log (independent review of `ffe826e`)
+
+Three issues were raised against the round-2 commit. All are fixed.
+
+### N1 — staging folder collisions between concurrent runs
+
+Accounts poll **concurrently** (`_poll_mailboxes` uses a
+`ThreadPoolExecutor` with up to 4 workers, and the manual per-account
+workers run in their own threads). Round 2 gave every run the SAME staging
+folder `data/mail-attachments/.staging/`, and:
+
+* each run **swept that folder at the start** — so run B starting while
+  run A was mid-flight **deleted run A's staged files**;
+* the staged file name was `<uid>_<pid>_<index>_<name>` — two accounts
+  fetching the same UID could write the same name.
+
+*Fixed:*
+
+* every run gets its **own** subfolder `data/mail-attachments/.staging/<run-id>/`,
+  where the run id is `acct<account id>-<random 12 hex>` — the account id
+  keeps it traceable, the random suffix keeps two concurrent runs of the
+  *same* account apart;
+* a run clears **only its own** folder, and removes **only its own** folder
+  when it finishes (in a `finally`, so an abandoned generator still cleans
+  up);
+* leftovers from a **crashed** run are swept by AGE
+  (`MAIL_ATTACHMENT_STAGING_MAX_AGE`, default 3600 s) — a folder younger
+  than that belongs to a **running** sync and is never touched;
+* the staged file name also carries a random token, so a name collision is
+  impossible even inside one folder.
+
+### N2 — the unique index moved out of 043 into 044
+
+The `uq_project_documents_opp_file_path` index was in migration `043`, which
+was wrong: a UNIQUE index cannot be created on a table that already holds
+duplicates, and `db.py`'s runner records a failed migration as "applied" (so
+it would never be retried).
+
+*Fixed:* the index moved to **`migrations/044_project_documents_unique_file_path.sql`**,
+which **checks for duplicates first**:
+
+* no duplicates → builds the index (a `NOTICE` says so);
+* duplicates → **skips** the index and logs a loud `WARNING` with the
+  **count** and a **sample of up to 10 offending keys**.
+
+⚠ The migration **never deletes or modifies any data** — the duplicate rows
+are left exactly as they are. See §6.2.
+
+Migration `044` also applies to **every** row in `project_documents`, not
+just the mail-attachment ones — so all the PDF generators (COC, invoice,
+photo report, document upload, doc create/copy, bot upload) now insert
+through `_insert_project_document_safely()`, which uses
+`ON CONFLICT ... DO NOTHING` and reuses the existing row on a conflict.
+Without that, two PDFs generated in the same second with the same name
+would have raised and **broken the generation**. See §6.4.
+
+### M4 — the test database name must be checked BEFORE any migration
+
+`db.init_db()` also runs `db.py`'s **migration runner**. The round-2 setup
+called it **before** the database name was checked — so pointing the suite
+at a non-test database would silently apply the pending migrations to it.
+
+*Fixed:* the name is now checked first, using a **raw psycopg2
+connection** (`_current_database_name()`) that does not touch the database
+in any way. Only after the name is confirmed does the suite call
+`db.init_db()`.
+
+### The classic COC generator — NOT shared, item skipped
+
+The instruction was: *"if the classic COC generator shares code with the path
+you touch, make the classic COC use the entered `completion_date` instead of
+the current date. If that code is not shared on this branch, skip this item
+and say so."*
+
+**It is not shared — the item is skipped.** Verified:
+
+* the COC code lives in `server.py` ~11163–11700 (`_handle_project_coc_generate`,
+  `_handle_standalone_coc_generate`, `_create_coc_pdf`). The whole
+  mail-attachment diff is at lines 2161, 4776, 12406, 12454, 20458, 20495,
+  22158 and 22363 — **no overlap**;
+* `_create_coc_pdf` calls only `fpdf` methods plus `_doc_pdf_safe`,
+  `_resolve_document_template` and `_humanize_file_size` — **none** of
+  which this work touched;
+* the COC path never touches `mail_scanner`, `_pick_imap_attachment`,
+  `_imap_part_id_str` or the attachment copy — **none** of which it uses.
+
+⚠ **A real bug was found while verifying this** (and is left alone, because
+the instruction says to skip the item when the code is not shared): the
+frontend sends `completion_date` in the COC payload
+(`public/app.js:47634`), but **no backend code reads it** —
+`_create_coc_pdf` hard-codes `datetime.now().strftime("%m/%d/%Y")`. So the
+completion date the user types into the COC form is **silently ignored** and
+the PDF always shows today's date. This is unrelated to the mail-attachment
+work (it is not caused by it) and is listed in §9 for a separate fix.

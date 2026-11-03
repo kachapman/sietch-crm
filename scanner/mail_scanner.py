@@ -18,6 +18,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -112,6 +113,12 @@ MAIL_ATTACHMENT_FETCH_RETRIES = max(1, int(os.environ.get("MAIL_ATTACHMENT_FETCH
 MAIL_ATTACHMENT_FETCH_BACKOFF = float(os.environ.get("MAIL_ATTACHMENT_FETCH_BACKOFF", "2.0"))
 MAIL_ATTACHMENT_DROP_STORED_ON_PURGE = os.environ.get(
     "MAIL_ATTACHMENT_DROP_STORED_ON_PURGE", "false").lower() in ("true", "1", "yes")
+
+# How long a staging folder from a crashed run is kept before it is swept.
+# A folder younger than this belongs to a RUNNING sync (accounts poll
+# concurrently) and is never touched.
+MAIL_ATTACHMENT_STAGING_MAX_AGE = int(
+    os.environ.get("MAIL_ATTACHMENT_STAGING_MAX_AGE", "3600"))
 
 # Hard cap on the stored MIME-part identifier. A fingerprint is ~40 chars;
 # this is a belt-and-braces limit so no code path can ever write a large
@@ -1249,6 +1256,84 @@ def _read_folder_status(mailbox_cfg: dict[str, Any], folder: str) -> tuple[int |
         return None, None
 
 
+def _staging_root() -> Path:
+    """The root of the mail-attachment staging area.
+
+    Each sync run gets its OWN subfolder under this root (see
+    `_new_staging_run_id`), because accounts poll concurrently.
+    """
+    return Path(__file__).resolve().parent.parent / MAIL_ATTACHMENT_DIR / ".staging"
+
+
+def _new_staging_run_id(mailbox_cfg: dict[str, Any] | None = None) -> str:
+    """A unique id for this sync run's staging subfolder.
+
+    The account id keeps the folders traceable; the random suffix keeps
+    two CONCURRENT runs of the same account (a manual poll racing the
+    scheduled cycle) apart.
+    """
+    account_id = 0
+    try:
+        account_id = int((mailbox_cfg or {}).get("account_id") or 0)
+    except (TypeError, ValueError):
+        account_id = 0
+    suffix = uuid.uuid4().hex[:12]
+    return f"acct{account_id}-{suffix}"
+
+
+def _sweep_stale_staging_dirs(own_dir: Path) -> None:
+    """Remove leftover staging folders from crashed runs.
+
+    Only folders OLDER than `MAIL_ATTACHMENT_STAGING_MAX_AGE` seconds are
+    touched, and NEVER the folder of a running sync — a concurrent run's
+    folder is young, so it cannot be swept. The run's OWN folder is also
+    left alone (it was just created).
+    """
+    root = _staging_root()
+    try:
+        now = time.time()
+        for entry in list(root.iterdir()):
+            if not entry.is_dir():
+                continue
+            try:
+                if entry.resolve() == own_dir.resolve():
+                    continue
+                age = now - entry.stat().st_mtime
+            except Exception:
+                continue
+            if age < MAIL_ATTACHMENT_STAGING_MAX_AGE:
+                continue
+            try:
+                for stale in entry.iterdir():
+                    try:
+                        stale.unlink()
+                    except Exception:
+                        pass
+                entry.rmdir()
+                logger.info("Removed stale mail attachment staging folder %s (age %.0fs)",
+                            entry.name, age)
+            except Exception:
+                logger.exception("Could not remove stale staging folder %s", entry)
+    except Exception:
+        logger.exception("Could not sweep stale mail attachment staging folders")
+
+
+def _remove_staging_dir(staging_dir: Path) -> None:
+    """Remove this run's staging folder (best effort)."""
+    try:
+        if not staging_dir.exists():
+            return
+        for stale in staging_dir.iterdir():
+            try:
+                stale.unlink()
+            except Exception:
+                pass
+        staging_dir.rmdir()
+    except Exception:
+        logger.exception("Could not remove the mail attachment staging folder %s",
+                         staging_dir)
+
+
 def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None,
                     since: datetime | None = None,
                     uid_min: int | None = None) -> Any:
@@ -1272,23 +1357,31 @@ def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None,
     staging path, never the bytes. `_store_attachments` moves the staged
     file into its final place.
 
-    The staging directory is `data/mail-attachments/.staging/` and is
-    swept at the start of every poll, so a crashed run cannot leak files.
+    The staging directory is `data/mail-attachments/.staging/<run-id>/`, where
+    the run id is unique per sync run (account id + a random suffix). Accounts
+    poll CONCURRENTLY (a ThreadPoolExecutor in `_poll_mailboxes`, plus the
+    manual per-account workers), so a shared staging folder would let one run
+    delete or overwrite another run's staged files. Each run therefore:
+      * creates its OWN subfolder,
+      * clears ONLY its own subfolder,
+      * removes its own subfolder when the run is done.
+    A crashed run leaks its own subfolder only; the next run for the same
+    account uses a NEW random suffix, so it never touches the leaked one
+    (the leftovers are swept by age, see `_sweep_stale_staging_dirs`).
 
     Newest-first ordering is preserved: IMAP returns UID-ascending, so the
     generator yields in DESCENDING UID order, matching the old
     `messages.sort(key=_uid_key, reverse=True)`.
     """
     # Staging area for attachment bytes that are on their way to disk.
-    staging_dir = Path(__file__).resolve().parent.parent / MAIL_ATTACHMENT_DIR / ".staging"
+    # OWN subfolder for this run — never shared with a concurrent run.
+    run_id = _new_staging_run_id(mailbox_cfg)
+    staging_dir = _staging_root() / run_id
     try:
         staging_dir.mkdir(parents=True, exist_ok=True)
-        # Sweep leftovers from a crashed run.
-        for stale in staging_dir.glob("*"):
-            try:
-                stale.unlink()
-            except Exception:
-                pass
+        # Sweep leftovers from a PREVIOUS run of the same account (this run's
+        # own folder is brand new, so nothing else can be in it).
+        _sweep_stale_staging_dirs(staging_dir)
     except Exception:
         logger.exception("Could not prepare the mail attachment staging directory")
 
@@ -1321,23 +1414,35 @@ def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None,
             except Exception:
                 pass
 
-    for uid in uids:
-        msg = None
-        try:
-            msg = _fetch_single_message(mailbox_cfg, folder, uid)
-        except Exception:
-            logger.exception("Failed to fetch message UID %s", uid)
-            continue
-        if not msg:
-            continue
-        yield msg
-        # Drop the reference so the payload is released before the next
-        # message is fetched.
-        del msg
+    try:
+        for uid in uids:
+            msg = None
+            try:
+                msg = _fetch_single_message(mailbox_cfg, folder, uid, staging_dir)
+            except Exception:
+                logger.exception("Failed to fetch message UID %s", uid)
+                continue
+            if not msg:
+                continue
+            yield msg
+            # Drop the reference so the payload is released before the next
+            # message is fetched.
+            del msg
+    finally:
+        # The run is done (or the caller abandoned it) — remove THIS run's
+        # staging folder, and only this run's. A concurrent run's folder is
+        # untouched: the folders are separate and the sweep only touches
+        # folders older than MAIL_ATTACHMENT_STAGING_MAX_AGE.
+        _remove_staging_dir(staging_dir)
 
 
-def _fetch_single_message(mailbox_cfg: dict[str, Any], folder: str, uid: int) -> dict[str, Any] | None:
+def _fetch_single_message(mailbox_cfg: dict[str, Any], folder: str, uid: int,
+                          staging_dir: Path | None = None) -> dict[str, Any] | None:
     """Fetch ONE message and stage its attachment bytes on disk.
+
+    `staging_dir` is THIS run's private staging folder (see
+    `_new_staging_run_id`). When it is None a fresh private folder is
+    created for the call.
 
     Returns the message dict (attachment entries carry a `staged_path`, not
     the bytes) or None when the message cannot be fetched.
@@ -1352,7 +1457,8 @@ def _fetch_single_message(mailbox_cfg: dict[str, Any], folder: str, uid: int) ->
             return None
         msg = msgs[0]
         attachments = []
-        staging_dir = Path(__file__).resolve().parent.parent / MAIL_ATTACHMENT_DIR / ".staging"
+        if staging_dir is None:
+            staging_dir = _staging_root() / _new_staging_run_id(mailbox_cfg)
         if msg.attachments:
             for att in msg.attachments:
                 payload = att.payload if att.payload else b""
@@ -1375,7 +1481,11 @@ def _fetch_single_message(mailbox_cfg: dict[str, Any], folder: str, uid: int) ->
                 if (MAIL_ATTACHMENT_STORAGE_ENABLED and size and size <= MAIL_ATTACHMENT_MAX_BYTES):
                     try:
                         staging_dir.mkdir(parents=True, exist_ok=True)
-                        staged = staging_dir / f"{uid}_{os.getpid()}_{len(attachments)}_{_safe_attachment_filename(entry['filename'])}"
+                        # The file name is unique within THIS run's folder
+                        # (the uid + a per-run token + the index). The folder
+                        # itself is already unique per run, so two concurrent
+                        # accounts can never collide.
+                        staged = staging_dir / f"{uid}_{uuid.uuid4().hex[:8]}_{len(attachments)}_{_safe_attachment_filename(entry['filename'])}"
                         staged.write_bytes(payload)
                         entry["staged_path"] = str(staged)
                     except Exception:

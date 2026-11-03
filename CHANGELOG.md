@@ -4,7 +4,49 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Linked emails don't put their PDFs/documents in the project's Documents tab (2026-11-03, branch `fix-mail-attachments`)
 
-**Round 2 (independent review of `240cbf9`): 4 HIGH + 6 MEDIUM issues found
+**Round 3 (independent review of `ffe826e`): N1 + N2 + M4 fixed.**
+**N1 — staging folder collisions.** Accounts poll CONCURRENTLY (a
+`ThreadPoolExecutor` in `_poll_mailboxes`, plus the manual per-account
+workers), and round 2 gave every run the SAME staging folder
+`data/mail-attachments/.staging/`, each run **sweeping it at the start** —
+so a run starting while another was mid-flight deleted the other's staged
+files (and the `<uid>_<pid>_<index>` names could collide across accounts).
+Now every run gets its OWN subfolder `…/.staging/acct<id>-<random>/`,
+clears only its own, and removes only its own when it finishes (in a
+`finally`, so an abandoned generator still cleans up). Leftovers from a
+crashed run are swept by AGE (`MAIL_ATTACHMENT_STAGING_MAX_AGE`, default
+3600 s) — a younger folder belongs to a RUNNING sync and is never touched.
+**N2 — the unique index moved out of 043 into a new migration 044**
+(`migrations/044_project_documents_unique_file_path.sql`). A UNIQUE index
+cannot be created on a table that already holds duplicates, and `db.py`'s
+runner records a failed migration as "applied" (so it would never be
+retried). 044 therefore checks FIRST: no duplicates → build the index; a
+duplicate exists → **skip** the index and log a loud WARNING with the
+COUNT and a SAMPLE of up to 10 offending keys. It **never deletes or
+modifies any data**. The index applies to every `project_documents` row,
+so all the PDF generators (COC, invoice, photo report, upload, doc
+create/copy, bot upload) now insert through the new
+`_insert_project_document_safely()`, which uses `ON CONFLICT ... DO NOTHING`
+and reuses the existing row — otherwise two PDFs generated in the same
+second with the same name would raise and break the generation.
+**M4 — the test database name is now checked BEFORE any migration can
+run.** `db.init_db()` also runs `db.py`'s migration runner; the round-2
+setup called it BEFORE the name check, so pointing the suite at a
+non-test database would silently migrate it. The check now uses a raw
+psycopg2 connection that does not touch the database. The classic COC
+generator does **not** share code with the mail-attachment path (verified:
+the COC hunks are at server.py ~11163–11700, the mail diff at 2161/4776/
+12406/12454/20458/20495/22158/22363, and `_create_coc_pdf` calls none of
+the touched helpers), so the `completion_date` item was **skipped as
+instructed** — but a real pre-existing bug was found while verifying it
+(the COC form's Completion Date is silently ignored because no backend
+code reads `completion_date`; `_create_coc_pdf` hard-codes
+`datetime.now()`), and it is documented in the bug doc §9/§13 for a
+separate change. Tests: 76 Python (up from 57) + 6 JS; every fix has a
+verified true-negative check. Not deployed, not merged. Write-up:
+`docs/bugs/2026-11-03-mail-link-attachments.md` §13.
+
+### Round 2
 and fixed.** H1: `_imap_part_id_str` returned `str(att.part)` — in
 imap_tools 1.14.0 `att.part` is the whole `EmailMessage`, so a 300 KB PDF
 became a **405,411-char** string with the base64 payload inside, written to

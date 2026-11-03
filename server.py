@@ -1539,6 +1539,66 @@ def _verify_document_callback(doc_id: int, body: dict) -> bool:
     return True
 
 
+def _insert_project_document_safely(opp_id: int | None, title: str, rel_path: str,
+                                    file_size: int, mime_type: str,
+                                    user_id: int | None = None,
+                                    company_scope: bool = False,
+                                    folder_id: int | None = None) -> int | None:
+    """INSERT a project_documents row, tolerating the unique index.
+
+    ⚠ Migration 044 adds
+        uq_project_documents_opp_file_path (opportunity_id, file_path)
+        WHERE is_deleted = FALSE
+    so that a double-click on "Link to deal" cannot register the same file
+    twice in a project's Documents tab.
+
+    Every PDF generator names its file "<epoch seconds>_<name>.pdf", so two
+    generations in the SAME second with the same name produce the SAME
+    file_path — which would now hit that index. A plain INSERT would raise
+    and break the generation, so every generator goes through this helper:
+
+      * INSERT ... ON CONFLICT DO NOTHING (the index is the arbiter);
+      * if nothing was inserted (the row already exists), reuse the
+        existing row's id;
+      * if the index does not exist yet (migration 044 skipped it because
+        of duplicates), the plain INSERT still works.
+
+    `opportunity_id = NULL` (the standalone/personal documents) never
+    conflicts: NULLs are never equal in a Postgres UNIQUE index.
+    """
+    if opp_id is None:
+        return db.insert_returning(
+            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope, folder_id)
+               VALUES (%s, %s, %s, %s, %s, NULL, %s, %s) RETURNING id""",
+            (title, rel_path, file_size, mime_type, user_id, company_scope, folder_id))
+    doc_id = db.insert_returning(
+        """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by, folder_id)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)
+           ON CONFLICT (opportunity_id, file_path) WHERE is_deleted = FALSE DO NOTHING
+           RETURNING id""",
+        (opp_id, title, rel_path, file_size, mime_type, user_id, folder_id))
+    if doc_id is not None:
+        return doc_id
+    try:
+        row = db.query_one(
+            "SELECT id FROM project_documents WHERE opportunity_id = %s AND file_path = %s "
+            "AND is_deleted = FALSE ORDER BY id DESC LIMIT 1",
+            (opp_id, rel_path))
+        if row:
+            return row["id"]
+    except Exception:
+        logger.exception("Could not look up the existing project document %s", rel_path)
+    # No index (migration 044 skipped) and no existing row — insert plainly.
+    try:
+        return db.insert_returning(
+            """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by, folder_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (opp_id, title, rel_path, file_size, mime_type, user_id, folder_id))
+    except Exception:
+        logger.exception("Could not register the project document %s", rel_path)
+        return None
+
+
 def _humanize_file_size(size_bytes) -> str:
     """Render a byte count as a short human label (e.g. '142 KB', '2.3 MB')."""
     try:
@@ -10761,11 +10821,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_size = os.path.getsize(output_path)
         rel_path = os.path.relpath(output_path, ROOT)
         pdf_title = f"{safe_filename}.pdf"
-        photo_id_result = db.insert_returning(
-            """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by)
-               VALUES (%s, %s, %s, %s, 'application/pdf', %s) RETURNING id""",
-            (opp_id, pdf_title, rel_path, file_size, user["id"]),
-        )
+        photo_id_result = _insert_project_document_safely(
+            opp_id, pdf_title, rel_path, file_size, "application/pdf", user["id"])
         # System action note (matches invoice/COC behavior). category_id 15 =
         # the "Action" category shipped in init.sql (sort_order 15, icon_key
         # 'pencil'). Keep this consistent with the invoice/COC handlers.
@@ -11136,11 +11193,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_size = os.path.getsize(output_path)
         rel_path = os.path.relpath(output_path, ROOT)
         pdf_title = f"{safe_stem}.pdf"
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by)
-               VALUES (%s, %s, %s, %s, 'application/pdf', %s) RETURNING id""",
-            (opp_id, pdf_title, rel_path, file_size, user["id"]),
-        )
+        doc_id = _insert_project_document_safely(
+            opp_id, pdf_title, rel_path, file_size, "application/pdf", user["id"])
         _size_label = _humanize_file_size(file_size)
         _action_content = f"Invoice generated: {pdf_title} ({_size_label}"
         if claim_number:
@@ -11219,11 +11273,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_size = os.path.getsize(output_path)
         rel_path = os.path.relpath(output_path, ROOT)
         pdf_title = f"{safe_stem}.pdf"
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by)
-               VALUES (%s, %s, %s, %s, 'application/pdf', %s) RETURNING id""",
-            (opp_id, pdf_title, rel_path, file_size, user["id"]),
-        )
+        doc_id = _insert_project_document_safely(
+            opp_id, pdf_title, rel_path, file_size, "application/pdf", user["id"])
         _size_label = _humanize_file_size(file_size)
         _action_content = f"Certificate of Completion generated: {pdf_title} ({_size_label}"
         if claim_number:
@@ -11312,11 +11363,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_size = os.path.getsize(output_path)
         rel_path = os.path.relpath(output_path, ROOT)
         pdf_title = f"{safe_stem}.pdf"
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
-               VALUES (%s, %s, %s, %s, 'application/pdf', %s, NULL, FALSE) RETURNING id""",
-            (pdf_title, rel_path, file_size, user["id"], None, False),
-        )
+        doc_id = _insert_project_document_safely(
+            None, pdf_title, rel_path, file_size, "application/pdf", user["id"])
         _json_response(self, 201, {
             "id": doc_id, "title": pdf_title, "fileSize": file_size,
             "mimeType": "application/pdf",
@@ -11376,11 +11424,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_size = os.path.getsize(output_path)
         rel_path = os.path.relpath(output_path, ROOT)
         pdf_title = f"{safe_stem}.pdf"
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
-               VALUES (%s, %s, %s, %s, 'application/pdf', %s, NULL, FALSE) RETURNING id""",
-            (pdf_title, rel_path, file_size, user["id"], None, False),
-        )
+        doc_id = _insert_project_document_safely(
+            None, pdf_title, rel_path, file_size, "application/pdf", user["id"])
         _json_response(self, 201, {
             "id": doc_id, "title": pdf_title, "fileSize": file_size,
             "mimeType": "application/pdf",
@@ -12136,11 +12181,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_path = opp_dir / unique_name
         file_path.write_bytes(data)
         file_size = len(data)
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by)
-               VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
-            (opp_id, filename, str(file_path.relative_to(ROOT)), file_size, mime_type, user["id"]),
-        )
+        doc_id = _insert_project_document_safely(
+            opp_id, filename, str(file_path.relative_to(ROOT)), file_size, mime_type,
+            user["id"])
         _json_response(self, 201, {
             "id": doc_id, "title": filename, "fileSize": file_size,
             "mimeType": mime_type, "editUrl": f"/doc-editor.html?id={doc_id}",
@@ -16190,11 +16233,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except OSError:
             _json_response(self, 500, {"error": "Failed to copy file"})
             return
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
-               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-            (title, str(dst.relative_to(ROOT)), file_size, mime_type, uploaded_by, new_opp_id, company_scope),
-        )
+        doc_id = _insert_project_document_safely(
+            new_opp_id, title, str(dst.relative_to(ROOT)), file_size, mime_type,
+            uploaded_by, company_scope)
         _json_response(self, 201, {"id": doc_id, "title": title})
 
     def _handle_documents_batch_delete(self) -> None:
@@ -16334,11 +16375,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 dst.write_bytes(src.read_bytes())
             except OSError:
                 continue
-            db.execute(
-                """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-                (title, str(dst.relative_to(ROOT)), file_size, mime_type, uploaded_by, new_opp_id, company_scope),
-            )
+            _insert_project_document_safely(
+                new_opp_id, title, str(dst.relative_to(ROOT)), file_size, mime_type,
+                uploaded_by, company_scope)
             copied += 1
         _json_response(self, 200, {"ok": True, "copied": copied})
 
@@ -16380,11 +16419,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 folder_id = int(folder_field["data"].decode("utf-8").strip())
             except (ValueError, UnicodeDecodeError):
                 folder_id = None
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope, folder_id)
-               VALUES (%s, %s, %s, %s, %s, NULL, FALSE, %s) RETURNING id""",
-            (title, str(file_path.relative_to(ROOT)), file_size, mime_type, user["id"], folder_id),
-        )
+        doc_id = _insert_project_document_safely(
+            None, title, str(file_path.relative_to(ROOT)), file_size, mime_type,
+            user["id"], folder_id=folder_id)
         _json_response(self, 201, {
             "id": doc_id, "title": title, "fileSize": file_size,
             "mimeType": mime_type, "editUrl": f"/doc-editor.html?id={doc_id}",
@@ -16428,11 +16465,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 folder_id = int(folder_field["data"].decode("utf-8").strip())
             except (ValueError, UnicodeDecodeError):
                 folder_id = None
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope, folder_id)
-               VALUES (%s, %s, %s, %s, %s, NULL, TRUE, %s) RETURNING id""",
-            (title, str(file_path.relative_to(ROOT)), file_size, mime_type, user["id"], folder_id),
-        )
+        doc_id = _insert_project_document_safely(
+            None, title, str(file_path.relative_to(ROOT)), file_size, mime_type,
+            user["id"], company_scope=True, folder_id=folder_id)
         _json_response(self, 201, {
             "id": doc_id, "title": title, "fileSize": file_size,
             "mimeType": mime_type, "editUrl": f"/doc-editor.html?id={doc_id}",
@@ -16687,11 +16722,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_path = scope_dir / unique_name
         file_path.write_bytes(data)
         file_size = len(data)
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope, folder_id)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-            (full_title, str(file_path.relative_to(ROOT)), file_size, mime, uploaded_by, new_opp_id, company_scope, folder_id),
-        )
+        doc_id = _insert_project_document_safely(
+            new_opp_id, full_title, str(file_path.relative_to(ROOT)), file_size, mime,
+            uploaded_by, company_scope, folder_id)
         # Diagnostic log: confirms the file is on disk at the path the download
         # handler will read from. Useful when OnlyOffice reports "Download failed"
         # or the editor hangs on a freshly-created blank doc.
@@ -16826,11 +16859,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_path = scope_dir / unique_name
         file_path.write_bytes(data)
         file_size = len(data)
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope, folder_id)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-            (title, str(file_path.relative_to(ROOT)), file_size, mime, uploaded_by, new_opp_id, company_scope, folder_id),
-        )
+        doc_id = _insert_project_document_safely(
+            new_opp_id, title, str(file_path.relative_to(ROOT)), file_size, mime,
+            uploaded_by, company_scope, folder_id)
         _json_response(self, 201, {
             "id": doc_id, "title": title, "fileSize": file_size,
             "editUrl": f"/doc-editor.html?id={doc_id}",
@@ -18578,11 +18609,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     with open(save_path, "wb") as f:
                         f.write(file_data)
                     # Insert into project_documents
-                    file_id = db.insert_returning(
-                        """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id)
-                           VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
-                        (filename, str(save_path.relative_to(ROOT)), len(file_data), mime_type, mapping.get("userId"), opp_id),
-                    )
+                    file_id = _insert_project_document_safely(
+                        opp_id, filename, str(save_path.relative_to(ROOT)), len(file_data),
+                        mime_type, mapping.get("userId"))
                     _json_response(self, 200, {"ok": True, "fileId": file_id, "filename": filename, "type": "document"})
                 # Log activity
                 try:

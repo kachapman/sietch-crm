@@ -35,6 +35,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -68,6 +69,36 @@ _FORBIDDEN_DB_NAMES = {
 }
 
 
+def _current_database_name() -> str | None:
+    """The name of the database we are connected to.
+
+    Uses a RAW psycopg2 connection — deliberately NOT `db.init_db()`, which
+    also runs the MIGRATION RUNNER. The database name must be checked
+    BEFORE any migration can be applied to it (bug fix 2026-11-03, round 3
+    / M4): otherwise pointing this suite at a non-test database would
+    silently migrate it.
+    """
+    try:
+        import psycopg2
+        conn = psycopg2.connect(
+            host=os.environ.get("DB_HOST", "localhost"),
+            port=int(os.environ.get("DB_PORT", "5432")),
+            dbname=os.environ.get("DB_NAME", "sietch_crm"),
+            user=os.environ.get("DB_USER", "sietch"),
+            password=os.environ.get("DB_PASSWORD", ""),
+            connect_timeout=10,
+        )
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT current_database()")
+                row = cur.fetchone()
+                return row[0] if row else None
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
 def _db_available() -> bool:
     global _SKIP_REASON
     if not _TEST_DB_NAME:
@@ -75,23 +106,28 @@ def _db_available() -> bool:
                         "throwaway database and will not run without an "
                         "explicit name (e.g. MAILATT_TEST_DB_NAME=sietch_mailatt_test)")
         return False
+    # ⚠ CHECK THE DATABASE NAME BEFORE ANY MIGRATION CAN RUN.
+    # `db.init_db()` also runs db.py's migration runner, so the name check
+    # must happen first — otherwise this suite could migrate a database it
+    # was never meant to touch. The check below uses a raw connection, so
+    # nothing is applied to the database at this point.
+    cur_name = _current_database_name()
+    if cur_name is None:
+        _SKIP_REASON = "database not reachable"
+        return False
+    if cur_name in _FORBIDDEN_DB_NAMES:
+        _SKIP_REASON = (f"refusing to run against the protected database "
+                        f"{cur_name!r} — use a throwaway database")
+        return False
+    if cur_name != _TEST_DB_NAME:
+        _SKIP_REASON = (f"refusing to run against database {cur_name!r} "
+                        f"(MAILATT_TEST_DB_NAME={_TEST_DB_NAME!r} does not match)")
+        return False
+    # The name is confirmed — NOW it is safe to initialise the pool (which
+    # applies any pending migrations to THIS test database).
     try:
         import db as _db
         _db.init_db()
-    except Exception as exc:
-        _SKIP_REASON = f"database not reachable: {type(exc).__name__}: {exc}"
-        return False
-    try:
-        import db as _db
-        cur_name = ( _db.query_one("SELECT current_database() AS n") or {}).get("n") or ""
-        if cur_name in _FORBIDDEN_DB_NAMES:
-            _SKIP_REASON = (f"refusing to run against the protected database "
-                            f"{cur_name!r} — use a throwaway database")
-            return False
-        if cur_name != _TEST_DB_NAME:
-            _SKIP_REASON = (f"refusing to run against database {cur_name!r} "
-                            f"(MAILATT_TEST_DB_NAME={_TEST_DB_NAME!r} does not match)")
-            return False
     except Exception as exc:
         _SKIP_REASON = f"database not reachable: {type(exc).__name__}: {exc}"
         return False
@@ -1230,7 +1266,7 @@ class TestBoundedMemory(BaseCase):
         def fake_login(cfg):
             return FakeMailbox()
 
-        def fake_single(cfg, folder, uid):
+        def fake_single(cfg, folder, uid, staging_dir=None):
             seen.append(uid)
             # A message that carries a 5 MB attachment — the scanner's own
             # fetch stages it on disk, so the dict carries a PATH.
@@ -1410,7 +1446,7 @@ class TestMemoryIsBounded(unittest.TestCase):
         # straight to disk, so they are never part of the message dict.
         state = {"bytes_in_dict": 0}
 
-        def fake_single(cfg, folder, uid):
+        def fake_single(cfg, folder, uid, staging_dir=None):
             payload = b"x" * ATT_BYTES
             staged = staged_root / f"{uid}.bin"
             staged.write_bytes(payload)
@@ -1625,6 +1661,560 @@ class TestExactTimelineMatch(BaseCase):
             (self.opp_id, other_msg))
         self.assertTrue(found)
         self.assertEqual(int(found["id"]), ev)
+
+
+# ── 12. Staging folder isolation between concurrent runs (N1) ───────────────
+class TestStagingIsolation(unittest.TestCase):
+    """Two accounts polling CONCURRENTLY must not share a staging folder.
+
+    Accounts poll concurrently (a ThreadPoolExecutor in `_poll_mailboxes`,
+    plus the manual per-account workers). With one shared staging folder
+    each run would sweep the other's staged files at the start of its run,
+    and two accounts fetching the same UID would write the same file name.
+    """
+
+    def _fake_mailbox(self, uids, payload=b"PAYLOAD", gate=None):
+        class FakeMsg:
+            def __init__(self, uid):
+                self.uid = uid
+                self.attachments = []
+                self.headers = None
+                self.from_values = None
+                self.to_values = []
+                self.subject = f"s{uid}"
+                self.date = None
+                self.text = ""
+                self.html = ""
+                self.flags = []
+
+        class FakeMailbox:
+            class folder:
+                @staticmethod
+                def set(name):
+                    pass
+
+            def xoauth2(self, user, token):
+                pass
+
+            def login(self, user, pwd):
+                pass
+
+            def fetch(self, criteria=None, mark_seen=False, bulk=False):
+                # The UID-listing pass returns every UID; the per-message
+                # pass returns just that one. The gate (if any) only holds
+                # the per-message pass, so the listing always completes.
+                if getattr(self, "_listed", False):
+                    if gate is not None:
+                        gate.wait(timeout=10)
+                    return [FakeMsg(int(getattr(self, "_single", 1)))]
+                self._listed = True
+                return [FakeMsg(u) for u in uids]
+
+            def logout(self):
+                pass
+
+        return FakeMailbox
+
+    def test_each_run_gets_its_own_staging_folder(self):
+        a = ms._new_staging_run_id({"account_id": 7})
+        b = ms._new_staging_run_id({"account_id": 7})
+        self.assertNotEqual(a, b, "two runs of the same account must differ")
+        self.assertTrue(a.startswith("acct7-"), "the account id must be in the name")
+        self.assertTrue(b.startswith("acct7-"))
+        c = ms._new_staging_run_id({"account_id": 8})
+        self.assertTrue(c.startswith("acct8-"))
+        self.assertNotEqual(a, c)
+
+    def test_two_concurrent_runs_do_not_delete_each_others_files(self):
+        """THE N1 REGRESSION: run A must not delete run B's staged files."""
+        import tempfile
+        import threading
+
+        root = Path(tempfile.mkdtemp(prefix="mailatt-staging-"))
+        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+
+        # Point the staging root at the temp dir.
+        with patch.object(ms, "_staging_root", return_value=root):
+            # Two runs, two accounts, two separate staging folders.
+            dir_a = root / ms._new_staging_run_id({"account_id": 1})
+            dir_b = root / ms._new_staging_run_id({"account_id": 2})
+            dir_a.mkdir(parents=True)
+            dir_b.mkdir(parents=True)
+            # Both runs stage a file with the SAME uid — the names must not
+            # collide because the folders are separate.
+            (dir_a / "100_a.bin").write_bytes(b"RUN-A")
+            (dir_b / "100_b.bin").write_bytes(b"RUN-B")
+
+            # Run B starts NOW, while run A is still going. Run B must not
+            # sweep run A's folder.
+            ms._sweep_stale_staging_dirs(dir_b)
+
+            self.assertTrue((dir_a / "100_a.bin").is_file(),
+                            "run A's staged file must survive run B's start")
+            self.assertTrue((dir_b / "100_b.bin").is_file())
+
+            # Run A finishes and removes ONLY its own folder.
+            ms._remove_staging_dir(dir_a)
+            self.assertFalse(dir_a.exists(), "run A's folder must be removed")
+            self.assertTrue(dir_b.exists(),
+                            "run A must not remove run B's folder")
+            self.assertTrue((dir_b / "100_b.bin").is_file(),
+                            "run A must not delete run B's staged file")
+
+    def test_two_concurrent_account_syncs_keep_their_own_files(self):
+        """End-to-end: two accounts syncing at once keep separate files.
+
+        Both runs use the SAME uid, so in a shared staging folder the file
+        names would collide and one run's sweep would delete the other's
+        staged bytes.
+        """
+        import tempfile
+        import threading
+
+        root = Path(tempfile.mkdtemp(prefix="mailatt-staging2-"))
+        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+
+        # Both accounts must be inside the barrier before either proceeds,
+        # so their staging folders really do coexist.
+        inside = threading.Barrier(2, timeout=15)
+        results: dict[int, list] = {}
+        lock = threading.Lock()
+
+        class FakePart:
+            def __init__(self, pid):
+                self.part_id = pid
+
+        class FakeAtt:
+            def __init__(self, filename, payload):
+                self.part = FakePart("1.1")
+                self.filename = filename
+                self.content_id = ""
+                self.content_type = "application/pdf"
+                self.payload = payload
+
+        class FakeMsg:
+            def __init__(self, uid, with_attachment):
+                self.uid = uid
+                self.attachments = [FakeAtt("plan.pdf", b"PAYLOAD")] if with_attachment else []
+                self.headers = None
+                self.from_values = None
+                self.to_values = []
+                self.subject = f"s{uid}"
+                self.date = None
+                self.text = ""
+                self.html = ""
+                self.flags = []
+
+        def make_mailbox(account_id):
+            class FakeMailbox:
+                class folder:
+                    @staticmethod
+                    def set(name):
+                        pass
+
+                def xoauth2(self, user, token):
+                    pass
+
+                def login(self, user, pwd):
+                    pass
+
+                def fetch(self, criteria=None, mark_seen=False, bulk=False):
+                    if getattr(self, "_listed", False):
+                        # The per-message pass — wait until BOTH runs have
+                        # staged their file, so the folders coexist.
+                        try:
+                            inside.wait()
+                        except Exception:
+                            pass
+                        return [FakeMsg(int(getattr(self, "_single", 1)), True)]
+                    self._listed = True
+                    return [FakeMsg(u, False) for u in (100,)]
+
+                def logout(self):
+                    pass
+
+            return FakeMailbox()
+
+        def run(account_id: int):
+            try:
+                with patch.object(ms, "_staging_root", return_value=root), \
+                     patch.object(ms, "A", MagicMock(return_value="CRITERION")), \
+                     patch.object(ms, "MailBox", MagicMock(return_value=make_mailbox(account_id))):
+                    gen = ms._fetch_messages(
+                        {"host": "h", "port": 993, "user": f"u{account_id}",
+                         "password": "p", "inbox": "INBOX", "account_id": account_id},
+                        "INBOX")
+                    msg = next(gen)
+                    staged = ""
+                    if msg.get("attachments"):
+                        staged = msg["attachments"][0].get("staged_path") or ""
+                        # The staged file must EXIST while both runs are
+                        # inside the barrier.
+                        with lock:
+                            results[account_id] = [
+                                staged,
+                                Path(staged).is_file() if staged else False,
+                                Path(staged).parent.name if staged else "",
+                            ]
+                    try:
+                        next(gen)
+                    except StopIteration:
+                        pass
+                    gen.close()
+            except Exception as exc:
+                with lock:
+                    results[account_id] = [f"ERROR: {exc}", False, ""]
+
+        t1 = threading.Thread(target=run, args=(1,))
+        t2 = threading.Thread(target=run, args=(2,))
+        t1.start()
+        t2.start()
+        t1.join(timeout=30)
+        t2.join(timeout=30)
+
+        self.assertEqual(len(results), 2, f"both runs must report: {results}")
+        for account_id, (staged, existed, folder_name) in results.items():
+            self.assertFalse(str(staged).startswith("ERROR"),
+                             f"account {account_id} failed: {staged}")
+            self.assertTrue(existed,
+                            f"account {account_id}'s staged file must exist while "
+                            f"the other run is active")
+            self.assertTrue(folder_name.startswith(f"acct{account_id}-"),
+                            f"account {account_id} must stage into its own "
+                            f"folder, got {folder_name!r}")
+        folders = {v[2] for v in results.values()}
+        self.assertEqual(len(folders), 2,
+                         f"the two runs must use DIFFERENT folders: {folders}")
+
+    def test_the_stale_sweep_never_touches_a_running_run(self):
+        """A young folder belongs to a RUNNING sync — it must be spared."""
+        import tempfile
+        import time as _time
+
+        root = Path(tempfile.mkdtemp(prefix="mailatt-staging3-"))
+        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+
+        own = root / "acct1-mine"
+        other = root / "acct2-theirs"
+        own.mkdir(parents=True)
+        other.mkdir(parents=True)
+        (other / "live.bin").write_bytes(b"RUNNING")
+        # Make the other folder look OLD (as if its run had crashed).
+        # The mtime must be set AFTER the file is written — writing into a
+        # directory updates its mtime.
+        old = _time.time() - (ms.MAIL_ATTACHMENT_STAGING_MAX_AGE + 60)
+        os.utime(other, (old, old))
+
+        with patch.object(ms, "_staging_root", return_value=root):
+            ms._sweep_stale_staging_dirs(own)
+            # It is old enough, so it IS swept — but only because it is stale.
+            self.assertFalse(other.exists(),
+                             "a folder older than the max age is a crashed run")
+            # A YOUNG folder (a running sync) is never touched.
+            other2 = root / "acct3-running"
+            other2.mkdir(parents=True)
+            (other2 / "live.bin").write_bytes(b"RUNNING")
+            ms._sweep_stale_staging_dirs(own)
+            self.assertTrue(other2.exists(),
+                            "a running sync's folder must never be swept")
+            self.assertTrue((other2 / "live.bin").is_file())
+
+    def test_the_own_folder_is_never_swept(self):
+        import tempfile
+        root = Path(tempfile.mkdtemp(prefix="mailatt-staging4-"))
+        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+        own = root / "acct1-mine"
+        own.mkdir(parents=True)
+        (own / "mine.bin").write_bytes(b"MINE")
+        old = time.time() - (ms.MAIL_ATTACHMENT_STAGING_MAX_AGE + 60)
+        os.utime(own, (old, old))
+        with patch.object(ms, "_staging_root", return_value=root):
+            ms._sweep_stale_staging_dirs(own)
+        self.assertTrue(own.exists(), "the run's own folder must never be swept")
+        self.assertTrue((own / "mine.bin").is_file())
+
+
+# ── 13. The database name must be checked BEFORE any migration (M4) ────────
+def _code_only(fn) -> str:
+    """The source of a function with comments and docstrings removed.
+
+    A docstring may legitimately MENTION a function name (e.g. "not
+    db.init_db()"); the guard must look at the CODE only.
+    """
+    import inspect
+    src = inspect.getsource(fn)
+    lines = []
+    in_doc = False
+    for ln in src.splitlines():
+        stripped = ln.strip()
+        if in_doc:
+            if stripped.endswith('"""'):
+                in_doc = False
+            continue
+        if stripped.startswith('"""') or stripped.startswith('r"""'):
+            if not (stripped.endswith('"""') and len(stripped) > 3):
+                in_doc = True
+            continue
+        if stripped.startswith("#"):
+            continue
+        lines.append(ln)
+    return "\n".join(lines)
+
+
+class TestDbSafetyBeforeMigrations(unittest.TestCase):
+    """M4: the suite must never migrate a non-test database.
+
+    `db.init_db()` ALSO runs db.py's migration runner. The old setup called
+    it before the database name was checked, so pointing the suite at a
+    non-test database would silently apply the pending migrations to it.
+    """
+
+    def test_the_name_is_checked_before_init_db(self):
+        """The order in the source must be: name check, THEN init_db."""
+        src = _code_only(_db_available)
+        name_at = src.index("_current_database_name()")
+        init_at = src.index("_db.init_db()")
+        self.assertLess(name_at, init_at,
+                        "the database name must be checked BEFORE init_db() "
+                        "(init_db runs the migration runner)")
+        # The check must happen against the RAW connection helper, which
+        # does not touch the database.
+        self.assertIn("psycopg2", _code_only(_current_database_name))
+
+    def test_the_raw_name_check_does_not_apply_migrations(self):
+        """`_current_database_name` must not migrate anything."""
+        src = _code_only(_current_database_name)
+        for forbidden in ("init_db", "_run_pending_migrations", "migrations"):
+            self.assertNotIn(forbidden, src,
+                             f"{forbidden} must not appear in the name check")
+
+    def test_a_protected_database_is_refused_without_touching_it(self):
+        """Pointing the suite at `sietch_crm` must not migrate it."""
+        # The check must refuse the protected name.
+        self.assertIn("sietch_crm", _FORBIDDEN_DB_NAMES)
+        # And the helper reports the real name without touching anything.
+        name = _current_database_name()
+        self.assertIsNotNone(name)
+        if name in _FORBIDDEN_DB_NAMES:
+            # We are pointed at a protected database: the suite must skip.
+            self.assertNotEqual(name, _TEST_DB_NAME or name)
+
+    def test_a_mismatched_name_is_refused(self):
+        """A name that does not match must be refused."""
+        self.assertNotEqual(_TEST_DB_NAME, "definitely-not-this-database")
+        # The comparison in the suite is exact.
+        src = _code_only(_db_available)
+        self.assertIn("cur_name != _TEST_DB_NAME", src)
+
+
+# ── 14. Migration 044: the duplicate check + the PDF generators ────────────
+class TestMigration044(unittest.TestCase):
+    """Migration 044 must build the index only when there are no duplicates.
+
+    A UNIQUE index cannot be created on a table that already holds
+    duplicates — Postgres raises and the whole migration file would then
+    fail (and db.py records it as "applied", so it would never be retried).
+    """
+
+    MIGRATION = "044_project_documents_unique_file_path.sql"
+
+    def _sql(self):
+        return (REPO / "migrations" / self.MIGRATION).read_text(encoding="utf-8")
+
+    def test_the_index_is_not_in_migration_043(self):
+        """The index moved OUT of 043 and into 044."""
+        sql_043 = (REPO / "migrations" / "043_mail_attachment_storage.sql").read_text(
+            encoding="utf-8")
+        self.assertNotIn("uq_project_documents_opp_file_path", sql_043,
+                         "the index must not be created by migration 043")
+        self.assertIn("uq_project_documents_opp_file_path", self._sql(),
+                      "migration 044 must create the index")
+
+    def test_the_migration_checks_for_duplicates_first(self):
+        sql = self._sql()
+        dup_at = sql.index("HAVING COUNT(*) > 1")
+        idx_at = sql.index("CREATE UNIQUE INDEX")
+        self.assertLess(dup_at, idx_at,
+                        "the duplicate check must come BEFORE the index build")
+        self.assertIn("GROUP BY opportunity_id, file_path", sql)
+
+    def test_the_migration_logs_the_count_and_a_sample(self):
+        sql = self._sql()
+        self.assertIn("dup_count", sql)
+        self.assertIn("RAISE WARNING", sql)
+        self.assertIn("duplicate (opportunity_id, file_path) key(s)", sql)
+        # A sample of the offending keys must be logged.
+        self.assertIn("Sample of the duplicates", sql)
+        self.assertIn("LIMIT 10", sql)
+
+    def test_the_migration_never_deletes_or_modifies_data(self):
+        sql = self._sql().upper()
+        for forbidden in ("DELETE ", "UPDATE ", "TRUNCATE", "DROP TABLE",
+                          "DROP COLUMN", "ALTER TABLE"):
+            self.assertNotIn(forbidden, sql,
+                             f"migration 044 must not contain {forbidden!r} — "
+                             f"it may only build an index or skip it")
+
+    def test_the_migration_skips_the_index_when_duplicates_exist(self):
+        """Run the migration against a DB that HAS duplicates."""
+        import subprocess
+        # A throwaway database with the schema and two duplicate rows.
+        db_name = "mailatt_mig044_dup_test"
+        subprocess.run(
+            ["docker", "exec", "-i", "sietch-postgres", "psql", "-U", "sietch",
+             "-d", "postgres", "-c", f'DROP DATABASE IF EXISTS "{db_name}"'],
+            capture_output=True, check=False)
+        subprocess.run(
+            ["docker", "exec", "-i", "sietch-postgres", "psql", "-U", "sietch",
+             "-d", "postgres", "-c", f'CREATE DATABASE "{db_name}"'],
+            capture_output=True, check=False)
+        try:
+            for f in ("init.sql",):
+                subprocess.run(
+                    ["docker", "exec", "-i", "sietch-postgres", "psql", "-q",
+                     "-U", "sietch", "-d", db_name],
+                    input=(REPO / f).read_text(encoding="utf-8").encode(),
+                    capture_output=True, check=False)
+            # Duplicates.
+            setup = """
+INSERT INTO users (email, display_name) VALUES ('m@t.local','M');
+INSERT INTO opportunities (title, created_by) VALUES ('P1',1);
+INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type)
+  VALUES (1,'a.pdf','data/dup.pdf',10,'application/pdf');
+INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type)
+  VALUES (1,'a.pdf','data/dup.pdf',10,'application/pdf');
+"""
+            subprocess.run(
+                ["docker", "exec", "-i", "sietch-postgres", "psql", "-q",
+                 "-U", "sietch", "-d", db_name],
+                input=setup.encode(), capture_output=True, check=False)
+            # Run the migration.
+            res = subprocess.run(
+                ["docker", "exec", "-i", "sietch-postgres", "psql", "-U", "sietch",
+                 "-d", db_name],
+                input=(REPO / "migrations" / self.MIGRATION).read_text(
+                    encoding="utf-8").encode(),
+                capture_output=True, check=False)
+            out = (res.stdout or b"").decode("utf-8", "replace") + \
+                  (res.stderr or b"").decode("utf-8", "replace")
+            self.assertIn("SKIPPED", out, f"the migration must log that it skipped:\n{out}")
+            self.assertIn("1 duplicate", out, f"the count must be logged:\n{out}")
+            self.assertIn("data/dup.pdf", out, f"a sample key must be logged:\n{out}")
+            # The index must NOT exist.
+            chk = subprocess.run(
+                ["docker", "exec", "sietch-postgres", "psql", "-U", "sietch",
+                 "-d", db_name, "-tAc",
+                 "SELECT count(*) FROM pg_indexes WHERE indexname='uq_project_documents_opp_file_path'"],
+                capture_output=True, check=False)
+            self.assertEqual((chk.stdout or b"").decode().strip(), "0",
+                             "the index must NOT be built when duplicates exist")
+            # The data must be untouched.
+            chk2 = subprocess.run(
+                ["docker", "exec", "sietch-postgres", "psql", "-U", "sietch",
+                 "-d", db_name, "-tAc", "SELECT count(*) FROM project_documents"],
+                capture_output=True, check=False)
+            self.assertEqual((chk2.stdout or b"").decode().strip(), "2",
+                             "no data may be deleted or modified")
+        finally:
+            subprocess.run(
+                ["docker", "exec", "-i", "sietch-postgres", "psql", "-U", "sietch",
+                 "-d", "postgres", "-c", f'DROP DATABASE IF EXISTS "{db_name}"'],
+                capture_output=True, check=False)
+
+    def test_the_pdf_generators_are_conflict_safe(self):
+        """Every project_documents INSERT must tolerate the new index.
+
+        The PDF generators name their file "<epoch seconds>_<name>.pdf", so
+        two generations in the same second would collide with the new
+        unique index — and a plain INSERT would raise and break the
+        generation.
+        """
+        import server as srv
+        src = inspect_source(srv.KanbanHandler._handle_project_coc_generate)
+        self.assertIn("_insert_project_document_safely", src,
+                      "the COC generator must use the conflict-safe insert")
+        # The helper itself must use ON CONFLICT.
+        helper = inspect_source(srv._insert_project_document_safely)
+        self.assertIn("ON CONFLICT", helper)
+        self.assertIn("WHERE is_deleted = FALSE DO NOTHING", helper)
+
+    def test_the_helper_reuses_the_existing_row_on_a_conflict(self):
+        """The helper must not raise when the row already exists."""
+        import server as srv
+        rel = "data/history-attachments/test/dup.pdf"
+        opp = db.insert_returning(
+            "INSERT INTO opportunities (title, created_by) VALUES (%s, %s) RETURNING id",
+            ("helper test", _TEST_USER_ID))
+        self.addCleanup(lambda: db.execute("DELETE FROM opportunities WHERE id = %s", (opp,)))
+        first = srv._insert_project_document_safely(
+            opp, "dup.pdf", rel, 10, "application/pdf", _TEST_USER_ID)
+        self.assertTrue(first)
+        second = srv._insert_project_document_safely(
+            opp, "dup.pdf", rel, 10, "application/pdf", _TEST_USER_ID)
+        self.assertEqual(first, second,
+                         "the second insert must reuse the existing row")
+        rows = db.query_dicts(
+            "SELECT id FROM project_documents WHERE opportunity_id = %s AND file_path = %s",
+            (opp, rel))
+        self.assertEqual(len(rows), 1, "there must be exactly one row")
+
+    def test_the_helper_preserves_folder_id_and_company_scope(self):
+        """The conversion must not drop folder_id / company_scope."""
+        import server as srv
+        # A document folder to point at.
+        fid = db.insert_returning(
+            "INSERT INTO document_folders (name, scope) VALUES (%s, %s) RETURNING id",
+            ("helper folder", "personal"))
+        self.addCleanup(lambda: db.execute("DELETE FROM document_folders WHERE id = %s", (fid,)))
+        rel = "data/history-attachments/test/foldered.pdf"
+        opp = db.insert_returning(
+            "INSERT INTO opportunities (title, created_by) VALUES (%s, %s) RETURNING id",
+            ("folder helper test", _TEST_USER_ID))
+        self.addCleanup(lambda: db.execute("DELETE FROM opportunities WHERE id = %s", (opp,)))
+        doc_id = srv._insert_project_document_safely(
+            opp, "foldered.pdf", rel, 10, "application/pdf", _TEST_USER_ID,
+            folder_id=fid)
+        self.assertTrue(doc_id)
+        row = db.query_one(
+            "SELECT folder_id, company_scope, opportunity_id FROM project_documents WHERE id = %s",
+            (doc_id,))
+        self.assertEqual(int(row["folder_id"]), int(fid),
+                         "folder_id must be stored")
+        self.assertFalse(row["company_scope"])
+        self.assertEqual(int(row["opportunity_id"]), int(opp))
+
+    def test_every_project_documents_insert_goes_through_the_helper(self):
+        """No plain INSERT may survive — they would raise on a conflict."""
+        import server as srv
+        src = Path(srv.__file__).read_text(encoding="utf-8")
+        # The helper's own INSERTs are allowed.
+        helper_at = src.index("def _insert_project_document_safely")
+        helper_end = src.index("def _humanize_file_size")
+        outside = src[:helper_at] + src[helper_end:]
+        # Any INSERT INTO project_documents outside the helper must either
+        # use ON CONFLICT or be a NULL-opportunity_id insert.
+        import re
+        for m in re.finditer(r"INSERT INTO project_documents(.{0,600}?)(?:RETURNING id)?\"\"\"",
+                             outside, re.S):
+            block = m.group(1)
+            self.assertTrue(
+                "ON CONFLICT" in block or "NULL," in block,
+                "a plain project_documents INSERT would raise on the new "
+                f"unique index:\n{block[:300]}")
+
+    def test_the_coc_and_invoice_generators_keep_their_arguments(self):
+        """The COC/invoice generators must still pass the same values."""
+        import server as srv
+        for name in ("_handle_project_coc_generate",
+                     "_handle_project_invoice_generate",
+                     "_handle_standalone_coc_generate"):
+            fn = getattr(srv.KanbanHandler, name, None)
+            if fn is None:
+                continue
+            src = inspect_source(fn)
+            self.assertIn("_insert_project_document_safely", src)
+            self.assertIn('"application/pdf"', src)
+            self.assertIn('user["id"]', src)
 
 
 if __name__ == "__main__":

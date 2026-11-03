@@ -76,7 +76,7 @@ This hid ~20 real assertions in `tests/test_telegram_bot.py` for an entire sessi
 
 ## Testing
 
-All test surfaces run via CI (`.github/workflows/smoke.yml`). **551 tests total: 134 JS + 417 Python, 0 failures.** (On `fix-mail-attachments`: 614 total — 140 JS + 474 Python, incl. the new 57-test `tests/test_mail_link_attachments.py` and the new 6-test `tests/test_mail_link_files_toast.mjs`. The new Python suite needs a live PostgreSQL — CI loads the schema first, and the suite skips when the DB has no CRM schema.)
+All test surfaces run via CI (`.github/workflows/smoke.yml`). **551 tests total: 134 JS + 417 Python, 0 failures.** (On `fix-mail-attachments`: 633 total — 140 JS + 493 Python, incl. the new 76-test `tests/test_mail_link_attachments.py` and the new 6-test `tests/test_mail_link_files_toast.mjs`. The new Python suite needs a live PostgreSQL — CI loads the schema first, and the suite skips when the DB has no CRM schema.)
 
 ```bash
 # Python unit tests (stdlib unittest)
@@ -94,14 +94,18 @@ python3 tests/test_search_modal.py           # search modal: ?ids= filter, pagin
 python3 tests/test_users.py                  # users: dup-email 409, kebab temp flow, plaintext reset email
                                            # ⚠ needs a live PostgreSQL; exits 0 with a SKIP: line otherwise
 python3 tests/test_mail_link_attachments.py  # linked-email files -> project Documents tab:
-                                           #   sync-time storage (streamed), retry/token
-                                           #   refresh, idempotent copy (incl. legacy rows),
-                                           #   "N of M" API counts, backfill dry-run/apply,
-                                           #   exact timeline matching, bounded memory
+                                           #   sync-time storage (streamed, run-scoped staging
+                                           #   folders), retry/token refresh, idempotent copy
+                                           #   (incl. legacy rows), "N of M" API counts,
+                                           #   backfill dry-run/apply, exact timeline
+                                           #   matching, bounded memory, migration 044
                                            # ⚠ needs a live PostgreSQL THROWAWAY database.
                                            #   MAILATT_TEST_DB_NAME is REQUIRED and must
                                            #   match exactly; `sietch_crm` is on a
                                            #   denylist and is refused even if named.
+                                           #   ⚠ The name is checked BEFORE init_db(),
+                                           #   because init_db() also runs the MIGRATION
+                                           #   RUNNER — never point this at a real DB.
 
 # Node unit tests (node:test, no npm deps) — run all *.mjs
 for t in tests/test_*.mjs; do node --test "$t"; done

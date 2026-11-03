@@ -85,10 +85,8 @@ CREATE INDEX IF NOT EXISTS idx_history_attachments_event_mail_att
     ON history_attachments (event_id, mail_attachment_id)
     WHERE mail_attachment_id IS NOT NULL;
 
--- The project-side copy must also be unique per (project, file). Without
--- this, two concurrent link requests (a double-click on "Link to deal")
--- could each insert a project_documents row for the same file and the
--- project would show the PDF twice in its Documents tab.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_project_documents_opp_file_path
-    ON project_documents (opportunity_id, file_path)
-    WHERE is_deleted = FALSE;
+-- NOTE: the unique index on project_documents(opportunity_id, file_path) is
+-- NOT here — it is in migration 044, which checks for existing duplicates
+-- first and refuses to build the index (without touching any data) when it
+-- finds them. That check needs a DO block, which cannot live in a plain
+-- `IF NOT EXISTS` migration file.

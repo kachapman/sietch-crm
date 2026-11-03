@@ -21,6 +21,39 @@ was NOT touched; the live local server on :8766 was NOT restarted; the
 backfill was run ONLY against a throwaway DB (`mailatt_test_scratch` in the
 `sietch-postgres` container).
 
+**Round 3 (independent review of `ffe826e`): N1 + N2 + M4 fixed.** Details in
+`docs/bugs/2026-11-03-mail-link-attachments.md` §13:
+- **N1** accounts poll CONCURRENTLY (ThreadPoolExecutor in
+  `_poll_mailboxes` + the manual per-account workers) and round 2 gave
+  every run the SAME staging folder, each sweeping it at the start — a run
+  starting mid-flight of another **deleted the other's staged files**. Now
+  every run gets its OWN subfolder
+  `data/mail-attachments/.staging/acct<id>-<random>/`, clears only its own,
+  removes only its own (in a `finally`); crashed-run leftovers are swept
+  by AGE (`MAIL_ATTACHMENT_STAGING_MAX_AGE`, 3600 s) so a RUNNING sync's
+  folder is never touched.
+- **N2** the `project_documents` unique index moved OUT of 043 into
+  **new migration 044**, which checks for duplicates FIRST: none → build
+  the index; duplicates → **skip** it and log the count + a sample of the
+  offending keys. **It never deletes or modifies data.** The index applies
+  to every row, so ALL the PDF generators (COC, invoice, photo report,
+  upload, doc create/copy, bot upload) now go through
+  `_insert_project_document_safely()` (`ON CONFLICT ... DO NOTHING` +
+  reuse the existing row) — otherwise two PDFs generated in the same
+  second would raise and break the generation.
+- **M4** `db.init_db()` also runs the MIGRATION RUNNER, and the round-2
+  setup called it BEFORE the DB-name check → pointing the suite at a
+  non-test DB would silently migrate it. The name is now checked FIRST
+  with a raw psycopg2 connection that touches nothing.
+- **The classic COC generator does NOT share code with the mail path**
+  (COC hunks at server.py ~11163–11700; the mail diff at 2161/4776/12406/
+  12454/20458/20495/22158/22363; `_create_coc_pdf` calls none of the
+  touched helpers) → the `completion_date` item was **SKIPPED as
+  instructed**. A real pre-existing bug was found while verifying it: the
+  COC form's Completion Date is silently ignored (no backend reads
+  `completion_date`; `_create_coc_pdf` hard-codes `datetime.now()`).
+  Documented in bug doc §9 for a separate change — NOT fixed here.
+
 **Round 2 (independent review of `240cbf9`): 4 HIGH + 6 MEDIUM issues found
 and fixed.** The review was right on every count — details in
 `docs/bugs/2026-11-03-mail-link-attachments.md` §12:
@@ -102,15 +135,17 @@ New settings: `MAIL_ATTACHMENT_MAX_BYTES` (25 MB),
 `.github/workflows/smoke.yml` (loads the schema into the CI postgres
 service and runs the new Python suite).
 
-**Tests:** `tests/test_mail_link_attachments.py` **57/57 OK** (real
+**Tests:** `tests/test_mail_link_attachments.py` **76/76 OK** (real
 PostgreSQL; `MAILATT_TEST_DB_NAME` is now REQUIRED, must match exactly,
-and `sietch_crm` is refused by a denylist even when named explicitly);
-`tests/test_mail_link_files_toast.mjs` 6/6 OK. **Nine verified
+and `sietch_crm` is refused by a denylist even when named explicitly;
+**the name is checked BEFORE any migration can run** — M4);
+`tests/test_mail_link_files_toast.mjs` 6/6 OK. **Twelve verified
 true-negative checks** — every fix was confirmed to fail its test when the
 fix was temporarily reverted (H1 payload-in-identifier, H2 legacy dedupe,
-H3 CASCADE FK, H4 list-vs-generator, the `strpos` prefix match, the round-1
-repair path, the round-1 idempotency check, and both JS toasts). Existing
-mail suites all green:
+H3 CASCADE FK, H4 list-vs-generator, the `strpos` prefix match, **N1 the
+shared staging folder, N2 the index in 043, M4 init_db before the name
+check**, the round-1 repair path, the round-1 idempotency check, and both
+JS toasts). Existing mail suites all green:
 `test_attachment_mirror_and_bookmark_titles` 9, `test_email_project_copy` 7,
 `test_linked_email_attachments` 5, `test_mail_link_history` 13,
 `test_mail_behaviors` 14, `test_mail_polling` 9, `test_mail_incremental` 15,
