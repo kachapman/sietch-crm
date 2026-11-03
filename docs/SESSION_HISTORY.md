@@ -11,6 +11,86 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-03 (second pass — Ken's decisions implemented, branch `invoice-coc-upgrade`)
+
+**Status: implemented + tested, NOT deployed, NOT merged, NOT pushed.**
+Same worktree `~/Projects/new-crm-invoice-coc`, same branch
+`invoice-coc-upgrade` (base `main` @ `c637526`, this pass started at
+`26ac44d`). The main checkout `~/Projects/new-crm` was NOT touched;
+`~/Projects/new-crm-mail-attachments` was NOT touched. Production
+(147.182.164.19) was NOT contacted. The dev server (port 8766) and the
+docker containers were NOT restarted. No Docker rebuild.
+
+**Ken's 8 decisions — all implemented:**
+
+1. **Modern is the default** for the invoice and the COC
+   (`DOC_LAYOUT_DEFAULT = "modern"`). Classic fpdf2 stays reachable via the
+   "PDF Layout" modal field or `SIETCH_DOC_LAYOUT=classic`.
+2. **$0.00 invoice lines are hidden** in BOTH layouts
+   (`doc_pdf/mapping.py: build_items()` and `server.py:
+   _create_invoice_pdf()`). The grand total is unchanged.
+3. **No property-owner signature line on the COC** — the upstream branch was
+   DELETED from `doc_pdf/coc_pdf.py`; the `homeowner_line` option no longer
+   exists. The classic COC never had one.
+4. **New template fields: website, license, signer title.**
+   **Migration `migrations/045_document_templates_branding_extras.sql`**
+   adds `company_website`, `company_license`, `signature_title` (additive,
+   `IF NOT EXISTS`, empty-string defaults). **Number 045 chosen deliberately:**
+   the highest on this branch is 042, and `fix-mail-attachments` uses
+   043/044, so 045 avoids a merge collision. `server.py` also inlines the
+   same `ALTER`s (the `show_branding_footer` pattern) for DBs that skip the
+   migration files. All three are in the admin template UI
+   (`doc-tpl-admin-website` / `-license` / `-sig-title`), persisted by the
+   admin create+update API, and rendered on the invoice AND the COC in
+   BOTH layouts. Empty values are OMITTED entirely (no blank labels). The
+   license gets a "License " prefix unless it already starts with "lic"/"#".
+5. **Sietch COC wording kept** ("Work completed per agreement.").
+6. **Builders stay copied** in `doc_pdf/` — no shared package.
+7. **No "Base charge" UI field** added.
+8. **The classic COC now honours the entered `completion_date`** with the
+   same fallback as the modern one (posted value, else today).
+
+**Tests:** `tests/test_invoice_coc_modern.py` grew 33 -> **60**, all
+passing (mapping: brand website/license, opts signer title, $0.00 hiding,
+the removed `homeowner_line`; builders: extras present when set / absent
+when empty, $0.00 rows not printed, no property-owner line; the layout
+default constant; the four handlers with a mocked DB incl. extras on both
+layouts + the classic COC completion date and its today fallback; and a new
+`TestBrandingExtrasMigration` class with 8 tests for the migration file,
+its non-colliding number, its idempotency, its application against a
+scratch table, the inlined ALTERs, and the admin API + UI).
+**Full Python suite: 61 passed / 2 failed** — the 2 failures
+(`test_scanner_toggle_gating.py`, `test_sync_pull_deals_fields.py`) were
+RE-VERIFIED as pre-existing on `main` @ c637526 (identical
+`FAILED (failures=1)` in the main checkout). **Full Node suite: 35/35
+files.** The new suite was verified to actually EXECUTE (a deliberately
+flipped expectation produced a real FAILED run).
+
+**Migration applied locally** to the dev `sietch_crm` DB via the real
+migration runner (recorded in `_applied_migrations`); the columns exist and
+the local DB was otherwise untouched.
+
+**Sample review pack regenerated** in `tmp/invoice-coc-review/` (gitignored,
+NOT committed): modern + classic invoice and COC for 3 projects, a
+**with-extras** set (website / license / signer title), a **zero-line-hidden**
+set, and the 60-line 3-page invoice. Generated from a throwaway DB
+(`sietch_inv_coc_review`) seeded with one realistic `document_templates` row
++ 3 projects, because the local `sietch_crm` DB has 0 template rows and 0
+opportunities. The throwaway DB was dropped afterwards.
+
+**Docs:** `docs/features/2026-11-03-invoice-coc-upgrade.md` gained a §1a
+"Ken's decisions" section (the migration SQL, the per-document rendering
+matrix, the admin UI field ids, the $0.00 rule); the mapping tables,
+deviations table, gaps, decisions, deploy notes, test results, sample-file
+list and deferred list were all updated. CHANGELOG entry added.
+
+**Still open:** deploy timing only — the image needs a rebuild for
+`reportlab` and migration 045 must run. Deploy late at night per Ken.
+
+---
+
+## Previous session summary
+
 **Date:** 2026-11-03 (Invoice + COC PDF upgrade, branch `invoice-coc-upgrade`)
 
 **Status: implemented + tested, NOT deployed, NOT merged, NOT pushed.**

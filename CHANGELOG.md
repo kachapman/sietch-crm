@@ -2,6 +2,70 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Invoice/COC PDF upgrade: Ken's decisions implemented (2026-11-03, branch `invoice-coc-upgrade`)
+
+Second pass on the modern (Sherwood-style) Invoice + Certificate of
+Completion PDFs, implementing all eight decisions Ken reviewed.
+
+1. **Modern is the default.** `DOC_LAYOUT_DEFAULT = "modern"` for both the
+   invoice and the COC. The classic fpdf2 renderer stays available through
+   the "PDF Layout" field in the modals or the `SIETCH_DOC_LAYOUT` env var.
+2. **$0.00 invoice lines are hidden.** Any line item whose amount is exactly
+   $0.00 is no longer printed, in **both** layouts. The grand total is
+   unchanged (a zero row contributes nothing either way).
+3. **No property-owner signature line on the COC.** The upstream Sherwood
+   builder draws a second "Property owner" block gated on
+   `opts["homeowner_line"]`; that branch was **deleted** from
+   `doc_pdf/coc_pdf.py` and the option no longer exists. The classic COC
+   never had one.
+4. **New document-template fields: website, license number, signer title.**
+   New migration **`migrations/045_document_templates_branding_extras.sql`**
+   adds `company_website`, `company_license` and `signature_title` to
+   `document_templates` (additive, `IF NOT EXISTS`, empty-string defaults).
+   **Migration number 045 was chosen deliberately**: the highest migration on
+   this branch is 042, and the separate `fix-mail-attachments` branch uses
+   043 / 044, so 045 avoids a filename collision when the branches merge.
+   `server.py` also carries the same inline `ALTER`s (the existing pattern
+   for `show_branding_footer`) for databases that skip the migration files.
+   All three fields are exposed in the admin template settings UI and are
+   shown on **both** the invoice and the COC, in **both** layouts. Empty
+   values are **omitted entirely** — no blank line, no blank label. The
+   license is prefixed with "License " unless it already starts with "lic"
+   or "#".
+5. **The Sietch COC wording stays** ("Work completed per agreement."); the
+   Sherwood default statement was not adopted.
+6. **The builders stay copied** into Sietch (`doc_pdf/`) — no shared
+   package, no dependency on Sherwood.
+7. **No "Base charge" UI field** was added; `base_amount` remains a
+   server-side API field the modal does not send.
+8. **The classic COC now honours the entered `completion_date`** with the
+   same fallback as the modern one (the posted value, else today). The
+   classic renderer previously always stamped today's date.
+
+Tests: `tests/test_invoice_coc_modern.py` grew from 33 to **60 tests** —
+mapping (brand website/license, opts signer title, $0.00 hiding, the
+removed `homeowner_line`), builders (website/license/signer title present
+when set and absent when empty, $0.00 rows not printed, no property-owner
+line), the layout default constant, the four HTTP handlers with a mocked DB
+(extras rendering on both layouts, extras omitted when empty, the classic
+COC completion date and its today fallback), and a new
+`TestBrandingExtrasMigration` class (8 tests) covering the migration file,
+its number not colliding with 043/044, its idempotency, its application
+against a scratch table, the inlined `ALTER`s, and the admin API + UI
+exposing the fields. Full Python suite **61 passed / 2 failed** (both
+failures — `test_scanner_toggle_gating.py`, `test_sync_pull_deals_fields.py`
+— re-verified as pre-existing on `main` @ c637526); full Node suite
+**35/35 files**.
+
+Sample review PDFs regenerated into `tmp/invoice-coc-review/` (gitignored,
+not committed): the modern + classic invoice and COC for three projects, a
+**with-extras** set showing the website / license / signer title, a
+**zero-line-hidden** set proving the $0.00 rows are not printed, and the
+60-line multi-page invoice. Full write-up:
+`docs/features/2026-11-03-invoice-coc-upgrade.md` §1a. **Not deployed** —
+needs a Docker image rebuild for `reportlab` and applies migration 045;
+deploy late at night per Ken.
+
 ## Invoice + Certificate of Completion PDFs upgraded to the Sherwood "modern" builders (2026-11-03, branch `invoice-coc-upgrade`)
 
 The Invoice and Certificate of Completion PDFs now render through a port of
