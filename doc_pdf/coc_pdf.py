@@ -4,7 +4,7 @@ Ported from kachapman/sherwood-toolbox @ 3d5bf83 (toolbox/tools/documents/coc_pd
 
 job: customer_name, street, city_state_zip, job_number, insurance_claim,
      sales_rep, completion_date, note
-opts: statement, signature_path, signer_name, signer_title, homeowner_line (bool)
+opts: statement, signature_path, signer_name, signer_title
 
 Deviations from upstream 3d5bf83:
   * Absolute import of pdf_common (Sietch package layout).
@@ -13,6 +13,11 @@ Deviations from upstream 3d5bf83:
   * `signature_path` is honored only when the caller asks for it (Sietch
     gates signatures on the template's show_signature flag); upstream always
     draws a contractor signature block.
+  * **No property-owner signature line.** Upstream draws a second
+    "Property owner" block gated on opts["homeowner_line"] (default True).
+    Ken's decision (2026-11-03): the Sietch COC has NO homeowner line, so
+    that branch was removed and the `homeowner_line` option no longer
+    exists.
 """
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import letter
@@ -87,14 +92,10 @@ def build_coc(out_path, brand, job, opts, root=None):
     signer = ", ".join(x for x in (opts.get("signer_name"), opts.get("signer_title")) if x)
     contractor = _sig_block(opts.get("signature_path"), signer, "Contractor representative",
                             f"Date: {job.get('completion_date') or ''}", root=root)
-    if opts.get("homeowner_line", True):
-        owner = _sig_block(None, job.get("customer_name"), "Property owner",
-                           "Date: ____________________", root=root)
-        cols = [contractor, "", owner]
-        widths = [(CONTENT_W - 40) / 2, 40, (CONTENT_W - 40) / 2]
-    else:
-        cols, widths = [contractor, ""], [(CONTENT_W - 40) / 2, (CONTENT_W + 40) / 2]
-    sig = Table([cols], colWidths=widths)
+    # Sietch decision 2026-11-03: there is NO property-owner signature line
+    # on the COC. The upstream Sherwood builder draws a second "Property
+    # owner" block; that branch was removed here.
+    sig = Table([[contractor]], colWidths=[CONTENT_W])
     sig.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "BOTTOM"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
                              ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
     story.append(KeepTogether([p("SIGNATURES", style("sh", 7.5, text_accent(acc), True)), Spacer(1, 10), sig]))

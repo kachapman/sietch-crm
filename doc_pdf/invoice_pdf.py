@@ -104,10 +104,12 @@ def _totals(total, acc):
 def _signature(signature, acc, root=None):
     """Sietch-only signature block (classic fpdf2 invoice had one).
 
-    signature: {path, name, date}. The image is optional; the name/date
-    lines are printed either way.
+    signature: {path, name, title, date}. The image is optional; the
+    name/title/date lines are printed either way. Empty parts are omitted
+    rather than printed as blank labels.
     """
     name = (signature.get("name") or "").strip()
+    title = (signature.get("title") or "").strip()
     date_text = (signature.get("date") or "").strip()
     img = logo_flowable(signature.get("path"), 170, 48, root=root)
     cells = []
@@ -116,6 +118,8 @@ def _signature(signature, acc, root=None):
     cells.append(HRFlowable(width="100%", thickness=0.8, color=INK, spaceBefore=2, spaceAfter=4))
     if name:
         cells.append(p(f"By {name}", style("sn", 9.5, INK, True)))
+    if title:
+        cells.append(p(title, style("st", 8.5, MUTED)))
     if date_text:
         cells.append(p(f"Date: {date_text}", style("sd", 9, MUTED)))
     if len(cells) == 1:
