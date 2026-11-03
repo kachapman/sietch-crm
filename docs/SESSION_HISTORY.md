@@ -13,7 +13,22 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 **Date:** 2026-11-02 (live bot-note failures, branch `fix-telegram-dupes`)
 
-**Status: DONE ON BRANCH, NOT DEPLOYED, NOT MERGED.** Read-only prod
+**Status: DEPLOYED 2026-11-02 (~23:35 ET)** — merged `fix-telegram-dupes`
+into `main` as `5de729d` (`--no-ff`; tag `pre-telegram-fix-merge` = `815d634`),
+pushed to origin. Post-merge: `test_bot_note_flow` 11/11, `test_telegram_dedupe`
+17/17, `test_telegram_bot` 120, `test_reply_tagged_telegram` 5,
+`test_notification_snippet` 5. Droplet sietch-crm-prod (147.182.164.19,
+/opt/sietch-crm): pre-deploy `pg_dump -Fc` to
+`backups/sietch_crm-pre-telegram-fix-20261103-043029.dump` (29.9 MB, 682 TOC
+entries) + `backups/bot-customers-pre-telegram-fix-20261103-043029.tar.gz`
+(bot link store), `git pull --ff-only` to `5de729d`, `docker compose build
+dashboard` + `up -d dashboard`; migration `042` auto-applied on boot;
+`systemctl restart crm-telegram-bot` (same token, no .env change). Verified:
+container healthy, site 200, bot polling, `/api/bot/heartbeat` +
+`config-check` now 200, bot link store unchanged (sietch 5 chats, vanguard 1),
+token absent from new dashboard + bot logs. Token NOT yet rotated (Ken,
+BotFather). Ghost 14:21 notes (history_events 50094/50095, opp 51) not
+touched. Original status: done on branch. Read-only prod
 investigation (journalctl + `docker compose logs`, no restarts/writes;
 token redacted in all handling). Two live bugs, both on deployed `main`:
 
@@ -42,7 +57,7 @@ post-deploy check Ken's project for the two ghost notes from 14:21.
 
 **Date:** 2026-11-02 (Telegram ~91x duplicate + token-in-journal, branch `fix-telegram-dupes`)
 
-**Status: DONE ON BRANCH, NOT DEPLOYED, NOT MERGED** — both fixes implemented
+**Status: DEPLOYED 2026-11-02 with the entry above (`5de729d`)** — both fixes implemented
 and tested on `fix-telegram-dupes` (off deployed `main`). No prod DB writes,
 no restarts: all DB proof ran on scratch DB `tg_dupe_scratch` (local dev
 postgres); pre-existing local logs (`/tmp/telegram-bot-audit.log`,
