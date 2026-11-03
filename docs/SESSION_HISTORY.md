@@ -21,6 +21,22 @@ was NOT touched; the live local server on :8766 was NOT restarted; the
 backfill was run ONLY against a throwaway DB (`mailatt_test_scratch` in the
 `sietch-postgres` container).
 
+**Round 4 (blocker B1): a missing unique index broke every document
+insert.** `_insert_project_document_safely` always sent `ON CONFLICT
+(opportunity_id, file_path) WHERE is_deleted = FALSE`, but migration 044
+SKIPS that index when `project_documents` holds duplicates — and Postgres
+then REJECTS the statement outright ("no unique or exclusion constraint
+matching the ON CONFLICT specification"). Every document insert (COC,
+invoice, photo report, upload, doc create/copy, bot upload) would 500 on
+such a database. Fix: `_unique_index_exists()` (cached, `pg_indexes`, a
+failed check assumes absent) + a SELECT-then-INSERT fallback; the same rule
+applies to the mail link-time copy for both optional indexes; the misleading
+round-3 docstring is corrected. 15 new tests (`TestMissingUniqueIndexB1`)
+drop the real indexes and prove the helper and the link copy still work,
+restoring each index from its original `pg_indexes.indexdef`. Both halves
+verified true-negative (reverting the server check fails 3 tests, the
+scanner check fails 4). Suite 91/91 on a fresh DB. Details: bug doc §14.
+
 **Round 3 (independent review of `ffe826e`): N1 + N2 + M4 fixed.** Details in
 `docs/bugs/2026-11-03-mail-link-attachments.md` §13:
 - **N1** accounts poll CONCURRENTLY (ThreadPoolExecutor in

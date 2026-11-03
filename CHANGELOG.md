@@ -4,6 +4,26 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Linked emails don't put their PDFs/documents in the project's Documents tab (2026-11-03, branch `fix-mail-attachments`)
 
+**Round 4 (blocker B1): a missing unique index no longer breaks document
+inserts.** `_insert_project_document_safely` unconditionally sent
+`ON CONFLICT (opportunity_id, file_path) WHERE is_deleted = FALSE`, but
+migration 044 deliberately SKIPS that index when `project_documents` already
+holds duplicates — and in that state Postgres REJECTS the statement
+("no unique or exclusion constraint matching the ON CONFLICT
+specification"). It is a hard error, not a no-op, so every document insert
+(COC, invoice, photo report, upload, doc create/copy, bot upload) returned a
+500. Fix: `_unique_index_exists()` checks `pg_indexes` once and caches the
+answer (a failed check assumes absent); when the index is missing the helper
+uses a SELECT-then-INSERT path and never sends `ON CONFLICT`. The same rule
+now applies to the mail link-time copy for both optional indexes
+(`uq_project_documents_opp_file_path` and
+`uq_history_attachments_mail_attachment`), and the misleading round-3
+docstring is corrected. Tests: 15 new
+(`TestMissingUniqueIndexB1`) which DROP the real indexes and prove the
+inserts and the link copy still work; both halves verified true-negative.
+Suite 91/91 on a fresh database. Not deployed, not merged. Write-up:
+`docs/bugs/2026-11-03-mail-link-attachments.md` §14.
+
 **Round 3 (independent review of `ffe826e`): N1 + N2 + M4 fixed.**
 **N1 — staging folder collisions.** Accounts poll CONCURRENTLY (a
 `ThreadPoolExecutor` in `_poll_mailboxes`, plus the manual per-account

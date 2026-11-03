@@ -129,6 +129,60 @@ MAX_PART_ID_LEN = 200
 # already reads as "a local file": data/mail-attachments/<message_id>/<file>.
 MAIL_ATTACHMENT_DIR = "data/mail-attachments"
 
+# ── Optional unique indexes (blocker B1) ────────────────────────────────────
+# Both indexes below are created by a migration, and a migration can leave
+# them absent:
+#   * migration 044 deliberately SKIPS uq_project_documents_opp_file_path
+#     when project_documents already holds duplicates;
+#   * migration 043's uq_history_attachments_mail_attachment is absent on a
+#     database where that migration never ran.
+#
+# ⚠ An `ON CONFLICT (<cols>) WHERE <predicate> DO NOTHING` statement is
+# REJECTED BY POSTGRES when no matching unique index exists:
+#
+#     ERROR:  there is no unique or exclusion constraint matching the
+#             ON CONFLICT specification
+#
+# It is a hard error (not a "no conflict happened" case), so the copy step
+# must check for the index and use a SELECT-then-INSERT path when it is
+# missing. The result is cached — the schema does not change while the
+# process runs (migrations are applied at boot).
+#
+# Mirrors server.py's PROJECT_DOCUMENTS_UNIQUE_INDEX / _unique_index_exists
+# (the scanner cannot import server — server imports the scanner), so the
+# names must be kept in sync by hand.
+PROJECT_DOCUMENTS_UNIQUE_INDEX = "uq_project_documents_opp_file_path"
+HISTORY_ATTACHMENTS_UNIQUE_INDEX = "uq_history_attachments_mail_attachment"
+
+_INDEX_EXISTS_CACHE: dict[str, bool] = {}
+
+
+def _unique_index_exists(index_name: str) -> bool:
+    """Does the named unique index exist? (cached)
+
+    Mirrors server.py `_unique_index_exists`. When the check itself fails we
+    assume the index is ABSENT, because the SELECT-then-INSERT fallback is
+    the path that cannot raise.
+    """
+    if index_name in _INDEX_EXISTS_CACHE:
+        return _INDEX_EXISTS_CACHE[index_name]
+    exists = False
+    try:
+        exists = bool(db.query_one(
+            "SELECT 1 AS ok FROM pg_indexes WHERE schemaname = current_schema() "
+            "AND indexname = %s", (index_name,)))
+    except Exception:
+        logger.exception("Could not check for the index %s", index_name)
+        exists = False
+    _INDEX_EXISTS_CACHE[index_name] = exists
+    return exists
+
+
+def _reset_index_cache() -> None:
+    """Forget the cached index existence flags (tests / after a migration)."""
+    _INDEX_EXISTS_CACHE.clear()
+
+
 _CRM_ACCOUNT_IDS: set[int] | None = None
 
 
@@ -1916,22 +1970,42 @@ def copy_mail_attachments_to_project_detailed(opp_id: int, event_id: int,
             rel = dest.relative_to(root)
             rel_str = str(rel)
             mime = att.get("mime_type") or "application/octet-stream"
-            # `mail_attachment_id` is the dedupe key (migration 043). The
-            # INSERT uses ON CONFLICT DO NOTHING so a double-click (two
-            # concurrent link requests) cannot create a second row — the
-            # unique index on (event_id, mail_attachment_id) is the
-            # arbiter. There is deliberately NO plain-INSERT fallback that
-            # would bypass the dedupe.
-            inserted = db.execute(
-                "INSERT INTO history_attachments (event_id, filename, file_path, file_size, "
-                "mime_type, uploaded_by, mail_attachment_id) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s) "
-                "ON CONFLICT (event_id, mail_attachment_id) WHERE mail_attachment_id IS NOT NULL "
-                "DO NOTHING",
-                (event_id, filename, rel_str, len(data), mime, None, att_id),
-            )
+            # `mail_attachment_id` is the dedupe key (migration 043), and a
+            # double-click (two concurrent link requests) must not create a
+            # second row.
+            #
+            # ⚠ `ON CONFLICT (event_id, mail_attachment_id) WHERE …` is
+            # REJECTED BY POSTGRES ("no unique or exclusion constraint
+            # matching the ON CONFLICT specification") when migration 043
+            # never created uq_history_attachments_mail_attachment. That is a
+            # hard error — not a "no conflict happened" case — so the
+            # statement must not be sent at all when the index is absent
+            # (blocker B1). In that state we check for an existing row first.
+            inserted = None
+            if _unique_index_exists(HISTORY_ATTACHMENTS_UNIQUE_INDEX):
+                inserted = db.execute(
+                    "INSERT INTO history_attachments (event_id, filename, file_path, file_size, "
+                    "mime_type, uploaded_by, mail_attachment_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                    "ON CONFLICT (event_id, mail_attachment_id) WHERE mail_attachment_id IS NOT NULL "
+                    "DO NOTHING",
+                    (event_id, filename, rel_str, len(data), mime, None, att_id),
+                )
+            else:
+                existing = db.query_one(
+                    "SELECT id FROM history_attachments WHERE event_id = %s "
+                    "AND mail_attachment_id = %s",
+                    (event_id, att_id))
+                if not existing:
+                    inserted = db.execute(
+                        "INSERT INTO history_attachments (event_id, filename, file_path, file_size, "
+                        "mime_type, uploaded_by, mail_attachment_id) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                        (event_id, filename, rel_str, len(data), mime, None, att_id),
+                    )
             if not inserted:
-                # Another copy won the race — do not add a second document.
+                # Another copy won the race (or the row was already there) —
+                # do not add a second document.
                 logger.info("Mail attachment %s for message %s was already copied "
                             "into event %s — skipping the duplicate",
                             att_id, message_id, event_id)
@@ -1944,29 +2018,34 @@ def copy_mail_attachments_to_project_detailed(opp_id: int, event_id: int,
             # Also register the file as a project document so it opens in the
             # document editor and appears in the project's Documents tab —
             # the same shape the imported attachments have.
-            # ON CONFLICT DO NOTHING: a double-click (two concurrent link
-            # requests) must not show the same PDF twice in the Documents
-            # tab. The unique index on (opportunity_id, file_path) is the
-            # arbiter.
+            #
+            # ⚠ Same B1 rule as above: migration 044 SKIPS
+            # uq_project_documents_opp_file_path when project_documents
+            # already holds duplicates, and an `ON CONFLICT (opportunity_id,
+            # file_path) WHERE …` statement is rejected outright in that
+            # state. Use the index only when it exists; otherwise check for
+            # an existing active row first.
             try:
-                db.execute(
-                    "INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by) "
-                    "VALUES (%s, %s, %s, %s, %s, %s) "
-                    "ON CONFLICT (opportunity_id, file_path) WHERE is_deleted = FALSE DO NOTHING",
-                    (opp_id, filename, rel_str, len(data), mime, None),
-                )
-            except Exception:
-                # The unique index may not exist yet (migration 043 not
-                # applied) — fall back to a plain insert. The history row
-                # above is already the primary dedupe key.
-                try:
+                if _unique_index_exists(PROJECT_DOCUMENTS_UNIQUE_INDEX):
                     db.execute(
                         "INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by) "
-                        "VALUES (%s, %s, %s, %s, %s, %s)",
+                        "VALUES (%s, %s, %s, %s, %s, %s) "
+                        "ON CONFLICT (opportunity_id, file_path) WHERE is_deleted = FALSE DO NOTHING",
                         (opp_id, filename, rel_str, len(data), mime, None),
                     )
-                except Exception:
-                    logger.exception("Failed to register project document for %s", filename)
+                else:
+                    already_doc = db.query_one(
+                        "SELECT id FROM project_documents WHERE opportunity_id = %s "
+                        "AND file_path = %s AND is_deleted = FALSE LIMIT 1",
+                        (opp_id, rel_str))
+                    if not already_doc:
+                        db.execute(
+                            "INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by) "
+                            "VALUES (%s, %s, %s, %s, %s, %s)",
+                            (opp_id, filename, rel_str, len(data), mime, None),
+                        )
+            except Exception:
+                logger.exception("Failed to register project document for %s", filename)
             report["copied"] += 1
         except Exception as exc:
             logger.exception("Failed to copy mail attachment %s into project %s",

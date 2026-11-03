@@ -76,7 +76,7 @@ This hid ~20 real assertions in `tests/test_telegram_bot.py` for an entire sessi
 
 ## Testing
 
-All test surfaces run via CI (`.github/workflows/smoke.yml`). **551 tests total: 134 JS + 417 Python, 0 failures.** (On `fix-mail-attachments`: 633 total — 140 JS + 493 Python, incl. the new 76-test `tests/test_mail_link_attachments.py` and the new 6-test `tests/test_mail_link_files_toast.mjs`. The new Python suite needs a live PostgreSQL — CI loads the schema first, and the suite skips when the DB has no CRM schema.)
+All test surfaces run via CI (`.github/workflows/smoke.yml`). **551 tests total: 134 JS + 417 Python, 0 failures.** (On `fix-mail-attachments`: 648 total — 140 JS + 508 Python, incl. the new 91-test `tests/test_mail_link_attachments.py` and the new 6-test `tests/test_mail_link_files_toast.mjs`. The new Python suite needs a live PostgreSQL — CI loads the schema first, and the suite skips when the DB has no CRM schema.)
 
 ```bash
 # Python unit tests (stdlib unittest)

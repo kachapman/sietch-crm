@@ -1284,6 +1284,60 @@ def _conflict_target(table: str) -> str:
     return " ON CONFLICT (" + ", ".join(cols) + ") DO NOTHING"
 
 
+# ── Optional unique indexes (blocker B1) ────────────────────────────────────
+# Some unique indexes are created by a migration that SKIPS itself when the
+# table already holds duplicates (migration 044 skips
+# uq_project_documents_opp_file_path in that case, deliberately, without
+# touching any data).
+#
+# ⚠ An `ON CONFLICT (<cols>) WHERE <predicate> DO NOTHING` statement is
+# REJECTED BY POSTGRES when no matching unique index exists:
+#
+#     ERROR:  there is no unique or exclusion constraint matching the
+#             ON CONFLICT specification
+#
+# The statement fails outright — it is not a runtime "no conflict" case —
+# so every insert through it would 500. The code must therefore check
+# whether the index exists and fall back to a SELECT-then-INSERT path when
+# it does not.
+#
+# The check is cached: the schema does not change while the process runs
+# (a migration is applied at boot, before any request is served).
+_INDEX_EXISTS_CACHE: dict[str, bool] = {}
+
+# Mirrored in scanner/mail_scanner.py (the scanner cannot import server —
+# server imports the scanner), so the two constants must stay in sync.
+PROJECT_DOCUMENTS_UNIQUE_INDEX = "uq_project_documents_opp_file_path"
+HISTORY_ATTACHMENTS_UNIQUE_INDEX = "uq_history_attachments_mail_attachment"
+
+
+def _unique_index_exists(index_name: str) -> bool:
+    """Does the named unique index exist? (cached)
+
+    `index_name` is looked up in `pg_indexes` for the CURRENT schema.
+    """
+    if index_name in _INDEX_EXISTS_CACHE:
+        return _INDEX_EXISTS_CACHE[index_name]
+    exists = False
+    try:
+        row = db.query_one(
+            "SELECT 1 AS ok FROM pg_indexes WHERE schemaname = current_schema() "
+            "AND indexname = %s",
+            (index_name,))
+        exists = bool(row)
+    except Exception:
+        logger.exception("Could not check for the index %s", index_name)
+        # Assume it does NOT exist: the fallback path is the safe one.
+        exists = False
+    _INDEX_EXISTS_CACHE[index_name] = exists
+    return exists
+
+
+def _reset_index_cache() -> None:
+    """Forget the cached index existence flags (tests / after a migration)."""
+    _INDEX_EXISTS_CACHE.clear()
+
+
 # ── Import jsonb adaptation ──────────────────────────────────────────────────
 # psycopg2 cannot adapt a Python dict/list to a `jsonb` column on its own: it
 # either raises "can't adapt type 'dict'" or, for a list, silently renders a
@@ -1544,33 +1598,50 @@ def _insert_project_document_safely(opp_id: int | None, title: str, rel_path: st
                                     user_id: int | None = None,
                                     company_scope: bool = False,
                                     folder_id: int | None = None) -> int | None:
-    """INSERT a project_documents row, tolerating the unique index.
+    """INSERT a project_documents row, tolerating a missing unique index.
 
-    ⚠ Migration 044 adds
+    Migration 044 adds
         uq_project_documents_opp_file_path (opportunity_id, file_path)
         WHERE is_deleted = FALSE
     so that a double-click on "Link to deal" cannot register the same file
     twice in a project's Documents tab.
 
-    Every PDF generator names its file "<epoch seconds>_<name>.pdf", so two
-    generations in the SAME second with the same name produce the SAME
-    file_path — which would now hit that index. A plain INSERT would raise
-    and break the generation, so every generator goes through this helper:
+    ⚠ TWO DIFFERENT failure modes have to be handled (blocker B1):
 
-      * INSERT ... ON CONFLICT DO NOTHING (the index is the arbiter);
-      * if nothing was inserted (the row already exists), reuse the
-        existing row's id;
-      * if the index does not exist yet (migration 044 skipped it because
-        of duplicates), the plain INSERT still works.
+      1. **The index EXISTS.** PDF generators name their file
+         "<epoch seconds>_<name>.pdf", so two generations in the SAME second
+         with the same name produce the SAME file_path. An `ON CONFLICT …
+         DO NOTHING` absorbs that instead of raising, and the existing row's
+         id is reused.
+
+      2. **The index DOES NOT EXIST.** Migration 044 deliberately SKIPS the
+         index when `project_documents` already holds duplicates. In that
+         case Postgres REJECTS an `ON CONFLICT (opportunity_id, file_path)`
+         statement outright with
+
+             ERROR:  there is no unique or exclusion constraint matching
+                     the ON CONFLICT specification
+
+         — it is a hard parse/plan-time error, not a "no conflict happened"
+         case, so every insert through it would return a 500. When the index
+         is absent this helper therefore uses a **SELECT-then-INSERT** path
+         and never sends the ON CONFLICT statement at all.
 
     `opportunity_id = NULL` (the standalone/personal documents) never
-    conflicts: NULLs are never equal in a Postgres UNIQUE index.
+    conflicts: NULLs are never equal in a Postgres UNIQUE index, so those
+    rows take the plain INSERT either way.
     """
     if opp_id is None:
         return db.insert_returning(
             """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope, folder_id)
                VALUES (%s, %s, %s, %s, %s, NULL, %s, %s) RETURNING id""",
             (title, rel_path, file_size, mime_type, user_id, company_scope, folder_id))
+
+    if not _unique_index_exists(PROJECT_DOCUMENTS_UNIQUE_INDEX):
+        # No index to arbitrate an ON CONFLICT — check first, then insert.
+        return _insert_project_document_without_unique_index(
+            opp_id, title, rel_path, file_size, mime_type, user_id, folder_id)
+
     doc_id = db.insert_returning(
         """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by, folder_id)
            VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -1579,6 +1650,7 @@ def _insert_project_document_safely(opp_id: int | None, title: str, rel_path: st
         (opp_id, title, rel_path, file_size, mime_type, user_id, folder_id))
     if doc_id is not None:
         return doc_id
+    # The insert was absorbed by the conflict: reuse the existing row.
     try:
         row = db.query_one(
             "SELECT id FROM project_documents WHERE opportunity_id = %s AND file_path = %s "
@@ -1588,7 +1660,43 @@ def _insert_project_document_safely(opp_id: int | None, title: str, rel_path: st
             return row["id"]
     except Exception:
         logger.exception("Could not look up the existing project document %s", rel_path)
-    # No index (migration 044 skipped) and no existing row — insert plainly.
+    # The index said it exists but nothing matched and nothing was inserted
+    # (should not happen) — insert plainly so the caller still gets an id.
+    try:
+        return db.insert_returning(
+            """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by, folder_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (opp_id, title, rel_path, file_size, mime_type, user_id, folder_id))
+    except Exception:
+        logger.exception("Could not register the project document %s", rel_path)
+        return None
+
+
+def _insert_project_document_without_unique_index(
+        opp_id: int, title: str, rel_path: str, file_size: int, mime_type: str,
+        user_id: int | None, folder_id: int | None) -> int | None:
+    """SELECT-then-INSERT for `project_documents` when the unique index is gone.
+
+    Used when migration 044 skipped `uq_project_documents_opp_file_path`
+    (because the table already held duplicates). The ON CONFLICT form cannot
+    be used at all in that state — Postgres rejects the statement — so we
+    look for an existing active row first and only insert when there is none.
+
+    ⚠ This is the PRE-index behaviour: two concurrent inserts can still both
+    see "nothing there" and create a duplicate. That is exactly the situation
+    the missing index describes (the table already has duplicates and an
+    operator has not cleaned them up yet), so it is no worse than before
+    migration 044 existed. Once the index is built this path is not taken.
+    """
+    try:
+        row = db.query_one(
+            "SELECT id FROM project_documents WHERE opportunity_id = %s AND file_path = %s "
+            "AND is_deleted = FALSE ORDER BY id DESC LIMIT 1",
+            (opp_id, rel_path))
+        if row:
+            return row["id"]
+    except Exception:
+        logger.exception("Could not look up the existing project document %s", rel_path)
     try:
         return db.insert_returning(
             """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by, folder_id)

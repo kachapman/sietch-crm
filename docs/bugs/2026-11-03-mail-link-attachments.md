@@ -473,7 +473,7 @@ The CLI writes a JSON report to `backfill-mail-attachments-report.json`.
 
 ## 10. Tests
 
-`tests/test_mail_link_attachments.py` — **76 tests**, needs a **real
+`tests/test_mail_link_attachments.py` — **91 tests**, needs a **real
 PostgreSQL throwaway database** (it exercises INSERTs and the unique
 indexes).
 
@@ -617,7 +617,7 @@ fail with the fix temporarily reverted:
 | `migrations/043_mail_attachment_storage.sql` | New columns + the dedupe unique index + the FK corrected to `ON DELETE SET NULL`. |
 | `migrations/044_project_documents_unique_file_path.sql` | **new** — the `project_documents` unique index, with a duplicate check that skips (and logs) instead of failing. |
 | `backfill_mail_attachments.py` | New CLI (dry-run by default); legacy-aware "already complete" counting; exact timeline matching. |
-| `tests/test_mail_link_attachments.py` | New suite (76 tests, needs a throwaway PostgreSQL; mandatory DB safety check before any migration). |
+| `tests/test_mail_link_attachments.py` | New suite (91 tests, needs a throwaway PostgreSQL; mandatory DB safety check before any migration). |
 | `tests/test_mail_link_files_toast.mjs` | New suite (6 tests, no DB): the link toasts must carry the file counts. |
 | `.github/workflows/smoke.yml` | Loads the CRM schema into the CI postgres service and runs the new Python suite. |
 
@@ -791,3 +791,94 @@ frontend sends `completion_date` in the COC payload
 completion date the user types into the COC form is **silently ignored** and
 the PDF always shows today's date. This is unrelated to the mail-attachment
 work (it is not caused by it) and is listed in §9 for a separate fix.
+
+## 14. Round-4 fix (blocker B1: a missing unique index broke every document insert)
+
+### The bug
+
+`_insert_project_document_safely` (added in round 3) always sent
+
+```sql
+INSERT INTO project_documents (...) VALUES (...)
+ON CONFLICT (opportunity_id, file_path) WHERE is_deleted = FALSE DO NOTHING
+RETURNING id
+```
+
+Migration `044` **deliberately skips** `uq_project_documents_opp_file_path`
+when `project_documents` already holds duplicate rows (§6.2). In that state
+Postgres does **not** treat the statement as a no-op — it **rejects it
+outright**:
+
+```
+ERROR:  there is no unique or exclusion constraint matching the
+        ON CONFLICT specification
+```
+
+That is a hard plan/parse-time error, so **every** project document insert
+returned a 500: the COC generator, the invoice generator, the photo report,
+document upload, doc create/copy, and the bot upload. On a prod database
+with pre-existing duplicates this is a total outage of document creation.
+
+The round-3 docstring made this worse by claiming "if the index does not
+exist yet … the plain INSERT still works" — the plain INSERT was never
+reached, because the `ON CONFLICT` statement itself failed.
+
+### The fix
+
+1. **`_unique_index_exists(index_name)`** (in both `server.py` and
+   `scanner/mail_scanner.py` — the scanner cannot import server, so the
+   helper and the index-name constants are mirrored by hand) looks the
+   index up in `pg_indexes` for the current schema and **caches** the
+   answer. A failed check assumes **absent**, because the fallback path is
+   the one that cannot raise.
+2. **`_reset_index_cache()`** clears the cache (tests, or after a migration).
+3. When the index **is missing**, `_insert_project_document_safely` takes a
+   **SELECT-then-INSERT** path (`_insert_project_document_without_unique_index`)
+   and never sends the `ON CONFLICT` statement.
+4. The **mail link-time copy** applies the same rule to both optional
+   indexes:
+   - `uq_project_documents_opp_file_path` (migration 044), and
+   - `uq_history_attachments_mail_attachment` (migration 043), which had the
+     same hard-failure mode if that migration never ran.
+5. The misleading docstring is corrected: it now spells out that the
+   statement is *rejected*, and documents the SELECT-then-INSERT fallback.
+
+`uq_history_attachments_event_file` (used by two unrelated `ON CONFLICT`
+sites) is created unconditionally by `init.sql` plus migration `030`, so it
+is not at risk and was left alone.
+
+### Trade-off (documented in the code)
+
+The SELECT-then-INSERT path is the **pre-index** behaviour: two concurrent
+inserts can both see "nothing there" and create a duplicate. That is exactly
+the condition the missing index describes (the table already has duplicates
+and an operator has not cleaned them up yet), so it is no worse than before
+migration 044 existed. Once the index is built, this path is never taken.
+
+### Tests
+
+`tests/test_mail_link_attachments.py::TestMissingUniqueIndexB1` — 15 tests.
+They **drop the real indexes** in the throwaway test database and restore
+each one from its original `pg_indexes.indexdef` in cleanup:
+
+- the `ON CONFLICT` statement **really is rejected** without the index
+  (proves B1 is real, not a no-op);
+- the helper inserts and dedupes without the index;
+- the helper still dedupes **with** the index (the normal path is unchanged);
+- the helper sends **no** `ON CONFLICT` when the index is reported absent
+  (asserts on the SQL actually executed);
+- `opportunity_id = NULL` documents never need the index;
+- the mail link copy works, skips and dedupes with the project-documents
+  index missing;
+- … with the history-attachments index missing;
+- … with **both** indexes missing (worst case);
+- the scanner sends no `ON CONFLICT` when both indexes are reported absent;
+- the existence check is cached (one query, not one per insert);
+- the cache can be reset;
+- server and scanner agree on the index names;
+- the docstring no longer makes the false "plain INSERT still works" claim.
+
+Both halves were verified **true-negative**: reverting the server check fails
+3 of the tests, and reverting the scanner check fails 4.
+
+Suite: **91/91** on a freshly created database (init.sql + all migrations).

@@ -428,7 +428,12 @@ class TestLinkApiFileCounts(BaseCase):
     def _link(self, payload=None):
         import server as srv
         responses = []
-        with patch.object(srv, "_require_auth", lambda h: _ADMIN), \
+        # Use the REAL test user id: `_handle_mail_link` writes it into
+        # mail_deal_links.linked_by_user_id, which is an FK to users. A
+        # hardcoded id would break on any database whose user sequence is
+        # not at 1 (it is a throwaway DB — the id is not guaranteed).
+        auth_user = {**_ADMIN, "id": self.user_id}
+        with patch.object(srv, "_require_auth", lambda h: auth_user), \
              patch.object(srv, "_mail_message_accessible", lambda u, m: True), \
              patch.object(srv, "_read_body",
                           lambda h: json.dumps(payload or {"opportunityId": self.opp_id}).encode()), \
@@ -2215,6 +2220,317 @@ INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime
             self.assertIn("_insert_project_document_safely", src)
             self.assertIn('"application/pdf"', src)
             self.assertIn('user["id"]', src)
+
+
+# ── 15. Blocker B1: a missing unique index must not break the insert ───────
+class TestMissingUniqueIndexB1(BaseCase):
+    """`ON CONFLICT (opportunity_id, file_path) WHERE is_deleted = FALSE`
+    is REJECTED BY POSTGRES when migration 044 skipped the index.
+
+    Migration 044 deliberately SKIPS `uq_project_documents_opp_file_path`
+    when `project_documents` already holds duplicates. In that state every
+    `ON CONFLICT (opportunity_id, file_path)` statement fails outright:
+
+        ERROR:  there is no unique or exclusion constraint matching the
+                ON CONFLICT specification
+
+    It is a hard error, not a "no conflict happened" case, so a project
+    document insert that always sends that statement would 500 forever.
+
+    These tests DROP the indexes in the throwaway test database and prove
+    the code falls back to a SELECT-then-INSERT path instead. Every dropped
+    index is restored from its original `pg_indexes.indexdef` in cleanup.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # The existence flag is cached per process — start every test clean.
+        self._reset_caches()
+        self.addCleanup(self._reset_caches)
+
+    def _reset_caches(self):
+        import server as srv
+        srv._reset_index_cache()
+        ms._reset_index_cache()
+
+    def _drop_index(self, index_name):
+        """Drop `index_name`, restoring its exact original definition later."""
+        row = db.query_one(
+            "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() "
+            "AND indexname = %s", (index_name,))
+        self.assertTrue(row, f"the test DB must have {index_name} to drop it")
+        indexdef = row["indexdef"]
+
+        def restore():
+            try:
+                db.execute(indexdef)
+            finally:
+                self._reset_caches()
+
+        self.addCleanup(restore)
+        db.execute(f"DROP INDEX {index_name}")
+        self._reset_caches()
+        # Confirm it really is gone.
+        self.assertFalse(
+            bool(db.query_one(
+                "SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() "
+                "AND indexname = %s", (index_name,))),
+            f"{index_name} must be gone for this test")
+
+    # ── the bug itself ─────────────────────────────────────────────────────
+    def test_the_on_conflict_statement_really_fails_without_the_index(self):
+        """Prove B1 is real: the statement is rejected, not a no-op."""
+        self._drop_index("uq_project_documents_opp_file_path")
+        with self.assertRaises(Exception) as ctx:
+            db.execute(
+                "INSERT INTO project_documents (opportunity_id, title, file_path, "
+                "file_size, mime_type) VALUES (%s, %s, %s, %s, %s) "
+                "ON CONFLICT (opportunity_id, file_path) WHERE is_deleted = FALSE DO NOTHING",
+                (self.opp_id, "x.pdf", "data/b1/x.pdf", 10, "application/pdf"))
+        msg = str(ctx.exception).lower()
+        self.assertIn("no unique or exclusion constraint matching the on conflict", msg,
+                      f"expected the ON CONFLICT rejection, got: {ctx.exception}")
+
+    # ── the helper (server.py) ─────────────────────────────────────────────
+    def test_the_helper_inserts_without_the_index(self):
+        """No index -> SELECT-then-INSERT; the insert must NOT 500."""
+        import server as srv
+        self._drop_index("uq_project_documents_opp_file_path")
+        self.assertFalse(srv._unique_index_exists(srv.PROJECT_DOCUMENTS_UNIQUE_INDEX))
+        doc_id = srv._insert_project_document_safely(
+            self.opp_id, "plan.pdf", "data/b1/plan.pdf", 10, "application/pdf",
+            self.user_id)
+        self.assertTrue(doc_id, "the helper must still create the row")
+        rows = db.query_dicts(
+            "SELECT id, title FROM project_documents WHERE opportunity_id = %s",
+            (self.opp_id,))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["title"], "plan.pdf")
+
+    def test_the_helper_dedupes_without_the_index(self):
+        """SELECT-then-INSERT must still avoid a duplicate row."""
+        import server as srv
+        self._drop_index("uq_project_documents_opp_file_path")
+        first = srv._insert_project_document_safely(
+            self.opp_id, "plan.pdf", "data/b1/plan.pdf", 10, "application/pdf",
+            self.user_id)
+        second = srv._insert_project_document_safely(
+            self.opp_id, "plan.pdf", "data/b1/plan.pdf", 10, "application/pdf",
+            self.user_id)
+        self.assertEqual(first, second, "the second call must reuse the row")
+        rows = db.query_dicts(
+            "SELECT id FROM project_documents WHERE opportunity_id = %s", (self.opp_id,))
+        self.assertEqual(len(rows), 1, "no duplicate row")
+
+    def test_the_helper_still_dedupes_with_the_index(self):
+        """Sanity: the index path (ON CONFLICT) is unchanged."""
+        import server as srv
+        self.assertTrue(srv._unique_index_exists(srv.PROJECT_DOCUMENTS_UNIQUE_INDEX))
+        first = srv._insert_project_document_safely(
+            self.opp_id, "plan.pdf", "data/b1/plan.pdf", 10, "application/pdf",
+            self.user_id)
+        second = srv._insert_project_document_safely(
+            self.opp_id, "plan.pdf", "data/b1/plan.pdf", 10, "application/pdf",
+            self.user_id)
+        self.assertEqual(first, second)
+        self.assertEqual(len(db.query_dicts(
+            "SELECT id FROM project_documents WHERE opportunity_id = %s", (self.opp_id,))), 1)
+
+    def test_the_helper_never_sends_on_conflict_without_the_index(self):
+        """Assert on the SQL actually executed, not just the outcome."""
+        import server as srv
+        sent: list[str] = []
+        real_execute = db.execute
+        real_insert = db.insert_returning
+
+        def spy_execute(sql, params=None, *a, **k):
+            sent.append(sql)
+            return real_execute(sql, params, *a, **k)
+
+        def spy_insert(sql, params=None, *a, **k):
+            sent.append(sql)
+            return real_insert(sql, params, *a, **k)
+
+        with patch.object(srv, "_unique_index_exists", return_value=False), \
+             patch.object(db, "execute", side_effect=spy_execute), \
+             patch.object(db, "insert_returning", side_effect=spy_insert):
+            doc_id = srv._insert_project_document_safely(
+                self.opp_id, "plan.pdf", "data/b1/plan.pdf", 10, "application/pdf",
+                self.user_id)
+        self.assertTrue(doc_id)
+        joined = "\n".join(sent)
+        self.assertIn("INSERT INTO project_documents", joined)
+        self.assertNotIn("ON CONFLICT", joined,
+                         "no ON CONFLICT may be sent when the index is missing")
+
+    def test_the_null_opportunity_path_never_uses_on_conflict(self):
+        """Standalone documents (opportunity_id NULL) must not need the index."""
+        import server as srv
+        self._drop_index("uq_project_documents_opp_file_path")
+        doc_id = srv._insert_project_document_safely(
+            None, "personal.pdf", "data/b1/personal.pdf", 10, "application/pdf",
+            self.user_id)
+        self.assertTrue(doc_id)
+        row = db.query_one(
+            "SELECT opportunity_id, file_path FROM project_documents WHERE id = %s",
+            (doc_id,))
+        self.assertIsNone(row["opportunity_id"])
+
+    # ── the mail link-time copy (scanner/mail_scanner.py) ──────────────────
+    def _copy_once(self, event_id):
+        return ms.copy_mail_attachments_to_project_detailed(
+            self.opp_id, event_id, self.msg_id)
+
+    def _snapshot_event(self):
+        return db.insert_returning(
+            "INSERT INTO history_events (opportunity_id, category_id, content, created_by) "
+            "VALUES (%s, %s, %s, %s) RETURNING id",
+            (self.opp_id, ms.EMAIL_HISTORY_CATEGORY_ID,
+             json.dumps({"type": "email_snapshot", "message_id": self.msg_id}),
+             self.user_id))
+
+    def test_the_mail_link_copy_works_without_the_project_documents_index(self):
+        """The link-time copy must not 500 when 044 skipped the index."""
+        att_id = self.add_attachment("plan.pdf", b"PLAN")
+        self.stored_file(att_id, "plan.pdf", b"PLAN")
+        event_id = self._snapshot_event()
+        self._drop_index("uq_project_documents_opp_file_path")
+
+        report = self._copy_once(event_id)
+
+        self.assertEqual(report["copied"], 1,
+                         f"the copy must succeed: {report['skipped']}")
+        self.assertEqual(report["skipped"], [])
+        self.assertEqual(len(self.project_files()), 1,
+                         "the file must reach the Documents tab")
+        self.assertEqual(len(self.event_files(event_id)), 1)
+
+    def test_the_mail_link_copy_dedupes_without_the_documents_index(self):
+        att_id = self.add_attachment("plan.pdf", b"PLAN")
+        self.stored_file(att_id, "plan.pdf", b"PLAN")
+        event_id = self._snapshot_event()
+        self._drop_index("uq_project_documents_opp_file_path")
+
+        first = self._copy_once(event_id)
+        second = self._copy_once(event_id)
+        self.assertEqual(first["copied"], 1)
+        self.assertEqual(second["copied"], 0, "the second run must copy nothing")
+        self.assertGreaterEqual(second["existing"], 1)
+        self.assertEqual(len(self.project_files()), 1, "no duplicate document")
+        self.assertEqual(len(self.event_files(event_id)), 1, "no duplicate timeline row")
+
+    def test_the_mail_link_copy_works_without_the_history_attachments_index(self):
+        """The other optional index (migration 043) must not hard-fail either."""
+        att_id = self.add_attachment("plan.pdf", b"PLAN")
+        self.stored_file(att_id, "plan.pdf", b"PLAN")
+        event_id = self._snapshot_event()
+        self._drop_index("uq_history_attachments_mail_attachment")
+        self.assertFalse(ms._unique_index_exists(ms.HISTORY_ATTACHMENTS_UNIQUE_INDEX))
+
+        report = self._copy_once(event_id)
+
+        self.assertEqual(report["copied"], 1,
+                         f"the copy must succeed: {report['skipped']}")
+        self.assertEqual(len(self.event_files(event_id)), 1)
+        self.assertEqual(len(self.project_files()), 1)
+
+    def test_the_mail_link_copy_works_with_both_indexes_missing(self):
+        """Worst case: both optional unique indexes are absent."""
+        att_id = self.add_attachment("plan.pdf", b"PLAN")
+        self.stored_file(att_id, "plan.pdf", b"PLAN")
+        event_id = self._snapshot_event()
+        self._drop_index("uq_project_documents_opp_file_path")
+        self._drop_index("uq_history_attachments_mail_attachment")
+
+        first = self._copy_once(event_id)
+        second = self._copy_once(event_id)
+
+        self.assertEqual(first["copied"], 1, f"skipped: {first['skipped']}")
+        self.assertEqual(first["skipped"], [])
+        self.assertEqual(second["copied"], 0)
+        self.assertEqual(len(self.project_files()), 1)
+        self.assertEqual(len(self.event_files(event_id)), 1)
+
+    def test_the_mail_link_copy_never_sends_on_conflict_without_the_indexes(self):
+        """Assert on the scanner's SQL when both indexes are reported absent."""
+        att_id = self.add_attachment("plan.pdf", b"PLAN")
+        self.stored_file(att_id, "plan.pdf", b"PLAN")
+        event_id = self._snapshot_event()
+        sent: list[str] = []
+        real_execute = db.execute
+
+        def spy_execute(sql, params=None, *a, **k):
+            sent.append(sql)
+            return real_execute(sql, params, *a, **k)
+
+        with patch.object(ms, "_unique_index_exists", return_value=False), \
+             patch.object(db, "execute", side_effect=spy_execute):
+            report = self._copy_once(event_id)
+        self.assertEqual(report["copied"], 1, f"skipped: {report['skipped']}")
+        joined = "\n".join(sent)
+        self.assertIn("INSERT INTO project_documents", joined)
+        self.assertNotIn("ON CONFLICT", joined,
+                         "no ON CONFLICT may be sent when the index is missing")
+
+    # ── the cache ──────────────────────────────────────────────────────────
+    def test_the_index_check_is_cached(self):
+        """The check must hit the DB once, not once per insert."""
+        import server as srv
+        calls = {"n": 0}
+        real_query_one = db.query_one
+
+        def counting_query_one(sql, params=None, *a, **k):
+            if "FROM pg_indexes" in sql:
+                calls["n"] += 1
+            return real_query_one(sql, params, *a, **k)
+
+        with patch.object(db, "query_one", side_effect=counting_query_one):
+            first = srv._unique_index_exists(srv.PROJECT_DOCUMENTS_UNIQUE_INDEX)
+            for _ in range(5):
+                srv._unique_index_exists(srv.PROJECT_DOCUMENTS_UNIQUE_INDEX)
+        self.assertTrue(first)
+        self.assertEqual(calls["n"], 1, "the existence check must be cached")
+
+    def test_the_cache_can_be_reset(self):
+        """`_reset_index_cache` must make the next call re-check the DB."""
+        import server as srv
+        self.assertTrue(srv._unique_index_exists(srv.PROJECT_DOCUMENTS_UNIQUE_INDEX))
+        db.execute("DROP INDEX uq_project_documents_opp_file_path")
+        try:
+            # Still cached True.
+            self.assertTrue(srv._unique_index_exists(srv.PROJECT_DOCUMENTS_UNIQUE_INDEX))
+            srv._reset_index_cache()
+            self.assertFalse(srv._unique_index_exists(srv.PROJECT_DOCUMENTS_UNIQUE_INDEX))
+        finally:
+            db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_project_documents_opp_file_path "
+                "ON project_documents (opportunity_id, file_path) WHERE is_deleted = FALSE")
+            self._reset_caches()
+
+    def test_server_and_scanner_agree_on_the_index_names(self):
+        """The names are duplicated by hand (the scanner cannot import server)."""
+        import server as srv
+        self.assertEqual(srv.PROJECT_DOCUMENTS_UNIQUE_INDEX,
+                         ms.PROJECT_DOCUMENTS_UNIQUE_INDEX)
+        self.assertEqual(srv.HISTORY_ATTACHMENTS_UNIQUE_INDEX,
+                         ms.HISTORY_ATTACHMENTS_UNIQUE_INDEX)
+        # And both actually describe a real index in the test DB.
+        for name in (srv.PROJECT_DOCUMENTS_UNIQUE_INDEX,
+                     srv.HISTORY_ATTACHMENTS_UNIQUE_INDEX):
+            self.assertTrue(
+                bool(db.query_one(
+                    "SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() "
+                    "AND indexname = %s", (name,))),
+                f"{name} must exist in the test DB")
+
+    def test_the_docstring_does_not_claim_a_plain_insert_still_works(self):
+        """The round-3 docstring was misleading (B1) and must be corrected."""
+        import server as srv
+        doc = srv._insert_project_document_safely.__doc__ or ""
+        self.assertNotIn("the plain INSERT still works", doc,
+                         "the misleading claim must be gone")
+        self.assertIn("SELECT-then-INSERT", doc,
+                      "the docstring must describe the fallback")
 
 
 if __name__ == "__main__":
