@@ -107,10 +107,21 @@ def main() -> int:
                   m.date_received, m.account_id, o.title AS opp_title,
                   (SELECT he.id FROM history_events he
                     WHERE he.opportunity_id = l.opportunity_id
-                      AND strpos(he.content, '"message_id": ' || l.message_id) > 0
+                      AND he.content ~ ('"message_id": ' || l.message_id || '([,}])')
                     ORDER BY he.id LIMIT 1) AS event_id,
                   (SELECT COUNT(*) FROM mail_attachments ma
-                    WHERE ma.message_id = l.message_id) AS att_count
+                    WHERE ma.message_id = l.message_id) AS att_count,
+                  (SELECT COUNT(*)
+                     FROM mail_attachments ma
+                     JOIN history_attachments ha
+                       ON ha.event_id = (SELECT he2.id FROM history_events he2
+                           WHERE he2.opportunity_id = l.opportunity_id
+                             AND he2.content ~ ('"message_id": ' || l.message_id || '([,}])')
+                           ORDER BY he2.id LIMIT 1)
+                      AND (ha.mail_attachment_id = ma.id
+                           OR (ha.filename = ma.filename
+                               AND ha.file_size = ma.size_bytes))
+                    WHERE ma.message_id = l.message_id) AS copied_count
              FROM mail_deal_links l
              JOIN mail_messages m ON m.id = l.message_id
              JOIN opportunities o ON o.id = l.opportunity_id"""
@@ -124,6 +135,11 @@ def main() -> int:
     for r in rows:
         if int(r.get("att_count") or 0) <= 0:
             continue
+        # A LEGACY copy (no mail_attachment_id) counts as copied when the
+        # filename + size match — otherwise the dry run would report every
+        # old email as missing files and the real run would duplicate them.
+        if int(r.get("copied_count") or 0) >= int(r.get("att_count") or 0):
+            continue
         if not r.get("event_id"):
             need_entry.append(r)
         else:
@@ -135,7 +151,13 @@ def main() -> int:
         need_entry = [r for r in need_entry if r in work]
         need_files = [r for r in need_files if r in work]
 
+    already_complete = sum(
+        1 for r in rows
+        if int(r.get("att_count") or 0) > 0
+        and int(r.get("copied_count") or 0) >= int(r.get("att_count") or 0)
+    )
     print(f"Linked emails scanned : {len(rows)}")
+    print(f"Already complete      : {already_complete}")
     print(f"Missing timeline entry: {len(need_entry)}")
     print(f"Missing project files : {len(need_files)}")
     print(f"Emails to process     : {len(work)}\n")
@@ -149,6 +171,8 @@ def main() -> int:
     for r in work:
         mid = int(r["message_id"])
         opp = int(r["opportunity_id"])
+        att_count = int(r.get("att_count") or 0)
+        copied_count = int(r.get("copied_count") or 0)
         item = {
             "message_id": mid,
             "opportunity_id": opp,
@@ -158,14 +182,16 @@ def main() -> int:
             "date": str(r.get("date_received") or ""),
             "action": "create_entry_and_copy" if not r.get("event_id") else "copy_files",
             "copied": 0,
-            "total": int(r.get("att_count") or 0),
+            "total": att_count,
+            "already_copied": copied_count,
             "skipped": [],
         }
         if dry_run:
+            missing = max(0, att_count - copied_count)
             item["would_add"] = (
-                f"timeline entry + {item['total']} file(s)"
+                f"timeline entry + {att_count} file(s)"
                 if item["action"] == "create_entry_and_copy"
-                else f"up to {item['total']} file(s)")
+                else f"{missing} file(s)")
             items.append(item)
             print(f"[DRY] {mid} -> project {opp} ({item['project']}): {item['would_add']}"
                   f"  | {item['subject'][:60]}")

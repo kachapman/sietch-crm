@@ -2162,22 +2162,50 @@ def _mail_draft_accessible(user: dict, draft_id: int) -> bool:
 # Best-effort: if IMAP fails, the DB is still updated; we log and continue.
 
 def _imap_part_id_str(att: Any) -> str:
-    """The real IMAP part id of an imap_tools attachment, as a string.
+    """A short, stable identifier for a MIME part.
 
-    Bug fix 2026-11-03: `mail_attachments.imap_part_id` holds a Content-ID
-    (see scanner/mail_scanner.py `_fetch_messages`), NOT the part id, so
-    matching `att_obj.part` against it never matched and the download only
-    ever worked through its filename fallback. The real part id is stored
-    in `remote_part_id`.
+    ⚠ NEVER return `str(att.part)`. In imap_tools 1.14.0, `att.part` is the
+    whole `email.message.EmailMessage` — its string form is the complete
+    MIME part INCLUDING the base64 payload (a 300 KB PDF becomes a 405,411
+    character string). Storing that would put megabytes of base64 into the
+    DB and into every mail API response.
+
+    imap_tools' `MailAttachment` exposes NO part id at all (`content_id` is
+    empty unless the message carries a Content-ID header), so the
+    identifier is derived here:
+
+      1. `cid:<Content-ID>` when the part has one;
+      2. otherwise `sha256:<first 16 hex chars>:<filename>:<size>`.
+
+    Mirrors scanner/mail_scanner.py `_imap_part_id_str` (the scanner cannot
+    import server — server imports the scanner — so the two copies are kept
+    in sync by hand, like EMAIL_HISTORY_CATEGORY_ID).
+
+    The result is capped at 200 chars and never contains payload text.
     """
-    part = getattr(att, "part", None)
-    if part is None:
+    if att is None:
         return ""
-    for attr in ("part_id", "id"):
-        val = getattr(part, attr, None)
-        if val:
-            return str(val)
-    return str(part)
+    cid = ""
+    try:
+        cid = (getattr(att, "content_id", "") or "").strip()
+    except Exception:
+        cid = ""
+    if cid:
+        return ("cid:" + cid)[:200]
+    payload = b""
+    try:
+        payload = getattr(att, "payload", None) or b""
+    except Exception:
+        payload = b""
+    if not isinstance(payload, (bytes, bytearray)):
+        payload = b""
+    filename = ""
+    try:
+        filename = (getattr(att, "filename", "") or "").strip()
+    except Exception:
+        filename = ""
+    digest = hashlib.sha256(bytes(payload)).hexdigest()[:16]
+    return (f"sha256:{digest}:{filename}:{len(payload)}")[:200]
 
 
 def _pick_imap_attachment(imap_msg: Any, att: dict) -> bytes | None:
@@ -12456,7 +12484,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                      WHERE NOT EXISTS (
                          SELECT 1 FROM history_events he
                          WHERE he.opportunity_id = l.opportunity_id
-                           AND strpos(he.content, '"message_id": ' || l.message_id) > 0
+                           AND he.content ~ ('"message_id": ' || l.message_id || '([,}])')
                      )"""
             params: list = []
             if since_days > 0:
@@ -12579,20 +12607,32 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _append_sync_log("info", f"Scanning linked emails for missing project files{scope_str}...")
 
             # Every linked email, with the state of its project copy.
+            #
+            # `copied_count` must count LEGACY copies too — the files copied
+            # BEFORE migration 043 have no `mail_attachment_id`, so counting
+            # only the linked rows would make the dry run report every old
+            # email as "missing files" and the real run would then duplicate
+            # them (bug fix 2026-11-03, review round 2). A copy counts when
+            # the timeline file matches the mail attachment by
+            # mail_attachment_id OR by filename + size.
             sql = """SELECT l.message_id, l.opportunity_id, m.subject, m.from_addr,
                             m.date_received, m.account_id, o.title AS opp_title,
                             (SELECT he.id FROM history_events he
                               WHERE he.opportunity_id = l.opportunity_id
-                                AND strpos(he.content, '"message_id": ' || l.message_id) > 0
+                                AND he.content ~ ('"message_id": ' || l.message_id || '([,}])')
                               ORDER BY he.id LIMIT 1) AS event_id,
                             (SELECT COUNT(*) FROM mail_attachments ma
                               WHERE ma.message_id = l.message_id) AS att_count,
-                            (SELECT COUNT(*) FROM mail_attachments ma
-                               JOIN history_attachments ha ON ha.mail_attachment_id = ma.id
-                               AND ha.event_id = (SELECT he2.id FROM history_events he2
-                                   WHERE he2.opportunity_id = l.opportunity_id
-                                     AND strpos(he2.content, '"message_id": ' || l.message_id) > 0
-                                   ORDER BY he2.id LIMIT 1)
+                            (SELECT COUNT(*)
+                               FROM mail_attachments ma
+                               JOIN history_attachments ha
+                                 ON ha.event_id = (SELECT he2.id FROM history_events he2
+                                     WHERE he2.opportunity_id = l.opportunity_id
+                                       AND he2.content ~ ('"message_id": ' || l.message_id || '([,}])')
+                                     ORDER BY he2.id LIMIT 1)
+                                AND (ha.mail_attachment_id = ma.id
+                                     OR (ha.filename = ma.filename
+                                         AND ha.file_size = ma.size_bytes))
                               WHERE ma.message_id = l.message_id) AS copied_count
                        FROM mail_deal_links l
                        JOIN mail_messages m ON m.id = l.message_id
@@ -12624,7 +12664,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                         m.date_received, m.account_id, o.title AS opp_title,
                                         (SELECT he.id FROM history_events he
                                           WHERE he.opportunity_id = l.opportunity_id
-                                            AND strpos(he.content, '"message_id": ' || l.message_id) > 0
+                                            AND he.content ~ ('"message_id": ' || l.message_id || '([,}])')
                                           ORDER BY he.id LIMIT 1) AS event_id,
                                         (SELECT COUNT(*) FROM mail_attachments ma
                                           WHERE ma.message_id = l.message_id) AS att_count,

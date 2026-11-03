@@ -27,8 +27,16 @@
 --   * mail_attachments.stored_size     — bytes actually written to disk.
 --   * mail_attachments.download_error  — last local-store failure reason
 --                                        (size limit, write error, ...).
---   * mail_attachments.remote_part_id  — the REAL IMAP part id (NOT the
---                                        Content-ID that imap_part_id holds).
+--   * mail_attachments.remote_part_id  — a SHORT, stable identifier for the
+--                                        MIME part: `cid:<Content-ID>` when
+--                                        the part has one, otherwise
+--                                        `sha256:<16 hex>:<filename>:<size>`
+--                                        derived from the payload.
+--                                        ⚠ NOT `str(att.part)`: in
+--                                        imap_tools 1.14.0 `att.part` is the
+--                                        whole EmailMessage, whose string
+--                                        form includes the base64 payload
+--                                        (a 300 KB PDF -> 405,411 chars).
 --                                        Lets the fallback match the right
 --                                        MIME part instead of relying on the
 --                                        filename fallback.
@@ -52,9 +60,20 @@ CREATE INDEX IF NOT EXISTS idx_mail_attachments_content_hash
 
 -- The link-time copy is idempotent through this column: one
 -- history_attachments row per (event, mail attachment).
+--
+-- ⚠ ON DELETE SET NULL, NOT ON DELETE CASCADE.
+-- `mail_attachments` rows are deleted when the mail account is deleted,
+-- when a message is emptied from Trash, and when the mail retention job
+-- purges old mail. With CASCADE that would delete the PROJECT's timeline
+-- file rows — the Oct 29 2026 bug all over again ("deleting the mail
+-- account cascaded mail_attachments away and the project's files
+-- vanished"). SET NULL keeps the project's copy: the timeline row and the
+-- file on disk survive, and only the link back to the mail attachment is
+-- dropped (a later relink of the same file is then recognised as a legacy
+-- copy by filename + size instead).
 ALTER TABLE history_attachments
   ADD COLUMN IF NOT EXISTS mail_attachment_id INTEGER
-    REFERENCES mail_attachments(id) ON DELETE CASCADE;
+    REFERENCES mail_attachments(id) ON DELETE SET NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_history_attachments_mail_attachment
     ON history_attachments (event_id, mail_attachment_id)
@@ -65,3 +84,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_history_attachments_mail_attachment
 CREATE INDEX IF NOT EXISTS idx_history_attachments_event_mail_att
     ON history_attachments (event_id, mail_attachment_id)
     WHERE mail_attachment_id IS NOT NULL;
+
+-- The project-side copy must also be unique per (project, file). Without
+-- this, two concurrent link requests (a double-click on "Link to deal")
+-- could each insert a project_documents row for the same file and the
+-- project would show the PDF twice in its Documents tab.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_project_documents_opp_file_path
+    ON project_documents (opportunity_id, file_path)
+    WHERE is_deleted = FALSE;

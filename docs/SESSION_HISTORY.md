@@ -21,6 +21,41 @@ was NOT touched; the live local server on :8766 was NOT restarted; the
 backfill was run ONLY against a throwaway DB (`mailatt_test_scratch` in the
 `sietch-postgres` container).
 
+**Round 2 (independent review of `240cbf9`): 4 HIGH + 6 MEDIUM issues found
+and fixed.** The review was right on every count — details in
+`docs/bugs/2026-11-03-mail-link-attachments.md` §12:
+- **H1** `str(att.part)` in imap_tools 1.14.0 is the WHOLE EmailMessage —
+  a 300 KB PDF → **405,411 chars** with the base64 inside, written to
+  `remote_part_id` + `attachments_json` + the mail APIs. Now
+  `cid:<Content-ID>` or `sha256:<16hex>:<file>:<size>`, capped at 200.
+  The round-1 tests used a fake `.part_id` attribute that **real
+  imap_tools objects do not have** — they now build real
+  `MailAttachment` objects from real MIME messages.
+- **H2** legacy copies (pre-043, `mail_attachment_id = NULL`) were
+  duplicated by a relink/backfill (1+1 → 2+2). Dedupe now matches
+  `mail_attachment_id` **or** filename+size; the backfill's dry-run counts
+  include legacy copies.
+- **H3** migration 043's FK was `ON DELETE CASCADE` → deleting a mail
+  account / Trash / retention would delete the PROJECT's timeline files
+  (the Oct 29 bug). Now `ON DELETE SET NULL`; the dev DB `sietch_crm`
+  (where 043 was already applied) was corrected in place.
+- **H4** `_fetch_messages` held the whole folder + attachment bytes in RAM
+  → now a **generator**; each message's bytes are staged to disk and moved
+  into place, so the dict never carries the bytes.
+- MEDIUM: `Retry-After` honoured (capped 120 s) + token refreshed before
+  the FIRST attempt; double-click race closed with `ON CONFLICT DO NOTHING`
+  (no plain-insert fallback) + new `uq_project_documents_opp_file_path`;
+  timeline lookup now **exact** (12 must not match 120/1200); the test DB
+  safety check is **mandatory** (`MAILATT_TEST_DB_NAME` required + a
+  denylist that refuses `sietch_crm` even if named); the storage kill
+  switch is documented.
+- **Retention is READY but NOT DECIDED** (Ken's call):
+  `MAIL_ATTACHMENT_DROP_STORED_ON_PURGE` defaults to **false** (keep the
+  files); when true the retention job deletes only the stored bytes of the
+  messages it purges, with a containment check, and NEVER the project's
+  own copy. `MAIL_ATTACHMENT_STORAGE_ENABLED=false` stops the tree growing
+  at all. Flipping the policy is a one-line env change.
+
 **Bug (Ken):** linking an email to a project reported success but the
 project's **Documents tab was empty**. Verified root cause in code:
 1. sync stored attachment **metadata only** (`scanner/mail_scanner.py`
@@ -61,18 +96,21 @@ New settings: `MAIL_ATTACHMENT_MAX_BYTES` (25 MB),
 **Files:** `scanner/mail_scanner.py`, `server.py`, `public/app.js`,
 `migrations/043_mail_attachment_storage.sql` (new),
 `backfill_mail_attachments.py` (new),
-`tests/test_mail_link_attachments.py` (new, 30 tests),
+`tests/test_mail_link_attachments.py` (new, 57 tests),
 `tests/test_mail_link_files_toast.mjs` (new, 6 tests),
 `docs/bugs/2026-11-03-mail-link-attachments.md` (new), CHANGELOG,
 `.github/workflows/smoke.yml` (loads the schema into the CI postgres
 service and runs the new Python suite).
 
-**Tests:** `tests/test_mail_link_attachments.py` 30/30 OK (real PostgreSQL,
-`MAILATT_TEST_DB_NAME` refuses to run against an unexpected DB);
-`tests/test_mail_link_files_toast.mjs` 6/6 OK. Four true-negative checks
-verified by temporarily reverting the fix (the scanner repair path, the
-idempotency check, the bulk-link file note, the single-link count block —
-each fails its test). Existing mail suites all green:
+**Tests:** `tests/test_mail_link_attachments.py` **57/57 OK** (real
+PostgreSQL; `MAILATT_TEST_DB_NAME` is now REQUIRED, must match exactly,
+and `sietch_crm` is refused by a denylist even when named explicitly);
+`tests/test_mail_link_files_toast.mjs` 6/6 OK. **Nine verified
+true-negative checks** — every fix was confirmed to fail its test when the
+fix was temporarily reverted (H1 payload-in-identifier, H2 legacy dedupe,
+H3 CASCADE FK, H4 list-vs-generator, the `strpos` prefix match, the round-1
+repair path, the round-1 idempotency check, and both JS toasts). Existing
+mail suites all green:
 `test_attachment_mirror_and_bookmark_titles` 9, `test_email_project_copy` 7,
 `test_linked_email_attachments` 5, `test_mail_link_history` 13,
 `test_mail_behaviors` 14, `test_mail_polling` 9, `test_mail_incremental` 15,
@@ -96,12 +134,20 @@ attachment payload in the scanner's message dict broke
 WHOLE mail sync. The payload is now stripped before the JSON dump; a
 regression test covers it.
 
-**Deferred (see the bug doc §9):** pruning of `data/mail-attachments/`;
-the new source tree is not in the backup bundle; the 25 MB limit is per
-file, not per message; the link API is still synchronous; existing
+**Deferred (see the bug doc §9):** retention/backup policy for
+`data/mail-attachments/` (Ken's call — the code is ready, §5.1); the new
+source tree is not in the backup bundle; the 25 MB limit is per file, not
+per message; the link API is still synchronous; existing
 `history_attachments.mail_attachment_id` values are not backfilled; the old
 `imap_part_id` column still holds Content-IDs; the mail modal's own
 attachment list still resolves live.
+
+**Dev DB note:** migration `043` had already been applied to the shared dev
+database `sietch_crm` during round 1; it was corrected in place to
+`ON DELETE SET NULL` + the new `uq_project_documents_opp_file_path`. That
+database holds **no test rows** (1 user = the original `dev@localhost`, 0
+test opportunities, 0 test mail accounts). The test suite now refuses to
+run against `sietch_crm` at all.
 
 **Next step for Ken:** review the dry-run report, then decide on the
 rollout (bug doc §8). Nothing is merged or deployed.

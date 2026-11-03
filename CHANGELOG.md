@@ -4,6 +4,49 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Linked emails don't put their PDFs/documents in the project's Documents tab (2026-11-03, branch `fix-mail-attachments`)
 
+**Round 2 (independent review of `240cbf9`): 4 HIGH + 6 MEDIUM issues found
+and fixed.** H1: `_imap_part_id_str` returned `str(att.part)` — in
+imap_tools 1.14.0 `att.part` is the whole `EmailMessage`, so a 300 KB PDF
+became a **405,411-char** string with the base64 payload inside, written to
+`mail_attachments.remote_part_id` and `mail_messages.attachments_json` and
+returned by the mail APIs. The identifier is now `cid:<Content-ID>` or
+`sha256:<16 hex>:<filename>:<size>`, capped at 200 chars, never payload
+text; the round-1 tests used a fake `.part_id` attribute that real
+imap_tools objects do not have and now build real `MailAttachment` objects
+from real MIME messages. H2: files copied before migration 043 have
+`mail_attachment_id = NULL`, so the dedupe missed them and a relink/backfill
+duplicated every legacy file (1 timeline row + 1 Documents row became 2+2);
+the dedupe now matches on `mail_attachment_id` **or** filename + size (in
+this event or another event of the same project), and the backfill's
+dry-run counts include legacy copies. H3: migration 043's FK was
+`ON DELETE CASCADE` — deleting a mail account / emptying Trash / the
+retention purge would have deleted the **project's** timeline files (the
+Oct 29 bug again); it is now `ON DELETE SET NULL` (043 has not shipped, so
+the migration was edited; the dev DB `sietch_crm`, where 043 had already
+been applied, was corrected in place). H4: `_fetch_messages` built a list of
+the whole folder with the attachment bytes inside — a first sync /
+renumbering / watermark reset could take the CRM down; it is now a
+**generator** that fetches and yields one message at a time, staging each
+message's bytes to disk (the dict carries a path, never the bytes) and
+moving the staged file into place. MEDIUM: `Retry-After` (429/503) is
+honoured (capped at 120 s) and the mailbox token is refreshed **before the
+first attempt**, not just the retries; the double-click race is closed with
+`ON CONFLICT ... DO NOTHING` on both the timeline and the Documents insert
+(plus a new `uq_project_documents_opp_file_path` index) — the plain-insert
+fallback that bypassed the dedupe is gone; the timeline lookup is now
+**exact** (`strpos('"message_id": 12')` also matched 120 and 1200); the test
+suite's DB safety check is **mandatory** (`MAILATT_TEST_DB_NAME` required,
+must match, and `sietch_crm` is on a denylist); `MAIL_ATTACHMENT_STORAGE_ENABLED`
+is documented as the kill switch. Retention for `data/mail-attachments/` is
+**ready but NOT decided** — `MAIL_ATTACHMENT_DROP_STORED_ON_PURGE` defaults
+to **false** (keep the files) and flips the policy with no code change; the
+project's own copy is never touched. Tests: 57 Python (up from 30) + 6 JS;
+every fix has a verified true-negative check (the test was confirmed to
+fail with the fix reverted). Not deployed, not merged. Full write-up:
+`docs/bugs/2026-11-03-mail-link-attachments.md` §12.
+
+### Round 1
+
 Live bug (Ken): linking an email to a project reported **success** but the
 project's Documents tab stayed empty. Root cause, verified in code:
 (1) at sync time the scanner stored attachment **metadata only**
