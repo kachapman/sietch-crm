@@ -683,6 +683,21 @@ try:
     db.execute("ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS show_branding_footer BOOLEAN NOT NULL DEFAULT TRUE")
 except Exception:
     pass
+# Migration 045: branding extras (website, license, signer title). Same
+# additive pattern as above so a database that skipped the migration files
+# still gets the columns.
+try:
+    db.execute("ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS company_website TEXT NOT NULL DEFAULT ''")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS company_license TEXT NOT NULL DEFAULT ''")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS signature_title TEXT NOT NULL DEFAULT ''")
+except Exception:
+    pass
 
 # Migration 022: service_feeds table (third-party status / webhook → notifications)
 try:
@@ -1996,6 +2011,8 @@ def _resolve_document_template(template_id) -> dict | None:
         "company_city_state_zip": "",
         "company_phone": "",
         "company_email": "",
+        "company_website": "",
+        "company_license": "",
         "primary_color": "#1a1a1a",
         "invoice_title": "INVOICE",
         "coc_title": "CERTIFICATE OF COMPLETION",
@@ -2004,6 +2021,7 @@ def _resolve_document_template(template_id) -> dict | None:
         "default_line_items": "[]",
         "show_signature": False,
         "signature_name": "",
+        "signature_title": "",
         "signature_path": None,
         "logo_path": None,
     }
@@ -10157,15 +10175,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         row = db.query_one(
             """INSERT INTO document_templates
                (name, company_name, company_address, company_city_state_zip,
-                company_phone, company_email, primary_color,
+                company_phone, company_email, company_website, company_license,
+                primary_color,
                 invoice_title, coc_title, default_terms, default_sales_rep,
-                default_line_items, show_signature, signature_name, is_default)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                default_line_items, show_signature, signature_name,
+                signature_title, is_default)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                RETURNING id""",
             (data["name"],
              data.get("company_name", ""), data.get("company_address", ""),
              data.get("company_city_state_zip", ""), data.get("company_phone", ""),
-             data.get("company_email", ""), data.get("primary_color", "#1a1a1a"),
+             data.get("company_email", ""),
+             data.get("company_website", ""), data.get("company_license", ""),
+             data.get("primary_color", "#1a1a1a"),
              data.get("invoice_title", "INVOICE"),
              data.get("coc_title", "CERTIFICATE OF COMPLETION"),
              data.get("default_terms", "Due on receipt"),
@@ -10173,6 +10195,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
              line_items_json,
              data.get("show_signature", True),
              data.get("signature_name", ""),
+             data.get("signature_title", ""),
              data.get("is_default", False)),
         )
         _json_response(self, 201, {"id": row["id"]})
@@ -10198,9 +10221,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         fields = []
         params = []
         for key in ("name", "company_name", "company_address", "company_city_state_zip",
-                     "company_phone", "company_email", "primary_color",
+                     "company_phone", "company_email", "company_website",
+                     "company_license", "primary_color",
                      "invoice_title", "coc_title", "default_terms", "default_sales_rep",
-                     "show_signature", "signature_name", "show_branding_footer", "is_default"):
+                     "show_signature", "signature_name", "signature_title",
+                     "show_branding_footer", "is_default"):
             if key in data:
                 fields.append(f"{key} = %s")
                 params.append(data[key])
@@ -11231,6 +11256,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     include_signature=include_signature,
                     signature_name=signature_name,
                     signature_path=signature_path,
+                    completion_date=completion_date,
                 )
         except Exception as exc:
             log_infra_event("error", f"PDF generation failed for opp {opp_id}: {exc}", source="doc-coc")
@@ -11439,6 +11465,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     include_signature=include_signature,
                     signature_name=signature_name,
                     signature_path=signature_path,
+                    completion_date=completion_date,
                 )
         except Exception as exc:
             log_infra_event("error", f"PDF generation failed for user {user['id']}: {exc}", source="doc-coc-standalone")
@@ -11504,6 +11531,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         comp_city = template.get("company_city_state_zip") or ""
         comp_phone = template.get("company_phone") or ""
         comp_email = template.get("company_email") or ""
+        # Branding extras (migration 045). Empty -> omitted, never a blank line.
+        comp_website = (template.get("company_website") or "").strip()
+        comp_license = (template.get("company_license") or "").strip()
+        if comp_license and not comp_license.lower().startswith(("lic", "#")):
+            comp_license = "License " + comp_license
+        sig_title = (template.get("signature_title") or "").strip()
         invoice_title = template.get("invoice_title") or "INVOICE"
         logo_path = template.get("logo_path")
         # Compute grand total
@@ -11562,6 +11595,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if comp_email:
             pdf.set_x(page_w - margin_r - 2.5)
             pdf.cell(2.5, 0.15, _doc_pdf_safe(comp_email), align="R", ln=1)
+        if comp_website:
+            pdf.set_x(page_w - margin_r - 2.5)
+            pdf.cell(2.5, 0.15, _doc_pdf_safe(comp_website), align="R", ln=1)
+        if comp_license:
+            pdf.set_x(page_w - margin_r - 2.5)
+            pdf.cell(2.5, 0.15, _doc_pdf_safe(comp_license), align="R", ln=1)
         # Divider
         pdf.set_draw_color(180, 180, 180)
         pdf.set_line_width(0.01)
@@ -11640,6 +11679,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             amt = float(li.get("amount") or 0)
             if not desc and amt == 0:
                 continue
+            # $0.00 rows are hidden (Sietch decision 2026-11-03). They add
+            # nothing to the grand total either way.
+            if amt == 0:
+                continue
             # Page break check
             if y + row_h + 0.6 > page_h - 0.5:
                 # Footer on previous page implicitly via header below; just break
@@ -11705,6 +11748,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     pdf.set_xy(sig_x, sig_y + sig_h + 0.1)
                     pdf.set_font("Helvetica", "", 8)
                     pdf.cell(sig_w, 0.15, _doc_pdf_safe(f"By {signature_name or sales_rep or 'Representative'}"), align="L")
+                    if sig_title:
+                        pdf.set_x(sig_x)
+                        pdf.cell(sig_w, 0.15, _doc_pdf_safe(sig_title), align="L")
                     pdf.set_x(sig_x)
                     pdf.cell(sig_w, 0.15, f"Date: {invoice_date}", align="L")
             except Exception:
@@ -11725,7 +11771,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     def _create_coc_pdf(self, output_path, customer_name, claim_number,
                          project_number, street, city_state_zip,
                          sales_rep, note, template,
-                         include_signature, signature_name, signature_path):
+                         include_signature, signature_name, signature_path,
+                         completion_date=None):
         """Render a Certificate of Completion PDF (Letter portrait) using fpdf2."""
         from fpdf import FPDF
         try:
@@ -11738,9 +11785,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         comp_city = template.get("company_city_state_zip") or ""
         comp_phone = template.get("company_phone") or ""
         comp_email = template.get("company_email") or ""
+        # Branding extras (migration 045). Empty -> omitted, never a blank line.
+        comp_website = (template.get("company_website") or "").strip()
+        comp_license = (template.get("company_license") or "").strip()
+        if comp_license and not comp_license.lower().startswith(("lic", "#")):
+            comp_license = "License " + comp_license
+        sig_title = (template.get("signature_title") or "").strip()
         coc_title = template.get("coc_title") or "CERTIFICATE OF COMPLETION"
         logo_path = template.get("logo_path")
-        today = datetime.now().strftime("%m/%d/%Y")
+        # The completion date the user entered; falls back to today.
+        today = (completion_date or "").strip() or datetime.now().strftime("%m/%d/%Y")
         pdf = FPDF(orientation="P", unit="in", format="Letter")
         pdf.set_auto_page_break(False)
         pdf.set_margins(left=0.75, top=0.75, right=0.75)
@@ -11782,6 +11836,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             pdf.set_x(margin_l)
         if comp_phone:
             pdf.cell(usable_w, 0.16, _doc_pdf_safe(comp_phone), align="R", ln=1)
+        if comp_website:
+            pdf.cell(usable_w, 0.16, _doc_pdf_safe(comp_website), align="R", ln=1)
+            pdf.set_x(margin_l)
+        if comp_license:
+            pdf.cell(usable_w, 0.16, _doc_pdf_safe(comp_license), align="R", ln=1)
+            pdf.set_x(margin_l)
         pdf.set_text_color(0, 0, 0)
         # ── Title ─────────────────────────────────────────────
         pdf.set_xy(margin_l, 2.55)
@@ -11848,6 +11908,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     pdf.set_xy(sig_x, sig_y + sig_h + 0.1)
                     pdf.set_font("Helvetica", "", 8)
                     pdf.cell(sig_w, 0.14, _doc_pdf_safe(f"By {signature_name or sales_rep or 'Representative'}"), align="L")
+                    if sig_title:
+                        pdf.set_x(sig_x)
+                        pdf.cell(sig_w, 0.14, _doc_pdf_safe(sig_title), align="L")
                     pdf.set_x(sig_x)
                     pdf.cell(sig_w, 0.14, f"Date: {today}", align="L")
             except Exception:
