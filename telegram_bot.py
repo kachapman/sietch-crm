@@ -31,6 +31,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger("crm_bot")
 
+# The bot token is part of every Telegram Bot API URL
+# (https://api.telegram.org/bot<TOKEN>/...). httpx logs each request URL at
+# INFO, which wrote the full token into the service journal on every call
+# (live 2026-11: token found verbatim in the bot log). Silence httpx/httpcore
+# to WARNING so request URLs — and the token inside them — are never logged.
+# (The boot log below intentionally prints only the first 10 chars.)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 # Load .env file like server.py does
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 if os.path.isfile(_env_path):
@@ -98,6 +107,24 @@ def _guess_mime(filename: str) -> str:
     return _MIME_MAP.get(ext, "application/octet-stream")
 
 # ── Helpers ──
+
+NOTIFY_TOGGLE_PREFIX = "notify_toggle:"
+
+
+def _parse_notify_toggle(data: str) -> int | None:
+    """Parse a 'notify_toggle:<user_id>' callback. Returns the uid or None.
+
+    Live 2026-11-02: the handler sliced off 13 chars but the prefix is
+    14 chars, so every tap parsed ":<uid>", raised ValueError, and silently
+    did nothing (picker stuck at "0 selected"). The width is derived from
+    the prefix here, never hard-coded.
+    """
+    if not isinstance(data, str) or not data.startswith(NOTIFY_TOGGLE_PREFIX):
+        return None
+    try:
+        return int(data[len(NOTIFY_TOGGLE_PREFIX):])
+    except (ValueError, TypeError):
+        return None
 
 BOT_AUTH_HEADERS: dict[str, str] = {}
 
@@ -1593,13 +1620,12 @@ def main() -> None:
             )
             return
 
-        if data.startswith("notify_toggle:"):
+        if data.startswith(NOTIFY_TOGGLE_PREFIX):
             pending = _pending_note.get(chat_id)
             if not pending or pending.get("step") != "awaiting_notify":
                 return
-            try:
-                uid = int(data[13:])
-            except (ValueError, IndexError):
+            uid = _parse_notify_toggle(data)
+            if uid is None:
                 return
             selected = pending.get("notifyUsers", [])
             if uid in selected:

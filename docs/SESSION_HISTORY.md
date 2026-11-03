@@ -11,6 +11,80 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-02 (live bot-note failures, branch `fix-telegram-dupes`)
+
+**Status: DONE ON BRANCH, NOT DEPLOYED, NOT MERGED.** Read-only prod
+investigation (journalctl + `docker compose logs`, no restarts/writes;
+token redacted in all handling). Two live bugs, both on deployed `main`:
+
+1. **"Failed to add note" (9:21 AM ET):** bot journal 14:21:36 `POST
+   /api/bot/note -> 404`; dashboard log shows the same request then answered
+   200 — `self.send_error(404)` sat mid-function before the route (added by
+   `ecd70bb`), so the handler ghost-executed. Ken's 14:21:36 + 14:21:53
+   attempts likely both inserted ghost notes. Same stray 404 broke ALL bot
+   POSTs below it (heartbeat #5640 failing ~4 days, config-check, task-*, …).
+2. **Notify taps dead:** `int(data[13:])` vs 14-char prefix → ValueError →
+   silent return; journal shows taps (answerCallbackQuery 14:21:18/26) with
+   no follow-up action. Only wrong slice of its kind (audited all others).
+
+**Fix:** 404 moved to true fallthrough at end of `_handle_bot_api_post`;
+`_parse_notify_toggle()` helper + handler use. **042 safety:** UNIQUE key is
+notifications-only, keyed per type/event/reply/recipient; notes untouched,
+INSERTs guarded by try/except → safe together with f814d66 (disjoint paths).
+**Tests:** `tests/test_bot_note_flow.py` 11/11 (true negative: 11/11 fail on
+deployed 815d634 via temp worktree); all prior suites still green. Note:
+pre-existing unrelated stash `WIP on main: 42174d3` (2026-10-16) left alone.
+**Files:** `server.py` (404 move), `telegram_bot.py` (toggle parser),
+`tests/test_bot_note_flow.py`, CHANGELOG. Deploy together with f814d66;
+post-deploy check Ken's project for the two ghost notes from 14:21.
+
+## Previous session summary (for next resume)
+
+**Date:** 2026-11-02 (Telegram ~91x duplicate + token-in-journal, branch `fix-telegram-dupes`)
+
+**Status: DONE ON BRANCH, NOT DEPLOYED, NOT MERGED** — both fixes implemented
+and tested on `fix-telegram-dupes` (off deployed `main`). No prod DB writes,
+no restarts: all DB proof ran on scratch DB `tg_dupe_scratch` (local dev
+postgres); pre-existing local logs (`/tmp/telegram-bot-audit.log`,
+`/tmp/crm-server.log`) used read-only.
+
+**BUG 1 root cause (confirmed by code + scratch-DB reproduction):** the
+notification dispatcher — the ONLY sender of notification Telegram messages —
+had no idempotency: (a) SELECT-then-SEND-then-MARK in separate statements
+(two overlapping passes both delivered the same row — reproduced: 2 threads
+→ 2 deliveries for 1 row); (b) any row left with `telegram_sent` FALSE was
+re-sent on EVERY 5s poll forever, no backoff/cap/dead-letter (reproduced: 5
+cycles with a lost mark → 5 deliveries of 1 row); (c) tag-notification
+INSERTs had no dedupe guard (a retried reply POST queued a second row for
+the same reply). The 91 copies drained 10-per-poll-cycle in under a minute,
+matching Ken's "all at 6:11 PM".
+**Fix:** atomic claim UPDATE (attempt bump + 300s lease, gated on unsent /
+under-cap / lease-expired) before any send; failure parks behind exponential
+backoff (60s doubling, 1h cap); 10 attempts → dead-letter (marked sent,
+drawer copy kept); `dedupe_key` UNIQUE (migration `042`) + `ON CONFLICT DO
+NOTHING` at all three creation sites (web note, reply, bot note).
+**BUG 2:** httpx logs full `api.telegram.org/bot<TOKEN>/…` URLs at INFO —
+919 token-bearing lines in the bot log; same `basicConfig(INFO)` in
+`server.py` put the token in the server journal on every dispatch send.
+Both entry points now set `httpx`/`httpcore` to WARNING (boot log keeps only
+the 10-char prefix). **Token must be rotated by Ken via BotFather** (new
+value → `.env` `TELEGRAM_BOT_TOKEN`); not rotated here.
+**Tests:** `tests/test_telegram_dedupe.py` 17/17 (incl. negative control:
+0/17 on pre-fix code); existing suites green (`test_telegram_bot` 120,
+`test_reply_tagged_telegram` 5, `test_mail_polling` 9,
+`test_notification_snippet` 5, `test_service_feed_delivery` 36, event_bus /
+backup / automation / presence / timesheet suites).
+**Deploy steps (on the droplet, NOT done):** `git pull`, apply migration
+(auto-runs at boot via `db.init_db`), `docker compose build dashboard` +
+`up -d dashboard`, verify one delivery + no token in
+`docker compose logs dashboard | grep -i token`, then rotate the token +
+restart bot + server.
+**Files:** `notification_dispatcher.py`, `server.py` (3 INSERT sites +
+logger), `telegram_bot.py` (logger), `migrations/042_*`,
+`tests/test_telegram_dedupe.py`, CHANGELOG.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-11-01 (follow-up due-date off-by-one fix, branch `fix-date-only-parsing`)
 
 **Status: DEPLOYED 2026-11-01 (~20:29 ET)** — merged `fix-date-only-parsing`

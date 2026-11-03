@@ -2,6 +2,64 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Live bot-note failures: unreachable /api/bot/note + dead notify picker (2026-11-02, branch `fix-telegram-dupes`)
+
+Live bugs on the deployed bot (Ken, 9:21 AM ET 2026-11-02), both confirmed
+in the prod journal + dashboard access log — NOT caused by the f814d66
+duplicate-send work (different subsystem: note creation, not delivery).
+(1) Every bot note failed with "Failed to add note": commit `ecd70bb` had
+inserted `self.send_error(404)` in the middle of `_handle_bot_api_post`,
+BEFORE the `/api/bot/note` route — the handler became unreachable dead code
+that still executed server-side (dashboard log shows `POST /api/bot/note`
+404 immediately followed by 200 for the same request: the note WAS created
+while the bot reported failure — ghost-writes; Ken's 14:21:36 and 14:21:53
+attempts both inserted). The same stray 404 broke every bot POST below it
+(heartbeat failure #5640, config-check, task-*, stage, settings, upload,
+activity). Fix: the 404 now sits after the last route as the true
+fallthrough. (2) Tapping a user in "Who should be notified?" never
+selected: `int(data[13:])` on the 14-char `notify_toggle:` prefix parsed
+`":<uid>"`, raised ValueError, and silently returned (14:21:18/26 taps
+show answerCallbackQuery with no follow-up action). Only slice of its kind
+wrong (all other `data[N:]` prefixes audited correct). Fix: `_parse_notify_toggle()`
+derives the width from the prefix. Tests: `tests/test_bot_note_flow.py`
+(11 tests: parser, slice/route-order guards, live route tests proving 200 —
+11/11 fail on deployed code). 042 safety: the UNIQUE key is on the
+notifications table only (keyed by type/event/reply/recipient, NULL for
+other types so legacy rows never conflict); note creation is untouched, and
+all three notification INSERTs sit inside try/except so a missing migration
+degrades to "note saved, no notification" rather than a 500. Not deployed,
+not merged — safe to deploy together with f814d66 (disjoint paths; combined
+effect: bot notes actually save once, and their notifications deliver once).
+
+## Telegram ~91x duplicate + bot token in journal (2026-11-02, branch `fix-telegram-dupes`)
+
+Live bug (Ken, ~2026-10-30): one `reply_tagged` notification ("Claudiu
+Chereji replied to a note you're tagged on / Project: Katherine Nelson")
+was delivered to Telegram ~91 times in a row. Root cause: the notification
+dispatcher (the sole sender) had no idempotency — SELECT-then-SEND-then-MARK
+in separate statements (overlapping passes double-sent), any row left
+unmarked was re-sent on EVERY 5s poll forever (no backoff, no cap, no
+dead-letter), and tag-notification INSERTs had no dedupe guard (a retried
+POST queued a second row for the same reply). Fix:
+`notification_dispatcher.py` claims each row with one atomic UPDATE
+(attempt bump + 5-min lease, only if unsent/under-cap/lease-expired) BEFORE
+any network call — losers never send; failed sends park behind exponential
+backoff (60s doubling, 1h cap); rows hitting 10 attempts are dead-lettered
+(marked sent, drawer copy untouched, error logged) instead of retried
+forever; `build_tag_dedupe_key()` + `dedupe_notify_list()` with a
+`dedupe_key` UNIQUE column (migration `042`) make creation idempotent
+(`ON CONFLICT DO NOTHING`) at all three sites (web note, reply, bot note).
+Known companion bug: httpx logged full Telegram API URLs — token included —
+at INFO into the service journal (919 token-bearing lines found in the bot
+log); both entry points (`telegram_bot.py`, `server.py`) now silence
+`httpx`/`httpcore` to WARNING. Tests: new `tests/test_telegram_dedupe.py`
+(17 tests: atomic claim, no-send-without-claim, lost-mark storm, backoff,
+cap/dead-letter, dedupe keys, SQL + log-silence guards; verified 0/17 pass
+on pre-fix code). ACTION REQUIRED (Ken, via BotFather): rotate the
+Telegram bot token — the old one is in shell-accessible journals — and put
+the new value in `.env` as `TELEGRAM_BOT_TOKEN` (server `bot_config` falls
+back to it). Not deployed, not merged.
+
 ## Follow-up due date off-by-one: date-only strings parse as local dates (2026-11-01)
 
 Live bug 2026-11-01 (project #30, stored `expected_close_date 2026-10-26`):
