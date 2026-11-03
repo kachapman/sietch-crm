@@ -11,6 +11,103 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-03 (Invoice + COC PDF upgrade, branch `invoice-coc-upgrade`)
+
+**Status: implemented + tested, NOT deployed, NOT merged, NOT pushed.**
+Branch `invoice-coc-upgrade` (from `main` @ `c637526`) in the worktree
+`~/Projects/new-crm-invoice-coc`. The main checkout `~/Projects/new-crm`
+was NOT touched; `~/Projects/new-crm-mail-attachments` was NOT touched.
+Production (147.182.164.19) was NOT contacted. The running dev server
+(port 8766) and the docker containers were NOT restarted.
+
+**What changed.** The Invoice and Certificate of Completion PDFs now render
+through a port of the Sherwood Toolbox "v26.5" document builders
+(kachapman/sherwood-toolbox @ `3d5bf83`) instead of the hand-rolled fpdf2
+code inside `server.py`. New `doc_pdf/` package:
+
+- `doc_pdf/pdf_common.py` — port of `toolbox/tools/documents/pdf_common.py`
+  (styles, `accent` / `on_accent` / `text_accent` / `tint`, `company_lines`,
+  `money`, `numbered_canvas` = accent bar + "Page x of y" footer).
+- `doc_pdf/invoice_pdf.py` — port of `toolbox/tools/documents/invoice_pdf.py`
+  (`build_invoice(out_path, brand, job, items) -> total`).
+- `doc_pdf/coc_pdf.py` — port of `toolbox/tools/documents/coc_pdf.py`
+  (`build_coc(out_path, brand, job, opts)`).
+- `doc_pdf/mapping.py` — Sietch-specific PURE mapping layer:
+  `document_templates` row + request payload → `brand` / `job` / `items` /
+  `opts`. No DB, no HTTP, no writes.
+
+The four endpoints (`POST /api/v2/projects/<id>/invoice`, `/coc`,
+`POST /api/v2/documents/invoice`, `/coc`) keep their URLs, request shapes,
+response shapes, output file locations, `project_documents` inserts
+(including `opportunity_id = NULL` for standalone) and `history_events`
+action notes. `server.py` gained `_resolve_doc_layout()`,
+`_modern_pdf_ready()`, `_create_invoice_pdf_modern()`,
+`_create_coc_pdf_modern()`; the four handlers dispatch on the layout.
+`public/app.js` gained a "PDF Layout" field on both modals.
+
+**Layout switch / rollback without a redeploy:** `payload["layout"]`
+("classic" | "modern", from the new modal field) wins, else the
+`SIETCH_DOC_LAYOUT` env var, else the default `"modern"`. The classic fpdf2
+renderers are untouched and still in `server.py`.
+
+**Dependency:** `reportlab>=4.0,<5` added to `requirements.txt` AND to the
+hardcoded `RUN pip install` line in the `Dockerfile` (the image does not use
+requirements.txt — the exact trap `tests/test_pdf_dependency.py` guards),
+plus `COPY doc_pdf ./doc_pdf` (the `COPY *.py ./` glob misses a package
+directory). New guard suite `tests/test_reportlab_dependency.py`.
+
+**Behaviour fixes / deviations from upstream** (full table in the feature
+doc): the COC now honours the posted `completion_date` (the classic
+renderer ignored it and stamped today); the invoice keeps a signature block
+via an optional `signature` dict on `build_invoice` (upstream has none, the
+classic Sietch invoice did); the COC statement uses the Sietch wording
+("Work completed per agreement.") and there is NO property-owner signature
+line (matches the classic Sietch COC; upstream defaults to True); the COC
+title renders "Certificate of Completion" (upstream's `str.title()` gives
+"Certificate Of Completion"); `brand["website"]`, `brand["license"]` and
+`opts["signer_title"]` stay blank (no `document_templates` columns exist);
+NO running invoice-number counter was ported — Sietch's invoice number is
+still the payload value or the project's `project_number`. No DB migration.
+
+**Tests (all `nice -n 10 ionice -c3`):** `tests/test_invoice_coc_modern.py`
+32/32 (mapping, builders, layout switch, and the four HTTP handlers with a
+mocked DB — asserts the 201 shape, the `project_documents` insert carrying
+the `opportunity_id`, the standalone `opportunity_id = NULL`, the classic
+fallback still rendering, the posted `completion_date` being honoured);
+`tests/test_reportlab_dependency.py` 6/6; `tests/test_pdf_dependency.py`
+2/2; `tests/test_reports.py` 33/33; `tests/test_doc_download_auth.py` 19/19;
+`tests/test_documents_batch_download.py` 6/6; `tests/test_documents_pagination.mjs`
+16/16. **Full Python suite: 61 passed, 2 failed** — the 2 failures
+(`test_scanner_toggle_gating.py`, `test_sync_pull_deals_fields.py`) are
+PRE-EXISTING on `main` @ c637526 (verified in the main checkout) and
+unrelated. **Full Node suite: 35/35 files pass.**
+
+**Sample review pack:** `tmp/invoice-coc-review/` (gitignored, NOT
+committed) — modern + classic invoice and COC for 3 projects plus a 60-line
+3-page modern invoice, each with a page-1 PNG. Regenerate with
+`scripts/make_invoice_coc_review.py` (reads the local sietch-postgres DB
+READ-ONLY via a read-only psycopg2 connection; falls back to seeded sample
+data when the DB has no rows). The local `sietch_crm` DB had 0
+`document_templates` and 0 `opportunities`, so a throwaway DB
+(`sietch_inv_coc_review`) was seeded for the review and dropped afterwards.
+
+**Docs:** `docs/features/2026-11-03-invoice-coc-upgrade.md` (full field
+mapping table, 11 upstream deviations, 5 gaps, 8 decisions for Ken, deploy
+note, test results, deferred list). CHANGELOG entry added.
+
+**Open decisions for Ken:** default layout; property-owner line on the COC;
+zero-amount row handling; the COC statement wording; whether to add
+`website` / `license` / `signer_title` columns to `document_templates`;
+whether to extract the builders into a shared pip package instead of a copy;
+whether to add a "Base charge" UI field for `base_amount`; deploy timing.
+
+**Deploy note:** needs `docker compose build` for `reportlab`. Deploy late
+at night per Ken.
+
+---
+
+## Previous session summary
+
 **Date:** 2026-11-02 (live bot-note failures, branch `fix-telegram-dupes`)
 
 **Status: DEPLOYED 2026-11-02 (~23:35 ET)** — merged `fix-telegram-dupes`

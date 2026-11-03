@@ -2,6 +2,61 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Invoice + Certificate of Completion PDFs upgraded to the Sherwood "modern" builders (2026-11-03, branch `invoice-coc-upgrade`)
+
+The Invoice and Certificate of Completion PDFs now render through a port of
+the Sherwood Toolbox "v26.5" document builders (kachapman/sherwood-toolbox
+@ 3d5bf83), instead of the hand-rolled fpdf2 code that lived inside
+`server.py`. New `doc_pdf/` package: `pdf_common.py` (shared styles, accent
+helpers, `company_lines`, `money`, the numbered-page canvas with the accent
+bar and "Page x of y" footer), `invoice_pdf.py` (`build_invoice`), `coc_pdf.py`
+(`build_coc`), and `mapping.py` (a pure, unit-testable mapping layer from
+`document_templates` + the request payload to the builders' `brand` / `job` /
+`items` / `opts`). All four endpoints (`POST /api/v2/projects/<id>/invoice`,
+`/coc`, `POST /api/v2/documents/invoice`, `/coc`) keep their URLs, request
+shapes, response shapes, output locations, `project_documents` inserts and
+`history_events` action notes.
+
+New dependency: `reportlab>=4.0,<5`, added to `requirements.txt` **and** to
+the hardcoded `RUN pip install` line in the `Dockerfile` (the image does not
+use `requirements.txt` — the exact failure mode
+`tests/test_pdf_dependency.py` was written to catch), plus
+`COPY doc_pdf ./doc_pdf` because the `COPY *.py ./` glob does not pick up a
+package directory. New guard suite `tests/test_reportlab_dependency.py`.
+
+The classic fpdf2 renderers are kept behind a switch: `payload["layout"]`
+(`"classic"` | `"modern"`, exposed as a "PDF Layout" field in the Invoice and
+COC modals) or the `SIETCH_DOC_LAYOUT` env var, defaulting to `"modern"`.
+Ken can roll back without a code redeploy. The classic renderers also fix a
+visible defect: the old footer printed a literal `Page 1 of (1)` placeholder.
+
+Behaviour fixes and Sietch-specific deviations: the COC now honours the
+`completion_date` the modal has always posted (the classic renderer ignored
+it and stamped today's date); the invoice keeps a signature block (upstream
+Sherwood has none, the classic Sietch invoice did) via an optional
+`signature` dict on `build_invoice`; the COC statement uses the Sietch
+wording and there is no property-owner signature line (matching the classic
+Sietch COC); the COC title renders as "Certificate of Completion" (upstream's
+`str.title()` produces "Certificate Of Completion"); `brand["website"]`,
+`brand["license"]` and `opts["signer_title"]` stay blank because no
+`document_templates` columns exist for them. No running invoice-number
+counter was ported — Sietch's invoice number is still the payload value or
+the project's `project_number`. No database migration.
+
+Tests: `tests/test_invoice_coc_modern.py` (32 tests — mapping, builders,
+layout switch, and the four handlers with a mocked DB, including the
+`project_documents` insert carrying the `opportunity_id` and the
+standalone `opportunity_id = NULL` case); `tests/test_reportlab_dependency.py`
+(6). Full Python suite 61 passed / 2 failed (both failures —
+`test_scanner_toggle_gating.py`, `test_sync_pull_deals_fields.py` — are
+pre-existing on `main` @ c637526 and unrelated); full Node suite 35/35.
+
+Sample review PDFs (modern + classic + a 60-line multi-page invoice, with
+page-1 PNGs) live in `tmp/invoice-coc-review/` (gitignored, not committed);
+regenerate with `scripts/make_invoice_coc_review.py`. Full write-up:
+`docs/features/2026-11-03-invoice-coc-upgrade.md`. **Not deployed** — needs
+a Docker image rebuild; deploy late at night per Ken.
+
 ## Live bot-note failures: unreachable /api/bot/note + dead notify picker (2026-11-02, branch `fix-telegram-dupes`)
 
 Live bugs on the deployed bot (Ken, 9:21 AM ET 2026-11-02), both confirmed
