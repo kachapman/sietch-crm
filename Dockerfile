@@ -4,7 +4,12 @@ WORKDIR /app
 
 RUN useradd --create-home --uid 10001 appuser
 
-RUN pip install --no-cache-dir psycopg2-binary Pillow ExifRead httpx imap_tools "fpdf2>=2.7.0"
+# fpdf2  -> classic Photo Report PDFs + the classic (fallback) Invoice/COC
+#            renderers in server.py.
+# reportlab -> the modern (Sherwood-style) Invoice + Certificate of Completion
+#            PDFs built by the doc_pdf/ package. Pinned to the 4.x line, which
+#            is what supports Python 3.12 (the base image below).
+RUN pip install --no-cache-dir psycopg2-binary Pillow ExifRead httpx imap_tools "fpdf2>=2.7.0" "reportlab>=4.0,<5"
 # Base tools (curl is required by the docker-cli install step below; otherwise
 # `python:3.12-slim-bookworm` ships without it and the build fails).
 # PostgreSQL client tools (pg_dump, psql) for database backup/restore.
@@ -33,6 +38,10 @@ RUN curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${
 # Keeping this as a glob avoids the "missing module → container crash" failure
 # mode called out in AGENTS.md when a new .py file is added at the repo root.
 COPY *.py ./
+# doc_pdf/ holds the modern (Sherwood-style) Invoice + Certificate of
+# Completion PDF builders (ReportLab). It is a package, not a module, so the
+# glob above does not pick it up.
+COPY doc_pdf ./doc_pdf
 COPY VERSION ./
 COPY CHANGELOG.md ./
 COPY init.sql ./

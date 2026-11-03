@@ -47324,6 +47324,10 @@ function renderInvoiceForm(body, project, templates, oppId, mode, dealFields) {
   const fCityStateZip = _docGenField("City, State ZIP", cityStateZip);
   const fFileName = _docGenField("File Name", "", "e.g. Invoice_Smith_2026-09-28");
   [fInvoiceNum, fInvoiceDate, fTerms, fSalesRep, fClaimNum, fJobNum].forEach(f => infoGrid.appendChild(f.wrap));
+  // PDF layout: "modern" (Sherwood-style ReportLab) or "classic" (the old
+  // fpdf2 look). The server falls back to its own default when blank.
+  const fLayout = _docGenField("PDF Layout", "", "modern or classic (blank = server default)");
+  infoGrid.appendChild(fLayout.wrap);
   infoSec.appendChild(infoGrid);
   sectionsWrap.appendChild(infoSec);
   // Section: Bill To
@@ -47460,6 +47464,7 @@ function renderInvoiceForm(body, project, templates, oppId, mode, dealFields) {
         include_signature: !!showSig.checked,
         signature_name: fSigName.input.value.trim(),
         file_name: fFileName.input.value.trim(),
+        layout: fLayout.input.value.trim(),
       };
       const url = isProject
         ? `/api/v2/projects/${oppId}/invoice`
@@ -47552,6 +47557,10 @@ function renderCocForm(body, project, templates, oppId, mode, dealFields) {
   const fCompletionDate = _docGenField("Completion Date", today, "MM/DD/YYYY");
   const fFileName = _docGenField("File Name", "", "e.g. Certificate_of_Completion_Smith");
   [fCustomer, fJobNum, fClaimNum, fSalesRep, fStreet, fCityStateZip, fCompletionDate].forEach(f => custGrid.appendChild(f.wrap));
+  // PDF layout: "modern" (Sherwood-style ReportLab) or "classic" (the old
+  // fpdf2 look). The server falls back to its own default when blank.
+  const fLayout = _docGenField("PDF Layout", "", "modern or classic (blank = server default)");
+  custGrid.appendChild(fLayout.wrap);
   custSec.appendChild(custGrid);
   sectionsWrap.appendChild(custSec);
   // Note
@@ -47612,6 +47621,7 @@ function renderCocForm(body, project, templates, oppId, mode, dealFields) {
         include_signature: !!showSig.checked,
         signature_name: fSigName.input.value.trim(),
         file_name: fFileName.input.value.trim(),
+        layout: fLayout.input.value.trim(),
       };
       const url = isProject
         ? `/api/v2/projects/${oppId}/coc`

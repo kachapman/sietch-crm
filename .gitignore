@@ -9,3 +9,6 @@ node_modules/
 dist/
 build/
 .DS_Store
+# Scratch output for the Invoice/COC PDF review pack (see
+# docs/features/2026-11-03-invoice-coc-upgrade.md). Never committed.
+tmp/
