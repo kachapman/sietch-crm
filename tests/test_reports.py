@@ -322,11 +322,15 @@ class TestReportsMigration(unittest.TestCase):
     def test_db_actually_has_the_indexes(self):
         # Requires a live DB. If no DB, the skip above takes effect.
         import os
-        for line in open(HERE.parent / ".env"):
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                os.environ[k.strip()] = v.strip().strip('"').strip("'")
+        # .env is gitignored and may be absent in a fresh worktree; the
+        # DB_* vars may already be exported in the environment.
+        env_path = HERE.parent / ".env"
+        if env_path.exists():
+            for line in open(env_path):
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, _, v = line.partition("=")
+                    os.environ[k.strip()] = v.strip().strip('"').strip("'")
         import db as db_mod
         db_mod.init_db()
         idx_names = {r[0] for r in db_mod.query(

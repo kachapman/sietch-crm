@@ -1,0 +1,597 @@
+#!/usr/bin/env python3
+"""Unit tests for the modern (Sherwood-style) Invoice + Certificate of
+Completion PDFs.
+
+Covers:
+  - the pure mapping layer (document_templates row + payload -> brand / job
+    / items / opts),
+  - the ported ReportLab builders (text content, page numbering, repeated
+    header rows, accent readability, missing assets),
+  - the server-side layout switch (payload `layout` field and the
+    SIETCH_DOC_LAYOUT env var) plus the classic fallback still rendering,
+  - the four HTTP handlers (project invoice, project COC, standalone
+    invoice, standalone COC) with a mocked DB.
+
+Unlike the older suites, this file resolves every path relative to its own
+location so it can run from any checkout / worktree.
+
+Run with: python3 tests/test_invoice_coc_modern.py
+"""
+
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent
+sys.path.insert(0, str(REPO))
+
+try:
+    from doc_pdf import mapping as doc_mapping
+    from doc_pdf.coc_pdf import build_coc
+    from doc_pdf.invoice_pdf import build_invoice
+    from doc_pdf.pdf_common import accent, company_lines, money, on_accent, text_accent
+    _PDF_IMPORT_ERROR = None
+except Exception as exc:  # pragma: no cover - environment dependent
+    doc_mapping = None
+    build_coc = None
+    build_invoice = None
+    _PDF_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+
+
+TEMPLATE = {
+    "id": 7,
+    "name": "Default",
+    "company_name": "Public Adjustment Midwest LLC",
+    "company_address": "1234 N Main St",
+    "company_city_state_zip": "Columbus, OH 43215",
+    "company_phone": "(614) 555-0100",
+    "company_email": "info@example.com",
+    "primary_color": "#1f4e79",
+    "invoice_title": "INVOICE",
+    "coc_title": "CERTIFICATE OF COMPLETION",
+    "default_terms": "Due on receipt",
+    "default_sales_rep": "Ken Chapman",
+    "default_line_items": [],
+    "show_signature": True,
+    "signature_name": "Ken Chapman",
+    "signature_path": None,
+    "logo_path": None,
+    "show_branding_footer": True,
+    "is_default": True,
+}
+
+PAYLOAD = {
+    "invoice_number": "VA-2041",
+    "invoice_date": "11/03/2026",
+    "terms": "Due on receipt",
+    "sales_rep": "Ken Chapman",
+    "claim_number": "CLM-9988",
+    "project_number": "1042",
+    "customer_name": "Jordan Ellis",
+    "street": "1428 Maple Ridge Dr",
+    "city_state_zip": "Columbus, OH 43215",
+    "notes": "Payment by check or ACH.",
+    "base_amount": "1000",
+    "line_items": [
+        {"description": "Roof replacement", "amount": "18450"},
+        {"description": "Gutters", "amount": "2310.50"},
+    ],
+    "include_signature": True,
+    "signature_name": "Ken Chapman",
+}
+
+
+def pdf_text(path):
+    """Extract text from a PDF (pdftotext when available, else pypdf)."""
+    path = str(path)
+    out = subprocess.run(["pdftotext", "-layout", path, "-"],
+                         capture_output=True, text=True)
+    if out.returncode == 0 and out.stdout.strip():
+        return out.stdout
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(path)
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
+    except Exception:
+        return ""
+
+
+def pdf_page_count(path):
+    try:
+        from pypdf import PdfReader
+        return len(PdfReader(str(path)).pages)
+    except Exception:
+        out = subprocess.run(["pdfinfo", str(path)], capture_output=True, text=True)
+        m = re.search(r"Pages:\s+(\d+)", out.stdout or "")
+        return int(m.group(1)) if m else 0
+
+
+# ── Mapping layer ───────────────────────────────────────────────────────────
+
+class TestMapping(unittest.TestCase):
+    """document_templates row + payload -> brand / job / items / opts."""
+
+    def setUp(self):
+        if doc_mapping is None:
+            self.skipTest(f"doc_pdf not importable: {_PDF_IMPORT_ERROR}")
+
+    def test_brand_maps_template_columns(self):
+        brand = doc_mapping.build_brand(TEMPLATE, root=REPO)
+        self.assertEqual(brand["name"], "Public Adjustment Midwest LLC")
+        self.assertEqual(brand["address"], "1234 N Main St")
+        self.assertEqual(brand["city_state_zip"], "Columbus, OH 43215")
+        self.assertEqual(brand["phone"], "(614) 555-0100")
+        self.assertEqual(brand["email"], "info@example.com")
+        self.assertEqual(brand["accent"], "#1f4e79")
+        self.assertEqual(brand["invoice_title"], "INVOICE")
+        self.assertEqual(brand["coc_title"], "CERTIFICATE OF COMPLETION")
+
+    def test_brand_footer_follows_show_branding_footer(self):
+        on = doc_mapping.build_brand(dict(TEMPLATE, show_branding_footer=True), root=REPO)
+        off = doc_mapping.build_brand(dict(TEMPLATE, show_branding_footer=False), root=REPO)
+        self.assertEqual(on["footer_text"], "Generated by Sietch CRM")
+        self.assertEqual(off["footer_text"], "")
+
+    def test_brand_website_and_license_are_blank_gaps(self):
+        brand = doc_mapping.build_brand(TEMPLATE, root=REPO)
+        self.assertEqual(brand["website"], "")
+        self.assertEqual(brand["license"], "")
+
+    def test_brand_missing_logo_does_not_crash(self):
+        tpl = dict(TEMPLATE, logo_path="data/logos/does-not-exist.png")
+        brand = doc_mapping.build_brand(tpl, root=REPO)
+        self.assertIsNone(brand["logo_path"])
+
+    def test_job_maps_payload_fields(self):
+        job = doc_mapping.build_job(PAYLOAD, today="11/03/2026")
+        self.assertEqual(job["customer_name"], "Jordan Ellis")
+        self.assertEqual(job["street"], "1428 Maple Ridge Dr")
+        self.assertEqual(job["city_state_zip"], "Columbus, OH 43215")
+        self.assertEqual(job["job_number"], "1042")
+        self.assertEqual(job["insurance_claim"], "CLM-9988")
+        self.assertEqual(job["sales_rep"], "Ken Chapman")
+        self.assertEqual(job["invoice_number"], "VA-2041")
+        self.assertEqual(job["invoice_date"], "11/03/2026")
+        self.assertEqual(job["terms"], "Due on receipt")
+        self.assertEqual(job["invoice_notes"], "Payment by check or ACH.")
+
+    def test_job_completion_date_defaults_to_today(self):
+        job = doc_mapping.build_job(dict(PAYLOAD, completion_date=""), today="11/03/2026")
+        self.assertEqual(job["completion_date"], "11/03/2026")
+        job2 = doc_mapping.build_job(dict(PAYLOAD, completion_date="10/31/2026"), today="11/03/2026")
+        self.assertEqual(job2["completion_date"], "10/31/2026")
+
+    def test_items_base_amount_is_first_row_labelled_by_terms(self):
+        items = doc_mapping.build_items(PAYLOAD)
+        self.assertEqual(items[0], ("Due on receipt", 1000.0))
+        self.assertEqual(items[1], ("Roof replacement", 18450.0))
+        self.assertEqual(items[2], ("Gutters", 2310.5))
+
+    def test_items_total_matches_classic_grand_total(self):
+        items = doc_mapping.build_items(PAYLOAD)
+        total = sum(a for _d, a in items)
+        # Classic: base_amount + sum(line_items)
+        expected = 1000.0 + 18450.0 + 2310.50
+        self.assertAlmostEqual(total, expected, places=2)
+
+    def test_items_base_amount_zero_is_omitted(self):
+        items = doc_mapping.build_items(dict(PAYLOAD, base_amount="0"))
+        self.assertEqual(len(items), 2)
+        self.assertNotIn(("Due on receipt", 0.0), items)
+
+    def test_items_explicit_line_items_override_payload(self):
+        items = doc_mapping.build_items(PAYLOAD, [{"description": "Override", "amount": "5"}])
+        self.assertEqual(items[-1], ("Override", 5.0))
+
+    def test_coc_opts_statement_and_homeowner_line(self):
+        opts = doc_mapping.build_coc_opts(PAYLOAD, TEMPLATE, root=REPO)
+        self.assertEqual(opts["statement"], doc_mapping.COC_STATEMENT)
+        # The classic Sietch COC drew no property-owner signature line.
+        self.assertFalse(opts["homeowner_line"])
+        self.assertEqual(opts["signer_name"], "Ken Chapman")
+        self.assertEqual(opts["signer_title"], "")
+
+    def test_coc_opts_signature_gated_by_include_signature(self):
+        tpl = dict(TEMPLATE, signature_path="data/sigs/sig.png")
+        on = doc_mapping.build_coc_opts(dict(PAYLOAD, include_signature=True), tpl, root=REPO)
+        off = doc_mapping.build_coc_opts(dict(PAYLOAD, include_signature=False), tpl, root=REPO)
+        self.assertIsNone(off["signature_path"])
+        # The file does not exist in the repo, so both resolve to None.
+        self.assertIsNone(on["signature_path"])
+
+    def test_invoice_signature_gated_by_include_signature(self):
+        sig = doc_mapping.build_invoice_signature(dict(PAYLOAD, include_signature=False), TEMPLATE, root=REPO)
+        self.assertIsNone(sig)
+        sig = doc_mapping.build_invoice_signature(dict(PAYLOAD, include_signature=True), TEMPLATE, root=REPO)
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig["name"], "Ken Chapman")
+        self.assertEqual(sig["date"], "11/03/2026")
+
+
+# ── Builders ────────────────────────────────────────────────────────────────
+
+class TestBuilders(unittest.TestCase):
+    """The ported ReportLab builders."""
+
+    def setUp(self):
+        if build_invoice is None:
+            self.skipTest(f"doc_pdf not importable: {_PDF_IMPORT_ERROR}")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.brand = doc_mapping.build_brand(TEMPLATE, root=REPO)
+        self.job = doc_mapping.build_job(PAYLOAD, today="11/03/2026")
+        self.items = doc_mapping.build_items(PAYLOAD)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_invoice_contains_key_strings(self):
+        out = self.dir / "invoice.pdf"
+        total = build_invoice(str(out), self.brand, self.job, self.items)
+        self.assertAlmostEqual(total, 21760.50, places=2)
+        text = pdf_text(out)
+        for bit in ("Public Adjustment Midwest LLC", "INVOICE", "VA-2041", "11/03/2026",
+                    "Jordan Ellis", "1428 Maple Ridge Dr", "CLM-9988", "1042",
+                    "Roof replacement", "Gutters", "$18,450.00", "$2,310.50",
+                    "$21,760.50", "Payment by check or ACH.",
+                    "Generated by Sietch CRM", "Page 1 of 1"):
+            self.assertIn(bit, text, f"missing {bit!r} in invoice text")
+
+    def test_invoice_footer_absent_when_branding_footer_off(self):
+        brand = doc_mapping.build_brand(dict(TEMPLATE, show_branding_footer=False), root=REPO)
+        out = self.dir / "invoice-nofooter.pdf"
+        build_invoice(str(out), brand, self.job, self.items)
+        text = pdf_text(out)
+        self.assertNotIn("Generated by Sietch CRM", text)
+        self.assertIn("Page 1 of 1", text)
+
+    def test_invoice_signature_block(self):
+        sig = doc_mapping.build_invoice_signature(PAYLOAD, TEMPLATE, root=REPO)
+        out = self.dir / "invoice-sig.pdf"
+        build_invoice(str(out), self.brand, self.job, self.items, signature=sig)
+        text = pdf_text(out)
+        self.assertIn("By Ken Chapman", text)
+        self.assertIn("Date: 11/03/2026", text)
+
+    def test_invoice_multipage_page_numbers_and_repeated_header(self):
+        items = [(f"Line item number {i:02d} - a description long enough to matter",
+                  float(i) * 100) for i in range(1, 61)]
+        out = self.dir / "invoice-long.pdf"
+        build_invoice(str(out), self.brand, self.job, items)
+        self.assertGreater(pdf_page_count(out), 1)
+        text = pdf_text(out)
+        pages = pdf_page_count(out)
+        self.assertIn(f"Page 1 of {pages}", text)
+        self.assertIn(f"Page {pages} of {pages}", text)
+        # The items table header repeats on every page.
+        self.assertGreaterEqual(text.count("DESCRIPTION"), pages)
+        self.assertGreaterEqual(text.count("AMOUNT"), pages)
+
+    def test_coc_contains_key_strings(self):
+        out = self.dir / "coc.pdf"
+        opts = doc_mapping.build_coc_opts(PAYLOAD, TEMPLATE, root=REPO)
+        build_coc(str(out), self.brand, self.job, opts)
+        text = pdf_text(out)
+        for bit in ("Public Adjustment Midwest LLC", "Certificate of Completion",
+                    "Jordan Ellis", "1428 Maple Ridge Dr", "CLM-9988", "1042",
+                    "11/03/2026", "Contractor representative", "Page 1 of 1"):
+            self.assertIn(bit, text, f"missing {bit!r} in COC text")
+
+    def test_coc_has_no_property_owner_line(self):
+        out = self.dir / "coc.pdf"
+        opts = doc_mapping.build_coc_opts(PAYLOAD, TEMPLATE, root=REPO)
+        build_coc(str(out), self.brand, self.job, opts)
+        self.assertNotIn("Property owner", pdf_text(out))
+
+    def test_coc_footer_absent_when_branding_footer_off(self):
+        brand = doc_mapping.build_brand(dict(TEMPLATE, show_branding_footer=False), root=REPO)
+        out = self.dir / "coc-nofooter.pdf"
+        opts = doc_mapping.build_coc_opts(PAYLOAD, TEMPLATE, root=REPO)
+        build_coc(str(out), brand, self.job, opts)
+        text = pdf_text(out)
+        self.assertNotIn("Generated by Sietch CRM", text)
+        self.assertIn("Page 1 of 1", text)
+
+    def test_missing_logo_and_signature_do_not_crash(self):
+        brand = doc_mapping.build_brand(
+            dict(TEMPLATE, logo_path="data/logos/missing.png"), root=REPO)
+        self.assertIsNone(brand["logo_path"])
+        out = self.dir / "invoice-nologo.pdf"
+        build_invoice(str(out), brand, self.job, self.items,
+                      signature={"path": "/nonexistent/sig.png", "name": "Ken Chapman",
+                                 "date": "11/03/2026"})
+        self.assertTrue(out.exists())
+        self.assertGreater(out.stat().st_size, 0)
+
+    def test_light_accent_stays_readable(self):
+        """A near-white accent must not render white-on-white text."""
+        brand = doc_mapping.build_brand(dict(TEMPLATE, primary_color="#f7f7f2"), root=REPO)
+        c = accent(brand)
+        self.assertEqual(on_accent(c), __import__("doc_pdf.pdf_common", fromlist=["INK"]).INK)
+        self.assertEqual(text_accent(c), __import__("doc_pdf.pdf_common", fromlist=["INK"]).INK)
+        out = self.dir / "invoice-light.pdf"
+        build_invoice(str(out), brand, self.job, self.items)
+        self.assertTrue(out.exists())
+
+    def test_dark_accent_uses_white_text_on_fill(self):
+        brand = doc_mapping.build_brand(dict(TEMPLATE, primary_color="#1f4e79"), root=REPO)
+        c = accent(brand)
+        self.assertNotEqual(on_accent(c), __import__("doc_pdf.pdf_common", fromlist=["INK"]).INK)
+
+    def test_zero_amount_rows_are_dropped(self):
+        items = doc_mapping.build_items(dict(PAYLOAD, line_items=[
+            {"description": "Real work", "amount": "100"},
+            {"description": "", "amount": "0"},
+            {"description": "Also real", "amount": "50"},
+        ]))
+        out = self.dir / "invoice-zero.pdf"
+        total = build_invoice(str(out), self.brand, self.job, items)
+        self.assertAlmostEqual(total, 1150.0, places=2)
+        text = pdf_text(out)
+        self.assertIn("Real work", text)
+        self.assertIn("Also real", text)
+
+    def test_company_lines_and_money_helpers(self):
+        lines = company_lines(self.brand)
+        self.assertIn("1234 N Main St", lines)
+        self.assertIn("Columbus, OH 43215", lines)
+        self.assertIn("(614) 555-0100  |  info@example.com", lines)
+        self.assertEqual(money(1234.5), "$1,234.50")
+        self.assertEqual(money(-5), "-$5.00")
+
+
+# ── Server-side layout switch + handlers ────────────────────────────────────
+
+class TestServerLayoutSwitch(unittest.TestCase):
+    """The layout switch and the four HTTP handlers, with a mocked DB."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import server as srv
+        except Exception as exc:  # pragma: no cover - environment dependent
+            raise unittest.SkipTest(f"server module not importable (no DB?): {exc}")
+        cls.server = srv
+
+    def _handler_class(self):
+        srv = self.server
+        # The HTTP handlers live on the request handler class; find it.
+        for name in dir(srv):
+            obj = getattr(srv, name)
+            if isinstance(obj, type) and hasattr(obj, "_handle_project_invoice_generate"):
+                return obj
+        self.fail("could not locate the request handler class in server.py")
+
+    def test_resolve_doc_layout_defaults_to_modern(self):
+        srv = self.server
+        old = os.environ.pop("SIETCH_DOC_LAYOUT", None)
+        try:
+            self.assertEqual(srv._resolve_doc_layout({}), "modern")
+            self.assertEqual(srv._resolve_doc_layout(None), "modern")
+            self.assertEqual(srv._resolve_doc_layout({"layout": "classic"}), "classic")
+            self.assertEqual(srv._resolve_doc_layout({"layout": "modern"}), "modern")
+            self.assertEqual(srv._resolve_doc_layout({"layout": "bogus"}), "modern")
+        finally:
+            if old is not None:
+                os.environ["SIETCH_DOC_LAYOUT"] = old
+
+    def test_resolve_doc_layout_honours_env_var(self):
+        srv = self.server
+        old = os.environ.get("SIETCH_DOC_LAYOUT")
+        try:
+            os.environ["SIETCH_DOC_LAYOUT"] = "classic"
+            self.assertEqual(srv._resolve_doc_layout({}), "classic")
+            # An explicit per-request value still wins.
+            self.assertEqual(srv._resolve_doc_layout({"layout": "modern"}), "modern")
+            os.environ["SIETCH_DOC_LAYOUT"] = "modern"
+            self.assertEqual(srv._resolve_doc_layout({}), "modern")
+        finally:
+            if old is None:
+                os.environ.pop("SIETCH_DOC_LAYOUT", None)
+            else:
+                os.environ["SIETCH_DOC_LAYOUT"] = old
+
+    def test_server_source_keeps_classic_renderers(self):
+        src = (REPO / "server.py").read_text(encoding="utf-8")
+        self.assertIn("def _create_invoice_pdf(", src)
+        self.assertIn("def _create_coc_pdf(", src)
+        self.assertIn("def _create_invoice_pdf_modern(", src)
+        self.assertIn("def _create_coc_pdf_modern(", src)
+
+
+# ── HTTP handler level ──────────────────────────────────────────────────────
+
+class _FakeHandler:
+    """Minimal stand-in for the http.server request handler.
+
+    Only the bits the four generation handlers touch are implemented:
+    headers, rfile, send_response / send_header / end_headers / wfile.
+    """
+
+    def __init__(self, body=b"{}"):
+        import io
+        self.headers = {"Content-Length": str(len(body))}
+        self.rfile = io.BytesIO(body)
+        self.status = None
+        self.headers_sent = []
+        self.wfile = io.BytesIO()
+
+    def send_response(self, status):
+        self.status = status
+
+    def send_header(self, key, value):
+        self.headers_sent.append((key, value))
+
+    def end_headers(self):
+        pass
+
+
+class TestGenerationHandlers(unittest.TestCase):
+    """Project + standalone invoice / COC endpoints with a mocked DB."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import server as srv
+        except Exception as exc:  # pragma: no cover - environment dependent
+            raise unittest.SkipTest(f"server module not importable (no DB?): {exc}")
+        cls.server = srv
+
+    def _handler_class(self):
+        srv = self.server
+        for name in dir(srv):
+            obj = getattr(srv, name)
+            if isinstance(obj, type) and hasattr(obj, "_handle_project_invoice_generate"):
+                return obj
+        self.fail("could not locate the request handler class in server.py")
+
+    def _run(self, method_name, payload, *, opp_id=None, root=None):
+        """Invoke one generation handler with mocked db + auth + storage."""
+        import json as _json
+        srv = self.server
+        method = getattr(self._handler_class(), method_name)
+        # The handler class subclasses SimpleHTTPRequestHandler, whose
+        # __init__ needs a live socket; build the instance without it.
+        instance = object.__new__(self._handler_class())
+
+        response = {}
+
+        def _json_response(h, status, data):
+            response["status"] = status
+            response["data"] = data
+
+        with patch.object(srv, "_json_response", _json_response), \
+             patch.object(srv, "_read_body",
+                          lambda h: _json.dumps(payload).encode("utf-8")), \
+             patch.object(srv, "_require_auth",
+                          lambda h: {"id": 42, "role": "admin"}), \
+             patch.object(srv, "db") as mock_db, \
+             patch.object(srv, "log_infra_event"), \
+             patch.object(srv, "_resolve_action_category_id", return_value=1), \
+             patch.object(srv, "_resolve_document_template", return_value=dict(TEMPLATE)):
+            mock_db.query_one.return_value = None
+            mock_db.insert_returning.return_value = 999
+            if root is not None:
+                with patch.object(srv, "ROOT", root):
+                    if opp_id is None:
+                        method(instance)
+                    else:
+                        method(instance, opp_id)
+            else:
+                if opp_id is None:
+                    method(instance)
+                else:
+                    method(instance, opp_id)
+        return response, mock_db
+
+    def _tmp_root(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "data" / "documents" / "77").mkdir(parents=True, exist_ok=True)
+        return root
+
+    def test_project_invoice_modern_returns_201_and_inserts_with_opp_id(self):
+        srv = self.server
+        root = self._tmp_root()
+        response, mock_db = self._run(
+            "_handle_project_invoice_generate", dict(PAYLOAD, template_id=7),
+            opp_id=77, root=root)
+        self.assertEqual(response["status"], 201)
+        data = response["data"]
+        self.assertEqual(data["id"], 999)
+        self.assertEqual(data["mimeType"], "application/pdf")
+        self.assertTrue(data["title"].endswith(".pdf"))
+        self.assertGreater(data["fileSize"], 0)
+        self.assertTrue(data.get("historyNoteCreated"))
+
+        # project_documents insert carries the opportunity id.
+        insert_args = None
+        for call in mock_db.insert_returning.call_args_list:
+            if "INSERT INTO project_documents" in (call.args[0] if call.args else ""):
+                insert_args = call.args[1]
+                break
+        self.assertIsNotNone(insert_args, "project_documents insert not called")
+        self.assertEqual(insert_args[0], 77)
+
+        # The PDF landed under data/documents/<opp_id>/
+        written = list((root / "data" / "documents" / "77").glob("*.pdf"))
+        self.assertEqual(len(written), 1)
+        text = pdf_text(written[0])
+        self.assertIn("Jordan Ellis", text)
+        self.assertIn("VA-2041", text)
+        self.assertIn("Page 1 of 1", text)
+
+    def test_project_coc_modern_returns_201_and_uses_completion_date(self):
+        srv = self.server
+        root = self._tmp_root()
+        response, mock_db = self._run(
+            "_handle_project_coc_generate",
+            dict(PAYLOAD, template_id=7, completion_date="10/31/2026", note="Roof done"),
+            opp_id=77, root=root)
+        self.assertEqual(response["status"], 201)
+        insert_args = None
+        for call in mock_db.insert_returning.call_args_list:
+            if "INSERT INTO project_documents" in (call.args[0] if call.args else ""):
+                insert_args = call.args[1]
+                break
+        self.assertIsNotNone(insert_args)
+        self.assertEqual(insert_args[0], 77)
+
+        written = list((root / "data" / "documents" / "77").glob("*.pdf"))
+        self.assertEqual(len(written), 1)
+        text = pdf_text(written[0])
+        self.assertIn("Certificate of Completion", text)
+        # The posted completion_date is honoured (the classic renderer
+        # ignored it and stamped today's date).
+        self.assertIn("10/31/2026", text)
+        self.assertIn("Roof done", text)
+
+    def test_project_invoice_classic_layout_still_renders(self):
+        srv = self.server
+        root = self._tmp_root()
+        response, mock_db = self._run(
+            "_handle_project_invoice_generate",
+            dict(PAYLOAD, template_id=7, layout="classic"),
+            opp_id=77, root=root)
+        self.assertEqual(response["status"], 201)
+        written = list((root / "data" / "documents" / "77").glob("*.pdf"))
+        self.assertEqual(len(written), 1)
+        text = pdf_text(written[0])
+        self.assertIn("Jordan Ellis", text)
+        self.assertIn("Grand Total", text)
+        # The classic renderer uses its own footer, not the branding footer.
+        self.assertNotIn("Generated by Sietch CRM", text)
+
+    def test_standalone_invoice_and_coc(self):
+        srv = self.server
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        storage = Path(tmp.name) / "documents"
+        response, mock_db = self._run(
+            "_handle_standalone_invoice_generate", dict(PAYLOAD, template_id=7))
+        self.assertEqual(response["status"], 201)
+        insert_args = None
+        for call in mock_db.insert_returning.call_args_list:
+            if "INSERT INTO project_documents" in (call.args[0] if call.args else ""):
+                insert_args = call.args[1]
+                break
+        self.assertIsNotNone(insert_args)
+        # Standalone documents have opportunity_id = NULL.
+        # Columns: (title, file_path, file_size, uploaded_by, opportunity_id, company_scope)
+        self.assertIsNone(insert_args[4])
+
+        response2, _ = self._run(
+            "_handle_standalone_coc_generate",
+            dict(PAYLOAD, template_id=7, completion_date="10/31/2026"))
+        self.assertEqual(response2["status"], 201)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

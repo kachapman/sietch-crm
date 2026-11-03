@@ -2,7 +2,11 @@
 """Unit tests for OnlyOffice import helpers (server.py + import_json_export.py)."""
 import os
 import sys
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+from pathlib import Path
+
+# Resolve the repo root relative to this file so the suite runs from any
+# checkout / worktree (it used to hardcode the main checkout path).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def test_field_type_map_numeric():
