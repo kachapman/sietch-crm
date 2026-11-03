@@ -11,6 +11,103 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-03 (linked-email attachments missing from the project
+Documents tab, branch `fix-mail-attachments`)
+
+**Status: IMPLEMENTED on branch `fix-mail-attachments` — NOT merged, NOT
+deployed.** Cut from `main` at `c637526`. Worktree:
+`~/Projects/new-crm-mail-attachments`. Prod (147.182.164.19 /opt/sietch-crm)
+was NOT touched; the live local server on :8766 was NOT restarted; the
+backfill was run ONLY against a throwaway DB (`mailatt_test_scratch` in the
+`sietch-postgres` container).
+
+**Bug (Ken):** linking an email to a project reported success but the
+project's **Documents tab was empty**. Verified root cause in code:
+1. sync stored attachment **metadata only** (`scanner/mail_scanner.py`
+   `_store_attachments`) — no bytes on disk (prod: 171 of 2306 attachments
+   had a local file);
+2. the link-time copy (`_copy_mail_attachments_to_project`) therefore needed
+   a live mailbox download; `_fetch_mail_attachment_bytes` returned `None` on
+   any failure and the caller did a bare `continue` → **the file was dropped
+   SILENTLY, UI still said success**;
+3. relinking could not repair it — `create_email_history_snapshot` returned
+   early when the timeline entry existed;
+4. side bug: the download matched on `imap_part_id`, which holds a
+   **Content-ID** (not a part id) → only the filename fallback ever worked;
+5. the 2026-11-02 Outlook failures (projects 75/42/1243) were a **stale
+   OAuth token** — the link-time path never refreshed it.
+
+**Fix:** attachment bytes stored on disk at sync time
+(`data/mail-attachments/<mid>/<id>_<name>`, sha256, 25 MB limit, over-limit
+skipped+logged, metadata kept); the copy prefers the local file and falls
+back to the mailbox with **3 retries + backoff** and a **token refresh
+before every retry**; every skip is **logged** (message id, attachment id,
+filename, reason — no secrets); the copy is **idempotent** via the new
+`history_attachments.mail_attachment_id` + UNIQUE `(event_id,
+mail_attachment_id)` (migration `043`); the snapshot helper runs the copy on
+the **repair path** too; the real IMAP part id is stored
+(`mail_attachments.remote_part_id`) and the server's two download paths use a
+shared `_pick_imap_attachment()`. The link API returns
+`filesCopied`/`filesTotal`/`filesSkipped`; the UI shows **"N of M files
+copied"** (warning toast on a partial copy). New admin endpoint
+`POST /api/v2/admin/sync/backfill-mail-attachments` + CLI
+`backfill_mail_attachments.py` — **(a)** entry exists / files missing → copy
+the files, **(b)** no entry → create it via the existing shared path, which
+then copies. **Dry run is the DEFAULT** (`--apply` / `{"apply": true}`).
+New settings: `MAIL_ATTACHMENT_MAX_BYTES` (25 MB),
+`MAIL_ATTACHMENT_STORAGE_ENABLED`, `MAIL_ATTACHMENT_FETCH_RETRIES` (3),
+`MAIL_ATTACHMENT_FETCH_BACKOFF` (2.0).
+
+**Files:** `scanner/mail_scanner.py`, `server.py`, `public/app.js`,
+`migrations/043_mail_attachment_storage.sql` (new),
+`backfill_mail_attachments.py` (new),
+`tests/test_mail_link_attachments.py` (new, 30 tests),
+`tests/test_mail_link_files_toast.mjs` (new, 6 tests),
+`docs/bugs/2026-11-03-mail-link-attachments.md` (new), CHANGELOG,
+`.github/workflows/smoke.yml` (loads the schema into the CI postgres
+service and runs the new Python suite).
+
+**Tests:** `tests/test_mail_link_attachments.py` 30/30 OK (real PostgreSQL,
+`MAILATT_TEST_DB_NAME` refuses to run against an unexpected DB);
+`tests/test_mail_link_files_toast.mjs` 6/6 OK. Four true-negative checks
+verified by temporarily reverting the fix (the scanner repair path, the
+idempotency check, the bulk-link file note, the single-link count block —
+each fails its test). Existing mail suites all green:
+`test_attachment_mirror_and_bookmark_titles` 9, `test_email_project_copy` 7,
+`test_linked_email_attachments` 5, `test_mail_link_history` 13,
+`test_mail_behaviors` 14, `test_mail_polling` 9, `test_mail_incremental` 15,
+`test_contact_and_mail_attach_fixes` 32, `test_relink_orphan_snapshots` 14,
+`test_mail_auth_gaps` 12, `test_mail_drafts_endpoint` 3,
+`test_graph_identity_guard` 24, `test_graph_truthfulness` 14,
+`test_graph_oauth_status` 12. JS: 307/307.
+
+**Pre-existing failures (NOT caused by this work — they fail identically on
+the base commit `c637526`):** `test_scanner_toggle_gating`
+(`test_link_step_uses_helper` expects a hoisted `_is_behavior_enabled(...)`
+call) and `test_sync_pull_deals_fields`
+(`test_update_writes_responsible_user_id` expects the UPDATE to write
+`bid_value`). Both are source-text guards that drifted from the code. Left
+alone (out of scope) — flagged in the bug doc §9.
+
+**Bug caught mid-implementation (worth remembering):** carrying the
+attachment payload in the scanner's message dict broke
+`mail_messages.attachments_json` — `json.dumps` on raw bytes raises
+"Object of type bytes is not JSON serializable" and would have broken the
+WHOLE mail sync. The payload is now stripped before the JSON dump; a
+regression test covers it.
+
+**Deferred (see the bug doc §9):** pruning of `data/mail-attachments/`;
+the new source tree is not in the backup bundle; the 25 MB limit is per
+file, not per message; the link API is still synchronous; existing
+`history_attachments.mail_attachment_id` values are not backfilled; the old
+`imap_part_id` column still holds Content-IDs; the mail modal's own
+attachment list still resolves live.
+
+**Next step for Ken:** review the dry-run report, then decide on the
+rollout (bug doc §8). Nothing is merged or deployed.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-11-02 (live bot-note failures, branch `fix-telegram-dupes`)
 
 **Status: DEPLOYED 2026-11-02 (~23:35 ET)** — merged `fix-telegram-dupes`

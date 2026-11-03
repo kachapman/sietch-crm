@@ -2161,6 +2161,50 @@ def _mail_draft_accessible(user: dict, draft_id: int) -> bool:
 # ── IMAP sync helpers ──────────────────────────────────────────────────────────
 # Best-effort: if IMAP fails, the DB is still updated; we log and continue.
 
+def _imap_part_id_str(att: Any) -> str:
+    """The real IMAP part id of an imap_tools attachment, as a string.
+
+    Bug fix 2026-11-03: `mail_attachments.imap_part_id` holds a Content-ID
+    (see scanner/mail_scanner.py `_fetch_messages`), NOT the part id, so
+    matching `att_obj.part` against it never matched and the download only
+    ever worked through its filename fallback. The real part id is stored
+    in `remote_part_id`.
+    """
+    part = getattr(att, "part", None)
+    if part is None:
+        return ""
+    for attr in ("part_id", "id"):
+        val = getattr(part, attr, None)
+        if val:
+            return str(val)
+    return str(part)
+
+
+def _pick_imap_attachment(imap_msg: Any, att: dict) -> bytes | None:
+    """Find the right MIME part in a fetched IMAP message.
+
+    Match order:
+      1. the real part id (`remote_part_id`)
+      2. the recorded Content-ID (`imap_part_id`)
+      3. the filename (last-resort fallback)
+    """
+    part_id = str(att.get("remote_part_id") or "").strip()
+    content_id = str(att.get("imap_part_id") or "").strip()
+    filename = att.get("filename") or ""
+    fallback = None
+    for att_obj in (getattr(imap_msg, "attachments", None) or []):
+        obj_part = _imap_part_id_str(att_obj)
+        if part_id and obj_part and obj_part == part_id:
+            return att_obj.payload
+        if content_id:
+            obj_cid = str(getattr(att_obj, "content_id", "") or "").strip()
+            if obj_cid and obj_cid == content_id:
+                return att_obj.payload
+        if filename and att_obj.filename == filename and fallback is None:
+            fallback = att_obj.payload
+    return fallback
+
+
 def _imap_connect(account_id: int):
     """Connect to IMAP for the given account. Returns MailBox or None."""
     from imap_tools import MailBox, A
@@ -4775,6 +4819,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not user:
                 return
             self._handle_sync_backfill_email_history()
+            return
+        if api_path == "/api/v2/admin/sync/backfill-mail-attachments" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_sync_backfill_mail_attachments()
             return
         if api_path == "/api/v2/admin/sync/relink-orphan-email-snapshots" and method == "POST":
             user = _require_admin(self)
@@ -12450,6 +12500,261 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                        "missing": len(rows), "items": items, "log": list(_sync_log)})
         except Exception as e:
             _append_sync_log("error", f"Email history backfill failed: {e}")
+            _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
+        finally:
+            _sync_running = False
+
+    def _handle_sync_backfill_mail_attachments(self) -> None:
+        """One-time repair: get linked emails' files into the project's Documents tab.
+
+        Bug fix 2026-11-03. Two families of damage:
+          (a) the link exists and the timeline entry exists, but the files were
+              never copied (the 2026-11-02 Outlook failures dropped ~20 emails;
+              ~163 older automatic links from Oct 19 never got files either);
+          (b) the link exists but there is no timeline entry at all — those are
+              handled by the EXISTING backfill path
+              (`_handle_sync_backfill_email_history`), which creates the entry
+              and then copies the files.
+
+        DRY RUN IS THE DEFAULT (`{"dry_run": true}` or omitting `apply`).
+        A real run needs an explicit `{"apply": true}`.
+
+        Payload (all optional):
+            dry_run / apply  — dry run unless apply is true
+            project_id       — limit to one opportunity
+            account_id       — limit to one mail account
+            since_days       — only mail received in the last N days
+            limit            — cap the number of emails processed
+
+        Idempotent: the copy is keyed on (event, mail attachment), so running
+        it twice adds nothing the second time.
+
+        MUST NOT be run against production by accident — the endpoint is
+        admin-only and dry-run is the default.
+        """
+        global _sync_log, _sync_running
+        if _sync_running:
+            _json_response(self, 409, {"error": "Sync already running"})
+            return
+        _sync_running = True
+        _sync_log.clear()
+        try:
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except Exception:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            # Dry run unless an explicit apply is requested.
+            apply_run = bool(payload.get("apply")) and not bool(payload.get("dry_run"))
+            dry_run = not apply_run
+            try:
+                project_id = int(payload.get("project_id") or 0)
+            except (TypeError, ValueError):
+                project_id = 0
+            try:
+                account_id = int(payload.get("account_id") or 0)
+            except (TypeError, ValueError):
+                account_id = 0
+            try:
+                since_days = int(payload.get("since_days") or 0)
+            except (TypeError, ValueError):
+                since_days = 0
+            try:
+                limit = int(payload.get("limit") or 0)
+            except (TypeError, ValueError):
+                limit = 0
+
+            if dry_run:
+                _append_sync_log("info", "DRY RUN — reporting only, zero writes. "
+                                         "Send {\"apply\": true} to actually copy files.")
+            scope = []
+            if project_id:
+                scope.append(f"project {project_id}")
+            if account_id:
+                scope.append(f"account {account_id}")
+            if since_days:
+                scope.append(f"last {since_days} days")
+            scope_str = (" (" + ", ".join(scope) + ")") if scope else ""
+            _append_sync_log("info", f"Scanning linked emails for missing project files{scope_str}...")
+
+            # Every linked email, with the state of its project copy.
+            sql = """SELECT l.message_id, l.opportunity_id, m.subject, m.from_addr,
+                            m.date_received, m.account_id, o.title AS opp_title,
+                            (SELECT he.id FROM history_events he
+                              WHERE he.opportunity_id = l.opportunity_id
+                                AND strpos(he.content, '"message_id": ' || l.message_id) > 0
+                              ORDER BY he.id LIMIT 1) AS event_id,
+                            (SELECT COUNT(*) FROM mail_attachments ma
+                              WHERE ma.message_id = l.message_id) AS att_count,
+                            (SELECT COUNT(*) FROM mail_attachments ma
+                               JOIN history_attachments ha ON ha.mail_attachment_id = ma.id
+                               AND ha.event_id = (SELECT he2.id FROM history_events he2
+                                   WHERE he2.opportunity_id = l.opportunity_id
+                                     AND strpos(he2.content, '"message_id": ' || l.message_id) > 0
+                                   ORDER BY he2.id LIMIT 1)
+                              WHERE ma.message_id = l.message_id) AS copied_count
+                       FROM mail_deal_links l
+                       JOIN mail_messages m ON m.id = l.message_id
+                       JOIN opportunities o ON o.id = l.opportunity_id"""
+            params: list = []
+            if project_id:
+                sql += " WHERE l.opportunity_id = %s"
+                params.append(project_id)
+                if account_id:
+                    sql += " AND m.account_id = %s"
+                    params.append(account_id)
+            elif account_id:
+                sql += " WHERE m.account_id = %s"
+                params.append(account_id)
+            if since_days > 0:
+                sql += (" AND m.date_received >= NOW() - (%s * INTERVAL '1 day')"
+                        if params else " WHERE m.date_received >= NOW() - (%s * INTERVAL '1 day')")
+                params.append(since_days)
+            sql += " ORDER BY l.message_id"
+            try:
+                rows = db.query_dicts(sql, tuple(params))
+            except Exception as exc:
+                # The sub-select needs migration 043 (history_attachments.
+                # mail_attachment_id). Without it, fall back to a simpler
+                # query that only checks for a timeline entry.
+                logger.warning("Attachment backfill query needs migration 043 (%s) — "
+                               "falling back to timeline-entry-only detection", exc)
+                simple_sql = """SELECT l.message_id, l.opportunity_id, m.subject, m.from_addr,
+                                        m.date_received, m.account_id, o.title AS opp_title,
+                                        (SELECT he.id FROM history_events he
+                                          WHERE he.opportunity_id = l.opportunity_id
+                                            AND strpos(he.content, '"message_id": ' || l.message_id) > 0
+                                          ORDER BY he.id LIMIT 1) AS event_id,
+                                        (SELECT COUNT(*) FROM mail_attachments ma
+                                          WHERE ma.message_id = l.message_id) AS att_count,
+                                        0 AS copied_count
+                                   FROM mail_deal_links l
+                                   JOIN mail_messages m ON m.id = l.message_id
+                                   JOIN opportunities o ON o.id = l.opportunity_id"""
+                simple_params: list = []
+                if project_id:
+                    simple_sql += " WHERE l.opportunity_id = %s"
+                    simple_params.append(project_id)
+                    if account_id:
+                        simple_sql += " AND m.account_id = %s"
+                        simple_params.append(account_id)
+                elif account_id:
+                    simple_sql += " WHERE m.account_id = %s"
+                    simple_params.append(account_id)
+                if since_days > 0:
+                    simple_sql += (" AND m.date_received >= NOW() - (%s * INTERVAL '1 day')"
+                                   if simple_params else
+                                   " WHERE m.date_received >= NOW() - (%s * INTERVAL '1 day')")
+                    simple_params.append(since_days)
+                simple_sql += " ORDER BY l.message_id"
+                rows = db.query_dicts(simple_sql, tuple(simple_params))
+
+            # Split the work:
+            #   missing_entry — no timeline entry at all -> create it (the
+            #                   existing backfill path does this, then copies)
+            #   missing_files — timeline entry exists but the files are not
+            #                   all there -> copy only the files
+            need_entry: list[dict] = []
+            need_files: list[dict] = []
+            for r in rows:
+                att_count = int(r.get("att_count") or 0)
+                if att_count <= 0:
+                    continue
+                copied = int(r.get("copied_count") or 0)
+                if not r.get("event_id"):
+                    need_entry.append(r)
+                elif copied < att_count:
+                    need_files.append(r)
+
+            work = need_entry + need_files
+            if limit > 0:
+                work = work[:limit]
+                need_entry = [r for r in need_entry if r in work]
+                need_files = [r for r in need_files if r in work]
+
+            _append_sync_log("info", f"{len(need_entry)} linked email(s) missing a timeline entry, "
+                                     f"{len(need_files)} missing project files")
+
+            items: list[dict] = []
+            failures: list[dict] = []
+            created_entries = 0
+            copied_files = 0
+            total_files = 0
+
+            for r in work:
+                mid = r["message_id"]
+                opp = r["opportunity_id"]
+                item = {
+                    "message_id": mid, "opportunity_id": opp,
+                    "subject": r.get("subject") or "",
+                    "from": r.get("from_addr") or "",
+                    "date": str(r.get("date_received") or ""),
+                    "project": r.get("opp_title") or "",
+                    "action": "create_entry_and_copy" if not r.get("event_id") else "copy_files",
+                    "copied": 0, "total": 0, "skipped": [],
+                }
+                if dry_run:
+                    item["would_add"] = ("timeline entry + "
+                                         f"{int(r.get('att_count') or 0)} file(s)"
+                                         if item["action"] == "create_entry_and_copy"
+                                         else f"{int(r.get('att_count') or 0) - int(r.get('copied_count') or 0)} file(s)")
+                    items.append(item)
+                    continue
+                # Real run.
+                if item["action"] == "create_entry_and_copy":
+                    # Existing path: creates the timeline entry, which then
+                    # copies the files.
+                    if mail_scanner is not None and hasattr(
+                            mail_scanner, "create_email_history_snapshot_detailed"):
+                        report = mail_scanner.create_email_history_snapshot_detailed(opp, mid)
+                    else:
+                        report = {"history_created": False, "copied": 0, "total": 0, "skipped": []}
+                    if report.get("history_created"):
+                        created_entries += 1
+                    item["copied"] = int(report.get("copied") or 0)
+                    item["total"] = int(report.get("total") or 0)
+                    item["skipped"] = report.get("skipped") or []
+                else:
+                    # Entry exists: copy only the missing files.
+                    event_id = int(r["event_id"])
+                    if mail_scanner is not None and hasattr(
+                            mail_scanner, "copy_mail_attachments_to_project_detailed"):
+                        report = mail_scanner.copy_mail_attachments_to_project_detailed(
+                            opp, event_id, mid)
+                    else:
+                        report = {"copied": 0, "total": 0, "skipped": []}
+                    item["copied"] = int(report.get("copied") or 0)
+                    item["total"] = int(report.get("total") or 0)
+                    item["skipped"] = report.get("skipped") or []
+                copied_files += item["copied"]
+                total_files += item["total"]
+                if item["skipped"]:
+                    for s in item["skipped"]:
+                        failures.append({
+                            "message_id": mid, "opportunity_id": opp,
+                            "attachment_id": s.get("attachment_id"),
+                            "filename": s.get("filename"),
+                            "reason": s.get("reason"),
+                        })
+                items.append(item)
+
+            if dry_run:
+                _append_sync_log("info", f"Dry run complete: {len(items)} email(s) would be repaired, "
+                                         f"0 written")
+            else:
+                _append_sync_log("info", f"Backfill complete: {created_entries} timeline entries created, "
+                                         f"{copied_files} file(s) copied, {len(failures)} failure(s)")
+            _json_response(self, 200, {
+                "ok": True, "dry_run": dry_run, "apply": apply_run,
+                "created_entries": created_entries,
+                "copied_files": copied_files, "total_files": total_files,
+                "missing_entry": len(need_entry), "missing_files": len(need_files),
+                "processed": len(items), "items": items, "failures": failures,
+                "log": list(_sync_log),
+            })
+        except Exception as e:
+            _append_sync_log("error", f"Mail attachment backfill failed: {e}")
             _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
         finally:
             _sync_running = False
@@ -20458,6 +20763,29 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             logger.exception("Shared email snapshot helper failed for email %d", message_id)
         return False
 
+    def _create_email_history_event_detailed(self, opp_id: int, message_id: int,
+                                              user_id: int | None) -> dict:
+        """Same as `_create_email_history_event` but returns the file-copy report.
+
+        Bug fix 2026-11-03: the link API reported plain success even when
+        NONE of the email's attachments made it into the project. The UI now
+        shows "N of M files copied" so a partial copy is visible.
+        """
+        fallback = {"history_created": False, "copied": 0, "total": 0,
+                    "existing": 0, "skipped": [], "event_id": None}
+        try:
+            if mail_scanner is not None and hasattr(
+                    mail_scanner, "create_email_history_snapshot_detailed"):
+                report = mail_scanner.create_email_history_snapshot_detailed(
+                    opp_id, message_id, user_id)
+                if isinstance(report, dict):
+                    return report
+            created = self._create_email_history_event(opp_id, message_id, user_id)
+            return {**fallback, "history_created": bool(created)}
+        except Exception:
+            logger.exception("Shared email snapshot helper failed for email %d", message_id)
+            return fallback
+
     def _handle_mail_link(self, message_id: int) -> None:
         try:
             user = _require_auth(self)
@@ -20495,14 +20823,29 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 # Already linked — but the timeline event may still be
                 # missing (link rows predate it). Backfill it now instead
                 # of reporting success while history stays empty.
-                history_created = self._create_email_history_event(opp_id, message_id, linked_by)
-                _json_response(self, 200, {"ok": True, "linked": False, "historyCreated": history_created, "message": "Already linked"})
+                # The copy runs on this path too, so RELINKING REPAIRS a
+                # project whose files are missing (bug fix 2026-11-03).
+                report = self._create_email_history_event_detailed(opp_id, message_id, linked_by)
+                _json_response(self, 200, {
+                    "ok": True, "linked": False,
+                    "historyCreated": bool(report.get("history_created")),
+                    "filesCopied": report.get("copied", 0),
+                    "filesTotal": report.get("total", 0),
+                    "filesSkipped": report.get("skipped", []),
+                    "message": "Already linked",
+                })
                 return
             # Create history event so the link appears in the deal timeline.
             # Store a full JSON snapshot so the embedded mail view survives account
             # deletion / auto-delete retention purging.
-            history_created = self._create_email_history_event(opp_id, message_id, linked_by)
-            _json_response(self, 200, {"ok": True, "linked": True, "historyCreated": history_created})
+            report = self._create_email_history_event_detailed(opp_id, message_id, linked_by)
+            _json_response(self, 200, {
+                "ok": True, "linked": True,
+                "historyCreated": bool(report.get("history_created")),
+                "filesCopied": report.get("copied", 0),
+                "filesTotal": report.get("total", 0),
+                "filesSkipped": report.get("skipped", []),
+            })
         except Exception as e:
             logger.exception("Failed to link message %d", message_id)
             _json_response(self, 500, {"error": str(e)})
@@ -22158,14 +22501,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         _json_response(self, 404, {"error": "Message not found on IMAP server"})
                         return
                     imap_msg = msgs[0]
-                    content = None
-                    part_id = str(att["imap_part_id"]) if att["imap_part_id"] else ""
-                    for att_obj in (imap_msg.attachments or []):
-                        if part_id and str(att_obj.part or "") == part_id:
-                            content = att_obj.payload
-                            break
-                        if att_obj.filename == att["filename"]:
-                            content = att_obj.payload
+                    content = _pick_imap_attachment(imap_msg, att)
                     if content is None:
                         _json_response(self, 404, {"error": "Attachment content not found on IMAP server"})
                         return
@@ -22363,14 +22699,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     _json_response(self, 410, {"error": "Attachment no longer available: source message purged from mail server"})
                     return
                 imap_msg = msgs[0]
-                content = None
-                part_id = str(att.get("imap_part_id") or "")
-                for att_obj in (imap_msg.attachments or []):
-                    if part_id and str(att_obj.part or "") == part_id:
-                        content = att_obj.payload
-                        break
-                    if att_obj.filename == att["filename"]:
-                        content = att_obj.payload
+                content = _pick_imap_attachment(imap_msg, att)
                 if content is None:
                     _json_response(self, 410, {"error": "Attachment no longer available: content missing on mail server"})
                     return
