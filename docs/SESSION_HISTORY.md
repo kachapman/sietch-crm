@@ -70,14 +70,17 @@ NO running invoice-number counter was ported — Sietch's invoice number is
 still the payload value or the project's `project_number`. No DB migration.
 
 **Tests (all `nice -n 10 ionice -c3`):** `tests/test_invoice_coc_modern.py`
-32/32 (mapping, builders, layout switch, and the four HTTP handlers with a
+33/33 (mapping, builders, layout switch, and the four HTTP handlers with a
 mocked DB — asserts the 201 shape, the `project_documents` insert carrying
 the `opportunity_id`, the standalone `opportunity_id = NULL`, the classic
-fallback still rendering, the posted `completion_date` being honoured);
-`tests/test_reportlab_dependency.py` 6/6; `tests/test_pdf_dependency.py`
-2/2; `tests/test_reports.py` 33/33; `tests/test_doc_download_auth.py` 19/19;
+fallback still rendering, the posted `completion_date` being honoured and
+falling back to today); `tests/test_reportlab_dependency.py` 6/6;
+`tests/test_pdf_dependency.py` 2/2; `tests/test_reports.py` 33/33;
+`tests/test_doc_download_auth.py` 19/19;
 `tests/test_documents_batch_download.py` 6/6; `tests/test_documents_pagination.mjs`
-16/16. **Full Python suite: 61 passed, 2 failed** — the 2 failures
+16/16. The new suite was verified to actually EXECUTE (a deliberately
+flipped expectation produced a real FAILED run). **Full Python suite: 61
+passed, 2 failed** — the 2 failures
 (`test_scanner_toggle_gating.py`, `test_sync_pull_deals_fields.py`) are
 PRE-EXISTING on `main` @ c637526 (verified in the main checkout) and
 unrelated. **Full Node suite: 35/35 files pass.**

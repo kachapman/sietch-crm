@@ -43,13 +43,15 @@ Sietch COC); the COC title renders as "Certificate of Completion" (upstream's
 counter was ported — Sietch's invoice number is still the payload value or
 the project's `project_number`. No database migration.
 
-Tests: `tests/test_invoice_coc_modern.py` (32 tests — mapping, builders,
+Tests: `tests/test_invoice_coc_modern.py` (33 tests — mapping, builders,
 layout switch, and the four handlers with a mocked DB, including the
 `project_documents` insert carrying the `opportunity_id` and the
 standalone `opportunity_id = NULL` case); `tests/test_reportlab_dependency.py`
 (6). Full Python suite 61 passed / 2 failed (both failures —
 `test_scanner_toggle_gating.py`, `test_sync_pull_deals_fields.py` — are
-pre-existing on `main` @ c637526 and unrelated); full Node suite 35/35.
+pre-existing on `main` @ c637526 and unrelated); full Node suite 35/35. The
+new suite was verified to actually execute (a deliberately flipped
+expectation produced a real failure).
 
 Sample review PDFs (modern + classic + a 60-line multi-page invoice, with
 page-1 PNGs) live in `tmp/invoice-coc-review/` (gitignored, not committed);

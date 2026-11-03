@@ -281,7 +281,7 @@ All runs throttled with `nice -n 10 ionice -c3`.
 
 | Suite | Result |
 |---|---|
-| `tests/test_invoice_coc_modern.py` | **32 passed**, 0 failed |
+| `tests/test_invoice_coc_modern.py` | **33 passed**, 0 failed |
 | `tests/test_reportlab_dependency.py` | **6 passed**, 0 failed |
 | `tests/test_pdf_dependency.py` | **2 passed**, 0 failed |
 | `tests/test_reports.py` | **33 passed**, 0 failed |
@@ -328,10 +328,15 @@ unknown values; both classic and modern renderers still exist in
 expected response keys, the `project_documents` insert carries the
 `opportunity_id`, and the PDF lands under `data/documents/<opp_id>/` with the
 expected text; the project COC returns `201`, inserts with the
-`opportunity_id`, and **honours the posted `completion_date`**; the classic
-layout still renders (and still uses the classic footer, not the branding
-footer); the standalone invoice + COC return `201` and insert with
-`opportunity_id = NULL`.
+`opportunity_id`, and **honours the posted `completion_date`** (and falls
+back to today when the payload omits it); the classic layout still renders
+(and still uses the classic footer, not the branding footer); the standalone
+invoice + COC return `201` and insert with `opportunity_id = NULL`.
+
+**Deliberate-failure check:** the suite was verified to actually execute —
+flipping an expected brand name and an expected `opportunity_id` each
+produced a real `FAILED (failures=1)` / `FAILED (failures=2)` run, so a
+green result is meaningful.
 
 ---
 
