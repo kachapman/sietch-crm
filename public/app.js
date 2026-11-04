@@ -23180,7 +23180,7 @@ async function reconcileOAuthConnect(email) {
           smtp_from_name: ($('#account-settings-from-name')?.value || '').trim(),
           monitored_folders: folderCbs ? Array.from(folderCbs).map(cb => cb.value) : ['INBOX'],
           auto_bcc_addr: ($('#account-settings-auto-bcc')?.value || '').trim(),
-          retention_days: parseInt($('#account-settings-retention-days')?.value) || 90,
+          retention_days: mailRetentionDaysInput($('#account-settings-retention-days')?.value),
           signature_html: $('#account-settings-signature')?.value || '',
           tab_icon: $('#account-settings-tab-icons')?.dataset.value || 'user',
           tab_color: $('#account-settings-tab-colors')?.dataset.value || 'var(--accent)',
@@ -23196,6 +23196,18 @@ async function reconcileOAuthConnect(email) {
   } catch (e) {
     showToast('OAuth connected, but refresh failed: ' + (e.message || e), true);
   }
+}
+
+// Read the mail account's retention-days field.
+//
+// `0` is a VALID value: it means "keep mail forever" (the retention purge
+// never runs). `parseInt(value) || 90` used to turn 0 back into 90, so
+// "keep forever" could never be saved. An empty or non-numeric value still
+// falls back to 90.
+function mailRetentionDaysInput(value) {
+  const n = parseInt(value, 10);
+  if (Number.isNaN(n) || n < 0) return 90;
+  return n;
 }
 
 function openAccountSettingsModal(editAccountId, opts) {
@@ -23291,7 +23303,9 @@ function openAccountSettingsModal(editAccountId, opts) {
         $('#account-settings-smtp-port').value = acct.smtp_port || 587;
         $('#account-settings-from-name').value = acct.smtp_from_name || '';
         $('#account-settings-auto-bcc').value = acct.auto_bcc_addr || '';
-        $('#account-settings-retention-days').value = acct.retention_days || 90;
+        // 0 means "keep forever" — a valid value, so it must survive the
+        // round-trip (it used to be turned back into 90 by `|| 90`).
+        $('#account-settings-retention-days').value = (acct.retention_days === 0 || acct.retention_days === '0') ? 0 : (acct.retention_days || 90);
         const iconBox = $('#account-settings-tab-icons');
         const colorBox = $('#account-settings-tab-colors');
         if (iconBox) iconBox.dataset.value = acct.tab_icon || 'user';
@@ -23502,7 +23516,7 @@ function openAccountSettingsModal(editAccountId, opts) {
           smtp_from_name: $('#account-settings-from-name').value.trim(),
           monitored_folders: folders,
           auto_bcc_addr: $('#account-settings-auto-bcc').value.trim(),
-          retention_days: parseInt($('#account-settings-retention-days').value) || 90,
+          retention_days: mailRetentionDaysInput($('#account-settings-retention-days').value),
           signature_html: $('#account-settings-signature').value,
           tab_icon: $('#account-settings-tab-icons')?.dataset.value || 'user',
           tab_color: $('#account-settings-tab-colors')?.dataset.value || 'var(--accent)',

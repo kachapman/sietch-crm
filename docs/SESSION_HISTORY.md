@@ -11,6 +11,74 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-04 (mail retention re-import loop, branch
+`fix-mail-retention-loop`)
+
+**Status: IMPLEMENTED on branch `fix-mail-retention-loop` — NOT merged, NOT
+pushed, NOT deployed.** Cut from `main` at `e1164f3`. Worktree:
+`~/Projects/new-crm-mail-loop`. No production server, `.env`, deploy file or
+database was touched; no network calls to prod. The diagnosis was read-only
+(`~/.cache/stilgar/sietch-mail-loop-diag.md`).
+
+**The bug.** On two IMAP accounts the newest Sent message is older than the
+90-day retention window. Every 2-minute poll: (1) `_fetch_messages` used
+`UidRange(last_seen, "*")` — the range INCLUDES `last_seen`, and RFC 3501
+says an `n:*` range always resolves to the folder's HIGHEST UID even when it
+is below `n`; (2) `_process_message` relied on the processed-ID guard to drop
+that overlap row; (3) `_enforce_retention` DELETED that guard's key when it
+purged the message; (4) so the next poll re-imported it, re-downloaded the
+attachments and stored them under a new message id, and retention deleted it
+again. 1,134 files / 1.62 GB in one day (~153 MB/h).
+
+**Fixes.**
+- **Strictly-newer incremental fetch** (`_fetch_messages`): IMAP is asked for
+  `UidRange(last_seen + 1, "*")` AND every returned UID is filtered
+  client-side against `last_seen`. The filter runs BEFORE the per-message
+  fetch, so a dropped row never has attachment bytes downloaded or staged.
+- **No import of over-retention messages** (`_process_message`): new
+  `_account_retention_days()`, `_retention_cutoff()`, `_parse_message_date()`,
+  `_message_older_than_cutoff()`. The cutoff reuses `_enforce_retention`'s
+  exact logic (naive wall-clock comparison — `mail_messages.date_received` is
+  a plain `TIMESTAMP`). The check runs BEFORE `_store_message()`, so no
+  message row and no attachment file is created. A skipped message is marked
+  processed; the folder watermark still advances past it.
+  `retention_days <= 0` = keep forever = never skipped. An explicit manual
+  reprocess is exempt (`skip_retention_check`).
+- **The retention purge KEEPS the processed keys** of the messages it
+  deletes (they are re-added under the folder-scoped AND the legacy key), so
+  a purged UID can never be re-imported.
+- **The processed key now includes the FOLDER** (`account:folder:uid`): a
+  Sent UID 4114 no longer collides with an INBOX UID 4114. The legacy
+  `account:uid` form is still honoured on read, so the deploy causes no mass
+  re-import.
+- **`retention_days = 0` ("keep forever") is saveable.** `server.py`: new
+  `_coerce_retention_days()` used by the create + update handlers (the old
+  `int(payload.get("retention_days") or 90)` turned 0 into 90).
+  `public/app.js`: new `mailRetentionDaysInput()` at the three retention call
+  sites (the old `parseInt(...) || 90` did the same) and the edit-modal
+  loader no longer rewrites a saved 0 to 90.
+
+**Unchanged on purpose:** `MAIL_ATTACHMENT_DROP_STORED_ON_PURGE` (default and
+behaviour), the stored-attachment retention policy, deploy files, `.env`,
+every production database.
+
+**Tests.** New `tests/test_mail_retention_loop.py` (29 tests). Also REPAIRED
+`tests/test_mail_incremental.py` + `tests/test_mail_polling.py`: both
+imported the scanner from the hardcoded path `/home/chapman-server/Projects/
+new-crm` (so in a worktree they patched a DIFFERENT module than they
+exercised) and both materialised the `_fetch_messages` GENERATOR outside its
+`patch` context (the 2026-11-03 generator refactor made that lazy). Both had
+been failing since that refactor; both now pass.
+
+**Follow-ups NOT done (need Ken's go):** the disk cleanup of the ~570 orphan
+`data/mail-attachments/<id>/` folders (1.71 GB) — the diagnosis §6D describes
+a dry-run-then-quarantine script; and the pre-existing duplicate documents on
+opp 98 / opp 63 (from the Oct 3–4 backfill runs, unrelated to this loop).
+
+---
+
+## Previous session summary
+
 **Date:** 2026-11-03 (linked-email attachments missing from the project
 Documents tab, branch `fix-mail-attachments`)
 

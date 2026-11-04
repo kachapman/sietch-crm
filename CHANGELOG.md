@@ -2,6 +2,74 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Mail retention re-import loop: the scanner re-imported (and re-downloaded) purged mail every 2 minutes (2026-11-04, branch `fix-mail-retention-loop`)
+
+**Symptom.** On two IMAP accounts (crm@vanguardadj.online, requests@sherwoodestimates.com)
+the newest message in the **Sent** folder is older than the account's 90-day
+retention window. Every poll re-imported it, re-downloaded its attachments
+and stored them under a NEW message id — and then the retention job deleted
+the message again in the same cycle. The DB rows churned; the files stayed on
+disk (`MAIL_ATTACHMENT_DROP_STORED_ON_PURGE` defaults to false): **1,134
+files / 1.62 GB in one day**, ~153 MB/h.
+
+**Root cause — three defects that only combine on a "stale highest UID" folder:**
+1. `_fetch_messages` asked IMAP for `UidRange(last_seen, "*")`. That range
+   INCLUDES `last_seen`, and per RFC 3501 an `n:*` range always resolves to
+   the folder's **highest** UID — even when that UID is *below* `n`. The
+   overlap row therefore came back on EVERY poll.
+2. `_process_message` relied on the processed-ID guard to drop that overlap
+   row — but `_enforce_retention` **discarded** the processed key of every
+   message it purged, so the guard was gone the moment it was needed.
+3. Nothing stopped the scanner from importing a message that retention was
+   about to delete in the same cycle.
+
+**Fixes (`scanner/mail_scanner.py` unless noted):**
+- **Incremental fetch is now strictly newer than the watermark.** IMAP is
+  asked for `UidRange(last_seen + 1, "*")` **and** every returned UID is
+  filtered client-side against `last_seen`. The filter runs BEFORE the
+  per-message fetch, so a dropped row never has its attachment bytes
+  downloaded or staged.
+- **Messages older than the account's retention window are no longer
+  imported.** New helpers `_account_retention_days()`, `_retention_cutoff()`,
+  `_parse_message_date()` and `_message_older_than_cutoff()` reuse the exact
+  cutoff of `_enforce_retention` (naive wall-clock comparison, because
+  `mail_messages.date_received` is a plain `TIMESTAMP`). The check runs
+  BEFORE `_store_message()`, so no message row and no attachment file is
+  created. A skipped message is marked processed, and the folder watermark
+  still advances past it. `retention_days <= 0` means "keep forever" — nothing
+  is skipped. An explicit manual reprocess is exempt (the row already exists,
+  so it survived retention).
+- **The retention purge no longer throws away the processed-ID keys of the
+  messages it deletes.** The purged UID is re-added under the folder-scoped
+  key (and the legacy key), so a purged message can never be re-imported.
+- **The processed key now includes the FOLDER** (`account:folder:uid`): a
+  Sent UID 4114 and an INBOX UID 4114 are different messages. The legacy
+  `account:uid` form is still honoured on read (and re-added on purge), so
+  deploying this does not trigger a mass re-import of already-processed mail.
+- **`retention_days = 0` ("keep forever") is now saveable.**
+  `server.py`: new `_coerce_retention_days()` helper used by the create and
+  update handlers — `int(payload.get("retention_days") or 90)` turned 0 back
+  into 90. `public/app.js`: new `mailRetentionDaysInput()` helper at the
+  three retention call sites (the old `parseInt(...) || 90` did the same), and
+  the edit-modal loader no longer rewrites a saved 0 to 90.
+
+**Unchanged on purpose:** `MAIL_ATTACHMENT_DROP_STORED_ON_PURGE` (default and
+behaviour), the stored-attachment retention policy, the deploy files, `.env`,
+and every production database.
+
+**Tests.** New `tests/test_mail_retention_loop.py` (29 tests): the IMAP
+`n:*` overlap regression (the fake IMAP faithfully returns the highest UID
+below `n`, and it is dropped before any fetch), the `last_seen + 1` range,
+the retention skip (no message row, no attachment stored), the two-poll loop
+(imported once at most, never twice), the watermark advancing past a skipped
+message, the purge keeping the processed key, the folder-scoped key, the
+legacy key still being honoured, and `retention_days = 0` accepted by the
+server. `tests/test_mail_incremental.py` and `tests/test_mail_polling.py`
+were also repaired (they imported the scanner from a hardcoded absolute path
+and materialised the `_fetch_messages` generator outside its patch context,
+so they had been failing since the 2026-11-03 generator refactor); both now
+pass. Not deployed, not merged.
+
 ## Linked emails don't put their PDFs/documents in the project's Documents tab (2026-11-03, branch `fix-mail-attachments`)
 
 **Round 4 (blocker B1): a missing unique index no longer breaks document

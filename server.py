@@ -2329,6 +2329,34 @@ def _mail_account_manageable(user: dict, account_id: int) -> bool:
     return row is not None and row["owner_user_id"] == user["id"]
 
 
+def _coerce_retention_days(value: Any, default: int = 90) -> int:
+    """Normalize a mail account's retention_days value.
+
+    `0` is a VALID value: it means "keep mail forever" (no retention purge).
+    An empty, missing, negative or non-numeric value falls back to `default`.
+
+    Before this, `int(payload.get("retention_days") or 90)` turned 0 into 90,
+    so "keep forever" could never be saved (bug fix 2026-11-04).
+    """
+    if value is None:
+        return int(default)
+    if isinstance(value, bool):
+        return int(default)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return int(default)
+        try:
+            value = int(text)
+        except ValueError:
+            return int(default)
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        return int(default)
+    return days if days >= 0 else int(default)
+
+
 def _get_system_smtp_account() -> dict | None:
     """Find the best SMTP config for system emails (password resets, 2FA, notifications).
     Priority: 1) Alternate SMTP if enabled, 2) CRM mail account.
@@ -22270,7 +22298,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     payload.get("oauth_token_expires"),
                     is_crm_mail,
                     payload.get("auto_bcc_addr"),
-                    int(payload.get("retention_days") or 90),
+                    _coerce_retention_days(payload.get("retention_days"), 90),
                     payload.get("tab_icon") or "user",
                     payload.get("tab_color") or "var(--accent)",
                 ),
@@ -22327,7 +22355,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     params.append(payload[key])
             if "retention_days" in payload:
                 fields.append("retention_days = %s")
-                params.append(int(payload["retention_days"] or 90))
+                params.append(_coerce_retention_days(payload.get("retention_days"), 90))
             if "signature_html" in payload:
                 fields.append("signature_html = %s")
                 params.append(payload["signature_html"])

@@ -19,7 +19,7 @@ import types
 import unittest
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent.parent))
 
 # Local .venv has every dependency (imap_tools included) and db connects
 # lazily, so both modules import for real — no stubs needed (same as
@@ -64,6 +64,20 @@ class FakeMailbox:
         pass
 
     def fetch(self, criteria=None, mark_seen=False, bulk=False):
+        crit = str(criteria or "")
+        if "UID" in crit:
+            # The scanner uses two UID criteria:
+            #   "(UID 101:*)" — a RANGE: every UID from 101 up.
+            #   "(UID 101)"   — a SINGLE UID: only that message (the scanner's
+            #     `_fetch_single_message` takes msgs[0]).
+            wanted = ""
+            for token in crit.replace("(", " ").replace(")", " ").split():
+                if token.isdigit():
+                    wanted = token
+                    break
+            if ":" in crit:
+                return [FakeMsg(uid) for uid in (101, 102, 103)]
+            return [FakeMsg(wanted)] if wanted else []
         return [FakeMsg(uid) for uid in (101, 102, 103)]
 
     def logout(self):
@@ -75,9 +89,13 @@ class TestNewestFirstFetch(unittest.TestCase):
         from datetime import datetime, timezone
         cfg = {"host": "h", "port": 993, "user": "u", "password": "p",
                "inbox": "INBOX", "account_id": 6}
+        # `_fetch_messages` is a GENERATOR (2026-11-03 refactor): its body
+        # runs on the first `next()`. Materialize the list INSIDE the patch
+        # context, otherwise the fake MailBox is already un-patched and the
+        # generator tries a real IMAP connection.
         with patch.object(ms, "MailBox", FakeMailbox):
-            msgs = ms._fetch_messages(cfg, "INBOX",
-                                      since=datetime.now(timezone.utc))
+            msgs = list(ms._fetch_messages(cfg, "INBOX",
+                                           since=datetime.now(timezone.utc)))
         self.assertEqual([m["uid"] for m in msgs], ["103", "102", "101"])
 
 
