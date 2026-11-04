@@ -25397,11 +25397,11 @@ function renderMailList(msgs) {
     subjText.className = 'mail-subject-text';
     subjText.innerHTML = draftBadge + escapeHtml(subj.slice(0, 80));
     subjDiv.appendChild(subjText);
-    // IMAP sync failure marker (e.g. read status did not reach Outlook).
+    // IMAP sync failure marker (e.g. read status did not reach the server).
     if (m.sync_failure) {
       const warn = document.createElement("span");
       warn.className = "mail-sync-warning";
-      warn.title = "Couldn't sync to Outlook: " + (m.sync_failure.error || "unknown error");
+      warn.title = "Couldn't sync to your mailbox: " + (m.sync_failure.error || "unknown error");
       warn.innerHTML = '<i class="ti ti-alert-triangle"></i>';
       subjText.appendChild(warn);
     }
@@ -27169,7 +27169,9 @@ function renderEmailPreviewHead(headEl, norm, fullMail, subject) {
 }
 
 // Show a short note when the last change (e.g. "mark read") could not be
-// pushed to Outlook, so the user knows the webmail still shows it unread.
+// pushed to the mail server, so the user knows the webmail still shows it
+// unread. Wording names the provider when it is known (Outlook / Gmail),
+// otherwise it stays generic — the account may be neither.
 function renderEmailPreviewSyncNote(noteEl, fullMail) {
   if (!noteEl) return;
   const fail = fullMail && (fullMail.sync_failure || fullMail.syncFailure);
@@ -27182,8 +27184,20 @@ function renderEmailPreviewSyncNote(noteEl, fullMail) {
   const verb = action === 'read' ? 'mark as read'
     : action === 'unread' ? 'mark as unread'
     : action === 'star' ? 'star' : 'change';
+  const target = mailProviderLabel(fullMail);
   noteEl.classList.remove('hidden');
-  noteEl.innerHTML = `<i class="ti ti-alert-triangle"></i> Couldn't sync "${escapeHtml(verb)}" to Outlook.`;
+  noteEl.innerHTML = `<i class="ti ti-alert-triangle"></i> Couldn't sync "${escapeHtml(verb)}" to ${escapeHtml(target)}.`;
+}
+
+// "Outlook" / "Gmail" when the account's provider is known, otherwise a
+// generic "your mailbox" — the account may use any IMAP provider.
+function mailProviderLabel(mail) {
+  const acctId = mail && (mail.account_id || mail.accountId);
+  const acct = (mailState.accounts || []).find(a => String(a.id) === String(acctId));
+  const provider = (acct && (acct.oauth_provider || acct.oauthProvider)) || '';
+  if (/microsoft|outlook|office/i.test(provider)) return 'Outlook';
+  if (/google|gmail/i.test(provider)) return 'Gmail';
+  return 'your mailbox';
 }
 
 function renderEmailPreviewBody(bodyEl, norm, fullMail, messageId) {

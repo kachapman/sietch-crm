@@ -50,9 +50,20 @@ test('sync note names the action that failed to sync', () => {
   assert.equal(syncNoteVerb('move'), 'change');
 });
 
+test('the wording names the provider or stays generic', () => {
+  // Never hard-code "Outlook" — the account may be Gmail or another IMAP
+  // provider.
+  assert.ok(appSrc.includes('function mailProviderLabel('));
+  assert.ok(appSrc.includes('your mailbox'));
+  const noteLine = appSrc.split('\n').find(l => l.includes("Couldn't sync") && l.includes('escapeHtml(target)'));
+  assert.ok(noteLine, 'the note must use the provider label, not a literal provider name');
+  assert.ok(!/Couldn't sync .* to Outlook\./.test(appSrc), 'no hard-coded "to Outlook."');
+});
+
 test('mail list rows show a warning icon for a failed sync', () => {
   assert.ok(appSrc.includes('if (m.sync_failure)'));
   assert.ok(appSrc.includes('mail-sync-warning'));
+  assert.ok(appSrc.includes("Couldn't sync to your mailbox"));
 });
 
 test('mail-sync-warning style is defined', () => {
