@@ -11,6 +11,62 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-03 (Outlook read-status sync — round 2, branch `fix-outlook-read-sync`)
+
+**Status: DONE ON BRANCH — not pushed, not merged, not deployed.** Worktree
+`~/Projects/new-crm-outlook-read`, branch `fix-outlook-read-sync`, off `main`
+`c637526`. No prod access, no other worktrees touched. Two review rounds
+done (round 1 = `3f4470f`, round 2 = the commit after it).
+
+**Round 2 changes (all from the round-2 review):**
+- **Fallback folder search narrowed** — the special-use flags were defined
+  but never used, so every IMAP `LIST` folder plus 13 hard-coded names was
+  searched (slow on a big mailbox). Now only the stored folder, `INBOX` and
+  the `LIST` folders marked `\Sent \Trash \Junk \Archive \Drafts` are
+  searched; the hard-coded names (incl. Outlook's "Sent Items", "Deleted
+  Items", "Junk Email") are the fallback when `LIST` fails or marks nothing.
+  Still cached per account.
+- **Permanent delete verifies the Message-ID** like move does; aborts with a
+  warning instead of deleting a stale UID.
+- **Forced refresh + manual "refresh now"** now use the same guarded
+  compare-and-swap save as the normal path.
+- **Scanner re-reads the stored token** when it loses the refresh race
+  (was continuing with the stale one).
+- **`scanner/Dockerfile` copies `mail_oauth.py`** (the scanner imports it;
+  the main image already got it via `COPY *.py ./`).
+
+**Round 1 recap:** the IMAP logic moved to `mail_imap.py` and the shared
+OAuth refresh to `mail_oauth.py` (one owner for the scanner, server.py's
+IMAP path, the forced refresh and the manual refresh button); the save is a
+DB-level compare-and-swap (`UPDATE ... WHERE id = %s AND oauth_access_token
+= %s`) so concurrent refreshes cannot clobber each other; the sync-failure
+marker is persisted in the existing `mail_flag_queue` table (pushed = FALSE)
+— **no migration needed**; the UI wording names the provider (Outlook /
+Gmail) or says "your mailbox".
+
+**Tests:** `tests/test_mail_imap_flag_sync.py` (68) +
+`tests/test_mail_sync_warning.mjs` (8). Verified by mutation: reverting the
+folder narrowing, the delete verification, the compare-and-swap, the exact
+Message-ID match, the no-Message-ID skip, the move abort or the scanner's
+re-read each makes the suite fail.
+**Suite state:** Python 60 files pass / 2 fail — the SAME 2 that already fail
+on `main` (`test_scanner_toggle_gating`, `test_sync_pull_deals_fields`);
+Node 36/36 files pass. `tests/test_reports.py` needs the gitignored `.env`
+(copied in from the main worktree; untracked).
+**Files:** `server.py` (thin IMAP wrappers ~2172-2345), `mail_imap.py` (new),
+`mail_oauth.py` (new), `scanner/mail_scanner.py` (shared refresh + re-read),
+`scanner/Dockerfile`, `public/app.js`, `public/index.html`,
+`public/styles.css`, `tests/test_mail_imap_flag_sync.py`,
+`tests/test_mail_sync_warning.mjs`, `.github/workflows/smoke.yml`,
+CHANGELOG.md, docs/SESSION_HISTORY.md.
+**Merge surface (measured with throwaway clones, since deleted):** with
+`fix-mail-attachments` → 1 server.py hunk (both sides ADD at the same
+anchor, so the resolution is "keep both"; the merged file compiles and
+passes all tests) + the 2 docs files; with `invoice-coc-upgrade` → server.py
+merges CLEAN, only the 2 docs files conflict.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-11-03 (Outlook read status not syncing, branch `fix-outlook-read-sync`)
 
 **Status: DONE ON BRANCH — not pushed, not merged, not deployed.** Worktree

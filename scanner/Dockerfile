@@ -4,7 +4,10 @@ WORKDIR /app
 
 RUN useradd --create-home --uid 10001 appuser
 
-COPY mail_scanner.py scanner_service.py train_ml_head.py db.py event_bus.py user_profile_store.py oauth_providers.py crm_bot_store.py infra_log.py ./
+# mail_oauth.py holds the shared OAuth token refresh (used by
+# mail_scanner.py and by server.py) — it must be in the image or the
+# scanner fails to import.
+COPY mail_scanner.py scanner_service.py train_ml_head.py db.py event_bus.py user_profile_store.py oauth_providers.py mail_oauth.py crm_bot_store.py infra_log.py ./
 COPY requirements.txt requirements-ml.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 

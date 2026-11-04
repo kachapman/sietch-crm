@@ -1089,7 +1089,16 @@ def _get_mailboxes() -> list[dict[str, Any]]:
                 if token_refreshed:
                     access_token = token_refreshed[0]
                 else:
-                    access_token = row.get("oauth_access_token") or ""
+                    # The refresh failed, or another refresher (the server)
+                    # won the race and stored a newer token. Re-read the row
+                    # so we do NOT keep using the stale token we read before
+                    # the attempt.
+                    fresh = db.query_one(
+                        "SELECT oauth_access_token FROM mail_accounts WHERE id = %s",
+                        (row["id"],),
+                    )
+                    access_token = ((fresh or {}).get("oauth_access_token")
+                                    or row.get("oauth_access_token") or "")
                 if not access_token:
                     logger.warning("No access token for OAuth account %d (%s), skipping", row["id"], row["email"])
                     continue

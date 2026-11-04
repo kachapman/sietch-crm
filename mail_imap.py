@@ -56,6 +56,7 @@ _FLAG_NAME_BY_ACTION = {
     "unread": "\\Seen",
     "star": "\\Flagged",
     "move": "\\Move",
+    "delete": "\\Deleted",
 }
 
 
@@ -97,8 +98,14 @@ def _clear_persisted_failure(message_id: int, action: str, db: Any = None) -> No
 
 # ── Folder discovery ──────────────────────────────────────────────────────────
 # The folders a message may live in. Resolved from the account's IMAP LIST
-# output (which carries Outlook's own names such as "Sent Items"), with a
-# static fallback for when LIST is unavailable.
+# output, keeping ONLY the folders the server marks with a special-use flag
+# (\Sent \Trash \Junk \Archive \Drafts). A big mailbox can have hundreds of
+# ordinary user folders; searching every one of them costs a SELECT + SEARCH
+# round trip each and slows the UI down when the message is genuinely gone.
+#
+# The hard-coded names (including Outlook's "Sent Items", "Deleted Items" and
+# "Junk Email") are used ONLY as a fallback: when LIST fails, or when the
+# server marks no folder with a special-use flag.
 _STATIC_FALLBACK_FOLDERS = (
     "INBOX",
     "Sent Items", "Sent", "Sent Mail", "Sent Messages",
@@ -109,13 +116,14 @@ _STATIC_FALLBACK_FOLDERS = (
     "Outbox",
 )
 
-# Cache of the resolved folder list per account, so a click does not re-LIST.
-_folder_cache: dict[int, list[str]] = {}
-_folder_cache_lock = threading.Lock()
-
 # Special-use flags from the IMAP LIST response (\Sent \Trash \Junk ...).
 # A folder carrying one of these is a candidate for a moved message.
 _SPECIAL_USE_FLAGS = ("\\sent", "\\trash", "\\junk", "\\archive", "\\drafts")
+
+# Cache of the resolved candidate folders per account, so a click does not
+# re-LIST.
+_folder_cache: dict[int, list[str]] = {}
+_folder_cache_lock = threading.Lock()
 
 
 def record_sync_failure(message_id: int, action: str, error: Any, db: Any = None) -> None:
@@ -303,29 +311,37 @@ def uid_message_id(mb: Any, uid: str) -> str:
 
 
 def list_folders(mb: Any) -> list[str]:
-    """Return the folder names the account exposes.
+    """Return the candidate folders a message may have been moved to.
 
-    Uses the IMAP LIST output when available, so Outlook's own names
-    ("Sent Items", "Deleted Items", "Junk Email") are used instead of
-    guessed ones. Falls back to a static list.
+    Only the folders the server marks with a special-use flag (\\Sent \\Trash
+    \\Junk \\Archive \\Drafts) are returned — those are the only places a
+    message can be moved to from the CRM's point of view. Ordinary user
+    folders are deliberately NOT searched: a big mailbox can have hundreds of
+    them and each one costs a SELECT + SEARCH round trip.
+
+    When LIST fails, or when the server marks no folder with a special-use
+    flag, the hard-coded names (including Outlook's "Sent Items",
+    "Deleted Items" and "Junk Email") are used instead.
     """
-    names: list[str] = []
+    special: list[str] = []
+    listed = False
     try:
         for folder in mb.folder.list():
+            listed = True
             name = getattr(folder, "name", None) or getattr(folder, "path", None) or ""
-            if name:
-                names.append(str(name))
+            if not name:
+                continue
+            flags = getattr(folder, "flags", None) or ()
+            lowered = {str(f).lower() for f in flags}
+            if lowered & set(_SPECIAL_USE_FLAGS):
+                special.append(str(name))
     except Exception as e:
         logger.error("IMAP: folder list failed: %s", e)
-    if not names:
+    if not listed or not special:
+        # LIST failed, or the server marked no folder with a special-use
+        # flag — fall back to the well-known names.
         return list(_STATIC_FALLBACK_FOLDERS)
-    # Keep the static fallbacks as a safety net for servers whose LIST is
-    # incomplete, but put the real names first.
-    merged = list(names)
-    for fallback in _STATIC_FALLBACK_FOLDERS:
-        if fallback not in merged:
-            merged.append(fallback)
-    return merged
+    return special
 
 
 def account_folders(account_id: int, mb: Any) -> list[str]:
@@ -389,10 +405,18 @@ def resolve_uid(mb: Any, folder: str, uid: str, message_id: str,
 
     The stored UID can be stale: after a move/delete the message lives in a
     different folder, and UIDs are only unique per folder. We verify the
-    Message-ID of the stored UID first; on mismatch we look the message up
-    by Message-ID header — in the folder we expect it in, and in the other
-    folders it may have been moved to (the IMAP move and the DB folder
-    update are not atomic, so either can be the stale one).
+    Message-ID of the stored UID first; on mismatch we look the message up by
+    Message-ID header in a SHORT candidate list:
+
+      1. the folder the row names (the DB folder update and the IMAP move
+         are not atomic, so either can be the stale one);
+      2. INBOX;
+      3. the folders the server marks with a special-use flag (\\Sent
+         \\Trash \\Junk \\Archive \\Drafts) — the only other places the CRM
+         moves a message to.
+
+    Ordinary user folders are NOT searched: on a big mailbox that would cost
+    a SELECT + SEARCH round trip per folder.
 
     Returns (uid, folder) — ("", "") when the message could not be located.
     An empty stored Message-ID yields ("", "") too: without it the target
@@ -413,8 +437,14 @@ def resolve_uid(mb: Any, folder: str, uid: str, message_id: str,
             "IMAP: Message-ID mismatch for uid %s in folder %s (expected %s, got %s) — not flagging",
             uid, folder, want, normalize_message_id(actual),
         )
-    # The UID is stale (or gone): find the message by Message-ID.
-    candidates = [folder] + [f for f in (candidate_folders or []) if f != folder]
+    # The UID is stale (or gone): find the message by Message-ID, but only in
+    # the few folders it can actually be in.
+    candidates = [folder]
+    if "INBOX" not in candidates:
+        candidates.append("INBOX")
+    for candidate in (candidate_folders or []):
+        if candidate not in candidates:
+            candidates.append(candidate)
     for candidate in candidates:
         found_uid, found_folder = find_uid_by_message_id(mb, candidate, want)
         if found_uid:
@@ -507,6 +537,65 @@ def apply_flag(account_id: int, folder: str, uid: str, flag: str, value: bool,
     return False
 
 
+def delete(account_id: int, folder: str, uid: str,
+           message_id: str | None = None, message_db_id: int | None = None,
+           connect: Any = None, db: Any = None,
+           candidate_folders: list[str] | None = None) -> bool:
+    """Permanently delete a message from IMAP.
+
+    The UID is resolved by Message-ID FIRST, exactly like the move path: a
+    stale UID may already belong to a different message, and deleting it
+    would destroy someone else's mail. When the Message-ID cannot be
+    resolved the delete is ABORTED with a warning.
+    """
+    if is_synthetic_uid(uid):
+        return True
+    mb = None
+    try:
+        mb = connect(account_id)
+        if not mb:
+            raise RuntimeError("IMAP connect failed (no mailbox)")
+        folders = candidate_folders
+        if folders is None:
+            folders = account_folders(account_id, mb)
+        mb.folder.set(folder)
+        target_uid, target_folder = resolve_uid(mb, folder, uid, message_id or "",
+                                                folders)
+        if not target_uid:
+            # Never delete a UID we could not verify — it may belong to a
+            # different message by now.
+            logger.error(
+                "IMAP delete aborted (account %d, folder %s, uid %s): the message could not be "
+                "resolved by Message-ID — it may have been replaced",
+                account_id, folder, uid,
+            )
+            if message_db_id:
+                record_sync_failure(message_db_id, "delete", "message could not be resolved by Message-ID", db)
+            return False
+        if target_folder != folder:
+            mb.folder.set(target_folder)
+        mb.delete([target_uid])
+        mb.logout()
+        mb = None
+        if message_db_id:
+            clear_sync_failure(message_db_id, "delete", db)
+        return True
+    except Exception as e:
+        logger.error(
+            "IMAP delete failed (account %d, folder %s, uid %s): %s",
+            account_id, folder, uid, e,
+        )
+        if message_db_id:
+            record_sync_failure(message_db_id, "delete", e, db)
+        return False
+    finally:
+        if mb is not None:
+            try:
+                mb.logout()
+            except Exception:
+                pass
+
+
 def move(account_id: int, folder: str, uid: str, dest_folder: str,
          message_id: str | None = None, message_db_id: int | None = None,
          connect: Any = None, db: Any = None,
@@ -580,6 +669,7 @@ __all__ = [
     "apply_flag",
     "clear_folder_cache",
     "clear_sync_failure",
+    "delete",
     "find_uid_by_message_id",
     "is_auth_error",
     "is_synthetic_uid",

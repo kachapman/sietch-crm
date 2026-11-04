@@ -2322,21 +2322,21 @@ def _imap_move(account_id: int, folder: str, uid: str, dest_folder: str,
     )
 
 
-def _imap_delete(account_id: int, folder: str, uid: str) -> bool:
-    """Permanently delete a message from IMAP."""
+def _imap_delete(account_id: int, folder: str, uid: str,
+                 message_id: str | None = None, message_db_id: int | None = None) -> bool:
+    """Permanently delete a message from IMAP.
+
+    The UID is resolved by Message-ID first; when it cannot be resolved the
+    delete is aborted — a stale UID may already belong to a different
+    message, and deleting it would destroy someone else's mail.
+    """
     if _is_synthetic_uid(uid):
         return True
-    try:
-        mb = _imap_connect(account_id)
-        if not mb:
-            return False
-        mb.folder.set(folder)
-        mb.delete([uid])
-        mb.logout()
-        return True
-    except Exception as e:
-        logger.warning("IMAP delete failed (account %d, uid %s): %s", account_id, uid, e)
-        return False
+    return mail_imap.delete(
+        account_id, folder, uid,
+        message_id=message_id, message_db_id=message_db_id,
+        connect=_imap_connect, db=db,
+    )
 
 
 def _parse_iso_datetime(value: str):
@@ -20048,6 +20048,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             token_data = mail_oauth.refresh_access_token(
                 account_id, row["oauth_provider"], row["oauth_refresh_token"], None,
                 force=True,
+                expected_access=row.get("oauth_access_token") or None,
             )
             if not token_data:
                 _json_response(self, 500, {"error": "Token refresh failed"})

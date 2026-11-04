@@ -2,6 +2,33 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Outlook read-status sync — round 2 (2026-11-03, branch `fix-outlook-read-sync`)
+
+Follow-ups to the first round (see the entry below for the original fix):
+
+- **Fallback folder search narrowed.** The special-use flags were defined but
+  never used, so every folder from IMAP `LIST` plus 13 hard-coded names was
+  searched — slow on a big mailbox. Now only the stored folder, `INBOX` and
+  the folders `LIST` marks `\Sent \Trash \Junk \Archive \Drafts` are searched;
+  the hard-coded names (incl. Outlook's "Sent Items", "Deleted Items",
+  "Junk Email") are used only when `LIST` fails or marks nothing. The
+  resolved list stays cached per account.
+- **Permanent delete verifies the Message-ID** like the move path does, and
+  aborts with a warning instead of deleting a stale UID that may now belong
+  to a different message.
+- **The forced (post-auth-failure) refresh and the manual "refresh now"
+  button** now use the same guarded compare-and-swap save as the normal
+  path, so they cannot overwrite a token another refresher stored.
+- **The scanner re-reads the stored token** when it loses the refresh race
+  instead of continuing with the stale one.
+- **The standalone scanner image** copies `mail_oauth.py` (the scanner
+  imports it; the main image already picked it up via `COPY *.py ./`).
+
+Tests: `tests/test_mail_imap_flag_sync.py` (68) and
+`tests/test_mail_sync_warning.mjs` (8) — new coverage for the narrowed
+folder search, the delete verification, the guarded forced refresh and the
+scanner's re-read.
+
 ## Outlook read status not syncing from the mail modal (2026-11-03, branch `fix-outlook-read-sync`)
 
 Live bug (MDM outlook.com account): opening an email in the Sietch mail modal

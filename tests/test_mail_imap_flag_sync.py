@@ -108,26 +108,48 @@ class FakeIMAPClient:
         return ("BYE", [b""])
 
 
+class FakeFolderInfo:
+    """Stand-in for imap_tools' FolderInfo (name + special-use flags)."""
+
+    def __init__(self, name, flags=()):
+        self.name = name
+        self.delim = "/"
+        self.flags = tuple(flags)
+
+
 class FakeFolderManager:
     """Stand-in for imap_tools' folder manager."""
 
-    def __init__(self, folders=None):
+    def __init__(self, folders=None, list_error=False):
         self.selected = []
         self._folders = folders or []
+        self._list_error = list_error
+        self.listed = 0
 
     def set(self, folder):
         self.selected.append(folder)
 
     def list(self):
-        return [type("F", (), {"name": n})() for n in self._folders]
+        self.listed += 1
+        if self._list_error:
+            raise RuntimeError("LIST failed")
+        out = []
+        for item in self._folders:
+            if isinstance(item, FakeFolderInfo):
+                out.append(item)
+            elif isinstance(item, tuple):
+                out.append(FakeFolderInfo(item[0], item[1]))
+            else:
+                out.append(FakeFolderInfo(item))
+        return out
 
 
 class FakeMailBox:
     """Stand-in for imap_tools.MailBox."""
 
-    def __init__(self, client, uids_by_message_id=None, folders=None):
+    def __init__(self, client, uids_by_message_id=None, folders=None, list_error=False):
         self.client = client
-        self.folder = FakeFolderManager(folders)
+        self.folder = FakeFolderManager(folders, list_error=list_error)
         self.logged_out = False
         self._uids_by_message_id = uids_by_message_id or {}
         self.moved = []
@@ -299,6 +321,77 @@ class TestTokenRefresh(unittest.TestCase):
         winners = [r for r in results if r]
         self.assertEqual(len(winners), 1, "exactly one refresh may win the compare-and-swap")
         self.assertEqual(stored["token"], winners[0][0])
+
+    def test_the_forced_refresh_also_uses_the_compare_and_swap(self):
+        """The post-auth-failure refresh must not overwrite a token another
+        refresher stored in the meantime."""
+        db = _mock_db()
+        db.query_one.return_value = {
+            "email": "mdm@outlook.com",
+            "oauth_provider": "microsoft",
+            "oauth_access_token": "old-token",
+            "oauth_refresh_token": "refresh-token",
+            "oauth_token_expires": datetime.now(timezone.utc) + timedelta(hours=1),
+        }
+        provider = MagicMock()
+        provider.refresh_token.return_value = {"access_token": "forced-token", "expires_in": 3600}
+        with patch.object(mail_oauth, "db", db, create=True), \
+            patch.object(_server.oauth_providers, "get_provider", return_value=provider):
+            mail_oauth.force_refresh_access_token(5)
+        sql, params = _find_execute(db, "AND oauth_access_token = %s")
+        self.assertIn("old-token", params)
+
+    def test_the_forced_refresh_keeps_the_newer_token_when_it_loses(self):
+        """If the compare-and-swap fails, the token another refresher stored
+        is used — not the stale one."""
+        db = _mock_db()
+        db.query_one.side_effect = [
+            {  # the initial read
+                "email": "mdm@outlook.com",
+                "oauth_provider": "microsoft",
+                "oauth_access_token": "old-token",
+                "oauth_refresh_token": "refresh-token",
+                "oauth_token_expires": datetime.now(timezone.utc) + timedelta(hours=1),
+            },
+            {  # the re-read after losing the race
+                "oauth_access_token": "newer-token",
+                "oauth_refresh_token": "refresh-token",
+            },
+        ]
+        provider = MagicMock()
+        provider.refresh_token.return_value = {"access_token": "forced-token", "expires_in": 3600}
+        db.execute.return_value = 0  # the compare-and-swap matches no row
+        with patch.object(mail_oauth, "db", db, create=True), \
+            patch.object(_server.oauth_providers, "get_provider", return_value=provider):
+            out = mail_oauth.force_refresh_access_token(5)
+        self.assertEqual(out[0], "newer-token")
+
+    def test_the_scanner_re_reads_the_token_when_it_loses_the_race(self):
+        """The scanner must not keep using the stale token it read before
+        the refresh attempt."""
+        import scanner.mail_scanner as ms
+        db = _mock_db()
+        db.query_dicts.return_value = [{
+            "id": 5,
+            "email": "mdm@outlook.com",
+            "imap_host": "imap.outlook.com",
+            "imap_port": 993,
+            "password_encrypted": "x",
+            "oauth_provider": "microsoft",
+            "oauth_access_token": "stale-token",
+            "oauth_refresh_token": "refresh-token",
+            "oauth_token_expires": datetime.now(timezone.utc) - timedelta(minutes=5),
+            "sync_enabled": True,
+            "monitored_folders": "",
+            "retention_days": 0,
+        }]
+        # The row now holds a newer token (another refresher won).
+        db.query_one.return_value = {"oauth_access_token": "newer-token"}
+        with patch.object(ms, "db", db), \
+            patch.object(ms.mail_oauth, "refresh_access_token", return_value=None):
+            mailboxes = ms._get_mailboxes()
+        self.assertEqual(len(mailboxes), 1)
+        self.assertEqual(mailboxes[0]["oauth_token"], "newer-token")
 
     def test_token_near_expiry_is_refreshed(self):
         db = _mock_db()
@@ -521,7 +614,12 @@ class TestMessageIdVerification(unittest.TestCase):
 
 
 class TestFolderDiscovery(unittest.TestCase):
-    """The candidate folder list must come from the account's IMAP LIST."""
+    """Only the stored folder, INBOX and the special-use folders are searched.
+
+    A big mailbox can have hundreds of ordinary user folders; searching each
+    of them costs a SELECT + SEARCH round trip and slows the UI down when
+    the message is genuinely gone.
+    """
 
     def setUp(self):
         mail_imap.clear_folder_cache()
@@ -529,26 +627,94 @@ class TestFolderDiscovery(unittest.TestCase):
     def tearDown(self):
         mail_imap.clear_folder_cache()
 
-    def test_folders_come_from_the_imap_list_output(self):
+    def test_only_special_use_folders_are_candidates(self):
         client = FakeIMAPClient()
-        mb = FakeMailBox(client, folders=["INBOX", "Sent Items", "Deleted Items", "Junk Email"])
+        mb = FakeMailBox(client, folders=[
+            FakeFolderInfo("INBOX", ("\\HasNoChildren",)),
+            FakeFolderInfo("Sent Items", ("\\HasNoChildren", "\\Sent")),
+            FakeFolderInfo("Deleted Items", ("\\HasNoChildren", "\\Trash")),
+            FakeFolderInfo("Junk Email", ("\\HasNoChildren", "\\Junk")),
+            FakeFolderInfo("Projects", ("\\HasNoChildren",)),
+            FakeFolderInfo("Clients", ("\\HasNoChildren",)),
+        ])
         folders = mail_imap.account_folders(1, mb)
-        for name in ("Sent Items", "Deleted Items", "Junk Email"):
+        self.assertIn("Sent Items", folders)
+        self.assertIn("Deleted Items", folders)
+        self.assertIn("Junk Email", folders)
+        # Ordinary user folders must NOT be searched.
+        self.assertNotIn("Projects", folders)
+        self.assertNotIn("Clients", folders)
+        self.assertNotIn("INBOX", folders)
+
+    def test_a_big_mailbox_does_not_get_all_its_folders_searched(self):
+        """200 ordinary folders + 2 special-use ones -> only 2 are candidates."""
+        folders = [FakeFolderInfo(f"Folder {i}", ("\\HasNoChildren",)) for i in range(200)]
+        folders.append(FakeFolderInfo("Sent Items", ("\\Sent",)))
+        folders.append(FakeFolderInfo("Deleted Items", ("\\Trash",)))
+        client = FakeIMAPClient()
+        mb = FakeMailBox(client, folders=folders)
+        candidates = mail_imap.account_folders(1, mb)
+        self.assertEqual(len(candidates), 2)
+        self.assertIn("Sent Items", candidates)
+        self.assertIn("Deleted Items", candidates)
+
+    def test_the_search_actually_visits_only_a_few_folders(self):
+        """End-to-end: a stale UID must not cause every folder to be searched."""
+        headers = {"99": _header_bytes(MESSAGE_ID)}
+        folders = [FakeFolderInfo(f"Folder {i}", ("\\HasNoChildren",)) for i in range(50)]
+        folders.append(FakeFolderInfo("Sent Items", ("\\Sent",)))
+        client = FakeIMAPClient(headers_by_uid=headers)
+        mb = FakeMailBox(
+            client,
+            uids_by_message_id={MESSAGE_ID: ["99"]},
+            folders=folders,
+        )
+        db = _mock_db()
+        with patch.object(_server, "db", db), \
+            patch.object(_server, "_imap_connect", return_value=mb):
+            ok = _server._imap_set_seen(1, "Trash", "42", True,
+                                        message_id=MESSAGE_ID, message_db_id=7)
+        self.assertTrue(ok)
+        # Only the stored folder, INBOX and the special-use folders were
+        # selected — never the 50 ordinary ones.
+        searched = set(mb.folder.selected)
+        self.assertNotIn("Folder 0", searched)
+        self.assertNotIn("Folder 25", searched)
+        self.assertLessEqual(len(searched), 4)
+
+    def test_the_static_fallback_is_used_when_list_fails(self):
+        client = FakeIMAPClient()
+        mb = FakeMailBox(client, list_error=True)
+        folders = mail_imap.account_folders(1, mb)
+        for name in ("Sent Items", "Deleted Items", "Junk Email", "INBOX"):
             self.assertIn(name, folders)
 
-    def test_folder_list_is_cached_per_account(self):
+    def test_the_static_fallback_is_used_when_no_folder_has_a_special_use_flag(self):
         client = FakeIMAPClient()
-        mb = FakeMailBox(client, folders=["INBOX", "Sent Items"])
-        mail_imap.account_folders(1, mb)
-        # A second call must not re-LIST.
-        mb2 = FakeMailBox(client, folders=["INBOX"])
-        folders = mail_imap.account_folders(1, mb2)
+        mb = FakeMailBox(client, folders=[
+            FakeFolderInfo("INBOX", ("\\HasNoChildren",)),
+            FakeFolderInfo("Projects", ("\\HasNoChildren",)),
+        ])
+        folders = mail_imap.account_folders(1, mb)
+        # No special-use flags -> the well-known names are used instead.
         self.assertIn("Sent Items", folders)
+        self.assertIn("Deleted Items", folders)
+        self.assertIn("Junk Email", folders)
 
     def test_static_fallback_includes_outlook_names(self):
         folders = mail_imap.list_folders(FakeMailBox(FakeIMAPClient()))
         for name in ("Sent Items", "Deleted Items", "Junk Email", "INBOX"):
             self.assertIn(name, folders)
+
+    def test_folder_list_is_cached_per_account(self):
+        client = FakeIMAPClient()
+        mb = FakeMailBox(client, folders=[FakeFolderInfo("Sent Items", ("\\Sent",))])
+        mail_imap.account_folders(1, mb)
+        # A second call must not re-LIST.
+        mb2 = FakeMailBox(client, folders=[])
+        folders = mail_imap.account_folders(1, mb2)
+        self.assertIn("Sent Items", folders)
+        self.assertEqual(mb2.folder.listed, 0)
 
     def test_outlook_folders_are_searched_when_the_stored_folder_is_stale(self):
         """A message moved to "Sent Items" must still be found."""
@@ -556,7 +722,12 @@ class TestFolderDiscovery(unittest.TestCase):
         mb = FakeMailBox(
             client,
             uids_by_message_id={MESSAGE_ID: ["99"]},
-            folders=["INBOX", "Sent Items", "Deleted Items", "Junk Email"],
+            folders=[
+                FakeFolderInfo("INBOX", ("\\HasNoChildren",)),
+                FakeFolderInfo("Sent Items", ("\\Sent",)),
+                FakeFolderInfo("Deleted Items", ("\\Trash",)),
+                FakeFolderInfo("Junk Email", ("\\Junk",)),
+            ],
         )
         db = _mock_db()
         with patch.object(_server, "db", db), \
@@ -565,6 +736,61 @@ class TestFolderDiscovery(unittest.TestCase):
                                         message_id=MESSAGE_ID, message_db_id=7)
         self.assertTrue(ok)
         self.assertEqual(mb.store_calls()[0][1][0], "99")
+
+
+class TestPermanentDelete(unittest.TestCase):
+    """Permanent delete must verify the Message-ID like the move path does."""
+
+    def setUp(self):
+        mail_imap.clear_sync_failure(7)
+
+    def tearDown(self):
+        mail_imap.clear_sync_failure(7)
+
+    def test_delete_verifies_the_message_id(self):
+        client = FakeIMAPClient(headers_by_uid={"42": _header_bytes(MESSAGE_ID)})
+        mb = FakeMailBox(client)
+        deleted = []
+        mb.delete = lambda uids, chunks=None: deleted.append(list(uids))
+        with patch.object(_server, "db", _mock_db()), \
+            patch.object(_server, "_imap_connect", return_value=mb):
+            ok = _server._imap_delete(1, "INBOX", "42", message_id=MESSAGE_ID)
+        self.assertTrue(ok)
+        self.assertEqual(deleted, [["42"]])
+
+    def test_delete_aborts_when_the_message_id_does_not_match(self):
+        """A stale UID may belong to a different message — never delete it."""
+        client = FakeIMAPClient(headers_by_uid={"42": _header_bytes(OTHER_MESSAGE_ID)})
+        mb = FakeMailBox(client)
+        deleted = []
+        mb.delete = lambda uids, chunks=None: deleted.append(list(uids))
+        with patch.object(_server, "db", _mock_db()), \
+            patch.object(_server, "_imap_connect", return_value=mb):
+            ok = _server._imap_delete(1, "INBOX", "42", message_id=MESSAGE_ID)
+        self.assertFalse(ok)
+        self.assertEqual(deleted, [], "no message may be deleted when the target is unresolved")
+
+    def test_delete_aborts_without_a_message_id(self):
+        client = FakeIMAPClient(headers_by_uid={"42": _header_bytes(MESSAGE_ID)})
+        mb = FakeMailBox(client)
+        deleted = []
+        mb.delete = lambda uids, chunks=None: deleted.append(list(uids))
+        with patch.object(_server, "db", _mock_db()), \
+            patch.object(_server, "_imap_connect", return_value=mb):
+            ok = _server._imap_delete(1, "INBOX", "42", message_id=None)
+        self.assertFalse(ok)
+        self.assertEqual(deleted, [])
+
+    def test_delete_logs_a_warning_when_it_cannot_resolve(self):
+        client = FakeIMAPClient(headers_by_uid={"42": _header_bytes(OTHER_MESSAGE_ID)})
+        mb = FakeMailBox(client)
+        mb.delete = lambda uids, chunks=None: None
+        with patch.object(_server, "db", _mock_db()), \
+            patch.object(_server, "_imap_connect", return_value=mb), \
+            patch.object(mail_imap, "logger") as logger:
+            _server._imap_delete(1, "INBOX", "42", message_id=MESSAGE_ID)
+        logged = " ".join(str(c) for c in logger.error.call_args_list)
+        self.assertIn("delete aborted", logged)
 
 
 class TestAuthRetry(unittest.TestCase):
@@ -923,6 +1149,13 @@ class TestSourceGuards(unittest.TestCase):
         self.assertIn("mail_oauth.refresh_access_token", scanner_src)
         # The scanner must not own a second copy of the refresh logic.
         self.assertNotIn("prov.refresh_token", scanner_src)
+
+    def test_the_scanner_dockerfile_copies_the_shared_module(self):
+        """The standalone scanner image copies files by name — the shared
+        token module must be on that list or the scanner fails to import."""
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        dockerfile = open(os.path.join(here, "scanner", "Dockerfile")).read()
+        self.assertIn("mail_oauth.py", dockerfile)
 
 
 if __name__ == "__main__":

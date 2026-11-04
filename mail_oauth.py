@@ -198,11 +198,21 @@ def force_refresh_access_token(account_id: int) -> tuple[str, str] | None:
         acct["oauth_refresh_token"],
         None,
         force=True,
-        # No compare-and-swap: we do not know what the row holds, and a
-        # forced refresh is already a last resort.
-        expected_access=None,
+        # Compare-and-swap against the token we just read, so a forced
+        # refresh cannot overwrite a token another refresher stored in the
+        # meantime (same guard as the normal path).
+        expected_access=acct.get("oauth_access_token") or None,
     )
-    return refreshed
+    if refreshed:
+        return refreshed
+    # The swap failed — another refresher won. Use the token they stored.
+    fresh = db.query_one(
+        "SELECT oauth_access_token, oauth_refresh_token FROM mail_accounts WHERE id = %s",
+        (account_id,),
+    )
+    if fresh and fresh.get("oauth_access_token"):
+        return (fresh["oauth_access_token"], fresh.get("oauth_refresh_token") or acct["oauth_refresh_token"])
+    return None
 
 
 __all__ = [
