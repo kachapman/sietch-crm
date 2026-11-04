@@ -1066,9 +1066,15 @@ class TestGenerationHandlers(unittest.TestCase):
                 insert_args = call.args[1]
                 break
         self.assertIsNotNone(insert_args)
-        # Standalone documents have opportunity_id = NULL.
-        # Columns: (title, file_path, file_size, uploaded_by, opportunity_id, company_scope)
-        self.assertIsNone(insert_args[4])
+        # Standalone documents have opportunity_id = NULL. Since the
+        # fix-mail-attachments merge the insert goes through
+        # _insert_project_document_safely, which writes the NULL literally
+        # in the SQL (columns: title, file_path, file_size, mime_type,
+        # uploaded_by, opportunity_id=NULL, company_scope, folder_id).
+        sql = " ".join(call.args[0].split())
+        self.assertIn("uploaded_by, opportunity_id, company_scope", sql)
+        self.assertIn("VALUES (%s, %s, %s, %s, %s, NULL, %s, %s)", sql)
+        self.assertNotIn(42, insert_args[:4])
 
         response2, _ = self._run(
             "_handle_standalone_coc_generate",
