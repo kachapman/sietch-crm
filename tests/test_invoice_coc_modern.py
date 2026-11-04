@@ -917,6 +917,141 @@ class TestGenerationHandlers(unittest.TestCase):
         self.assertNotIn("Certificate Of Completion", text)
         self.assertNotIn("CERTIFICATE OF COMPLETION", text)
 
+    def test_classic_footer_page_count_is_substituted(self):
+        """The classic footer used to print the literal "Page 1 of (1)".
+
+        fpdf2 substitutes a SINGLE-brace "{nb}" alias with the page count
+        when the document is closed; the old code emitted "{{nb}}" (double
+        braces, from an f-string) and never registered the alias, so
+        nothing was substituted.
+        """
+        srv = self.server
+        for method in ("_handle_project_invoice_generate",
+                       "_handle_project_coc_generate"):
+            root = self._tmp_root()
+            payload = dict(PAYLOAD, template_id=7, layout="classic")
+            response, _ = self._run(method, payload, opp_id=77, root=root)
+            self.assertEqual(response["status"], 201, method)
+            written = list((root / "data" / "documents" / "77").glob("*.pdf"))
+            self.assertEqual(len(written), 1, method)
+            text = pdf_text(written[0])
+            self.assertIn("Page 1 of 1", text, method)
+            self.assertNotIn("(1)", text, method)
+            self.assertNotIn("{nb}", text, method)
+
+    def test_classic_multipage_footer_counts_the_pages(self):
+        """The classic invoice's page count is right.
+
+        Note: the classic renderer draws its footer once, at the end of the
+        content, so it appears on the LAST page only (the modern renderer
+        draws it on every page). The page count itself must still be the
+        document's total.
+        """
+        srv = self.server
+        root = self._tmp_root()
+        payload = dict(PAYLOAD, template_id=7, layout="classic",
+                       line_items=[{"description": f"Line {i:03d}", "amount": str(i)}
+                                   for i in range(1, 61)])
+        response, _ = self._run("_handle_project_invoice_generate", payload,
+                                opp_id=77, root=root)
+        self.assertEqual(response["status"], 201)
+        written = list((root / "data" / "documents" / "77").glob("*.pdf"))
+        self.assertEqual(len(written), 1)
+        text = pdf_text(written[0])
+        pages = pdf_page_count(written[0])
+        self.assertGreater(pages, 1)
+        # The footer carries the real total, not "(1)".
+        self.assertIn(f"Page {pages} of {pages}", text)
+        self.assertNotIn("(1)", text)
+        self.assertNotIn("{nb}", text)
+
+    def test_classic_coc_renders_with_reportlab_blocked(self):
+        """The classic layout is the FALLBACK when reportlab is missing, so
+        it must not import it.
+
+        coc_title() used to be imported from doc_pdf.pdf_common, which
+        imports reportlab at module load -- so the classic COC died with
+        "No module named 'reportlab'" on exactly the machine that needed
+        the fallback. It now lives in doc_pdf.mapping, which is
+        reportlab-free.
+        """
+        import builtins
+        srv = self.server
+        root = self._tmp_root()
+        real_import = builtins.__import__
+
+        def blocked(name, *args, **kwargs):
+            if name == "reportlab" or name.startswith("reportlab."):
+                raise ImportError("No module named 'reportlab' (blocked by the test)")
+            return real_import(name, *args, **kwargs)
+
+        # Drop any cached doc_pdf / reportlab modules so the imports run
+        # again under the blocker.
+        saved = {k: v for k, v in sys.modules.items()
+                 if k.startswith("doc_pdf") or k.startswith("reportlab")}
+        for k in saved:
+            del sys.modules[k]
+        builtins.__import__ = blocked
+        try:
+            response, _ = self._run(
+                "_handle_project_coc_generate",
+                dict(PAYLOAD, template_id=7, layout="classic",
+                     completion_date="10/31/2026"),
+                opp_id=77, root=root,
+                template=dict(TEMPLATE, coc_title="CERTIFICATE OF COMPLETION"))
+        finally:
+            builtins.__import__ = real_import
+            for k in list(sys.modules):
+                if k.startswith("doc_pdf") or k.startswith("reportlab"):
+                    del sys.modules[k]
+            sys.modules.update(saved)
+
+        self.assertEqual(response["status"], 201)
+        written = list((root / "data" / "documents" / "77").glob("*.pdf"))
+        self.assertEqual(len(written), 1)
+        text = pdf_text(written[0])
+        # The certificate is complete and correctly titled without reportlab.
+        self.assertIn("Certificate of Completion", text)
+        self.assertNotIn("Certificate Of Completion", text)
+        self.assertIn("Jordan Ellis", text)
+        self.assertIn("10/31/2026", text)
+        self.assertIn("Page 1 of 1", text)
+
+    def test_classic_coc_title_helper_does_not_need_reportlab(self):
+        """doc_pdf.mapping must stay importable without reportlab."""
+        import builtins
+        real_import = builtins.__import__
+
+        def blocked(name, *args, **kwargs):
+            if name == "reportlab" or name.startswith("reportlab."):
+                raise ImportError("No module named 'reportlab' (blocked by the test)")
+            return real_import(name, *args, **kwargs)
+
+        saved = {k: v for k, v in sys.modules.items()
+                 if k.startswith("doc_pdf") or k.startswith("reportlab")}
+        for k in saved:
+            del sys.modules[k]
+        builtins.__import__ = blocked
+        try:
+            from doc_pdf.mapping import coc_title as title_fn
+            self.assertEqual(title_fn("CERTIFICATE OF COMPLETION"),
+                             "Certificate of Completion")
+            self.assertEqual(title_fn("NOTICE OF COMPLETION AND RELEASE"),
+                             "Notice of Completion and Release")
+        finally:
+            builtins.__import__ = real_import
+            for k in list(sys.modules):
+                if k.startswith("doc_pdf") or k.startswith("reportlab"):
+                    del sys.modules[k]
+            sys.modules.update(saved)
+
+    def test_pdf_common_re_exports_coc_title(self):
+        """The modern builders import coc_title from pdf_common, which
+        re-exports the one in mapping."""
+        from doc_pdf.pdf_common import coc_title as from_common
+        from doc_pdf.mapping import coc_title as from_mapping
+        self.assertIs(from_common, from_mapping)
+
     def test_standalone_invoice_and_coc(self):
         srv = self.server
         tmp = tempfile.TemporaryDirectory()

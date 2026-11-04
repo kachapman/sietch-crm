@@ -14,6 +14,63 @@ Deploy late at night per Ken.
 > (upstream `94e66ac`, tag `live-v28.2`). Its two document changes are ported
 > into Sietch's copied `doc_pdf/` builders, plus three fixes. See **§1b**.
 
+> **Update (2026-11-03, fourth session):** two follow-up fixes — the classic
+> COC must not depend on reportlab (the fallback has to work when reportlab
+> is missing), and the classic footer printed `Page 1 of (1)`. See **§1c**.
+
+---
+
+## 1c. Fallback independence + the classic page count (implemented 2026-11-03)
+
+### 1c.1 The classic layout must not need reportlab
+
+The v28.2 work put `coc_title()` in `doc_pdf/pdf_common.py` — and
+`pdf_common.py` imports reportlab at module load. The classic COC
+(`server.py: _create_coc_pdf`) imported it from there, so on a machine
+**without reportlab** the classic layout — which exists precisely as the
+fallback for that case — died with `ImportError: No module named
+'reportlab'`.
+
+**Fix:** `coc_title()` and its `_SMALL_WORDS` list moved to
+`doc_pdf/mapping.py`, which has **no top-level imports at all** and
+therefore never pulls reportlab in. `doc_pdf/pdf_common.py` re-exports it
+(`from doc_pdf.mapping import COC_TITLE, coc_title`) so the modern builders
+keep importing it from where they always did.
+
+The rule now holds for the whole classic path:
+
+| Module | reportlab? | Used by |
+|---|---|---|
+| `doc_pdf/mapping.py` | **no** | both layouts (`BASE_CHARGE_LABEL`, `license_label`, `coc_title`, the opts/items/brand builders) |
+| `doc_pdf/pdf_common.py` | yes | the modern builders only |
+| `doc_pdf/invoice_pdf.py`, `doc_pdf/coc_pdf.py` | yes | the modern renderers only |
+
+`tests/test_invoice_coc_modern.py` now has
+`test_classic_coc_renders_with_reportlab_blocked`, which blocks every
+`reportlab` import and asserts the classic COC still renders completely
+(correct title, customer, completion date and "Page 1 of 1"). Reverting the
+move makes that test fail, so the regression cannot come back.
+
+### 1c.2 The classic footer printed "Page 1 of (1)"
+
+fpdf2 substitutes a **single-brace** `{nb}` alias with the page count when
+the document is closed, but only if the alias has been registered with
+`pdf.alias_nb_pages("{nb}")`.
+
+The classic renderers wrote the token as `f"... of {{{{nb}}}}"` — inside an
+f-string, `{{{{nb}}}}` produces the **literal** `{{nb}}` (double braces).
+That is neither fpdf2's alias nor a number, so fpdf2 rendered it literally
+as `(1)`: **"Page 1 of (1)"**.
+
+**Fix:** both classic renderers now write `f"... of {{nb}}"` (which produces
+the single-brace `{nb}`) and call `pdf.alias_nb_pages("{nb}")` before
+`pdf.output()`. The footer now reads "Page 1 of 1", and on a multi-page
+invoice "Page 2 of 2".
+
+> The classic renderer draws its footer **once**, at the end of the content,
+> so it appears on the **last page only**. The modern renderer draws it on
+> every page. That difference is unchanged; only the page *count* was wrong.
+
 ---
 
 ## 1b. Sherwood v28.2 port + three fixes (implemented 2026-11-03)
@@ -416,7 +473,7 @@ migration 045 (see §1a). The remaining ones:
 |---|---|---|
 | `base_amount` has no UI field | The Invoice modal only sends `line_items`; `base_amount` is a server-side API field that the frontend never sets (so it is always `0` in practice). | **Open by decision** — Ken's decision 7: no "Base charge" UI field. |
 | No `website` / `license` / `signer_title` on the **photo report** templates | `photo_report_templates` is a separate table and is unchanged. | Open, out of scope. |
-| The classic invoice's footer still prints `Page 1 of (1)` | fpdf2's `{{nb}}` alias is never substituted in the classic renderer. The modern one prints `Page 1 of 1` correctly. | Open — the classic renderer is a fallback; fixing it would touch a path Ken may not use. |
+| The classic invoice's footer still prints `Page 1 of (1)` | fpdf2's `{{nb}}` alias is never substituted in the classic renderer. The modern one prints `Page 1 of 1` correctly. | **Fixed** — see §1c. |
 
 ---
 
@@ -466,7 +523,7 @@ All runs throttled with `nice -n 10 ionice -c3`.
 
 | Suite | Result |
 |---|---|
-| `tests/test_invoice_coc_modern.py` | **78 passed**, 0 failed |
+| `tests/test_invoice_coc_modern.py` | **83 passed**, 0 failed |
 | `tests/test_reportlab_dependency.py` | **6 passed**, 0 failed |
 | `tests/test_pdf_dependency.py` | **2 passed**, 0 failed |
 | `tests/test_reports.py` | **33 passed**, 0 failed |
@@ -510,6 +567,15 @@ The v28.2 cases above are ported from Sherwood's
 adapted to Sietch: Sietch has no Flask app, no customer branding profile
 and no homeowner line, so the upstream "customer form" and "admin form"
 cases become the Sietch template + the four HTTP handlers.
+
+### Tests added for §1c (fallback independence + the classic page count)
+
+| Change | Test |
+|---|---|
+| The classic COC renders with reportlab blocked | `test_classic_coc_renders_with_reportlab_blocked` — blocks every `reportlab` import, then asserts the classic COC still renders completely (title, customer, completion date, "Page 1 of 1"). Reverting the `coc_title` move makes it fail. |
+| `doc_pdf.mapping` stays importable without reportlab | `test_classic_coc_title_helper_does_not_need_reportlab` |
+| `pdf_common` re-exports the same helper | `test_pdf_common_re_exports_coc_title` (asserts it is the *same object* as `mapping.coc_title`) |
+| The classic footer substitutes the page count | `test_classic_footer_page_count_is_substituted` (invoice + COC: "Page 1 of 1", and neither "(1)" nor "{nb}") and `test_classic_multipage_footer_counts_the_pages` (60 lines → 2 pages, "Page 2 of 2"). Reverting the footer fix makes all three fail. |
 
 ### What the new suite covers
 
@@ -600,6 +666,7 @@ rows.
 | `tmp/invoice-coc-review/zero-line-hidden-invoice-modern.pdf` (+ `.page1.png`) | **Two `$0.00` line items are not printed.** The total is unchanged ($6,670.00) and only the real rows appear. |
 | `tmp/invoice-coc-review/zero-line-hidden-invoice-classic.pdf` (+ `.page1.png`) | The same for the classic renderer. |
 | `tmp/invoice-coc-review/long-multipage-invoice-modern.pdf` (+ `.page1.png`) | 60 line items → **3 pages**, header row repeats, "Page 1 of 3" … "Page 3 of 3". |
+| `tmp/invoice-coc-review/long-multipage-invoice-classic.pdf` (+ `.page1.png`) | The same 60 lines in the classic layout → **2 pages**, footer "Page 2 of 2" (the classic renderer draws its footer on the last page only). |
 
 Regenerate with:
 
@@ -615,8 +682,8 @@ DB_HOST=127.0.0.1 DB_PORT=5432 DB_NAME=<db> DB_USER=<user> DB_PASSWORD=<pw> \
   numbered + zebra-striped items table with an accent header row, a
   right-aligned "Subtotal" / "Total due" block on the accent fill, a
   "NOTES" section and a signature block.
-* The classic invoice's footer literally prints `Page 1 of (1)` — the
-  modern one prints `Page 1 of 1`.
+* The classic invoice's footer now prints `Page 1 of 1` (it used to
+  print `Page 1 of (1)`) — see §1c.2. The modern one always did.
 * The classic COC has **no** signature block by default (it needs a
   signature image) and no accent bar; the modern COC has both plus the
   details table and the page footer.
@@ -641,10 +708,11 @@ DB_HOST=127.0.0.1 DB_PORT=5432 DB_NAME=<db> DB_USER=<user> DB_PASSWORD=<pw> \
 * **The website / licence / signer title are not on the photo-report
   templates** — `photo_report_templates` is a separate table.
 * **The classic invoice footer still prints `Page 1 of (1)`** — fpdf2's
-  `{{nb}}` alias is never substituted in the classic renderer.
+  `{{nb}}` alias is never substituted in the classic renderer. → **Fixed**
+  in §1c.
 * **Sherwood's admin UI** (`branding.py` branding editor, per-customer
   profiles, image re-encoding) — not ported. Sietch keeps its existing
-  `document_templates` admin CRUD (extended with the three new fields).
+  `document_templates` admin CRUD (extended with the four new fields).
 * **Sherwood's Flask routes** — not ported (Sietch uses `http.server`).
 * **The `layout` field is not yet exposed in the admin UI** — it is a
   per-request field in the Invoice / COC modals plus the `SIETCH_DOC_LAYOUT`

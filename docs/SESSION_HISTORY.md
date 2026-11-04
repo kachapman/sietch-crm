@@ -11,6 +11,79 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-03 (fourth pass — fallback independence + the classic page count, branch `invoice-coc-upgrade`)
+
+**Status: implemented + tested, NOT deployed, NOT merged, NOT pushed.**
+Same worktree `~/Projects/new-crm-invoice-coc`, same branch
+`invoice-coc-upgrade` (base `main` @ `c637526`; this pass started at
+`ec92d0b`). The main checkout `~/Projects/new-crm` was NOT touched;
+`~/Projects/new-crm-mail-attachments` was NOT touched. Production
+(147.182.164.19) was NOT contacted. The dev server (port 8766) and the
+docker containers were NOT restarted. No Docker rebuild.
+
+**Two follow-up fixes:**
+
+1. **The classic layout must not need reportlab.** The v28.2 work put
+   `coc_title()` in `doc_pdf/pdf_common.py`, and `pdf_common.py` imports
+   reportlab AT MODULE LOAD. `server.py`'s classic COC imported it from
+   there, so on a machine WITHOUT reportlab the classic layout — which
+   exists precisely as the fallback for that case — died with
+   `ImportError: No module named 'reportlab'`. The breakage was reproduced
+   before fixing it. **Fix:** `coc_title()` + `_SMALL_WORDS` moved to
+   `doc_pdf/mapping.py`, which has NO top-level imports and never pulls
+   reportlab in; `doc_pdf/pdf_common.py` re-exports it
+   (`from doc_pdf.mapping import COC_TITLE, coc_title`) so the modern
+   builders are unaffected. `server.py`'s classic COC now imports it from
+   `doc_pdf.mapping`. The classic path touches only reportlab-free modules;
+   `pdf_common` / `invoice_pdf` / `coc_pdf` are modern-only.
+2. **The classic footer printed "Page 1 of (1)".** fpdf2 substitutes a
+   SINGLE-brace `{nb}` alias with the page count when the document closes,
+   and only if `pdf.alias_nb_pages("{nb}")` was called. The classic
+   renderers wrote `f"... of {{{{nb}}}}"`, which inside an f-string
+   produces the LITERAL `{{nb}}` (double braces) — neither the alias nor a
+   number — so fpdf2 rendered it as `(1)`. **Fix:** both classic renderers
+   now write `f"... of {{nb}}"` and call `pdf.alias_nb_pages("{nb}")`
+   before `pdf.output()`. The footer reads "Page 1 of 1", and "Page 2 of 2"
+   on a multi-page invoice. NOTE: the classic renderer draws its footer on
+   the LAST PAGE ONLY (the modern one draws it on every page) — that
+   difference is unchanged, only the count was wrong.
+
+**Tests:** `tests/test_invoice_coc_modern.py` grew 78 -> **83**, all
+passing. New: `test_classic_coc_renders_with_reportlab_blocked` (blocks
+every reportlab import, asserts the classic COC still renders completely),
+`test_classic_coc_title_helper_does_not_need_reportlab`,
+`test_pdf_common_re_exports_coc_title` (same object as
+`mapping.coc_title`), `test_classic_footer_page_count_is_substituted`
+(invoice + COC: "Page 1 of 1", no "(1)", no "{nb}"),
+`test_classic_multipage_footer_counts_the_pages` (60 lines -> 2 pages,
+"Page 2 of 2"). BOTH fixes were verified to be caught: reverting the
+`coc_title` move fails the reportlab-blocked test; reverting the footer
+fix fails three of the new tests.
+**Full Python suite: 61 passed / 2 failed** — the 2 failures
+(`test_scanner_toggle_gating.py`, `test_sync_pull_deals_fields.py`) were
+RE-VERIFIED as pre-existing on `main` @ c637526 (identical
+`FAILED (failures=1)` in the main checkout). **Full Node suite: 35/35
+files.**
+
+**Sample review pack regenerated** in `tmp/invoice-coc-review/` (gitignored,
+NOT committed): the classic invoices + COCs now footer "Page 1 of 1", and a
+new `long-multipage-invoice-classic.pdf` shows "Page 2 of 2". The review
+script's own classic renderers were fixed the same way (they had the same
+`{{nb}}` bug).
+
+**Docs:** `docs/features/2026-11-03-invoice-coc-upgrade.md` gained §1c
+(the fallback-independence rule and a table of which module needs
+reportlab; the footer bug explained) and the gaps / deferred lists were
+updated — the "classic footer still prints Page 1 of (1)" gap is now
+**closed**. CHANGELOG entry added.
+
+**Still open:** deploy timing only — the image needs a rebuild for
+`reportlab` and migration 045 must run. Deploy late at night per Ken.
+
+---
+
+## Previous session summary
+
 **Date:** 2026-11-03 (third pass — Sherwood v28.2 port + three fixes, branch `invoice-coc-upgrade`)
 
 **Status: implemented + tested, NOT deployed, NOT merged, NOT pushed.**

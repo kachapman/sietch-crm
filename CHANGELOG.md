@@ -2,6 +2,53 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Invoice/COC PDFs: the classic layout no longer needs reportlab + real page counts (2026-11-03, branch `invoice-coc-upgrade`)
+
+Two follow-up fixes to the modern (Sherwood-style) Invoice + Certificate of
+Completion work.
+
+**The classic layout must not depend on reportlab.** The v28.2 work put
+`coc_title()` in `doc_pdf/pdf_common.py`, and `pdf_common.py` imports
+reportlab at module load. `server.py`'s classic COC
+(`_create_coc_pdf`) imported it from there, so on a machine **without
+reportlab** the classic layout — which exists precisely as the fallback for
+that case — died with `ImportError: No module named 'reportlab'`.
+`coc_title()` and its `_SMALL_WORDS` list moved to `doc_pdf/mapping.py`,
+which has no top-level imports and never pulls reportlab in;
+`doc_pdf/pdf_common.py` re-exports it so the modern builders are
+unaffected. The classic path now touches only reportlab-free modules
+(`doc_pdf.mapping`); `pdf_common`, `invoice_pdf` and `coc_pdf` are used by
+the modern renderers alone. New test
+`test_classic_coc_renders_with_reportlab_blocked` blocks every reportlab
+import and asserts the classic COC still renders completely; reverting the
+move makes it fail.
+
+**The classic footer printed "Page 1 of (1)".** fpdf2 substitutes a
+**single-brace** `{nb}` alias with the page count when the document is
+closed, and only if the alias was registered with
+`pdf.alias_nb_pages("{nb}")`. The classic renderers wrote the token as
+`f"... of {{{{nb}}}}"`, which inside an f-string produces the literal
+`{{nb}}` — neither fpdf2's alias nor a number — so fpdf2 rendered it as
+`(1)`. Both classic renderers now write `f"... of {{nb}}"` and call
+`pdf.alias_nb_pages("{nb}")` before `pdf.output()`. The footer reads
+"Page 1 of 1", and "Page 2 of 2" on a multi-page invoice. (The classic
+renderer still draws its footer on the **last page only**; the modern one
+draws it on every page. That difference is unchanged — only the count was
+wrong.) The sample review pack's classic renderers were fixed the same
+way, and a `long-multipage-invoice-classic.pdf` sample was added.
+
+Tests: `tests/test_invoice_coc_modern.py` grew from 78 to **83** —
+`test_classic_coc_renders_with_reportlab_blocked`,
+`test_classic_coc_title_helper_does_not_need_reportlab`,
+`test_pdf_common_re_exports_coc_title`,
+`test_classic_footer_page_count_is_substituted` and
+`test_classic_multipage_footer_counts_the_pages`. Reverting either fix
+makes the relevant tests fail (verified). Full Python suite **61 passed /
+2 failed** (both failures — `test_scanner_toggle_gating.py`,
+`test_sync_pull_deals_fields.py` — re-verified as pre-existing on `main` @
+c637526); full Node suite **35/35 files**. Full write-up:
+`docs/features/2026-11-03-invoice-coc-upgrade.md` §1c. **Not deployed.**
+
 ## Invoice/COC PDFs: Sherwood v28.2 port + three fixes (2026-11-03, branch `invoice-coc-upgrade`)
 
 Third pass on the modern (Sherwood-style) Invoice + Certificate of
