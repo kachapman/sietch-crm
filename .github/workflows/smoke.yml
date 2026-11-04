@@ -169,6 +169,25 @@ jobs:
       - name: Run linked email attachment tests
         run: python3 tests/test_linked_email_attachments.py -v
 
+      - name: Load the CRM schema into the test database
+        # The mail-link-attachment suite exercises real INSERTs and the
+        # dedupe unique indexes, so it needs the schema (not just an empty
+        # postgres service).
+        env:
+          PGPASSWORD: ci_password
+        run: |
+          for f in init.sql migrations/0*.sql; do
+            psql -h 127.0.0.1 -U sietch -d sietch_crm -v ON_ERROR_STOP=0 -f "$f" > /dev/null
+          done
+
+      - name: Run mail link attachment (Documents tab) tests
+        # Needs a live PostgreSQL (it exercises INSERTs + the dedupe unique
+        # indexes). MAILATT_TEST_DB_NAME makes the suite refuse to run
+        # against any other database.
+        env:
+          MAILATT_TEST_DB_NAME: sietch_crm
+        run: python3 tests/test_mail_link_attachments.py -v
+
       - name: Run mail link history tests
         run: python3 tests/test_mail_link_history.py -v
 

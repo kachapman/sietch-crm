@@ -18,6 +18,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,104 @@ DEFAULT_CONTRACTORS = {
 
 IMAP_PORT_SSL = 993
 IMAP_PORT_STARTTLS = 143
+
+# ── Mail attachment storage settings (bug fix 2026-11-03) ───────────────────
+# Attachment BYTES are stored on disk at sync time so that linking an email
+# to a project can copy the files into the project's own storage WITHOUT a
+# live mailbox round-trip (which is what silently dropped files in prod).
+#
+#   MAIL_ATTACHMENT_MAX_BYTES — per-file size limit for the local store.
+#     Default 25 MB. Files above it are NOT stored locally: the metadata row
+#     is still written (so the attachment is still listed and still
+#     downloadable at link time via the mailbox fallback), but no bytes are
+#     kept on disk. Each skip is logged.
+#   MAIL_ATTACHMENT_STORAGE_ENABLED — "false" disables local storage
+#     entirely (metadata only, the old behaviour).
+#   MAIL_ATTACHMENT_FETCH_RETRIES — how many attempts the link-time mailbox
+#     download makes (default 3).
+#   MAIL_ATTACHMENT_FETCH_BACKOFF — base seconds for the retry backoff
+#     (default 2.0; attempt N waits N * backoff).
+#   MAIL_ATTACHMENT_DROP_STORED_ON_PURGE — when the mail retention job
+#     purges a mail message, also delete its stored attachment bytes.
+#     DEFAULT **false** (keep the files): the retention/backup policy for
+#     data/mail-attachments/ is Ken's call and is NOT decided here. The
+#     setting exists so the policy can be flipped without another code
+#     change.
+MAIL_ATTACHMENT_MAX_BYTES = int(os.environ.get("MAIL_ATTACHMENT_MAX_BYTES", str(25 * 1024 * 1024)))
+MAIL_ATTACHMENT_STORAGE_ENABLED = os.environ.get("MAIL_ATTACHMENT_STORAGE_ENABLED", "true").lower() in ("true", "1", "yes")
+MAIL_ATTACHMENT_FETCH_RETRIES = max(1, int(os.environ.get("MAIL_ATTACHMENT_FETCH_RETRIES", "3")))
+MAIL_ATTACHMENT_FETCH_BACKOFF = float(os.environ.get("MAIL_ATTACHMENT_FETCH_BACKOFF", "2.0"))
+MAIL_ATTACHMENT_DROP_STORED_ON_PURGE = os.environ.get(
+    "MAIL_ATTACHMENT_DROP_STORED_ON_PURGE", "false").lower() in ("true", "1", "yes")
+
+# How long a staging folder from a crashed run is kept before it is swept.
+# A folder younger than this belongs to a RUNNING sync (accounts poll
+# concurrently) and is never touched.
+MAIL_ATTACHMENT_STAGING_MAX_AGE = int(
+    os.environ.get("MAIL_ATTACHMENT_STAGING_MAX_AGE", "3600"))
+
+# Hard cap on the stored MIME-part identifier. A fingerprint is ~40 chars;
+# this is a belt-and-braces limit so no code path can ever write a large
+# blob into remote_part_id / attachments_json.
+MAX_PART_ID_LEN = 200
+
+# Where the scanner keeps attachment bytes. Same layout the link-time copy
+# already reads as "a local file": data/mail-attachments/<message_id>/<file>.
+MAIL_ATTACHMENT_DIR = "data/mail-attachments"
+
+# ── Optional unique indexes (blocker B1) ────────────────────────────────────
+# Both indexes below are created by a migration, and a migration can leave
+# them absent:
+#   * migration 044 deliberately SKIPS uq_project_documents_opp_file_path
+#     when project_documents already holds duplicates;
+#   * migration 043's uq_history_attachments_mail_attachment is absent on a
+#     database where that migration never ran.
+#
+# ⚠ An `ON CONFLICT (<cols>) WHERE <predicate> DO NOTHING` statement is
+# REJECTED BY POSTGRES when no matching unique index exists:
+#
+#     ERROR:  there is no unique or exclusion constraint matching the
+#             ON CONFLICT specification
+#
+# It is a hard error (not a "no conflict happened" case), so the copy step
+# must check for the index and use a SELECT-then-INSERT path when it is
+# missing. The result is cached — the schema does not change while the
+# process runs (migrations are applied at boot).
+#
+# Mirrors server.py's PROJECT_DOCUMENTS_UNIQUE_INDEX / _unique_index_exists
+# (the scanner cannot import server — server imports the scanner), so the
+# names must be kept in sync by hand.
+PROJECT_DOCUMENTS_UNIQUE_INDEX = "uq_project_documents_opp_file_path"
+HISTORY_ATTACHMENTS_UNIQUE_INDEX = "uq_history_attachments_mail_attachment"
+
+_INDEX_EXISTS_CACHE: dict[str, bool] = {}
+
+
+def _unique_index_exists(index_name: str) -> bool:
+    """Does the named unique index exist? (cached)
+
+    Mirrors server.py `_unique_index_exists`. When the check itself fails we
+    assume the index is ABSENT, because the SELECT-then-INSERT fallback is
+    the path that cannot raise.
+    """
+    if index_name in _INDEX_EXISTS_CACHE:
+        return _INDEX_EXISTS_CACHE[index_name]
+    exists = False
+    try:
+        exists = bool(db.query_one(
+            "SELECT 1 AS ok FROM pg_indexes WHERE schemaname = current_schema() "
+            "AND indexname = %s", (index_name,)))
+    except Exception:
+        logger.exception("Could not check for the index %s", index_name)
+        exists = False
+    _INDEX_EXISTS_CACHE[index_name] = exists
+    return exists
+
+
+def _reset_index_cache() -> None:
+    """Forget the cached index existence flags (tests / after a migration)."""
+    _INDEX_EXISTS_CACHE.clear()
+
 
 _CRM_ACCOUNT_IDS: set[int] | None = None
 
@@ -1211,83 +1310,285 @@ def _read_folder_status(mailbox_cfg: dict[str, Any], folder: str) -> tuple[int |
         return None, None
 
 
-def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None, since: datetime | None = None, uid_min: int | None = None) -> list[dict[str, Any]]:
+def _staging_root() -> Path:
+    """The root of the mail-attachment staging area.
+
+    Each sync run gets its OWN subfolder under this root (see
+    `_new_staging_run_id`), because accounts poll concurrently.
+    """
+    return Path(__file__).resolve().parent.parent / MAIL_ATTACHMENT_DIR / ".staging"
+
+
+def _new_staging_run_id(mailbox_cfg: dict[str, Any] | None = None) -> str:
+    """A unique id for this sync run's staging subfolder.
+
+    The account id keeps the folders traceable; the random suffix keeps
+    two CONCURRENT runs of the same account (a manual poll racing the
+    scheduled cycle) apart.
+    """
+    account_id = 0
+    try:
+        account_id = int((mailbox_cfg or {}).get("account_id") or 0)
+    except (TypeError, ValueError):
+        account_id = 0
+    suffix = uuid.uuid4().hex[:12]
+    return f"acct{account_id}-{suffix}"
+
+
+def _sweep_stale_staging_dirs(own_dir: Path) -> None:
+    """Remove leftover staging folders from crashed runs.
+
+    Only folders OLDER than `MAIL_ATTACHMENT_STAGING_MAX_AGE` seconds are
+    touched, and NEVER the folder of a running sync — a concurrent run's
+    folder is young, so it cannot be swept. The run's OWN folder is also
+    left alone (it was just created).
+    """
+    root = _staging_root()
+    try:
+        now = time.time()
+        for entry in list(root.iterdir()):
+            if not entry.is_dir():
+                continue
+            try:
+                if entry.resolve() == own_dir.resolve():
+                    continue
+                age = now - entry.stat().st_mtime
+            except Exception:
+                continue
+            if age < MAIL_ATTACHMENT_STAGING_MAX_AGE:
+                continue
+            try:
+                for stale in entry.iterdir():
+                    try:
+                        stale.unlink()
+                    except Exception:
+                        pass
+                entry.rmdir()
+                logger.info("Removed stale mail attachment staging folder %s (age %.0fs)",
+                            entry.name, age)
+            except Exception:
+                logger.exception("Could not remove stale staging folder %s", entry)
+    except Exception:
+        logger.exception("Could not sweep stale mail attachment staging folders")
+
+
+def _remove_staging_dir(staging_dir: Path) -> None:
+    """Remove this run's staging folder (best effort)."""
+    try:
+        if not staging_dir.exists():
+            return
+        for stale in staging_dir.iterdir():
+            try:
+                stale.unlink()
+            except Exception:
+                pass
+        staging_dir.rmdir()
+    except Exception:
+        logger.exception("Could not remove the mail attachment staging folder %s",
+                         staging_dir)
+
+
+def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None,
+                    since: datetime | None = None,
+                    uid_min: int | None = None) -> Any:
     """Fetch messages, newest handling unchanged. When uid_min is given, only
     UID > uid_min are fetched (incremental path — seconds, not minutes). The
     IMAP `uid_min:*` range always includes the mailbox's highest UID even when
     nothing is new; that overlap row is dropped by _process_message's
-    already_processed guard, so it can never double-notify or double-link."""
-    messages: list[dict[str, Any]] = []
+    already_processed guard, so it can never double-notify or double-link.
+
+    ⚠ GENERATOR (bug fix 2026-11-03, review round 2).
+
+    This used to build a LIST of every message in the folder, each carrying
+    its attachment BYTES. On a first sync, a mailbox renumbering, or a
+    watermark reset, that is every message in the sync window in RAM at
+    once — a folder full of PDFs could take the CRM down.
+
+    It is now a generator: one message is materialised at a time, and the
+    caller (`_poll_account`) processes it immediately. To keep the memory
+    bounded, the attachment bytes of a message are written to a STAGING file
+    on disk as the message is yielded; the dict then carries only the
+    staging path, never the bytes. `_store_attachments` moves the staged
+    file into its final place.
+
+    The staging directory is `data/mail-attachments/.staging/<run-id>/`, where
+    the run id is unique per sync run (account id + a random suffix). Accounts
+    poll CONCURRENTLY (a ThreadPoolExecutor in `_poll_mailboxes`, plus the
+    manual per-account workers), so a shared staging folder would let one run
+    delete or overwrite another run's staged files. Each run therefore:
+      * creates its OWN subfolder,
+      * clears ONLY its own subfolder,
+      * removes its own subfolder when the run is done.
+    A crashed run leaks its own subfolder only; the next run for the same
+    account uses a NEW random suffix, so it never touches the leaked one
+    (the leftovers are swept by age, see `_sweep_stale_staging_dirs`).
+
+    Newest-first ordering is preserved: IMAP returns UID-ascending, so the
+    generator yields in DESCENDING UID order, matching the old
+    `messages.sort(key=_uid_key, reverse=True)`.
+    """
+    # Staging area for attachment bytes that are on their way to disk.
+    # OWN subfolder for this run — never shared with a concurrent run.
+    run_id = _new_staging_run_id(mailbox_cfg)
+    staging_dir = _staging_root() / run_id
+    try:
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        # Sweep leftovers from a PREVIOUS run of the same account (this run's
+        # own folder is brand new, so nothing else can be in it).
+        _sweep_stale_staging_dirs(staging_dir)
+    except Exception:
+        logger.exception("Could not prepare the mail attachment staging directory")
+
+    # Collect the UIDs first (cheap: no bodies, no attachments) so the
+    # generator can yield newest-first while only ONE message's payload is
+    # ever in memory.
+    uids: list[int] = []
+    mailbox = None
     try:
         mailbox = _login_mailbox(mailbox_cfg)
-
         folder = _normalize_folder_name(folder or mailbox_cfg.get("inbox", "INBOX"))
         mailbox.folder.set(folder)
-
         if uid_min is not None:
             criterion = A(uid=UidRange(str(int(uid_min)), "*"))
         else:
             criterion = A() if since is None else A(date_gte=since.date())
-
         for msg in mailbox.fetch(criteria=criterion, mark_seen=False, bulk=False):
-            attachments = []
-            if msg.attachments:
-                for att in msg.attachments:
-                    attachments.append({
-                        "filename": att.filename or "unnamed",
-                        "mime_type": att.content_type or "application/octet/octet-stream",
-                        "size_bytes": len(att.payload) if att.payload else 0,
-                        # imap_tools: att.part is the raw MIME part object (not JSON-serializable);
-                        # use content_id which matches the server-side download lookup key.
-                        "part_id": att.content_id or "",
-                    })
-            # Build raw headers string from imap_tools headers object
-            raw_headers = ""
-            message_id = ""
-            if hasattr(msg, "headers") and msg.headers:
-                mid_val = msg.headers.get("message-id")
-                if mid_val:
-                    if isinstance(mid_val, (tuple, list)):
-                        mid_val = ", ".join(str(v) for v in mid_val)
-                    message_id = str(mid_val).strip("<>")
-                header_lines = []
-                for key in ("from", "to", "cc", "subject", "date", "message-id", "in-reply-to", "references", "content-type"):
-                    val = msg.headers.get(key)
-                    if val:
-                        if isinstance(val, (tuple, list)):
-                            val = ", ".join(str(v) for v in val)
-                        header_lines.append(f"{key}: {val}")
-                raw_headers = "\n".join(header_lines)
-
-            messages.append({
-                "uid": msg.uid,
-                "message_id": message_id,
-                "from": msg.from_values.email if msg.from_values else "",
-                "from_name": msg.from_values.name if msg.from_values else "",
-                "to": msg.to_values[0].email if msg.to_values else "",
-                "subject": msg.subject or "",
-                "date": msg.date.isoformat() if msg.date else "",
-                "body_text": msg.text or "",
-                "body_html": msg.html or "",
-                "flags": list(msg.flags) if msg.flags else [],
-                "folder": folder,
-                "attachments": attachments,
-                "raw_headers": raw_headers,
-            })
-
-        mailbox.logout()
+            try:
+                uids.append(int(msg.uid))
+            except (TypeError, ValueError):
+                continue
+        uids.sort(reverse=True)
     except Exception as e:
         logger.error("IMAP fetch error: %s", e)
-    # Newest-first: IMAP returns UID-ascending, so a big backfill would store
-    # months of old mail before today's. Processing newest first means fresh
-    # mail lands in the DB within the first minute of a cycle.
-    def _uid_key(m: dict[str, Any]) -> int:
-        try:
-            return int(str(m.get("uid") or 0))
-        except (TypeError, ValueError):
-            return 0
-    messages.sort(key=_uid_key, reverse=True)
-    return messages
+        return
+    finally:
+        if mailbox is not None:
+            try:
+                mailbox.logout()
+            except Exception:
+                pass
+
+    try:
+        for uid in uids:
+            msg = None
+            try:
+                msg = _fetch_single_message(mailbox_cfg, folder, uid, staging_dir)
+            except Exception:
+                logger.exception("Failed to fetch message UID %s", uid)
+                continue
+            if not msg:
+                continue
+            yield msg
+            # Drop the reference so the payload is released before the next
+            # message is fetched.
+            del msg
+    finally:
+        # The run is done (or the caller abandoned it) — remove THIS run's
+        # staging folder, and only this run's. A concurrent run's folder is
+        # untouched: the folders are separate and the sweep only touches
+        # folders older than MAIL_ATTACHMENT_STAGING_MAX_AGE.
+        _remove_staging_dir(staging_dir)
+
+
+def _fetch_single_message(mailbox_cfg: dict[str, Any], folder: str, uid: int,
+                          staging_dir: Path | None = None) -> dict[str, Any] | None:
+    """Fetch ONE message and stage its attachment bytes on disk.
+
+    `staging_dir` is THIS run's private staging folder (see
+    `_new_staging_run_id`). When it is None a fresh private folder is
+    created for the call.
+
+    Returns the message dict (attachment entries carry a `staged_path`, not
+    the bytes) or None when the message cannot be fetched.
+    """
+    mailbox = None
+    try:
+        mailbox = _login_mailbox(mailbox_cfg)
+        folder = _normalize_folder_name(folder or mailbox_cfg.get("inbox", "INBOX"))
+        mailbox.folder.set(folder)
+        msgs = list(mailbox.fetch(criteria=A(uid=str(uid)), mark_seen=False, bulk=False))
+        if not msgs:
+            return None
+        msg = msgs[0]
+        attachments = []
+        if staging_dir is None:
+            staging_dir = _staging_root() / _new_staging_run_id(mailbox_cfg)
+        if msg.attachments:
+            for att in msg.attachments:
+                payload = att.payload if att.payload else b""
+                size = len(payload)
+                entry = {
+                    "filename": att.filename or "unnamed",
+                    "mime_type": att.content_type or "application/octet/octet-stream",
+                    "size_bytes": size,
+                    # imap_tools: att.part is the raw MIME part object (not JSON-serializable);
+                    # use content_id which matches the server-side download lookup key.
+                    "part_id": att.content_id or "",
+                    # A SHORT, stable identifier for the MIME part (NOT str(att.part)
+                    # — that is the whole MIME part including the base64 payload).
+                    "remote_part_id": _imap_part_id_str(att),
+                    # The bytes are staged on disk right away so they never
+                    # accumulate in RAM across the folder.
+                    "content": b"",
+                    "staged_path": "",
+                }
+                if (MAIL_ATTACHMENT_STORAGE_ENABLED and size and size <= MAIL_ATTACHMENT_MAX_BYTES):
+                    try:
+                        staging_dir.mkdir(parents=True, exist_ok=True)
+                        # The file name is unique within THIS run's folder
+                        # (the uid + a per-run token + the index). The folder
+                        # itself is already unique per run, so two concurrent
+                        # accounts can never collide.
+                        staged = staging_dir / f"{uid}_{uuid.uuid4().hex[:8]}_{len(attachments)}_{_safe_attachment_filename(entry['filename'])}"
+                        staged.write_bytes(payload)
+                        entry["staged_path"] = str(staged)
+                    except Exception:
+                        logger.exception("Could not stage attachment %r for UID %s",
+                                         entry["filename"], uid)
+                        entry["staged_path"] = ""
+                attachments.append(entry)
+        # Build raw headers string from imap_tools headers object
+        raw_headers = ""
+        message_id = ""
+        if hasattr(msg, "headers") and msg.headers:
+            mid_val = msg.headers.get("message-id")
+            if mid_val:
+                if isinstance(mid_val, (tuple, list)):
+                    mid_val = ", ".join(str(v) for v in mid_val)
+                message_id = str(mid_val).strip("<>")
+            header_lines = []
+            for key in ("from", "to", "cc", "subject", "date", "message-id", "in-reply-to", "references", "content-type"):
+                val = msg.headers.get(key)
+                if val:
+                    if isinstance(val, (tuple, list)):
+                        val = ", ".join(str(v) for v in val)
+                    header_lines.append(f"{key}: {val}")
+            raw_headers = "\n".join(header_lines)
+
+        return {
+            "uid": msg.uid,
+            "message_id": message_id,
+            "from": msg.from_values.email if msg.from_values else "",
+            "from_name": msg.from_values.name if msg.from_values else "",
+            "to": msg.to_values[0].email if msg.to_values else "",
+            "subject": msg.subject or "",
+            "date": msg.date.isoformat() if msg.date else "",
+            "body_text": msg.text or "",
+            "body_html": msg.html or "",
+            "flags": list(msg.flags) if msg.flags else [],
+            "folder": folder,
+            "attachments": attachments,
+            "raw_headers": raw_headers,
+        }
+    except Exception as e:
+        logger.error("IMAP fetch error for UID %s: %s", uid, e)
+        return None
+    finally:
+        if mailbox is not None:
+            try:
+                mailbox.logout()
+            except Exception:
+                pass
 
 
 def _list_imap_folders(mailbox_cfg: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1501,87 +1802,376 @@ def _copy_mail_attachments_to_project(opp_id: int, event_id: int, message_id: in
     account cascaded mail_attachments away and the project's files vanished.
 
     Source of the bytes, in order:
-      1. the local mirror (data/mail-attachments/<message_id>/<file>) — used
-         by sent mail and by anything already cached locally
-      2. a live IMAP fetch — inbound attachment bytes were never persisted
-         locally, so they are pulled from the mailbox on demand
-    A failure to copy one file never fails the link.
+      1. the local store (data/mail-attachments/<message_id>/<file>) — the
+         scanner now writes the bytes here at SYNC time, so the common case
+         needs no mailbox round-trip at all
+      2. a live mailbox download — fallback for attachments that were never
+         stored locally (sent mail mirrored differently, oversized files that
+         were skipped, mail that predates the sync-time storage)
 
-    Returns the number of files copied.
+    A failure to copy one file never fails the link, but it is now LOGGED
+    (message id, attachment id, filename, reason) instead of vanishing.
+
+    Idempotent (bug fix 2026-11-03): a `history_attachments` row carries the
+    source `mail_attachment_id`, and the unique index on
+    (event_id, mail_attachment_id) makes a second copy of the same
+    attachment a no-op. Relinking or re-running the backfill therefore
+    never doubles a file in the project's Documents tab.
+
+    Returns the number of files copied (see
+    `copy_mail_attachments_to_project_detailed` for the full report).
     """
-    import re as _re
-    from pathlib import Path
+    report = copy_mail_attachments_to_project_detailed(opp_id, event_id, message_id)
+    return report["copied"]
 
+
+def _find_existing_project_copy(opp_id: int, event_id: int, att_id: Any,
+                                filename: str, size_bytes: Any) -> dict | None:
+    """Is this attachment already copied into the project? (dedupe)
+
+    Bug fix 2026-11-03 (review round 2): the original dedupe only looked at
+    `history_attachments.mail_attachment_id`, which is NULL for every file
+    copied BEFORE migration 043. A relink or a backfill therefore copied
+    those files a second time — the project ended up with 2 timeline rows
+    and 2 Documents rows for the same PDF.
+
+    The check now recognises a copy by any of:
+      1. `mail_attachment_id` — the exact key (post-043 copies);
+      2. the same filename + size in this event — a legacy copy;
+      3. the same filename + size in another event of the SAME project —
+         the mail was linked to this project before.
+
+    Returns the matching row, or None.
+    """
+    if att_id is not None:
+        try:
+            row = db.query_one(
+                "SELECT id FROM history_attachments WHERE event_id = %s AND mail_attachment_id = %s",
+                (event_id, att_id),
+            )
+            if row:
+                return row
+        except Exception:
+            # Column missing (migration 043 not applied yet) — fall through
+            # to the filename/size checks below.
+            pass
+    # Legacy copy: same filename AND same size. The size matters — a file
+    # with the same name but a different size is a DIFFERENT file and must
+    # still be copied.
+    try:
+        if size_bytes is not None:
+            row = db.query_one(
+                "SELECT id FROM history_attachments WHERE event_id = %s AND filename = %s "
+                "AND file_size = %s",
+                (event_id, filename, int(size_bytes)),
+            )
+            if row:
+                return row
+            # Another event of the same project may already hold this file.
+            row = db.query_one(
+                "SELECT ha.id FROM history_attachments ha "
+                "JOIN history_events he ON he.id = ha.event_id "
+                "WHERE he.opportunity_id = %s AND ha.event_id <> %s "
+                "AND ha.filename = %s AND ha.file_size = %s LIMIT 1",
+                (opp_id, event_id, filename, int(size_bytes)),
+            )
+            if row:
+                return row
+        else:
+            # No size known — fall back to the filename alone.
+            row = db.query_one(
+                "SELECT id FROM history_attachments WHERE event_id = %s AND filename = %s",
+                (event_id, filename),
+            )
+            if row:
+                return row
+    except Exception:
+        logger.exception("Could not check for an existing project copy of %r", filename)
+        return None
+    return None
+
+
+def copy_mail_attachments_to_project_detailed(opp_id: int, event_id: int,
+                                               message_id: int) -> dict[str, Any]:
+    """Copy a linked email's attachments into the project (detailed report).
+
+    Returns a dict:
+        copied   — files newly written into the project
+        total    — attachments considered for this message
+        skipped  — files that could NOT be copied (with reasons)
+        existing — files already present (idempotent no-op)
+    """
+    report: dict[str, Any] = {"copied": 0, "total": 0, "skipped": [],
+                              "existing": 0, "message_id": message_id,
+                              "opportunity_id": opp_id, "event_id": event_id}
     try:
         att_rows = db.query_dicts(
-            "SELECT id, filename, mime_type, size_bytes, stored_path FROM mail_attachments "
-            "WHERE message_id = %s ORDER BY filename",
+            "SELECT id, filename, mime_type, size_bytes, stored_path, content_hash "
+            "FROM mail_attachments WHERE message_id = %s ORDER BY filename",
             (message_id,),
         )
     except Exception:
         logger.exception("Failed to list attachments for message %d", message_id)
-        return 0
+        report["skipped"].append({"attachment_id": None, "filename": "",
+                                  "reason": "could not list attachments for message"})
+        return report
+    report["total"] = len(att_rows)
     if not att_rows:
-        return 0
+        return report
 
     root = Path(__file__).resolve().parent.parent
     dest_dir = root / "data" / "history-attachments" / str(opp_id) / str(event_id)
-    copied = 0
     for att in att_rows:
+        att_id = att.get("id")
         filename = att.get("filename") or "attachment"
+        # ── Idempotency ────────────────────────────────────────────────────
+        # Three ways an attachment can already be in this event:
+        #   1. the row carries `mail_attachment_id` (copied after migration
+        #      043) — the exact key;
+        #   2. a LEGACY copy (written before 043) has no
+        #      `mail_attachment_id`; it must still be recognised, or a
+        #      relink/backfill would duplicate every old file;
+        #   3. the same file copied into this project from a different
+        #      timeline event (e.g. the mail was linked twice) — matched on
+        #      filename + size.
+        existing = _find_existing_project_copy(opp_id, event_id, att_id, filename,
+                                                att.get("size_bytes"))
+        if existing:
+            report["existing"] += 1
+            continue
+
         data: bytes | None = None
+        reason = ""
         stored = (att.get("stored_path") or "").strip()
         if stored:
             full = root / stored
             if full.is_file():
                 try:
                     data = full.read_bytes()
-                except Exception:
-                    data = None
+                except Exception as exc:
+                    reason = f"local file unreadable: {exc}"
+            else:
+                reason = "local file missing on disk"
         if data is None:
-            data = _fetch_mail_attachment_bytes(message_id, att.get("id"))
+            # Fallback: pull the bytes from the mailbox.
+            data, reason = _fetch_mail_attachment_bytes(message_id, att_id)
         if not data:
+            logger.warning(
+                "Mail attachment skipped: message=%s attachment=%s filename=%r reason=%s",
+                message_id, att_id, filename, reason or "unknown")
+            report["skipped"].append({"attachment_id": att_id, "filename": filename,
+                                      "reason": reason or "attachment bytes unavailable"})
             continue
-        safe = _re.sub(r"[^\w.\- ]+", "_", filename).strip("._") or "attachment"
+        safe = _safe_attachment_filename(filename)
         try:
             dest_dir.mkdir(parents=True, exist_ok=True)
-            dest = dest_dir / f"{int(att['id'])}_{safe}"
+            dest = dest_dir / f"{int(att_id)}_{safe}"
             dest.write_bytes(data)
             rel = dest.relative_to(root)
             rel_str = str(rel)
             mime = att.get("mime_type") or "application/octet-stream"
-            db.execute(
-                "INSERT INTO history_attachments (event_id, filename, file_path, file_size, mime_type, uploaded_by) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
-                (event_id, filename, rel_str, len(data), mime, None),
-            )
+            # `mail_attachment_id` is the dedupe key (migration 043), and a
+            # double-click (two concurrent link requests) must not create a
+            # second row.
+            #
+            # ⚠ `ON CONFLICT (event_id, mail_attachment_id) WHERE …` is
+            # REJECTED BY POSTGRES ("no unique or exclusion constraint
+            # matching the ON CONFLICT specification") when migration 043
+            # never created uq_history_attachments_mail_attachment. That is a
+            # hard error — not a "no conflict happened" case — so the
+            # statement must not be sent at all when the index is absent
+            # (blocker B1). In that state we check for an existing row first.
+            inserted = None
+            if _unique_index_exists(HISTORY_ATTACHMENTS_UNIQUE_INDEX):
+                inserted = db.execute(
+                    "INSERT INTO history_attachments (event_id, filename, file_path, file_size, "
+                    "mime_type, uploaded_by, mail_attachment_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                    "ON CONFLICT (event_id, mail_attachment_id) WHERE mail_attachment_id IS NOT NULL "
+                    "DO NOTHING",
+                    (event_id, filename, rel_str, len(data), mime, None, att_id),
+                )
+            else:
+                existing = db.query_one(
+                    "SELECT id FROM history_attachments WHERE event_id = %s "
+                    "AND mail_attachment_id = %s",
+                    (event_id, att_id))
+                if not existing:
+                    inserted = db.execute(
+                        "INSERT INTO history_attachments (event_id, filename, file_path, file_size, "
+                        "mime_type, uploaded_by, mail_attachment_id) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                        (event_id, filename, rel_str, len(data), mime, None, att_id),
+                    )
+            if not inserted:
+                # Another copy won the race (or the row was already there) —
+                # do not add a second document.
+                logger.info("Mail attachment %s for message %s was already copied "
+                            "into event %s — skipping the duplicate",
+                            att_id, message_id, event_id)
+                try:
+                    dest.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                report["existing"] += 1
+                continue
             # Also register the file as a project document so it opens in the
             # document editor and appears in the project's Documents tab —
             # the same shape the imported attachments have.
+            #
+            # ⚠ Same B1 rule as above: migration 044 SKIPS
+            # uq_project_documents_opp_file_path when project_documents
+            # already holds duplicates, and an `ON CONFLICT (opportunity_id,
+            # file_path) WHERE …` statement is rejected outright in that
+            # state. Use the index only when it exists; otherwise check for
+            # an existing active row first.
             try:
-                db.execute(
-                    "INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by) "
-                    "VALUES (%s, %s, %s, %s, %s, %s)",
-                    (opp_id, filename, rel_str, len(data), mime, None),
-                )
+                if _unique_index_exists(PROJECT_DOCUMENTS_UNIQUE_INDEX):
+                    db.execute(
+                        "INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by) "
+                        "VALUES (%s, %s, %s, %s, %s, %s) "
+                        "ON CONFLICT (opportunity_id, file_path) WHERE is_deleted = FALSE DO NOTHING",
+                        (opp_id, filename, rel_str, len(data), mime, None),
+                    )
+                else:
+                    already_doc = db.query_one(
+                        "SELECT id FROM project_documents WHERE opportunity_id = %s "
+                        "AND file_path = %s AND is_deleted = FALSE LIMIT 1",
+                        (opp_id, rel_str))
+                    if not already_doc:
+                        db.execute(
+                            "INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by) "
+                            "VALUES (%s, %s, %s, %s, %s, %s)",
+                            (opp_id, filename, rel_str, len(data), mime, None),
+                        )
             except Exception:
                 logger.exception("Failed to register project document for %s", filename)
-            copied += 1
-        except Exception:
+            report["copied"] += 1
+        except Exception as exc:
             logger.exception("Failed to copy mail attachment %s into project %s",
                              filename, opp_id)
-    return copied
+            logger.warning(
+                "Mail attachment skipped: message=%s attachment=%s filename=%r reason=copy failed: %s",
+                message_id, att_id, filename, exc)
+            report["skipped"].append({"attachment_id": att_id, "filename": filename,
+                                      "reason": f"copy failed: {exc}"})
+    return report
 
 
-def _fetch_mail_attachment_bytes(message_id: int, attachment_id: int | None) -> bytes | None:
+def _refresh_mail_account_token(account_id: int) -> None:
+    """Refresh the mailbox OAuth token the same way the scanner's poll loop does.
+
+    Bug fix 2026-11-03: the link-time mailbox download used a STALE
+    `oauth_access_token`, so on 2026-11-02 every download for Outlook
+    account 10 failed (expired / throttled token) and the linked emails
+    silently lost their files.
+
+    Never logs the token itself.
+    """
+    try:
+        row = db.query_one(
+            "SELECT id, email, oauth_provider, oauth_access_token, oauth_refresh_token, "
+            "oauth_token_expires FROM mail_accounts WHERE id = %s",
+            (account_id,),
+        )
+    except Exception:
+        logger.exception("Could not load mail account %s for token refresh", account_id)
+        return
+    if not row:
+        return
+    provider_name = row.get("oauth_provider")
+    if not provider_name:
+        return
+    try:
+        refreshed = _refresh_oauth_token_if_needed(
+            row["id"], provider_name,
+            row.get("oauth_refresh_token") or "",
+            row.get("oauth_token_expires"),
+        )
+    except Exception:
+        logger.exception("Token refresh raised for mail account %s", account_id)
+        return
+    if refreshed:
+        logger.info("Refreshed mailbox token for account %s (%s)", account_id,
+                    row.get("email") or "?")
+    else:
+        logger.warning("Could not refresh mailbox token for account %s (%s) — "
+                       "the link-time download will use the existing token",
+                       account_id, row.get("email") or "?")
+
+
+def _fetch_mail_attachment_bytes(message_id: int, attachment_id: int | None) -> tuple[bytes | None, str]:
     """Pull attachment bytes straight from the mailbox (live IMAP fetch).
 
-    Inbound attachment bytes are not persisted in the CRM, so this is the
-    only way to materialize them into project storage. Returns None when the
-    mailbox cannot be reached or the file is gone.
+    Fallback for attachments that are not in the local store (mail synced
+    before the sync-time storage existed, or files above the size limit).
+
+    Returns (bytes, reason). `bytes` is None on failure and `reason` explains
+    why — the caller logs it. A reason never contains a token or password.
+
+    Retries with backoff (MAIL_ATTACHMENT_FETCH_RETRIES attempts,
+    MAIL_ATTACHMENT_FETCH_BACKOFF base seconds) because the prod failure was
+    transient Graph/IMAP throttling.
+
+    The mailbox OAuth token is refreshed BEFORE THE FIRST ATTEMPT too, not
+    only before the retries: the 2026-11-02 prod failure was a stale token,
+    so waiting for a retry to discover that would waste an attempt (and the
+    first attempt's failure was the one the user saw).
+
+    A `Retry-After` hint from the server (429 / 503) is honoured instead of
+    the plain backoff.
 
     The scanner cannot import server (server imports this module), so the
     IMAP connection is made here from the same mail_accounts row.
+    """
+    last_reason = "attachment bytes unavailable"
+    # Refresh the token BEFORE the first attempt.
+    _refresh_token_for_message(message_id)
+    for attempt in range(1, MAIL_ATTACHMENT_FETCH_RETRIES + 1):
+        if attempt > 1:
+            delay = MAIL_ATTACHMENT_FETCH_BACKOFF * attempt
+            logger.info("Retrying mailbox attachment fetch for message %s attachment %s "
+                        "in %.1fs (attempt %d/%d)",
+                        message_id, attachment_id, delay, attempt, MAIL_ATTACHMENT_FETCH_RETRIES)
+            time.sleep(delay)
+            # Refresh the token before retrying — the usual cause of a
+            # sudden "everything fails" on one account.
+            _refresh_token_for_message(message_id)
+        data, reason, retry_after = _fetch_mail_attachment_bytes_once(message_id, attachment_id)
+        if data:
+            return data, ""
+        last_reason = reason
+        # Honour the server's Retry-After (429 / 503) instead of the plain
+        # backoff — it is the authoritative wait time.
+        if retry_after:
+            try:
+                wait = float(retry_after)
+            except (TypeError, ValueError):
+                wait = 0.0
+            if wait > 0:
+                logger.info("Mailbox asked to retry after %.1fs (message %s attachment %s)",
+                            wait, message_id, attachment_id)
+                time.sleep(min(wait, 120.0))
+    return None, last_reason
+
+
+def _refresh_token_for_message(message_id: int) -> None:
+    """Refresh the mailbox token for the account that owns this message."""
+    try:
+        msg = db.query_one(
+            "SELECT account_id FROM mail_messages WHERE id = %s", (message_id,))
+        if msg and msg.get("account_id"):
+            _refresh_mail_account_token(int(msg["account_id"]))
+    except Exception:
+        logger.exception("Token refresh before fetch failed for message %s", message_id)
+
+
+def _fetch_mail_attachment_bytes_once(message_id: int,
+                                      attachment_id: int | None) -> tuple[bytes | None, str, float | None]:
+    """One mailbox fetch attempt for a single attachment.
+
+    Returns (bytes, reason, retry_after). `retry_after` is the server's
+    Retry-After hint in seconds when the failure was a 429/503, else None.
     """
     try:
         msg = db.query_one(
@@ -1589,20 +2179,20 @@ def _fetch_mail_attachment_bytes(message_id: int, attachment_id: int | None) -> 
             (message_id,),
         )
         if not msg:
-            return None
+            return None, "message not found", None
         att = db.query_one(
-            "SELECT filename, imap_part_id FROM mail_attachments WHERE id = %s",
+            "SELECT filename, imap_part_id, remote_part_id FROM mail_attachments WHERE id = %s",
             (attachment_id,),
         )
         if not att:
-            return None
+            return None, "attachment row not found", None
         acct = db.query_one(
             "SELECT email, imap_host, imap_port, password_encrypted, oauth_provider, oauth_access_token "
             "FROM mail_accounts WHERE id = %s",
             (msg["account_id"],),
         )
         if not acct or not acct.get("imap_host"):
-            return None
+            return None, "mail account has no IMAP host configured", None
         from imap_tools import A, MailBox
         port = int(acct.get("imap_port") or 993)
         mailbox = MailBox(acct["imap_host"], port=port)
@@ -1610,35 +2200,84 @@ def _fetch_mail_attachment_bytes(message_id: int, attachment_id: int | None) -> 
             if acct.get("oauth_provider"):
                 token = acct.get("oauth_access_token") or ""
                 if not token:
-                    return None
+                    return None, "mail account has no OAuth access token", None
                 mailbox.xoauth2(acct["email"], token)
             else:
                 pwd = acct.get("password_encrypted") or ""
                 if not pwd:
-                    return None
+                    return None, "mail account has no password stored", None
                 mailbox.login(acct["email"], pwd)
             mailbox.folder.set(msg["folder"] or "INBOX")
             uid = str(msg["imap_uid"])
             msgs = list(mailbox.fetch(criteria=A(uid=uid), mark_seen=False, bulk=False))
             if not msgs:
-                return None
+                return None, f"message {uid} not found in folder {msg['folder'] or 'INBOX'}", None
             imap_msg = msgs[0]
-            part_id = str(att.get("imap_part_id") or "")
+            # The short MIME-part identifier (remote_part_id) selects the
+            # right part. `imap_part_id` holds a Content-ID, which never
+            # matches `att_obj.part` — that was the side bug fixed on
+            # 2026-11-03.
+            part_id = str(att.get("remote_part_id") or "").strip()
+            content_id = str(att.get("imap_part_id") or "").strip()
+            filename = att.get("filename") or ""
+            fallback_payload = None
             for att_obj in (imap_msg.attachments or []):
-                if part_id and str(att_obj.part or "") == part_id:
-                    return att_obj.payload
-                if att_obj.filename == att["filename"]:
-                    return att_obj.payload
-            return None
+                obj_part = _imap_part_id_str(att_obj)
+                if part_id and obj_part and obj_part == part_id:
+                    return att_obj.payload, "", None
+                # Last-resort: match on the Content-ID we recorded at sync time.
+                if content_id:
+                    obj_cid = str(getattr(att_obj, "content_id", "") or "").strip()
+                    if obj_cid and obj_cid == content_id:
+                        return att_obj.payload, "", None
+                # Last-resort: filename.
+                if filename and att_obj.filename == filename and fallback_payload is None:
+                    fallback_payload = att_obj.payload
+            if fallback_payload is not None:
+                return fallback_payload, "", None
+            return None, "attachment part not present in the mailbox copy", None
         finally:
             try:
                 mailbox.logout()
             except Exception:
                 pass
-    except Exception:
-        logger.exception("Live IMAP fetch failed for message %d attachment %s",
+    except Exception as exc:
+        logger.exception("Live mailbox fetch failed for message %d attachment %s",
                          message_id, attachment_id)
-        return None
+        return None, f"mailbox fetch failed: {exc}", _retry_after_from_exception(exc)
+
+
+def _retry_after_from_exception(exc: BaseException) -> float | None:
+    """The Retry-After hint (seconds) from a 429/503 error, if any.
+
+    imap_tools raises its own exceptions; when the server sent a
+    Retry-After header the value is on the exception (or on its `response`).
+    Anything unrecognised returns None (the caller then uses the plain
+    backoff).
+    """
+    for attr in ("retry_after", "retry_after_seconds"):
+        val = getattr(exc, attr, None)
+        if val is not None:
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                pass
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers:
+        try:
+            raw = headers.get("Retry-After") or headers.get("retry-after")
+            if raw:
+                return float(raw)
+        except Exception:
+            pass
+    text = str(exc)
+    # imap_tools' IMAP4 response errors carry the server response text.
+    if "429" in text or "503" in text or "TOOBUSY" in text.upper():
+        # No explicit Retry-After — signal "throttled" with a small hint so
+        # the caller waits a little longer than the plain backoff.
+        return 0.0
+    return None
 
 
 def create_email_history_snapshot(opp_id: int, message_id: int, user_id: int | None = None) -> bool:
@@ -1652,13 +2291,30 @@ def create_email_history_snapshot(opp_id: int, message_id: int, user_id: int | N
     The event carries the full email body inline (so every project user can
     read it without the mail account) AND copies the attachments into the
     project's own storage (so the files survive the mail account going away).
+
+    Bug fix 2026-11-03: when the event ALREADY existed the function returned
+    early and the attachment copy never ran — so relinking an email whose
+    files were missing (the 2026-11-02 Outlook failures) could not repair
+    anything. The copy now runs on BOTH paths; it is idempotent, so an
+    already-copied file is a no-op.
     """
     try:
         existing = db.query_one(
-            "SELECT id FROM history_events WHERE opportunity_id = %s AND content LIKE %s",
-            (opp_id, f'%"message_id": {int(message_id)}%'),
+            # ⚠ EXACT match: a LIKE '%"message_id": 12%' also matches
+            # message_id 120 and 1200 (the prefix is a substring). The regex
+            # requires a delimiter (',' or '}') right after the id.
+            "SELECT id FROM history_events WHERE opportunity_id = %s "
+            "AND content ~ %s",
+            (opp_id, '"message_id": ' + str(int(message_id)) + '([,}])'),
         )
         if existing:
+            # Repair path: the timeline entry exists, but its files may not
+            # (a previous copy attempt failed). The copy is idempotent.
+            try:
+                _copy_mail_attachments_to_project(opp_id, int(existing["id"]), message_id)
+            except Exception:
+                logger.exception("Failed to repair attachments for email %d in project %s",
+                                 message_id, opp_id)
             return True
         msg = db.query_one(
             "SELECT subject, from_addr, to_addr, cc_addr, body_html, body_text, date_received FROM mail_messages WHERE id = %s",
@@ -1705,6 +2361,80 @@ def create_email_history_snapshot(opp_id: int, message_id: int, user_id: int | N
     except Exception:
         logger.exception("Failed to create history event for email %d", message_id)
         return False
+
+
+def create_email_history_snapshot_detailed(opp_id: int, message_id: int,
+                                           user_id: int | None = None) -> dict[str, Any]:
+    """Same as `create_email_history_snapshot` but returns the copy report.
+
+    The link API needs to tell the user how many of the email's files made
+    it into the project ("3 of 4 files copied"), because a partial copy used
+    to be reported as plain success.
+    """
+    result: dict[str, Any] = {
+        "history_created": False, "copied": 0, "total": 0, "existing": 0,
+        "skipped": [], "event_id": None,
+    }
+    try:
+        existing = db.query_one(
+            # ⚠ EXACT match: a LIKE '%"message_id": 12%' also matches
+            # message_id 120 and 1200 (the prefix is a substring). The regex
+            # requires a delimiter (',' or '}') right after the id.
+            "SELECT id FROM history_events WHERE opportunity_id = %s "
+            "AND content ~ %s",
+            (opp_id, '"message_id": ' + str(int(message_id)) + '([,}])'),
+        )
+        event_id = int(existing["id"]) if existing else None
+        if not event_id:
+            msg = db.query_one(
+                "SELECT subject, from_addr, to_addr, cc_addr, body_html, body_text, date_received "
+                "FROM mail_messages WHERE id = %s",
+                (message_id,),
+            )
+            if not msg:
+                return result
+            try:
+                att_rows = db.query_dicts(
+                    "SELECT filename, size_bytes, mime_type FROM mail_attachments WHERE message_id = %s",
+                    (message_id,),
+                )
+                att_snapshot = [
+                    {"filename": a["filename"], "size_bytes": a["size_bytes"] or 0,
+                     "mime_type": a["mime_type"] or ""}
+                    for a in att_rows
+                ]
+            except Exception:
+                att_snapshot = []
+            snapshot = {
+                "type": "email_snapshot",
+                "message_id": message_id,
+                "from": msg["from_addr"] or "",
+                "to": msg["to_addr"] or "",
+                "cc": msg["cc_addr"] or "",
+                "subject": msg["subject"] or "",
+                "date_sent": str(msg["date_received"]) if msg["date_received"] else "",
+                "body_html": msg["body_html"] or "",
+                "body_text": msg["body_text"] or "",
+                "attachments": att_snapshot,
+            }
+            event_id = db.insert_returning(
+                "INSERT INTO history_events (opportunity_id, category_id, content, created_by) "
+                "VALUES (%s, %s, %s, %s) RETURNING id",
+                (opp_id, EMAIL_HISTORY_CATEGORY_ID, json.dumps(snapshot), user_id),
+            )
+            result["history_created"] = bool(event_id)
+        if not event_id:
+            return result
+        result["event_id"] = int(event_id)
+        report = copy_mail_attachments_to_project_detailed(opp_id, int(event_id), message_id)
+        result["copied"] = report["copied"]
+        result["total"] = report["total"]
+        result["existing"] = report["existing"]
+        result["skipped"] = report["skipped"]
+        return result
+    except Exception:
+        logger.exception("Failed to create history event for email %d", message_id)
+        return result
 
 
 def _post_note_to_deal(opp_id: int, content: str, notify_users: list[str] | None = None, category_id: int = 16) -> bool:
@@ -1925,7 +2655,13 @@ def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | No
             return existing["id"]
 
         attachments = msg.get("attachments", [])
-        attachments_json = json.dumps(attachments) if attachments else None
+        # The attachment payloads (bytes) must NOT go into attachments_json:
+        # they are not JSON-serializable, and the column only ever held
+        # metadata. The bytes are written to disk by `_store_attachments`
+        # right after the message row is created.
+        attachments_json = json.dumps(
+            [{k: v for k, v in a.items() if k != "content"} for a in attachments]
+        ) if attachments else None
 
         # Check IMAP \Seen flag — respect server-side read status
         flags = msg.get("flags") or []
@@ -1967,18 +2703,270 @@ def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | No
         return None
 
 
-def _store_attachments(message_id: int, account_id: int, attachments: list[dict], msg: dict[str, Any]) -> None:
-    """Store attachment metadata in mail_attachments table."""
-    for att in attachments:
+def _safe_attachment_filename(name: str) -> str:
+    """Filesystem-safe name for a stored attachment file."""
+    out = re.sub(r"[^\w.\- ]+", "_", name or "").strip("._")
+    return out or "attachment"
+
+
+def _imap_part_id_str(att: Any) -> str:
+    """A short, stable identifier for a MIME part.
+
+    ⚠ NEVER return `str(att.part)`. In imap_tools 1.14.0, `att.part` is the
+    whole `email.message.EmailMessage` — its string form is the complete
+    MIME part INCLUDING the base64 payload (a 300 KB PDF becomes a 405,411
+    character string). Storing that in `mail_attachments.remote_part_id`
+    (and in `mail_messages.attachments_json`) would put megabytes of base64
+    into the DB and into every inbox/message API response.
+
+    imap_tools' `MailAttachment` exposes NO part id at all (`content_id` is
+    empty unless the message carries a Content-ID header), so the
+    identifier is derived here:
+
+      1. `cid:<Content-ID>` when the part has one — short, stable, and the
+         thing a real MIME part is normally addressed by;
+      2. otherwise `sha256:<first 16 hex chars>:<filename>:<size>` — derived
+         from the payload, so it identifies the exact bytes, and short.
+
+    The result is capped at MAX_PART_ID_LEN and never contains payload text.
+    """
+    if att is None:
+        return ""
+    cid = ""
+    try:
+        cid = (getattr(att, "content_id", "") or "").strip()
+    except Exception:
+        cid = ""
+    if cid:
+        return ("cid:" + cid)[:MAX_PART_ID_LEN]
+    # Fall back to a content fingerprint. `payload` is the decoded bytes.
+    payload = b""
+    try:
+        payload = getattr(att, "payload", None) or b""
+    except Exception:
+        payload = b""
+    if not isinstance(payload, (bytes, bytearray)):
+        payload = b""
+    filename = ""
+    try:
+        filename = (getattr(att, "filename", "") or "").strip()
+    except Exception:
+        filename = ""
+    digest = hashlib.sha256(bytes(payload)).hexdigest()[:16]
+    return (f"sha256:{digest}:{filename}:{len(payload)}")[:MAX_PART_ID_LEN]
+
+
+def _hash_file(path: Path) -> tuple[str, int]:
+    """(sha256 hex, size in bytes) of a file, read in chunks.
+
+    The bytes are never loaded into memory as a whole.
+    """
+    h = hashlib.sha256()
+    size = 0
+    with open(path, "rb") as fh:
+        while True:
+            chunk = fh.read(1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            h.update(chunk)
+    return h.hexdigest(), size
+
+
+def _store_staged_attachment_bytes(message_id: int, attachment_id: int, filename: str,
+                                   staged_path: str) -> tuple[str | None, str | None]:
+    """Move a staged attachment file into its final place in the local store.
+
+    The staged file (written by `_fetch_single_message` when the message was
+    fetched) is MOVED, not read into memory — that is what keeps the sync
+    loop's memory bounded over a whole folder of attachments.
+
+    Returns (relative_path, error); `relative_path` is None on failure.
+    """
+    if not MAIL_ATTACHMENT_STORAGE_ENABLED:
+        return None, "local attachment storage disabled (MAIL_ATTACHMENT_STORAGE_ENABLED=false)"
+    staged = Path(staged_path)
+    try:
+        size = staged.stat().st_size
+    except Exception as exc:
+        return None, f"staged attachment file unreadable: {exc}"
+    if size > MAIL_ATTACHMENT_MAX_BYTES:
         try:
-            db.execute(
+            staged.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return None, (f"file is {size} bytes, above the {MAIL_ATTACHMENT_MAX_BYTES} byte "
+                      f"local-store limit (MAIL_ATTACHMENT_MAX_BYTES)")
+    try:
+        root = Path(__file__).resolve().parent.parent
+        rel_dir = Path(MAIL_ATTACHMENT_DIR) / str(int(message_id))
+        dest_dir = root / rel_dir
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"{int(attachment_id)}_{_safe_attachment_filename(filename)}"
+        # Move within the same filesystem where possible (a rename), else
+        # copy. A rename is atomic, so a crash never leaves a half-written
+        # file that would later look like a valid local copy.
+        try:
+            staged.replace(dest)
+        except OSError:
+            dest.write_bytes(staged.read_bytes())
+            try:
+                staged.unlink(missing_ok=True)
+            except Exception:
+                pass
+        return str(rel_dir / dest.name), None
+    except Exception as exc:
+        return None, f"could not store attachment on disk: {exc}"
+
+
+def _store_attachment_bytes(message_id: int, attachment_id: int, filename: str,
+                            content: bytes) -> tuple[str | None, str | None]:
+    """Write attachment bytes to the local store.
+
+    Returns (relative_path, error). `relative_path` is None when the bytes
+    could NOT be stored (error explains why). The path is relative to the
+    repo root, e.g. "data/mail-attachments/42/invoice.pdf".
+
+    A file above MAIL_ATTACHMENT_MAX_BYTES is skipped (the metadata row
+    still exists; the link-time mailbox fallback can still fetch it).
+    """
+    if not MAIL_ATTACHMENT_STORAGE_ENABLED:
+        return None, "local attachment storage disabled (MAIL_ATTACHMENT_STORAGE_ENABLED=false)"
+    size = len(content or b"")
+    if size > MAIL_ATTACHMENT_MAX_BYTES:
+        return None, (f"file is {size} bytes, above the {MAIL_ATTACHMENT_MAX_BYTES} byte "
+                      f"local-store limit (MAIL_ATTACHMENT_MAX_BYTES)")
+    try:
+        root = Path(__file__).resolve().parent.parent
+        rel_dir = Path(MAIL_ATTACHMENT_DIR) / str(int(message_id))
+        dest_dir = root / rel_dir
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"{int(attachment_id)}_{_safe_attachment_filename(filename)}"
+        # Write to a temp file then rename, so a crash never leaves a
+        # half-written file that later looks like a valid local copy.
+        tmp = dest.with_suffix(dest.suffix + ".part")
+        tmp.write_bytes(content)
+        tmp.replace(dest)
+        return str(rel_dir / dest.name), None
+    except Exception as exc:
+        return None, f"could not write attachment to disk: {exc}"
+
+
+def _store_attachments(message_id: int, account_id: int, attachments: list[dict], msg: dict[str, Any]) -> None:
+    """Store attachment metadata AND bytes in mail_attachments.
+
+    Bug fix 2026-11-03: this used to store METADATA ONLY. Linking an email
+    to a project then needed a live mailbox download to get the bytes, and
+    any failure silently dropped the file from the project's Documents tab.
+    The bytes are now stored locally at sync time so the link-time copy has
+    a local source.
+
+    The bytes arrive as a STAGED FILE on disk (`staged_path`), written by
+    `_fetch_single_message` as the message was fetched. The file is MOVED
+    into its final place — the bytes are never loaded into RAM, so a folder
+    full of PDFs cannot exhaust memory (bug fix 2026-11-03, review round 2).
+
+    Each attachment is stored independently: one oversized or failing file
+    must not abort the others, and must not abort the sync loop.
+    """
+    for att in attachments:
+        filename = _clean_nul_str(att.get("filename", "unnamed"))
+        mime = _clean_nul_str(att.get("mime_type", "application/octet/octet-stream"))
+        staged_path = (att.get("staged_path") or "").strip()
+        content = att.get("content")
+        try:
+            att_id = db.insert_returning(
                 "INSERT INTO mail_attachments (message_id, filename, mime_type, size_bytes, imap_part_id) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (message_id, _clean_nul_str(att.get("filename", "unnamed")), _clean_nul_str(att.get("mime_type", "application/octet/octet-stream")),
+                "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                (message_id, filename, mime,
                  att.get("size_bytes", 0), _clean_nul_str(att.get("part_id", ""))),
             )
         except Exception as e:
-            logger.error("Failed to store attachment metadata: %s", e)
+            logger.error("Failed to store attachment metadata for message %s (%s): %s",
+                         message_id, filename, e)
+            continue
+        if not att_id:
+            continue
+        # The short MIME-part identifier (Content-ID when the part has one,
+        # otherwise a sha256 fingerprint) — used by the link-time fallback to
+        # match the right MIME part.
+        part_id = _clean_nul_str(att.get("remote_part_id", "") or "")
+        if part_id:
+            try:
+                db.execute("UPDATE mail_attachments SET remote_part_id = %s WHERE id = %s",
+                           (part_id, att_id))
+            except Exception:
+                logger.exception("Failed to record remote part id for attachment %s", att_id)
+        if staged_path:
+            # The staged file holds the bytes — move it into place without
+            # reading it into memory.
+            rel_path, err = _store_staged_attachment_bytes(message_id, att_id,
+                                                           filename, staged_path)
+            if rel_path:
+                try:
+                    digest, size = _hash_file(Path(__file__).resolve().parent.parent / rel_path)
+                    db.execute(
+                        "UPDATE mail_attachments SET stored_path = %s, content_hash = %s, "
+                        "stored_size = %s, download_error = NULL WHERE id = %s",
+                        (rel_path, digest, size, att_id),
+                    )
+                except Exception:
+                    logger.exception("Failed to record stored path for attachment %s", att_id)
+                logger.info("Stored mail attachment %s (%s) for message %s at %s",
+                            att_id, filename, message_id, rel_path)
+            else:
+                logger.warning("Mail attachment %s (%s) for message %s not stored locally: %s",
+                               att_id, filename, message_id, err)
+                try:
+                    db.execute("UPDATE mail_attachments SET download_error = %s WHERE id = %s",
+                               (err, att_id))
+                except Exception:
+                    logger.exception("Failed to record download error for attachment %s", att_id)
+            continue
+        if not isinstance(content, (bytes, bytearray)) or not content:
+            # No payload carried over. Two reasons:
+            #   * the file is above MAIL_ATTACHMENT_MAX_BYTES — the fetch
+            #     layer deliberately does not stage big payloads, so the
+            #     bytes are dropped here and the file is NOT stored locally;
+            #   * the scan produced metadata only.
+            # Either way the metadata row stays, the attachment is still
+            # listed, and the link-time mailbox fallback can still fetch it.
+            size = int(att.get("size_bytes") or 0)
+            if size > MAIL_ATTACHMENT_MAX_BYTES:
+                err = (f"file is {size} bytes, above the {MAIL_ATTACHMENT_MAX_BYTES} byte "
+                       f"local-store limit (MAIL_ATTACHMENT_MAX_BYTES)")
+                logger.warning("Mail attachment %s (%s) for message %s not stored locally: %s",
+                               att_id, filename, message_id, err)
+                try:
+                    db.execute("UPDATE mail_attachments SET download_error = %s WHERE id = %s",
+                               (err, att_id))
+                except Exception:
+                    logger.exception("Failed to record download error for attachment %s", att_id)
+            continue
+        content = bytes(content)
+        digest = hashlib.sha256(content).hexdigest()
+        rel_path, err = _store_attachment_bytes(message_id, att_id, filename, content)
+        if rel_path:
+            try:
+                db.execute(
+                    "UPDATE mail_attachments SET stored_path = %s, content_hash = %s, "
+                    "stored_size = %s, download_error = NULL WHERE id = %s",
+                    (rel_path, digest, len(content), att_id),
+                )
+            except Exception:
+                logger.exception("Failed to record stored path for attachment %s", att_id)
+            logger.info("Stored mail attachment %s (%s) for message %s at %s",
+                        att_id, filename, message_id, rel_path)
+        else:
+            # Metadata is still stored; the file is still listed and can
+            # still be fetched at link time. Log the skip loudly.
+            logger.warning("Mail attachment %s (%s) for message %s not stored locally: %s",
+                           att_id, filename, message_id, err)
+            try:
+                db.execute("UPDATE mail_attachments SET download_error = %s WHERE id = %s",
+                           (err, att_id))
+            except Exception:
+                logger.exception("Failed to record download error for attachment %s", att_id)
 
 
 def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[str, Any]:
@@ -2190,25 +3178,39 @@ def _poll_mailbox_cfg(cfg: dict[str, Any]) -> list[dict[str, Any]]:
                         and cur_validity == stored_validity):
                     uid_min = int(last_seen)
                     logger.info("Incremental fetch UID>%d for %s folder %s", uid_min, cfg["user"], folder)
+            # ⚠ STREAMED (bug fix 2026-11-03, review round 2).
+            # `_fetch_messages` is a generator: it yields one message at a
+            # time, and each message's attachment bytes are staged on disk
+            # before the next message is fetched. The old code built a LIST
+            # of the whole folder (bytes included), which on a first sync /
+            # renumbering / watermark reset could exhaust RAM.
+            #
+            # The watermark still needs the highest UID before processing, so
+            # the UIDs are collected up front by the generator itself; here we
+            # simply track the max as the messages arrive.
             msgs = _fetch_messages(cfg, folder, since=since, uid_min=uid_min)
             max_uid = 0
-            for m in msgs:
+            count = 0
+            for msg in msgs:
                 try:
-                    max_uid = max(max_uid, int(m.get("uid") or 0))
+                    max_uid = max(max_uid, int(msg.get("uid") or 0))
                 except (TypeError, ValueError):
                     pass
+                count += 1
+                # Process (and store) immediately, so the message's bytes
+                # are released before the next one is fetched.
+                result = _process_message(msg, cfg)
+                results.append(result)
+                del msg
             # Advance the watermark: max fetched UID, or UIDNEXT-1 when nothing
             # new (empty folder converges to incremental on the next cycle).
             # Never move it backwards.
             floor = max(int(last_seen or 0),
-                        int(cur_uidnext or 1) - 1 if not msgs and cur_uidnext else 0)
+                        int(cur_uidnext or 1) - 1 if not count and cur_uidnext else 0)
             new_last = max(max_uid, floor)
             _save_folder_watermark(cfg.get("account_id"), imap_folder,
                                    cur_validity if cur_validity is not None else stored_validity,
                                    new_last)
-            for msg in msgs:
-                result = _process_message(msg, cfg)
-                results.append(result)
     except Exception as e:
         logger.error("Polling error for %s: %s", cfg["host"], e)
         infra_log.log_infra_event("error", f"Mail scanner poll failed for {cfg.get('host')}: {e}", source="mail_scanner")
@@ -2327,6 +3329,16 @@ def _enforce_retention() -> None:
     Runs for every account with retention_days > 0, regardless of sync_enabled.
     Messages linked to deals are always kept. Local DB only — never touches IMAP.
     Also cleans up processed-IDs file for deleted messages.
+
+    The stored attachment bytes (`data/mail-attachments/<message_id>/`) are
+    only deleted when `MAIL_ATTACHMENT_DROP_STORED_ON_PURGE` is true. The
+    DEFAULT is **false** (keep the files): the retention/backup policy for
+    that tree is Ken's decision and is NOT made by this code. The setting
+    exists so the policy can be flipped without another code change.
+
+    NOTE: the PROJECT's copy (`data/history-attachments/<opp>/<event>/`) is
+    never touched by retention — it is the customer's document and must
+    outlive the mail account (the Oct 29 2026 bug).
     """
     try:
         rows = db.query_dicts(
@@ -2344,6 +3356,25 @@ def _enforce_retention() -> None:
                 "SELECT account_id, imap_uid FROM mail_messages WHERE account_id = %s AND date_received < %s AND id NOT IN (SELECT message_id FROM mail_deal_links)",
                 (acct["id"], cutoff),
             )
+            # Collect the stored attachment paths BEFORE the delete — the
+            # DELETE cascades the mail_attachments rows away, and with
+            # migration 043's ON DELETE SET NULL the project's timeline rows
+            # survive (the file itself must survive too).
+            stored_paths: list[str] = []
+            if MAIL_ATTACHMENT_DROP_STORED_ON_PURGE:
+                try:
+                    stored_paths = [
+                        r["stored_path"] for r in db.query_dicts(
+                            "SELECT ma.stored_path FROM mail_attachments ma "
+                            "JOIN mail_messages m ON m.id = ma.message_id "
+                            "WHERE m.account_id = %s AND m.date_received < %s "
+                            "AND m.id NOT IN (SELECT message_id FROM mail_deal_links) "
+                            "AND ma.stored_path IS NOT NULL AND ma.stored_path <> ''",
+                            (acct["id"], cutoff),
+                        )
+                    ]
+                except Exception:
+                    logger.exception("Retention: could not list stored attachment paths")
             deleted = db.execute(
                 """DELETE FROM mail_messages
                    WHERE account_id = %s
@@ -2360,6 +3391,25 @@ def _enforce_retention() -> None:
                     for r in uids_to_clean:
                         ids.discard(_processed_key(r["account_id"], r["imap_uid"]))
                     _save_processed_ids(ids)
+            if stored_paths:
+                removed = 0
+                root = Path(__file__).resolve().parent.parent
+                for rel in stored_paths:
+                    try:
+                        full = root / rel
+                        # Containment check: only ever delete inside the
+                        # mail-attachments tree.
+                        base = (root / MAIL_ATTACHMENT_DIR).resolve()
+                        if not str(full.resolve()).startswith(str(base) + os.sep):
+                            continue
+                        if full.is_file():
+                            full.unlink()
+                            removed += 1
+                    except Exception:
+                        logger.exception("Retention: could not delete stored attachment %s", rel)
+                logger.info("Retention: deleted %d stored attachment file(s) for %s "
+                            "(MAIL_ATTACHMENT_DROP_STORED_ON_PURGE=true)",
+                            removed, acct["email"])
         except Exception as e:
             logger.error("Retention: failed for %s: %s", acct["email"], e)
             infra_log.log_infra_event("error", f"Mail retention failed for {acct.get('email')}: {e}", source="mail_scanner")

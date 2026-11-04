@@ -1284,6 +1284,60 @@ def _conflict_target(table: str) -> str:
     return " ON CONFLICT (" + ", ".join(cols) + ") DO NOTHING"
 
 
+# ── Optional unique indexes (blocker B1) ────────────────────────────────────
+# Some unique indexes are created by a migration that SKIPS itself when the
+# table already holds duplicates (migration 044 skips
+# uq_project_documents_opp_file_path in that case, deliberately, without
+# touching any data).
+#
+# ⚠ An `ON CONFLICT (<cols>) WHERE <predicate> DO NOTHING` statement is
+# REJECTED BY POSTGRES when no matching unique index exists:
+#
+#     ERROR:  there is no unique or exclusion constraint matching the
+#             ON CONFLICT specification
+#
+# The statement fails outright — it is not a runtime "no conflict" case —
+# so every insert through it would 500. The code must therefore check
+# whether the index exists and fall back to a SELECT-then-INSERT path when
+# it does not.
+#
+# The check is cached: the schema does not change while the process runs
+# (a migration is applied at boot, before any request is served).
+_INDEX_EXISTS_CACHE: dict[str, bool] = {}
+
+# Mirrored in scanner/mail_scanner.py (the scanner cannot import server —
+# server imports the scanner), so the two constants must stay in sync.
+PROJECT_DOCUMENTS_UNIQUE_INDEX = "uq_project_documents_opp_file_path"
+HISTORY_ATTACHMENTS_UNIQUE_INDEX = "uq_history_attachments_mail_attachment"
+
+
+def _unique_index_exists(index_name: str) -> bool:
+    """Does the named unique index exist? (cached)
+
+    `index_name` is looked up in `pg_indexes` for the CURRENT schema.
+    """
+    if index_name in _INDEX_EXISTS_CACHE:
+        return _INDEX_EXISTS_CACHE[index_name]
+    exists = False
+    try:
+        row = db.query_one(
+            "SELECT 1 AS ok FROM pg_indexes WHERE schemaname = current_schema() "
+            "AND indexname = %s",
+            (index_name,))
+        exists = bool(row)
+    except Exception:
+        logger.exception("Could not check for the index %s", index_name)
+        # Assume it does NOT exist: the fallback path is the safe one.
+        exists = False
+    _INDEX_EXISTS_CACHE[index_name] = exists
+    return exists
+
+
+def _reset_index_cache() -> None:
+    """Forget the cached index existence flags (tests / after a migration)."""
+    _INDEX_EXISTS_CACHE.clear()
+
+
 # ── Import jsonb adaptation ──────────────────────────────────────────────────
 # psycopg2 cannot adapt a Python dict/list to a `jsonb` column on its own: it
 # either raises "can't adapt type 'dict'" or, for a list, silently renders a
@@ -1537,6 +1591,120 @@ def _verify_document_callback(doc_id: int, body: dict) -> bool:
         logger.warning("Document callback for doc %s rejected: token not bound to this document", doc_id)
         return False
     return True
+
+
+def _insert_project_document_safely(opp_id: int | None, title: str, rel_path: str,
+                                    file_size: int, mime_type: str,
+                                    user_id: int | None = None,
+                                    company_scope: bool = False,
+                                    folder_id: int | None = None) -> int | None:
+    """INSERT a project_documents row, tolerating a missing unique index.
+
+    Migration 044 adds
+        uq_project_documents_opp_file_path (opportunity_id, file_path)
+        WHERE is_deleted = FALSE
+    so that a double-click on "Link to deal" cannot register the same file
+    twice in a project's Documents tab.
+
+    ⚠ TWO DIFFERENT failure modes have to be handled (blocker B1):
+
+      1. **The index EXISTS.** PDF generators name their file
+         "<epoch seconds>_<name>.pdf", so two generations in the SAME second
+         with the same name produce the SAME file_path. An `ON CONFLICT …
+         DO NOTHING` absorbs that instead of raising, and the existing row's
+         id is reused.
+
+      2. **The index DOES NOT EXIST.** Migration 044 deliberately SKIPS the
+         index when `project_documents` already holds duplicates. In that
+         case Postgres REJECTS an `ON CONFLICT (opportunity_id, file_path)`
+         statement outright with
+
+             ERROR:  there is no unique or exclusion constraint matching
+                     the ON CONFLICT specification
+
+         — it is a hard parse/plan-time error, not a "no conflict happened"
+         case, so every insert through it would return a 500. When the index
+         is absent this helper therefore uses a **SELECT-then-INSERT** path
+         and never sends the ON CONFLICT statement at all.
+
+    `opportunity_id = NULL` (the standalone/personal documents) never
+    conflicts: NULLs are never equal in a Postgres UNIQUE index, so those
+    rows take the plain INSERT either way.
+    """
+    if opp_id is None:
+        return db.insert_returning(
+            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope, folder_id)
+               VALUES (%s, %s, %s, %s, %s, NULL, %s, %s) RETURNING id""",
+            (title, rel_path, file_size, mime_type, user_id, company_scope, folder_id))
+
+    if not _unique_index_exists(PROJECT_DOCUMENTS_UNIQUE_INDEX):
+        # No index to arbitrate an ON CONFLICT — check first, then insert.
+        return _insert_project_document_without_unique_index(
+            opp_id, title, rel_path, file_size, mime_type, user_id, folder_id)
+
+    doc_id = db.insert_returning(
+        """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by, folder_id)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)
+           ON CONFLICT (opportunity_id, file_path) WHERE is_deleted = FALSE DO NOTHING
+           RETURNING id""",
+        (opp_id, title, rel_path, file_size, mime_type, user_id, folder_id))
+    if doc_id is not None:
+        return doc_id
+    # The insert was absorbed by the conflict: reuse the existing row.
+    try:
+        row = db.query_one(
+            "SELECT id FROM project_documents WHERE opportunity_id = %s AND file_path = %s "
+            "AND is_deleted = FALSE ORDER BY id DESC LIMIT 1",
+            (opp_id, rel_path))
+        if row:
+            return row["id"]
+    except Exception:
+        logger.exception("Could not look up the existing project document %s", rel_path)
+    # The index said it exists but nothing matched and nothing was inserted
+    # (should not happen) — insert plainly so the caller still gets an id.
+    try:
+        return db.insert_returning(
+            """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by, folder_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (opp_id, title, rel_path, file_size, mime_type, user_id, folder_id))
+    except Exception:
+        logger.exception("Could not register the project document %s", rel_path)
+        return None
+
+
+def _insert_project_document_without_unique_index(
+        opp_id: int, title: str, rel_path: str, file_size: int, mime_type: str,
+        user_id: int | None, folder_id: int | None) -> int | None:
+    """SELECT-then-INSERT for `project_documents` when the unique index is gone.
+
+    Used when migration 044 skipped `uq_project_documents_opp_file_path`
+    (because the table already held duplicates). The ON CONFLICT form cannot
+    be used at all in that state — Postgres rejects the statement — so we
+    look for an existing active row first and only insert when there is none.
+
+    ⚠ This is the PRE-index behaviour: two concurrent inserts can still both
+    see "nothing there" and create a duplicate. That is exactly the situation
+    the missing index describes (the table already has duplicates and an
+    operator has not cleaned them up yet), so it is no worse than before
+    migration 044 existed. Once the index is built this path is not taken.
+    """
+    try:
+        row = db.query_one(
+            "SELECT id FROM project_documents WHERE opportunity_id = %s AND file_path = %s "
+            "AND is_deleted = FALSE ORDER BY id DESC LIMIT 1",
+            (opp_id, rel_path))
+        if row:
+            return row["id"]
+    except Exception:
+        logger.exception("Could not look up the existing project document %s", rel_path)
+    try:
+        return db.insert_returning(
+            """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by, folder_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (opp_id, title, rel_path, file_size, mime_type, user_id, folder_id))
+    except Exception:
+        logger.exception("Could not register the project document %s", rel_path)
+        return None
 
 
 def _humanize_file_size(size_bytes) -> str:
@@ -2160,6 +2328,78 @@ def _mail_draft_accessible(user: dict, draft_id: int) -> bool:
 
 # ── IMAP sync helpers ──────────────────────────────────────────────────────────
 # Best-effort: if IMAP fails, the DB is still updated; we log and continue.
+
+def _imap_part_id_str(att: Any) -> str:
+    """A short, stable identifier for a MIME part.
+
+    ⚠ NEVER return `str(att.part)`. In imap_tools 1.14.0, `att.part` is the
+    whole `email.message.EmailMessage` — its string form is the complete
+    MIME part INCLUDING the base64 payload (a 300 KB PDF becomes a 405,411
+    character string). Storing that would put megabytes of base64 into the
+    DB and into every mail API response.
+
+    imap_tools' `MailAttachment` exposes NO part id at all (`content_id` is
+    empty unless the message carries a Content-ID header), so the
+    identifier is derived here:
+
+      1. `cid:<Content-ID>` when the part has one;
+      2. otherwise `sha256:<first 16 hex chars>:<filename>:<size>`.
+
+    Mirrors scanner/mail_scanner.py `_imap_part_id_str` (the scanner cannot
+    import server — server imports the scanner — so the two copies are kept
+    in sync by hand, like EMAIL_HISTORY_CATEGORY_ID).
+
+    The result is capped at 200 chars and never contains payload text.
+    """
+    if att is None:
+        return ""
+    cid = ""
+    try:
+        cid = (getattr(att, "content_id", "") or "").strip()
+    except Exception:
+        cid = ""
+    if cid:
+        return ("cid:" + cid)[:200]
+    payload = b""
+    try:
+        payload = getattr(att, "payload", None) or b""
+    except Exception:
+        payload = b""
+    if not isinstance(payload, (bytes, bytearray)):
+        payload = b""
+    filename = ""
+    try:
+        filename = (getattr(att, "filename", "") or "").strip()
+    except Exception:
+        filename = ""
+    digest = hashlib.sha256(bytes(payload)).hexdigest()[:16]
+    return (f"sha256:{digest}:{filename}:{len(payload)}")[:200]
+
+
+def _pick_imap_attachment(imap_msg: Any, att: dict) -> bytes | None:
+    """Find the right MIME part in a fetched IMAP message.
+
+    Match order:
+      1. the real part id (`remote_part_id`)
+      2. the recorded Content-ID (`imap_part_id`)
+      3. the filename (last-resort fallback)
+    """
+    part_id = str(att.get("remote_part_id") or "").strip()
+    content_id = str(att.get("imap_part_id") or "").strip()
+    filename = att.get("filename") or ""
+    fallback = None
+    for att_obj in (getattr(imap_msg, "attachments", None) or []):
+        obj_part = _imap_part_id_str(att_obj)
+        if part_id and obj_part and obj_part == part_id:
+            return att_obj.payload
+        if content_id:
+            obj_cid = str(getattr(att_obj, "content_id", "") or "").strip()
+            if obj_cid and obj_cid == content_id:
+                return att_obj.payload
+        if filename and att_obj.filename == filename and fallback is None:
+            fallback = att_obj.payload
+    return fallback
+
 
 def _imap_connect(account_id: int):
     """Connect to IMAP for the given account. Returns MailBox or None."""
@@ -4775,6 +5015,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not user:
                 return
             self._handle_sync_backfill_email_history()
+            return
+        if api_path == "/api/v2/admin/sync/backfill-mail-attachments" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_sync_backfill_mail_attachments()
             return
         if api_path == "/api/v2/admin/sync/relink-orphan-email-snapshots" and method == "POST":
             user = _require_admin(self)
@@ -10683,11 +10929,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_size = os.path.getsize(output_path)
         rel_path = os.path.relpath(output_path, ROOT)
         pdf_title = f"{safe_filename}.pdf"
-        photo_id_result = db.insert_returning(
-            """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by)
-               VALUES (%s, %s, %s, %s, 'application/pdf', %s) RETURNING id""",
-            (opp_id, pdf_title, rel_path, file_size, user["id"]),
-        )
+        photo_id_result = _insert_project_document_safely(
+            opp_id, pdf_title, rel_path, file_size, "application/pdf", user["id"])
         # System action note (matches invoice/COC behavior). category_id 15 =
         # the "Action" category shipped in init.sql (sort_order 15, icon_key
         # 'pencil'). Keep this consistent with the invoice/COC handlers.
@@ -11058,11 +11301,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_size = os.path.getsize(output_path)
         rel_path = os.path.relpath(output_path, ROOT)
         pdf_title = f"{safe_stem}.pdf"
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by)
-               VALUES (%s, %s, %s, %s, 'application/pdf', %s) RETURNING id""",
-            (opp_id, pdf_title, rel_path, file_size, user["id"]),
-        )
+        doc_id = _insert_project_document_safely(
+            opp_id, pdf_title, rel_path, file_size, "application/pdf", user["id"])
         _size_label = _humanize_file_size(file_size)
         _action_content = f"Invoice generated: {pdf_title} ({_size_label}"
         if claim_number:
@@ -11141,11 +11381,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_size = os.path.getsize(output_path)
         rel_path = os.path.relpath(output_path, ROOT)
         pdf_title = f"{safe_stem}.pdf"
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by)
-               VALUES (%s, %s, %s, %s, 'application/pdf', %s) RETURNING id""",
-            (opp_id, pdf_title, rel_path, file_size, user["id"]),
-        )
+        doc_id = _insert_project_document_safely(
+            opp_id, pdf_title, rel_path, file_size, "application/pdf", user["id"])
         _size_label = _humanize_file_size(file_size)
         _action_content = f"Certificate of Completion generated: {pdf_title} ({_size_label}"
         if claim_number:
@@ -11234,11 +11471,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_size = os.path.getsize(output_path)
         rel_path = os.path.relpath(output_path, ROOT)
         pdf_title = f"{safe_stem}.pdf"
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
-               VALUES (%s, %s, %s, %s, 'application/pdf', %s, NULL, FALSE) RETURNING id""",
-            (pdf_title, rel_path, file_size, user["id"], None, False),
-        )
+        doc_id = _insert_project_document_safely(
+            None, pdf_title, rel_path, file_size, "application/pdf", user["id"])
         _json_response(self, 201, {
             "id": doc_id, "title": pdf_title, "fileSize": file_size,
             "mimeType": "application/pdf",
@@ -11298,11 +11532,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_size = os.path.getsize(output_path)
         rel_path = os.path.relpath(output_path, ROOT)
         pdf_title = f"{safe_stem}.pdf"
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
-               VALUES (%s, %s, %s, %s, 'application/pdf', %s, NULL, FALSE) RETURNING id""",
-            (pdf_title, rel_path, file_size, user["id"], None, False),
-        )
+        doc_id = _insert_project_document_safely(
+            None, pdf_title, rel_path, file_size, "application/pdf", user["id"])
         _json_response(self, 201, {
             "id": doc_id, "title": pdf_title, "fileSize": file_size,
             "mimeType": "application/pdf",
@@ -12058,11 +12289,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_path = opp_dir / unique_name
         file_path.write_bytes(data)
         file_size = len(data)
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by)
-               VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
-            (opp_id, filename, str(file_path.relative_to(ROOT)), file_size, mime_type, user["id"]),
-        )
+        doc_id = _insert_project_document_safely(
+            opp_id, filename, str(file_path.relative_to(ROOT)), file_size, mime_type,
+            user["id"])
         _json_response(self, 201, {
             "id": doc_id, "title": filename, "fileSize": file_size,
             "mimeType": mime_type, "editUrl": f"/doc-editor.html?id={doc_id}",
@@ -12406,7 +12635,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                      WHERE NOT EXISTS (
                          SELECT 1 FROM history_events he
                          WHERE he.opportunity_id = l.opportunity_id
-                           AND strpos(he.content, '"message_id": ' || l.message_id) > 0
+                           AND he.content ~ ('"message_id": ' || l.message_id || '([,}])')
                      )"""
             params: list = []
             if since_days > 0:
@@ -12450,6 +12679,273 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                        "missing": len(rows), "items": items, "log": list(_sync_log)})
         except Exception as e:
             _append_sync_log("error", f"Email history backfill failed: {e}")
+            _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
+        finally:
+            _sync_running = False
+
+    def _handle_sync_backfill_mail_attachments(self) -> None:
+        """One-time repair: get linked emails' files into the project's Documents tab.
+
+        Bug fix 2026-11-03. Two families of damage:
+          (a) the link exists and the timeline entry exists, but the files were
+              never copied (the 2026-11-02 Outlook failures dropped ~20 emails;
+              ~163 older automatic links from Oct 19 never got files either);
+          (b) the link exists but there is no timeline entry at all — those are
+              handled by the EXISTING backfill path
+              (`_handle_sync_backfill_email_history`), which creates the entry
+              and then copies the files.
+
+        DRY RUN IS THE DEFAULT (`{"dry_run": true}` or omitting `apply`).
+        A real run needs an explicit `{"apply": true}`.
+
+        Payload (all optional):
+            dry_run / apply  — dry run unless apply is true
+            project_id       — limit to one opportunity
+            account_id       — limit to one mail account
+            since_days       — only mail received in the last N days
+            limit            — cap the number of emails processed
+
+        Idempotent: the copy is keyed on (event, mail attachment), so running
+        it twice adds nothing the second time.
+
+        MUST NOT be run against production by accident — the endpoint is
+        admin-only and dry-run is the default.
+        """
+        global _sync_log, _sync_running
+        if _sync_running:
+            _json_response(self, 409, {"error": "Sync already running"})
+            return
+        _sync_running = True
+        _sync_log.clear()
+        try:
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except Exception:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            # Dry run unless an explicit apply is requested.
+            apply_run = bool(payload.get("apply")) and not bool(payload.get("dry_run"))
+            dry_run = not apply_run
+            try:
+                project_id = int(payload.get("project_id") or 0)
+            except (TypeError, ValueError):
+                project_id = 0
+            try:
+                account_id = int(payload.get("account_id") or 0)
+            except (TypeError, ValueError):
+                account_id = 0
+            try:
+                since_days = int(payload.get("since_days") or 0)
+            except (TypeError, ValueError):
+                since_days = 0
+            try:
+                limit = int(payload.get("limit") or 0)
+            except (TypeError, ValueError):
+                limit = 0
+
+            if dry_run:
+                _append_sync_log("info", "DRY RUN — reporting only, zero writes. "
+                                         "Send {\"apply\": true} to actually copy files.")
+            scope = []
+            if project_id:
+                scope.append(f"project {project_id}")
+            if account_id:
+                scope.append(f"account {account_id}")
+            if since_days:
+                scope.append(f"last {since_days} days")
+            scope_str = (" (" + ", ".join(scope) + ")") if scope else ""
+            _append_sync_log("info", f"Scanning linked emails for missing project files{scope_str}...")
+
+            # Every linked email, with the state of its project copy.
+            #
+            # `copied_count` must count LEGACY copies too — the files copied
+            # BEFORE migration 043 have no `mail_attachment_id`, so counting
+            # only the linked rows would make the dry run report every old
+            # email as "missing files" and the real run would then duplicate
+            # them (bug fix 2026-11-03, review round 2). A copy counts when
+            # the timeline file matches the mail attachment by
+            # mail_attachment_id OR by filename + size.
+            sql = """SELECT l.message_id, l.opportunity_id, m.subject, m.from_addr,
+                            m.date_received, m.account_id, o.title AS opp_title,
+                            (SELECT he.id FROM history_events he
+                              WHERE he.opportunity_id = l.opportunity_id
+                                AND he.content ~ ('"message_id": ' || l.message_id || '([,}])')
+                              ORDER BY he.id LIMIT 1) AS event_id,
+                            (SELECT COUNT(*) FROM mail_attachments ma
+                              WHERE ma.message_id = l.message_id) AS att_count,
+                            (SELECT COUNT(*)
+                               FROM mail_attachments ma
+                               JOIN history_attachments ha
+                                 ON ha.event_id = (SELECT he2.id FROM history_events he2
+                                     WHERE he2.opportunity_id = l.opportunity_id
+                                       AND he2.content ~ ('"message_id": ' || l.message_id || '([,}])')
+                                     ORDER BY he2.id LIMIT 1)
+                                AND (ha.mail_attachment_id = ma.id
+                                     OR (ha.filename = ma.filename
+                                         AND ha.file_size = ma.size_bytes))
+                              WHERE ma.message_id = l.message_id) AS copied_count
+                       FROM mail_deal_links l
+                       JOIN mail_messages m ON m.id = l.message_id
+                       JOIN opportunities o ON o.id = l.opportunity_id"""
+            params: list = []
+            if project_id:
+                sql += " WHERE l.opportunity_id = %s"
+                params.append(project_id)
+                if account_id:
+                    sql += " AND m.account_id = %s"
+                    params.append(account_id)
+            elif account_id:
+                sql += " WHERE m.account_id = %s"
+                params.append(account_id)
+            if since_days > 0:
+                sql += (" AND m.date_received >= NOW() - (%s * INTERVAL '1 day')"
+                        if params else " WHERE m.date_received >= NOW() - (%s * INTERVAL '1 day')")
+                params.append(since_days)
+            sql += " ORDER BY l.message_id"
+            try:
+                rows = db.query_dicts(sql, tuple(params))
+            except Exception as exc:
+                # The sub-select needs migration 043 (history_attachments.
+                # mail_attachment_id). Without it, fall back to a simpler
+                # query that only checks for a timeline entry.
+                logger.warning("Attachment backfill query needs migration 043 (%s) — "
+                               "falling back to timeline-entry-only detection", exc)
+                simple_sql = """SELECT l.message_id, l.opportunity_id, m.subject, m.from_addr,
+                                        m.date_received, m.account_id, o.title AS opp_title,
+                                        (SELECT he.id FROM history_events he
+                                          WHERE he.opportunity_id = l.opportunity_id
+                                            AND he.content ~ ('"message_id": ' || l.message_id || '([,}])')
+                                          ORDER BY he.id LIMIT 1) AS event_id,
+                                        (SELECT COUNT(*) FROM mail_attachments ma
+                                          WHERE ma.message_id = l.message_id) AS att_count,
+                                        0 AS copied_count
+                                   FROM mail_deal_links l
+                                   JOIN mail_messages m ON m.id = l.message_id
+                                   JOIN opportunities o ON o.id = l.opportunity_id"""
+                simple_params: list = []
+                if project_id:
+                    simple_sql += " WHERE l.opportunity_id = %s"
+                    simple_params.append(project_id)
+                    if account_id:
+                        simple_sql += " AND m.account_id = %s"
+                        simple_params.append(account_id)
+                elif account_id:
+                    simple_sql += " WHERE m.account_id = %s"
+                    simple_params.append(account_id)
+                if since_days > 0:
+                    simple_sql += (" AND m.date_received >= NOW() - (%s * INTERVAL '1 day')"
+                                   if simple_params else
+                                   " WHERE m.date_received >= NOW() - (%s * INTERVAL '1 day')")
+                    simple_params.append(since_days)
+                simple_sql += " ORDER BY l.message_id"
+                rows = db.query_dicts(simple_sql, tuple(simple_params))
+
+            # Split the work:
+            #   missing_entry — no timeline entry at all -> create it (the
+            #                   existing backfill path does this, then copies)
+            #   missing_files — timeline entry exists but the files are not
+            #                   all there -> copy only the files
+            need_entry: list[dict] = []
+            need_files: list[dict] = []
+            for r in rows:
+                att_count = int(r.get("att_count") or 0)
+                if att_count <= 0:
+                    continue
+                copied = int(r.get("copied_count") or 0)
+                if not r.get("event_id"):
+                    need_entry.append(r)
+                elif copied < att_count:
+                    need_files.append(r)
+
+            work = need_entry + need_files
+            if limit > 0:
+                work = work[:limit]
+                need_entry = [r for r in need_entry if r in work]
+                need_files = [r for r in need_files if r in work]
+
+            _append_sync_log("info", f"{len(need_entry)} linked email(s) missing a timeline entry, "
+                                     f"{len(need_files)} missing project files")
+
+            items: list[dict] = []
+            failures: list[dict] = []
+            created_entries = 0
+            copied_files = 0
+            total_files = 0
+
+            for r in work:
+                mid = r["message_id"]
+                opp = r["opportunity_id"]
+                item = {
+                    "message_id": mid, "opportunity_id": opp,
+                    "subject": r.get("subject") or "",
+                    "from": r.get("from_addr") or "",
+                    "date": str(r.get("date_received") or ""),
+                    "project": r.get("opp_title") or "",
+                    "action": "create_entry_and_copy" if not r.get("event_id") else "copy_files",
+                    "copied": 0, "total": 0, "skipped": [],
+                }
+                if dry_run:
+                    item["would_add"] = ("timeline entry + "
+                                         f"{int(r.get('att_count') or 0)} file(s)"
+                                         if item["action"] == "create_entry_and_copy"
+                                         else f"{int(r.get('att_count') or 0) - int(r.get('copied_count') or 0)} file(s)")
+                    items.append(item)
+                    continue
+                # Real run.
+                if item["action"] == "create_entry_and_copy":
+                    # Existing path: creates the timeline entry, which then
+                    # copies the files.
+                    if mail_scanner is not None and hasattr(
+                            mail_scanner, "create_email_history_snapshot_detailed"):
+                        report = mail_scanner.create_email_history_snapshot_detailed(opp, mid)
+                    else:
+                        report = {"history_created": False, "copied": 0, "total": 0, "skipped": []}
+                    if report.get("history_created"):
+                        created_entries += 1
+                    item["copied"] = int(report.get("copied") or 0)
+                    item["total"] = int(report.get("total") or 0)
+                    item["skipped"] = report.get("skipped") or []
+                else:
+                    # Entry exists: copy only the missing files.
+                    event_id = int(r["event_id"])
+                    if mail_scanner is not None and hasattr(
+                            mail_scanner, "copy_mail_attachments_to_project_detailed"):
+                        report = mail_scanner.copy_mail_attachments_to_project_detailed(
+                            opp, event_id, mid)
+                    else:
+                        report = {"copied": 0, "total": 0, "skipped": []}
+                    item["copied"] = int(report.get("copied") or 0)
+                    item["total"] = int(report.get("total") or 0)
+                    item["skipped"] = report.get("skipped") or []
+                copied_files += item["copied"]
+                total_files += item["total"]
+                if item["skipped"]:
+                    for s in item["skipped"]:
+                        failures.append({
+                            "message_id": mid, "opportunity_id": opp,
+                            "attachment_id": s.get("attachment_id"),
+                            "filename": s.get("filename"),
+                            "reason": s.get("reason"),
+                        })
+                items.append(item)
+
+            if dry_run:
+                _append_sync_log("info", f"Dry run complete: {len(items)} email(s) would be repaired, "
+                                         f"0 written")
+            else:
+                _append_sync_log("info", f"Backfill complete: {created_entries} timeline entries created, "
+                                         f"{copied_files} file(s) copied, {len(failures)} failure(s)")
+            _json_response(self, 200, {
+                "ok": True, "dry_run": dry_run, "apply": apply_run,
+                "created_entries": created_entries,
+                "copied_files": copied_files, "total_files": total_files,
+                "missing_entry": len(need_entry), "missing_files": len(need_files),
+                "processed": len(items), "items": items, "failures": failures,
+                "log": list(_sync_log),
+            })
+        except Exception as e:
+            _append_sync_log("error", f"Mail attachment backfill failed: {e}")
             _json_response(self, 500, {"error": str(e), "log": list(_sync_log)})
         finally:
             _sync_running = False
@@ -15845,11 +16341,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except OSError:
             _json_response(self, 500, {"error": "Failed to copy file"})
             return
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
-               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-            (title, str(dst.relative_to(ROOT)), file_size, mime_type, uploaded_by, new_opp_id, company_scope),
-        )
+        doc_id = _insert_project_document_safely(
+            new_opp_id, title, str(dst.relative_to(ROOT)), file_size, mime_type,
+            uploaded_by, company_scope)
         _json_response(self, 201, {"id": doc_id, "title": title})
 
     def _handle_documents_batch_delete(self) -> None:
@@ -15989,11 +16483,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 dst.write_bytes(src.read_bytes())
             except OSError:
                 continue
-            db.execute(
-                """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-                (title, str(dst.relative_to(ROOT)), file_size, mime_type, uploaded_by, new_opp_id, company_scope),
-            )
+            _insert_project_document_safely(
+                new_opp_id, title, str(dst.relative_to(ROOT)), file_size, mime_type,
+                uploaded_by, company_scope)
             copied += 1
         _json_response(self, 200, {"ok": True, "copied": copied})
 
@@ -16035,11 +16527,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 folder_id = int(folder_field["data"].decode("utf-8").strip())
             except (ValueError, UnicodeDecodeError):
                 folder_id = None
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope, folder_id)
-               VALUES (%s, %s, %s, %s, %s, NULL, FALSE, %s) RETURNING id""",
-            (title, str(file_path.relative_to(ROOT)), file_size, mime_type, user["id"], folder_id),
-        )
+        doc_id = _insert_project_document_safely(
+            None, title, str(file_path.relative_to(ROOT)), file_size, mime_type,
+            user["id"], folder_id=folder_id)
         _json_response(self, 201, {
             "id": doc_id, "title": title, "fileSize": file_size,
             "mimeType": mime_type, "editUrl": f"/doc-editor.html?id={doc_id}",
@@ -16083,11 +16573,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 folder_id = int(folder_field["data"].decode("utf-8").strip())
             except (ValueError, UnicodeDecodeError):
                 folder_id = None
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope, folder_id)
-               VALUES (%s, %s, %s, %s, %s, NULL, TRUE, %s) RETURNING id""",
-            (title, str(file_path.relative_to(ROOT)), file_size, mime_type, user["id"], folder_id),
-        )
+        doc_id = _insert_project_document_safely(
+            None, title, str(file_path.relative_to(ROOT)), file_size, mime_type,
+            user["id"], company_scope=True, folder_id=folder_id)
         _json_response(self, 201, {
             "id": doc_id, "title": title, "fileSize": file_size,
             "mimeType": mime_type, "editUrl": f"/doc-editor.html?id={doc_id}",
@@ -16342,11 +16830,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_path = scope_dir / unique_name
         file_path.write_bytes(data)
         file_size = len(data)
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope, folder_id)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-            (full_title, str(file_path.relative_to(ROOT)), file_size, mime, uploaded_by, new_opp_id, company_scope, folder_id),
-        )
+        doc_id = _insert_project_document_safely(
+            new_opp_id, full_title, str(file_path.relative_to(ROOT)), file_size, mime,
+            uploaded_by, company_scope, folder_id)
         # Diagnostic log: confirms the file is on disk at the path the download
         # handler will read from. Useful when OnlyOffice reports "Download failed"
         # or the editor hangs on a freshly-created blank doc.
@@ -16481,11 +16967,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_path = scope_dir / unique_name
         file_path.write_bytes(data)
         file_size = len(data)
-        doc_id = db.insert_returning(
-            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope, folder_id)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-            (title, str(file_path.relative_to(ROOT)), file_size, mime, uploaded_by, new_opp_id, company_scope, folder_id),
-        )
+        doc_id = _insert_project_document_safely(
+            new_opp_id, title, str(file_path.relative_to(ROOT)), file_size, mime,
+            uploaded_by, company_scope, folder_id)
         _json_response(self, 201, {
             "id": doc_id, "title": title, "fileSize": file_size,
             "editUrl": f"/doc-editor.html?id={doc_id}",
@@ -18233,11 +18717,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     with open(save_path, "wb") as f:
                         f.write(file_data)
                     # Insert into project_documents
-                    file_id = db.insert_returning(
-                        """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id)
-                           VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
-                        (filename, str(save_path.relative_to(ROOT)), len(file_data), mime_type, mapping.get("userId"), opp_id),
-                    )
+                    file_id = _insert_project_document_safely(
+                        opp_id, filename, str(save_path.relative_to(ROOT)), len(file_data),
+                        mime_type, mapping.get("userId"))
                     _json_response(self, 200, {"ok": True, "fileId": file_id, "filename": filename, "type": "document"})
                 # Log activity
                 try:
@@ -20458,6 +20940,29 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             logger.exception("Shared email snapshot helper failed for email %d", message_id)
         return False
 
+    def _create_email_history_event_detailed(self, opp_id: int, message_id: int,
+                                              user_id: int | None) -> dict:
+        """Same as `_create_email_history_event` but returns the file-copy report.
+
+        Bug fix 2026-11-03: the link API reported plain success even when
+        NONE of the email's attachments made it into the project. The UI now
+        shows "N of M files copied" so a partial copy is visible.
+        """
+        fallback = {"history_created": False, "copied": 0, "total": 0,
+                    "existing": 0, "skipped": [], "event_id": None}
+        try:
+            if mail_scanner is not None and hasattr(
+                    mail_scanner, "create_email_history_snapshot_detailed"):
+                report = mail_scanner.create_email_history_snapshot_detailed(
+                    opp_id, message_id, user_id)
+                if isinstance(report, dict):
+                    return report
+            created = self._create_email_history_event(opp_id, message_id, user_id)
+            return {**fallback, "history_created": bool(created)}
+        except Exception:
+            logger.exception("Shared email snapshot helper failed for email %d", message_id)
+            return fallback
+
     def _handle_mail_link(self, message_id: int) -> None:
         try:
             user = _require_auth(self)
@@ -20495,14 +21000,29 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 # Already linked — but the timeline event may still be
                 # missing (link rows predate it). Backfill it now instead
                 # of reporting success while history stays empty.
-                history_created = self._create_email_history_event(opp_id, message_id, linked_by)
-                _json_response(self, 200, {"ok": True, "linked": False, "historyCreated": history_created, "message": "Already linked"})
+                # The copy runs on this path too, so RELINKING REPAIRS a
+                # project whose files are missing (bug fix 2026-11-03).
+                report = self._create_email_history_event_detailed(opp_id, message_id, linked_by)
+                _json_response(self, 200, {
+                    "ok": True, "linked": False,
+                    "historyCreated": bool(report.get("history_created")),
+                    "filesCopied": report.get("copied", 0),
+                    "filesTotal": report.get("total", 0),
+                    "filesSkipped": report.get("skipped", []),
+                    "message": "Already linked",
+                })
                 return
             # Create history event so the link appears in the deal timeline.
             # Store a full JSON snapshot so the embedded mail view survives account
             # deletion / auto-delete retention purging.
-            history_created = self._create_email_history_event(opp_id, message_id, linked_by)
-            _json_response(self, 200, {"ok": True, "linked": True, "historyCreated": history_created})
+            report = self._create_email_history_event_detailed(opp_id, message_id, linked_by)
+            _json_response(self, 200, {
+                "ok": True, "linked": True,
+                "historyCreated": bool(report.get("history_created")),
+                "filesCopied": report.get("copied", 0),
+                "filesTotal": report.get("total", 0),
+                "filesSkipped": report.get("skipped", []),
+            })
         except Exception as e:
             logger.exception("Failed to link message %d", message_id)
             _json_response(self, 500, {"error": str(e)})
@@ -22158,14 +22678,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         _json_response(self, 404, {"error": "Message not found on IMAP server"})
                         return
                     imap_msg = msgs[0]
-                    content = None
-                    part_id = str(att["imap_part_id"]) if att["imap_part_id"] else ""
-                    for att_obj in (imap_msg.attachments or []):
-                        if part_id and str(att_obj.part or "") == part_id:
-                            content = att_obj.payload
-                            break
-                        if att_obj.filename == att["filename"]:
-                            content = att_obj.payload
+                    content = _pick_imap_attachment(imap_msg, att)
                     if content is None:
                         _json_response(self, 404, {"error": "Attachment content not found on IMAP server"})
                         return
@@ -22363,14 +22876,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     _json_response(self, 410, {"error": "Attachment no longer available: source message purged from mail server"})
                     return
                 imap_msg = msgs[0]
-                content = None
-                part_id = str(att.get("imap_part_id") or "")
-                for att_obj in (imap_msg.attachments or []):
-                    if part_id and str(att_obj.part or "") == part_id:
-                        content = att_obj.payload
-                        break
-                    if att_obj.filename == att["filename"]:
-                        content = att_obj.payload
+                content = _pick_imap_attachment(imap_msg, att)
                 if content is None:
                     _json_response(self, 410, {"error": "Attachment no longer available: content missing on mail server"})
                     return

@@ -24324,6 +24324,12 @@ function attachMailModalListeners() {
       let ok = 0;
       let already = 0;
       let lastErr = '';
+      // Bug fix 2026-11-03: a link could silently drop some (or all) of the
+      // email's files. The API now reports how many were copied, and a
+      // partial copy is surfaced as a warning instead of plain success.
+      let filesCopied = 0;
+      let filesTotal = 0;
+      let filesPartial = false;
       for (const mid of ids) {
         try {
           const res = await api(`/api/v2/mail/messages/${mid}/link`, {
@@ -24332,17 +24338,25 @@ function attachMailModalListeners() {
           });
           if (res && res.linked === false) already++;
           else ok++;
+          if (res && typeof res.filesTotal === 'number' && res.filesTotal > 0) {
+            filesTotal += res.filesTotal;
+            filesCopied += (typeof res.filesCopied === 'number' ? res.filesCopied : 0);
+            if (res.filesCopied < res.filesTotal) filesPartial = true;
+          }
         } catch (e) {
           lastErr = e.message || e.error || 'unknown error';
           console.warn('[mail-inbox] link failed for', mid, lastErr);
         }
       }
+      const fileNote = filesTotal > 0
+        ? ` — ${filesCopied} of ${filesTotal} file${filesTotal === 1 ? '' : 's'} copied`
+        : '';
       if (already && !ok && !lastErr) {
-        showToast(`Already linked to this deal`);
+        showToast(`Already linked to this deal${fileNote}`, filesPartial ? 'warning' : null);
       } else if (ok === ids.length) {
-        showToast(`Linked ${ok} email(s) to deal`);
+        showToast(`Linked ${ok} email(s) to deal${fileNote}`, filesPartial ? 'warning' : null);
       } else if (ok > 0) {
-        showToast(`Linked ${ok}/${ids.length}${already ? ` (${already} already linked)` : ''} — errors: ${lastErr}`, true);
+        showToast(`Linked ${ok}/${ids.length}${already ? ` (${already} already linked)` : ''}${fileNote} — errors: ${lastErr}`, true);
       } else {
         showToast(`Link failed: ${lastErr}`, true);
       }
@@ -27385,7 +27399,17 @@ function renderEmailPreviewLinkedDeals(linkedEl, fullMail, messageId, ctrl) {
             b.addEventListener('click', async () => {
               try {
                 const res = await api(`/api/v2/mail/messages/${messageId}/link`, { method: 'POST', body: JSON.stringify({ opportunityId: opp.id }) });
-                showToast(res && res.linked === false ? 'Already linked to ' + opp.title : 'Linked to ' + opp.title);
+                // Bug fix 2026-11-03: report how many of the email's files
+                // actually made it into the project. A partial copy used to
+                // look like plain success.
+                let msg = res && res.linked === false ? 'Already linked to ' + opp.title : 'Linked to ' + opp.title;
+                let warn = false;
+                if (res && typeof res.filesTotal === 'number' && res.filesTotal > 0) {
+                  const copied = typeof res.filesCopied === 'number' ? res.filesCopied : 0;
+                  msg += ` — ${copied} of ${res.filesTotal} file${res.filesTotal === 1 ? '' : 's'} copied`;
+                  warn = copied < res.filesTotal;
+                }
+                showToast(msg, warn ? 'warning' : null);
                 searchWrap.classList.add('hidden');
                 // Audit #4: refresh just the badges (listeners are preserved).
                 await refresh();

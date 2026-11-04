@@ -11,6 +11,200 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-03 (linked-email attachments missing from the project
+Documents tab, branch `fix-mail-attachments`)
+
+**Status: IMPLEMENTED on branch `fix-mail-attachments` — NOT merged, NOT
+deployed.** Cut from `main` at `c637526`. Worktree:
+`~/Projects/new-crm-mail-attachments`. Prod (147.182.164.19 /opt/sietch-crm)
+was NOT touched; the live local server on :8766 was NOT restarted; the
+backfill was run ONLY against a throwaway DB (`mailatt_test_scratch` in the
+`sietch-postgres` container).
+
+**Round 4 (blocker B1): a missing unique index broke every document
+insert.** `_insert_project_document_safely` always sent `ON CONFLICT
+(opportunity_id, file_path) WHERE is_deleted = FALSE`, but migration 044
+SKIPS that index when `project_documents` holds duplicates — and Postgres
+then REJECTS the statement outright ("no unique or exclusion constraint
+matching the ON CONFLICT specification"). Every document insert (COC,
+invoice, photo report, upload, doc create/copy, bot upload) would 500 on
+such a database. Fix: `_unique_index_exists()` (cached, `pg_indexes`, a
+failed check assumes absent) + a SELECT-then-INSERT fallback; the same rule
+applies to the mail link-time copy for both optional indexes; the misleading
+round-3 docstring is corrected. 15 new tests (`TestMissingUniqueIndexB1`)
+drop the real indexes and prove the helper and the link copy still work,
+restoring each index from its original `pg_indexes.indexdef`. Both halves
+verified true-negative (reverting the server check fails 3 tests, the
+scanner check fails 4). Suite 91/91 on a fresh DB. Details: bug doc §14.
+
+**Round 3 (independent review of `ffe826e`): N1 + N2 + M4 fixed.** Details in
+`docs/bugs/2026-11-03-mail-link-attachments.md` §13:
+- **N1** accounts poll CONCURRENTLY (ThreadPoolExecutor in
+  `_poll_mailboxes` + the manual per-account workers) and round 2 gave
+  every run the SAME staging folder, each sweeping it at the start — a run
+  starting mid-flight of another **deleted the other's staged files**. Now
+  every run gets its OWN subfolder
+  `data/mail-attachments/.staging/acct<id>-<random>/`, clears only its own,
+  removes only its own (in a `finally`); crashed-run leftovers are swept
+  by AGE (`MAIL_ATTACHMENT_STAGING_MAX_AGE`, 3600 s) so a RUNNING sync's
+  folder is never touched.
+- **N2** the `project_documents` unique index moved OUT of 043 into
+  **new migration 044**, which checks for duplicates FIRST: none → build
+  the index; duplicates → **skip** it and log the count + a sample of the
+  offending keys. **It never deletes or modifies data.** The index applies
+  to every row, so ALL the PDF generators (COC, invoice, photo report,
+  upload, doc create/copy, bot upload) now go through
+  `_insert_project_document_safely()` (`ON CONFLICT ... DO NOTHING` +
+  reuse the existing row) — otherwise two PDFs generated in the same
+  second would raise and break the generation.
+- **M4** `db.init_db()` also runs the MIGRATION RUNNER, and the round-2
+  setup called it BEFORE the DB-name check → pointing the suite at a
+  non-test DB would silently migrate it. The name is now checked FIRST
+  with a raw psycopg2 connection that touches nothing.
+- **The classic COC generator does NOT share code with the mail path**
+  (COC hunks at server.py ~11163–11700; the mail diff at 2161/4776/12406/
+  12454/20458/20495/22158/22363; `_create_coc_pdf` calls none of the
+  touched helpers) → the `completion_date` item was **SKIPPED as
+  instructed**. A real pre-existing bug was found while verifying it: the
+  COC form's Completion Date is silently ignored (no backend reads
+  `completion_date`; `_create_coc_pdf` hard-codes `datetime.now()`).
+  Documented in bug doc §9 for a separate change — NOT fixed here.
+
+**Round 2 (independent review of `240cbf9`): 4 HIGH + 6 MEDIUM issues found
+and fixed.** The review was right on every count — details in
+`docs/bugs/2026-11-03-mail-link-attachments.md` §12:
+- **H1** `str(att.part)` in imap_tools 1.14.0 is the WHOLE EmailMessage —
+  a 300 KB PDF → **405,411 chars** with the base64 inside, written to
+  `remote_part_id` + `attachments_json` + the mail APIs. Now
+  `cid:<Content-ID>` or `sha256:<16hex>:<file>:<size>`, capped at 200.
+  The round-1 tests used a fake `.part_id` attribute that **real
+  imap_tools objects do not have** — they now build real
+  `MailAttachment` objects from real MIME messages.
+- **H2** legacy copies (pre-043, `mail_attachment_id = NULL`) were
+  duplicated by a relink/backfill (1+1 → 2+2). Dedupe now matches
+  `mail_attachment_id` **or** filename+size; the backfill's dry-run counts
+  include legacy copies.
+- **H3** migration 043's FK was `ON DELETE CASCADE` → deleting a mail
+  account / Trash / retention would delete the PROJECT's timeline files
+  (the Oct 29 bug). Now `ON DELETE SET NULL`; the dev DB `sietch_crm`
+  (where 043 was already applied) was corrected in place.
+- **H4** `_fetch_messages` held the whole folder + attachment bytes in RAM
+  → now a **generator**; each message's bytes are staged to disk and moved
+  into place, so the dict never carries the bytes.
+- MEDIUM: `Retry-After` honoured (capped 120 s) + token refreshed before
+  the FIRST attempt; double-click race closed with `ON CONFLICT DO NOTHING`
+  (no plain-insert fallback) + new `uq_project_documents_opp_file_path`;
+  timeline lookup now **exact** (12 must not match 120/1200); the test DB
+  safety check is **mandatory** (`MAILATT_TEST_DB_NAME` required + a
+  denylist that refuses `sietch_crm` even if named); the storage kill
+  switch is documented.
+- **Retention is READY but NOT DECIDED** (Ken's call):
+  `MAIL_ATTACHMENT_DROP_STORED_ON_PURGE` defaults to **false** (keep the
+  files); when true the retention job deletes only the stored bytes of the
+  messages it purges, with a containment check, and NEVER the project's
+  own copy. `MAIL_ATTACHMENT_STORAGE_ENABLED=false` stops the tree growing
+  at all. Flipping the policy is a one-line env change.
+
+**Bug (Ken):** linking an email to a project reported success but the
+project's **Documents tab was empty**. Verified root cause in code:
+1. sync stored attachment **metadata only** (`scanner/mail_scanner.py`
+   `_store_attachments`) — no bytes on disk (prod: 171 of 2306 attachments
+   had a local file);
+2. the link-time copy (`_copy_mail_attachments_to_project`) therefore needed
+   a live mailbox download; `_fetch_mail_attachment_bytes` returned `None` on
+   any failure and the caller did a bare `continue` → **the file was dropped
+   SILENTLY, UI still said success**;
+3. relinking could not repair it — `create_email_history_snapshot` returned
+   early when the timeline entry existed;
+4. side bug: the download matched on `imap_part_id`, which holds a
+   **Content-ID** (not a part id) → only the filename fallback ever worked;
+5. the 2026-11-02 Outlook failures (projects 75/42/1243) were a **stale
+   OAuth token** — the link-time path never refreshed it.
+
+**Fix:** attachment bytes stored on disk at sync time
+(`data/mail-attachments/<mid>/<id>_<name>`, sha256, 25 MB limit, over-limit
+skipped+logged, metadata kept); the copy prefers the local file and falls
+back to the mailbox with **3 retries + backoff** and a **token refresh
+before every retry**; every skip is **logged** (message id, attachment id,
+filename, reason — no secrets); the copy is **idempotent** via the new
+`history_attachments.mail_attachment_id` + UNIQUE `(event_id,
+mail_attachment_id)` (migration `043`); the snapshot helper runs the copy on
+the **repair path** too; the real IMAP part id is stored
+(`mail_attachments.remote_part_id`) and the server's two download paths use a
+shared `_pick_imap_attachment()`. The link API returns
+`filesCopied`/`filesTotal`/`filesSkipped`; the UI shows **"N of M files
+copied"** (warning toast on a partial copy). New admin endpoint
+`POST /api/v2/admin/sync/backfill-mail-attachments` + CLI
+`backfill_mail_attachments.py` — **(a)** entry exists / files missing → copy
+the files, **(b)** no entry → create it via the existing shared path, which
+then copies. **Dry run is the DEFAULT** (`--apply` / `{"apply": true}`).
+New settings: `MAIL_ATTACHMENT_MAX_BYTES` (25 MB),
+`MAIL_ATTACHMENT_STORAGE_ENABLED`, `MAIL_ATTACHMENT_FETCH_RETRIES` (3),
+`MAIL_ATTACHMENT_FETCH_BACKOFF` (2.0).
+
+**Files:** `scanner/mail_scanner.py`, `server.py`, `public/app.js`,
+`migrations/043_mail_attachment_storage.sql` (new),
+`backfill_mail_attachments.py` (new),
+`tests/test_mail_link_attachments.py` (new, 57 tests),
+`tests/test_mail_link_files_toast.mjs` (new, 6 tests),
+`docs/bugs/2026-11-03-mail-link-attachments.md` (new), CHANGELOG,
+`.github/workflows/smoke.yml` (loads the schema into the CI postgres
+service and runs the new Python suite).
+
+**Tests:** `tests/test_mail_link_attachments.py` **76/76 OK** (real
+PostgreSQL; `MAILATT_TEST_DB_NAME` is now REQUIRED, must match exactly,
+and `sietch_crm` is refused by a denylist even when named explicitly;
+**the name is checked BEFORE any migration can run** — M4);
+`tests/test_mail_link_files_toast.mjs` 6/6 OK. **Twelve verified
+true-negative checks** — every fix was confirmed to fail its test when the
+fix was temporarily reverted (H1 payload-in-identifier, H2 legacy dedupe,
+H3 CASCADE FK, H4 list-vs-generator, the `strpos` prefix match, **N1 the
+shared staging folder, N2 the index in 043, M4 init_db before the name
+check**, the round-1 repair path, the round-1 idempotency check, and both
+JS toasts). Existing mail suites all green:
+`test_attachment_mirror_and_bookmark_titles` 9, `test_email_project_copy` 7,
+`test_linked_email_attachments` 5, `test_mail_link_history` 13,
+`test_mail_behaviors` 14, `test_mail_polling` 9, `test_mail_incremental` 15,
+`test_contact_and_mail_attach_fixes` 32, `test_relink_orphan_snapshots` 14,
+`test_mail_auth_gaps` 12, `test_mail_drafts_endpoint` 3,
+`test_graph_identity_guard` 24, `test_graph_truthfulness` 14,
+`test_graph_oauth_status` 12. JS: 307/307.
+
+**Pre-existing failures (NOT caused by this work — they fail identically on
+the base commit `c637526`):** `test_scanner_toggle_gating`
+(`test_link_step_uses_helper` expects a hoisted `_is_behavior_enabled(...)`
+call) and `test_sync_pull_deals_fields`
+(`test_update_writes_responsible_user_id` expects the UPDATE to write
+`bid_value`). Both are source-text guards that drifted from the code. Left
+alone (out of scope) — flagged in the bug doc §9.
+
+**Bug caught mid-implementation (worth remembering):** carrying the
+attachment payload in the scanner's message dict broke
+`mail_messages.attachments_json` — `json.dumps` on raw bytes raises
+"Object of type bytes is not JSON serializable" and would have broken the
+WHOLE mail sync. The payload is now stripped before the JSON dump; a
+regression test covers it.
+
+**Deferred (see the bug doc §9):** retention/backup policy for
+`data/mail-attachments/` (Ken's call — the code is ready, §5.1); the new
+source tree is not in the backup bundle; the 25 MB limit is per file, not
+per message; the link API is still synchronous; existing
+`history_attachments.mail_attachment_id` values are not backfilled; the old
+`imap_part_id` column still holds Content-IDs; the mail modal's own
+attachment list still resolves live.
+
+**Dev DB note:** migration `043` had already been applied to the shared dev
+database `sietch_crm` during round 1; it was corrected in place to
+`ON DELETE SET NULL` + the new `uq_project_documents_opp_file_path`. That
+database holds **no test rows** (1 user = the original `dev@localhost`, 0
+test opportunities, 0 test mail accounts). The test suite now refuses to
+run against `sietch_crm` at all.
+
+**Next step for Ken:** review the dry-run report, then decide on the
+rollout (bug doc §8). Nothing is merged or deployed.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-11-02 (live bot-note failures, branch `fix-telegram-dupes`)
 
 **Status: DEPLOYED 2026-11-02 (~23:35 ET)** — merged `fix-telegram-dupes`
