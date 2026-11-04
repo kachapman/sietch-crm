@@ -2,6 +2,62 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Estimate Reconciler — Phase 0b: port the useful parts of the standalone reconciler (2026-11-04, branch `reconciler`)
+
+**Status: Phase 0b only. NOT merged, NOT pushed, NOT deployed.** No UI, no
+endpoints, no `server.py` changes, no migrations, no DB access, no network.
+The droplet was not touched.
+
+A **port of pieces into our package, not a replacement**. Our parser stays
+primary; Spock's is a fallback.
+
+* **Parser fallback (`reconciler/parse.py`).** Added
+  `parse_items_schema()` (a port of `header_schema`/`assign`, both the
+  `sameline` and `nextline` row layouts) and `parse_text()` now runs our
+  parser first, falls back to the schema parser only when the tie-out fails,
+  keeps whichever result ties (ours wins a tie), and records `parser_path`
+  (`legacy` / `schema`). Money is `Decimal` inside the schema parser and
+  integer cents at the boundary.
+* **Gated OCR repair.** `looks_ocr()` / `ocr_fix()` repair only real OCR
+  damage (`LOO`, `I.00`, ...); the benign `1 .00` column layout is accepted
+  by the row regex instead, so a clean fixture is byte-for-byte unchanged.
+* **Broader status flags.** `build_item()` recognises struck markers
+  (`REVISED`, `SEE REVISION`, `PWARR`, ...) and "not yet incurred" rows; those
+  rows are carried at $0 and never reach the billable totals.
+* **PDF bbox continuations (`reconciler/pdftext.py`).**
+  `extract_bbox_continuations()` uses `pdftotext -bbox-layout` to join wrapped
+  descriptions. PDF input only, returns an empty map on any failure, cached
+  by (path, mtime, size).
+* **Tie-out (`reconciler/tieout.py`).** Field-by-field section checks, strict
+  area checks for the schema area→section tree (legacy area roll-ups remain
+  advisory), `qty × price + tax + O&P == RCV` and `RCV − depreciation ==
+  ACV` row checks, `tieout_diff(old, new, diff)` (Σsection = Σrow = grand =
+  printed difference), and `draft_gate()` which blocks a draft when either
+  per-estimate tie-out or the delta tie-out fails. The $0.01-per-line slack
+  remains the blocking rule; an exact match is now reported as a flag.
+* **Matcher (`reconciler/diff.py`).** Rebuilt as a pass pipeline: our four
+  exact passes, then section mapping (our 50% rename rule + Spock's scored
+  mapping), fuzzy in-section, fuzzy moved, R&R split/merge, possible
+  replacement and ambiguity logging. Every match records `how` + `sim`;
+  everything non-exact and every ambiguous near-tie goes into `needs_review`
+  and is never auto-approved. Thresholds are named module constants.
+  `diff_summary()` stays backward compatible and adds `needs_review_count`.
+* **Notes (`reconciler/notes.py`).** Optional top-N change drivers in our
+  existing "Claim increased by …" format, built only from code. A clearly
+  marked, disabled hook (`model_why_layer`,
+  `explanation_numbers_are_consistent`) exists for a future explanation-only
+  layer; no model call is implemented or enabled.
+
+**Dropped:** `qwen_summary`, the HTML/CSV report writer, `cli.py`,
+`--redact`, `.bak` files, `runall.sh`.
+
+**Tests:** 104 tests, 0 failures — the 66 Phase 0 tests still pass, plus the
+six new fixtures tie exactly, every pair delta equals the printed difference,
+self-diffs are empty, and synthetic units cover every matcher pass including
+R&R split/merge, an ambiguous near-tie and the guard that non-exact is always
+`needs_review`. `koller_og` and `morrison_og` (OCR) remain known parse
+failures.
+
 ## Estimate Reconciler — Phase 0: parser library + golden tests (2026-11-04, branch `reconciler`)
 
 **Status: Phase 0 only. NOT merged, NOT pushed, NOT deployed.** No UI, no

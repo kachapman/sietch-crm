@@ -11,6 +11,76 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-04 (Sietch Estimate Reconciler — Phase 0b: merge the useful
+parts of Spock's standalone reconciler, branch `reconciler`)
+
+**Status: IMPLEMENTED on branch `reconciler` — NOT merged, NOT pushed, NOT
+deployed.** Worktree: `~/Projects/new-crm-reconciler`, cut from Phase 0 at
+`26eaacc`. No UI, no endpoints, no `server.py`, no migrations, no DB, no
+network. The droplet / prod were NOT touched.
+
+**What landed (a port of pieces, not a replacement).**
+- `parse.py`: a schema-driven row parser ported from Spock's `xparse.py`
+  (`header_schema` / `assign`, sameline + nextline layouts) runs **only when
+  our primary parser cannot tie the estimate out**; the result that ties wins
+  (primary wins a tie) and `parser_path` records `legacy` or `schema`.
+  `parse_items_schema()` keeps USD as `Decimal` internally and converts to
+  integer cents at the boundary. Gated `ocr_fix()`/`looks_ocr()` repair only
+  real OCR damage (`LOO`, `I.00`); the benign `1 .00` column layout is
+  tolerated by the row regex instead, so clean fixtures are unchanged.
+  `build_item()` now also recognises broader struck markers (`REVISED`,
+  `SEE REVISION`, `PWARR`, ...) and "not yet incurred" rows (carried at $0).
+- `pdftext.py`: `extract_bbox_continuations()` (`pdftotext -bbox-layout`)
+  recovers wrapped descriptions; PDF input only, returns `{}` on any failure,
+  and caches by (path, mtime, size). Used by both parsers (schema and legacy
+  cross-page joins).
+- `tieout.py`: field-by-field section checks, strict area checks for the
+  schema tree (legacy area roll-ups stay advisory), `qty x price + tax + O&P
+  == RCV` and `RCV - depreciation == ACV` row checks, `tieout_diff(old, new,
+  diff)` (section sum = row sum = grand = printed difference) and
+  `draft_gate()` (a failed per-estimate or delta tie-out blocks the draft).
+  The 1-cent-per-line slack is still the blocking rule and `exact` is now a
+  result flag.
+- `diff.py`: a pass pipeline - our four exact passes first, then section
+  mapping (our 50% rename rule + Spock's scored mapping), fuzzy in-section,
+  fuzzy moved, R&R split/merge, possible replacement, ambiguity logging.
+  Every match records `how` + `sim`; every non-exact match (and every
+  ambiguous near-tie) is in `needs_review` and is never auto-approved.
+  Thresholds are named module constants. `diff_summary()` is backward
+  compatible and adds `needs_review_count`.
+- `notes.py`: top-N change drivers in our existing note format
+  (`claim_increase_note` first line unchanged), all numbers from code. A
+  clearly marked, disabled `model_why_layer()` hook plus
+  `explanation_numbers_are_consistent()` exist for a future explanation-only
+  "why" layer; **no model is called anywhere**.
+
+**Dropped (per the comparison):** `qwen_summary`, the HTML/CSV/Markdown report
+writer, `cli.py`, `--redact`, `.bak` files, `runall.sh`.
+
+**Tests: 104 total, 0 failures** (`test_reconciler_parse.py` 50,
+`test_reconciler_commission.py` 20, `test_reconciler_notes.py` 12,
+`test_reconciler_pairs.py` 6, `test_reconciler_matcher.py` 16). The 66 Phase 0
+tests all still pass. New: the six Spock fixtures tie exactly (150/173/174,
+184, 1926, 727 items) with the expected `parser_path`; every pair delta equals
+the printed difference (incl. Stanley `3,796.34` and the three s1 pairs
+`505,489.46` / `78,571.25` / `584,060.71`); self-diff of every fixture is
+empty; synthetic units cover fuzzy, moved, rename/re-parent, replacement,
+ambiguous near-tie and both R&R directions; guards prove non-exact always
+needs review, PP is excluded on the schema path, scans still refuse, and
+`ocr_fix` is a no-op on clean text; the s3 (1926-row) pair finishes under 2 s.
+
+**Known limits.** `koller_og` and `morrison_og` (OCR) still do not tie out
+(same two known failures as Phase 0). The R&R path is now unit-tested, but no
+real pair exercises it. The s1 v2 summary block prints split numbers
+(`14,78 1.8 1`); a narrow tail repair handles it without changing the clean
+oracle fixtures. `qwen`/report/CLI are deliberately not present.
+
+Report: the final assistant message of the session (no repo file).
+
+---
+
+## Previous session summary
+
 **Date:** 2026-11-04 (Sietch Estimate Reconciler — Phase 0: parser library +
 golden tests, branch `reconciler`)
 

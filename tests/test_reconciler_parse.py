@@ -401,6 +401,90 @@ GOLDEN = {
         "file": "lancaster/State Farm revised Lancaster-Morrisoe 8-28-26.pdf",
         "kind": "scanned",
     },
+    # --- Spock's standalone-reconciler corpus (neutral ids only) ---
+    # s1 = one commercial State Farm job, three revisions; the printed RCV
+    # differences are v1->v2 +505,489.46, v2->v3 +78,571.25, v1->v3 +584,060.71.
+    "sf_comm_v1": {
+        "file": "spock/s1_pair_v1.pdf",
+        "kind": "carrier",
+        "carrier": "State Farm",
+        "items": 150,
+        "rcv": 26657821,
+        "lit": 21820418,
+        "tax": 520559,
+        "op": 4316844,
+        "deductible": 1000000,
+        "summaries": 4,
+        "parser_path": "schema",
+        "tie_out": True,
+    },
+    "sf_comm_v2": {
+        "file": "spock/s1_pair_v2.pdf",
+        "kind": "carrier",
+        "carrier": "State Farm",
+        "items": 173,
+        "rcv": 77206767,
+        "lit": 62958115,
+        "tax": 1506974,
+        "op": 12741678,
+        "deductible": 1000000,
+        "summaries": 4,
+        "parser_path": "schema",
+        "tie_out": True,
+    },
+    "sf_comm_v3": {
+        "file": "spock/s1_pair_v3.pdf",
+        "kind": "carrier",
+        "carrier": "State Farm",
+        "items": 174,
+        "rcv": 85063892,
+        "lit": 70886260,
+        "tax": 1505076,
+        "op": 12672556,
+        "deductible": 1000000,
+        "summaries": 4,
+        "parser_path": "schema",
+        "tie_out": True,
+    },
+    "sf_res_h": {
+        "file": "spock/s2_single_sf.pdf",
+        "kind": "carrier",
+        "carrier": "State Farm",
+        "items": 184,
+        "rcv": 35846935,
+        "lit": 34792778,
+        "tax": 1054157,
+        "deductible": 2500000,
+        "summaries": 8,
+        "parser_path": "legacy",
+        "tie_out": True,
+    },
+    "interior_final_i": {
+        "file": "spock/s3_single_interior.pdf",
+        "kind": "carrier",
+        "carrier": "unknown",
+        "items": 1926,
+        "rcv": 114585530,
+        "lit": 111124335,
+        "tax": 3461195,
+        "summaries": 0,
+        "parser_path": "schema",
+        "tie_out": True,
+    },
+    "ocr_e": {
+        "file": "spock/s4_single_edj.pdf",
+        "kind": "carrier",
+        "carrier": "Auto-Owners",
+        "items": 727,
+        "rcv": 58544504,
+        "lit": 57536823,
+        "tax": 1007681,
+        "deductible": 9943909,
+        "acv": 41454074,
+        "summaries": 31,
+        "parser_path": "schema",
+        "tie_out": True,
+    },
 }
 
 # the neutral ids the plan asks for explicitly
@@ -416,6 +500,12 @@ REQUIRED_IDS = [
     "koller_new",
     "koller_ours",
     "lanc_r1002",
+    "sf_comm_v1",
+    "sf_comm_v2",
+    "sf_comm_v3",
+    "sf_res_h",
+    "interior_final_i",
+    "ocr_e",
 ]
 
 
@@ -456,7 +546,10 @@ class TestGoldenTable(unittest.TestCase):
         # no digit run that could be a claim / policy number in a string value
         self.assertIsNone(re.search(r"\b\d{7,}\b", blob), "long number (claim/policy) in golden table")
         # the carrier list is the only allowed free text
-        allowed = {"carrier", "kind", "file", "us", "supplement", "carrier", "scanned"}
+        allowed = {
+            "carrier", "kind", "file", "us", "supplement", "carrier", "scanned",
+            "unknown", "schema", "legacy",
+        }
         for value in strings:
             if value in allowed:
                 continue
@@ -464,7 +557,7 @@ class TestGoldenTable(unittest.TestCase):
                 continue
             if value.startswith("recon_samples/") or value.startswith("koller/") or value.startswith(
                 "lancaster/"
-            ):
+            ) or value.startswith("spock/"):
                 continue
             self.fail(f"unexpected free-text value in the golden table: {value!r}")
 
@@ -506,6 +599,10 @@ class TestGoldenCases(unittest.TestCase):
             self.assertEqual(
                 to["passed"], spec["tie_out"], f"{case_id}: tie-out\n{to['summary']}"
             )
+        if "parser_path" in spec:
+            self.assertEqual(
+                est.get("parser_path"), spec["parser_path"], f"{case_id}: parser_path"
+            )
 
     def test_all_golden_cases(self):
         for case_id in sorted(GOLDEN):
@@ -514,6 +611,141 @@ class TestGoldenCases(unittest.TestCase):
                 if spec["kind"] == "scanned":
                     continue
                 self._check(case_id)
+
+
+class TestSchemaFallback(unittest.TestCase):
+    """The schema-driven parser is a fallback: it runs only when ours fails."""
+
+    def test_new_cases_tie_field_by_field(self):
+        for case_id in ("sf_comm_v1", "sf_comm_v2", "sf_comm_v3", "sf_res_h",
+                        "interior_final_i", "ocr_e"):
+            with self.subTest(case=case_id):
+                est = parse_case(case_id)
+                to = T.tieout_estimate(est)
+                self.assertTrue(to["passed"], f"{case_id}:\n{to['summary']}")
+                self.assertTrue(to["exact"], f"{case_id} should tie exactly")
+
+    def test_schema_path_is_recorded(self):
+        for case_id in ("sf_comm_v1", "interior_final_i", "ocr_e"):
+            with self.subTest(case=case_id):
+                est = parse_case(case_id)
+                self.assertEqual(est.get("parser_path"), "schema")
+                self.assertTrue((est.get("schema_fallback") or {}).get("tied"))
+
+    def test_legacy_path_is_kept_when_it_ties(self):
+        est = parse_case("sf_res_h")
+        self.assertEqual(est.get("parser_path"), "legacy")
+        self.assertIsNone(est.get("schema_fallback"))
+
+    def test_schema_parser_tolerates_the_space_before_the_decimals(self):
+        """A clean '1 .00 EA' column layout parses without OCR repair."""
+        self.assertFalse(P.looks_ocr("1 .00 EA   $12.34   $12.34"))
+        q = P._SCHEMA_QTYUNIT.search("Temporary toilet (per 1 .00 MO")
+        self.assertIsNotNone(q)
+        self.assertEqual(str(q.group("qty")).replace(" ", ""), "1.00")
+
+    def test_parser_path_is_on_every_estimate(self):
+        est = parse_case("rae_og")
+        self.assertEqual(est.get("parser_path"), "legacy")
+
+
+class TestOcrFixGuard(unittest.TestCase):
+    """ocr_fix is gated: it never touches a clean text layer."""
+
+    def test_looks_ocr_ignores_a_clean_column_layout(self):
+        # "1 .00" is a normal narrow-column artefact, not OCR damage
+        self.assertFalse(P.looks_ocr("Temporary toilet (per 1 .00 MO   180.00"))
+        self.assertFalse(P.looks_ocr("QUANTITY UNIT PRICE TAX RCV DEPREC. ACV\n1.00 SQ 2.27 0.00 2.27"))
+        self.assertTrue(P.looks_ocr("1 LOO EA   12.34"))
+        self.assertTrue(P.looks_ocr("18. I.00 EA   12.34"))
+
+    def test_ocr_fix_repairs_damage(self):
+        self.assertEqual(P.ocr_fix("1 LOO EA   12.34", enabled=True), "1 1.00 EA   12.34")
+        self.assertEqual(P.ocr_fix("1 .00 EA   12.34", enabled=True), "1.00 EA   12.34")
+
+    def test_ocr_fix_is_a_no_op_when_not_enabled(self):
+        clean = "1.00 SQ   2.27   0.00   2.27\nLaminated - comp. shingle"
+        self.assertEqual(P.ocr_fix(clean), clean)
+        self.assertEqual(P.ocr_fix(clean, enabled=False), clean)
+
+    def test_clean_fixtures_are_untouched(self):
+        """No clean fixture is recognised as OCR text."""
+        for case_id in ("rae_og", "stanley_og", "sf_res_h", "interior_final_i"):
+            with self.subTest(case=case_id):
+                spec = GOLDEN[case_id]
+                path = require(spec["file"])
+                if path.suffix.lower() == ".txt":
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                else:
+                    text = extract_text(str(path)).text
+                self.assertFalse(P.looks_ocr(text), f"{case_id}: wrongly flagged as OCR")
+                self.assertEqual(P.ocr_fix(text), text, f"{case_id}: ocr_fix changed clean text")
+
+
+class TestBboxContinuations(unittest.TestCase):
+    """Optional PDF-only wrapped-description continuations."""
+
+    def test_pdf_continuations_are_found(self):
+        from reconciler.pdftext import extract_bbox_continuations
+
+        path = require(GOLDEN["sf_res_h"]["file"])
+        cont = extract_bbox_continuations(str(path))
+        self.assertTrue(cont, "expected bbox continuations on a PDF")
+        self.assertTrue(any(parts for parts in cont.values()), "no wrapped description found")
+
+    def test_text_input_has_no_bbox(self):
+        from reconciler.pdftext import extract_bbox_continuations
+
+        path = require(GOLDEN["rae_og"]["file"])
+        self.assertEqual(extract_bbox_continuations(str(path)), {})
+
+    def test_missing_file_returns_empty_map(self):
+        from reconciler.pdftext import extract_bbox_continuations
+
+        self.assertEqual(extract_bbox_continuations("/no/such/file.pdf"), {})
+
+
+class TestStruckAndNotIncurred(unittest.TestCase):
+    """Broader struck / REVISED / not-incurred detection in ``build_item``."""
+
+    HEADER = "DESCRIPTION QUANTITY UNIT PRICE TAX RCV DEPREC. ACV"
+
+    def _raw(self, first, rest=None):
+        return {
+            "no": 1,
+            "first": first,
+            "rest": [(1, line) for line in (rest or [])],
+            "page": 1,
+            "header": self.HEADER,
+            "closed_desc": False,
+        }
+
+    def test_revised_marker_without_money(self):
+        raw = self._raw("Tear off roof  10.00 SQ", ["   REVISED"])
+        P.build_item(raw, [])
+        self.assertTrue(raw.get("revised"))
+        self.assertEqual(raw.get("rcv"), 0)
+
+    def test_generic_status_marker_is_struck(self):
+        raw = self._raw("R&R Gutter - aluminum  10.00 LF", ["   PWARR"])
+        P.build_item(raw, [])
+        self.assertTrue(raw.get("revised"))
+        self.assertEqual(raw.get("status"), "PWARR")
+
+    def test_see_revision_is_struck(self):
+        raw = self._raw("Roofing felt - 15 lb.  14.05 SQ", ["   SEE REVISION"])
+        P.build_item(raw, [])
+        self.assertTrue(raw.get("revised"))
+
+    def test_not_incurred_row_is_carried_at_zero(self):
+        raw = self._raw(
+            "R&R Flashing - pipe jack  1.00 EA  100.00  0.00  100.00",
+            ["Note: this item has not yet been incurred"],
+        )
+        P.build_item(raw, [])
+        self.assertTrue(raw.get("not_incurred"))
+        self.assertEqual(raw.get("rcv"), 0)
+        self.assertEqual(raw.get("printed_rcv"), 100_00)
 
 
 class TestScannedRefusesCleanly(unittest.TestCase):
