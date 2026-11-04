@@ -11,6 +11,75 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-04 (Sietch Estimate Reconciler — Phase 0: parser library +
+golden tests, branch `reconciler`)
+
+**Status: IMPLEMENTED on branch `reconciler` — NOT merged, NOT pushed, NOT
+deployed.** Cut from `main` at `e1164f3`. Worktree:
+`~/Projects/new-crm-reconciler`. No UI, no endpoints, no `server.py` changes,
+no migrations, no DB access, no network. The droplet / prod were NOT touched
+and the Docker image was NOT built or run.
+
+**What landed.** A standalone `reconciler/` library at the repo root:
+`money.py` (integer-cents helpers), `pdftext.py` (`pdftotext -layout` via
+subprocess + a clean `status="needs_ocr"` result for scans/garbled text),
+`parse.py` (the carrier estimate parser, ported from the old `recon.py`),
+`supplement.py` (**new** — our own contractor/Xactimate supplement estimate
+parser, which `recon.py` never had), `tieout.py` ($0.01-per-line slack
+tie-outs with pass/fail + delta), `diff.py`, `commission.py`
+(`max(250, 10%×Δ − 250) − already_noted`) and `notes.py` (the
+"Claim increased by $X ($orig to $new, no PP)" draft text). All money is
+integer cents; quantities stay `Decimal` because they are frequently
+fractional. Everything is informational — nothing writes anywhere.
+
+**Carrier parser fidelity.** The old `recon.py` runs in-test as an oracle and
+the port matches it field by field (totals, item count, item RCV/pretax sums,
+every summary block, every line item, and the PARSE WARNINGS count) for all
+20 `recon_samples` text files plus `koller/og_all.txt`, `koller/new.txt` and
+`lancaster/r1002.txt`. Guide/sample pages are skipped; the 6-column (no O&P)
+and 8-column (TAX + O&P) variants are detected from the table header.
+
+**Supplement parser (new work).** Our own Xactimate exports have a different
+shape: no coverage table, a single trailing `Summary` block (which prints
+`Material Sales Tax` and sometimes `Subtotal`), area → section → sub-section
+grouping, `Totals: <section>` vs `Total: <area>`. All five contractor
+samples (Morrison, Comer, Rouse ×2, the Allstate supplement) and the Koller
+supplement parse with `items_match_printed_total == True` and every printed
+section total ties out to $0.00.
+
+**Tests.** `tests/test_reconciler_parse.py` (34), `test_reconciler_commission.py`
+(20), `test_reconciler_notes.py` (12) — 66 tests, 0 failures. The golden
+table is PII-free (a test enforces that): only neutral ids, carrier names,
+line counts and integer cents. Samples are read from
+`RECONCILER_SAMPLES_DIR` (default `tests/fixtures/reconciler`) and every test
+skips cleanly when the data is absent, so CI without the fixtures stays green.
+A deliberate one-cent break was injected and the suite correctly reported 42
+failures; it was reverted.
+
+**Known limits (all reported, never hidden).** Scanned samples
+(`busjhan_og`, `rouse_og`, `comer_cc`) and the font-encoded Lancaster 8-28
+PDF return `needs_ocr` with a human-readable reason and no bogus totals.
+Three OCR-damaged documents (`morrison_og`, `comer_og`, `koller_og`) parse
+but do not tie out — the same three the old `recon.py` could not tie out.
+Area (`Total:`) roll-ups are advisory because Xactimate sometimes prints
+area totals out of content order; the per-section checks are strict.
+
+**Also changed:** `Dockerfile` gains `poppler-utils` on the existing
+`apt-get install` line (image not built). `.gitignore` gains
+`tests/fixtures/reconciler/` so the real claim data stays out of git — no
+fixture, PDF or sample `.txt` is committed.
+
+**Full local suite:** 816 tests, 14 failures / 79 errors — the failure set
+is byte-identical to the one on `main` (verified by stashing the branch
+changes and re-running). They are pre-existing (no reachable PostgreSQL,
+`could not translate host name "db"`) and were not touched.
+
+Report: `tmp/reconciler-p0/REPORT.md` (git-ignored).
+
+---
+
+## Previous session summary
+
 **Date:** 2026-11-03 (linked-email attachments missing from the project
 Documents tab, branch `fix-mail-attachments`)
 

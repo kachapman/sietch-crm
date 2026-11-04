@@ -2,6 +2,70 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Estimate Reconciler — Phase 0: parser library + golden tests (2026-11-04, branch `reconciler`)
+
+**Status: Phase 0 only. NOT merged, NOT pushed, NOT deployed.** No UI, no
+endpoints, no `server.py` changes, no migrations, no DB access, no network.
+The Docker image was not built and the droplet was not touched.
+
+**New standalone library `reconciler/`** (repo root) for deterministic
+reconciliation of Xactimate carrier estimates and our own supplement
+estimates. All money is integer cents; quantities stay `Decimal` because
+Xactimate quantities are frequently fractional (`23.56 SF`). Everything is
+informational — nothing in the package writes to the CRM, the database or any
+accounting system.
+
+* `reconciler/money.py` — integer-cents money helpers (parse / format /
+  percent), following Ook's approach without importing Ook.
+* `reconciler/pdftext.py` — runs `pdftotext -layout` via subprocess and
+  returns a result object with `status="needs_ocr"` and a human-readable
+  reason when the text layer is missing, too sparse or garbled. It never
+  raises on a scan and never returns junk totals. No OCR is included.
+* `reconciler/parse.py` — carrier estimate parser ported from the old
+  deterministic `recon.py`: meta (insured, claim #, carrier, estimate date,
+  revision), the coverage table, the per-coverage summary blocks (LIT, tax,
+  O&P, RCV, depreciation, ACV, deductible, net claim), line items (number,
+  section/area, description, qty, unit, unit price, tax, O&P, RCV,
+  depreciation, ACV) with continuation lines, the 6-column (no O&P) and
+  8-column (TAX + O&P) table variants, revision-block detection, guide/sample
+  page skipping, and the PARSE WARNINGS self-checks kept intact.
+* `reconciler/supplement.py` — **new**: parser for our own Xactimate
+  supplement estimates, which the old tool never handled. Different shape: no
+  coverage table, a single trailing `Summary` block (with `Material Sales
+  Tax` and sometimes `Subtotal`), area → section → sub-section grouping,
+  `Totals: <section>` vs `Total: <area>`.
+* `reconciler/tieout.py` — tie-out checks with `$0.01`-per-line slack,
+  reporting pass/fail and the delta per check.
+* `reconciler/diff.py` — old-vs-new line-item diff with section-rename
+  detection (pure function).
+* `reconciler/commission.py` — `max(250, 10%×Δ − 250) − already_noted`.
+* `reconciler/notes.py` — the draft note text
+  `"Claim increased by $X ($orig to $new, no PP)"`.
+
+**Fidelity.** The old `recon.py` runs in-test as an oracle: the port matches
+it field by field (totals, item counts, item RCV/pretax sums, every summary
+block, every line item and the warning count) for all 20 text samples plus
+the Koller and Lancaster text files. Every clean estimate ties out to
+$0.00 against the printed totals.
+
+**Tests.** `tests/test_reconciler_parse.py` (34),
+`tests/test_reconciler_commission.py` (20), `tests/test_reconciler_notes.py`
+(12) — 66 tests, 0 failures. The golden table is PII-free (enforced by a
+test): neutral sample ids, carrier names, line counts and integer cents
+only. Samples are read from `RECONCILER_SAMPLES_DIR` (default
+`tests/fixtures/reconciler`) and every test skips cleanly when the data is
+absent, so CI without the real claim files stays green.
+
+**Clean refusals.** Scanned samples and a font-encoded PDF return
+`needs_ocr` with a reason and no bogus totals. OCR-damaged documents parse
+but do not tie out; the delta is reported rather than hidden, exactly as the
+old parser behaved.
+
+**Also:** `Dockerfile` adds `poppler-utils` to the existing `apt-get install`
+line so `pdftotext` is available in the image (image not built).
+`.gitignore` excludes `tests/fixtures/reconciler/` — the real claim data
+stays out of git.
+
 ## Linked emails don't put their PDFs/documents in the project's Documents tab (2026-11-03, branch `fix-mail-attachments`)
 
 **Round 4 (blocker B1): a missing unique index no longer breaks document

@@ -9,8 +9,10 @@ RUN pip install --no-cache-dir psycopg2-binary Pillow ExifRead httpx imap_tools 
 # `python:3.12-slim-bookworm` ships without it and the build fails).
 # PostgreSQL client tools (pg_dump, psql) for database backup/restore.
 # ca-certificates so HTTPS fetches (curl, backup remote) work.
+# poppler-utils provides pdftotext, used by the estimate reconciler to read
+# carrier estimate PDFs (`pdftotext -layout`).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        postgresql-client rsync openssh-client ca-certificates curl \
+        postgresql-client rsync openssh-client ca-certificates curl poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Docker CLI (static client) so the admin Infrastructure tab can inspect sibling
