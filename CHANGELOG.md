@@ -2,6 +2,78 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Invoice/COC PDFs: Sherwood v28.2 port + three fixes (2026-11-03, branch `invoice-coc-upgrade`)
+
+Third pass on the modern (Sherwood-style) Invoice + Certificate of
+Completion PDFs. Sherwood shipped **v28.2** (upstream `94e66ac`, tag
+`live-v28.2`); its two document changes are ported into Sietch's copied
+`doc_pdf/` builders, plus three fixes.
+
+**Ported from upstream `bee1b9e`** — an "Include signature lines" toggle.
+`build_coc` gains `opts["signatures"]` (bool, default `True`); `False` leaves
+out the **whole** SIGNATURES section — heading, contractor block and
+homeowner block. In Sietch the homeowner branch stays deleted (Ken's earlier
+decision), so `False` drops the heading + the contractor block. The classic
+COC honours the same switch and draws no signature block (image, rule and
+"By <name>") at all when it is off. New template column
+`document_templates.show_signature_lines` (`BOOLEAN NOT NULL DEFAULT TRUE`),
+added **inside the existing migration 045** (not deployed yet) plus the
+matching `server.py` startup column add, same pattern as the other new
+fields. New admin checkbox "Include signature lines"
+(`doc-tpl-admin-show-sig-lines`), checked by default. The payload may
+override the template per request with `include_signature_lines`. Sherwood's
+"Include company signature" relabel of the existing box was not ported —
+Sietch's box already controls the signature image, so the two controls are
+already distinct.
+
+**Ported from upstream `bb35d36`** — a `coc_title(raw)` helper in
+`pdf_common`: blank or any casing of "Certificate of Completion" gives
+"Certificate of Completion"; another all-caps title is title-cased with
+short words ("of", "and", "the", ...) lowercased; a mixed-case custom title
+is left exactly as typed. Ported verbatim and used in **both** layouts, so a
+template saved with the old all-caps `CERTIFICATE OF COMPLETION` now renders
+"Certificate of Completion" in the modern *and* the classic certificate.
+
+**Fix — license label doubling.** "OH LIC 104.8872" printed as
+"License OH LIC 104.8872", because upstream only skips the prefix when the
+value *starts* with "lic" or "#". The rule is now: do not prefix when the
+value already contains "lic" anywhere (case-insensitive) or starts with "#";
+otherwise prefix with "License ". Implemented once in
+`doc_pdf/mapping.py: license_label()` and mirrored by
+`server.py: _doc_license_label()`, and `pdf_common.company_lines()` now
+prints `brand["license"]` verbatim instead of re-applying the prefix.
+
+**Fix — the base charge was labelled with the payment terms.** This was
+**code, not test data**: both renderers used the payment *terms* as the
+base-amount row's description (`doc_pdf/mapping.py: build_items()` →
+`payload.get("terms") or "Services"`, and `server.py:
+_create_invoice_pdf()` → `terms or "Services"`), so the row read
+**"Due on receipt  $275.00"** — a payment condition where a charge
+description belongs. It now reads **"Base charge  $275.00"**
+(`doc_pdf/mapping.py: BASE_CHARGE_LABEL`, mirrored in `server.py` via
+`_DOC_BASE_CHARGE_LABEL`); a payload may override it with
+`base_description`. The payment terms still print in the invoice header's
+"Terms" meta block, so nothing is lost.
+
+Tests: `tests/test_invoice_coc_modern.py` grew from 60 to **78 tests** — a
+new `TestSherwoodV282Port` class (the "Include signature lines" toggle, the
+`coc_title` helper, the license label and the base charge label) plus the
+handler-level cases (the toggle in both layouts, the classic signature
+block with a real PNG so it actually renders, and the classic certificate
+title). The upstream v28.2 cases in
+`tests/test_v28_2_coc_signatures.py` were ported and adapted to Sietch (no
+Flask app, no customer branding profile, no homeowner line → the Sietch
+template + the four HTTP handlers). The migration tests were updated for
+the fourth column. Full Python suite **61 passed / 2 failed** (both
+failures — `test_scanner_toggle_gating.py`, `test_sync_pull_deals_fields.py`
+— re-verified as pre-existing on `main` @ c637526); full Node suite
+**35/35 files**.
+
+Sample review PDFs regenerated into `tmp/invoice-coc-review/` (gitignored,
+not committed), now including the **certificate with the signature lines on
+and off** in both layouts. Full write-up:
+`docs/features/2026-11-03-invoice-coc-upgrade.md` §1b. **Not deployed.**
+
 ## Invoice/COC PDF upgrade: Ken's decisions implemented (2026-11-03, branch `invoice-coc-upgrade`)
 
 Second pass on the modern (Sherwood-style) Invoice + Certificate of

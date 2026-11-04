@@ -10,6 +10,103 @@ Deploy late at night per Ken.
 > **Update (2026-11-03, later session):** Ken reviewed the open decisions and
 > they are now **implemented**. See §1a for the decisions and what changed.
 
+> **Update (2026-11-03, third session):** Sherwood shipped **v28.2**
+> (upstream `94e66ac`, tag `live-v28.2`). Its two document changes are ported
+> into Sietch's copied `doc_pdf/` builders, plus three fixes. See **§1b**.
+
+---
+
+## 1b. Sherwood v28.2 port + three fixes (implemented 2026-11-03)
+
+Upstream reference: `kachapman/sherwood-toolbox` master `94e66ac`
+(tag `live-v28.2`), read-only clone at `~/scratch/sherwood-toolbox-94e66ac`.
+
+| Upstream commit | What it does | Sietch port |
+|---|---|---|
+| `bee1b9e` | An "Include signature lines" toggle: `build_coc` gains `opts["signatures"]` (bool, default `True`); `False` leaves out the **whole** SIGNATURES section — heading, contractor block and homeowner block. | Ported. The `homeowner_line` branch stays deleted (Ken's earlier decision), so Sietch's `False` drops the heading + the contractor block. |
+| `bb35d36` | A `coc_title(raw)` helper in `pdf_common`: blank or any casing of "Certificate of Completion" → "Certificate of Completion"; another all-caps title is title-cased with short words lowercased; a mixed-case custom title is left as typed. | Ported verbatim (`doc_pdf/pdf_common.py: coc_title`), and used in **both** layouts (the classic COC previously used the raw template string). |
+
+### 1b.1 The "Include signature lines" toggle
+
+* **Modern COC** — `doc_pdf/coc_pdf.py: build_coc()` now skips the whole
+  SIGNATURES section (the "SIGNATURES" heading included) when
+  `opts["signatures"]` is `False`.
+* **Classic COC** — `server.py: _create_coc_pdf()` draws no signature block
+  at all (image, rule and "By <name>") when the toggle is off.
+* **Template column** — `document_templates.show_signature_lines`
+  (`BOOLEAN NOT NULL DEFAULT TRUE`), added **inside the existing migration
+  045** (it is not deployed yet) plus the matching `server.py` startup
+  column add, same pattern as the other new fields.
+* **Admin UI** — a new "Include signature lines" checkbox
+  (`doc-tpl-admin-show-sig-lines`), checked by default, next to the
+  existing "Include Signature" one. It is loaded and saved by `app.js` and
+  persisted by the admin create/update API.
+* **Per-request override** — `payload["include_signature_lines"]` wins over
+  the template value (the same pattern `include_signature` uses).
+
+Sherwood's *"Include company signature"* relabel of the existing
+"Include Signature" box was **not** ported: Sietch's box already controls
+the signature image, and the new box is the separate "signature lines"
+switch, so the two controls are already distinct here.
+
+### 1b.2 The certificate title
+
+`doc_pdf/pdf_common.py: coc_title(raw)` (ported verbatim from upstream
+`bb35d36`):
+
+| Input | Output |
+|---|---|
+| `None`, `""`, `"   "` | `Certificate of Completion` |
+| `"CERTIFICATE OF COMPLETION"` | `Certificate of Completion` |
+| `"Certificate Of Completion"` | `Certificate of Completion` |
+| `" certificate of completion "` | `Certificate of Completion` |
+| `"NOTICE OF COMPLETION AND RELEASE"` | `Notice of Completion and Release` |
+| `"Job Sign-Off"` | `Job Sign-Off` (mixed case, left as typed) |
+
+Used by the **modern** COC (`build_coc`) and by the **classic** COC
+(`server.py: _create_coc_pdf`), so a template saved with the old all-caps
+`CERTIFICATE OF COMPLETION` now renders "Certificate of Completion" in both
+layouts.
+
+### 1b.3 Fix: no more "License License OH LIC …"
+
+The license value already containing "lic" was still being prefixed, so
+`"OH LIC 104.8872"` printed as **"License OH LIC 104.8872"**.
+
+The rule is now: **do not** prefix when the value already contains `lic`
+anywhere (case-insensitive) or starts with `#`. Otherwise prefix with
+`"License "`.
+
+| Value | Printed |
+|---|---|
+| `OH LIC 104.8872` | `OH LIC 104.8872` |
+| `lic 12345` / `LIC-998` | unchanged |
+| `#A-123` | unchanged |
+| `OH 12345` | `License OH 12345` |
+
+Implemented once in `doc_pdf/mapping.py: license_label()` and mirrored by
+`server.py: _doc_license_label()` for the classic layouts, so the two can
+never disagree. `pdf_common.company_lines()` now prints
+`brand["license"]` verbatim (it used to re-apply the prefix, which would
+have doubled it).
+
+### 1b.4 Fix: the base charge is no longer labelled with the payment terms
+
+**This was CODE, not test data.** Both renderers labelled the invoice's
+base-amount row with the payment *terms*:
+
+* `doc_pdf/mapping.py: build_items()` → `desc = _s(payload.get("terms")) or "Services"`
+* `server.py: _create_invoice_pdf()` → `pdf.cell(..., terms or "Services", ...)`
+
+so the row read **"Due on receipt  $275.00"** — a payment condition where a
+charge description belongs. It now reads **"Base charge  $275.00"**
+(`doc_pdf/mapping.py: BASE_CHARGE_LABEL`, mirrored in `server.py` via
+`_DOC_BASE_CHARGE_LABEL` so the two layouts agree). A payload may override
+it with `base_description`.
+
+The payment terms are still printed where they belong — the invoice
+header's "Terms" meta block — so nothing is lost.
+
 ---
 
 ## 1a. Ken's decisions (implemented 2026-11-03)
@@ -41,13 +138,19 @@ ALTER TABLE document_templates
     ADD COLUMN IF NOT EXISTS company_license  TEXT NOT NULL DEFAULT '';
 ALTER TABLE document_templates
     ADD COLUMN IF NOT EXISTS signature_title   TEXT NOT NULL DEFAULT '';
+ALTER TABLE document_templates
+    ADD COLUMN IF NOT EXISTS show_signature_lines BOOLEAN NOT NULL DEFAULT TRUE;
 ```
 
 Additive, idempotent (`IF NOT EXISTS`), empty-string defaults so existing
-template rows keep working and print no extra labels. `server.py` also
+template rows keep working and print no extra labels; the boolean defaults
+to TRUE so nothing changes unless the switch is turned off. `server.py` also
 carries the same inline `ALTER`s (the existing pattern for
 `show_branding_footer`) so a database that skipped the migration files
 still gets the columns.
+
+> `show_signature_lines` was added to the **existing** 045 migration (rather
+> than a new one) because 045 has not been deployed yet — see §1b.1.
 
 ### Where the new fields appear
 
@@ -56,17 +159,20 @@ still gets the columns.
 | Website | `company_website` | company block | company block | company block | company block |
 | License | `company_license` | company block | company block | company block | company block |
 | Signer title | `signature_title` | signature block | signature block | signature block | signature block |
+| Signature lines | `show_signature_lines` | n/a | n/a | SIGNATURES section | signature block |
 
-* The license is prefixed with `"License "` unless it already starts with
-  `"lic"` or `"#"` (the upstream Sherwood rule, kept).
+* The license is prefixed with `"License "` **unless** it already contains
+  `lic` (case-insensitive) or starts with `#` — see §1b.3.
 * The signer title prints under the name on the invoice, and as
   `"<name>, <title>"` on the COC.
+* `show_signature_lines = FALSE` leaves the certificate's SIGNATURES
+  section out entirely (§1b.1). The invoice is unaffected.
 * **Empty values are omitted entirely** — no blank line, no blank label.
   This is asserted in the tests for all four document types.
 
 ### Admin UI
 
-Three new fields in the document-template editor
+Four new fields in the document-template editor
 (`public/index.html` + `public/app.js`):
 
 | Label | Element id | Saved as |
@@ -74,6 +180,7 @@ Three new fields in the document-template editor
 | Website | `doc-tpl-admin-website` | `company_website` |
 | License Number | `doc-tpl-admin-license` | `company_license` |
 | Signature Title | `doc-tpl-admin-sig-title` | `signature_title` |
+| Include signature lines | `doc-tpl-admin-show-sig-lines` (checkbox, on by default) | `show_signature_lines` |
 
 The admin API (`POST /api/v2/admin/document-templates` and
 `PUT /api/v2/admin/document-templates/<id>`) persists all three.
@@ -155,7 +262,7 @@ roll back without a code redeploy.
 | `coc_title` | `document_templates.coc_title` | Default `CERTIFICATE OF COMPLETION`. |
 | `footer_text` | `document_templates.show_branding_footer` | `"Generated by Sietch CRM"` when true, `""` when false. |
 | `website` | `document_templates.company_website` | **Added in migration 045.** Empty → omitted from the document. |
-| `license` | `document_templates.company_license` | **Added in migration 045.** Empty → omitted. Prefixed with `"License "` unless it already starts with `"lic"` / `"#"`. |
+| `license` | `document_templates.company_license` | **Added in migration 045.** Empty → omitted. Prefixed with `"License "` **unless** the value already contains `lic` (case-insensitive) or starts with `#` — see §1b.3. |
 
 ### 2.2 `job`
 
@@ -201,6 +308,7 @@ grand total is unchanged for any given input. Asserted by
 | `signature_path` | `document_templates.signature_path` | Only when `include_signature` is true. Resolved against `ROOT`; missing file → `None`. |
 | `signer_name` | `payload.signature_name` → `template.signature_name` → `sales_rep` | |
 | `signer_title` | `document_templates.signature_title` | **Added in migration 045.** Empty → omitted. |
+| `signatures` | `document_templates.show_signature_lines` | **v28.2.** Default `True`. `False` → the whole SIGNATURES section is left out. The payload may override it with `include_signature_lines`. |
 
 > The `homeowner_line` option was **removed** (Ken's decision 3): the Sietch
 > COC never draws a property-owner signature line, so the builder branch was
@@ -242,6 +350,12 @@ relevant ported file.
 | 9 | `opts["signer_title"]` comes from the new `signature_title` column | Added in migration 045 (Ken's decision 4). Empty → omitted. |
 | 10 | No running invoice-number counter | Sherwood's `branding.py` has `invoice_prefix` + `next_invoice_number`. Sietch's invoice number is the payload value or the project's `project_number`; that behaviour is preserved exactly. |
 | 11 | `_money()` helper duplicated in `doc_pdf/mapping.py` | `server.py` cannot be imported by the pure mapping module without pulling in the DB pool. The helper is a 6-line mirror of `server._money`. |
+| 12 | **v28.2**: `opts["signatures"]` (default `True`) drops the whole SIGNATURES section | Ported from upstream `bee1b9e`. Because Sietch has no homeowner block (deviation 6), `False` leaves out the heading + the contractor block. |
+| 13 | **v28.2**: the COC title comes from `pdf_common.coc_title()` | Ported from upstream `bb35d36`, replacing Sietch's inline `.title()` workaround (deviation 5). Both layouts now use it. |
+| 14 | The license is **not** prefixed when it already contains `lic` anywhere | Upstream only checks `startswith(("lic", "#"))`, so `"OH LIC 104.8872"` became "License OH LIC 104.8872". Sietch's rule is "contains lic, or starts with #" — see §1b.3. |
+| 15 | The invoice's base charge is labelled **"Base charge"**, not with the payment terms | Upstream has no base-charge concept; the classic Sietch renderer used the payment *terms* ("Due on receipt") as the row label, which reads like a payment condition. See §1b.4. |
+| 16 | `company_lines()` prints `brand["license"]` verbatim | Upstream applies the "License " prefix inside `company_lines()`. Sietch applies it once, in `mapping.license_label()`, so the two cannot double it. |
+| 17 | The classic COC's signature block is suppressed by the same toggle | Upstream's classic renderer takes `signature_path=None` to switch it off; Sietch's takes an explicit `show_signature_lines` flag. |
 
 ---
 
@@ -352,7 +466,7 @@ All runs throttled with `nice -n 10 ionice -c3`.
 
 | Suite | Result |
 |---|---|
-| `tests/test_invoice_coc_modern.py` | **60 passed**, 0 failed |
+| `tests/test_invoice_coc_modern.py` | **78 passed**, 0 failed |
 | `tests/test_reportlab_dependency.py` | **6 passed**, 0 failed |
 | `tests/test_pdf_dependency.py` | **2 passed**, 0 failed |
 | `tests/test_reports.py` | **33 passed**, 0 failed |
@@ -380,6 +494,22 @@ not touch). Re-verified after the Ken-decisions work: both still report
 | 4 — the migration | `TestBrandingExtrasMigration` (8 tests): the file exists, the number does not collide with 043/044, it adds the three columns, it is idempotent, it applies cleanly twice against a scratch table, `server.py` inlines the same ALTERs, the admin API accepts the fields, the admin UI exposes them |
 | 5 — Sietch COC wording kept | `test_coc_opts_statement_and_no_homeowner_line` (asserts `COC_STATEMENT`) |
 | 8 — classic COC completion date | `test_project_coc_classic_uses_completion_date`, `test_project_coc_classic_defaults_completion_date_to_today` |
+
+### Tests added for the v28.2 port + the three fixes
+
+| Change | Test |
+|---|---|
+| v28.2 `bee1b9e` — the "Include signature lines" toggle | `TestSherwoodV282Port`: `test_coc_opts_signatures_defaults_to_true`, `test_coc_opts_signatures_off_from_the_template`, `test_coc_opts_signatures_payload_overrides_the_template`, `test_modern_coc_has_no_signatures_section_when_off`, `test_modern_coc_has_the_signatures_section_when_on`; plus the handler-level `test_coc_signature_lines_off_in_both_layouts`, `test_coc_signature_lines_on_by_default` and `test_classic_coc_signature_block_respects_the_toggle` (which writes a real PNG so the classic signature block actually renders) |
+| v28.2 `bb35d36` — the certificate title | `test_coc_title_helper` (ported from upstream's `test_coc_title_helper`), `test_modern_coc_title_is_certificate_of_completion`, `test_modern_coc_keeps_a_custom_mixed_case_title`, `test_classic_coc_title_is_certificate_of_completion` |
+| Fix — no "License License OH LIC …" | `test_license_label_helper`, `test_invoice_does_not_double_the_license_label`, `test_coc_does_not_double_the_license_label`, `test_company_lines_include_website_and_license` (updated) |
+| Fix — the base charge is not labelled with the payment terms | `test_items_base_amount_is_first_row_labelled_base_charge` (updated), `test_items_base_charge_label_is_not_the_payment_terms`, `test_items_base_charge_label_can_be_overridden`, `test_base_charge_is_not_labelled_with_the_payment_terms` |
+| The migration now also adds `show_signature_lines` | `test_migration_adds_the_three_columns` (updated), `test_migration_is_idempotent` (updated — 4 columns now), `test_migration_applies_and_is_re_runnable` (updated), `test_server_inlines_the_same_columns` (updated), `test_admin_api_accepts_the_new_fields` (updated), `test_admin_ui_exposes_the_new_fields` (updated) |
+
+The v28.2 cases above are ported from Sherwood's
+`tests/test_v28_2_coc_signatures.py` (upstream `bee1b9e` + `bb35d36`),
+adapted to Sietch: Sietch has no Flask app, no customer branding profile
+and no homeowner line, so the upstream "customer form" and "admin form"
+cases become the Sietch template + the four HTTP handlers.
 
 ### What the new suite covers
 
@@ -459,10 +589,14 @@ rows.
 | `tmp/invoice-coc-review/project-103-1063-coc-modern.pdf` (+ `.page1.png`) | |
 | `tmp/invoice-coc-review/project-103-1063-invoice-classic.pdf` (+ `.page1.png`) | |
 | `tmp/invoice-coc-review/project-103-1063-coc-classic.pdf` (+ `.page1.png`) | |
-| `tmp/invoice-coc-review/with-extras-project-103-1063-invoice-modern.pdf` (+ `.page1.png`) | **Website + license + signer title filled in** — modern invoice. Shows `www.publicadjustermidwest.com`, `License OH LIC 104.8872` in the company block and "Licensed Public Adjuster" under the signature. |
+| `tmp/invoice-coc-review/with-extras-project-103-1063-invoice-modern.pdf` (+ `.page1.png`) | **Website + license + signer title filled in** — modern invoice. Shows `www.publicadjustermidwest.com`, `OH LIC 104.8872` in the company block (no "License " prefix — §1b.3) and "Licensed Public Adjuster" under the signature. |
 | `tmp/invoice-coc-review/with-extras-project-103-1063-coc-modern.pdf` (+ `.page1.png`) | Same, modern COC. Shows "Ken Chapman, Licensed Public Adjuster" and a single signature block (no homeowner line). |
 | `tmp/invoice-coc-review/with-extras-project-103-1063-invoice-classic.pdf` (+ `.page1.png`) | Same, classic invoice — website + license in the company block. |
 | `tmp/invoice-coc-review/with-extras-project-103-1063-coc-classic.pdf` (+ `.page1.png`) | Same, classic COC — website + license in the company block. |
+| `tmp/invoice-coc-review/coc-signatures-project-103-1063-on-coc-modern-lines-on.pdf` (+ `.page1.png`) | **v28.2 — signature lines ON**, modern COC. The "SIGNATURES" heading and the contractor block are present. |
+| `tmp/invoice-coc-review/coc-signatures-project-103-1063-on-coc-classic-lines-on.pdf` (+ `.page1.png`) | Signature lines ON, classic COC — the signature image, its rule and "By Ken Chapman" are drawn. |
+| `tmp/invoice-coc-review/coc-signatures-project-103-1063-off-coc-modern-lines-off.pdf` (+ `.page1.png`) | **v28.2 — signature lines OFF**, modern COC. No "SIGNATURES" heading, no contractor block; the rest of the certificate is unchanged. |
+| `tmp/invoice-coc-review/coc-signatures-project-103-1063-off-coc-classic-lines-off.pdf` (+ `.page1.png`) | Signature lines OFF, classic COC — no signature image, rule or "By" name. |
 | `tmp/invoice-coc-review/zero-line-hidden-invoice-modern.pdf` (+ `.page1.png`) | **Two `$0.00` line items are not printed.** The total is unchanged ($6,670.00) and only the real rows appear. |
 | `tmp/invoice-coc-review/zero-line-hidden-invoice-classic.pdf` (+ `.page1.png`) | The same for the classic renderer. |
 | `tmp/invoice-coc-review/long-multipage-invoice-modern.pdf` (+ `.page1.png`) | 60 line items → **3 pages**, header row repeats, "Page 1 of 3" … "Page 3 of 3". |
@@ -483,10 +617,16 @@ DB_HOST=127.0.0.1 DB_PORT=5432 DB_NAME=<db> DB_USER=<user> DB_PASSWORD=<pw> \
   "NOTES" section and a signature block.
 * The classic invoice's footer literally prints `Page 1 of (1)` — the
   modern one prints `Page 1 of 1`.
-* The classic COC has **no** signature block and no accent bar; the modern
-  COC has both plus the details table and the page footer.
+* The classic COC has **no** signature block by default (it needs a
+  signature image) and no accent bar; the modern COC has both plus the
+  details table and the page footer.
 * The website and the license appear under the company contact line in
-  both layouts, and the license is prefixed with "License ".
+  both layouts. The license prints **as typed** when it already contains
+  "lic" (`OH LIC 104.8872`, not "License OH LIC 104.8872").
+* The base charge row reads **"Base charge"**, not the payment terms
+  ("Due on receipt").
+* Both certificates are titled **"Certificate of Completion"** — never
+  "Certificate Of Completion" or the all-caps form.
 * The `$0.00` rows are absent from both layouts, and the grand total is
   unchanged.
 

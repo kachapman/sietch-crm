@@ -11,6 +11,107 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-03 (third pass — Sherwood v28.2 port + three fixes, branch `invoice-coc-upgrade`)
+
+**Status: implemented + tested, NOT deployed, NOT merged, NOT pushed.**
+Same worktree `~/Projects/new-crm-invoice-coc`, same branch
+`invoice-coc-upgrade` (base `main` @ `c637526`; this pass started at
+`f71ed6a`). The main checkout `~/Projects/new-crm` was NOT touched;
+`~/Projects/new-crm-mail-attachments` was NOT touched. Production
+(147.182.164.19) was NOT contacted. The dev server (port 8766) and the
+docker containers were NOT restarted. No Docker rebuild.
+
+**Sherwood v28.2 port** (upstream `kachapman/sherwood-toolbox` master
+`94e66ac`, tag `live-v28.2`, read-only clone at
+`~/scratch/sherwood-toolbox-94e66ac`):
+
+1. **`bee1b9e` — "Include signature lines" toggle.** `build_coc` gains
+   `opts["signatures"]` (bool, default True); False leaves out the WHOLE
+   SIGNATURES section (heading included). The homeowner branch stays
+   deleted (Ken's earlier decision), so False drops the heading + the
+   contractor block. The CLASSIC COC honours the same switch (no signature
+   image / rule / "By" name when off). New template column
+   `document_templates.show_signature_lines BOOLEAN NOT NULL DEFAULT TRUE`,
+   added **INSIDE the existing migration 045** (not deployed yet) plus the
+   matching `server.py` startup ALTER, same pattern as the other new
+   fields. New admin checkbox "Include signature lines"
+   (`doc-tpl-admin-show-sig-lines`), checked by default; the payload can
+   override it per request with `include_signature_lines`.
+   Sherwood's "Include company signature" relabel was NOT ported — Sietch's
+   existing box already controls the signature image, so the two controls
+   are already distinct.
+2. **`bb35d36` — `coc_title(raw)` helper.** Added to
+   `doc_pdf/pdf_common.py` (ported verbatim): blank or any casing of
+   "Certificate of Completion" → "Certificate of Completion"; another
+   all-caps title is title-cased with short words lowercased; a mixed-case
+   custom title is left as typed. Used in BOTH layouts (the classic COC
+   previously used the raw template string).
+
+**Three fixes:**
+
+3. **License label doubling.** "OH LIC 104.8872" printed as "License OH
+   LIC 104.8872". Upstream only skips the prefix when the value *starts*
+   with "lic"/"#"; the rule is now "contains lic anywhere (case-insensitive)
+   or starts with #". Implemented once in
+   `doc_pdf/mapping.py: license_label()` + mirrored by
+   `server.py: _doc_license_label()`; `pdf_common.company_lines()` now
+   prints `brand["license"]` verbatim instead of re-applying the prefix.
+4. **Base charge labelled with the payment terms — THIS WAS CODE, NOT TEST
+   DATA.** Both renderers used the payment *terms* as the base-amount row's
+   description (`doc_pdf/mapping.py: build_items()` →
+   `payload.get("terms") or "Services"`; `server.py: _create_invoice_pdf()`
+   → `terms or "Services"`), so the row read "Due on receipt  $275.00" —
+   a payment condition where a charge description belongs. It now reads
+   **"Base charge  $275.00"** (`doc_pdf/mapping.py: BASE_CHARGE_LABEL`,
+   mirrored in `server.py` via `_DOC_BASE_CHARGE_LABEL`); a payload may
+   override it with `base_description`. The terms still print in the
+   invoice header's "Terms" meta block.
+5. The classic COC's title now uses `coc_title()` (see 2).
+
+**Tests:** `tests/test_invoice_coc_modern.py` grew 60 -> **78**, all
+passing. New `TestSherwoodV282Port` class (the toggle: opts defaults /
+template off / payload override / modern section on / modern section off;
+the `coc_title` helper; the license label; the base charge label) plus
+handler-level cases (the toggle in both layouts, the classic signature
+block with a REAL PNG so it actually renders, the classic certificate
+title). Upstream's `tests/test_v28_2_coc_signatures.py` cases were ported
+and adapted to Sietch (no Flask app / customer profile / homeowner line →
+the Sietch template + the four HTTP handlers). The migration tests were
+updated for the fourth column.
+**Full Python suite: 61 passed / 2 failed** — the 2 failures
+(`test_scanner_toggle_gating.py`, `test_sync_pull_deals_fields.py`) were
+RE-VERIFIED as pre-existing on `main` @ c637526 (identical
+`FAILED (failures=1)` in the main checkout). **Full Node suite: 35/35
+files.** The suite was verified to actually EXECUTE (a deliberately
+flipped expectation produced a real FAILED run).
+
+**Migration 045** now carries FOUR columns (company_website,
+company_license, signature_title, show_signature_lines). It still applies
+cleanly and is idempotent (verified twice against a scratch table); the
+local dev `sietch_crm` DB has the columns.
+
+**Sample review pack regenerated** in `tmp/invoice-coc-review/` (gitignored,
+NOT committed), now including the **certificate with the signature lines ON
+and OFF** in both layouts, plus the earlier sets (3 projects x 2 layouts,
+with-extras, zero-line-hidden, long multi-page). Generated from a throwaway
+DB (`sietch_inv_coc_review`) seeded with one realistic
+`document_templates` row + 3 projects, because the local `sietch_crm` DB
+has 0 template rows and 0 opportunities. The throwaway DB was dropped
+afterwards.
+
+**Docs:** `docs/features/2026-11-03-invoice-coc-upgrade.md` gained §1b
+(Sherwood v28.2 port + the three fixes), and the mapping tables,
+deviations table (now 17 entries), migration SQL, admin-UI table, test
+results (+ a table of which test covers which change) and sample-file list
+were updated. CHANGELOG entry added.
+
+**Still open:** deploy timing only — the image needs a rebuild for
+`reportlab` and migration 045 must run. Deploy late at night per Ken.
+
+---
+
+## Previous session summary
+
 **Date:** 2026-11-03 (second pass — Ken's decisions implemented, branch `invoice-coc-upgrade`)
 
 **Status: implemented + tested, NOT deployed, NOT merged, NOT pushed.**
