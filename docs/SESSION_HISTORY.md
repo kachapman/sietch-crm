@@ -559,6 +559,128 @@ at night per Ken.
 
 ## Previous session summary
 
+**Date:** 2026-11-03 (Outlook read-status sync — round 2, branch `fix-outlook-read-sync`)
+
+**Status: DONE ON BRANCH — not pushed, not merged, not deployed.** Worktree
+`~/Projects/new-crm-outlook-read`, branch `fix-outlook-read-sync`, off `main`
+`c637526`. No prod access, no other worktrees touched. Two review rounds
+done (round 1 = `3f4470f`, round 2 = the commit after it).
+
+**Round 2 changes (all from the round-2 review):**
+- **Fallback folder search narrowed** — the special-use flags were defined
+  but never used, so every IMAP `LIST` folder plus 13 hard-coded names was
+  searched (slow on a big mailbox). Now only the stored folder, `INBOX` and
+  the `LIST` folders marked `\Sent \Trash \Junk \Archive \Drafts` are
+  searched; the hard-coded names (incl. Outlook's "Sent Items", "Deleted
+  Items", "Junk Email") are the fallback when `LIST` fails or marks nothing.
+  Still cached per account.
+- **Permanent delete verifies the Message-ID** like move does; aborts with a
+  warning instead of deleting a stale UID.
+- **Forced refresh + manual "refresh now"** now use the same guarded
+  compare-and-swap save as the normal path.
+- **Scanner re-reads the stored token** when it loses the refresh race
+  (was continuing with the stale one).
+- **`scanner/Dockerfile` copies `mail_oauth.py`** (the scanner imports it;
+  the main image already got it via `COPY *.py ./`).
+
+**Round 1 recap:** the IMAP logic moved to `mail_imap.py` and the shared
+OAuth refresh to `mail_oauth.py` (one owner for the scanner, server.py's
+IMAP path, the forced refresh and the manual refresh button); the save is a
+DB-level compare-and-swap (`UPDATE ... WHERE id = %s AND oauth_access_token
+= %s`) so concurrent refreshes cannot clobber each other; the sync-failure
+marker is persisted in the existing `mail_flag_queue` table (pushed = FALSE)
+— **no migration needed**; the UI wording names the provider (Outlook /
+Gmail) or says "your mailbox".
+
+**Tests:** `tests/test_mail_imap_flag_sync.py` (68) +
+`tests/test_mail_sync_warning.mjs` (8). Verified by mutation: reverting the
+folder narrowing, the delete verification, the compare-and-swap, the exact
+Message-ID match, the no-Message-ID skip, the move abort or the scanner's
+re-read each makes the suite fail.
+**Suite state:** Python 60 files pass / 2 fail — the SAME 2 that already fail
+on `main` (`test_scanner_toggle_gating`, `test_sync_pull_deals_fields`);
+Node 36/36 files pass. `tests/test_reports.py` needs the gitignored `.env`
+(copied in from the main worktree; untracked).
+**Files:** `server.py` (thin IMAP wrappers ~2172-2345), `mail_imap.py` (new),
+`mail_oauth.py` (new), `scanner/mail_scanner.py` (shared refresh + re-read),
+`scanner/Dockerfile`, `public/app.js`, `public/index.html`,
+`public/styles.css`, `tests/test_mail_imap_flag_sync.py`,
+`tests/test_mail_sync_warning.mjs`, `.github/workflows/smoke.yml`,
+CHANGELOG.md, docs/SESSION_HISTORY.md.
+**Merge surface (measured with throwaway clones, since deleted):** with
+`fix-mail-attachments` → 1 server.py hunk (both sides ADD at the same
+anchor, so the resolution is "keep both"; the merged file compiles and
+passes all tests) + the 2 docs files; with `invoice-coc-upgrade` → server.py
+merges CLEAN, only the 2 docs files conflict.
+
+## Previous session summary (for next resume)
+
+**Date:** 2026-11-03 (Outlook read status not syncing, branch `fix-outlook-read-sync`)
+
+**Status: DONE ON BRANCH — not pushed, not merged, not deployed.** Worktree
+`~/Projects/new-crm-outlook-read`, branch `fix-outlook-read-sync`, off `main`
+`c637526`. No prod access, no other worktrees touched.
+
+**Live bug:** opening an email in the Sietch mail modal marked it read in
+Sietch but NOT in Outlook (MDM outlook.com account). Four independent defects
+in the IMAP flag path:
+
+1. **Stale OAuth token** — `_imap_connect` used the stored
+   `oauth_access_token` as-is (no expiry check, no refresh); only the scanner
+   refreshed tokens, on its own cycle. A stale token means the `UID STORE`
+   never reaches the server, and the endpoint had already returned
+   `{"ok":true}` (the IMAP work ran in a background thread).
+2. **`EXPUNGE` side effect** — the flag path used `imap_tools`
+   `MailBox.flag()`, which runs `EXPUNGE` after every `UID STORE`
+   (imap_tools 1.14 `mailbox.py:351`), so each read/unread toggle permanently
+   expunged every `\Deleted` message in that folder.
+3. **Unverified target** — the stored UID was trusted blindly. After a move or
+   delete the message lives in another folder with a NEW UID (UIDs are only
+   unique per folder), so the flag hit nothing or the wrong message.
+4. **Silent failure** — `_imap_set_seen` caught every error and logged at
+   warning level; nothing told the user the change never reached Outlook.
+
+**Fix (no schema change, no migration — 046 was NOT needed):**
+- `_imap_account_token()` — refreshes the access token when expired or within
+  5 min of expiry, reusing the scanner's provider logic and persisting the
+  new token the same way; a module lock (`_imap_token_lock`) keeps it from
+  racing the scanner's own refresh. `_imap_connect` authenticates with the
+  refreshed token.
+- `_imap_store_flags()` — plain `UID STORE` (`+FLAGS`/`-FLAGS`), never
+  `EXPUNGE`. Shared by every flag path via `_imap_apply_flag()` (`\Seen`
+  read/unread and `\Flagged` star).
+- `_imap_resolve_uid()` — verifies the target by Message-ID before storing the
+  flag; on mismatch it searches the folder (then `_IMAP_FOLDER_FALLBACKS`)
+  by Message-ID header, uses that UID and updates the stored UID/folder. A
+  message whose Message-ID does not match is never flagged. `_imap_move()`
+  re-resolves the destination UID the same way.
+- Auth failure → refresh the token and retry once (`_is_imap_auth_error`,
+  `_imap_force_token_refresh`).
+- Failures logged at ERROR level with account id + mail message id (never a
+  token) and recorded per message; the API exposes it as `sync_failure`; the
+  mail list shows a warning icon and the preview modal shows
+  "Couldn't sync … to Outlook".
+
+**Tests:** `tests/test_mail_imap_flag_sync.py` (33) + `tests/test_mail_sync_warning.mjs` (7).
+All IMAP access is mocked — no mail server contacted. Verified by mutation:
+reverting the token refresh, the `UID STORE`, the Message-ID check, the auth
+retry, the log level or the failure marker each makes the suite fail.
+**Suite state:** Python 60 files pass / 2 fail — the SAME 2 that already fail
+on `main` (`test_scanner_toggle_gating`, `test_sync_pull_deals_fields`); Node
+35/35 files pass. `tests/test_reports.py` needs the gitignored `.env` — it was
+absent in this worktree and was copied in from the main worktree.
+**Files:** `server.py` (IMAP helper block ~2161-2620, handlers ~20902/20928/
+20953/22142/22187, list+detail responses ~20761/20817), `public/app.js`
+(sync-warning icon + preview note), `public/index.html` (note element),
+`public/styles.css` (`.mail-sync-warning`), `tests/test_mail_imap_flag_sync.py`,
+`tests/test_mail_sync_warning.mjs`, `.github/workflows/smoke.yml`,
+CHANGELOG.md.
+**Note for tonight's merges:** `fix-mail-attachments` (migrations 043/044) and
+`invoice-coc-upgrade` (045) also touch `server.py`; this diff is confined to
+the IMAP/mail-flag area plus two new test files, so it should rebase cleanly.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-11-02 (live bot-note failures, branch `fix-telegram-dupes`)
 
 **Status: DEPLOYED 2026-11-02 (~23:35 ET)** — merged `fix-telegram-dupes`

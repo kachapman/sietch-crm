@@ -38,6 +38,7 @@ import db
 from event_bus import event_bus
 from user_profile_store import load_user_profile, save_user_profile
 import oauth_providers
+import mail_oauth
 import infra_log
 
 logger = logging.getLogger("sietch.mail_scanner")
@@ -1133,32 +1134,18 @@ def _is_processed(account_id, conv_id: str) -> bool:
     return _processed_key(account_id, conv_id) in _load_processed_ids()
 
 
-def _refresh_oauth_token_if_needed(account_id: int, provider_name: str, current_refresh_token: str, expires_at: datetime | None) -> tuple[str, str] | None:
-    """Refresh OAuth access token if expired. Returns (new_access_token, new_refresh_token) or None."""
-    now_ts = time.time()
-    if expires_at and expires_at.timestamp() > now_ts + 300:
-        return None
-    if not current_refresh_token:
-        logger.warning("No refresh token for account %d (%s), cannot refresh", account_id, provider_name)
-        return None
-    prov = oauth_providers.get_provider(provider_name)
-    if not prov:
-        logger.warning("Unknown provider %s for account %d", provider_name, account_id)
-        return None
-    try:
-        token_data = prov.refresh_token(current_refresh_token)
-        new_access = token_data.get("access_token", "")
-        new_refresh = token_data.get("refresh_token", current_refresh_token)
-        new_expires = time.time() + token_data.get("expires_in", 3600)
-        if new_access:
-            db.execute(
-                "UPDATE mail_accounts SET oauth_access_token = %s, oauth_refresh_token = %s, oauth_token_expires = to_timestamp(%s) WHERE id = %s",
-                (new_access, new_refresh, new_expires, account_id),
-            )
-            return new_access, new_refresh
-    except Exception as e:
-        logger.error("Failed to refresh OAuth token for account %d: %s", account_id, e)
-    return None
+def _refresh_oauth_token_if_needed(account_id: int, provider_name: str, current_refresh_token: str, expires_at: datetime | None, expected_access: str | None = None) -> tuple[str, str] | None:
+    """Refresh OAuth access token if expired. Returns (new_access_token, new_refresh_token) or None.
+
+    Thin wrapper over the shared helper in mail_oauth.py so the scanner and
+    server.py refresh tokens the same way and can never overwrite each
+    other's freshly-minted token (the save is a compare-and-swap on the
+    token that was read).
+    """
+    return mail_oauth.refresh_access_token(
+        account_id, provider_name, current_refresh_token, expires_at,
+        expected_access=expected_access,
+    )
 
 
 def _get_mailboxes() -> list[dict[str, Any]]:
@@ -1196,11 +1183,21 @@ def _get_mailboxes() -> list[dict[str, Any]]:
                     row["id"], oauth_provider,
                     row.get("oauth_refresh_token") or "",
                     row.get("oauth_token_expires"),
+                    expected_access=row.get("oauth_access_token") or None,
                 )
                 if token_refreshed:
                     access_token = token_refreshed[0]
                 else:
-                    access_token = row.get("oauth_access_token") or ""
+                    # The refresh failed, or another refresher (the server)
+                    # won the race and stored a newer token. Re-read the row
+                    # so we do NOT keep using the stale token we read before
+                    # the attempt.
+                    fresh = db.query_one(
+                        "SELECT oauth_access_token FROM mail_accounts WHERE id = %s",
+                        (row["id"],),
+                    )
+                    access_token = ((fresh or {}).get("oauth_access_token")
+                                    or row.get("oauth_access_token") or "")
                 if not access_token:
                     logger.warning("No access token for OAuth account %d (%s), skipping", row["id"], row["email"])
                     continue

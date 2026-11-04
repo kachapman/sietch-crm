@@ -495,6 +495,8 @@ def _load_env_file() -> None:
 
 _load_env_file()
 import oauth_providers
+import mail_oauth
+import mail_imap
 
 # mail_scanner imports oauth_providers (and reads its env-derived constants),
 # so it MUST be imported AFTER _load_env_file() has populated the environment.
@@ -2358,22 +2360,28 @@ def _get_system_smtp_account() -> dict | None:
     if not row:
         return None
     acct = dict(row)
-    # Refresh OAuth token if expired
+    # Refresh OAuth token if expired — shared helper, same compare-and-swap
+    # save as the scanner and the IMAP flag path.
     if acct.get("oauth_provider") and acct.get("oauth_refresh_token"):
         try:
             expires = acct.get("oauth_token_expires")
             if expires and expires < datetime.now(timezone.utc):
-                prov = oauth_providers.get_provider(acct["oauth_provider"])
-                tok = prov.refresh_token(acct["oauth_refresh_token"])
-                if tok and tok.get("access_token"):
-                    acct["oauth_access_token"] = tok["access_token"]
-                    new_refresh = tok.get("refresh_token", acct["oauth_refresh_token"])
-                    new_expires = tok.get("expires_in", 3600)
-                    db.execute(
-                        "UPDATE mail_accounts SET oauth_access_token = %s, oauth_refresh_token = %s, "
-                        "oauth_token_expires = to_timestamp(%s) WHERE id = %s",
-                        (tok["access_token"], new_refresh, int(time.time()) + new_expires, acct["id"]),
+                refreshed = mail_oauth.refresh_access_token(
+                    acct["id"], acct["oauth_provider"], acct["oauth_refresh_token"],
+                    expires, expected_access=acct.get("oauth_access_token") or None,
+                )
+                if refreshed:
+                    acct["oauth_access_token"] = refreshed[0]
+                    acct["oauth_refresh_token"] = refreshed[1]
+                else:
+                    # Refresh lost a race or failed — use whatever is stored.
+                    fresh = db.query_one(
+                        "SELECT oauth_access_token, oauth_refresh_token FROM mail_accounts WHERE id = %s",
+                        (acct["id"],),
                     )
+                    if fresh:
+                        acct["oauth_access_token"] = fresh.get("oauth_access_token") or acct["oauth_access_token"]
+                        acct["oauth_refresh_token"] = fresh.get("oauth_refresh_token") or acct["oauth_refresh_token"]
         except Exception:
             logger.exception("Failed to refresh OAuth token for system SMTP")
     return acct
@@ -2497,9 +2505,56 @@ def _pick_imap_attachment(imap_msg: Any, att: dict) -> bytes | None:
     return fallback
 
 
+# The IMAP flag/folder logic lives in mail_imap.py; these are thin wrappers
+# so the request handlers keep the same call shape as before. Keeping the
+# bulk of it out of server.py also keeps this branch's conflict with
+# fix-mail-attachments (which edits this same region) small.
+
+def _record_mail_sync_failure(message_id: int, action: str, error: str) -> None:
+    """Remember that an IMAP flag sync failed for a message (shown in the UI)."""
+    mail_imap.record_sync_failure(message_id, action, error, db)
+
+
+def _clear_mail_sync_failure(message_id: int) -> None:
+    """Drop a previously recorded sync failure (the sync worked)."""
+    mail_imap.clear_sync_failure(message_id)
+
+
+def _mail_sync_failure(message_id: int) -> dict | None:
+    """Return the recorded sync failure for a message, if any.
+
+    The in-memory marker is authoritative when present (it carries the error
+    text). Otherwise fall back to the persisted `mail_flag_queue` row, so a
+    failure recorded before a restart is still shown.
+    """
+    marker = mail_imap.sync_failure(message_id)
+    if marker:
+        return marker
+    return mail_imap.persisted_failure(message_id, db)
+
+
+def _mail_sync_failures(message_ids: list[int]) -> dict[int, dict]:
+    """Batch lookup of sync-failure markers (in-memory + persisted)."""
+    markers = mail_imap.persisted_failures(message_ids, db)
+    for mid in message_ids:
+        live = mail_imap.sync_failure(mid)
+        if live:
+            markers[mid] = live
+    return markers
+
+
+def _imap_account_token(account_id: int) -> tuple[str, str]:
+    """Return (access_token, refresh_token) for an account, refreshing if needed.
+
+    Delegates to the shared mail_oauth helper so the scanner and the server
+    refresh tokens the same way and cannot overwrite each other's token.
+    """
+    return mail_oauth.get_valid_access_token(account_id)
+
+
 def _imap_connect(account_id: int):
     """Connect to IMAP for the given account. Returns MailBox or None."""
-    from imap_tools import MailBox, A
+    from imap_tools import MailBox
     acct = db.query_one(
         "SELECT email, imap_host, imap_port, password_encrypted, oauth_provider, oauth_access_token "
         "FROM mail_accounts WHERE id = %s",
@@ -2510,8 +2565,12 @@ def _imap_connect(account_id: int):
     port = int(acct.get("imap_port") or 993)
     mb = MailBox(acct["imap_host"], port=port)
     if acct.get("oauth_provider"):
-        token = acct.get("oauth_access_token") or ""
+        # Use a token that is valid NOW — the stored one may have expired
+        # since the last scan (live bug: marking an email read in Outlook did
+        # nothing because the access token was stale).
+        token, _refresh = _imap_account_token(account_id)
         if not token:
+            logger.error("IMAP: no usable OAuth access token for account %d (%s)", account_id, acct["email"])
             return None
         mb.xoauth2(acct["email"], token)
     else:
@@ -2522,77 +2581,98 @@ def _imap_connect(account_id: int):
     return mb
 
 
+def _imap_candidate_folders(account_id: int, mb=None) -> list[str]:
+    """Folders a moved message may live in — from the account's IMAP LIST.
+
+    Outlook names its folders "Sent Items", "Deleted Items" and
+    "Junk Email"; guessing generic names would cost a failed search per
+    folder. The resolved list is cached per account.
+    """
+    if mb is None:
+        return []
+    try:
+        return mail_imap.account_folders(account_id, mb)
+    except Exception as e:
+        logger.error("IMAP: could not resolve the folder list for account %d: %s", account_id, e)
+        return []
+
+
+def _is_imap_auth_error(err: Exception) -> bool:
+    """True when an IMAP error looks like an authentication/authorization failure."""
+    return mail_imap.is_auth_error(err)
+
+
+def _imap_force_token_refresh(account_id: int) -> bool:
+    """Force a fresh OAuth access token for an account (used after an auth failure)."""
+    return bool(mail_oauth.force_refresh_access_token(account_id))
+
+
 def _is_synthetic_uid(uid: str | None) -> bool:
     """Return True for locally-generated UIDs that do not exist on the IMAP server."""
-    return bool(uid) and str(uid).startswith("sent:outgoing:")
+    return mail_imap.is_synthetic_uid(uid)
 
 
-def _imap_set_seen(account_id: int, folder: str, uid: str, seen: bool) -> bool:
-    """Set or unset \\Seen flag on IMAP (mark read/unread)."""
+def _imap_set_seen(account_id: int, folder: str, uid: str, seen: bool,
+                   message_id: str | None = None, message_db_id: int | None = None) -> bool:
+    """Set or unset \\Seen flag on IMAP (mark read/unread).
+
+    Uses a plain UID STORE (never EXPUNGE) and verifies the target by
+    Message-ID before touching anything, so a stale UID can never flag the
+    wrong message.
+    """
     if _is_synthetic_uid(uid):
         return True
-    try:
-        mb = _imap_connect(account_id)
-        if not mb:
-            return False
-        mb.folder.set(folder)
-        mb.flag([uid], "\\Seen", seen)
-        mb.logout()
-        return True
-    except Exception as e:
-        logger.warning("IMAP set_seen failed (account %d, folder %s, uid %s): %s", account_id, folder, uid, e)
-        return False
+    return mail_imap.apply_flag(
+        account_id, folder, uid, "\\Seen", seen,
+        message_id=message_id, message_db_id=message_db_id,
+        connect=_imap_connect, db=db, force_refresh=_imap_force_token_refresh,
+    )
 
 
-def _imap_set_flagged(account_id: int, folder: str, uid: str, flagged: bool) -> bool:
+def _imap_set_flagged(account_id: int, folder: str, uid: str, flagged: bool,
+                      message_id: str | None = None, message_db_id: int | None = None) -> bool:
     """Set or unset \\Flagged flag on IMAP (star)."""
     if _is_synthetic_uid(uid):
         return True
-    try:
-        mb = _imap_connect(account_id)
-        if not mb:
-            return False
-        mb.folder.set(folder)
-        mb.flag([uid], "\\Flagged", flagged)
-        mb.logout()
-        return True
-    except Exception as e:
-        logger.warning("IMAP set_flagged failed (account %d, uid %s): %s", account_id, uid, e)
-        return False
+    return mail_imap.apply_flag(
+        account_id, folder, uid, "\\Flagged", flagged,
+        message_id=message_id, message_db_id=message_db_id,
+        connect=_imap_connect, db=db, force_refresh=_imap_force_token_refresh,
+    )
 
 
-def _imap_move(account_id: int, folder: str, uid: str, dest_folder: str) -> bool:
-    """Move a message between IMAP folders."""
+def _imap_move(account_id: int, folder: str, uid: str, dest_folder: str,
+               message_id: str | None = None, message_db_id: int | None = None) -> bool:
+    """Move a message between IMAP folders.
+
+    The source UID is resolved by Message-ID first; if it cannot be resolved
+    the move is ABORTED rather than moving a stale UID that may now belong
+    to a different message.
+    """
     if _is_synthetic_uid(uid):
         return True
-    try:
-        mb = _imap_connect(account_id)
-        if not mb:
-            return False
-        mb.folder.set(folder)
-        mb.move([uid], dest_folder)
-        mb.logout()
-        return True
-    except Exception as e:
-        logger.warning("IMAP move failed (account %d, uid %s → %s): %s", account_id, uid, dest_folder, e)
-        return False
+    return mail_imap.move(
+        account_id, folder, uid, dest_folder,
+        message_id=message_id, message_db_id=message_db_id,
+        connect=_imap_connect, db=db,
+    )
 
 
-def _imap_delete(account_id: int, folder: str, uid: str) -> bool:
-    """Permanently delete a message from IMAP."""
+def _imap_delete(account_id: int, folder: str, uid: str,
+                 message_id: str | None = None, message_db_id: int | None = None) -> bool:
+    """Permanently delete a message from IMAP.
+
+    The UID is resolved by Message-ID first; when it cannot be resolved the
+    delete is aborted — a stale UID may already belong to a different
+    message, and deleting it would destroy someone else's mail.
+    """
     if _is_synthetic_uid(uid):
         return True
-    try:
-        mb = _imap_connect(account_id)
-        if not mb:
-            return False
-        mb.folder.set(folder)
-        mb.delete([uid])
-        mb.logout()
-        return True
-    except Exception as e:
-        logger.warning("IMAP delete failed (account %d, uid %s): %s", account_id, uid, e)
-        return False
+    return mail_imap.delete(
+        account_id, folder, uid,
+        message_id=message_id, message_db_id=message_db_id,
+        connect=_imap_connect, db=db,
+    )
 
 
 def _parse_iso_datetime(value: str):
@@ -20748,23 +20828,28 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         try:
             row = db.query_one(
-                "SELECT oauth_provider, oauth_refresh_token FROM mail_accounts WHERE id = %s AND owner_user_id = %s",
+                "SELECT oauth_provider, oauth_refresh_token, oauth_access_token "
+                "FROM mail_accounts WHERE id = %s AND owner_user_id = %s",
                 (account_id, user["id"]),
             )
             if not row or not row.get("oauth_provider") or not row.get("oauth_refresh_token"):
                 _json_response(self, 400, {"error": "Account not found or not OAuth-enabled"})
                 return
-            prov = oauth_providers.get_provider(row["oauth_provider"])
-            if not prov:
+            if not oauth_providers.get_provider(row["oauth_provider"]):
                 _json_response(self, 400, {"error": "Unknown provider"})
                 return
-            token_data = prov.refresh_token(row["oauth_refresh_token"])
-            expires_ts = datetime.now(timezone.utc).timestamp() + token_data.get("expires_in", 3600)
-            new_refresh = token_data.get("refresh_token", row["oauth_refresh_token"])
-            db.execute(
-                "UPDATE mail_accounts SET oauth_access_token = %s, oauth_refresh_token = %s, oauth_token_expires = to_timestamp(%s) WHERE id = %s",
-                (token_data["access_token"], new_refresh, expires_ts, account_id),
+            # Shared helper: same refresh + compare-and-swap save as the
+            # scanner and the IMAP flag path, so the three can never
+            # overwrite each other's token.
+            token_data = mail_oauth.refresh_access_token(
+                account_id, row["oauth_provider"], row["oauth_refresh_token"], None,
+                force=True,
+                expected_access=row.get("oauth_access_token") or None,
             )
+            if not token_data:
+                _json_response(self, 500, {"error": "Token refresh failed"})
+                return
+            expires_ts = datetime.now(timezone.utc).timestamp() + 3600
             _json_response(self, 200, {"ok": True, "expiresAt": expires_ts})
         except Exception as e:
             logger.exception("Failed to refresh OAuth token for account %d", account_id)
@@ -21170,9 +21255,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     (msg_ids,),
                 )
                 att_counts = {r["message_id"]: r["cnt"] for r in att_count_rows}
+                # Per-message IMAP sync failure markers (read/unread/star).
+                sync_markers = _mail_sync_failures([r["id"] for r in rows])
                 for r in rows:
                     r["tags"] = tags_by_msg.get(r["id"], [])
                     r["linked_deals"] = deals_by_msg.get(r["id"], [])
+                    r["sync_failure"] = sync_markers.get(r["id"])
                     # Attachment count: prefer mail_attachments table, fallback to attachments_json
                     r["attachment_count"] = att_counts.get(r["id"], 0)
                     if not r["attachment_count"] and r.get("attachments_json"):
@@ -21231,6 +21319,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 row_dict["attachments"] = []
             row_dict["tags"] = tags
             row_dict["linked_deals"] = links
+            # Surfaced so the UI can say "couldn't sync read status to Outlook".
+            fail = _mail_sync_failure(message_id)
+            row_dict["sync_failure"] = fail
             _json_response(self, 200, row_dict)
         except Exception as e:
             logger.exception("Failed to fetch message %d", message_id)
@@ -21351,9 +21442,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             db.execute("UPDATE mail_messages SET is_read = TRUE WHERE id = %s", (message_id,))
             # Sync to IMAP — set \Seen flag so Outlook/webmail reflect the change
-            msg = db.query_one("SELECT account_id, folder, imap_uid FROM mail_messages WHERE id = %s", (message_id,))
+            msg = db.query_one(
+                "SELECT account_id, folder, imap_uid, message_id FROM mail_messages WHERE id = %s",
+                (message_id,),
+            )
             if msg and msg.get("imap_uid"):
-                threading.Thread(target=_imap_set_seen, args=(msg["account_id"], msg["folder"], str(msg["imap_uid"]), True), daemon=True).start()
+                threading.Thread(
+                    target=_imap_set_seen,
+                    args=(msg["account_id"], msg["folder"], str(msg["imap_uid"]), True),
+                    kwargs={"message_id": msg.get("message_id"), "message_db_id": message_id},
+                    daemon=True,
+                ).start()
             _json_response(self, 200, {"ok": True})
         except Exception as e:
             logger.exception("Failed to mark message %d read", message_id)
@@ -21369,9 +21468,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             db.execute("UPDATE mail_messages SET is_read = FALSE WHERE id = %s", (message_id,))
             # Sync to IMAP — remove \Seen flag
-            msg = db.query_one("SELECT account_id, folder, imap_uid FROM mail_messages WHERE id = %s", (message_id,))
+            msg = db.query_one(
+                "SELECT account_id, folder, imap_uid, message_id FROM mail_messages WHERE id = %s",
+                (message_id,),
+            )
             if msg and msg.get("imap_uid"):
-                threading.Thread(target=_imap_set_seen, args=(msg["account_id"], msg["folder"], str(msg["imap_uid"]), False), daemon=True).start()
+                threading.Thread(
+                    target=_imap_set_seen,
+                    args=(msg["account_id"], msg["folder"], str(msg["imap_uid"]), False),
+                    kwargs={"message_id": msg.get("message_id"), "message_db_id": message_id},
+                    daemon=True,
+                ).start()
             _json_response(self, 200, {"ok": True})
         except Exception as e:
             logger.exception("Failed to mark message %d unread", message_id)
@@ -21386,10 +21493,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 403, {"error": "You don't have access to this message"})
                 return
             db.execute("UPDATE mail_messages SET folder = 'Trash' WHERE id = %s", (message_id,))
-            # Sync to IMAP — move to Trash folder
-            msg = db.query_one("SELECT account_id, folder, imap_uid FROM mail_messages WHERE id = %s", (message_id,))
+            # Sync to IMAP — move to Trash folder. The IMAP side re-resolves the
+            # UID in Trash (a move changes the UID) and stores it, so a later
+            # read/unread toggle on the trashed message still hits it.
+            msg = db.query_one(
+                "SELECT account_id, folder, imap_uid, message_id FROM mail_messages WHERE id = %s",
+                (message_id,),
+            )
             if msg and msg.get("imap_uid"):
-                threading.Thread(target=_imap_move, args=(msg["account_id"], msg["folder"], str(msg["imap_uid"]), "Trash"), daemon=True).start()
+                threading.Thread(
+                    target=_imap_move,
+                    args=(msg["account_id"], msg["folder"], str(msg["imap_uid"]), "Trash"),
+                    kwargs={"message_id": msg.get("message_id"), "message_db_id": message_id},
+                    daemon=True,
+                ).start()
             _json_response(self, 200, {"ok": True})
         except Exception as e:
             logger.exception("Failed to trash message %d", message_id)
@@ -22562,10 +22679,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 403, {"error": "You don't have access to this message"})
                 return
             db.execute("UPDATE mail_messages SET starred = NOT starred WHERE id = %s", (message_id,))
-            row = db.query_one("SELECT starred, account_id, folder, imap_uid FROM mail_messages WHERE id = %s", (message_id,))
+            row = db.query_one(
+                "SELECT starred, account_id, folder, imap_uid, message_id FROM mail_messages WHERE id = %s",
+                (message_id,),
+            )
             # Sync to IMAP — set/unset \Flagged
             if row and row.get("imap_uid"):
-                threading.Thread(target=_imap_set_flagged, args=(row["account_id"], row["folder"], str(row["imap_uid"]), bool(row["starred"])), daemon=True).start()
+                threading.Thread(
+                    target=_imap_set_flagged,
+                    args=(row["account_id"], row["folder"], str(row["imap_uid"]), bool(row["starred"])),
+                    kwargs={"message_id": row.get("message_id"), "message_db_id": message_id},
+                    daemon=True,
+                ).start()
             _json_response(self, 200, {"starred": row["starred"] if row else False})
         except Exception as e:
             logger.exception("Failed to toggle star for message %d", message_id)
@@ -22596,11 +22721,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             folder = payload.get("folder", "INBOX")
             if folder.lower() in ("inbox",): folder = "INBOX"
             # Get old folder for IMAP move
-            old = db.query_one("SELECT account_id, folder, imap_uid FROM mail_messages WHERE id = %s", (message_id,))
+            old = db.query_one(
+                "SELECT account_id, folder, imap_uid, message_id FROM mail_messages WHERE id = %s",
+                (message_id,),
+            )
             db.execute("UPDATE mail_messages SET folder = %s WHERE id = %s", (folder, message_id))
-            # Sync to IMAP — move to destination folder
+            # Sync to IMAP — move to destination folder. The IMAP side also
+            # re-resolves the new UID in the destination folder and stores it,
+            # so later read/unread toggles still hit the right message.
             if old and old.get("imap_uid") and old.get("folder") != folder:
-                threading.Thread(target=_imap_move, args=(old["account_id"], old["folder"], str(old["imap_uid"]), folder), daemon=True).start()
+                threading.Thread(
+                    target=_imap_move,
+                    args=(old["account_id"], old["folder"], str(old["imap_uid"]), folder),
+                    kwargs={"message_id": old.get("message_id"), "message_db_id": message_id},
+                    daemon=True,
+                ).start()
             _json_response(self, 200, {"ok": True})
         except Exception as e:
             logger.exception("Failed to move message %d", message_id)
