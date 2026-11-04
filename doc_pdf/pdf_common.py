@@ -15,6 +15,13 @@ Deviations from upstream 3d5bf83:
   * `logo_flowable` and `numbered_canvas` gained an optional `root` argument
     so a repo-relative asset path can be resolved against the Sietch ROOT
     directory. When `root` is None the behaviour is identical to upstream.
+
+v28.2 (upstream 94e66ac):
+  * Added `coc_title(raw)` -- the certificate title as printed. Blank or any
+    casing of "Certificate of Completion" gives "Certificate of Completion";
+    another all-caps title is title-cased with short words ("of", "and",
+    "the", ...) lowercased; a mixed-case title is left as typed. Ported
+    verbatim from upstream bb35d36.
 """
 from xml.sax.saxutils import escape
 
@@ -30,6 +37,26 @@ MUTED = HexColor("#5d6b5a")
 LINE = HexColor("#d9ded3")
 ZEBRA = HexColor("#f6f7f3")
 FALLBACK_ACCENT = "#2c5130"
+COC_TITLE = "Certificate of Completion"
+_SMALL_WORDS = {"a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to"}
+
+
+def coc_title(raw):
+    """Certificate title as printed (v28.2, Ken: lowercase "of").
+
+    Blank, or any casing of "Certificate of Completion" (the shipped
+    companies.json and older saved companies had "CERTIFICATE OF COMPLETION"),
+    gives "Certificate of Completion". Another all-caps title is title-cased
+    with short words like "of" kept lowercase; mixed-case titles are left as
+    typed."""
+    t = " ".join((raw or "").split())
+    if not t or t.lower() == COC_TITLE.lower():
+        return COC_TITLE
+    if t.isupper():
+        words = t.lower().split(" ")
+        return " ".join(w if (i and w in _SMALL_WORDS) else w[:1].upper() + w[1:]
+                        for i, w in enumerate(words))
+    return t
 
 
 def accent(brand):
@@ -105,12 +132,18 @@ def logo_flowable(path, max_w, max_h, root=None):
 
 
 def company_lines(brand):
-    """Contact lines under the company name (blank parts dropped)."""
+    """Contact lines under the company name (blank parts dropped).
+
+    Sietch (2026-11-03): brand["license"] is already the finished label
+    (mapping.license_label applies the "License " prefix when it is needed),
+    so it is printed verbatim here. Upstream applied the prefix in this
+    function instead.
+    """
     lines = [brand.get("address"), brand.get("city_state_zip")]
     contact = "  |  ".join(x for x in (brand.get("phone"), brand.get("email")) if x)
     lines += [contact, brand.get("website")]
     if brand.get("license"):
-        lines.append("License " + brand["license"] if not brand["license"].lower().startswith(("lic", "#")) else brand["license"])
+        lines.append(brand["license"])
     return [x for x in lines if x]
 
 
@@ -163,4 +196,4 @@ def numbered_canvas(brand, page_w, page_h):
 
 __all__ = ["INK", "MUTED", "LINE", "ZEBRA", "accent", "on_accent", "text_accent", "tint",
            "style", "p", "logo_flowable", "company_lines", "money", "numbered_canvas",
-           "TA_LEFT", "TA_RIGHT"]
+           "coc_title", "COC_TITLE", "TA_LEFT", "TA_RIGHT"]

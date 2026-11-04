@@ -1,10 +1,13 @@
 """Modern certificate of completion PDF (US Letter).
 
 Ported from kachapman/sherwood-toolbox @ 3d5bf83 (toolbox/tools/documents/coc_pdf.py)
+Updated for v28.2 (upstream 94e66ac).
 
 job: customer_name, street, city_state_zip, job_number, insurance_claim,
      sales_rep, completion_date, note
-opts: statement, signature_path, signer_name, signer_title
+opts: statement, signature_path, signer_name, signer_title,
+      signatures (bool, default True; v28.2: False leaves out the whole
+      SIGNATURES section, heading included)
 
 Deviations from upstream 3d5bf83:
   * Absolute import of pdf_common (Sietch package layout).
@@ -18,13 +21,23 @@ Deviations from upstream 3d5bf83:
     Ken's decision (2026-11-03): the Sietch COC has NO homeowner line, so
     that branch was removed and the `homeowner_line` option no longer
     exists.
+
+v28.2 (upstream 94e66ac):
+  * `opts["signatures"]` (bool, default True). False leaves out the whole
+    SIGNATURES section -- the heading, the contractor block and the (removed)
+    homeowner block. Ported from upstream bee1b9e.
+  * The title now comes from `pdf_common.coc_title()` (upstream bb35d36)
+    instead of an inline `.title()` call, so "CERTIFICATE OF COMPLETION"
+    renders as "Certificate of Completion" and a custom mixed-case title is
+    left exactly as typed.
 """
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import HRFlowable, KeepTogether, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from doc_pdf.pdf_common import (INK, LINE, MUTED, TA_RIGHT, accent, company_lines,
-                                logo_flowable, numbered_canvas, p, style, text_accent, tint)
+from doc_pdf.pdf_common import (INK, LINE, MUTED, TA_RIGHT, accent, coc_title,
+                                company_lines, logo_flowable, numbered_canvas, p,
+                                style, text_accent, tint)
 
 
 PAGE_W, PAGE_H = letter
@@ -69,34 +82,36 @@ def _sig_block(img_path, name_line, label, date_text, root=None):
     return cells
 
 
+def _signatures(job, opts, acc, root=None):
+    """The SIGNATURES section: heading + the contractor signature block.
+
+    Sietch decision 2026-11-03: there is NO property-owner signature line on
+    the COC. The upstream Sherwood builder draws a second "Property owner"
+    block; that branch was removed here, so only the contractor block is
+    drawn.
+    """
+    signer = ", ".join(x for x in (opts.get("signer_name"), opts.get("signer_title")) if x)
+    contractor = _sig_block(opts.get("signature_path"), signer, "Contractor representative",
+                            f"Date: {job.get('completion_date') or ''}", root=root)
+    sig = Table([[contractor]], colWidths=[CONTENT_W])
+    sig.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "BOTTOM"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                             ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    return KeepTogether([p("SIGNATURES", style("sh", 7.5, text_accent(acc), True)), Spacer(1, 10), sig])
+
+
 def build_coc(out_path, brand, job, opts, root=None):
     """Render a modern Certificate of Completion PDF."""
     acc = accent(brand)
     doc = SimpleDocTemplate(out_path, pagesize=letter, leftMargin=M, rightMargin=M, topMargin=40,
                             bottomMargin=62, title="Certificate of Completion", author=brand.get("name") or "")
-    title = brand.get("coc_title") or "Certificate of Completion"
-    if title.isupper():
-        # Upstream uses str.title(), which renders "Certificate Of
-        # Completion". Sietch deviation: keep the short function word
-        # lowercase so the heading reads "Certificate of Completion" (the
-        # same wording the classic Sietch COC used).
-        title = title.title()
-        for _small in ("Of", "The", "And", "For", "At", "On", "In", "To", "A", "An"):
-            title = title.replace(f" {_small} ", f" {_small.lower()} ")
-        title = title[:1].upper() + title[1:]
+    title = coc_title(brand.get("coc_title"))
     story = [_header(brand, root=root), Spacer(1, 44),
              p(title, style("t", 28, INK, True, TA_CENTER, 34)), Spacer(1, 8),
              HRFlowable(width=70, thickness=3, color=acc, hAlign="CENTER"), Spacer(1, 16),
              p(opts.get("statement") or "", style("st", 11, MUTED, align=TA_CENTER, leading=16)),
-             Spacer(1, 26), _details(job, acc), Spacer(1, 48)]
-    signer = ", ".join(x for x in (opts.get("signer_name"), opts.get("signer_title")) if x)
-    contractor = _sig_block(opts.get("signature_path"), signer, "Contractor representative",
-                            f"Date: {job.get('completion_date') or ''}", root=root)
-    # Sietch decision 2026-11-03: there is NO property-owner signature line
-    # on the COC. The upstream Sherwood builder draws a second "Property
-    # owner" block; that branch was removed here.
-    sig = Table([[contractor]], colWidths=[CONTENT_W])
-    sig.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "BOTTOM"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                             ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
-    story.append(KeepTogether([p("SIGNATURES", style("sh", 7.5, text_accent(acc), True)), Spacer(1, 10), sig]))
+             Spacer(1, 26), _details(job, acc)]
+    # v28.2: opts["signatures"] (default True). False leaves out the whole
+    # SIGNATURES section -- the heading included.
+    if opts.get("signatures", True):
+        story += [Spacer(1, 48), _signatures(job, opts, acc, root=root)]
     doc.build(story, canvasmaker=numbered_canvas(brand, PAGE_W, PAGE_H))
