@@ -1117,20 +1117,47 @@ def _save_processed_ids(ids: set[str]) -> None:
     _write_json(PROCESSED_IDS_FILE, sorted(list(ids)))
 
 
-def _processed_key(account_id, conv_id: str) -> str:
-    # Scope processed-UID tracking per account so a deleted account's UIDs can
-    # never suppress another account's messages.
+def _processed_key(account_id, conv_id: str, folder: str | None = None) -> str:
+    """The processed-ID key for a message.
+
+    Scoped per account so a deleted account's UIDs can never suppress another
+    account's messages, and — since 2026-11-04 — per FOLDER as well: a Sent
+    UID 4114 and an INBOX UID 4114 are different messages, so the key is
+    `account:folder:uid`.
+
+    BACKWARD COMPATIBILITY: the deployed `processed_ids.json` still holds the
+    old `account:uid` keys. Those are honoured too (see `_is_processed`), so
+    deploying this fix does not trigger a mass re-import of everything that
+    was already processed.
+    """
+    if folder is None or str(folder).strip() == "":
+        # Legacy form — kept so an old caller still produces a valid key.
+        return f"{account_id}:{conv_id}"
+    return f"{account_id}:{_normalize_folder_name(folder)}:{conv_id}"
+
+
+def _legacy_processed_key(account_id, conv_id: str) -> str:
+    """The pre-2026-11-04 key form (`account:uid`), still honoured on read."""
     return f"{account_id}:{conv_id}"
 
 
-def _mark_processed(account_id, conv_id: str) -> None:
+def _mark_processed(account_id, conv_id: str, folder: str | None = None) -> None:
     ids = _load_processed_ids()
-    ids.add(_processed_key(account_id, conv_id))
+    ids.add(_processed_key(account_id, conv_id, folder))
     _save_processed_ids(ids)
 
 
-def _is_processed(account_id, conv_id: str) -> bool:
-    return _processed_key(account_id, conv_id) in _load_processed_ids()
+def _is_processed(account_id, conv_id: str, folder: str | None = None) -> bool:
+    """True when the message was already processed.
+
+    Checks the current (folder-scoped) key FIRST, then the legacy
+    `account:uid` key, so a deploy does not re-import everything that the
+    old key set already covered.
+    """
+    ids = _load_processed_ids()
+    if _processed_key(account_id, conv_id, folder) in ids:
+        return True
+    return _legacy_processed_key(account_id, conv_id) in ids
 
 
 def _refresh_oauth_token_if_needed(account_id: int, provider_name: str, current_refresh_token: str, expires_at: datetime | None) -> tuple[str, str] | None:
@@ -1392,10 +1419,17 @@ def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None,
                     since: datetime | None = None,
                     uid_min: int | None = None) -> Any:
     """Fetch messages, newest handling unchanged. When uid_min is given, only
-    UID > uid_min are fetched (incremental path — seconds, not minutes). The
-    IMAP `uid_min:*` range always includes the mailbox's highest UID even when
-    nothing is new; that overlap row is dropped by _process_message's
-    already_processed guard, so it can never double-notify or double-link.
+    UID > uid_min are fetched (incremental path — seconds, not minutes).
+
+    ⚠ IMAP `n:*` ALWAYS returns the mailbox's highest UID, even when that UID
+    is BELOW n (that is the RFC 3501 rule for a `*` range end). So the range
+    start is `uid_min + 1` (strictly newer than the watermark) AND every
+    returned UID is filtered client-side against `uid_min`. Without the
+    client-side filter the overlap row comes back on EVERY poll, which used to
+    be dropped by _process_message's already_processed guard — but retention
+    deletes that guard's key when it purges the message, so the row was
+    re-imported (attachments re-downloaded) every cycle. The filter is
+    therefore the primary guard; the processed-ID set is the backstop.
 
     ⚠ GENERATOR (bug fix 2026-11-03, review round 2).
 
@@ -1449,7 +1483,8 @@ def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None,
         folder = _normalize_folder_name(folder or mailbox_cfg.get("inbox", "INBOX"))
         mailbox.folder.set(folder)
         if uid_min is not None:
-            criterion = A(uid=UidRange(str(int(uid_min)), "*"))
+            # Strictly newer than the watermark: `last_seen + 1`.
+            criterion = A(uid=UidRange(str(int(uid_min) + 1), "*"))
         else:
             criterion = A() if since is None else A(date_gte=since.date())
         for msg in mailbox.fetch(criteria=criterion, mark_seen=False, bulk=False):
@@ -1457,6 +1492,18 @@ def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None,
                 uids.append(int(msg.uid))
             except (TypeError, ValueError):
                 continue
+        if uid_min is not None:
+            # Client-side filter (see the docstring): IMAP's `n:*` returns the
+            # HIGHEST UID in the folder even when it is below n, so the server
+            # range alone does NOT guarantee "only newer than uid_min".
+            # Filtering here happens BEFORE the per-message fetch, so no
+            # attachment bytes are downloaded/staged for a stale row.
+            before = len(uids)
+            uids = [u for u in uids if u > int(uid_min)]
+            dropped = before - len(uids)
+            if dropped:
+                logger.info("Dropped %d message(s) with UID <= %d (IMAP n:* overlap) for folder %s",
+                            dropped, int(uid_min), folder)
         uids.sort(reverse=True)
     except Exception as e:
         logger.error("IMAP fetch error: %s", e)
@@ -2693,7 +2740,7 @@ def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | No
         )
         msg_id = result["id"] if result else None
         if msg_id:
-            _mark_processed(account_id, str(msg.get("uid") or msg_id))
+            _mark_processed(account_id, str(msg.get("uid") or msg_id), folder)
             # Store attachment records and optionally download files
             if attachments and account_id:
                 _store_attachments(msg_id, account_id, attachments, msg)
@@ -2969,6 +3016,92 @@ def _store_attachments(message_id: int, account_id: int, attachments: list[dict]
                 logger.exception("Failed to record download error for attachment %s", att_id)
 
 
+def _account_retention_days(mailbox_cfg: dict[str, Any]) -> int:
+    """The account's retention window in days (0 = keep forever).
+
+    Read from the mailbox config when present; otherwise fall back to the
+    `mail_accounts.retention_days` column. A missing/invalid value means
+    "no retention" (keep forever) — the scanner then never skips a message.
+    """
+    raw = (mailbox_cfg or {}).get("retention_days")
+    if raw is None:
+        account_id = (mailbox_cfg or {}).get("account_id")
+        if account_id is not None:
+            try:
+                row = db.query_one(
+                    "SELECT retention_days FROM mail_accounts WHERE id = %s",
+                    (account_id,),
+                )
+                raw = (row or {}).get("retention_days")
+            except Exception:
+                logger.exception("Retention: could not read retention_days for account %s",
+                                 account_id)
+                raw = None
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return days if days > 0 else 0
+
+
+def _retention_cutoff(mailbox_cfg: dict[str, Any]) -> datetime | None:
+    """The instant before which a message is too old to import, or None when
+    the account keeps mail forever.
+
+    Same cutoff logic as `_enforce_retention` (now - retention_days), so the
+    scanner never imports a message that retention would immediately delete.
+
+    The cutoff is NAIVE (no timezone), matching `mail_messages.date_received`
+    (a plain TIMESTAMP) and the aware-but-offset-dropped value Postgres
+    stores for it.
+    """
+    days = _account_retention_days(mailbox_cfg)
+    if days <= 0:
+        return None
+    return (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None)
+
+
+def _parse_message_date(value: Any) -> datetime | None:
+    """Parse an IMAP message date into a naive datetime, or None.
+
+    The value is the message's own wall-clock time, WITHOUT a timezone
+    conversion, because that is exactly how Postgres stores it:
+    `mail_messages.date_received` is a plain `TIMESTAMP` (no time zone), and
+    `_store_message` writes `msg.date.isoformat()` verbatim — Postgres drops
+    the offset and keeps the wall-clock time as written.
+
+    Comparing that wall-clock value against `_enforce_retention`'s cutoff
+    (also naive, see `_retention_cutoff`) keeps the import-skip and the
+    retention purge in agreement: the scanner never skips a message that
+    retention would keep, and never imports one that retention would delete.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            dt = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    # Drop the offset — the stored value has none.
+    return dt.replace(tzinfo=None)
+
+
+def _message_older_than_cutoff(msg: dict[str, Any], cutoff: datetime | None) -> bool:
+    """True when the message's date is strictly older than the retention cutoff."""
+    if cutoff is None:
+        return False
+    dt = _parse_message_date(msg.get("date"))
+    if dt is None:
+        # An undated message cannot be proven older than the cutoff — import it.
+        return False
+    return dt < cutoff
+
+
 def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[str, Any]:
     uid = msg.get("uid") or ""
     account_id = mailbox_cfg.get("account_id")
@@ -2988,9 +3121,28 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
         _append_log(log_entry)
         return log_entry
 
-    if _is_processed(account_id, uid or msg.get("message_id") or ""):
+    if _is_processed(account_id, uid or msg.get("message_id") or "", msg.get("folder", "")):
         log_entry["status"] = "already_processed"
         _append_log(log_entry)
+        return log_entry
+
+    # ⚠ Retention guard (bug fix 2026-11-04, "mail retention re-import loop").
+    # A message older than the account's retention window would be deleted by
+    # `_enforce_retention` in the SAME poll cycle. Importing it first meant
+    # the message was re-imported (attachments re-downloaded and stored under
+    # a NEW message id) on every poll — 1.6 GB of duplicate files in one day.
+    # Skip it BEFORE the message row and its attachments are stored.
+    # An explicit manual reprocess (mailbox_cfg["skip_retention_check"]) is
+    # exempt: the row already exists in the DB, so it survived retention.
+    cutoff = None if mailbox_cfg.get("skip_retention_check") else _retention_cutoff(mailbox_cfg)
+    if _message_older_than_cutoff(msg, cutoff):
+        log_entry["status"] = "skipped_older_than_retention"
+        _append_log(log_entry)
+        # Mark it processed so the next poll does not reconsider it. The
+        # watermark advances past it either way (see _poll_mailbox_cfg).
+        _mark_processed(account_id, uid or msg.get("message_id") or "", msg.get("folder", ""))
+        logger.info("Skipped message UID %s (folder %s): older than the %d-day retention window",
+                    uid, msg.get("folder", ""), _account_retention_days(mailbox_cfg))
         return log_entry
 
     msg_id = _store_message(msg, mailbox_cfg)
@@ -3169,6 +3321,9 @@ def _poll_mailbox_cfg(cfg: dict[str, Any]) -> list[dict[str, Any]]:
             # Incremental path: when UIDVALIDITY matches the watermark, fetch
             # only UID > last_seen (seconds). Otherwise the legacy full-window
             # fetch (first run, renumbered mailbox, unknown validity).
+            # `uid_min` is the EXCLUSIVE lower bound: `_fetch_messages` asks
+            # IMAP for `uid_min+1:*` and drops anything <= uid_min it gets
+            # back (IMAP's `n:*` always includes the folder's highest UID).
             uid_min = None
             cur_validity, cur_uidnext = None, None
             stored_validity, last_seen = _get_folder_watermark(cfg.get("account_id"), imap_folder)
@@ -3328,7 +3483,15 @@ def _enforce_retention() -> None:
 
     Runs for every account with retention_days > 0, regardless of sync_enabled.
     Messages linked to deals are always kept. Local DB only — never touches IMAP.
-    Also cleans up processed-IDs file for deleted messages.
+
+    ⚠ The processed-ID keys of the purged messages are KEPT (bug fix
+    2026-11-04, "mail retention re-import loop"). They used to be discarded
+    here, which removed the guard that stops the scanner from re-importing a
+    message: the message was deleted, its key was dropped, and the next poll
+    imported it again (attachments re-downloaded) — 1.6 GB of duplicate files
+    in one day. The purged UID stays in the processed set so it is never
+    imported again. `_process_message` also skips messages that are already
+    older than the retention window, so a purged message is not even fetched.
 
     The stored attachment bytes (`data/mail-attachments/<message_id>/`) are
     only deleted when `MAIL_ATTACHMENT_DROP_STORED_ON_PURGE` is true. The
@@ -3351,9 +3514,11 @@ def _enforce_retention() -> None:
     for acct in rows:
         try:
             cutoff = datetime.now(timezone.utc) - timedelta(days=int(acct["retention_days"]))
-            # Get UIDs about to be deleted (for processed-IDs cleanup)
-            uids_to_clean = db.query_dicts(
-                "SELECT account_id, imap_uid FROM mail_messages WHERE account_id = %s AND date_received < %s AND id NOT IN (SELECT message_id FROM mail_deal_links)",
+            # The messages about to be deleted. Their processed-ID keys are
+            # KEPT (not discarded) so the scanner never re-imports them —
+            # see the function docstring.
+            purged_rows = db.query_dicts(
+                "SELECT account_id, imap_uid, folder FROM mail_messages WHERE account_id = %s AND date_received < %s AND id NOT IN (SELECT message_id FROM mail_deal_links)",
                 (acct["id"], cutoff),
             )
             # Collect the stored attachment paths BEFORE the delete — the
@@ -3385,11 +3550,22 @@ def _enforce_retention() -> None:
             )
             if deleted:
                 logger.info("Retention: deleted %d old message(s) for %s (older than %d days)", deleted, acct["email"], acct["retention_days"])
-                # Clean up processed IDs for deleted messages
-                if uids_to_clean:
+                # ⚠ Keep the processed-ID keys of the purged messages (bug fix
+                # 2026-11-04). They used to be discarded here, which removed
+                # the very guard that stops the scanner from re-importing the
+                # message on the next poll. Instead, the purged UID is
+                # RE-ADDED under the folder-scoped key so it can never be
+                # imported again (the legacy `account:uid` key is also kept,
+                # so an existing deployment is not re-imported either).
+                if purged_rows:
                     ids = _load_processed_ids()
-                    for r in uids_to_clean:
-                        ids.discard(_processed_key(r["account_id"], r["imap_uid"]))
+                    for r in purged_rows:
+                        uid_val = r.get("imap_uid")
+                        if uid_val is None or str(uid_val) == "":
+                            continue
+                        ids.add(_processed_key(r.get("account_id"), str(uid_val),
+                                               r.get("folder") or ""))
+                        ids.add(_legacy_processed_key(r.get("account_id"), str(uid_val)))
                     _save_processed_ids(ids)
             if stored_paths:
                 removed = 0
@@ -3724,13 +3900,10 @@ def _reprocess_message_by_uid(account_id: int, uid: str) -> dict[str, Any] | Non
     Reconstructs the message from mail_messages and runs the classifier pipeline so
     dry-run actions and classifications are logged immediately, not just on the next
     IMAP poll.
-    """
-    key = _processed_key(account_id, uid)
-    ids = _load_processed_ids()
-    if key in ids:
-        ids.discard(key)
-        _save_processed_ids(ids)
 
+    Both the folder-scoped key and the legacy `account:uid` key are cleared,
+    so a manual reprocess always works against the current key scheme.
+    """
     try:
         row = db.query_one(
             "SELECT id, imap_uid, message_id, from_addr, to_addr, cc_addr, subject, "
@@ -3740,6 +3913,14 @@ def _reprocess_message_by_uid(account_id: int, uid: str) -> dict[str, Any] | Non
         )
     except Exception:
         row = None
+
+    # Clear the processed keys for BOTH the folder-scoped and the legacy form.
+    ids = _load_processed_ids()
+    folder = (row or {}).get("folder") or ""
+    for key in (_processed_key(account_id, uid, folder),
+                _legacy_processed_key(account_id, uid)):
+        ids.discard(key)
+    _save_processed_ids(ids)
 
     if not row:
         return {"account_id": account_id, "uid": uid, "reprocessed": True, "immediate": False}
@@ -3758,7 +3939,11 @@ def _reprocess_message_by_uid(account_id: int, uid: str) -> dict[str, Any] | Non
         "attachments": [],
         "raw_headers": "",
     }
-    mailbox_cfg = {"account_id": account_id, "inbox": row["folder"] or "INBOX"}
+    mailbox_cfg = {"account_id": account_id, "inbox": row["folder"] or "INBOX",
+                   # The row already exists in the DB, so it survived retention;
+                   # an explicit manual reprocess must not be blocked by the
+                   # retention skip.
+                   "skip_retention_check": True}
     log_entry = _process_message(msg, mailbox_cfg)
     return {"account_id": account_id, "uid": uid, "reprocessed": True, "immediate": True, "log_status": log_entry.get("status")}
 
