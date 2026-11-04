@@ -17,11 +17,17 @@ Deviations from upstream 3d5bf83:
     directory. When `root` is None the behaviour is identical to upstream.
 
 v28.2 (upstream 94e66ac):
-  * Added `coc_title(raw)` -- the certificate title as printed. Blank or any
+  * `coc_title(raw)` -- the certificate title as printed. Blank or any
     casing of "Certificate of Completion" gives "Certificate of Completion";
     another all-caps title is title-cased with short words ("of", "and",
     "the", ...) lowercased; a mixed-case title is left as typed. Ported
     verbatim from upstream bb35d36.
+
+    It was moved OUT of this module into `doc_pdf.mapping` (which does not
+    import reportlab) so the classic fpdf2 renderers can use it without
+    pulling reportlab in -- the classic layout is the fallback when
+    reportlab is missing, so it must not depend on it. It is re-exported
+    here for the modern builders.
 """
 from xml.sax.saxutils import escape
 
@@ -32,31 +38,17 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas as rl_canvas
 from reportlab.platypus import Image, Paragraph
 
+# coc_title lives in doc_pdf.mapping, which does NOT import reportlab, so
+# the classic (fpdf2) renderers can use it even when reportlab is missing.
+# It is re-exported here for the modern builders, which already need
+# reportlab anyway.
+from doc_pdf.mapping import COC_TITLE, coc_title
+
 INK = HexColor("#1c241c")
 MUTED = HexColor("#5d6b5a")
 LINE = HexColor("#d9ded3")
 ZEBRA = HexColor("#f6f7f3")
 FALLBACK_ACCENT = "#2c5130"
-COC_TITLE = "Certificate of Completion"
-_SMALL_WORDS = {"a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to"}
-
-
-def coc_title(raw):
-    """Certificate title as printed (v28.2, Ken: lowercase "of").
-
-    Blank, or any casing of "Certificate of Completion" (the shipped
-    companies.json and older saved companies had "CERTIFICATE OF COMPLETION"),
-    gives "Certificate of Completion". Another all-caps title is title-cased
-    with short words like "of" kept lowercase; mixed-case titles are left as
-    typed."""
-    t = " ".join((raw or "").split())
-    if not t or t.lower() == COC_TITLE.lower():
-        return COC_TITLE
-    if t.isupper():
-        words = t.lower().split(" ")
-        return " ".join(w if (i and w in _SMALL_WORDS) else w[:1].upper() + w[1:]
-                        for i, w in enumerate(words))
-    return t
 
 
 def accent(brand):
