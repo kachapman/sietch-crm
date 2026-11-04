@@ -165,9 +165,10 @@ class TestMapping(unittest.TestCase):
         brand = doc_mapping.build_brand(TEMPLATE_WITH_EXTRAS, root=REPO)
         lines = company_lines(brand)
         self.assertIn("www.publicadjustermidwest.com", lines)
-        # The license is prefixed with "License " unless it already starts
-        # with "lic" / "#" (upstream rule).
-        self.assertIn("License OH LIC 104.8872", lines)
+        # The value already contains "lic", so it is NOT prefixed with
+        # "License " (2026-11-03 fix: no more "License OH LIC 104.8872").
+        self.assertIn("OH LIC 104.8872", lines)
+        self.assertNotIn("License OH LIC", " ".join(lines))
 
     def test_company_lines_omit_empty_website_and_license(self):
         brand = doc_mapping.build_brand(TEMPLATE, root=REPO)
@@ -199,11 +200,23 @@ class TestMapping(unittest.TestCase):
         job2 = doc_mapping.build_job(dict(PAYLOAD, completion_date="10/31/2026"), today="11/03/2026")
         self.assertEqual(job2["completion_date"], "10/31/2026")
 
-    def test_items_base_amount_is_first_row_labelled_by_terms(self):
+    def test_items_base_amount_is_first_row_labelled_base_charge(self):
+        # The base charge used to be labelled with the payment TERMS
+        # ("Due on receipt"), which reads like a payment condition rather
+        # than a charge description. It is now "Base charge".
         items = doc_mapping.build_items(PAYLOAD)
-        self.assertEqual(items[0], ("Due on receipt", 1000.0))
+        self.assertEqual(items[0], ("Base charge", 1000.0))
         self.assertEqual(items[1], ("Roof replacement", 18450.0))
         self.assertEqual(items[2], ("Gutters", 2310.5))
+
+    def test_items_base_charge_label_is_not_the_payment_terms(self):
+        items = doc_mapping.build_items(dict(PAYLOAD, terms="Net 30"))
+        self.assertEqual(items[0][0], "Base charge")
+        self.assertNotIn("Net 30", [d for d, _a in items])
+
+    def test_items_base_charge_label_can_be_overridden(self):
+        items = doc_mapping.build_items(dict(PAYLOAD, base_description="Labor - initial draw"))
+        self.assertEqual(items[0], ("Labor - initial draw", 1000.0))
 
     def test_items_total_matches_classic_grand_total(self):
         items = doc_mapping.build_items(PAYLOAD)
@@ -803,6 +816,107 @@ class TestGenerationHandlers(unittest.TestCase):
                 self.assertNotIn("License", text, f"{layout} {kind}")
                 self.assertNotIn("www.", text, f"{layout} {kind}")
 
+    def test_coc_signature_lines_off_in_both_layouts(self):
+        """v28.2: "Include signature lines" off drops the signature block
+        from the certificate in both layouts."""
+        srv = self.server
+        for layout in ("modern", "classic"):
+            root = self._tmp_root()
+            tpl = dict(TEMPLATE, show_signature_lines=False)
+            response, _ = self._run(
+                "_handle_project_coc_generate",
+                dict(PAYLOAD, template_id=7, layout=layout),
+                opp_id=77, root=root, template=tpl)
+            self.assertEqual(response["status"], 201)
+            written = list((root / "data" / "documents" / "77").glob("*.pdf"))
+            self.assertEqual(len(written), 1, layout)
+            text = pdf_text(written[0])
+            self.assertNotIn("SIGNATURES", text, layout)
+            self.assertNotIn("Contractor representative", text, layout)
+            # The classic signature block prints "By <name>"; it must be gone.
+            self.assertNotIn("By Ken", text, layout)
+            # The rest of the certificate is untouched.
+            self.assertIn("Certificate of Completion", text, layout)
+            self.assertIn("Jordan Ellis", text, layout)
+
+    def test_classic_coc_signature_block_respects_the_toggle(self):
+        """The classic signature block needs a signature IMAGE; with one
+        present the toggle decides whether it is drawn."""
+        srv = self.server
+        try:
+            from PIL import Image
+        except Exception as exc:  # pragma: no cover - environment dependent
+            self.skipTest(f"Pillow not installed: {exc}")
+        for lines_on, expect_block in ((True, True), (False, False)):
+            root = self._tmp_root()
+            # A tiny PNG to stand in for the signature image, inside the
+            # same root the handler resolves asset paths against.
+            png = root / "sig.png"
+            Image.new("RGB", (120, 40), (20, 30, 70)).save(png)
+            tpl = dict(TEMPLATE, show_signature_lines=lines_on,
+                       signature_path=str(png))
+            response, _ = self._run(
+                "_handle_project_coc_generate",
+                dict(PAYLOAD, template_id=7, layout="classic"),
+                opp_id=77, root=root, template=tpl)
+            self.assertEqual(response["status"], 201)
+            written = list((root / "data" / "documents" / "77").glob("*.pdf"))
+            self.assertEqual(len(written), 1)
+            text = pdf_text(written[0])
+            # The classic signature block prints "By <name>" (it can wrap
+            # across lines, so match on "By " + the first name part).
+            if expect_block:
+                self.assertIn("By Ken", text)
+            else:
+                self.assertNotIn("By Ken", text)
+            # The certificate itself is always there.
+            self.assertIn("Certificate of Completion", text)
+
+    def test_coc_signature_lines_on_by_default(self):
+        srv = self.server
+        # Modern: the SIGNATURES heading + the contractor block.
+        root = self._tmp_root()
+        response, _ = self._run(
+            "_handle_project_coc_generate",
+            dict(PAYLOAD, template_id=7, layout="modern"),
+            opp_id=77, root=root)
+        self.assertEqual(response["status"], 201)
+        written = list((root / "data" / "documents" / "77").glob("*.pdf"))
+        text = pdf_text(written[0])
+        self.assertIn("SIGNATURES", text)
+        self.assertIn("Contractor representative", text)
+
+        # Classic: the signature block only appears when the template has a
+        # signature IMAGE (this one does not), but the toggle must never
+        # remove anything else from the certificate.
+        root = self._tmp_root()
+        response, _ = self._run(
+            "_handle_project_coc_generate",
+            dict(PAYLOAD, template_id=7, layout="classic"),
+            opp_id=77, root=root)
+        self.assertEqual(response["status"], 201)
+        written = list((root / "data" / "documents" / "77").glob("*.pdf"))
+        text = pdf_text(written[0])
+        self.assertIn("Certificate of Completion", text)
+        self.assertIn("Jordan Ellis", text)
+        self.assertIn("Work completed per agreement.", text)
+
+    def test_classic_coc_title_is_certificate_of_completion(self):
+        """v28.2: the classic layout uses the title helper too."""
+        srv = self.server
+        root = self._tmp_root()
+        response, _ = self._run(
+            "_handle_project_coc_generate",
+            dict(PAYLOAD, template_id=7, layout="classic"),
+            opp_id=77, root=root,
+            template=dict(TEMPLATE, coc_title="CERTIFICATE OF COMPLETION"))
+        self.assertEqual(response["status"], 201)
+        written = list((root / "data" / "documents" / "77").glob("*.pdf"))
+        text = pdf_text(written[0])
+        self.assertIn("Certificate of Completion", text)
+        self.assertNotIn("Certificate Of Completion", text)
+        self.assertNotIn("CERTIFICATE OF COMPLETION", text)
+
     def test_standalone_invoice_and_coc(self):
         srv = self.server
         tmp = tempfile.TemporaryDirectory()
@@ -827,10 +941,159 @@ class TestGenerationHandlers(unittest.TestCase):
         self.assertEqual(response2["status"], 201)
 
 
+# ── Sherwood v28.2 port ─────────────────────────────────────────────────────
+
+class TestSherwoodV282Port(unittest.TestCase):
+    """The v28.2 (upstream 94e66ac) changes.
+
+    Ported from upstream bee1b9e ("Include signature lines" toggle) and
+    bb35d36 (the certificate title helper).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if doc_mapping is None:
+            raise unittest.SkipTest(f"doc_pdf not importable: {_PDF_IMPORT_ERROR}")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.brand = doc_mapping.build_brand(TEMPLATE, root=REPO)
+        self.job = doc_mapping.build_job(PAYLOAD, today="11/03/2026")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    # --- 1. the "Include signature lines" toggle ----------------------------
+
+    def test_coc_opts_signatures_defaults_to_true(self):
+        opts = doc_mapping.build_coc_opts(PAYLOAD, TEMPLATE, root=REPO)
+        self.assertTrue(opts["signatures"])
+
+    def test_coc_opts_signatures_off_from_the_template(self):
+        tpl = dict(TEMPLATE, show_signature_lines=False)
+        opts = doc_mapping.build_coc_opts(PAYLOAD, tpl, root=REPO)
+        self.assertFalse(opts["signatures"])
+
+    def test_coc_opts_signatures_payload_overrides_the_template(self):
+        tpl = dict(TEMPLATE, show_signature_lines=False)
+        opts = doc_mapping.build_coc_opts(
+            dict(PAYLOAD, include_signature_lines=True), tpl, root=REPO)
+        self.assertTrue(opts["signatures"])
+        opts = doc_mapping.build_coc_opts(
+            dict(PAYLOAD, include_signature_lines=False),
+            dict(TEMPLATE, show_signature_lines=True), root=REPO)
+        self.assertFalse(opts["signatures"])
+
+    def test_modern_coc_has_no_signatures_section_when_off(self):
+        """opts["signatures"] False drops the whole SIGNATURES section --
+        the heading included (upstream bee1b9e)."""
+        out = self.dir / "coc-nosig.pdf"
+        opts = doc_mapping.build_coc_opts(PAYLOAD, TEMPLATE, root=REPO)
+        opts["signatures"] = False
+        build_coc(str(out), self.brand, self.job, opts)
+        text = pdf_text(out)
+        self.assertNotIn("SIGNATURES", text)
+        self.assertNotIn("Contractor representative", text)
+        self.assertNotIn("By ", text)
+        # The rest of the certificate is untouched.
+        self.assertIn("Certificate of Completion", text)
+        self.assertIn("Jordan Ellis", text)
+        self.assertIn("Page 1 of 1", text)
+
+    def test_modern_coc_has_the_signatures_section_when_on(self):
+        out = self.dir / "coc-sig.pdf"
+        opts = doc_mapping.build_coc_opts(PAYLOAD, TEMPLATE, root=REPO)
+        build_coc(str(out), self.brand, self.job, opts)
+        text = pdf_text(out)
+        self.assertIn("SIGNATURES", text)
+        self.assertIn("Contractor representative", text)
+
+    # --- 2. the certificate title helper -----------------------------------
+
+    def test_coc_title_helper(self):
+        """Ported from upstream bb35d36."""
+        from doc_pdf.pdf_common import coc_title
+        for raw in (None, "", "CERTIFICATE OF COMPLETION", "Certificate Of Completion",
+                    " certificate of completion ", "CERTIFICATE   OF   COMPLETION"):
+            self.assertEqual(coc_title(raw), "Certificate of Completion")
+        self.assertEqual(coc_title("NOTICE OF COMPLETION AND RELEASE"),
+                         "Notice of Completion and Release")
+        # A mixed-case custom title is left exactly as typed.
+        self.assertEqual(coc_title("Job Sign-Off"), "Job Sign-Off")
+        self.assertEqual(coc_title("Certificate of Work Completion"),
+                         "Certificate of Work Completion")
+
+    def test_modern_coc_title_is_certificate_of_completion(self):
+        """The all-caps template title must render as "Certificate of
+        Completion", not "Certificate Of Completion"."""
+        out = self.dir / "coc-title.pdf"
+        brand = doc_mapping.build_brand(
+            dict(TEMPLATE, coc_title="CERTIFICATE OF COMPLETION"), root=REPO)
+        opts = doc_mapping.build_coc_opts(PAYLOAD, TEMPLATE, root=REPO)
+        build_coc(str(out), brand, self.job, opts)
+        text = pdf_text(out)
+        self.assertIn("Certificate of Completion", text)
+        self.assertNotIn("Certificate Of Completion", text)
+        self.assertNotIn("CERTIFICATE OF COMPLETION", text)
+
+    def test_modern_coc_keeps_a_custom_mixed_case_title(self):
+        out = self.dir / "coc-custom-title.pdf"
+        brand = doc_mapping.build_brand(
+            dict(TEMPLATE, coc_title="Job Sign-Off Certificate"), root=REPO)
+        opts = doc_mapping.build_coc_opts(PAYLOAD, TEMPLATE, root=REPO)
+        build_coc(str(out), brand, self.job, opts)
+        self.assertIn("Job Sign-Off Certificate", pdf_text(out))
+
+    # --- 3. the license label ----------------------------------------------
+
+    def test_license_label_helper(self):
+        """No "License " prefix when the value already contains "lic"
+        anywhere, or starts with "#"."""
+        self.assertEqual(doc_mapping.license_label("OH LIC 104.8872"), "OH LIC 104.8872")
+        self.assertEqual(doc_mapping.license_label("lic 12345"), "lic 12345")
+        self.assertEqual(doc_mapping.license_label("LIC-998"), "LIC-998")
+        self.assertEqual(doc_mapping.license_label("#A-123"), "#A-123")
+        self.assertEqual(doc_mapping.license_label("OH 12345"), "License OH 12345")
+        self.assertEqual(doc_mapping.license_label(""), "")
+        self.assertEqual(doc_mapping.license_label(None), "")
+
+    def test_invoice_does_not_double_the_license_label(self):
+        brand = doc_mapping.build_brand(TEMPLATE_WITH_EXTRAS, root=REPO)
+        out = self.dir / "invoice-license.pdf"
+        build_invoice(str(out), brand, self.job, doc_mapping.build_items(PAYLOAD))
+        text = pdf_text(out)
+        self.assertIn("OH LIC 104.8872", text)
+        self.assertNotIn("License OH LIC", text)
+
+    def test_coc_does_not_double_the_license_label(self):
+        brand = doc_mapping.build_brand(TEMPLATE_WITH_EXTRAS, root=REPO)
+        out = self.dir / "coc-license.pdf"
+        opts = doc_mapping.build_coc_opts(PAYLOAD, TEMPLATE_WITH_EXTRAS, root=REPO)
+        build_coc(str(out), brand, self.job, opts)
+        text = pdf_text(out)
+        self.assertIn("OH LIC 104.8872", text)
+        self.assertNotIn("License OH LIC", text)
+
+    # --- 4. the base charge label ------------------------------------------
+
+    def test_base_charge_is_not_labelled_with_the_payment_terms(self):
+        out = self.dir / "invoice-base.pdf"
+        payload = dict(PAYLOAD, terms="Due on receipt")
+        items = doc_mapping.build_items(payload)
+        build_invoice(str(out), self.brand, self.job, items)
+        text = pdf_text(out)
+        self.assertIn("Base charge", text)
+        self.assertNotIn("Due on receipt $1,000.00", text)
+        # The terms still show in the header meta block -- that is correct.
+        self.assertIn("Due on receipt", text)
+
+
 # ── Migration 045 (branding extras) ─────────────────────────────────────────
 
 class TestBrandingExtrasMigration(unittest.TestCase):
-    """migration 045 adds company_website / company_license / signature_title.
+    """migration 045 adds company_website / company_license / signature_title
+    / show_signature_lines.
 
     The migration must be additive, idempotent and must not collide with the
     numbering used by the other in-flight branch (043 / 044).
@@ -853,14 +1116,15 @@ class TestBrandingExtrasMigration(unittest.TestCase):
 
     def test_migration_adds_the_three_columns(self):
         src = self.MIGRATION.read_text(encoding="utf-8")
-        for col in ("company_website", "company_license", "signature_title"):
+        for col in ("company_website", "company_license", "signature_title",
+                    "show_signature_lines"):
             self.assertIn(col, src)
             self.assertIn(f"ADD COLUMN IF NOT EXISTS {col}", src)
 
     def test_migration_is_idempotent(self):
         """ADD COLUMN IF NOT EXISTS makes a re-run a no-op."""
         src = self.MIGRATION.read_text(encoding="utf-8")
-        self.assertEqual(src.count("ADD COLUMN IF NOT EXISTS"), 3)
+        self.assertEqual(src.count("ADD COLUMN IF NOT EXISTS"), 4)
         self.assertNotIn("DROP COLUMN", src)
 
     def test_migration_applies_and_is_re_runnable(self):
@@ -914,14 +1178,20 @@ class TestBrandingExtrasMigration(unittest.TestCase):
                     FROM information_schema.columns
                     WHERE table_schema LIKE 'pg_temp%'
                       AND table_name = 'document_templates'
-                      AND column_name IN ('company_website','company_license','signature_title')
+                      AND column_name IN ('company_website','company_license',
+                                          'signature_title','show_signature_lines')
                     ORDER BY column_name""")
                 rows = cur.fetchall()
-                self.assertEqual(len(rows), 3)
+                self.assertEqual(len(rows), 4)
                 for name, dtype, nullable, default in rows:
-                    self.assertEqual(dtype, "text", name)
-                    self.assertEqual(nullable, "NO", name)
-                    self.assertIn("''", str(default), name)
+                    if name == "show_signature_lines":
+                        self.assertEqual(dtype, "boolean", name)
+                        self.assertEqual(nullable, "NO", name)
+                        self.assertIn("true", str(default).lower(), name)
+                    else:
+                        self.assertEqual(dtype, "text", name)
+                        self.assertEqual(nullable, "NO", name)
+                        self.assertIn("''", str(default), name)
         finally:
             if conn is not None:
                 conn.close()
@@ -930,29 +1200,33 @@ class TestBrandingExtrasMigration(unittest.TestCase):
         """server.py carries an inline ALTER for databases that skip the
         migration files, so the columns exist either way."""
         src = (REPO / "server.py").read_text(encoding="utf-8")
-        for col in ("company_website", "company_license", "signature_title"):
+        for col in ("company_website", "company_license", "signature_title",
+                    "show_signature_lines"):
             self.assertIn(f"ADD COLUMN IF NOT EXISTS {col}", src)
 
     def test_admin_api_accepts_the_new_fields(self):
         src = (REPO / "server.py").read_text(encoding="utf-8")
-        # The create + update handlers must persist all three.
+        # The create + update handlers must persist all of them.
         self.assertGreaterEqual(src.count('"company_website"'), 1)
         self.assertGreaterEqual(src.count('"company_license"'), 1)
         self.assertGreaterEqual(src.count('"signature_title"'), 1)
+        self.assertGreaterEqual(src.count('"show_signature_lines"'), 1)
         self.assertIn("company_website", src)
         self.assertIn("company_license", src)
         self.assertIn("signature_title", src)
+        self.assertIn("show_signature_lines", src)
 
     def test_admin_ui_exposes_the_new_fields(self):
         html = (REPO / "public" / "index.html").read_text(encoding="utf-8")
         for field_id in ("doc-tpl-admin-website", "doc-tpl-admin-license",
-                         "doc-tpl-admin-sig-title"):
+                         "doc-tpl-admin-sig-title", "doc-tpl-admin-show-sig-lines"):
             self.assertIn(f'id="{field_id}"', html)
         js = (REPO / "public" / "app.js").read_text(encoding="utf-8")
         for field_id in ("doc-tpl-admin-website", "doc-tpl-admin-license",
-                         "doc-tpl-admin-sig-title"):
+                         "doc-tpl-admin-sig-title", "doc-tpl-admin-show-sig-lines"):
             self.assertIn(field_id, js)
-        for key in ("company_website", "company_license", "signature_title"):
+        for key in ("company_website", "company_license", "signature_title",
+                    "show_signature_lines"):
             self.assertIn(key, js)
 
 

@@ -238,6 +238,7 @@ def build_payload(project, index):
 
 def classic_invoice(out_path, payload, template):
     from fpdf import FPDF
+    from doc_pdf.mapping import BASE_CHARGE_LABEL, license_label
     hex_color = (template.get("primary_color") or "#1a1a1a").lstrip("#")
     r_c, g_c, b_c = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
     grand_total = float(payload.get("base_amount") or 0)
@@ -258,9 +259,7 @@ def classic_invoice(out_path, payload, template):
     pdf.set_font("Helvetica", "B", 10)
     pdf.cell(2.5, 0.18, template.get("company_name") or "", align="R", ln=1)
     pdf.set_font("Helvetica", "", 9)
-    comp_license = (template.get("company_license") or "").strip()
-    if comp_license and not comp_license.lower().startswith(("lic", "#")):
-        comp_license = "License " + comp_license
+    comp_license = license_label(template.get("company_license"))
     for value in (template.get("company_address"), template.get("company_city_state_zip"),
                   template.get("company_phone"), template.get("company_email"),
                   template.get("company_website"), comp_license):
@@ -313,7 +312,7 @@ def classic_invoice(out_path, payload, template):
     if float(payload.get("base_amount") or 0) > 0:
         pdf.set_xy(margin_l, y)
         pdf.set_font("Helvetica", "", 10)
-        pdf.cell(usable_w - 1.3, row_h, payload["terms"] or "Services", align="L")
+        pdf.cell(usable_w - 1.3, row_h, BASE_CHARGE_LABEL, align="L")
         pdf.cell(1.3, row_h, f"${float(payload['base_amount']):,.2f}", align="R")
         y += row_h
     for li in payload["line_items"]:
@@ -377,8 +376,10 @@ def classic_invoice(out_path, payload, template):
     pdf.output(out_path)
 
 
-def classic_coc(out_path, payload, template):
+def classic_coc(out_path, payload, template, tpl=None):
     from fpdf import FPDF
+    from doc_pdf.mapping import license_label
+    from doc_pdf.pdf_common import coc_title as coc_title_fn
     hex_color = (template.get("primary_color") or "#1a1a1a").lstrip("#")
     r_c, g_c, b_c = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
     pdf = FPDF(orientation="P", unit="in", format="Letter")
@@ -391,9 +392,7 @@ def classic_coc(out_path, payload, template):
     pdf.set_text_color(r_c, g_c, b_c)
     pdf.set_xy(margin_l, 1.55)
     pdf.set_font("Helvetica", "", 10)
-    comp_license = (template.get("company_license") or "").strip()
-    if comp_license and not comp_license.lower().startswith(("lic", "#")):
-        comp_license = "License " + comp_license
+    comp_license = license_label(template.get("company_license"))
     for value in (template.get("company_address"), template.get("company_city_state_zip"),
                   template.get("company_email"), template.get("company_phone"),
                   template.get("company_website"), comp_license):
@@ -404,7 +403,7 @@ def classic_coc(out_path, payload, template):
     pdf.set_xy(margin_l, 2.55)
     pdf.set_font("Helvetica", "B", 18)
     pdf.set_text_color(r_c, g_c, b_c)
-    coc_title = template.get("coc_title") or "CERTIFICATE OF COMPLETION"
+    coc_title = coc_title_fn(template.get("coc_title"))
     title_w = pdf.get_string_width(coc_title)
     pdf.set_x((page_w - title_w) / 2)
     pdf.cell(title_w, 0.3, coc_title, ln=1)
@@ -439,6 +438,29 @@ def classic_coc(out_path, payload, template):
     pdf.set_font("Helvetica", "", 11)
     pdf.set_xy(margin_l + label_w, note_y)
     pdf.multi_cell(usable_w - label_w, 0.22, payload.get("note") or "Work completed per agreement.", align="L")
+    # ── Signature block (only when the template has a signature image) ─────
+    sig_path = (tpl or template).get("signature_path")
+    show_lines = (tpl or template).get("show_signature_lines", True)
+    if sig_path and show_lines:
+        try:
+            _sp = Path(str(sig_path))
+            if not _sp.is_absolute():
+                _sp = REPO / _sp
+            if _sp.exists():
+                sig_w, sig_h = 1.7, 0.55
+                sig_x = page_w - margin_r - sig_w
+                sig_y = page_h - 2.0
+                pdf.image(str(_sp), x=sig_x, y=sig_y, w=sig_w, h=sig_h)
+                pdf.set_draw_color(180, 180, 180)
+                pdf.set_line_width(0.01)
+                pdf.line(sig_x, sig_y + sig_h + 0.05, sig_x + sig_w, sig_y + sig_h + 0.05)
+                pdf.set_xy(sig_x, sig_y + sig_h + 0.1)
+                pdf.set_font("Helvetica", "", 8)
+                pdf.cell(sig_w, 0.14, f"By {payload.get('signature_name') or 'Representative'}", align="L")
+                pdf.set_x(sig_x)
+                pdf.cell(sig_w, 0.14, f"Date: {payload.get('completion_date') or ''}", align="L")
+        except Exception:
+            pass
     pdf.set_draw_color(180, 180, 180)
     pdf.set_line_width(0.01)
     pdf.line(margin_l, page_h - 0.4, page_w - margin_r, page_h - 0.4)
@@ -489,16 +511,17 @@ def main():
         if not (template_extras.get(key) or "").strip():
             template_extras[key] = value
 
-    def _emit(payload, safe_stem, tpl, suffix):
+    def _emit(payload, safe_stem, tpl, suffix, coc_only=False):
         """Render one project in both layouts with one template."""
         # Modern
         brand = doc_mapping.build_brand(tpl, root=REPO)
         job = doc_mapping.build_job(payload, today="11/03/2026")
-        items = doc_mapping.build_items(payload)
-        sig = doc_mapping.build_invoice_signature(payload, tpl, root=REPO)
-        inv_modern = out_dir / f"{safe_stem}-invoice-modern{suffix}.pdf"
-        build_invoice(str(inv_modern), brand, job, items, signature=sig, root=REPO)
-        made.append(inv_modern)
+        if not coc_only:
+            items = doc_mapping.build_items(payload)
+            sig = doc_mapping.build_invoice_signature(payload, tpl, root=REPO)
+            inv_modern = out_dir / f"{safe_stem}-invoice-modern{suffix}.pdf"
+            build_invoice(str(inv_modern), brand, job, items, signature=sig, root=REPO)
+            made.append(inv_modern)
 
         opts = doc_mapping.build_coc_opts(payload, tpl, root=REPO)
         coc_modern = out_dir / f"{safe_stem}-coc-modern{suffix}.pdf"
@@ -507,11 +530,12 @@ def main():
 
         # Classic
         if _HAVE_FPDF:
-            inv_classic = out_dir / f"{safe_stem}-invoice-classic{suffix}.pdf"
-            classic_invoice(str(inv_classic), payload, tpl)
-            made.append(inv_classic)
+            if not coc_only:
+                inv_classic = out_dir / f"{safe_stem}-invoice-classic{suffix}.pdf"
+                classic_invoice(str(inv_classic), payload, tpl)
+                made.append(inv_classic)
             coc_classic = out_dir / f"{safe_stem}-coc-classic{suffix}.pdf"
-            classic_coc(str(coc_classic), payload, tpl)
+            classic_coc(str(coc_classic), payload, tpl, tpl)
             made.append(coc_classic)
 
     for idx, project in enumerate(db_projects):
@@ -527,6 +551,32 @@ def main():
         ch if ch.isalnum() or ch in "-_." else "_"
         for ch in f"project-{db_projects[0].get('id')}-{db_projects[0].get('project_number')}")
     _emit(extra_payload, extra_stem, template_extras, "")
+
+    # ── v28.2: the certificate with the signature lines ON and OFF ─────────
+    # A stand-in signature image so the classic layout's signature block
+    # (which needs an image file) is visible in the review.
+    sig_img = out_dir / "_review-signature.png"
+    try:
+        from PIL import Image as _PILImage
+        _PILImage.new("RGB", (240, 80), (28, 42, 96)).save(sig_img)
+    except Exception:
+        sig_img = None
+
+    sig_payload = build_payload(db_projects[0], 0)
+    sig_payload["signature_name"] = "Ken Chapman"
+    sig_stem = "coc-signatures-" + "".join(
+        ch if ch.isalnum() or ch in "-_." else "_"
+        for ch in f"project-{db_projects[0].get('id')}-{db_projects[0].get('project_number')}")
+
+    template_sig = dict(template_extras)
+    if sig_img is not None:
+        template_sig["signature_path"] = str(sig_img)
+    template_sig["show_signature_lines"] = True
+    _emit(sig_payload, sig_stem + "-on", template_sig, "-lines-on", coc_only=True)
+
+    template_nosig = dict(template_sig)
+    template_nosig["show_signature_lines"] = False
+    _emit(sig_payload, sig_stem + "-off", template_nosig, "-lines-off", coc_only=True)
 
     # One long multi-page modern invoice.
     long_payload = build_payload(db_projects[0], 0)
