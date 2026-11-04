@@ -2,6 +2,61 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Outlook read status not syncing from the mail modal (2026-11-03, branch `fix-outlook-read-sync`)
+
+Live bug (MDM outlook.com account): opening an email in the Sietch mail modal
+marked it read in Sietch but NOT in Outlook/webmail. Four independent defects,
+all in the IMAP flag path:
+
+1. **Stale OAuth token.** `_imap_connect` used the stored
+   `oauth_access_token` as-is, with no expiry check and no refresh — only the
+   scanner refreshed tokens, and only on its own cycle. A stale token means the
+   `UID STORE` never reaches the server, and the failure was swallowed (the
+   endpoint returned `{"ok":true}` before the background thread ran).
+2. **`EXPUNGE` side effect.** The flag path used `imap_tools`
+   `MailBox.flag()`, which runs `EXPUNGE` after every `UID STORE`
+   (imap_tools 1.14 `mailbox.py:351`) — so every read/unread toggle
+   permanently expunged every `\Deleted` message in that folder.
+3. **Unverified target.** The stored UID was trusted blindly. After a move or
+   delete the message lives in another folder with a NEW UID (UIDs are only
+   unique per folder), so the flag hit nothing or the wrong message.
+4. **Silent failure.** `_imap_set_seen` caught every error and logged at
+   warning level, so nothing told the user the change never reached Outlook.
+
+Fix (no schema change, no migration):
+- `_imap_account_token()` refreshes the access token when it is expired or
+  within 5 minutes of expiry, reusing the scanner's provider logic and
+  persisting the new token the same way; a module lock keeps it from racing
+  the scanner's own refresh. `_imap_connect` now authenticates with the
+  refreshed token.
+- `_imap_store_flags()` issues a plain `UID STORE` (`+FLAGS`/`-FLAGS`) — never
+  `EXPUNGE`. Applied to every flag path (`\Seen` read/unread and `\Flagged`
+  star) via the shared `_imap_apply_flag()` helper.
+- `_imap_resolve_uid()` verifies the target by Message-ID before storing the
+  flag: on a mismatch it searches the folder (then the other folders the
+  message may have been moved to) by Message-ID header and uses that UID,
+  updating the stored UID/folder. A message whose Message-ID does not match
+  is never flagged. `_imap_move()` re-resolves the destination UID the same
+  way, so a later read/unread toggle on a moved or trashed message still hits
+  it.
+- An authentication failure refreshes the token and retries once.
+- Failures are logged at ERROR level with the account id and the mail message
+  id (never a token) and recorded in a per-message marker that the API
+  exposes as `sync_failure`; the mail list shows a warning icon and the email
+  preview modal shows "Couldn't sync … to Outlook".
+- The frontend still treats the mark-read call as best-effort, but the UI now
+  surfaces the failure instead of silently pretending it worked.
+
+Tests: `tests/test_mail_imap_flag_sync.py` (33 tests — expired/near-expiry/
+valid token, auth-failure retry-once, no EXPUNGE for `\Seen` and `\Flagged`,
+Message-ID mismatch not flagged, moved message found by Message-ID, stored
+UID/folder updated, failure logged at error level and recorded for the UI,
+tokens never logged) and `tests/test_mail_sync_warning.mjs` (7 tests — the
+sync-failure UI). All IMAP access is mocked; no mail server is contacted.
+Verified by mutation: reverting the token refresh, the `UID STORE`, the
+Message-ID check, the auth retry, the log level or the failure marker each
+makes the suite fail.
+
 ## Live bot-note failures: unreachable /api/bot/note + dead notify picker (2026-11-02, branch `fix-telegram-dupes`)
 
 Live bugs on the deployed bot (Ken, 9:21 AM ET 2026-11-02), both confirmed

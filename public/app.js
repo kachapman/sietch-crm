@@ -25397,6 +25397,14 @@ function renderMailList(msgs) {
     subjText.className = 'mail-subject-text';
     subjText.innerHTML = draftBadge + escapeHtml(subj.slice(0, 80));
     subjDiv.appendChild(subjText);
+    // IMAP sync failure marker (e.g. read status did not reach Outlook).
+    if (m.sync_failure) {
+      const warn = document.createElement("span");
+      warn.className = "mail-sync-warning";
+      warn.title = "Couldn't sync to Outlook: " + (m.sync_failure.error || "unknown error");
+      warn.innerHTML = '<i class="ti ti-alert-triangle"></i>';
+      subjText.appendChild(warn);
+    }
     row.appendChild(subjDiv);
 
     // Body snippet
@@ -27065,6 +27073,7 @@ function openEmailPreviewModal(messageId) {
       const headEl = $('#email-preview-head');
       const bodyEl = $('#email-preview-body');
       const linkedEl = $('#email-preview-linked');
+      const syncNoteEl = $('#email-preview-sync-note');
       if (titleEl) titleEl.textContent = 'Loading...';
       fullMailPromise.then(fullMail => {
         if (!fullMail) { if (titleEl) titleEl.textContent = 'Failed to load email'; return; }
@@ -27073,6 +27082,7 @@ function openEmailPreviewModal(messageId) {
         const subject = norm.subject || fullMail.subject || '(no subject)';
         if (titleEl) titleEl.textContent = subject;
         renderEmailPreviewHead(headEl, norm, fullMail, subject);
+        renderEmailPreviewSyncNote(syncNoteEl, fullMail);
         renderEmailPreviewBody(bodyEl, norm, fullMail, messageId);
         renderEmailPreviewLinkedDeals(linkedEl, fullMail, messageId, ctrl);
       }).catch(err => {
@@ -27108,6 +27118,7 @@ function openEmailPreviewModal(messageId) {
   const bodyEl = $('#email-preview-body');
   const attEl = $('#email-preview-attachments');
   const linkedEl = $('#email-preview-linked');
+  const syncNoteEl = $('#email-preview-sync-note');
   const replyArea = $('#email-preview-reply-area');
 
   // The reply area is intentionally not populated here — reply/forward
@@ -27128,6 +27139,7 @@ function openEmailPreviewModal(messageId) {
     if (titleEl) titleEl.textContent = subject;
 
     renderEmailPreviewHead(headEl, norm, fullMail, subject);
+    renderEmailPreviewSyncNote(syncNoteEl, fullMail);
     renderEmailPreviewBody(bodyEl, norm, fullMail, messageId);
     renderEmailPreviewAttachments(attEl, fullMail, messageId, ctrl);
     renderEmailPreviewLinkedDeals(linkedEl, fullMail, messageId, ctrl);
@@ -27154,6 +27166,24 @@ function renderEmailPreviewHead(headEl, norm, fullMail, subject) {
     ${date ? `<div>${escapeHtml(formatPreviewDateTime(date) || date)}</div>` : ''}
     <div style="margin-top:0.3rem;"><strong>${escapeHtml(subject)}</strong></div>
   `;
+}
+
+// Show a short note when the last change (e.g. "mark read") could not be
+// pushed to Outlook, so the user knows the webmail still shows it unread.
+function renderEmailPreviewSyncNote(noteEl, fullMail) {
+  if (!noteEl) return;
+  const fail = fullMail && (fullMail.sync_failure || fullMail.syncFailure);
+  if (!fail) {
+    noteEl.classList.add('hidden');
+    noteEl.innerHTML = '';
+    return;
+  }
+  const action = fail.action || 'sync';
+  const verb = action === 'read' ? 'mark as read'
+    : action === 'unread' ? 'mark as unread'
+    : action === 'star' ? 'star' : 'change';
+  noteEl.classList.remove('hidden');
+  noteEl.innerHTML = `<i class="ti ti-alert-triangle"></i> Couldn't sync "${escapeHtml(verb)}" to Outlook.`;
 }
 
 function renderEmailPreviewBody(bodyEl, norm, fullMail, messageId) {

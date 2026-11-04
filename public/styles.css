@@ -17483,6 +17483,24 @@ select.form-control {
   .mail-link-icon.unlinked:hover { color: #f59e0b; }
 }
 
+/* ── Mail IMAP sync-failure marker ───────────────────────────────────── */
+.mail-sync-warning {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.3rem;
+  font-size: 0.75rem;
+  color: #f59e0b;
+  cursor: help;
+  flex-shrink: 0;
+}
+.mail-sync-warning:hover {
+  color: #d97706;
+}
+@media (prefers-color-scheme: dark) {
+  .mail-sync-warning { color: #fbbf24; }
+  .mail-sync-warning:hover { color: #f59e0b; }
+}
+
 /* Scanner log dry-run status */
 .log-dry-run {
   border-left: 2px solid var(--accent);

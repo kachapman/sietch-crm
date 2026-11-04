@@ -11,6 +11,72 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-03 (Outlook read status not syncing, branch `fix-outlook-read-sync`)
+
+**Status: DONE ON BRANCH — not pushed, not merged, not deployed.** Worktree
+`~/Projects/new-crm-outlook-read`, branch `fix-outlook-read-sync`, off `main`
+`c637526`. No prod access, no other worktrees touched.
+
+**Live bug:** opening an email in the Sietch mail modal marked it read in
+Sietch but NOT in Outlook (MDM outlook.com account). Four independent defects
+in the IMAP flag path:
+
+1. **Stale OAuth token** — `_imap_connect` used the stored
+   `oauth_access_token` as-is (no expiry check, no refresh); only the scanner
+   refreshed tokens, on its own cycle. A stale token means the `UID STORE`
+   never reaches the server, and the endpoint had already returned
+   `{"ok":true}` (the IMAP work ran in a background thread).
+2. **`EXPUNGE` side effect** — the flag path used `imap_tools`
+   `MailBox.flag()`, which runs `EXPUNGE` after every `UID STORE`
+   (imap_tools 1.14 `mailbox.py:351`), so each read/unread toggle permanently
+   expunged every `\Deleted` message in that folder.
+3. **Unverified target** — the stored UID was trusted blindly. After a move or
+   delete the message lives in another folder with a NEW UID (UIDs are only
+   unique per folder), so the flag hit nothing or the wrong message.
+4. **Silent failure** — `_imap_set_seen` caught every error and logged at
+   warning level; nothing told the user the change never reached Outlook.
+
+**Fix (no schema change, no migration — 046 was NOT needed):**
+- `_imap_account_token()` — refreshes the access token when expired or within
+  5 min of expiry, reusing the scanner's provider logic and persisting the
+  new token the same way; a module lock (`_imap_token_lock`) keeps it from
+  racing the scanner's own refresh. `_imap_connect` authenticates with the
+  refreshed token.
+- `_imap_store_flags()` — plain `UID STORE` (`+FLAGS`/`-FLAGS`), never
+  `EXPUNGE`. Shared by every flag path via `_imap_apply_flag()` (`\Seen`
+  read/unread and `\Flagged` star).
+- `_imap_resolve_uid()` — verifies the target by Message-ID before storing the
+  flag; on mismatch it searches the folder (then `_IMAP_FOLDER_FALLBACKS`)
+  by Message-ID header, uses that UID and updates the stored UID/folder. A
+  message whose Message-ID does not match is never flagged. `_imap_move()`
+  re-resolves the destination UID the same way.
+- Auth failure → refresh the token and retry once (`_is_imap_auth_error`,
+  `_imap_force_token_refresh`).
+- Failures logged at ERROR level with account id + mail message id (never a
+  token) and recorded per message; the API exposes it as `sync_failure`; the
+  mail list shows a warning icon and the preview modal shows
+  "Couldn't sync … to Outlook".
+
+**Tests:** `tests/test_mail_imap_flag_sync.py` (33) + `tests/test_mail_sync_warning.mjs` (7).
+All IMAP access is mocked — no mail server contacted. Verified by mutation:
+reverting the token refresh, the `UID STORE`, the Message-ID check, the auth
+retry, the log level or the failure marker each makes the suite fail.
+**Suite state:** Python 60 files pass / 2 fail — the SAME 2 that already fail
+on `main` (`test_scanner_toggle_gating`, `test_sync_pull_deals_fields`); Node
+35/35 files pass. `tests/test_reports.py` needs the gitignored `.env` — it was
+absent in this worktree and was copied in from the main worktree.
+**Files:** `server.py` (IMAP helper block ~2161-2620, handlers ~20902/20928/
+20953/22142/22187, list+detail responses ~20761/20817), `public/app.js`
+(sync-warning icon + preview note), `public/index.html` (note element),
+`public/styles.css` (`.mail-sync-warning`), `tests/test_mail_imap_flag_sync.py`,
+`tests/test_mail_sync_warning.mjs`, `.github/workflows/smoke.yml`,
+CHANGELOG.md.
+**Note for tonight's merges:** `fix-mail-attachments` (migrations 043/044) and
+`invoice-coc-upgrade` (045) also touch `server.py`; this diff is confined to
+the IMAP/mail-flag area plus two new test files, so it should rebase cleanly.
+
+## Previous session summary (for next resume)
+
 **Date:** 2026-11-02 (live bot-note failures, branch `fix-telegram-dupes`)
 
 **Status: DEPLOYED 2026-11-02 (~23:35 ET)** — merged `fix-telegram-dupes`
