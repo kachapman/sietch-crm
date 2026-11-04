@@ -21384,6 +21384,9 @@ function resetLinkDealDropdown() {
   const dr = $("#mail-link-deal-results"); if (dr) { dr.innerHTML = ""; dr.dataset.selectedDealId = ""; }
   const lb = $("#mail-link-deal-submit"); if (lb) lb.disabled = true;
   const dd = $("#mail-link-deal-dropdown"); if (dd) dd.classList.add("hidden");
+  // "Show closed" starts unchecked every time the popup is reset, so the
+  // default search behaviour is always "open projects only".
+  const ic = $("#mail-link-deal-include-closed"); if (ic) ic.checked = false;
 }
 
 async function openMailInboxModal() {
@@ -24328,6 +24331,29 @@ function attachMailModalListeners() {
     });
   }
 
+  // "Show closed" toggle (2026-11-03): ticking it re-runs the current
+  // search with include_closed=true so closed projects (Won/Lost) are
+  // listed too. Unticking it goes back to open-only. Re-running the
+  // search keeps the results list in sync with the checkbox.
+  const dealIncludeClosed = $("#mail-link-deal-include-closed");
+  if (dealIncludeClosed) {
+    dealIncludeClosed.addEventListener("change", () => {
+      const q = (dealSearch?.value || "").trim();
+      if (!q) {
+        // Nothing typed yet - just clear the stale results.
+        const resEl = $("#mail-link-deal-results");
+        if (resEl) {
+          resEl.innerHTML = "";
+          resEl.dataset.selectedDealId = "";
+        }
+        const linkBtn = $("#mail-link-deal-submit");
+        if (linkBtn) linkBtn.disabled = true;
+        return;
+      }
+      searchDealsForMailLink(q);
+    });
+  }
+
   const linkSubmitBtn = $("#mail-link-deal-submit");
   if (linkSubmitBtn) {
     linkSubmitBtn.addEventListener("click", async () => {
@@ -25765,8 +25791,14 @@ async function markMailMessageRead(messageId) {
   if (q.length < 1) {
     return;
   }
+  // "Show closed" checkbox (2026-11-03): unchecked by default, so the
+  // popup keeps finding open projects only. Ticking it re-runs the
+  // search with include_closed so closed projects (Won/Lost) show up
+  // too - otherwise a closed project could never be linked and the
+  // popup said "No matches".
+  const includeClosed = !!$("#mail-link-deal-include-closed")?.checked;
   try {
-    const opps = await searchOpportunitiesByTitle(q, { limit: 8 });
+    const opps = await searchOpportunitiesByTitle(q, { limit: 8, includeClosed });
     if (!opps.length) {
       const b = document.createElement("button");
       b.type = "button";
@@ -25778,7 +25810,17 @@ async function markMailMessageRead(messageId) {
     opps.forEach(opp => {
       const b = document.createElement("button");
       b.type = "button";
-      b.textContent = opp.title;
+      if (opp.isClosed) {
+        // Closed project: show the name plus a small "Closed" label.
+        b.classList.add("mail-link-deal-result-closed");
+        b.appendChild(document.createTextNode(opp.title));
+        const badge = document.createElement("span");
+        badge.className = "mail-link-deal-closed-badge";
+        badge.textContent = "Closed";
+        b.appendChild(badge);
+      } else {
+        b.textContent = opp.title;
+      }
       b.addEventListener("click", () => {
         resEl.querySelectorAll("button").forEach(x => x.classList.remove("selected"));
         b.classList.add("selected");
@@ -25857,7 +25899,16 @@ async function loadTaskCategories({ force = false } = {}) {
   }
 }
 
-async function searchOpportunitiesByTitle(query, { limit = 30 } = {}) {
+/**
+ * Search projects by title (or by numeric project id).
+ *
+ * `includeClosed` (2026-11-03) widens the server-side query to also return
+ * closed projects (stageType 1 = Won, 2 = Lost). Default false keeps the
+ * historical behaviour: open projects only. Results carry an `isClosed`
+ * flag so callers can label them (the email-inbox Link popup shows a
+ * "Closed" badge).
+ */
+async function searchOpportunitiesByTitle(query, { limit = 30, includeClosed = false } = {}) {
   const q = String(query || "").trim();
   const local = [];
   const seen = new Set();
@@ -25874,7 +25925,7 @@ async function searchOpportunitiesByTitle(query, { limit = 30 } = {}) {
       // Match by title OR by ID (if query is numeric)
       if (!q || title.toLowerCase().includes(qLower) || (isNumeric && String(id) === q)) {
         seen.add(key);
-        local.push({ id: Number(id), title });
+        local.push({ id: Number(id), title, isClosed: isClosedOpportunity(o) });
       }
     }
   }
@@ -25882,6 +25933,7 @@ async function searchOpportunitiesByTitle(query, { limit = 30 } = {}) {
   if (q.length >= 2) {
     try {
       const params = new URLSearchParams({ startIndex: "0", count: "40", filterValue: q, stageType: "0" });
+      if (includeClosed) params.set("include_closed", "true");
       const data = await api(`/api/v2/projects?${params}`);
       for (const o of unwrap(data)) {
         const id = o.id ?? o.ID;
@@ -25889,7 +25941,11 @@ async function searchOpportunitiesByTitle(query, { limit = 30 } = {}) {
         const key = String(id);
         if (seen.has(key)) continue;
         seen.add(key);
-        local.push({ id: Number(id), title: (o.title || o.Title || `Project #${id}`).trim() });
+        local.push({
+          id: Number(id),
+          title: (o.title || o.Title || `Project #${id}`).trim(),
+          isClosed: isClosedOpportunity(o),
+        });
         indexOpportunity(o);
       }
     } catch {
@@ -25898,6 +25954,15 @@ async function searchOpportunitiesByTitle(query, { limit = 30 } = {}) {
   }
 
   return local.sort((a, b) => String(a.title || "").localeCompare(String(b.title || ""))).slice(0, limit);
+}
+
+/** True when the project's stage type marks it closed (Won=1, Lost=2). */
+function isClosedOpportunity(opp) {
+  const st = resolveOppStageType(opp);
+  if (st === "" || st == null) return false;
+  const n = Number(st);
+  if (!Number.isFinite(n)) return false;
+  return n === 1 || n === 2;
 }
 
 const ICON_EXTERNAL_LINK = `<svg class="crm-open-external-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>`;
@@ -29015,6 +29080,38 @@ function setBookmarkPreviewCrmLink(oppId, projectNumber) {
   wrap.appendChild(link);
 }
 
+/**
+ * Render the project's unique project number as a small badge next to the
+ * title, using the SAME field + format as the full project page (the
+ * opportunity preview modal): `#<project_number>`, falling back to the
+ * internal opportunity id when the project has no number yet.
+ *
+ * Shared by the project preview modal and the bookmark sidebar preview so
+ * the two never drift apart (2026-11-03).
+ */
+function renderProjectNumberBadge(titleEl, projectNumber, oppId) {
+  if (!titleEl) return;
+  const head = titleEl.parentElement;
+  if (!head) return;
+  // Remove any previous badge so re-renders don't stack duplicates.
+  const existing = head.querySelector('.opp-project-number-badge');
+  if (existing) existing.remove();
+  const projNum = projectNumber || oppId;
+  if (!projNum) return;
+  const badge = document.createElement("span");
+  badge.className = "opp-project-number-badge";
+  badge.textContent = `#${projNum}`;
+  badge.title = "Click to copy project number";
+  badge.style.cssText = "background:var(--bg-elevated); padding:0.2rem 0.5rem; border-radius:4px; cursor:pointer; font-size:0.85rem; color:var(--text); margin-left:0.5rem;";
+  badge.addEventListener("click", () => {
+    safeCopyToClipboard(`#${projNum}`).then(() => showToast("Copied to clipboard")).catch(() => {});
+  });
+  const actionsEl = head.querySelector('.opp-preview-head-actions')
+    || head.querySelector('.bookmark-preview-actions');
+  if (actionsEl) head.insertBefore(badge, actionsEl);
+  else head.appendChild(badge);
+}
+
 function findGroupForOpportunity(oppId) {
   const id = Number(oppId);
   if (!Number.isFinite(id)) return null;
@@ -29356,23 +29453,8 @@ async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, 
     titleEl.textContent = data.opp.title || data.opp.Title || titleHint || `Project #${id}`;
     setOpportunityPreviewCrmLink(id, data.opp.project_number);
 
-    // Project number badge
-    const existingBadge = titleEl.parentElement?.querySelector('.opp-project-number-badge');
-    if (existingBadge) existingBadge.remove();
-    const projNum = data.opp.project_number || id;
-    if (projNum) {
-      const badge = document.createElement("span");
-      badge.className = "opp-project-number-badge";
-      badge.textContent = `#${projNum}`;
-      badge.title = "Click to copy project number";
-      badge.style.cssText = "background:var(--bg-elevated); padding:0.2rem 0.5rem; border-radius:4px; cursor:pointer; font-size:0.85rem; color:var(--text); margin-left:0.5rem;";
-      badge.addEventListener("click", () => {
-        safeCopyToClipboard(`#${projNum}`).then(() => showToast("Copied to clipboard")).catch(() => {});
-      });
-      const actionsEl = titleEl.parentElement?.querySelector('.opp-preview-head-actions');
-      if (actionsEl) titleEl.parentElement.insertBefore(badge, actionsEl);
-      else titleEl.parentElement.appendChild(badge);
-    }
+    // Project number badge (shared formatter - see renderProjectNumberBadge)
+    renderProjectNumberBadge(titleEl, data.opp.project_number, id);
 
     renderOpportunityPreviewBody(data);
     linkifyPhonesAndEmails(body);
@@ -31741,6 +31823,9 @@ async function activateBookmarkTab(oppId) {
     renderOpportunityPreviewContent(bodyEl, deal._cachedData, "bookmark");
     linkifyPhonesAndEmails(bodyEl);
     setBookmarkPreviewCrmLink(id, deal._cachedData.opp?.project_number);
+    // Show the project's unique ID/number, same format as the full
+    // project page (shared badge renderer).
+    renderProjectNumberBadge(titleEl, deal._cachedData.opp?.project_number, id);
     updateInferredStatus("preview", deal.title || `Project #${id}`);
   } else {
     titleEl.textContent = deal?.title || `Project #${id}`;
@@ -31766,6 +31851,9 @@ async function activateBookmarkTab(oppId) {
       renderOpportunityPreviewContent(bodyEl, data, "bookmark");
       linkifyPhonesAndEmails(bodyEl);
       setBookmarkPreviewCrmLink(id, data.opp?.project_number);
+      // Show the project's unique ID/number, same format as the full
+      // project page (shared badge renderer).
+      renderProjectNumberBadge(titleEl, data.opp?.project_number, id);
       updateInferredStatus("preview", data.opp?.title || data.opp?.Title || deal?.title || `Project #${id}`);
       // Update tab's stage/due info
       renderBookmarkTabs();
@@ -31895,6 +31983,9 @@ async function refreshBookmarkTab(oppId, showLoading = true) {
       linkifyPhonesAndEmails(bodyEl);
     }
     setBookmarkPreviewCrmLink(id, data.opp?.project_number);
+    // Show the project's unique ID/number, same format as the full
+    // project page (shared badge renderer).
+    renderProjectNumberBadge(titleEl, data.opp?.project_number, id);
     renderBookmarkTabs();
   } catch (err) {
     if (bodyEl) {

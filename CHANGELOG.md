@@ -70,6 +70,55 @@ and materialised the `_fetch_messages` generator outside its patch context,
 so they had been failing since the 2026-11-03 generator refactor); both now
 pass. Not deployed, not merged.
 
+## Two small UI fixes: link a closed project from the email inbox, and show the project ID in the bookmark preview (2026-11-03, branch `link-show-closed`)
+
+**Fix 1 — the email inbox "Link" popup could not find closed projects.** The
+toolbar link icon opens a popup with a search box and a "Link" button. It
+searched `/api/v2/projects` with `stageType=0`, so only OPEN projects matched
+and a closed project (Won = stage type 1, Lost = stage type 2) always showed
+"No matches" — making it impossible to link an email to a closed project.
+
+- **Backend:** new opt-in `include_closed` query parameter on the project
+  list/count endpoint, handled in `_build_projects_where`. It **defaults to
+  false**, so the behaviour of every existing caller is unchanged (the filter
+  stays `o.stage_type = %s`). When true, the stage-type filter widens to
+  `o.stage_type = ANY(%s)` with `[0, 1, 2]` — open + Won + Lost — and the
+  requested stage type is still honoured. Parsed by the new module-level
+  `_query_bool()` helper (accepts `true`/`1`/`yes`/`on`, case-insensitive;
+  anything else, including a missing key, is false). Both `include_closed`
+  and the camelCase `includeClosed` are accepted.
+- **Frontend:** a "Show closed" checkbox in the popup, **unchecked by
+  default**. Ticking it re-runs the current search with `include_closed=true`
+  (unticking it goes back to open-only); the popup resets the checkbox to
+  unchecked whenever it is reset, so the default is always "open projects
+  only". Closed results show the project name plus a small "Closed" label
+  badge; open results look exactly as before.
+- **Linking a closed project works identically to linking an open one** —
+  the same `POST /api/v2/mail/messages/{id}/link` endpoint with the same
+  payload, no closed-specific branch anywhere in the link path.
+
+**Fix 2 — the bookmarked project panel did not show the project's unique
+ID.** The side panel that opens from a bookmark showed the project name
+(e.g. "Judy Osier") with its Details/Documents/Photos/Tasks tabs, but not the
+project's project number. The badge renderer used by the full project page
+was extracted into a shared `renderProjectNumberBadge()` helper and is now
+also used by the bookmark preview (all three render paths: cached, freshly
+fetched, and explicit refresh). It uses the SAME field and the SAME format as
+the project page — `#<project_number>`, falling back to the internal
+opportunity id — so the two can never drift apart.
+
+**Tests:** 34 new Python tests (`tests/test_link_show_closed.py`) drive the
+real `_build_projects_where` and prove the default is unchanged, that
+`include_closed` widens the filter to `[0, 1, 2]`, that the flag composes
+with the search/ids filters, and that the frontend sends the flag / renders
+the "Closed" badge / renders the project ID. 18 new Node tests
+(`tests/test_link_show_closed_ui.mjs`) cover the checkbox markup, the badge,
+the shared renderer and the unchanged link endpoint. Both suites were
+verified **true-negative**: deliberately breaking the backend default, the
+badge text, the bookmark badge and the CSS class each makes them fail.
+
+Not deployed, not merged.
+
 ## Linked emails don't put their PDFs/documents in the project's Documents tab (2026-11-03, branch `fix-mail-attachments`)
 
 **Round 4 (blocker B1): a missing unique index no longer breaks document

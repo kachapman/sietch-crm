@@ -4429,6 +4429,24 @@ body {
   font-size: 0.85rem;
   margin-bottom: 0.4rem;
 }
+/* "Show closed" checkbox in the mail inbox Link popup (2026-11-03). */
+.mail-link-deal-closed-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  cursor: pointer;
+  margin-bottom: 0.4rem;
+  user-select: none;
+}
+.mail-link-deal-closed-toggle input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
 .mail-link-deal-results {
   max-height: 200px;
   overflow-y: auto;
@@ -4451,6 +4469,25 @@ body {
 .mail-link-deal-results button.selected {
   background: var(--accent-subtle);
   color: var(--accent);
+}
+/* Closed result: name + a small "Closed" label next to it. */
+.mail-link-deal-results button.mail-link-deal-result-closed {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.mail-link-deal-closed-badge {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  line-height: 1;
+  padding: 0.15rem 0.3rem;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: var(--bg-elevated);
+  color: var(--muted);
+  border: 1px solid var(--border);
 }
 @media (max-width: 600px) {
   .mail-link-deal-dropdown {
@@ -5086,6 +5123,8 @@ body {
 .mail-link-deal-dropdown button { color: var(--text); }
 .mail-link-deal-dropdown button:hover { background: var(--bg-elevated); }
 .mail-link-deal-dropdown button.selected { background: var(--accent-subtle); color: var(--accent); }
+.mail-link-deal-closed-toggle { color: var(--muted); }
+.mail-link-deal-closed-badge { background: var(--bg-elevated); color: var(--muted); border-color: var(--border); }
 #compose-body { background: var(--bg); color: var(--text); }
 .mail-toolbar .btn-ghost { color: var(--text); opacity: 0.8; }
 .mail-toolbar .btn-ghost:hover { opacity: 1; }
