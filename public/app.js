@@ -47348,6 +47348,10 @@ function renderInvoiceForm(body, project, templates, oppId, mode, dealFields) {
   const fCityStateZip = _docGenField("City, State ZIP", cityStateZip);
   const fFileName = _docGenField("File Name", "", "e.g. Invoice_Smith_2026-09-28");
   [fInvoiceNum, fInvoiceDate, fTerms, fSalesRep, fClaimNum, fJobNum].forEach(f => infoGrid.appendChild(f.wrap));
+  // PDF layout: "modern" (Sherwood-style ReportLab) or "classic" (the old
+  // fpdf2 look). The server falls back to its own default when blank.
+  const fLayout = _docGenField("PDF Layout", "", "modern or classic (blank = server default)");
+  infoGrid.appendChild(fLayout.wrap);
   infoSec.appendChild(infoGrid);
   sectionsWrap.appendChild(infoSec);
   // Section: Bill To
@@ -47484,6 +47488,7 @@ function renderInvoiceForm(body, project, templates, oppId, mode, dealFields) {
         include_signature: !!showSig.checked,
         signature_name: fSigName.input.value.trim(),
         file_name: fFileName.input.value.trim(),
+        layout: fLayout.input.value.trim(),
       };
       const url = isProject
         ? `/api/v2/projects/${oppId}/invoice`
@@ -47576,6 +47581,10 @@ function renderCocForm(body, project, templates, oppId, mode, dealFields) {
   const fCompletionDate = _docGenField("Completion Date", today, "MM/DD/YYYY");
   const fFileName = _docGenField("File Name", "", "e.g. Certificate_of_Completion_Smith");
   [fCustomer, fJobNum, fClaimNum, fSalesRep, fStreet, fCityStateZip, fCompletionDate].forEach(f => custGrid.appendChild(f.wrap));
+  // PDF layout: "modern" (Sherwood-style ReportLab) or "classic" (the old
+  // fpdf2 look). The server falls back to its own default when blank.
+  const fLayout = _docGenField("PDF Layout", "", "modern or classic (blank = server default)");
+  custGrid.appendChild(fLayout.wrap);
   custSec.appendChild(custGrid);
   sectionsWrap.appendChild(custSec);
   // Note
@@ -47636,6 +47645,7 @@ function renderCocForm(body, project, templates, oppId, mode, dealFields) {
         include_signature: !!showSig.checked,
         signature_name: fSigName.input.value.trim(),
         file_name: fFileName.input.value.trim(),
+        layout: fLayout.input.value.trim(),
       };
       const url = isProject
         ? `/api/v2/projects/${oppId}/coc`
@@ -47902,13 +47912,17 @@ function openAdminDocTplEditor(template) {
   $("#doc-tpl-admin-city").value = template ? (template.company_city_state_zip || "") : "";
   $("#doc-tpl-admin-phone").value = template ? (template.company_phone || "") : "";
   $("#doc-tpl-admin-email").value = template ? (template.company_email || "") : "";
+  $("#doc-tpl-admin-website").value = template ? (template.company_website || "") : "";
+  $("#doc-tpl-admin-license").value = template ? (template.company_license || "") : "";
   $("#doc-tpl-admin-color").value = template ? (template.primary_color || "#1a1a1a") : "#1a1a1a";
   $("#doc-tpl-admin-invoice-title").value = template ? (template.invoice_title || "INVOICE") : "INVOICE";
   $("#doc-tpl-admin-coc-title").value = template ? (template.coc_title || "CERTIFICATE OF COMPLETION") : "CERTIFICATE OF COMPLETION";
   $("#doc-tpl-admin-terms").value = template ? (template.default_terms || "Due on receipt") : "Due on receipt";
   $("#doc-tpl-admin-sales-rep").value = template ? (template.default_sales_rep || "") : "";
   $("#doc-tpl-admin-sig-name").value = template ? (template.signature_name || "") : "";
+  $("#doc-tpl-admin-sig-title").value = template ? (template.signature_title || "") : "";
   $("#doc-tpl-admin-show-sig").checked = template ? !!template.show_signature : true;
+  $("#doc-tpl-admin-show-sig-lines").checked = template ? (template.show_signature_lines !== false) : true;
   $("#doc-tpl-admin-show-footer").checked = template ? (template.show_branding_footer !== false) : true;
   $("#doc-tpl-admin-default").checked = template ? !!template.is_default : false;
   $("#doc-tpl-admin-logo").value = "";
@@ -47976,13 +47990,17 @@ function saveAdminDocTpl() {
     company_city_state_zip: (($("#doc-tpl-admin-city") || {}).value || "").trim(),
     company_phone: (($("#doc-tpl-admin-phone") || {}).value || "").trim(),
     company_email: (($("#doc-tpl-admin-email") || {}).value || "").trim(),
+    company_website: (($("#doc-tpl-admin-website") || {}).value || "").trim(),
+    company_license: (($("#doc-tpl-admin-license") || {}).value || "").trim(),
     primary_color: ($("#doc-tpl-admin-color") || {}).value || "#1a1a1a",
     invoice_title: (($("#doc-tpl-admin-invoice-title") || {}).value || "INVOICE").trim() || "INVOICE",
     coc_title: (($("#doc-tpl-admin-coc-title") || {}).value || "CERTIFICATE OF COMPLETION").trim() || "CERTIFICATE OF COMPLETION",
     default_terms: (($("#doc-tpl-admin-terms") || {}).value || "Due on receipt").trim() || "Due on receipt",
     default_sales_rep: (($("#doc-tpl-admin-sales-rep") || {}).value || "").trim(),
     signature_name: (($("#doc-tpl-admin-sig-name") || {}).value || "").trim(),
+    signature_title: (($("#doc-tpl-admin-sig-title") || {}).value || "").trim(),
     show_signature: !!($("#doc-tpl-admin-show-sig") || {}).checked,
+    show_signature_lines: !!($("#doc-tpl-admin-show-sig-lines") || {}).checked,
     show_branding_footer: !!($("#doc-tpl-admin-show-footer") || {}).checked,
     is_default: !!($("#doc-tpl-admin-default") || {}).checked,
     default_line_items: collectDocTplLineItems(),

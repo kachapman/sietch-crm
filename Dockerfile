@@ -29,10 +29,21 @@ RUN curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${
     && install -m 0755 /tmp/docker/docker /usr/local/bin/docker \
     && rm -rf /tmp/docker.tgz /tmp/docker
 
+# reportlab -> the modern (Sherwood-style) Invoice + Certificate of Completion
+# PDFs built by the doc_pdf/ package. Kept as its OWN layer, after the base
+# pip/apt/docker-cli layers, so adding it reuses the cached layers on the
+# droplet instead of reinstalling every dependency (a full rebuild can pin
+# the 2-CPU/4GB droplet). Pinned to 4.x for Python 3.12.
+RUN pip install --no-cache-dir "reportlab>=4.0,<5"
+
 # All top-level Python modules server.py may import (and the test-server).
 # Keeping this as a glob avoids the "missing module → container crash" failure
 # mode called out in AGENTS.md when a new .py file is added at the repo root.
 COPY *.py ./
+# doc_pdf/ holds the modern (Sherwood-style) Invoice + Certificate of
+# Completion PDF builders (ReportLab). It is a package, not a module, so the
+# glob above does not pick it up.
+COPY doc_pdf ./doc_pdf
 COPY VERSION ./
 COPY CHANGELOG.md ./
 COPY init.sql ./

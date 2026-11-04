@@ -162,6 +162,246 @@ have broken the whole mail sync — the payload is stripped before the JSON
 dump, with a regression test. Not deployed, not merged. Full write-up:
 `docs/bugs/2026-11-03-mail-link-attachments.md`.
 
+## Invoice/COC PDFs: the classic layout no longer needs reportlab + real page counts (2026-11-03, branch `invoice-coc-upgrade`)
+
+Two follow-up fixes to the modern (Sherwood-style) Invoice + Certificate of
+Completion work.
+
+**The classic layout must not depend on reportlab.** The v28.2 work put
+`coc_title()` in `doc_pdf/pdf_common.py`, and `pdf_common.py` imports
+reportlab at module load. `server.py`'s classic COC
+(`_create_coc_pdf`) imported it from there, so on a machine **without
+reportlab** the classic layout — which exists precisely as the fallback for
+that case — died with `ImportError: No module named 'reportlab'`.
+`coc_title()` and its `_SMALL_WORDS` list moved to `doc_pdf/mapping.py`,
+which has no top-level imports and never pulls reportlab in;
+`doc_pdf/pdf_common.py` re-exports it so the modern builders are
+unaffected. The classic path now touches only reportlab-free modules
+(`doc_pdf.mapping`); `pdf_common`, `invoice_pdf` and `coc_pdf` are used by
+the modern renderers alone. New test
+`test_classic_coc_renders_with_reportlab_blocked` blocks every reportlab
+import and asserts the classic COC still renders completely; reverting the
+move makes it fail.
+
+**The classic footer printed "Page 1 of (1)".** fpdf2 substitutes a
+**single-brace** `{nb}` alias with the page count when the document is
+closed, and only if the alias was registered with
+`pdf.alias_nb_pages("{nb}")`. The classic renderers wrote the token as
+`f"... of {{{{nb}}}}"`, which inside an f-string produces the literal
+`{{nb}}` — neither fpdf2's alias nor a number — so fpdf2 rendered it as
+`(1)`. Both classic renderers now write `f"... of {{nb}}"` and call
+`pdf.alias_nb_pages("{nb}")` before `pdf.output()`. The footer reads
+"Page 1 of 1", and "Page 2 of 2" on a multi-page invoice. (The classic
+renderer still draws its footer on the **last page only**; the modern one
+draws it on every page. That difference is unchanged — only the count was
+wrong.) The sample review pack's classic renderers were fixed the same
+way, and a `long-multipage-invoice-classic.pdf` sample was added.
+
+Tests: `tests/test_invoice_coc_modern.py` grew from 78 to **83** —
+`test_classic_coc_renders_with_reportlab_blocked`,
+`test_classic_coc_title_helper_does_not_need_reportlab`,
+`test_pdf_common_re_exports_coc_title`,
+`test_classic_footer_page_count_is_substituted` and
+`test_classic_multipage_footer_counts_the_pages`. Reverting either fix
+makes the relevant tests fail (verified). Full Python suite **61 passed /
+2 failed** (both failures — `test_scanner_toggle_gating.py`,
+`test_sync_pull_deals_fields.py` — re-verified as pre-existing on `main` @
+c637526); full Node suite **35/35 files**. Full write-up:
+`docs/features/2026-11-03-invoice-coc-upgrade.md` §1c. **Not deployed.**
+
+## Invoice/COC PDFs: Sherwood v28.2 port + three fixes (2026-11-03, branch `invoice-coc-upgrade`)
+
+Third pass on the modern (Sherwood-style) Invoice + Certificate of
+Completion PDFs. Sherwood shipped **v28.2** (upstream `94e66ac`, tag
+`live-v28.2`); its two document changes are ported into Sietch's copied
+`doc_pdf/` builders, plus three fixes.
+
+**Ported from upstream `bee1b9e`** — an "Include signature lines" toggle.
+`build_coc` gains `opts["signatures"]` (bool, default `True`); `False` leaves
+out the **whole** SIGNATURES section — heading, contractor block and
+homeowner block. In Sietch the homeowner branch stays deleted (Ken's earlier
+decision), so `False` drops the heading + the contractor block. The classic
+COC honours the same switch and draws no signature block (image, rule and
+"By <name>") at all when it is off. New template column
+`document_templates.show_signature_lines` (`BOOLEAN NOT NULL DEFAULT TRUE`),
+added **inside the existing migration 045** (not deployed yet) plus the
+matching `server.py` startup column add, same pattern as the other new
+fields. New admin checkbox "Include signature lines"
+(`doc-tpl-admin-show-sig-lines`), checked by default. The payload may
+override the template per request with `include_signature_lines`. Sherwood's
+"Include company signature" relabel of the existing box was not ported —
+Sietch's box already controls the signature image, so the two controls are
+already distinct.
+
+**Ported from upstream `bb35d36`** — a `coc_title(raw)` helper in
+`pdf_common`: blank or any casing of "Certificate of Completion" gives
+"Certificate of Completion"; another all-caps title is title-cased with
+short words ("of", "and", "the", ...) lowercased; a mixed-case custom title
+is left exactly as typed. Ported verbatim and used in **both** layouts, so a
+template saved with the old all-caps `CERTIFICATE OF COMPLETION` now renders
+"Certificate of Completion" in the modern *and* the classic certificate.
+
+**Fix — license label doubling.** "OH LIC 104.8872" printed as
+"License OH LIC 104.8872", because upstream only skips the prefix when the
+value *starts* with "lic" or "#". The rule is now: do not prefix when the
+value already contains "lic" anywhere (case-insensitive) or starts with "#";
+otherwise prefix with "License ". Implemented once in
+`doc_pdf/mapping.py: license_label()` and mirrored by
+`server.py: _doc_license_label()`, and `pdf_common.company_lines()` now
+prints `brand["license"]` verbatim instead of re-applying the prefix.
+
+**Fix — the base charge was labelled with the payment terms.** This was
+**code, not test data**: both renderers used the payment *terms* as the
+base-amount row's description (`doc_pdf/mapping.py: build_items()` →
+`payload.get("terms") or "Services"`, and `server.py:
+_create_invoice_pdf()` → `terms or "Services"`), so the row read
+**"Due on receipt  $275.00"** — a payment condition where a charge
+description belongs. It now reads **"Base charge  $275.00"**
+(`doc_pdf/mapping.py: BASE_CHARGE_LABEL`, mirrored in `server.py` via
+`_DOC_BASE_CHARGE_LABEL`); a payload may override it with
+`base_description`. The payment terms still print in the invoice header's
+"Terms" meta block, so nothing is lost.
+
+Tests: `tests/test_invoice_coc_modern.py` grew from 60 to **78 tests** — a
+new `TestSherwoodV282Port` class (the "Include signature lines" toggle, the
+`coc_title` helper, the license label and the base charge label) plus the
+handler-level cases (the toggle in both layouts, the classic signature
+block with a real PNG so it actually renders, and the classic certificate
+title). The upstream v28.2 cases in
+`tests/test_v28_2_coc_signatures.py` were ported and adapted to Sietch (no
+Flask app, no customer branding profile, no homeowner line → the Sietch
+template + the four HTTP handlers). The migration tests were updated for
+the fourth column. Full Python suite **61 passed / 2 failed** (both
+failures — `test_scanner_toggle_gating.py`, `test_sync_pull_deals_fields.py`
+— re-verified as pre-existing on `main` @ c637526); full Node suite
+**35/35 files**.
+
+Sample review PDFs regenerated into `tmp/invoice-coc-review/` (gitignored,
+not committed), now including the **certificate with the signature lines on
+and off** in both layouts. Full write-up:
+`docs/features/2026-11-03-invoice-coc-upgrade.md` §1b. **Not deployed.**
+
+## Invoice/COC PDF upgrade: Ken's decisions implemented (2026-11-03, branch `invoice-coc-upgrade`)
+
+Second pass on the modern (Sherwood-style) Invoice + Certificate of
+Completion PDFs, implementing all eight decisions Ken reviewed.
+
+1. **Modern is the default.** `DOC_LAYOUT_DEFAULT = "modern"` for both the
+   invoice and the COC. The classic fpdf2 renderer stays available through
+   the "PDF Layout" field in the modals or the `SIETCH_DOC_LAYOUT` env var.
+2. **$0.00 invoice lines are hidden.** Any line item whose amount is exactly
+   $0.00 is no longer printed, in **both** layouts. The grand total is
+   unchanged (a zero row contributes nothing either way).
+3. **No property-owner signature line on the COC.** The upstream Sherwood
+   builder draws a second "Property owner" block gated on
+   `opts["homeowner_line"]`; that branch was **deleted** from
+   `doc_pdf/coc_pdf.py` and the option no longer exists. The classic COC
+   never had one.
+4. **New document-template fields: website, license number, signer title.**
+   New migration **`migrations/045_document_templates_branding_extras.sql`**
+   adds `company_website`, `company_license` and `signature_title` to
+   `document_templates` (additive, `IF NOT EXISTS`, empty-string defaults).
+   **Migration number 045 was chosen deliberately**: the highest migration on
+   this branch is 042, and the separate `fix-mail-attachments` branch uses
+   043 / 044, so 045 avoids a filename collision when the branches merge.
+   `server.py` also carries the same inline `ALTER`s (the existing pattern
+   for `show_branding_footer`) for databases that skip the migration files.
+   All three fields are exposed in the admin template settings UI and are
+   shown on **both** the invoice and the COC, in **both** layouts. Empty
+   values are **omitted entirely** — no blank line, no blank label. The
+   license is prefixed with "License " unless it already starts with "lic"
+   or "#".
+5. **The Sietch COC wording stays** ("Work completed per agreement."); the
+   Sherwood default statement was not adopted.
+6. **The builders stay copied** into Sietch (`doc_pdf/`) — no shared
+   package, no dependency on Sherwood.
+7. **No "Base charge" UI field** was added; `base_amount` remains a
+   server-side API field the modal does not send.
+8. **The classic COC now honours the entered `completion_date`** with the
+   same fallback as the modern one (the posted value, else today). The
+   classic renderer previously always stamped today's date.
+
+Tests: `tests/test_invoice_coc_modern.py` grew from 33 to **60 tests** —
+mapping (brand website/license, opts signer title, $0.00 hiding, the
+removed `homeowner_line`), builders (website/license/signer title present
+when set and absent when empty, $0.00 rows not printed, no property-owner
+line), the layout default constant, the four HTTP handlers with a mocked DB
+(extras rendering on both layouts, extras omitted when empty, the classic
+COC completion date and its today fallback), and a new
+`TestBrandingExtrasMigration` class (8 tests) covering the migration file,
+its number not colliding with 043/044, its idempotency, its application
+against a scratch table, the inlined `ALTER`s, and the admin API + UI
+exposing the fields. Full Python suite **61 passed / 2 failed** (both
+failures — `test_scanner_toggle_gating.py`, `test_sync_pull_deals_fields.py`
+— re-verified as pre-existing on `main` @ c637526); full Node suite
+**35/35 files**.
+
+Sample review PDFs regenerated into `tmp/invoice-coc-review/` (gitignored,
+not committed): the modern + classic invoice and COC for three projects, a
+**with-extras** set showing the website / license / signer title, a
+**zero-line-hidden** set proving the $0.00 rows are not printed, and the
+60-line multi-page invoice. Full write-up:
+`docs/features/2026-11-03-invoice-coc-upgrade.md` §1a. **Not deployed** —
+needs a Docker image rebuild for `reportlab` and applies migration 045;
+deploy late at night per Ken.
+
+## Invoice + Certificate of Completion PDFs upgraded to the Sherwood "modern" builders (2026-11-03, branch `invoice-coc-upgrade`)
+
+The Invoice and Certificate of Completion PDFs now render through a port of
+the Sherwood Toolbox "v26.5" document builders (kachapman/sherwood-toolbox
+@ 3d5bf83), instead of the hand-rolled fpdf2 code that lived inside
+`server.py`. New `doc_pdf/` package: `pdf_common.py` (shared styles, accent
+helpers, `company_lines`, `money`, the numbered-page canvas with the accent
+bar and "Page x of y" footer), `invoice_pdf.py` (`build_invoice`), `coc_pdf.py`
+(`build_coc`), and `mapping.py` (a pure, unit-testable mapping layer from
+`document_templates` + the request payload to the builders' `brand` / `job` /
+`items` / `opts`). All four endpoints (`POST /api/v2/projects/<id>/invoice`,
+`/coc`, `POST /api/v2/documents/invoice`, `/coc`) keep their URLs, request
+shapes, response shapes, output locations, `project_documents` inserts and
+`history_events` action notes.
+
+New dependency: `reportlab>=4.0,<5`, added to `requirements.txt` **and** to
+the hardcoded `RUN pip install` line in the `Dockerfile` (the image does not
+use `requirements.txt` — the exact failure mode
+`tests/test_pdf_dependency.py` was written to catch), plus
+`COPY doc_pdf ./doc_pdf` because the `COPY *.py ./` glob does not pick up a
+package directory. New guard suite `tests/test_reportlab_dependency.py`.
+
+The classic fpdf2 renderers are kept behind a switch: `payload["layout"]`
+(`"classic"` | `"modern"`, exposed as a "PDF Layout" field in the Invoice and
+COC modals) or the `SIETCH_DOC_LAYOUT` env var, defaulting to `"modern"`.
+Ken can roll back without a code redeploy. The classic renderers also fix a
+visible defect: the old footer printed a literal `Page 1 of (1)` placeholder.
+
+Behaviour fixes and Sietch-specific deviations: the COC now honours the
+`completion_date` the modal has always posted (the classic renderer ignored
+it and stamped today's date); the invoice keeps a signature block (upstream
+Sherwood has none, the classic Sietch invoice did) via an optional
+`signature` dict on `build_invoice`; the COC statement uses the Sietch
+wording and there is no property-owner signature line (matching the classic
+Sietch COC); the COC title renders as "Certificate of Completion" (upstream's
+`str.title()` produces "Certificate Of Completion"); `brand["website"]`,
+`brand["license"]` and `opts["signer_title"]` stay blank because no
+`document_templates` columns exist for them. No running invoice-number
+counter was ported — Sietch's invoice number is still the payload value or
+the project's `project_number`. No database migration.
+
+Tests: `tests/test_invoice_coc_modern.py` (33 tests — mapping, builders,
+layout switch, and the four handlers with a mocked DB, including the
+`project_documents` insert carrying the `opportunity_id` and the
+standalone `opportunity_id = NULL` case); `tests/test_reportlab_dependency.py`
+(6). Full Python suite 61 passed / 2 failed (both failures —
+`test_scanner_toggle_gating.py`, `test_sync_pull_deals_fields.py` — are
+pre-existing on `main` @ c637526 and unrelated); full Node suite 35/35. The
+new suite was verified to actually execute (a deliberately flipped
+expectation produced a real failure).
+
+Sample review PDFs (modern + classic + a 60-line multi-page invoice, with
+page-1 PNGs) live in `tmp/invoice-coc-review/` (gitignored, not committed);
+regenerate with `scripts/make_invoice_coc_review.py`. Full write-up:
+`docs/features/2026-11-03-invoice-coc-upgrade.md`. **Not deployed** — needs
+a Docker image rebuild; deploy late at night per Ken.
+
 ## Live bot-note failures: unreachable /api/bot/note + dead notify picker (2026-11-02, branch `fix-telegram-dupes`)
 
 Live bugs on the deployed bot (Ken, 9:21 AM ET 2026-11-02), both confirmed

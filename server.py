@@ -683,6 +683,25 @@ try:
     db.execute("ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS show_branding_footer BOOLEAN NOT NULL DEFAULT TRUE")
 except Exception:
     pass
+# Migration 045: branding extras (website, license, signer title). Same
+# additive pattern as above so a database that skipped the migration files
+# still gets the columns.
+try:
+    db.execute("ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS company_website TEXT NOT NULL DEFAULT ''")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS company_license TEXT NOT NULL DEFAULT ''")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS signature_title TEXT NOT NULL DEFAULT ''")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS show_signature_lines BOOLEAN NOT NULL DEFAULT TRUE")
+except Exception:
+    pass
 
 # Migration 022: service_feeds table (third-party status / webhook → notifications)
 try:
@@ -1795,6 +1814,37 @@ def _doc_pdf_safe(text) -> str:
     return "".join(ch for ch in s if ord(ch) <= 0xFF)
 
 
+def _doc_base_charge_label() -> str:
+    """The label the invoice's base charge is printed under.
+
+    Sourced from doc_pdf.mapping so the classic and the modern invoice agree.
+    """
+    try:
+        from doc_pdf.mapping import BASE_CHARGE_LABEL
+        return BASE_CHARGE_LABEL
+    except Exception:
+        return "Base charge"
+
+
+_DOC_BASE_CHARGE_LABEL = _doc_base_charge_label()
+
+
+def _doc_license_label(value) -> str:
+    """The license number as printed on the invoice / COC.
+
+    Prefixed with "License " unless the value already contains "lic"
+    (case-insensitive) or starts with "#" -- so "OH LIC 104.8872" prints
+    as-is instead of "License OH LIC 104.8872". Mirrors
+    doc_pdf.mapping.license_label() so both layouts agree.
+    """
+    text = (value or "").strip()
+    if not text:
+        return ""
+    if "lic" in text.lower() or text.startswith("#"):
+        return text
+    return "License " + text
+
+
 def _money(value) -> float:
     """Coerce a user-entered amount string to float; returns 0 on failure."""
     if value is None:
@@ -2164,6 +2214,8 @@ def _resolve_document_template(template_id) -> dict | None:
         "company_city_state_zip": "",
         "company_phone": "",
         "company_email": "",
+        "company_website": "",
+        "company_license": "",
         "primary_color": "#1a1a1a",
         "invoice_title": "INVOICE",
         "coc_title": "CERTIFICATE OF COMPLETION",
@@ -2172,9 +2224,53 @@ def _resolve_document_template(template_id) -> dict | None:
         "default_line_items": "[]",
         "show_signature": False,
         "signature_name": "",
+        "signature_title": "",
+        "show_signature_lines": True,
         "signature_path": None,
         "logo_path": None,
     }
+
+
+# ── Invoice / COC PDF layout selection ─────────────────────────────────────
+# "modern" = ReportLab builders ported from the Sherwood Toolbox (doc_pdf/).
+# "classic" = the original hand-rolled fpdf2 renderers (_create_invoice_pdf /
+# _create_coc_pdf), kept so Ken can roll back without a code redeploy.
+DOC_LAYOUT_MODERN = "modern"
+DOC_LAYOUT_CLASSIC = "classic"
+DOC_LAYOUT_DEFAULT = DOC_LAYOUT_MODERN
+DOC_LAYOUTS = (DOC_LAYOUT_CLASSIC, DOC_LAYOUT_MODERN)
+
+
+def _resolve_doc_layout(payload) -> str:
+    """Pick the invoice/COC PDF layout for this request.
+
+    Precedence:
+      1. payload["layout"] ("classic" | "modern") -- per-request override.
+      2. SIETCH_DOC_LAYOUT env var -- server-wide default (no redeploy needed).
+      3. "modern".
+    Anything unrecognised falls back to the default.
+    """
+    requested = ""
+    try:
+        if isinstance(payload, dict):
+            requested = str(payload.get("layout") or "").strip().lower()
+    except Exception:
+        requested = ""
+    if requested in DOC_LAYOUTS:
+        return requested
+    env_layout = str(os.getenv("SIETCH_DOC_LAYOUT") or "").strip().lower()
+    if env_layout in DOC_LAYOUTS:
+        return env_layout
+    return DOC_LAYOUT_DEFAULT
+
+
+def _modern_pdf_ready() -> bool:
+    """True when the ReportLab builders are importable."""
+    try:
+        import reportlab  # noqa: F401
+    except Exception:
+        return False
+    return True
 
 
 def _doc_draw_invoice_table_header(pdf, margin_l, usable_w, header_h, r_c, g_c, b_c):
@@ -10361,15 +10457,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         row = db.query_one(
             """INSERT INTO document_templates
                (name, company_name, company_address, company_city_state_zip,
-                company_phone, company_email, primary_color,
+                company_phone, company_email, company_website, company_license,
+                primary_color,
                 invoice_title, coc_title, default_terms, default_sales_rep,
-                default_line_items, show_signature, signature_name, is_default)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                default_line_items, show_signature, signature_name,
+                signature_title, show_signature_lines, is_default)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                RETURNING id""",
             (data["name"],
              data.get("company_name", ""), data.get("company_address", ""),
              data.get("company_city_state_zip", ""), data.get("company_phone", ""),
-             data.get("company_email", ""), data.get("primary_color", "#1a1a1a"),
+             data.get("company_email", ""),
+             data.get("company_website", ""), data.get("company_license", ""),
+             data.get("primary_color", "#1a1a1a"),
              data.get("invoice_title", "INVOICE"),
              data.get("coc_title", "CERTIFICATE OF COMPLETION"),
              data.get("default_terms", "Due on receipt"),
@@ -10377,6 +10477,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
              line_items_json,
              data.get("show_signature", True),
              data.get("signature_name", ""),
+             data.get("signature_title", ""),
+             data.get("show_signature_lines", True),
              data.get("is_default", False)),
         )
         _json_response(self, 201, {"id": row["id"]})
@@ -10402,9 +10504,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         fields = []
         params = []
         for key in ("name", "company_name", "company_address", "company_city_state_zip",
-                     "company_phone", "company_email", "primary_color",
+                     "company_phone", "company_email", "company_website",
+                     "company_license", "primary_color",
                      "invoice_title", "coc_title", "default_terms", "default_sales_rep",
-                     "show_signature", "signature_name", "show_branding_footer", "is_default"):
+                     "show_signature", "signature_name", "signature_title",
+                     "show_signature_lines", "show_branding_footer", "is_default"):
             if key in data:
                 fields.append(f"{key} = %s")
                 params.append(data[key])
@@ -11224,15 +11328,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not user:
             return
         try:
-            from fpdf import FPDF
-        except Exception:
-            _json_response(self, 500, {"error": "fpdf2 not installed"})
-            return
-        try:
             payload = json.loads(_read_body(self) or b"{}")
         except Exception:
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
+        layout = _resolve_doc_layout(payload)
+        if layout == DOC_LAYOUT_MODERN:
+            if not _modern_pdf_ready():
+                _json_response(self, 500, {"error": "reportlab not installed"})
+                return
+        else:
+            try:
+                from fpdf import FPDF
+            except Exception:
+                _json_response(self, 500, {"error": "fpdf2 not installed"})
+                return
         template = _resolve_document_template(payload.get("template_id"))
         if not template:
             _json_response(self, 400, {"error": "No document template configured"})
@@ -11274,6 +11384,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         include_signature = bool(payload.get("include_signature", template.get("show_signature", True)))
         signature_name = (payload.get("signature_name") or template.get("signature_name") or sales_rep).strip()
         signature_path = template.get("signature_path") or None
+        # Write the resolved defaults back onto the payload so the modern
+        # (ReportLab) renderer sees exactly the same values as the classic one.
+        payload = dict(payload or {})
+        payload["customer_name"] = customer_name
+        payload["invoice_number"] = invoice_number
+        payload["invoice_date"] = invoice_date
+        payload["terms"] = terms
+        payload["sales_rep"] = sales_rep
+        payload["claim_number"] = claim_number
+        payload["project_number"] = project_number
+        payload["street"] = street
+        payload["city_state_zip"] = city_state_zip
+        payload["notes"] = notes
+        payload["base_amount"] = base_amount
+        payload["include_signature"] = include_signature
+        payload["signature_name"] = signature_name
         # Output path
         safe_stem = re.sub(r'[^\w.\-]', '_', (payload.get("file_name") or f"Invoice_{customer_name}_{invoice_number}").strip()) or "Invoice"
         safe_stem = safe_stem[:80]
@@ -11281,19 +11407,26 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         target_dir.mkdir(parents=True, exist_ok=True)
         output_path = target_dir / f"{int(time.time())}_{safe_stem}.pdf"
         try:
-            self._create_invoice_pdf(
-                output_path=str(output_path),
-                invoice_number=invoice_number, invoice_date=invoice_date,
-                terms=terms, customer_name=customer_name,
-                claim_number=claim_number, project_number=project_number,
-                street=street, city_state_zip=city_state_zip,
-                notes=notes, sales_rep=sales_rep,
-                line_items=line_items, base_amount=base_amount,
-                template=template,
-                include_signature=include_signature,
-                signature_name=signature_name,
-                signature_path=signature_path,
-            )
+            if layout == DOC_LAYOUT_MODERN:
+                self._create_invoice_pdf_modern(
+                    output_path=str(output_path),
+                    payload=payload, template=template, line_items=line_items,
+                    today=self._doc_today(),
+                )
+            else:
+                self._create_invoice_pdf(
+                    output_path=str(output_path),
+                    invoice_number=invoice_number, invoice_date=invoice_date,
+                    terms=terms, customer_name=customer_name,
+                    claim_number=claim_number, project_number=project_number,
+                    street=street, city_state_zip=city_state_zip,
+                    notes=notes, sales_rep=sales_rep,
+                    line_items=line_items, base_amount=base_amount,
+                    template=template,
+                    include_signature=include_signature,
+                    signature_name=signature_name,
+                    signature_path=signature_path,
+                )
         except Exception as exc:
             log_infra_event("error", f"PDF generation failed for opp {opp_id}: {exc}", source="doc-invoice")
             _json_response(self, 500, {"error": f"PDF generation failed: {exc}"})
@@ -11328,15 +11461,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not user:
             return
         try:
-            from fpdf import FPDF
-        except Exception:
-            _json_response(self, 500, {"error": "fpdf2 not installed"})
-            return
-        try:
             payload = json.loads(_read_body(self) or b"{}")
         except Exception:
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
+        layout = _resolve_doc_layout(payload)
+        if layout == DOC_LAYOUT_MODERN:
+            if not _modern_pdf_ready():
+                _json_response(self, 500, {"error": "reportlab not installed"})
+                return
+        else:
+            try:
+                from fpdf import FPDF
+            except Exception:
+                _json_response(self, 500, {"error": "fpdf2 not installed"})
+                return
         template = _resolve_document_template(payload.get("template_id"))
         if not template:
             _json_response(self, 400, {"error": "No document template configured"})
@@ -11354,26 +11493,57 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         city_state_zip = (payload.get("city_state_zip") or "").strip()
         sales_rep = (payload.get("sales_rep") or template.get("default_sales_rep") or "").strip()
         note = (payload.get("note") or "").strip()
+        # Completion date: the modal has always sent this field, but the
+        # server used to ignore it and stamp today's date instead. Honour the
+        # posted value and fall back to today when it is blank.
+        completion_date = (payload.get("completion_date") or "").strip() or datetime.now().strftime("%m/%d/%Y")
         include_signature = bool(payload.get("include_signature", template.get("show_signature", True)))
         signature_name = (payload.get("signature_name") or template.get("signature_name") or sales_rep).strip()
         signature_path = template.get("signature_path") or None
+        # v28.2: "Include signature lines". Off leaves the whole SIGNATURES
+        # section out of the certificate. The template sets the default; the
+        # payload may override it per request.
+        show_signature_lines = payload.get("include_signature_lines")
+        if show_signature_lines is None:
+            show_signature_lines = template.get("show_signature_lines", True)
+        show_signature_lines = bool(show_signature_lines)
+        payload = dict(payload or {})
+        payload["customer_name"] = customer_name
+        payload["claim_number"] = claim_number
+        payload["project_number"] = project_number
+        payload["street"] = street
+        payload["city_state_zip"] = city_state_zip
+        payload["sales_rep"] = sales_rep
+        payload["note"] = note
+        payload["completion_date"] = completion_date
+        payload["include_signature_lines"] = show_signature_lines
+        payload["include_signature"] = include_signature
+        payload["signature_name"] = signature_name
         safe_stem = re.sub(r'[^\w.\-]', '_', (payload.get("file_name") or f"Certificate_of_Completion_{customer_name}").strip()) or "Certificate_of_Completion"
         safe_stem = safe_stem[:80]
         target_dir = (ROOT / "data" / "documents" / str(opp_id))
         target_dir.mkdir(parents=True, exist_ok=True)
         output_path = target_dir / f"{int(time.time())}_{safe_stem}.pdf"
         try:
-            self._create_coc_pdf(
-                output_path=str(output_path),
-                customer_name=customer_name,
-                claim_number=claim_number, project_number=project_number,
-                street=street, city_state_zip=city_state_zip,
-                sales_rep=sales_rep, note=note,
-                template=template,
-                include_signature=include_signature,
-                signature_name=signature_name,
-                signature_path=signature_path,
-            )
+            if layout == DOC_LAYOUT_MODERN:
+                self._create_coc_pdf_modern(
+                    output_path=str(output_path),
+                    payload=payload, template=template, today=completion_date,
+                )
+            else:
+                self._create_coc_pdf(
+                    output_path=str(output_path),
+                    customer_name=customer_name,
+                    claim_number=claim_number, project_number=project_number,
+                    street=street, city_state_zip=city_state_zip,
+                    sales_rep=sales_rep, note=note,
+                    template=template,
+                    include_signature=include_signature,
+                    signature_name=signature_name,
+                    signature_path=signature_path,
+                    completion_date=completion_date,
+                    show_signature_lines=show_signature_lines,
+                )
         except Exception as exc:
             log_infra_event("error", f"PDF generation failed for opp {opp_id}: {exc}", source="doc-coc")
             _json_response(self, 500, {"error": f"PDF generation failed: {exc}"})
@@ -11409,15 +11579,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not user:
             return
         try:
-            from fpdf import FPDF
-        except Exception:
-            _json_response(self, 500, {"error": "fpdf2 not installed"})
-            return
-        try:
             payload = json.loads(_read_body(self) or b"{}")
         except Exception:
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
+        layout = _resolve_doc_layout(payload)
+        if layout == DOC_LAYOUT_MODERN:
+            if not _modern_pdf_ready():
+                _json_response(self, 500, {"error": "reportlab not installed"})
+                return
+        else:
+            try:
+                from fpdf import FPDF
+            except Exception:
+                _json_response(self, 500, {"error": "fpdf2 not installed"})
+                return
         template = _resolve_document_template(payload.get("template_id"))
         if not template:
             _json_response(self, 400, {"error": "No document template configured"})
@@ -11445,25 +11621,46 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         include_signature = bool(payload.get("include_signature", template.get("show_signature", True)))
         signature_name = (payload.get("signature_name") or template.get("signature_name") or sales_rep).strip()
         signature_path = template.get("signature_path") or None
+        payload = dict(payload or {})
+        payload["customer_name"] = customer_name
+        payload["invoice_number"] = invoice_number
+        payload["invoice_date"] = invoice_date
+        payload["terms"] = terms
+        payload["sales_rep"] = sales_rep
+        payload["claim_number"] = claim_number
+        payload["project_number"] = project_number
+        payload["street"] = street
+        payload["city_state_zip"] = city_state_zip
+        payload["notes"] = notes
+        payload["base_amount"] = base_amount
+        payload["include_signature"] = include_signature
+        payload["signature_name"] = signature_name
         safe_stem = re.sub(r'[^\w.\-]', '_', (payload.get("file_name") or f"Invoice_{customer_name}_{invoice_number}").strip()) or "Invoice"
         safe_stem = safe_stem[:80]
         scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "personal" / str(user["id"])
         scope_dir.mkdir(parents=True, exist_ok=True)
         output_path = scope_dir / f"{int(time.time())}_{safe_stem}.pdf"
         try:
-            self._create_invoice_pdf(
-                output_path=str(output_path),
-                invoice_number=invoice_number, invoice_date=invoice_date,
-                terms=terms, customer_name=customer_name,
-                claim_number=claim_number, project_number=project_number,
-                street=street, city_state_zip=city_state_zip,
-                notes=notes, sales_rep=sales_rep,
-                line_items=line_items, base_amount=base_amount,
-                template=template,
-                include_signature=include_signature,
-                signature_name=signature_name,
-                signature_path=signature_path,
-            )
+            if layout == DOC_LAYOUT_MODERN:
+                self._create_invoice_pdf_modern(
+                    output_path=str(output_path),
+                    payload=payload, template=template, line_items=line_items,
+                    today=self._doc_today(),
+                )
+            else:
+                self._create_invoice_pdf(
+                    output_path=str(output_path),
+                    invoice_number=invoice_number, invoice_date=invoice_date,
+                    terms=terms, customer_name=customer_name,
+                    claim_number=claim_number, project_number=project_number,
+                    street=street, city_state_zip=city_state_zip,
+                    notes=notes, sales_rep=sales_rep,
+                    line_items=line_items, base_amount=base_amount,
+                    template=template,
+                    include_signature=include_signature,
+                    signature_name=signature_name,
+                    signature_path=signature_path,
+                )
         except Exception as exc:
             log_infra_event("error", f"PDF generation failed for user {user['id']}: {exc}", source="doc-invoice-standalone")
             _json_response(self, 500, {"error": f"PDF generation failed: {exc}"})
@@ -11485,15 +11682,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not user:
             return
         try:
-            from fpdf import FPDF
-        except Exception:
-            _json_response(self, 500, {"error": "fpdf2 not installed"})
-            return
-        try:
             payload = json.loads(_read_body(self) or b"{}")
         except Exception:
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
+        layout = _resolve_doc_layout(payload)
+        if layout == DOC_LAYOUT_MODERN:
+            if not _modern_pdf_ready():
+                _json_response(self, 500, {"error": "reportlab not installed"})
+                return
+        else:
+            try:
+                from fpdf import FPDF
+            except Exception:
+                _json_response(self, 500, {"error": "fpdf2 not installed"})
+                return
         template = _resolve_document_template(payload.get("template_id"))
         if not template:
             _json_response(self, 400, {"error": "No document template configured"})
@@ -11505,26 +11708,54 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         city_state_zip = (payload.get("city_state_zip") or "").strip()
         sales_rep = (payload.get("sales_rep") or template.get("default_sales_rep") or "").strip()
         note = (payload.get("note") or "").strip()
+        completion_date = (payload.get("completion_date") or "").strip() or datetime.now().strftime("%m/%d/%Y")
         include_signature = bool(payload.get("include_signature", template.get("show_signature", True)))
         signature_name = (payload.get("signature_name") or template.get("signature_name") or sales_rep).strip()
         signature_path = template.get("signature_path") or None
+        # v28.2: "Include signature lines". Off leaves the whole SIGNATURES
+        # section out of the certificate. The template sets the default; the
+        # payload may override it per request.
+        show_signature_lines = payload.get("include_signature_lines")
+        if show_signature_lines is None:
+            show_signature_lines = template.get("show_signature_lines", True)
+        show_signature_lines = bool(show_signature_lines)
+        payload = dict(payload or {})
+        payload["customer_name"] = customer_name
+        payload["claim_number"] = claim_number
+        payload["project_number"] = project_number
+        payload["street"] = street
+        payload["city_state_zip"] = city_state_zip
+        payload["sales_rep"] = sales_rep
+        payload["note"] = note
+        payload["completion_date"] = completion_date
+        payload["include_signature_lines"] = show_signature_lines
+        payload["include_signature"] = include_signature
+        payload["signature_name"] = signature_name
         safe_stem = re.sub(r'[^\w.\-]', '_', (payload.get("file_name") or f"Certificate_of_Completion_{customer_name}").strip()) or "Certificate_of_Completion"
         safe_stem = safe_stem[:80]
         scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "personal" / str(user["id"])
         scope_dir.mkdir(parents=True, exist_ok=True)
         output_path = scope_dir / f"{int(time.time())}_{safe_stem}.pdf"
         try:
-            self._create_coc_pdf(
-                output_path=str(output_path),
-                customer_name=customer_name,
-                claim_number=claim_number, project_number=project_number,
-                street=street, city_state_zip=city_state_zip,
-                sales_rep=sales_rep, note=note,
-                template=template,
-                include_signature=include_signature,
-                signature_name=signature_name,
-                signature_path=signature_path,
-            )
+            if layout == DOC_LAYOUT_MODERN:
+                self._create_coc_pdf_modern(
+                    output_path=str(output_path),
+                    payload=payload, template=template, today=completion_date,
+                )
+            else:
+                self._create_coc_pdf(
+                    output_path=str(output_path),
+                    customer_name=customer_name,
+                    claim_number=claim_number, project_number=project_number,
+                    street=street, city_state_zip=city_state_zip,
+                    sales_rep=sales_rep, note=note,
+                    template=template,
+                    include_signature=include_signature,
+                    signature_name=signature_name,
+                    signature_path=signature_path,
+                    completion_date=completion_date,
+                    show_signature_lines=show_signature_lines,
+                )
         except Exception as exc:
             log_infra_event("error", f"PDF generation failed for user {user['id']}: {exc}", source="doc-coc-standalone")
             _json_response(self, 500, {"error": f"PDF generation failed: {exc}"})
@@ -11538,6 +11769,35 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "id": doc_id, "title": pdf_title, "fileSize": file_size,
             "mimeType": "application/pdf",
         })
+
+    # ── Modern (ReportLab) invoice / COC renderers ───────────────────────
+    # Ported from the Sherwood Toolbox "v26.5" document builders, see the
+    # doc_pdf/ package and docs/features/2026-11-03-invoice-coc-upgrade.md.
+
+    def _create_invoice_pdf_modern(self, output_path, payload, template, line_items,
+                                   today=None):
+        """Render a modern Invoice PDF using the ReportLab builders."""
+        from doc_pdf.invoice_pdf import build_invoice
+        from doc_pdf import mapping as doc_mapping
+        brand = doc_mapping.build_brand(template, root=ROOT)
+        job = doc_mapping.build_job(payload, today=today)
+        items = doc_mapping.build_items(payload, line_items)
+        signature = doc_mapping.build_invoice_signature(payload, template, root=ROOT)
+        return build_invoice(output_path, brand, job, items, signature=signature, root=ROOT)
+
+    def _create_coc_pdf_modern(self, output_path, payload, template, today=None):
+        """Render a modern Certificate of Completion PDF (ReportLab)."""
+        from doc_pdf.coc_pdf import build_coc
+        from doc_pdf import mapping as doc_mapping
+        brand = doc_mapping.build_brand(template, root=ROOT)
+        job = doc_mapping.build_job(payload, today=today)
+        opts = doc_mapping.build_coc_opts(payload, template, root=ROOT)
+        build_coc(output_path, brand, job, opts, root=ROOT)
+
+    @staticmethod
+    def _doc_today() -> str:
+        """Today's date as MM/DD/YYYY (the format the modals use)."""
+        return datetime.now().strftime("%m/%d/%Y")
 
     def _create_invoice_pdf(self, output_path, invoice_number, invoice_date,
                              terms, customer_name, claim_number, project_number,
@@ -11557,6 +11817,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         comp_city = template.get("company_city_state_zip") or ""
         comp_phone = template.get("company_phone") or ""
         comp_email = template.get("company_email") or ""
+        # Branding extras (migration 045). Empty -> omitted, never a blank line.
+        comp_website = (template.get("company_website") or "").strip()
+        comp_license = _doc_license_label(template.get("company_license"))
+        sig_title = (template.get("signature_title") or "").strip()
         invoice_title = template.get("invoice_title") or "INVOICE"
         logo_path = template.get("logo_path")
         # Compute grand total
@@ -11615,6 +11879,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if comp_email:
             pdf.set_x(page_w - margin_r - 2.5)
             pdf.cell(2.5, 0.15, _doc_pdf_safe(comp_email), align="R", ln=1)
+        if comp_website:
+            pdf.set_x(page_w - margin_r - 2.5)
+            pdf.cell(2.5, 0.15, _doc_pdf_safe(comp_website), align="R", ln=1)
+        if comp_license:
+            pdf.set_x(page_w - margin_r - 2.5)
+            pdf.cell(2.5, 0.15, _doc_pdf_safe(comp_license), align="R", ln=1)
         # Divider
         pdf.set_draw_color(180, 180, 180)
         pdf.set_line_width(0.01)
@@ -11676,7 +11946,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if base_amount and base_amount > 0:
             pdf.set_xy(margin_l, y)
             pdf.set_font("Helvetica", "", 10)
-            pdf.cell(usable_w - 1.3, row_h, _doc_pdf_safe(terms or "Services"), align="L")
+            # The base charge used to be labelled with the payment TERMS
+            # ("Due on receipt"), which reads like a payment condition rather
+            # than a charge description. It is now "Base charge".
+            pdf.cell(usable_w - 1.3, row_h, _doc_pdf_safe(_DOC_BASE_CHARGE_LABEL), align="L")
             pdf.cell(1.3, row_h, f"${base_amount:,.2f}", align="R")
             y += row_h
             first_line_added = True
@@ -11692,6 +11965,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             desc = (li.get("description") or "").strip()
             amt = float(li.get("amount") or 0)
             if not desc and amt == 0:
+                continue
+            # $0.00 rows are hidden (Sietch decision 2026-11-03). They add
+            # nothing to the grand total either way.
+            if amt == 0:
                 continue
             # Page break check
             if y + row_h + 0.6 > page_h - 0.5:
@@ -11758,6 +12035,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     pdf.set_xy(sig_x, sig_y + sig_h + 0.1)
                     pdf.set_font("Helvetica", "", 8)
                     pdf.cell(sig_w, 0.15, _doc_pdf_safe(f"By {signature_name or sales_rep or 'Representative'}"), align="L")
+                    if sig_title:
+                        pdf.set_x(sig_x)
+                        pdf.cell(sig_w, 0.15, _doc_pdf_safe(sig_title), align="L")
                     pdf.set_x(sig_x)
                     pdf.cell(sig_w, 0.15, f"Date: {invoice_date}", align="L")
             except Exception:
@@ -11771,14 +12051,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         pdf.set_text_color(100, 100, 100)
         left_txt = f"Job #{project_number}" if project_number else f"Invoice #{invoice_number}"
         pdf.cell(usable_w * 0.5, 0.15, _doc_pdf_safe(left_txt), align="L")
-        pdf.cell(usable_w * 0.5, 0.15, f"Page {pdf.page_no()} of {{{{nb}}}}", align="R")
+        # fpdf2 substitutes the {nb} alias with the page count when the
+        # document is closed. The token must be a SINGLE-brace "{nb}" and
+        # the alias must be registered -- the old "{{nb}}" literal was
+        # neither, so the footer printed "Page 1 of (1)".
+        pdf.cell(usable_w * 0.5, 0.15, f"Page {pdf.page_no()} of {{nb}}", align="R")
+        pdf.alias_nb_pages("{nb}")
         pdf.set_text_color(0, 0, 0)
         pdf.output(output_path)
 
     def _create_coc_pdf(self, output_path, customer_name, claim_number,
                          project_number, street, city_state_zip,
                          sales_rep, note, template,
-                         include_signature, signature_name, signature_path):
+                         include_signature, signature_name, signature_path,
+                         completion_date=None, show_signature_lines=True):
         """Render a Certificate of Completion PDF (Letter portrait) using fpdf2."""
         from fpdf import FPDF
         try:
@@ -11791,9 +12077,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         comp_city = template.get("company_city_state_zip") or ""
         comp_phone = template.get("company_phone") or ""
         comp_email = template.get("company_email") or ""
-        coc_title = template.get("coc_title") or "CERTIFICATE OF COMPLETION"
+        # Branding extras (migration 045). Empty -> omitted, never a blank line.
+        comp_website = (template.get("company_website") or "").strip()
+        comp_license = _doc_license_label(template.get("company_license"))
+        sig_title = (template.get("signature_title") or "").strip()
+        # v28.2: the title as printed (blank or any casing of "Certificate of
+        # Completion" -> "Certificate of Completion"; an all-caps custom title
+        # is title-cased; a mixed-case one is left as typed).
+        # Imported from doc_pdf.mapping, NOT doc_pdf.pdf_common: the classic
+        # renderer is the fallback when reportlab is missing, and
+        # pdf_common imports reportlab at module load.
+        from doc_pdf.mapping import coc_title as _coc_title
+        coc_title = _coc_title(template.get("coc_title"))
         logo_path = template.get("logo_path")
-        today = datetime.now().strftime("%m/%d/%Y")
+        # The completion date the user entered; falls back to today.
+        today = (completion_date or "").strip() or datetime.now().strftime("%m/%d/%Y")
         pdf = FPDF(orientation="P", unit="in", format="Letter")
         pdf.set_auto_page_break(False)
         pdf.set_margins(left=0.75, top=0.75, right=0.75)
@@ -11835,6 +12133,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             pdf.set_x(margin_l)
         if comp_phone:
             pdf.cell(usable_w, 0.16, _doc_pdf_safe(comp_phone), align="R", ln=1)
+        if comp_website:
+            pdf.cell(usable_w, 0.16, _doc_pdf_safe(comp_website), align="R", ln=1)
+            pdf.set_x(margin_l)
+        if comp_license:
+            pdf.cell(usable_w, 0.16, _doc_pdf_safe(comp_license), align="R", ln=1)
+            pdf.set_x(margin_l)
         pdf.set_text_color(0, 0, 0)
         # ── Title ─────────────────────────────────────────────
         pdf.set_xy(margin_l, 2.55)
@@ -11887,7 +12191,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         pdf.set_xy(value_x, note_y)
         pdf.multi_cell(value_w, 0.22, _doc_pdf_safe(note or "Work completed per agreement."), align="L")
         # ── Signature ─────────────────────────────────────────
-        if include_signature and signature_path:
+        # v28.2: "Include signature lines" off -> no signature block at all
+        # on the classic certificate (the image, its line and the "By" name).
+        if include_signature and signature_path and show_signature_lines:
             try:
                 _sp = ROOT / signature_path if not os.path.isabs(signature_path) else Path(signature_path)
                 if _sp.exists():
@@ -11901,6 +12207,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     pdf.set_xy(sig_x, sig_y + sig_h + 0.1)
                     pdf.set_font("Helvetica", "", 8)
                     pdf.cell(sig_w, 0.14, _doc_pdf_safe(f"By {signature_name or sales_rep or 'Representative'}"), align="L")
+                    if sig_title:
+                        pdf.set_x(sig_x)
+                        pdf.cell(sig_w, 0.14, _doc_pdf_safe(sig_title), align="L")
                     pdf.set_x(sig_x)
                     pdf.cell(sig_w, 0.14, f"Date: {today}", align="L")
             except Exception:
@@ -11916,7 +12225,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             pdf.cell(usable_w * 0.5, 0.15, "Generated by Sietch CRM", align="L")
         else:
             pdf.cell(usable_w * 0.5, 0.15, "", align="L")
-        pdf.cell(usable_w * 0.5, 0.15, f"Page {pdf.page_no()} of {{{{nb}}}}", align="R")
+        # fpdf2 substitutes the {nb} alias with the page count when the
+        # document is closed. The token must be a SINGLE-brace "{nb}" and
+        # the alias must be registered -- the old "{{nb}}" literal was
+        # neither, so the footer printed "Page 1 of (1)".
+        pdf.cell(usable_w * 0.5, 0.15, f"Page {pdf.page_no()} of {{nb}}", align="R")
+        pdf.alias_nb_pages("{nb}")
         pdf.set_text_color(0, 0, 0)
         pdf.output(output_path)
 
