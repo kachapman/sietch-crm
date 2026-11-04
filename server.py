@@ -2291,6 +2291,29 @@ def _is_limited(user: dict) -> bool:
     return user.get("role") == "limited"
 
 
+def _query_bool(qs: dict, *keys) -> bool:
+    """Parse an opt-in boolean query-string flag.
+
+    Accepts the usual spellings ("true", "1", "yes", "on") in any case and
+    treats anything else (including a missing key) as False. Used for
+    opt-in behaviour switches such as `include_closed` on the project
+    list endpoint, where the default must stay False so existing callers
+    are unaffected.
+    """
+    for k in keys:
+        if k not in qs:
+            continue
+        raw = qs[k]
+        if isinstance(raw, (list, tuple)):
+            if not raw:
+                continue
+            raw = raw[0]
+        if raw is None:
+            continue
+        return str(raw).strip().lower() in ("1", "true", "yes", "on")
+    return False
+
+
 def _mail_visible_accounts_sql(user_id: int) -> str:
     """SQL predicate fragment: accounts visible to user (company inbox, own, or shared)."""
     return (
@@ -6024,10 +6047,30 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             )""")
             params.extend([like, like, like, like, like, like])
 
+        # Opt-in "include closed" (2026-11-03, Ken-approved).
+        #
+        # Default (absent / false) keeps the historical behaviour: only the
+        # requested stage_type is returned, so a caller asking for stageType=0
+        # gets open projects only. When include_closed=true the stage_type
+        # filter is widened so closed projects (stage_type 1 = Won, 2 = Lost)
+        # come back too. This is what the email-inbox "Link" popup uses when
+        # the user ticks the "Show closed" checkbox - otherwise a closed
+        # project can never be found and the popup says "No matches".
+        include_closed = _query_bool(qs, "include_closed", "includeClosed")
         st = qval(qs, "stage_type", "stageType")
         if st is not None and str(st).strip() != "":
-            where.append("o.stage_type = %s")
-            params.append(int(st))
+            stage_type = int(st)
+            if include_closed:
+                # Keep the open filter but add the closed stage types so the
+                # result set is "open + closed" instead of "open only".
+                # Closed = 1 (Won) + 2 (Lost); the requested stage_type is
+                # still honoured (e.g. stageType=1 + include_closed -> 1,2).
+                closed_types = sorted({1, 2, stage_type})
+                where.append("o.stage_type = ANY(%s)")
+                params.append(closed_types)
+            else:
+                where.append("o.stage_type = %s")
+                params.append(stage_type)
 
         sid = qval(qs, "stageId", "opportunityStagesid")
         if sid:

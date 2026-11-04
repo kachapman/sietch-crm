@@ -11,6 +11,70 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-03 (email inbox "Link" popup + bookmark preview project ID,
+branch `link-show-closed`)
+
+**Status: IMPLEMENTED on branch `link-show-closed` — NOT merged, NOT
+deployed.** Cut from `main` at `e1164f3`. Worktree:
+`~/Projects/new-crm-link-closed`. Prod (147.182.164.19) was NOT touched and
+no other worktree was modified.
+
+**Fix 1 — the email inbox "Link" popup could not link a closed project.**
+The popup searched `/api/v2/projects` with `stageType=0`, so only OPEN
+projects matched; a closed project (Won = stage type 1, Lost = 2) always
+showed "No matches". Fix, in three parts:
+- **Backend** — new opt-in `include_closed` query parameter on the project
+  list/count endpoint, handled in `_build_projects_where`. **Defaults to
+  false**, so every existing caller is untouched (filter stays
+  `o.stage_type = %s`). When true the filter widens to
+  `o.stage_type = ANY(%s)` with `[0, 1, 2]` (open + Won + Lost); the
+  requested stage type is still honoured. Parsed by the new module-level
+  `_query_bool()` helper (`true`/`1`/`yes`/`on`, case-insensitive; anything
+  else — including a missing key — is false). Both `include_closed` and
+  `includeClosed` are accepted.
+- **Frontend** — a "Show closed" checkbox in the popup, **unchecked by
+  default**. Ticking it re-runs the current search with
+  `include_closed=true`; unticking it goes back to open-only. The popup
+  resets the checkbox to unchecked on every reset, so the default search is
+  always "open projects only". Closed results render the project name plus a
+  small "Closed" label badge; open results are unchanged.
+- **Linking** — a closed project links through the SAME
+  `POST /api/v2/mail/messages/{id}/link` endpoint with the SAME payload.
+  There is no closed-specific branch anywhere in the link path.
+
+**Fix 2 — the bookmarked project panel did not show the project's unique
+ID.** The side panel opened from a bookmark showed the name ("Judy Osier")
+and its Details/Documents/Photos/Tasks tabs, but not the project number.
+The project page's badge renderer was extracted into a shared
+`renderProjectNumberBadge()` helper, now used by the bookmark preview too
+(all three render paths: cached, freshly fetched, explicit refresh). Same
+field, same format as the project page — `#<project_number>`, falling back
+to the internal opportunity id — so the two cannot drift apart.
+
+**Tests:** 34 new Python tests (`tests/test_link_show_closed.py`) drive the
+real `_build_projects_where`; 18 new Node tests
+(`tests/test_link_show_closed_ui.mjs`) cover the checkbox, the badge, the
+shared renderer and the unchanged link endpoint. Both suites verified
+**true-negative** — deliberately breaking the backend default, the badge
+text, the bookmark badge and the CSS class each makes them fail. Registered
+in `.github/workflows/smoke.yml`.
+
+**Files changed:** `server.py`, `public/app.js`, `public/index.html`,
+`public/styles.css`, `tests/test_link_show_closed.py` (new),
+`tests/test_link_show_closed_ui.mjs` (new), `.github/workflows/smoke.yml`,
+`CHANGELOG.md`, `docs/SESSION_HISTORY.md`.
+
+**Known pre-existing failures (NOT caused by this work, verified identical
+on the clean baseline with the changes stashed):**
+`test_scanner_toggle_gating`, `test_sync_pull_deals_fields`,
+`test_email_project_copy`, `test_mail_incremental`, `test_mail_polling` —
+plus `test_invoice_coc_modern` (16 failures + 1 error), which is also
+pre-existing and unrelated (invoice/COC PDF generation).
+
+---
+
+## Previous session summary
+
 **Date:** 2026-11-03 (linked-email attachments missing from the project
 Documents tab, branch `fix-mail-attachments`)
 
