@@ -12,3 +12,7 @@ build/
 # Scratch output for the Invoice/COC PDF review pack (see
 # docs/features/2026-11-03-invoice-coc-upgrade.md). Never committed.
 tmp/
+
+# Reconciler golden fixtures hold real claim data (PII). Never committed.
+# Tests read RECONCILER_SAMPLES_DIR (default tests/fixtures/reconciler) and skip if absent.
+tests/fixtures/reconciler/
