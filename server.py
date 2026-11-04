@@ -698,6 +698,10 @@ try:
     db.execute("ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS signature_title TEXT NOT NULL DEFAULT ''")
 except Exception:
     pass
+try:
+    db.execute("ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS show_signature_lines BOOLEAN NOT NULL DEFAULT TRUE")
+except Exception:
+    pass
 
 # Migration 022: service_feeds table (third-party status / webhook → notifications)
 try:
@@ -1642,6 +1646,37 @@ def _doc_pdf_safe(text) -> str:
     return "".join(ch for ch in s if ord(ch) <= 0xFF)
 
 
+def _doc_base_charge_label() -> str:
+    """The label the invoice's base charge is printed under.
+
+    Sourced from doc_pdf.mapping so the classic and the modern invoice agree.
+    """
+    try:
+        from doc_pdf.mapping import BASE_CHARGE_LABEL
+        return BASE_CHARGE_LABEL
+    except Exception:
+        return "Base charge"
+
+
+_DOC_BASE_CHARGE_LABEL = _doc_base_charge_label()
+
+
+def _doc_license_label(value) -> str:
+    """The license number as printed on the invoice / COC.
+
+    Prefixed with "License " unless the value already contains "lic"
+    (case-insensitive) or starts with "#" -- so "OH LIC 104.8872" prints
+    as-is instead of "License OH LIC 104.8872". Mirrors
+    doc_pdf.mapping.license_label() so both layouts agree.
+    """
+    text = (value or "").strip()
+    if not text:
+        return ""
+    if "lic" in text.lower() or text.startswith("#"):
+        return text
+    return "License " + text
+
+
 def _money(value) -> float:
     """Coerce a user-entered amount string to float; returns 0 on failure."""
     if value is None:
@@ -2022,6 +2057,7 @@ def _resolve_document_template(template_id) -> dict | None:
         "show_signature": False,
         "signature_name": "",
         "signature_title": "",
+        "show_signature_lines": True,
         "signature_path": None,
         "logo_path": None,
     }
@@ -10179,8 +10215,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 primary_color,
                 invoice_title, coc_title, default_terms, default_sales_rep,
                 default_line_items, show_signature, signature_name,
-                signature_title, is_default)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                signature_title, show_signature_lines, is_default)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                RETURNING id""",
             (data["name"],
              data.get("company_name", ""), data.get("company_address", ""),
@@ -10196,6 +10232,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
              data.get("show_signature", True),
              data.get("signature_name", ""),
              data.get("signature_title", ""),
+             data.get("show_signature_lines", True),
              data.get("is_default", False)),
         )
         _json_response(self, 201, {"id": row["id"]})
@@ -10225,7 +10262,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                      "company_license", "primary_color",
                      "invoice_title", "coc_title", "default_terms", "default_sales_rep",
                      "show_signature", "signature_name", "signature_title",
-                     "show_branding_footer", "is_default"):
+                     "show_signature_lines", "show_branding_footer", "is_default"):
             if key in data:
                 fields.append(f"{key} = %s")
                 params.append(data[key])
@@ -11223,6 +11260,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         include_signature = bool(payload.get("include_signature", template.get("show_signature", True)))
         signature_name = (payload.get("signature_name") or template.get("signature_name") or sales_rep).strip()
         signature_path = template.get("signature_path") or None
+        # v28.2: "Include signature lines". Off leaves the whole SIGNATURES
+        # section out of the certificate. The template sets the default; the
+        # payload may override it per request.
+        show_signature_lines = payload.get("include_signature_lines")
+        if show_signature_lines is None:
+            show_signature_lines = template.get("show_signature_lines", True)
+        show_signature_lines = bool(show_signature_lines)
         payload = dict(payload or {})
         payload["customer_name"] = customer_name
         payload["claim_number"] = claim_number
@@ -11232,6 +11276,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         payload["sales_rep"] = sales_rep
         payload["note"] = note
         payload["completion_date"] = completion_date
+        payload["include_signature_lines"] = show_signature_lines
         payload["include_signature"] = include_signature
         payload["signature_name"] = signature_name
         safe_stem = re.sub(r'[^\w.\-]', '_', (payload.get("file_name") or f"Certificate_of_Completion_{customer_name}").strip()) or "Certificate_of_Completion"
@@ -11257,6 +11302,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     signature_name=signature_name,
                     signature_path=signature_path,
                     completion_date=completion_date,
+                    show_signature_lines=show_signature_lines,
                 )
         except Exception as exc:
             log_infra_event("error", f"PDF generation failed for opp {opp_id}: {exc}", source="doc-coc")
@@ -11432,6 +11478,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         include_signature = bool(payload.get("include_signature", template.get("show_signature", True)))
         signature_name = (payload.get("signature_name") or template.get("signature_name") or sales_rep).strip()
         signature_path = template.get("signature_path") or None
+        # v28.2: "Include signature lines". Off leaves the whole SIGNATURES
+        # section out of the certificate. The template sets the default; the
+        # payload may override it per request.
+        show_signature_lines = payload.get("include_signature_lines")
+        if show_signature_lines is None:
+            show_signature_lines = template.get("show_signature_lines", True)
+        show_signature_lines = bool(show_signature_lines)
         payload = dict(payload or {})
         payload["customer_name"] = customer_name
         payload["claim_number"] = claim_number
@@ -11441,6 +11494,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         payload["sales_rep"] = sales_rep
         payload["note"] = note
         payload["completion_date"] = completion_date
+        payload["include_signature_lines"] = show_signature_lines
         payload["include_signature"] = include_signature
         payload["signature_name"] = signature_name
         safe_stem = re.sub(r'[^\w.\-]', '_', (payload.get("file_name") or f"Certificate_of_Completion_{customer_name}").strip()) or "Certificate_of_Completion"
@@ -11466,6 +11520,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     signature_name=signature_name,
                     signature_path=signature_path,
                     completion_date=completion_date,
+                    show_signature_lines=show_signature_lines,
                 )
         except Exception as exc:
             log_infra_event("error", f"PDF generation failed for user {user['id']}: {exc}", source="doc-coc-standalone")
@@ -11533,9 +11588,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         comp_email = template.get("company_email") or ""
         # Branding extras (migration 045). Empty -> omitted, never a blank line.
         comp_website = (template.get("company_website") or "").strip()
-        comp_license = (template.get("company_license") or "").strip()
-        if comp_license and not comp_license.lower().startswith(("lic", "#")):
-            comp_license = "License " + comp_license
+        comp_license = _doc_license_label(template.get("company_license"))
         sig_title = (template.get("signature_title") or "").strip()
         invoice_title = template.get("invoice_title") or "INVOICE"
         logo_path = template.get("logo_path")
@@ -11662,7 +11715,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if base_amount and base_amount > 0:
             pdf.set_xy(margin_l, y)
             pdf.set_font("Helvetica", "", 10)
-            pdf.cell(usable_w - 1.3, row_h, _doc_pdf_safe(terms or "Services"), align="L")
+            # The base charge used to be labelled with the payment TERMS
+            # ("Due on receipt"), which reads like a payment condition rather
+            # than a charge description. It is now "Base charge".
+            pdf.cell(usable_w - 1.3, row_h, _doc_pdf_safe(_DOC_BASE_CHARGE_LABEL), align="L")
             pdf.cell(1.3, row_h, f"${base_amount:,.2f}", align="R")
             y += row_h
             first_line_added = True
@@ -11772,7 +11828,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                          project_number, street, city_state_zip,
                          sales_rep, note, template,
                          include_signature, signature_name, signature_path,
-                         completion_date=None):
+                         completion_date=None, show_signature_lines=True):
         """Render a Certificate of Completion PDF (Letter portrait) using fpdf2."""
         from fpdf import FPDF
         try:
@@ -11787,11 +11843,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         comp_email = template.get("company_email") or ""
         # Branding extras (migration 045). Empty -> omitted, never a blank line.
         comp_website = (template.get("company_website") or "").strip()
-        comp_license = (template.get("company_license") or "").strip()
-        if comp_license and not comp_license.lower().startswith(("lic", "#")):
-            comp_license = "License " + comp_license
+        comp_license = _doc_license_label(template.get("company_license"))
         sig_title = (template.get("signature_title") or "").strip()
-        coc_title = template.get("coc_title") or "CERTIFICATE OF COMPLETION"
+        # v28.2: the title as printed (blank or any casing of "Certificate of
+        # Completion" -> "Certificate of Completion"; an all-caps custom title
+        # is title-cased; a mixed-case one is left as typed).
+        from doc_pdf.pdf_common import coc_title as _coc_title
+        coc_title = _coc_title(template.get("coc_title"))
         logo_path = template.get("logo_path")
         # The completion date the user entered; falls back to today.
         today = (completion_date or "").strip() or datetime.now().strftime("%m/%d/%Y")
@@ -11894,7 +11952,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         pdf.set_xy(value_x, note_y)
         pdf.multi_cell(value_w, 0.22, _doc_pdf_safe(note or "Work completed per agreement."), align="L")
         # ── Signature ─────────────────────────────────────────
-        if include_signature and signature_path:
+        # v28.2: "Include signature lines" off -> no signature block at all
+        # on the classic certificate (the image, its line and the "By" name).
+        if include_signature and signature_path and show_signature_lines:
             try:
                 _sp = ROOT / signature_path if not os.path.isabs(signature_path) else Path(signature_path)
                 if _sp.exists():

@@ -47898,6 +47898,7 @@ function openAdminDocTplEditor(template) {
   $("#doc-tpl-admin-sig-name").value = template ? (template.signature_name || "") : "";
   $("#doc-tpl-admin-sig-title").value = template ? (template.signature_title || "") : "";
   $("#doc-tpl-admin-show-sig").checked = template ? !!template.show_signature : true;
+  $("#doc-tpl-admin-show-sig-lines").checked = template ? (template.show_signature_lines !== false) : true;
   $("#doc-tpl-admin-show-footer").checked = template ? (template.show_branding_footer !== false) : true;
   $("#doc-tpl-admin-default").checked = template ? !!template.is_default : false;
   $("#doc-tpl-admin-logo").value = "";
@@ -47975,6 +47976,7 @@ function saveAdminDocTpl() {
     signature_name: (($("#doc-tpl-admin-sig-name") || {}).value || "").trim(),
     signature_title: (($("#doc-tpl-admin-sig-title") || {}).value || "").trim(),
     show_signature: !!($("#doc-tpl-admin-show-sig") || {}).checked,
+    show_signature_lines: !!($("#doc-tpl-admin-show-sig-lines") || {}).checked,
     show_branding_footer: !!($("#doc-tpl-admin-show-footer") || {}).checked,
     is_default: !!($("#doc-tpl-admin-default") || {}).checked,
     default_line_items: collectDocTplLineItems(),
