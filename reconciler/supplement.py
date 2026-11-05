@@ -42,14 +42,14 @@ __all__ = ["parse_supplement", "parse_supplement_text"]
 _NUM = r"\(?-?\$?[\d,]*\d\.\d{2}\)?"
 _NUM_TOKEN_RE = re.compile(_NUM)
 
-# "KOLLER-R                                     9/16/2026                Page: 10"
+# "ESTIMATOR-JOB                             9/16/2026                Page: 10"
 _PAGE_DATE_RE = re.compile(r"(\d{1,2}/\d{1,2}/\d{4})\s+Page:\s*(\d+)")
-# "Line Item Totals: KOLLER-R    0.00   8,090.08   48,540.25 ..."
+# "Line Item Totals: <job name>    0.00   8,090.08   48,540.25 ..."
 _LIT_RE = re.compile(r"^\s*Line Item Totals?:", re.I)
 
 # Lines that look like a heading but are really report furniture.
 _NOT_A_HEADING = re.compile(
-    r"^(MDM Construction|https?://|KOLLER-R\b|Summary$|Recap|Grand Total Areas|"
+    r"^(MDM Construction|https?://|Summary$|Recap|Grand Total Areas|"
     r"Line Item Totals|Estimate:|Price List:|Estimator:|Operator:|Business:|E-mail:|"
     r"Type of Estimate|Date Entered|Date Assigned|Cellular:|Client:|Property:|"
     r"File Number:|Note:|Yellow:|Blue:|Xactimate EULA|Labor Efficiency)",

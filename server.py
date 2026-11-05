@@ -642,6 +642,7 @@ def _invalidate_bot_config_cache() -> None:
 import db
 import auth as auth_mod
 import api_tokens as api_tokens_mod
+import reconciler_service
 
 db.init_db()
 
@@ -4558,6 +4559,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 404, {"error": "Project not found"})
             return
 
+        # ── Reconciler (Phase 1: draft runs, Admin approve) ──
+        if api_path == "/api/v2/reconciler/health":
+            self._handle_reconciler_health()
+            return
+        m = re.match(r"^/api/v2/reconciler/runs/(\d+)$", api_path)
+        if m:
+            self._handle_reconciler_run_get(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/reconciler/runs$", api_path)
+        if m:
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_reconciler_runs_get(opp_id, qs)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
+            return
+
         # History attachment download (serves the file from data/history-attachments/)
         m = re.match(r"^/api/v2/history-attachments/(\d+)/download$", api_path)
         if m:
@@ -5584,6 +5602,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 self._handle_project_document_upload(opp_id)
             else:
                 _json_response(self, 404, {"error": "Project not found"})
+            return
+
+        # ── Reconciler (Phase 1) ──
+        if api_path == "/api/v2/reconciler/runs" and method == "POST":
+            self._handle_reconciler_run_create()
+            return
+        m = re.match(r"^/api/v2/reconciler/runs/(\d+)/approve$", api_path)
+        if m and method == "POST":
+            self._handle_reconciler_run_approve(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/reconciler/runs/(\d+)/reject$", api_path)
+        if m and method == "POST":
+            self._handle_reconciler_run_reject(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/reconciler/runs/(\d+)$", api_path)
+        if m and method == "PATCH":
+            self._handle_reconciler_run_patch(int(m.group(1)))
             return
         m = re.match(r"^/api/v2/documents/(\d+)/callback$", api_path)
         if m and method == "POST":
@@ -6712,6 +6747,259 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             (opp_id, tag_id),
         )
         _json_response(self, 200, {"ok": True})
+
+    # ── Reconciler (Phase 1: draft-only; Admin approves) ────────────────────
+    #
+    # The deterministic engine lives in reconciler/ + reconciler_service.py.
+    # These handlers are deliberately thin: auth + scope, doc reference
+    # resolution, then one service call.  Nothing here runs OCR in the request
+    # path (PaddleOCR is not a production dependency) and nothing ever writes
+    # the "Final RCV" custom fields.
+
+    def _reconciler_scoped(self, user: dict, opp_id: int) -> bool:
+        """Limited users may only reconcile their own deals."""
+        if not _is_limited(user):
+            return True
+        row = db.query_one(
+            "SELECT id FROM opportunities "
+            "WHERE id = %s AND (responsible_user_id = %s OR created_by = %s)",
+            (opp_id, user["id"], user["id"]),
+        )
+        return bool(row)
+
+    def _reconciler_doc(self, opp_id: int, kind: str, doc_id) -> dict | None:
+        """Resolve a reconciler doc ref to a real file on this project.
+
+        ``kind`` is ``doc`` (project_documents) or ``attachment``
+        (history_attachments).  The two id spaces overlap, so the ref is
+        explicit.  Returns None when the row does not belong to the project or
+        the file is missing on disk.
+        """
+        try:
+            doc_id = int(doc_id)
+        except (TypeError, ValueError):
+            return None
+        if doc_id <= 0:
+            return None
+        if kind == "attachment":
+            row = db.query_one(
+                """SELECT ha.id, ha.filename AS title, ha.file_path AS file_path
+                     FROM history_attachments ha
+                     JOIN history_events he ON he.id = ha.event_id
+                    WHERE ha.id = %s AND he.opportunity_id = %s""",
+                (doc_id, opp_id),
+            )
+            ref_prefix = "att"
+        else:
+            row = db.query_one(
+                """SELECT id, title, file_path
+                     FROM project_documents
+                    WHERE id = %s AND opportunity_id = %s AND is_deleted = FALSE""",
+                (doc_id, opp_id),
+            )
+            ref_prefix = "doc"
+        if not row or not row.get("file_path"):
+            return None
+        rel = str(row["file_path"])
+        path = Path(rel) if os.path.isabs(rel) else (ROOT / rel)
+        if not path.is_file():
+            return None
+        return {
+            "docRef": f"{ref_prefix}:{doc_id}",
+            "title": row.get("title") or path.name,
+            "path": str(path),
+        }
+
+    def _handle_reconciler_run_create(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        opp_id = _resolve_project_id(payload.get("projectId"))
+        if not opp_id:
+            _json_response(self, 404, {"error": "Project not found"})
+            return
+        if not self._reconciler_scoped(user, opp_id):
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        refs = payload.get("documents") or {}
+        docs: dict = {}
+        for slot in reconciler_service.SLOTS:
+            ref = refs.get(slot) if isinstance(refs, dict) else None
+            ref = ref if isinstance(ref, dict) else {}
+            kind = str(ref.get("kind") or "doc")
+            if kind not in ("doc", "attachment"):
+                _json_response(self, 400, {"error": f"{slot}: kind must be doc or attachment"})
+                return
+            doc = self._reconciler_doc(opp_id, kind, ref.get("id"))
+            if not doc:
+                _json_response(
+                    self, 400, {"error": f"{slot}: document not found on this project"}
+                )
+                return
+            docs[slot] = doc
+        try:
+            built = reconciler_service.build_run(opp_id, docs)
+            run = reconciler_service.create_run(opp_id, user["id"], built)
+        except Exception as exc:
+            logger.exception("reconciler run create failed")
+            log_infra_event(
+                "error", f"reconciler run create failed: {exc}", source="reconciler",
+                method=self.command, path=self.path,
+            )
+            _json_response(self, 500, {"error": "Reconciliation failed"})
+            return
+        _json_response(self, 201, {"run": run})
+
+    def _handle_reconciler_run_get(self, run_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        run = reconciler_service.get_run(run_id)
+        if not run:
+            _json_response(self, 404, {"error": "Run not found"})
+            return
+        if not self._reconciler_scoped(user, run["projectId"]):
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        _json_response(self, 200, {"run": run})
+
+    def _handle_project_reconciler_runs_get(self, opp_id: int, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        if not self._reconciler_scoped(user, opp_id):
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        limit_raw = qs.get("limit", [20])
+        try:
+            limit = int(limit_raw[0] if isinstance(limit_raw, (list, tuple)) else limit_raw)
+        except (TypeError, ValueError):
+            limit = 20
+        _json_response(self, 200, {"runs": reconciler_service.list_runs(opp_id, user, limit)})
+
+    def _handle_reconciler_run_patch(self, run_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        run = reconciler_service.get_run(run_id)
+        if not run:
+            _json_response(self, 404, {"error": "Run not found"})
+            return
+        if not self._reconciler_scoped(user, run["projectId"]):
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        if "draftNote" not in payload:
+            _json_response(self, 400, {"error": "draftNote is required"})
+            return
+        result = reconciler_service.update_draft_note(
+            run_id, str(payload.get("draftNote") or ""), user["id"]
+        )
+        if not result.get("ok"):
+            _json_response(self, int(result.get("code") or 400), {"error": result.get("error")})
+            return
+        _json_response(self, 200, {"run": result["run"]})
+
+    def _handle_reconciler_run_approve(self, run_id: int) -> None:
+        # Posting is admin-only (managers carry is_admin, per migration 011).
+        user = _require_admin(self)
+        if not user:
+            return
+        note_override = None
+        body = _read_body(self)
+        if body:
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            if isinstance(payload, dict) and "draftNote" in payload:
+                note_override = str(payload.get("draftNote") or "")
+        try:
+            result = reconciler_service.approve_run(run_id, user, note_override=note_override)
+        except Exception as exc:
+            logger.exception("reconciler approve failed")
+            log_infra_event(
+                "error", f"reconciler approve failed: {exc}", source="reconciler",
+                method=self.command, path=self.path,
+            )
+            _json_response(self, 500, {"error": "Approval failed"})
+            return
+        if not result.get("ok"):
+            _json_response(self, int(result.get("code") or 409), {"error": result.get("error")})
+            return
+        _json_response(self, 200, {
+            "ok": True,
+            "alreadyApproved": bool(result.get("alreadyApproved")),
+            "noteEventId": result.get("noteEventId"),
+            "tagRemoved": bool(result.get("tagRemoved")),
+            "run": result.get("run"),
+        })
+
+    def _handle_reconciler_run_reject(self, run_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        run = reconciler_service.get_run(run_id)
+        if not run:
+            _json_response(self, 404, {"error": "Run not found"})
+            return
+        if not self._reconciler_scoped(user, run["projectId"]):
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        reason = ""
+        body = _read_body(self)
+        if body:
+            try:
+                payload = json.loads(body)
+                reason = str((payload or {}).get("reason") or "")
+            except json.JSONDecodeError:
+                reason = ""
+        result = reconciler_service.reject_run(run_id, user, reason=reason)
+        if not result.get("ok"):
+            _json_response(self, int(result.get("code") or 409), {"error": result.get("error")})
+            return
+        _json_response(self, 200, {"ok": True, "run": result.get("run")})
+
+    def _handle_reconciler_health(self) -> None:
+        """Model/engine versions + whether OCR is available on THIS server.
+
+        Intentionally cheap: it checks for the OCR interpreter on disk and never
+        imports paddle, so the production droplet answers instantly and reports
+        OCR unavailable (the prod path must not need OCR).
+        """
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            from reconciler import ocr as ocr_mod
+
+            ocr_python = ocr_mod.ocr_python()
+            ocr_ready = bool(ocr_python) and bool(ocr_mod.ocr_enabled())
+        except Exception:
+            ocr_python, ocr_ready = None, False
+        _json_response(self, 200, {
+            "parserVersion": reconciler_service.PARSER_VERSION,
+            "ocr": {
+                "engine": "paddleocr-ppocrv6",
+                "python": ocr_python,
+                "available": ocr_ready,
+                "enabled": bool(ocr_ready),
+                "note": (
+                    "OCR runs only in the Phase 2 worker; scanned PDFs are "
+                    "reported as needs_ocr here."
+                ),
+            },
+        })
 
     # ── Custom Fields ───────────────────────────────────────────────────────
 

@@ -288,16 +288,15 @@ def draft_note(
 ) -> str:
     """The claim-increase note, gated on the parse / delta tie-out.
 
-    The first line is always our agreed format
-    ``Claim increased by $X ($orig to $new, no PP)`` - **but only when the
-    tie-out passed**.  If either estimate or the old-vs-new delta fails its
-    tie-out, the draft is a "needs review" note instead and no increase is
-    stated: a number taken from a broken parse is worse than no number.
+    The first line is our agreed format
+    ``Claim increased by $X ($orig to $new, no PP)`` - **and only when the
+    tie-out passed**.  Pass ``old``/``new`` (parsed estimates) to let the
+    tie-out decide and to take the stated RCVs from the **tied-out** totals, or
+    pass a ready-made ``gate`` (``reconciler.tieout.draft_gate`` result).
 
-    Pass ``old``/``new`` (parsed estimates) to let the tie-out decide and to
-    take the stated RCVs from the **tied-out** totals, or pass a ready-made
-    ``gate`` (``reconciler.tieout.draft_gate`` result).  With neither, the
-    function is a plain text helper (legacy behaviour).
+    There is **no ungated path**: calling ``draft_note`` without a gate or a
+    pair of estimates returns the "DRAFT - NEEDS REVIEW" text, because a
+    revenue figure that was never tied out must not be quotable.
 
     When the line-item diff total disagrees with the RCV change, the draft says
     so explicitly.  A silent mismatch is how a note ends up quoting a number
@@ -309,18 +308,35 @@ def draft_note(
 
         tieout_gate = draft_gate(old, new, diff or {})
 
-    if tieout_gate is not None:
-        # The stated RCVs come from the tied-out estimate totals, never from a
-        # caller-supplied pair that could disagree with the parse.
-        old_rcv = int(tieout_gate.get("old_rcv", old_rcv) or 0)
-        new_rcv = int(tieout_gate.get("new_rcv", new_rcv) or 0)
-        if not tieout_gate.get("allowed"):
-            return needs_review_note(
-                gate=tieout_gate,
-                diff=diff,
-                old_rcv=old_rcv,
-                new_rcv=new_rcv,
-            )
+    if tieout_gate is None:
+        # No gate and no estimates: refuse to state a number.  This keeps the
+        # old positional signature from silently producing an ungated note.
+        return needs_review_note(
+            gate={
+                "allowed": False,
+                "blockers": [
+                    "no tie-out gate supplied - a draft cannot state an increase "
+                    "without a passed tie-out"
+                ],
+                "estimate_old": {"results": []},
+                "estimate_new": {"results": []},
+            },
+            diff=diff,
+            old_rcv=int(old_rcv or 0),
+            new_rcv=int(new_rcv or 0),
+        )
+
+    # The stated RCVs come from the tied-out estimate totals, never from a
+    # caller-supplied pair that could disagree with the parse.
+    old_rcv = int(tieout_gate.get("old_rcv", old_rcv) or 0)
+    new_rcv = int(tieout_gate.get("new_rcv", new_rcv) or 0)
+    if not tieout_gate.get("allowed"):
+        return needs_review_note(
+            gate=tieout_gate,
+            diff=diff,
+            old_rcv=old_rcv,
+            new_rcv=new_rcv,
+        )
 
     extra: List[str] = []
     mismatch = line_diff_mismatch(old_rcv, new_rcv, diff)

@@ -196,7 +196,7 @@ def parse_meta(text: str) -> Dict[str, Optional[str]]:
 
 
 def pretty_name(insured: Optional[str]) -> str:
-    """'ROBERT RAE' -> 'Robert Rae' (used for invoice descriptions)."""
+    """'DOE, JANE' -> 'Jane Doe' (used for invoice descriptions)."""
     if not insured:
         return "<Name>"
     n = insured.split("&")[0].strip()

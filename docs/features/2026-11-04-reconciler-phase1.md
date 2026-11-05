@@ -161,11 +161,14 @@ mismatch by `holdback_releases`, not silently resolved.
 python3 tests/test_reconciler_notes.py
 python3 tests/test_reconciler_ocr.py        # row layout + clean refusal
 python3 tests/test_reconciler_explain.py    # G1 maths, pure
+python3 tests/test_reconciler_service.py    # build_run + approval policy
 python3 tests/test_reconciler_parse.py      # fixtures: skips cleanly if absent
 python3 tests/test_reconciler_matcher.py
 python3 tests/test_reconciler_pairs.py
 python3 tests/test_reconciler_commission.py
+python3 tests/test_reconciler_regressions.py  # O&P noise + REVISED
 python3 tests/test_reconciler_g1.py         # fast tier; OCR tier skips
+python3 tests/test_reconciler_routes.py     # skips without a database
 
 # the heavy tier (minutes on CPU, then cached)
 RECONCILER_OCR_TEST=1 python3 tests/test_reconciler_g1.py
@@ -175,15 +178,180 @@ CI now runs the reconciler suites. They need no database; the client fixtures
 are gitignored so fixture-dependent tests skip on CI, and the OCR tier is
 env-gated.
 
-## 6. Open items
+## 6. Open items (state after round 2)
 
-- **Prior SF (9/11) estimate**: needed for the true line-by-line split of the
-  ~$26k and to turn the "unconfirmed" sentence into a confirmed one.
-- **Note composer wiring**: `claim_change_note` is a library function; posting
-  stays a human Admin action in Phase 1's UI (not built here).
+- **Prior SF estimate**: resolved in round 2 — the 8/27 prior is in
+  `golden_g1/prior_sf/` and the split test now runs (see §9).
+- **Note composer wiring**: done in round 2 (`reconciler_service` + UI); posting
+  stays a human Admin action.
 - **OCR cost**: 46 pages ≈ 12.6 minutes on this CPU. That is fine for a
   background draft but too slow for a synchronous request; the Phase 2 worker
   queue is still the right home for it.
 - **PP-OCRv6 medium** is cached and selectable (`--model medium`); it was not
   benchmarked here. Small tied out exactly on G1, so medium is unnecessary for
   now.
+
+---
+
+# Round 2 (same branch, 2026-11-04): gate hardening, real prior split, API + UI
+
+Stilgar reviewed `ebec4d3`. This round addresses the review items below. All
+fixtures remain gitignored; no client surname or claim number appears in the
+committed code or test names.
+
+## 7. K1 fixtures are neutral now
+
+`tests/fixtures/reconciler/k1/` (renamed from the customer-surname folder)
+with neutral filenames:
+
+| before | after |
+|---|---|
+| `<claim#> - Customer Copy Final Draft.pdf` | `k1/k1_carrier_revised.pdf` |
+| `<surname>-R_Exterior.Interior 9.15.26.pdf` | `k1/k1_ours.pdf` |
+| `new.txt` / `og_all.txt` / `ours.txt` | `k1/k1_new.txt` / `k1/k1_og.txt` / `k1/k1_ours.txt` |
+
+The golden ids are `k1_og`, `k1_new`, `k1_ours`, `k1_revised_pdf`,
+`k1_ours_pdf`. No customer surname or claim-number string remains in committed
+code or test names.
+
+## 8. The draft-note gate is mandatory
+
+`notes.draft_note()` no longer has an ungated path. Pass `old=`/`new=`
+estimates (or a ready-made `gate=`); calling it with neither returns:
+
+```
+DRAFT - NEEDS REVIEW: claim increase NOT stated
+- no tie-out gate supplied - a draft cannot state an increase without a passed tie-out
+...
+```
+
+Tests: `tests/test_reconciler_notes.py::TestDraftNoteGate.test_no_gate_and_no_estimates_is_needs_review`
+(both `draft_note()` and the old positional `draft_note(100_000, 150_000)`
+form), plus the existing allowed/blocked cases.
+
+## 9. The prior State Farm estimates — the split is computed, not assumed
+
+The direct prior (8/27) is an obfuscated text layer, so it needs PP-OCRv6.
+It parses to **RCV $850,638.92** with **exact** tie-out, which equals the
+Summary of Loss **$840,638.92 prior payments + $10,000 deductible** (both
+parsed).
+
+`TestG1PriorCarrierEstimate` is no longer skipped for a missing fixture. It
+asserts, from parsed output only:
+
+- prior RCV == parsed prior payments + parsed deductible;
+- payment ($104,450.96) == revised RCV − prior RCV;
+- PWARR release (with the prior supplied) == **$57,065.99**, line 65, and the
+  Worker Comp ISO line's note-vs-RCV mismatch is still reported;
+- the metal-roof lines' delta is **$0**;
+- the remainder is fully attributed per line.
+
+### The golden report's inferred split was wrong — here are the real numbers
+
+The report inferred "~$14.1k standing-seam metal + ~$11.9k shingle quantity"
+for the ~$26k remainder, because it did not have the 8/27 estimate. With the
+prior parsed, the metal-roof lines were **already present at the same prices**
+(delta $0), and the ~$26,021.39 remainder is:
+
+| Parsed item group | Delta |
+|---|---|
+| 11 D&R condensers (one line, qty 11) | $9,996.10 |
+| D&R black pipe with fitting and hanger | $9,481.81 |
+| Interior 401A drywall/paint/finish | $5,473.86 (plus ~$237 other interior) |
+| Apartment Roof soffit + metal-roof felt | $887.55 |
+| Small price drift / labor minimums | ≈ +$182 |
+| **Remainder after PWARR + HVAC O&P + Garage 1 shingles** | **$26,021.39** |
+
+The three confirmed big items remain PWARR $57,065.99, HVACi GC O&P
+$16,543.70 and Garage 1 shingles $4,819.88. This is a correction to the
+report, not a disagreement with the totals: every number still sums to the
+$104,450.96 cheque exactly (`row_deltas.rcv == payment`).
+
+## 10. Phase 1 API + UI (draft-only, Admin approve)
+
+### Migration
+
+**`migrations/046_reconciler_runs.sql`** — the next number after 045, and the
+only migration this phase adds. It creates:
+
+- `reconciler_runs` (project, status, creator, inputs with doc refs + sha256,
+  parser version, `gate_allowed`, confidence, draft note, billing summary,
+  result JSON, approved/rejected by/at, timestamps);
+- `reconciler_audit` (run, project, user, action, before/after JSON).
+
+The plan split this into 046/047/048; the MVP keeps the parsed artifacts as
+JSON on the run row, which the plan explicitly allows.
+
+### Routes (`server.py` → thin handlers, logic in `reconciler_service.py`)
+
+| Method | Path | Auth |
+|---|---|---|
+| POST | `/api/v2/reconciler/runs` | any logged-in user (limited users: own deals only) |
+| GET | `/api/v2/reconciler/runs/{id}` | any logged-in user, scoped |
+| GET | `/api/v2/projects/{id}/reconciler/runs` | any logged-in user, scoped |
+| PATCH | `/api/v2/reconciler/runs/{id}` | any logged-in user, scoped, audited |
+| POST | `/api/v2/reconciler/runs/{id}/approve` | **Admin only** (`_require_admin`) |
+| POST | `/api/v2/reconciler/runs/{id}/reject` | any logged-in user, scoped |
+| GET | `/api/v2/reconciler/health` | any logged-in user |
+
+`POST /runs` resolves `{kind: "doc"|"attachment", id}` refs against the
+project (the two id spaces overlap, so the ref is explicit), parses the prior
+and revised carriers with `parse_estimate` and our estimate with
+`parse_supplement`, runs the diff + gate + note + billing + holdbacks + gap +
+attribution, and stores a draft. **It parses with `ocr=False`**: OCR is not a
+production dependency.
+
+**Approval** (`reconciler_service.approve_run`) is one transaction:
+atomic status claim → history note (category 8 = "Note") → notify the run
+creator → delete **only** the "Needs reconciliation" tag → audit → mark
+approved. A second approve is idempotent (no second note). A run whose
+`gate_allowed` is false returns **409** and posts nothing, even if the draft
+text was edited. Custom fields (notably "Final RCV") are never written.
+
+### UI (`public/app.js` + `public/index.html` + `public/styles.css`)
+
+- A **Reconcile** icon button in the project Documents toolbar (next to
+  Upload/Create).
+- Modal with three document pickers (prior carrier / revised carrier / our
+  estimate), pre-filled from filenames (revised/original/supplement
+  heuristics).
+- Draft note textarea with **Save draft**, **Discard**, and an Admin-only
+  **Approve & post** button that is disabled when the gate blocked the run.
+- Deterministic summary: RCV by slot, top drivers, line-diff counts,
+  PWARR/code holdbacks, buildable attribution, gap (with bid-superseded
+  exclusion), and the info-only billing summary.
+- Previous runs for the project, clickable to reopen.
+- A scanned PDF shows the "needs OCR" explanation and no approve button; it
+  does not fail.
+
+Tests: `tests/test_reconciler_routes.py` (handler shim: auth 401, non-admin
+approve 403, gate-blocked approve 409, doc scoping, limited-user 403, health)
+and DB-backed `TestApprovalPersistence` (real note, tag removal only,
+creator notified, audit, idempotency, no custom-field writes).
+`tests/test_reconciler_service.py` covers `build_run` and `approval_guard`
+without a DB.
+
+## 11. OCR stays out of production; cold-run timing
+
+`requirements.txt` and the `Dockerfile` contain **no** PaddleOCR /
+paddlepaddle. The image only gains `COPY reconciler ./reconciler` (pure
+stdlib). `parse_estimate(..., ocr=False)` is what the API uses, so a scanned
+PDF returns `needs_ocr` with a human message instead of an error or a crash.
+
+A **cold** PP-OCRv6 run (fresh `RECONCILER_OCR_CACHE_DIR`, no cache reuse) was
+done on the 46-page G1 carrier revision through the parent bridge
+(`python3 -m reconciler.ocr`):
+
+- device: **CPU** (device reason recorded: Paddle CPU build; Vega 8 gfx902
+  unsupported);
+- 46 pages @ 200 DPI, PP-OCRv6_small: **789.41 s cold** (13 min 09 s,
+  ~17.2 s/page; per-page range 5.3–29.8 s);
+- the recognised text still ties out to **$955,089.88** (verified from the
+  cold text, not the cache).
+
+**The heavy G1 tests depend on the OCR disk cache** (`~/.cache/sietch-reconciler/ocr/`,
+override with `RECONCILER_OCR_CACHE_DIR`). The first `RECONCILER_OCR_TEST=1`
+run on a new machine pays the ~13-minute CPU cost per scanned document; after
+that the same file hash is cached and the suite runs in seconds. CI does not
+set `RECONCILER_OCR_TEST`, so it never pays that cost (the heavy tier skips).
+

@@ -589,8 +589,11 @@ def diff_items(old: List[Dict], new: List[Dict]) -> Dict:
         m["what_changed"] = list(dict.fromkeys(what))
         # O&P/tax-only movement is one commercial change (the carrier added
         # overhead to every line), not N scope changes.  ``pretax`` equality is
-        # the reliable test; RCV moved only as a consequence.
-        m["only_op_or_tax"] = bool(what) and set(what) <= {"tax", "O&P", "RCV"} and (
+        # the reliable test; RCV (and the depreciation that tracks it) moved
+        # only as a consequence.
+        m["only_op_or_tax"] = bool(what) and set(what) <= {
+            "tax", "O&P", "RCV", "depreciation"
+        } and (
             int(n.get("pretax") or 0) == int(o.get("pretax") or 0)
         )
         m["revised"] = bool(o.get("revised") or n.get("revised"))

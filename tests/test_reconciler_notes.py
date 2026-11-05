@@ -89,6 +89,19 @@ class TestDraftNoteGate(unittest.TestCase):
         text = draft_note(gate=self._gate(True, old_rcv=100_000, new_rcv=150_000))
         self.assertTrue(text.startswith("Claim increased by $500.00"))
 
+    def test_no_gate_and_no_estimates_is_needs_review(self):
+        """There is no ungated path: a bare call must not state an increase."""
+        for args in ((100_000, 150_000), ()):
+            with self.subTest(args=args):
+                text = draft_note(*args)
+                self.assertNotIn("increased by", text.lower())
+                self.assertIn("NEEDS REVIEW", text)
+                self.assertIn("no tie-out gate supplied", text)
+
+    def test_gate_supplied_directly_still_works(self):
+        text = draft_note(gate=self._gate(True, old_rcv=0, new_rcv=500_000))
+        self.assertIn("Claim increased by $5,000.00", text)
+
     def test_blocked_draft_states_no_increase(self):
         text = draft_note(
             gate=self._gate(False, ["old estimate failed tie-out"], old_rcv=100_000, new_rcv=150_000)

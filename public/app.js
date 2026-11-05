@@ -40804,6 +40804,17 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
 
   docsToolbar.appendChild(uploadBtn);
   docsToolbar.appendChild(createWrap);
+
+  // Reconcile (Phase 1): pick prior carrier / revised carrier / our estimate
+  // and draft the claim-increase note. Draft-only - an Admin approves to post.
+  const reconcileBtn = document.createElement("button");
+  reconcileBtn.type = "button";
+  reconcileBtn.className = "btn btn-secondary btn-icon-only btn-sm";
+  reconcileBtn.title = "Reconcile carrier estimates";
+  reconcileBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/><path d="M18 3v6"/><path d="M15 6l3 3 3-3"/></svg>';
+  reconcileBtn.addEventListener("click", () => openReconcileModal(oppId));
+  docsToolbar.appendChild(reconcileBtn);
+
   docsToolbar.appendChild(selectAllLabel);
   docsToolbar.appendChild(actionsSelect);
 
@@ -47336,6 +47347,393 @@ function _docGenToday() {
 }
 
 // mode: "project" → auto-fill from project; "standalone" → blank for manual entry
+// ─────────────────────────────────────────────────────────────────────────────
+// Estimate reconciler (Phase 1)
+//
+// Manual 3-slot reconcile (prior carrier, revised carrier, our estimate) ->
+// deterministic draft note -> Admin approve-to-post. The server owns the
+// tie-out gate: a run whose parse did not tie out can never be posted, and a
+// scanned PDF comes back as needs_ocr (OCR is not a production dependency).
+// ─────────────────────────────────────────────────────────────────────────────
+const RECONCILE_STATUS = {
+  drafted: { label: "Drafted", tone: "ok" },
+  needs_review: { label: "Needs review", tone: "warn" },
+  needs_ocr: { label: "Needs OCR", tone: "warn" },
+  approved: { label: "Approved", tone: "ok" },
+  rejected: { label: "Discarded", tone: "muted" },
+};
+
+function _reconMoney(cents) {
+  if (cents === null || cents === undefined) return "—";
+  const n = Number(cents) / 100;
+  if (!isFinite(n)) return "—";
+  return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function _reconSigned(cents) {
+  if (cents === null || cents === undefined) return "—";
+  const n = Number(cents);
+  const sign = n > 0 ? "+" : n < 0 ? "-" : "";
+  return sign + _reconMoney(Math.abs(n));
+}
+
+function _reconDocKind(doc) {
+  return doc && doc.fromHistoryAttachment ? "attachment" : "doc";
+}
+
+function _reconDocValue(doc) {
+  return `${_reconDocKind(doc)}:${doc.id}`;
+}
+
+function _reconPdfDocs(docs) {
+  return (docs || []).filter((d) => {
+    const title = String(d.title || "");
+    const mime = String(d.mimeType || "");
+    return /\.pdf$/i.test(title) || mime === "application/pdf";
+  });
+}
+
+function _reconGuessSlots(docs) {
+  const list = _reconPdfDocs(docs).slice().sort((a, b) => {
+    const ta = new Date(a.uploadedAt || 0).getTime();
+    const tb = new Date(b.uploadedAt || 0).getTime();
+    return ta - tb;
+  });
+  const isOur = (d) =>
+    /(supplement|vanguard|mdm|ours\b|our[ _-]?estimate|vanguardadj|\br1\b)/i.test(String(d.title || ""));
+  const ours = list.find(isOur) || null;
+  const carriers = list.filter((d) => d !== ours);
+  const revisedRe = /(revised|revision|final|updated|supp\b)/i;
+  const priorRe = /(original|\bog\b|initial|first|202[0-5])/i;
+  let revised = carriers.filter((d) => revisedRe.test(String(d.title || ""))).pop()
+    || carriers[carriers.length - 1]
+    || null;
+  let prior = carriers.filter((d) => priorRe.test(String(d.title || ""))).shift()
+    || carriers.find((d) => d !== revised)
+    || null;
+  if (prior === revised) prior = carriers.find((d) => d !== revised) || null;
+  return { prior, revised, our: ours };
+}
+
+function _reconSelect(label, docs, selected) {
+  const wrap = document.createElement("div");
+  wrap.className = "reconcile-field";
+  const lbl = document.createElement("label");
+  lbl.textContent = label;
+  wrap.appendChild(lbl);
+  const sel = document.createElement("select");
+  sel.className = "reconcile-select";
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = "— pick a document —";
+  sel.appendChild(ph);
+  for (const d of _reconPdfDocs(docs)) {
+    const opt = document.createElement("option");
+    opt.value = _reconDocValue(d);
+    const when = d.uploadedAt ? ` — ${new Date(d.uploadedAt).toLocaleDateString()}` : "";
+    opt.textContent = `${d.title || "document"}${when}`;
+    sel.appendChild(opt);
+  }
+  if (selected) sel.value = _reconDocValue(selected);
+  wrap.appendChild(sel);
+  return { wrap, select: sel };
+}
+
+function _reconStatusPill(run) {
+  const s = RECONCILE_STATUS[run.status] || { label: run.status || "Unknown", tone: "muted" };
+  return `<span class="reconcile-pill reconcile-pill-${s.tone}">${escapeHtml(s.label)}</span>`;
+}
+
+function openReconcileModal(oppId) {
+  const modal = $("#reconcile-modal");
+  const body = $("#reconcile-body");
+  if (!modal || !body) return;
+  body.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--muted)">Loading documents…</div>';
+  modal.classList.remove("hidden");
+  if (!modal.dataset.boundReconcile) {
+    modal.dataset.boundReconcile = "1";
+    modal.querySelectorAll("[data-reconcile-dismiss]").forEach((el) => {
+      el.addEventListener("click", () => modal.classList.add("hidden"));
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !modal.classList.contains("hidden")) modal.classList.add("hidden");
+    });
+  }
+  Promise.all([
+    api(`/api/v2/projects/${oppId}/documents`).catch(() => ({ documents: [] })),
+    api(`/api/v2/projects/${oppId}/reconciler/runs`).catch(() => ({ runs: [] })),
+  ]).then(([docRes, runRes]) => {
+    renderReconcileForm(body, oppId, (docRes && docRes.documents) || [], (runRes && runRes.runs) || []);
+  }).catch((err) => {
+    body.innerHTML = `<div style="padding:2rem;color:var(--danger)">Failed to load: ${escapeHtml(err.message)}</div>`;
+  });
+}
+
+function renderReconcileForm(body, oppId, docs, runs) {
+  body.innerHTML = "";
+  const intro = document.createElement("p");
+  intro.className = "reconcile-intro";
+  intro.textContent = "Pick the prior carrier revision, the new one, and (optionally) our estimate. The draft is deterministic — nothing posts until an Admin approves it.";
+  body.appendChild(intro);
+
+  if (!_reconPdfDocs(docs).length) {
+    const empty = document.createElement("div");
+    empty.className = "reconcile-warning";
+    empty.textContent = "No PDFs on this project yet. Upload the prior and revised carrier estimates (and our estimate) first.";
+    body.appendChild(empty);
+  }
+
+  const guess = _reconGuessSlots(docs);
+  const fields = document.createElement("div");
+  fields.className = "reconcile-fields";
+  const prior = _reconSelect("Prior carrier estimate", docs, guess.prior);
+  const revised = _reconSelect("Revised carrier estimate", docs, guess.revised);
+  const our = _reconSelect("Our estimate (optional)", docs, guess.our);
+  fields.appendChild(prior.wrap);
+  fields.appendChild(revised.wrap);
+  fields.appendChild(our.wrap);
+  body.appendChild(fields);
+
+  const actions = document.createElement("div");
+  actions.className = "reconcile-actions";
+  const runBtn = document.createElement("button");
+  runBtn.type = "button";
+  runBtn.className = "btn btn-primary";
+  runBtn.textContent = "Run reconcile";
+  const runMsg = document.createElement("span");
+  runMsg.className = "reconcile-run-msg";
+  actions.appendChild(runBtn);
+  actions.appendChild(runMsg);
+  body.appendChild(actions);
+
+  runBtn.addEventListener("click", async () => {
+    const payload = { projectId: oppId, documents: {} };
+    for (const [slot, field] of [["prior", prior], ["revised", revised], ["our", our]]) {
+      const val = field.select.value;
+      if (!val) {
+        if (slot !== "our") {
+          showToast(`Pick the ${slot} estimate first`, true);
+          return;
+        }
+        continue;
+      }
+      const [kind, id] = val.split(":");
+      payload.documents[slot] = { kind, id: parseInt(id, 10) };
+    }
+    if (!payload.documents.prior || !payload.documents.revised) {
+      showToast("Prior and revised carrier estimates are required", true);
+      return;
+    }
+    runBtn.disabled = true;
+    runMsg.textContent = "Reading and tying out the PDFs…";
+    try {
+      const res = await api("/api/v2/reconciler/runs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      renderReconcileRun(body, res.run, oppId, docs, runs);
+    } catch (err) {
+      runMsg.textContent = "";
+      showToast(err.message || "Reconcile failed", true);
+    } finally {
+      runBtn.disabled = false;
+    }
+  });
+
+  const history = document.createElement("div");
+  history.className = "reconcile-history";
+  if (runs.length) {
+    const h = document.createElement("div");
+    h.className = "reconcile-history-title";
+    h.textContent = "Previous runs";
+    history.appendChild(h);
+    for (const r of runs.slice(0, 8)) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "reconcile-history-row";
+      const when = r.createdAt ? new Date(r.createdAt).toLocaleString() : "";
+      row.innerHTML = `${_reconStatusPill(r)} <span class="reconcile-history-when">${escapeHtml(when)}</span>`;
+      row.addEventListener("click", () => renderReconcileRun(body, r, oppId, docs, runs));
+      history.appendChild(row);
+    }
+  }
+  body.appendChild(history);
+}
+
+function renderReconcileRun(body, run, oppId, docs, runs) {
+  body.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "reconcile-run-head";
+  head.innerHTML = `${_reconStatusPill(run)} <span class="reconcile-confidence">confidence ${(Number(run.confidence || 0) * 100).toFixed(0)}%</span>`;
+  body.appendChild(head);
+
+  const result = run.result || {};
+  const blockers = result.blockers || [];
+  if (result.needsOcr && result.needsOcr.length) {
+    const warn = document.createElement("div");
+    warn.className = "reconcile-warning";
+    const msgs = result.messages && result.messages.length
+      ? result.messages.join(" ")
+      : "A scanned PDF needs OCR. OCR is not available on the CRM server.";
+    warn.textContent = msgs;
+    body.appendChild(warn);
+  }
+  if (blockers.length) {
+    const box = document.createElement("div");
+    box.className = "reconcile-blockers";
+    box.innerHTML = `<strong>Blocked by the tie-out gate</strong><ul>${blockers.map((b) => `<li>${escapeHtml(String(b))}</li>`).join("")}</ul>`;
+    body.appendChild(box);
+  }
+
+  const noteWrap = document.createElement("div");
+  noteWrap.className = "reconcile-note-wrap";
+  const noteLabel = document.createElement("label");
+  noteLabel.textContent = "Draft note";
+  noteLabel.htmlFor = "reconcile-note";
+  const note = document.createElement("textarea");
+  note.id = "reconcile-note";
+  note.className = "reconcile-note";
+  note.rows = 8;
+  note.value = run.draftNote || "";
+  note.disabled = run.status === "approved" || run.status === "rejected";
+  noteWrap.appendChild(noteLabel);
+  noteWrap.appendChild(note);
+  body.appendChild(noteWrap);
+
+  const actions = document.createElement("div");
+  actions.className = "reconcile-actions";
+  const isAdmin = !!(state.currentUser && state.currentUser.isAdmin);
+  const editable = run.status !== "approved" && run.status !== "rejected";
+
+  if (editable) {
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "btn btn-secondary";
+    save.textContent = "Save draft";
+    save.addEventListener("click", async () => {
+      save.disabled = true;
+      try {
+        const res = await api(`/api/v2/reconciler/runs/${run.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ draftNote: note.value }),
+        });
+        showToast("Draft saved");
+        renderReconcileRun(body, res.run, oppId, docs, runs);
+      } catch (err) {
+        showToast(err.message || "Could not save the draft", true);
+      } finally {
+        save.disabled = false;
+      }
+    });
+    actions.appendChild(save);
+  }
+
+  if (isAdmin && run.status !== "approved" && run.status !== "rejected") {
+    const approve = document.createElement("button");
+    approve.type = "button";
+    approve.className = "btn btn-primary";
+    approve.textContent = "Approve & post";
+    const blocked = !run.gateAllowed;
+    approve.disabled = blocked;
+    approve.title = blocked
+      ? "The tie-out gate did not pass, so this run cannot be posted"
+      : "Post the note and remove the Needs reconciliation tag";
+    approve.addEventListener("click", async () => {
+      const ok = await confirmDialog({
+        title: "Approve and post this note?",
+        message: "This posts the draft note to the project and removes only the \u201cNeeds reconciliation\u201d tag.",
+        confirmLabel: "Approve & post",
+        danger: false,
+      });
+      if (!ok) return;
+      approve.disabled = true;
+      try {
+        const res = await api(`/api/v2/reconciler/runs/${run.id}/approve`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ draftNote: note.value }),
+        });
+        showToast(res.alreadyApproved ? "Already approved" : "Note posted");
+        renderReconcileRun(body, res.run || run, oppId, docs, runs);
+      } catch (err) {
+        showToast(err.message || "Approval failed", true);
+      } finally {
+        approve.disabled = false;
+      }
+    });
+    actions.appendChild(approve);
+  }
+
+  if (editable) {
+    const reject = document.createElement("button");
+    reject.type = "button";
+    reject.className = "btn btn-secondary";
+    reject.textContent = "Discard";
+    reject.addEventListener("click", async () => {
+      const ok = await confirmDialog({
+        title: "Discard this reconciler run?",
+        message: "The draft is kept for audit but will not be posted.",
+        confirmLabel: "Discard",
+      });
+      if (!ok) return;
+      try {
+        const res = await api(`/api/v2/reconciler/runs/${run.id}/reject`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: "discarded in UI" }),
+        });
+        showToast("Run discarded");
+        renderReconcileRun(body, res.run || run, oppId, docs, runs);
+      } catch (err) {
+        showToast(err.message || "Could not discard", true);
+      }
+    });
+    actions.appendChild(reject);
+  }
+
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "btn btn-secondary";
+  back.textContent = "New reconcile";
+  back.addEventListener("click", () => renderReconcileForm(body, oppId, docs, runs));
+  actions.appendChild(back);
+  body.appendChild(actions);
+
+  // Deterministic summary (information only)
+  const details = document.createElement("div");
+  details.className = "reconcile-details";
+  const est = result.estimates || {};
+  const cells = ["prior", "revised", "our"].map((slot) => {
+    const e = est[slot] || {};
+    const t = e.totals || {};
+    const label = slot === "our" ? "Our estimate" : slot === "prior" ? "Prior carrier" : "Revised carrier";
+    return `<tr><th>${label}</th><td>${_reconMoney(t.rcv)}</td><td>${e.itemCount ?? "—"} items</td><td>${escapeHtml(e.status || "")}</td></tr>`;
+  }).join("");
+  const diff = result.diff || {};
+  const sum = diff.summary || {};
+  const hold = result.holdbacks || {};
+  const gap = result.gap || null;
+  const att = result.attribution || {};
+  details.innerHTML = `
+    <table class="reconcile-table">
+      <thead><tr><th></th><th>RCV</th><th>Items</th><th>Parse</th></tr></thead>
+      <tbody>${cells}</tbody>
+    </table>
+    <div class="reconcile-grid">
+      <div><span class="reconcile-label">Change drivers (top)</span><div>${(diff.drivers || []).map((d) => `${escapeHtml(d.kind || "")}: ${escapeHtml(String(d.description || "").slice(0, 70))} ${_reconSigned(d.delta)}`).map((s) => `<div class="reconcile-driver">${s}</div>`).join("") || "—"}</div></div>
+      <div><span class="reconcile-label">Line diff</span><div>${sum.net_rcv_formatted || _reconSigned(sum.net_rcv)} · ${sum.changed_count || 0} changed · ${sum.added_count || 0} added · ${sum.removed_count || 0} removed · ${sum.needs_review_count || 0} to review</div>
+        <span class="reconcile-label">PWARR / code holdbacks</span><div>${_reconMoney(hold.confirmedTotal)} confirmed · ${_reconMoney(hold.conditionalTotal)} conditional</div>
+        <span class="reconcile-label">Buildable attribution</span><div>${_reconMoney(att.buildableTotal)} buildable · ${_reconMoney(att.nonBuildableTotal)} not buildable</div>
+        ${gap ? `<span class="reconcile-label">Gap to our estimate</span><div>${_reconMoney(gap.gap)} total · ${_reconMoney(gap.excluded_total)} bid-superseded · ${_reconMoney(gap.realistic_gap)} realistic</div>` : ""}
+      </div>
+    </div>
+    ${(run.billingSummary || []).length ? `<div class="reconcile-billing"><span class="reconcile-label">Billing summary (info only)</span>${(run.billingSummary || []).map((l) => `<div>${escapeHtml(String(l))}</div>`).join("")}</div>` : ""}
+  `;
+  body.appendChild(details);
+}
+
 function openInvoiceModal(oppId, mode) {
   mode = mode || (oppId ? "project" : "standalone");
   const modal = $("#invoice-generator-modal");

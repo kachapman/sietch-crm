@@ -121,9 +121,9 @@ class TestPairDeltas(unittest.TestCase):
         self.assertEqual(td["fields"]["rcv"]["printed_delta"], 50_548_946)
         self.assertTrue(td["exact"])
 
-    def test_koller_is_a_known_parse_failure_and_blocks(self):
-        """Both sides of the Koller pair fail their own tie-out (known limit)."""
-        a, b = self._est("koller_og"), self._est("koller_new")
+    def test_k1_is_a_known_parse_failure_and_blocks(self):
+        """Both sides of the K1 pair fail their own tie-out (known limit)."""
+        a, b = self._est("k1_og"), self._est("k1_new")
         self.assertFalse(T.tieout_estimate(a)["passed"])
         d = D.diff_items(a["items"], b["items"])
         gate = T.draft_gate(a, b, d)

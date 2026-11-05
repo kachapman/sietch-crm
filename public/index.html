@@ -3870,6 +3870,20 @@
     </div>
   </div>
 
+  <!-- Estimate Reconciler Modal (Phase 1: draft + Admin approve) -->
+  <div id="reconcile-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="reconcile-title">
+    <div class="modal-backdrop" data-reconcile-dismiss></div>
+    <div class="modal-card modal-card-reconcile">
+      <div class="modal-card-head">
+        <h2 id="reconcile-title" class="modal-title">Reconcile carrier estimates</h2>
+        <button class="btn btn-icon-only modal-header-control" data-reconcile-dismiss aria-label="Close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="reconcile-body" id="reconcile-body"></div>
+    </div>
+  </div>
+
   <div id="photo-markup-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="photo-markup-title">
     <div class="modal-backdrop" data-photo-markup-dismiss></div>
     <div class="modal-card modal-card-photo-markup">

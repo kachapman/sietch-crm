@@ -2,6 +2,70 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Reconciler Phase 1 round 2: mandatory gate, real prior split, API + UI, migration 046 (2026-11-04, branch `reconciler-phase1`)
+
+**Scope.** Follow-up to `ebec4d3` after review. It touches `reconciler/`,
+`reconciler_service.py`, `server.py`, `public/` (reconcile modal + toolbar
+button), `migrations/046_reconciler_runs.sql`, `Dockerfile` and tests. Nothing
+merged/pushed/deployed; no prod access; no writes to a real database (tests use
+a throwaway local Postgres). Full write-up:
+[`docs/features/2026-11-04-reconciler-phase1.md`](docs/features/2026-11-04-reconciler-phase1.md).
+
+**Neutral fixtures.** The K1 fixture folder (previously a customer surname)
+is now `tests/fixtures/reconciler/k1/` with neutral names
+(`k1_carrier_revised.pdf`, `k1_ours.pdf`, `k1_og.txt`, `k1_new.txt`,
+`k1_ours.txt`). No surname or claim number remains in committed code or test
+names.
+
+**The draft-note gate is mandatory.** `notes.draft_note()` has no ungated
+path: without a gate or a pair of estimates it returns `DRAFT - NEEDS REVIEW:
+claim increase NOT stated`. Test added for the bare call and the old
+positional form.
+
+**Prior SF estimates are used.** The 8/27 prior (obfuscated text layer, OCR)
+parses to RCV $850,638.92 with exact tie-out = $840,638.92 prior payments +
+$10,000 deductible. The metal-roof/shingle split test is un-skipped and now
+asserts on parsed line deltas. Real finding: the standing-seam metal lines were
+**already in the prior** (delta $0), so the report's "~$14.1k metal" inference
+was wrong; the ~$26,021.39 remainder is 11 D&R condensers $9,996.10, D&R black
+pipe $9,481.81, interior 401A $5,473.86, soffit/felt $887.55 and ~$182 drift.
+`holdback_releases` now matches a prior line by description **and quantity**
+(the same ISO 4" line appears in two sections), so the PWARR release is
+confirmed at $57,065.99 even with the prior supplied.
+
+**Phase 1 API + UI (draft-only, Admin approves).** New
+`reconciler_service.py` and routes: create/list/get/patch/reject runs, Admin
+`approve`, and health. Approve posts the note (category 8 "Note"), notifies the
+run creator, removes **only** "Needs reconciliation", audits, and is
+idempotent; it returns **409 when the tie-out gate did not pass** and never
+writes custom fields. The project Documents toolbar gets a **Reconcile**
+button and a modal with three document pickers, draft-note editor, Save/
+Discard and an Admin-only **Approve & post**.
+
+**Migration 046** (`046_reconciler_runs.sql`, next after 045) adds
+`reconciler_runs` and `reconciler_audit`. No other migration.
+
+**OCR stays out of production.** No PaddleOCR/paddlepaddle in
+`requirements.txt` or the image; the API parses with `ocr=False` and reports
+`needs_ocr` with a message (the UI shows it and offers no approve). The
+Dockerfile only adds `COPY reconciler ./reconciler`. A cold PP-OCRv6 run
+(46 pages, fresh `RECONCILER_OCR_CACHE_DIR`) is documented with its timing and
+device; the heavy G1 tests depend on the OCR disk cache.
+
+**Regression tests.** `tests/test_reconciler_regressions.py` pins O&P-only
+noise collapsing and REVISED-line handling on a real three-revision pair;
+`tests/test_reconciler_service.py` and `tests/test_reconciler_routes.py` cover
+the service, auth, Admin-only posting and gate-blocked posting (the latter two
+with DB-backed approval tests).
+
+**Test totals.** All eleven reconciler suites: **226 tests** in fast mode with
+a database (5 OCR-tier skips); **249 tests** with `RECONCILER_OCR_TEST=1`
+(0 skips). The full CI smoke list was run on this branch and on `main`
+`ee6e401`: the same four suites fail on both (pre-existing source guards:
+`test_email_project_copy`, `test_mail_template_auth` — a missing file
+referenced by the workflow, `test_scanner_toggle_gating`,
+`test_sync_pull_deals_fields`); no regression is introduced.
+
 ## Reconciler Phase 1: tie-out-gated notes, PP-OCRv6, G1 golden case (2026-11-04, branch `reconciler-phase1`)
 
 **Scope.** Library-only work under `reconciler/`; no Sietch app code, no UI, no

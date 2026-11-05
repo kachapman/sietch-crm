@@ -11,6 +11,60 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-04 (reconciler Phase 1 round 2: mandatory gate, prior split,
+API + UI, migration 046, branch `reconciler-phase1`)
+
+**Status: IMPLEMENTED + TESTED on branch `reconciler-phase1` — NOT merged, NOT
+pushed, NOT deployed.** Follow-up to `ebec4d3`. No production access; the only
+DB touched was a throwaway local PostgreSQL container. Full write-up:
+[`docs/features/2026-11-04-reconciler-phase1.md`](docs/features/2026-11-04-reconciler-phase1.md).
+
+**Fixtures neutralised.** The K1 fixture folder (previously a customer
+surname) is now `k1/` with `k1_carrier_revised.pdf`, `k1_ours.pdf`,
+`k1_og.txt`, `k1_new.txt`, `k1_ours.txt`; golden ids `k1_*`. No surname/claim
+number in committed code or test names.
+
+**Note gate is mandatory.** `notes.draft_note()` with no gate/estimates returns
+`DRAFT - NEEDS REVIEW: claim increase NOT stated`. Tested.
+
+**Prior SF now used.** 8/27 prior (OCR) parses to RCV $850,638.92, exact
+tie-out, = $840,638.92 payments + $10,000 deductible. The split test is
+un-skipped and asserts parsed line deltas. **Real finding:** the metal-roof
+lines were already in the prior (delta $0), so the report's ~$14.1k metal
+inference was wrong; the ~$26,021.39 remainder is condensers $9,996.10, black
+pipe $9,481.81, interior 401A $5,473.86, soffit/felt $887.55, ~$182 drift.
+`holdback_releases` now matches prior lines by desc+qty, so PWARR is
+$57,065.99 even with the prior.
+
+**Phase 1 API + UI.** `reconciler_service.py` + routes: create/list/get/patch/
+reject (auth, limited-user scoped), Admin-only approve, health. Approve posts
+the note (category 8), notifies the creator, removes only "Needs
+reconciliation", audits, idempotent, 409 when the gate blocked, never writes
+custom fields. UI: Reconcile button in the project Documents toolbar + modal
+(3 pickers, draft editor, Save/Discard, Admin Approve & post, needs-OCR
+message).
+
+**Migration 046_reconciler_runs.sql** (reconciler_runs + reconciler_audit) —
+the only new migration, next after 045.
+
+**OCR out of prod.** No paddle deps in requirements/Dockerfile (only
+`COPY reconciler`); API parses with `ocr=False` and reports needs_ocr. Cold
+PP-OCRv6 run (46 pp, fresh cache dir) documented; the heavy G1 tests depend on
+the OCR disk cache; CI never runs the heavy tier.
+
+**Tests:** 11 reconciler suites — **226 tests** fast (with DB; 5 OCR-tier
+skips) / **249** with `RECONCILER_OCR_TEST=1` (all pass, 0 skips). Full CI
+smoke list run on branch and on `main ee6e401`: same four pre-existing
+failures on both (`test_email_project_copy`, `test_mail_template_auth` — file
+missing from git, `test_scanner_toggle_gating`, `test_sync_pull_deals_fields`);
+no regression. `test_reconciler_pairs` only failed while the cold OCR was
+saturating all 4 cores; it passes alone (6/6, 9.3 s).
+
+---
+
+
+## Previous session summary
+
 **Date:** 2026-11-04 (reconciler Phase 1: gated notes, PP-OCRv6, G1 golden,
 branch `reconciler-phase1`)
 

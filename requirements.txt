@@ -3,3 +3,8 @@ fpdf2>=2.7.0
 # Completion PDFs in the doc_pdf/ package. Keep the pin compatible with
 # Python 3.12 (the Docker base image is python:3.12-slim-bookworm).
 reportlab>=4.0,<5
+
+# NOTE: PaddleOCR / paddlepaddle are deliberately NOT here. The estimate
+# reconciler's OCR path (PP-OCRv6) runs only in the separate worker
+# environment; the production image must never need it. A scanned PDF is
+# reported as "needs OCR" instead of failing (see reconciler/ocr.py).

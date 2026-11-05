@@ -292,9 +292,9 @@ GOLDEN = {
         "coverage_rows": 0,
         "tie_out": True,
     },
-    # --- Koller ---
-    "koller_og": {
-        "file": "koller/og_all.txt",
+    # --- K1 ---
+    "k1_og": {
+        "file": "k1/k1_og.txt",
         "kind": "carrier",
         "carrier": "State Farm",
         "items": 31,
@@ -302,8 +302,8 @@ GOLDEN = {
         # OCR'd earlier: item totals do not reconcile (known limit, same as recon.py)
         "tie_out": False,
     },
-    "koller_new": {
-        "file": "koller/new.txt",
+    "k1_new": {
+        "file": "k1/k1_new.txt",
         "kind": "carrier",
         "carrier": "State Farm",
         "items": 77,
@@ -320,8 +320,8 @@ GOLDEN = {
         "coverage_rows": 0,
         "tie_out": True,
     },
-    "koller_ours": {
-        "file": "koller/ours.txt",
+    "k1_ours": {
+        "file": "k1/k1_ours.txt",
         "kind": "supplement",
         "carrier": "us",
         "items": 99,
@@ -333,8 +333,8 @@ GOLDEN = {
         "areas": 4,
         "tie_out": True,
     },
-    "koller_new_pdf": {
-        "file": "koller/49-0L1N-844 - Customer Copy Final Draft.pdf",
+    "k1_revised_pdf": {
+        "file": "k1/k1_carrier_revised.pdf",
         "kind": "carrier",
         "carrier": "State Farm",
         "items": 77,
@@ -342,8 +342,8 @@ GOLDEN = {
         "rcv": 4549110,
         "tie_out": True,
     },
-    "koller_ours_pdf": {
-        "file": "koller/KOLLER-R_Exterior.Interior 9.15.26.pdf",
+    "k1_ours_pdf": {
+        "file": "k1/k1_ours.pdf",
         "kind": "supplement",
         "carrier": "us",
         "items": 99,
@@ -501,9 +501,9 @@ REQUIRED_IDS = [
     "muehlbauer_og",
     "muehlbauer_rev",
     "sf_sample",
-    "koller_og",
-    "koller_new",
-    "koller_ours",
+    "k1_og",
+    "k1_new",
+    "k1_ours",
     "lanc_r1002",
     "sf_comm_v1",
     "sf_comm_v2",
@@ -560,7 +560,7 @@ class TestGoldenTable(unittest.TestCase):
                 continue
             if value in P.SUPPORTED_CARRIERS:
                 continue
-            if value.startswith("recon_samples/") or value.startswith("koller/") or value.startswith(
+            if value.startswith("recon_samples/") or value.startswith("k1/") or value.startswith(
                 "lancaster/"
             ) or value.startswith("spock/"):
                 continue
@@ -812,7 +812,7 @@ class TestAgainstOldOracle(unittest.TestCase):
     # "PER INVOICE"/"PER BID" are kept at $0 and flagged as unpriced (24 roof
     # lines on K1) instead of being dropped with a per-line "no prices"
     # warning.  Totals and every *priced* item must still match exactly.
-    UNPRICED_LINES_FIX = frozenset({"koller/new.txt"})
+    UNPRICED_LINES_FIX = frozenset({"k1/k1_new.txt"})
 
     def _compare(self, rel: str):
         old = load_old_recon()
@@ -889,8 +889,8 @@ class TestAgainstOldOracle(unittest.TestCase):
             with self.subTest(sample=name):
                 self._compare(f"recon_samples/{name}")
 
-    def test_koller_and_lancaster_match_oracle(self):
-        for rel in ("koller/og_all.txt", "koller/new.txt", "lancaster/r1002.txt"):
+    def test_k1_and_lancaster_match_oracle(self):
+        for rel in ("k1/k1_og.txt", "k1/k1_new.txt", "lancaster/r1002.txt"):
             with self.subTest(sample=rel):
                 self._compare(rel)
 
@@ -929,13 +929,13 @@ class TestGuideAndSamplePages(unittest.TestCase):
     """Carrier guide / sample pages must be skipped."""
 
     def test_guide_page_is_skipped(self):
-        est = parse_case("koller_new")
+        est = parse_case("k1_new")
         self.assertTrue(
             any("guide/sample" in w for w in est.get("warnings") or []),
             "expected a guide/sample-page warning",
         )
         # the skipped page must not contribute items
-        self.assertEqual(est.get("checks", {}).get("items_parsed"), GOLDEN["koller_new"]["items"])
+        self.assertEqual(est.get("checks", {}).get("items_parsed"), GOLDEN["k1_new"]["items"])
 
     def test_sf_sample_page_marker(self):
         from reconciler.parse import GUIDE_MARKERS, pages_of
@@ -973,7 +973,7 @@ class TestLineItems(unittest.TestCase):
     """Line items carry the expected fields and money is integer cents."""
 
     def test_item_fields(self):
-        est = parse_case("koller_new")
+        est = parse_case("k1_new")
         items = est["items"]
         self.assertTrue(items)
         for it in items:
@@ -995,7 +995,7 @@ class TestLineItems(unittest.TestCase):
             self.assertIn("deprec", it)
 
     def test_pretax_is_rcv_minus_tax_and_op(self):
-        est = parse_case("koller_new")
+        est = parse_case("k1_new")
         for it in est["items"]:
             if not it.get("ok"):
                 continue
@@ -1014,7 +1014,7 @@ class TestLineItems(unittest.TestCase):
         self.assertTrue(any(it["op"] for it in est["items"] if it.get("ok")))
 
     def test_continuation_lines_are_joined(self):
-        est = parse_case("koller_new")
+        est = parse_case("k1_new")
         multi = [it for it in est["items"] if len(it.get("desc", "")) > 40]
         self.assertTrue(multi, "expected at least one wrapped description")
 
@@ -1023,23 +1023,23 @@ class TestSupplementParser(unittest.TestCase):
     """Our supplement estimate parser."""
 
     def test_supplement_totals(self):
-        est = parse_case("koller_ours")
-        self.assertEqual(est["totals"]["rcv"], GOLDEN["koller_ours"]["rcv"])
-        self.assertEqual(est["totals"]["line_item_total"], GOLDEN["koller_ours"]["lit"])
-        self.assertEqual(est["totals"]["overhead_profit"], GOLDEN["koller_ours"]["op"])
-        self.assertEqual(est["totals"]["deductible"], GOLDEN["koller_ours"]["deductible"])
+        est = parse_case("k1_ours")
+        self.assertEqual(est["totals"]["rcv"], GOLDEN["k1_ours"]["rcv"])
+        self.assertEqual(est["totals"]["line_item_total"], GOLDEN["k1_ours"]["lit"])
+        self.assertEqual(est["totals"]["overhead_profit"], GOLDEN["k1_ours"]["op"])
+        self.assertEqual(est["totals"]["deductible"], GOLDEN["k1_ours"]["deductible"])
 
     def test_supplement_summary_block(self):
-        est = parse_case("koller_ours")
+        est = parse_case("k1_ours")
         self.assertEqual(len(est["summaries"]), 1)
         s = est["summaries"][0]
-        self.assertEqual(s["line_item_total"], GOLDEN["koller_ours"]["lit"])
-        self.assertEqual(s["rcv"], GOLDEN["koller_ours"]["rcv"])
-        self.assertEqual(s["deductible"], GOLDEN["koller_ours"]["deductible"])
+        self.assertEqual(s["line_item_total"], GOLDEN["k1_ours"]["lit"])
+        self.assertEqual(s["rcv"], GOLDEN["k1_ours"]["rcv"])
+        self.assertEqual(s["deductible"], GOLDEN["k1_ours"]["deductible"])
         self.assertIn("net_claim", s)
 
     def test_supplement_section_totals_tie_out(self):
-        est = parse_case("koller_ours")
+        est = parse_case("k1_ours")
         for t in est.get("printed_totals") or []:
             if not t.get("items") or not t.get("nums"):
                 continue
@@ -1047,16 +1047,16 @@ class TestSupplementParser(unittest.TestCase):
             self.assertIn(s, t["nums"], f"section '{t['name']}' does not tie out")
 
     def test_supplement_sections_and_areas(self):
-        est = parse_case("koller_ours")
-        self.assertEqual(len(est["sections"]), GOLDEN["koller_ours"]["sections"])
-        self.assertEqual(len(est["areas"]), GOLDEN["koller_ours"]["areas"])
+        est = parse_case("k1_ours")
+        self.assertEqual(len(est["sections"]), GOLDEN["k1_ours"]["sections"])
+        self.assertEqual(len(est["areas"]), GOLDEN["k1_ours"]["areas"])
         area_names = {a["name"] for a in est["areas"]}
         self.assertIn("Exterior", area_names)
         self.assertIn("Interior", area_names)
 
     def test_supplement_pdf_matches_text(self):
-        txt = parse_case("koller_ours")
-        pdf = parse_case("koller_ours_pdf")
+        txt = parse_case("k1_ours")
+        pdf = parse_case("k1_ours_pdf")
         self.assertEqual(txt["totals"]["rcv"], pdf["totals"]["rcv"])
         self.assertEqual(txt["checks"]["items_parsed"], pdf["checks"]["items_parsed"])
 
@@ -1116,14 +1116,14 @@ class TestMeta(unittest.TestCase):
                 self.assertEqual(est["meta"]["carrier"], carrier)
 
     def test_estimate_date_present(self):
-        for case_id in ("rae_og", "koller_new", "lanc_r1002"):
+        for case_id in ("rae_og", "k1_new", "lanc_r1002"):
             with self.subTest(case=case_id):
                 est = parse_case(case_id)
                 self.assertIsNotNone(est["meta"].get("estimate_date"))
                 self.assertRegex(est["meta"]["estimate_date"], r"^\d{1,2}/\d{1,2}/\d{4}$")
 
     def test_revision_detected(self):
-        est = parse_case("koller_new")
+        est = parse_case("k1_new")
         self.assertIsNotNone(est["meta"].get("revision"))
 
 

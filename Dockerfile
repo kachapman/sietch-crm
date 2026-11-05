@@ -46,6 +46,10 @@ COPY *.py ./
 # Completion PDF builders (ReportLab). It is a package, not a module, so the
 # glob above does not pick it up.
 COPY doc_pdf ./doc_pdf
+# The estimate reconciler (parser, tie-out, diff, draft notes). Pure stdlib:
+# no OCR dependency is installed here on purpose - PaddleOCR/PP-OCRv6 runs only
+# in the Phase 2 worker, and a scanned PDF is reported as needs_ocr instead.
+COPY reconciler ./reconciler
 COPY VERSION ./
 COPY CHANGELOG.md ./
 COPY init.sql ./

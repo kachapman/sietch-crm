@@ -205,9 +205,30 @@ def holdback_releases(
     ``confirmed_total`` is the number a note may quote; ``conditional_total``
     is every holdback line's RCV and is only for the reviewer.
     """
-    old_by_desc: Dict[str, Dict] = {}
+    old_by_desc: Dict[str, List[Dict]] = {}
     for it in old_items or []:
-        old_by_desc.setdefault(str(it.get("desc") or "").strip().lower(), it)
+        key = str(it.get("desc") or "").strip().lower()
+        old_by_desc.setdefault(key, []).append(it)
+
+    def _find_old(it: Dict) -> Optional[Dict]:
+        """Match the same line in the prior estimate.
+
+        Descriptions are not unique (the same ISO board line appears under
+        both the Worker Comp and Apartment Roof sections), so the quantity and
+        then the unit disambiguate; falling back to the first same-description
+        row would compare two different sections and hide a release.
+        """
+        cands = old_by_desc.get(str(it.get("desc") or "").strip().lower()) or []
+        if not cands:
+            return None
+        qty = str(it.get("qty"))
+        for c in cands:
+            if str(c.get("qty")) == qty and c.get("unit") == it.get("unit"):
+                return c
+        for c in cands:
+            if str(c.get("qty")) == qty:
+                return c
+        return cands[0]
 
     rows: List[Dict] = []
     mismatches: List[Dict] = []
@@ -219,7 +240,7 @@ def holdback_releases(
             continue
         note_amount = parse_money(m.group(1)) if m else None
         line_rcv = int(it.get("rcv") or 0)
-        old = old_by_desc.get(str(it.get("desc") or "").strip().lower())
+        old = _find_old(it)
         if old_items is not None:
             released = bool(line_rcv) and (old is None or not int(old.get("rcv") or 0))
             basis = "absent-or-zero in the prior estimate"
