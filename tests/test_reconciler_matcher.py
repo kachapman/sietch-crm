@@ -307,5 +307,40 @@ class TestGuards(unittest.TestCase):
         self.assertTrue(gate["blockers"])
 
 
+class TestOpOnlyAndRevisedNoise(unittest.TestCase):
+    """O&P-only rows and REVISED rows are labelled, not reported as scope change."""
+
+    def test_op_only_row_is_flagged_and_counted_once(self):
+        old = [item(1, "Laminated shingles", 100_00, qty=10, price=100_00)]
+        new = [item(1, "Laminated shingles", 110_00, qty=10, price=100_00, op=10_00)]
+        d = D.diff_items(old, new)
+        match = next(m for m in d["matches"] if m["a"])
+        self.assertTrue(match["only_op_or_tax"])
+        s = D.diff_summary(d)
+        self.assertEqual(s["op_only_count"], 1)
+        self.assertEqual(s["op_only_total"], 10_00)
+        self.assertEqual(s["scope_changed_count"], 0)
+
+    def test_a_real_scope_change_is_not_op_only(self):
+        old = [item(1, "Laminated shingles", 100_00, qty=10)]
+        new = [item(1, "Laminated shingles", 150_00, qty=15)]
+        d = D.diff_items(old, new)
+        match = next(m for m in d["matches"] if m["a"])
+        self.assertFalse(match["only_op_or_tax"])
+        self.assertEqual(D.diff_summary(d)["scope_changed_count"], 1)
+
+    def test_revised_row_is_flagged_not_a_removal(self):
+        old = [item(1, "Valley metal", 90_00, qty=10)]
+        new = [item(1, "Valley metal", 0, qty=10, price=0)]
+        new[0]["revised"] = True
+        d = D.diff_items(old, new)
+        match = next(m for m in d["matches"] if m["a"])
+        self.assertTrue(match["revised"])
+        self.assertEqual(len(d["removed"]), 0)
+        s = D.diff_summary(d)
+        self.assertEqual(s["revised_count"], 1)
+        self.assertEqual(s["scope_changed_count"], 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

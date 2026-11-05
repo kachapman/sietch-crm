@@ -17,6 +17,9 @@ from reconciler.notes import (  # noqa: E402
     NO_PP_MARKER,
     billing_summary_lines,
     claim_increase_note,
+    draft_note,
+    line_diff_mismatch,
+    needs_review_note,
     note_text,
 )
 
@@ -67,6 +70,97 @@ class TestClaimIncreaseNote(unittest.TestCase):
         self.assertNotIn("@", text)
         self.assertNotIn("Invoice", text)
         self.assertNotIn("invoice", text)
+
+
+class TestDraftNoteGate(unittest.TestCase):
+    """A failed tie-out must never produce an "increased by $X" sentence."""
+
+    def _gate(self, allowed=True, blockers=(), old_rcv=0, new_rcv=0):
+        return {
+            "allowed": allowed,
+            "blockers": list(blockers),
+            "old_rcv": old_rcv,
+            "new_rcv": new_rcv,
+            "estimate_old": {"results": []},
+            "estimate_new": {"results": []},
+        }
+
+    def test_allowed_draft_states_the_increase(self):
+        text = draft_note(gate=self._gate(True, old_rcv=100_000, new_rcv=150_000))
+        self.assertTrue(text.startswith("Claim increased by $500.00"))
+
+    def test_blocked_draft_states_no_increase(self):
+        text = draft_note(
+            gate=self._gate(False, ["old estimate failed tie-out"], old_rcv=100_000, new_rcv=150_000)
+        )
+        self.assertNotIn("increased by", text.lower())
+        self.assertIn("NEEDS REVIEW", text)
+        self.assertIn("old estimate failed tie-out", text)
+
+    def test_stated_increase_comes_from_the_gated_rcvs(self):
+        """Caller-supplied RCVs cannot override the tied-out ones."""
+        text = draft_note(
+            1, 2, gate=self._gate(True, old_rcv=100_000, new_rcv=150_000)
+        )
+        self.assertIn("$1,000.00 to $1,500.00", text)
+        self.assertIn("Claim increased by $500.00", text)
+
+    def test_line_diff_disagreement_is_flagged(self):
+        text = draft_note(
+            gate=self._gate(True, old_rcv=100_000, new_rcv=200_000),
+            diff={"row_deltas": {"rcv": 50_000}},
+        )
+        self.assertIn("WARNING: the line-item diff totals +$500.00", text)
+        self.assertIn("RCV change is +$1,000.00", text)
+
+    def test_matching_line_diff_is_not_flagged(self):
+        text = draft_note(
+            gate=self._gate(True, old_rcv=100_000, new_rcv=200_000),
+            diff={"row_deltas": {"rcv": 100_000}},
+        )
+        self.assertNotIn("WARNING", text)
+
+    def test_line_diff_mismatch_helper(self):
+        mismatch = line_diff_mismatch(-20_353, 4_549_110, {"row_deltas": {"rcv": 2_577_290}})
+        self.assertEqual(mismatch["stated"], 4_569_463)
+        self.assertEqual(mismatch["diff_total"], 2_577_290)
+        self.assertIsNone(line_diff_mismatch(0, 100, {"row_deltas": {"rcv": 100}}))
+        self.assertIsNone(line_diff_mismatch(0, 100, {}))
+
+    def test_needs_review_note_reports_both_numbers(self):
+        """K1 shape: RCV delta +$45,694.63 vs line diff +$25,772.90."""
+        text = needs_review_note(
+            gate={
+                "allowed": False,
+                "blockers": ["old estimate failed tie-out"],
+                "estimate_old": {"results": []},
+                "estimate_new": {"results": []},
+            },
+            diff={"row_deltas": {"rcv": 2_577_290}},
+            old_rcv=-20_353,
+            new_rcv=4_549_110,
+        )
+        self.assertIn("$45,694.63", text)
+        self.assertIn("+$25,772.90", text)
+        self.assertIn("disagrees", text)
+        self.assertNotIn("increased by", text.lower())
+
+    def test_needs_review_lists_failing_checks(self):
+        class R:
+            def __init__(self, name, passed):
+                self.name = name
+                self.passed = passed
+
+        text = needs_review_note(
+            gate={
+                "allowed": False,
+                "blockers": ["old estimate failed tie-out"],
+                "estimate_old": {"results": [R("items vs printed", False), R("ok", True)]},
+                "estimate_new": {"results": []},
+            }
+        )
+        self.assertIn("items vs printed", text)
+        self.assertNotIn("ok,", text)
 
 
 class TestBillingSummaryLines(unittest.TestCase):

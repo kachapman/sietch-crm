@@ -587,6 +587,13 @@ def diff_items(old: List[Dict], new: List[Dict]) -> Dict:
         if _section_parts(o)[0] != _section_parts(n)[0]:
             what.append("moved")
         m["what_changed"] = list(dict.fromkeys(what))
+        # O&P/tax-only movement is one commercial change (the carrier added
+        # overhead to every line), not N scope changes.  ``pretax`` equality is
+        # the reliable test; RCV moved only as a consequence.
+        m["only_op_or_tax"] = bool(what) and set(what) <= {"tax", "O&P", "RCV"} and (
+            int(n.get("pretax") or 0) == int(o.get("pretax") or 0)
+        )
+        m["revised"] = bool(o.get("revised") or n.get("revised"))
         if m["how"].startswith("moved"):
             moved.append((o, n))
         elif m["exact"] and o.get("rcv") == n.get("rcv") and not m.get("forced_changed"):
@@ -704,6 +711,28 @@ def diff_summary(d: Dict) -> Dict:
         "moved_count": len(d.get("moved", [])),
         "unchanged_count": len(d.get("unchanged", [])),
         "split_count": len(d.get("split", [])),
+        # additive: rows whose only movement is O&P/tax, and rows flagged
+        # REVISED (value superseded elsewhere, not a real removal)
+        "op_only_count": sum(1 for m in d.get("matches", []) if m.get("only_op_or_tax")),
+        "op_only_total": sum(
+            (
+                sum(int(x.get("rcv") or 0) for x in m.get("b", []))
+                - sum(int(x.get("rcv") or 0) for x in m.get("a", []))
+                for m in d.get("matches", [])
+                if m.get("only_op_or_tax")
+            ),
+            ZERO,
+        ),
+        "revised_count": sum(1 for m in d.get("matches", []) if m.get("revised")),
+        "scope_changed_count": len(
+            [
+                m
+                for m in d.get("matches", [])
+                if not m.get("only_op_or_tax")
+                and not m.get("revised")
+                and m.get("what_changed")
+            ]
+        ),
         "added_total": added,
         "removed_total": removed,
         "changed_total": changed,

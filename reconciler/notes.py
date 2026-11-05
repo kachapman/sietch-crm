@@ -23,6 +23,8 @@ __all__ = [
     "billing_summary_lines",
     "note_text",
     "draft_note",
+    "needs_review_note",
+    "line_diff_mismatch",
     "change_drivers",
     "change_driver_lines",
     "change_summary_line",
@@ -134,19 +136,32 @@ def _desc(items: List[Dict]) -> str:
     return " + ".join(str(it.get("desc") or "") for it in items if it.get("desc"))
 
 
-def change_drivers(diff: Dict, limit: int = DRIVER_TOP_N) -> List[Dict]:
+def change_drivers(
+    diff: Dict, limit: int = DRIVER_TOP_N, collapse_op_only: bool = True
+) -> List[Dict]:
     """The largest changes in a diff, biggest |RCV| first.
 
     Every number and label here comes from the diff rows (code), never from a
     model.  Used by the note's "main changes" lines.
+
+    ``collapse_op_only`` merges rows whose only movement is O&P/tax into one
+    driver: when a carrier adds general-contractor O&P to every line, listing
+    each line as "changed" buries the real scope changes.  The merged driver
+    carries the summed O&P delta.
     """
     diff = diff or {}
     rows: List[Dict] = []
+    op_only_delta = ZERO
+    op_only_count = 0
     for m in diff.get("matches") or []:
         a_items = m.get("a") or []
         b_items = m.get("b") or []
         delta = sum(_rcv(x) for x in b_items) - sum(_rcv(x) for x in a_items)
         if delta == 0:
+            continue
+        if collapse_op_only and m.get("only_op_or_tax"):
+            op_only_delta += delta
+            op_only_count += 1
             continue
         ref = (b_items or a_items)[0]
         rows.append(
@@ -160,6 +175,7 @@ def change_drivers(diff: Dict, limit: int = DRIVER_TOP_N) -> List[Dict]:
                 "how": m.get("how"),
                 "sim": m.get("sim"),
                 "exact": bool(m.get("exact")),
+                "revised": bool(m.get("revised")),
             }
         )
     for it in diff.get("added") or []:
@@ -191,6 +207,22 @@ def change_drivers(diff: Dict, limit: int = DRIVER_TOP_N) -> List[Dict]:
             }
         )
     rows.sort(key=lambda r: (-abs(int(r["delta"])), str(r["description"])))
+    if op_only_count:
+        rows.insert(
+            0,
+            {
+                "kind": "changed",
+                "description": f"O&P / tax only on {op_only_count} line(s)",
+                "section": "",
+                "qty": None,
+                "unit": None,
+                "delta": op_only_delta,
+                "how": "O&P/tax only",
+                "sim": None,
+                "exact": True,
+                "revised": False,
+            },
+        )
     return rows[: max(0, int(limit))]
 
 
@@ -214,7 +246,9 @@ def change_driver_lines(diff: Dict, limit: int = DRIVER_TOP_N) -> List[str]:
             desc = desc[:87].rstrip() + "..."
         delta = fmt_signed(int(row["delta"]))
         kind = row["kind"]
-        if kind == "added":
+        if row.get("revised"):
+            lines.append(f"Superseded (REVISED): {desc}{_qty_text(row)}, {delta}")
+        elif kind == "added":
             lines.append(f"Added: {desc}{_qty_text(row)}, {delta}")
         elif kind == "removed":
             lines.append(f"Removed: {desc}{_qty_text(row)}, {delta}")
@@ -241,20 +275,61 @@ def change_summary_line(diff: Dict) -> str:
 
 
 def draft_note(
-    old_rcv: int,
-    new_rcv: int,
+    old_rcv: int = 0,
+    new_rcv: int = 0,
     diff: Optional[Dict] = None,
     already_noted: int = 0,
     exclude_personal_property: bool = True,
     driver_limit: int = DRIVER_TOP_N,
+    *,
+    old: Optional[Dict] = None,
+    new: Optional[Dict] = None,
+    gate: Optional[Dict] = None,
 ) -> str:
-    """The claim-increase note plus optional code-generated change drivers.
+    """The claim-increase note, gated on the parse / delta tie-out.
 
     The first line is always our agreed format
-    ``Claim increased by $X ($orig to $new, no PP)``.  Driver lines are added
-    only from ``diff`` and are plain templates - no model is involved.
+    ``Claim increased by $X ($orig to $new, no PP)`` - **but only when the
+    tie-out passed**.  If either estimate or the old-vs-new delta fails its
+    tie-out, the draft is a "needs review" note instead and no increase is
+    stated: a number taken from a broken parse is worse than no number.
+
+    Pass ``old``/``new`` (parsed estimates) to let the tie-out decide and to
+    take the stated RCVs from the **tied-out** totals, or pass a ready-made
+    ``gate`` (``reconciler.tieout.draft_gate`` result).  With neither, the
+    function is a plain text helper (legacy behaviour).
+
+    When the line-item diff total disagrees with the RCV change, the draft says
+    so explicitly.  A silent mismatch is how a note ends up quoting a number
+    nobody can reproduce.
     """
+    tieout_gate = gate
+    if tieout_gate is None and old is not None and new is not None:
+        from .tieout import draft_gate
+
+        tieout_gate = draft_gate(old, new, diff or {})
+
+    if tieout_gate is not None:
+        # The stated RCVs come from the tied-out estimate totals, never from a
+        # caller-supplied pair that could disagree with the parse.
+        old_rcv = int(tieout_gate.get("old_rcv", old_rcv) or 0)
+        new_rcv = int(tieout_gate.get("new_rcv", new_rcv) or 0)
+        if not tieout_gate.get("allowed"):
+            return needs_review_note(
+                gate=tieout_gate,
+                diff=diff,
+                old_rcv=old_rcv,
+                new_rcv=new_rcv,
+            )
+
     extra: List[str] = []
+    mismatch = line_diff_mismatch(old_rcv, new_rcv, diff)
+    if mismatch:
+        extra.append(
+            "WARNING: the line-item diff totals "
+            f"{fmt_signed(mismatch['diff_total'])} but the RCV change is "
+            f"{fmt_signed(mismatch['stated'])} - verify before posting."
+        )
     if diff:
         summary = change_summary_line(diff)
         if summary:
@@ -267,6 +342,76 @@ def draft_note(
         exclude_personal_property=exclude_personal_property,
         extra_lines=extra,
     )
+
+
+def line_diff_mismatch(old_rcv: int, new_rcv: int, diff: Optional[Dict]) -> Optional[Dict]:
+    """The line-item diff total vs the RCV change, when they disagree.
+
+    ``None`` when the diff carries no ``row_deltas.rcv`` or the two agree
+    within $0.01 per row (the reconciler's tie-out slack).  K1 is the motivating
+    case: the parsed line diff says +$25,772.90 while the RCVs say +$45,694.63,
+    because the 2020 side did not parse.
+    """
+    row = (diff or {}).get("row_deltas") or {}
+    if "rcv" not in row:
+        return None
+    stated = int(new_rcv or 0) - int(old_rcv or 0)
+    diff_total = int(row.get("rcv") or 0)
+    rows = (
+        len((diff or {}).get("matches") or [])
+        + len((diff or {}).get("added") or [])
+        + len((diff or {}).get("removed") or [])
+    )
+    slack = max(1, rows)
+    if abs(diff_total - stated) <= slack:
+        return None
+    return {"stated": stated, "diff_total": diff_total, "delta": diff_total - stated}
+
+
+def needs_review_note(
+    gate: Optional[Dict] = None,
+    diff: Optional[Dict] = None,
+    old_rcv: int = 0,
+    new_rcv: int = 0,
+) -> str:
+    """A draft that states *no* increase because the parse could not be trusted.
+
+    Deterministic text only: the blockers from the tie-out, the unverified
+    parsed RCVs and (when available) the unverified line-item diff total.  It
+    never says "Claim increased by", so nothing downstream can bill from it.
+    """
+    gate = gate or {}
+    lines: List[str] = ["DRAFT - NEEDS REVIEW: claim increase NOT stated"]
+    blockers = list(gate.get("blockers") or [])
+    if not blockers and gate.get("reason"):
+        blockers = [str(gate["reason"])]
+    if not blockers:
+        blockers = ["tie-out did not pass"]
+    for b in blockers:
+        lines.append(f"- {b}")
+    for label, key in (("old", "estimate_old"), ("new", "estimate_new")):
+        res = gate.get(key) or {}
+        failing = [r.name for r in (res.get("results") or []) if not r.passed]
+        if failing:
+            shown = ", ".join(failing[:3])
+            more = "" if len(failing) <= 3 else f" (+{len(failing) - 3} more)"
+            lines.append(f"  {label} estimate failing checks: {shown}{more}")
+    lines.append(
+        "Parsed RCV (unverified): "
+        f"{fmt_cents(int(old_rcv or 0))} -> {fmt_cents(int(new_rcv or 0))} "
+        f"({fmt_signed(int(new_rcv or 0) - int(old_rcv or 0))})"
+    )
+    mismatch = line_diff_mismatch(old_rcv, new_rcv, diff)
+    if mismatch:
+        lines.append(
+            f"Line-item diff total (unverified): {fmt_signed(mismatch['diff_total'])} "
+            f"- disagrees with the RCV change {fmt_signed(mismatch['stated'])}"
+        )
+    lines.append(
+        "A person must confirm the parse (and, where relevant, the missing prior "
+        "estimate) before this claim increase is noted or billed."
+    )
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

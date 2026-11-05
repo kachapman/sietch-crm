@@ -272,6 +272,37 @@ jobs:
       - name: Run users tests
         run: python3 tests/test_users.py
 
+      # Reconciler suites. The client fixtures are gitignored, so tests that
+      # need them skip cleanly; the heavy PP-OCRv6 run is also opt-in
+      # (RECONCILER_OCR_TEST=1). No reconciliation test needs a database.
+      - name: Run reconciler commission tests
+        run: python3 tests/test_reconciler_commission.py
+
+      - name: Run reconciler matcher tests
+        run: python3 tests/test_reconciler_matcher.py
+
+      - name: Run reconciler notes tests
+        run: python3 tests/test_reconciler_notes.py
+
+      - name: Run reconciler OCR tests
+        run: python3 tests/test_reconciler_ocr.py
+
+      - name: Run reconciler explain tests
+        run: python3 tests/test_reconciler_explain.py
+
+      - name: Run reconciler parse tests
+        run: python3 tests/test_reconciler_parse.py
+
+      - name: Run reconciler pair tests
+        run: python3 tests/test_reconciler_pairs.py
+
+      - name: Run reconciler golden G1 tests
+        run: python3 tests/test_reconciler_g1.py
+
+      - name: Compile-check reconciler package
+        run: |
+          python -m py_compile reconciler/*.py
+
   node:
     name: JavaScript unit tests
     runs-on: ubuntu-latest

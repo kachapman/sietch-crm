@@ -11,6 +11,62 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-04 (reconciler Phase 1: gated notes, PP-OCRv6, G1 golden,
+branch `reconciler-phase1`)
+
+**Status: IMPLEMENTED + TESTED on branch `reconciler-phase1` — NOT merged, NOT
+pushed, NOT deployed.** Worktree `~/Projects/new-crm-reconciler`, cut from
+`main` @ `ee6e401`. No DB writes, no production access, no Sietch app/UI code
+touched. Full write-up:
+[`docs/features/2026-11-04-reconciler-phase1.md`](docs/features/2026-11-04-reconciler-phase1.md).
+
+**1. The draft note is tie-out gated.** `reconciler/notes.py::draft_note` now
+accepts `old=`/`new=`/`gate=` and runs `tieout.draft_gate`. Failed parse ⇒
+`DRAFT - NEEDS REVIEW: claim increase NOT stated` (blockers + failing checks +
+unverified RCVs/line-diff total), never "increased by". Stated RCVs come from
+`draft_gate`'s new `old_rcv`/`new_rcv`. A line diff that disagrees with the RCV
+change is flagged (K1: +$25,772.90 vs +$45,694.63).
+
+**2. PP-OCRv6 path (never Tesseract).** `reconciler/ocr.py` +
+`reconciler/ocr_worker.py`; worker runs in `~/venvs/paddleocr`
+(PP-OCRv6 small/medium). GPU→CPU selection with reason recorded in
+`est["ocr"]` (chapmanserver: CPU; Vega 8 gfx902 unsupported). Row
+reconstruction in `ocr.boxes_to_text` (pure, unit-tested), disk cache by file
+hash, clean refusal when unavailable. OCR is opt-in (`ocr=True` /
+`RECONCILER_OCR=1`) so scans still refuse by default.
+`pdftext.has_line_item_structure()` stops our drawing-heavy R1 estimate being
+flagged as a scan. Measured: 46 pages @200 DPI = 759 s (~16.5 s/page);
+`enable_mkldnn=False` required on this Paddle build.
+
+**3. Phase 1 explanation features** (`reconciler/explain.py`):
+prior carrier RCV from payments+deductible, payment-vs-increase explanation,
+PWARR/code holdback releases (note-vs-line mismatch reported, not guessed),
+per-item buildable attribution, O&P-only noise collapsed into one driver,
+REVISED rows labelled superseded (not removed), gap vs our estimate excluding
+bid-superseded scope (section-first), deterministic `claim_change_note`
+composer. Parser now keeps `PER INVOICE`/`PER BID` rows at $0 as `unpriced`
+(K1's 24 roof lines) instead of dropping them as parse failures.
+
+**4. G1 golden — all four targets match exactly** from the real PDFs (carrier
+RCV from OCR, tie-out exact): RCV $955,089.88; additional increase $47,384.97;
+PWARR $57,065.99; gap $83,360.41 (realistic $26,848.86). Our R1
+$1,038,450.29, cheque $104,450.96, 11 payments $840,638.92. No xfail needed.
+The prior SF 9/11 estimate is still missing; the ~$26k metal-roof/shingle split
+stays explicitly unconfirmed (test skips with that reason).
+
+**Tests:** 8 reconciler suites. Default (fast) mode 178 tests; with
+`RECONCILER_OCR_TEST=1` 190 tests, 1 skip (prior estimate). CI now runs them
+all + `py_compile reconciler/*`; client fixtures stay gitignored so
+fixture-dependent tests skip on CI and the heavy OCR tier is env-gated.
+
+**Open:** prior SF 9/11 estimate; note posting/UI (Phase 1 UI not built);
+idempotency/route tests for the future API; PP-OCRv6 medium not benchmarked.
+
+---
+
+
+## Previous session summary
+
 **Date:** 2026-11-04 (mail retention re-import loop, branch
 `fix-mail-retention-loop`)
 

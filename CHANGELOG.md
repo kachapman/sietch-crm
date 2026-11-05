@@ -2,6 +2,55 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Reconciler Phase 1: tie-out-gated notes, PP-OCRv6, G1 golden case (2026-11-04, branch `reconciler-phase1`)
+
+**Scope.** Library-only work under `reconciler/`; no Sietch app code, no UI, no
+DB writes, nothing merged/pushed/deployed. Full write-up:
+[`docs/features/2026-11-04-reconciler-phase1.md`](docs/features/2026-11-04-reconciler-phase1.md).
+
+**Draft note respects the parse gate.** `notes.draft_note(old=, new=, diff=)`
+runs `tieout.draft_gate`; a failed per-estimate or delta tie-out produces a
+`DRAFT - NEEDS REVIEW: claim increase NOT stated` note (blockers, failing
+checks, unverified RCVs and line-diff total) and **never** an "increased by $X"
+sentence. Stated RCVs come from the tied-out totals (`draft_gate` now returns
+`old_rcv`/`new_rcv`). A line diff that disagrees with the RCV change is flagged
+explicitly (K1: diff +$25,772.90 vs stated +$45,694.63).
+
+**PP-OCRv6 OCR path (never Tesseract).** New `reconciler/ocr.py` (bridge, row
+reconstruction, disk cache, clean refusal) and `reconciler/ocr_worker.py`
+(runs in the `~/venvs/paddleocr` venv, PP-OCRv6 small/medium, GPU→CPU device
+selection with the decision recorded). `parse_estimate`/`parse_supplement`
+take `ocr=True` (or `RECONCILER_OCR=1`); off by default so scans still refuse
+cleanly. `pdftext.has_line_item_structure()` stops our drawing-heavy R1
+estimate being misread as a scan.
+
+**Phase 1 G1 features.** New `reconciler/explain.py`: prior carrier RCV from
+payments + deductible, payment-vs-increase explanation, PWARR/code holdback
+releases (with note-vs-line mismatch reporting), per-item buildable
+attribution, O&P-only noise collapsed to one driver, REVISED rows labelled as
+superseded rather than removed, bid-superseded gap to our estimate, and a
+deterministic `claim_change_note` composer. `PER INVOICE`/`PER BID` rows
+(K1's 24 roof lines) are kept at $0 and flagged `unpriced` instead of being
+dropped as parse failures.
+
+**Golden G1 — all four targets match exactly:** RCV $955,089.88 (tie-out
+exact), additional increase $47,384.97, PWARR release $57,065.99, gap
+$83,360.41 (realistic remainder $26,848.86). Our R1 parses to $1,038,450.29,
+the payment letter to $104,450.96, and the Summary of Loss to 11 payments
+summing $840,638.92. No `xfail` was needed. The prior SF 9/11 estimate is
+still missing, so the ~$26k metal-roof/shingle split stays explicitly
+"unconfirmed" (a test skips with that reason).
+
+**OCR cost (measured, CPU):** 46 pages at 200 DPI / PP-OCRv6_small = 759 s
+(~16.5 s/page); results are cached by file hash. `enable_mkldnn=False` is
+required on this Paddle build.
+
+**Tests.** 178 reconciler tests in the default (fast) mode; with
+`RECONCILER_OCR_TEST=1` the G1 suite runs its PP-OCRv6 tier and the total is
+**190 tests, 1 skipped** (the prior SF 9/11 estimate has not been fetched).
+CI (`.github/workflows/smoke.yml`) now runs all eight reconciler suites and a
+`py_compile` of the package.
+
 ## Mail retention re-import loop: the scanner re-imported (and re-downloaded) purged mail every 2 minutes (2026-11-04, branch `fix-mail-retention-loop`)
 
 **Symptom.** On two IMAP accounts (crm@vanguardadj.online, requests@sherwoodestimates.com)

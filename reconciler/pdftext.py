@@ -38,6 +38,27 @@ _PRINTABLE_RE = re.compile(r"[ -~]")
 _LETTER_RE = re.compile(r"[A-Za-z]")
 _WORD_RE = re.compile(r"[A-Za-z]{3,}")
 
+# A *structural* signal, much stronger than a letter ratio: a real
+# Xactimate/Symbility line-item table plus its printed totals.  Drawings and
+# diagrams (which push the letter ratio down on our own contractor estimates)
+# cannot fake these, while a scanned page with an obfuscated text layer cannot
+# produce them either.  When both are present the letter-ratio heuristic is
+# skipped - the page carries real, parseable line items.
+_STRUCTURED_HEADER_RE = re.compile(r"QUANTITY\s+UNIT\s+PRICE|QUANTITY\s+.*\bRCV\b", re.I)
+_STRUCTURED_TOTALS_RE = re.compile(r"Line Item Totals?:|Replacement Cost Value", re.I)
+
+
+def has_line_item_structure(text: str) -> bool:
+    """True when the text carries a real line-item table header *and* totals.
+
+    Used to overrule the "mostly non-letter garbage" heuristic: a contractor
+    estimate with large drawing pages is legitimate even though most of its
+    characters are diagram labels.
+    """
+    if not text:
+        return False
+    return bool(_STRUCTURED_HEADER_RE.search(text) and _STRUCTURED_TOTALS_RE.search(text))
+
 
 @dataclass
 class PdfTextResult:
@@ -199,12 +220,13 @@ def looks_garbled(text: str) -> Optional[str]:
 
     letters = len(_LETTER_RE.findall(text))
     words = _WORD_RE.findall(text)
-    if letters < printable * 0.20:
+    structured = has_line_item_structure(text)
+    if letters < printable * 0.20 and not structured:
         return (
             "PDF text layer is mostly non-letter garbage "
             f"({printable} printable chars, {letters} letters) - the document is most likely a scan"
         )
-    if len(words) < 20:
+    if len(words) < 20 and not structured:
         return (
             f"PDF text layer contains almost no readable words ({len(words)} words) "
             f"- the document is most likely a scan"

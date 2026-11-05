@@ -306,7 +306,11 @@ GOLDEN = {
         "file": "koller/new.txt",
         "kind": "carrier",
         "carrier": "State Farm",
-        "items": 53,
+        "items": 77,
+        # 24 roof lines are printed "PER INVOICE"/"PER BID": unpriced by the
+        # carrier (excluded from its totals), kept at $0 and flagged, never
+        # reported as a parse failure.
+        "unpriced": 24,
         "rcv": 4549110,
         "lit": 4090407,
         "tax": 32809,
@@ -333,7 +337,8 @@ GOLDEN = {
         "file": "koller/49-0L1N-844 - Customer Copy Final Draft.pdf",
         "kind": "carrier",
         "carrier": "State Farm",
-        "items": 53,
+        "items": 77,
+        "unpriced": 24,
         "rcv": 4549110,
         "tie_out": True,
     },
@@ -594,6 +599,9 @@ class TestGoldenCases(unittest.TestCase):
             self.assertEqual(len(est.get("sections") or []), spec["sections"], f"{case_id}: sections")
         if "areas" in spec:
             self.assertEqual(len(est.get("areas") or []), spec["areas"], f"{case_id}: areas")
+        if "unpriced" in spec:
+            n = sum(1 for it in est.get("items") or [] if it.get("unpriced"))
+            self.assertEqual(n, spec["unpriced"], f"{case_id}: unpriced (PER INVOICE/BID) lines")
         if "tie_out" in spec:
             to = T.tieout_estimate(est)
             self.assertEqual(
@@ -726,6 +734,20 @@ class TestStruckAndNotIncurred(unittest.TestCase):
         self.assertTrue(raw.get("revised"))
         self.assertEqual(raw.get("rcv"), 0)
 
+    def test_per_invoice_row_is_kept_unpriced(self):
+        """PER INVOICE / PER BID is an intentional $0, not a parse failure."""
+        for marker, pricing in (("PER INVOICE", "invoice"), ("PER BID", "bid")):
+            with self.subTest(marker=marker):
+                warnings = []
+                raw = self._raw("Laminated - comp. shingle rfg.  16.67 SQ", ["   " + marker])
+                P.build_item(raw, warnings)
+                self.assertTrue(raw.get("unpriced"))
+                self.assertEqual(raw.get("pricing"), pricing)
+                self.assertEqual(raw.get("rcv"), 0)
+                self.assertIsNone(raw.get("unit_price"))
+                self.assertFalse(raw.get("revised"))
+                self.assertEqual(warnings, [])
+
     def test_generic_status_marker_is_struck(self):
         raw = self._raw("R&R Gutter - aluminum  10.00 LF", ["   PWARR"])
         P.build_item(raw, [])
@@ -786,6 +808,12 @@ class TestScannedRefusesCleanly(unittest.TestCase):
 class TestAgainstOldOracle(unittest.TestCase):
     """The port must reproduce the old recon.py numbers exactly."""
 
+    # The one intentional divergence from recon.py: rows printed
+    # "PER INVOICE"/"PER BID" are kept at $0 and flagged as unpriced (24 roof
+    # lines on K1) instead of being dropped with a per-line "no prices"
+    # warning.  Totals and every *priced* item must still match exactly.
+    UNPRICED_LINES_FIX = frozenset({"koller/new.txt"})
+
     def _compare(self, rel: str):
         old = load_old_recon()
         path = require(rel)
@@ -799,7 +827,17 @@ class TestAgainstOldOracle(unittest.TestCase):
         for key in ("line_item_total", "tax", "overhead_profit", "rcv", "deductible", "acv"):
             self.assertEqual(cents(ot.get(key)), nt.get(key), f"{rel}: totals.{key}")
         oc, nc = o["checks"], n["checks"]
-        self.assertEqual(oc.get("items_parsed"), nc.get("items_parsed"), f"{rel}: item count")
+        diverges = rel in self.UNPRICED_LINES_FIX
+        new_items = n.get("items") or []
+        priced_new = [it for it in new_items if not it.get("unpriced")]
+        if diverges:
+            self.assertTrue(
+                any(it.get("unpriced") for it in new_items),
+                f"{rel}: expected kept PER INVOICE/BID rows",
+            )
+            self.assertEqual(len(priced_new), oc.get("items_parsed"), f"{rel}: priced item count")
+        else:
+            self.assertEqual(oc.get("items_parsed"), nc.get("items_parsed"), f"{rel}: item count")
         self.assertEqual(
             cents(oc.get("items_rcv_sum")), nc.get("items_rcv_sum"), f"{rel}: item RCV sum"
         )
@@ -827,7 +865,7 @@ class TestAgainstOldOracle(unittest.TestCase):
                     f"{rel}: summary {key}",
                 )
         # every item, field by field
-        for oi, ni in zip(o.get("items") or [], n.get("items") or []):
+        for oi, ni in zip(o.get("items") or [], priced_new):
             self.assertEqual(oi["no"], ni["no"], f"{rel}: item number")
             self.assertEqual(oi.get("qty"), ni.get("qty"), f"{rel}: item {oi['no']} qty")
             for key in ("rcv", "tax", "op", "deprec", "acv", "unit_price"):
@@ -836,9 +874,10 @@ class TestAgainstOldOracle(unittest.TestCase):
                     int(ni.get(key) or 0),
                     f"{rel}: item {oi['no']} {key}",
                 )
-        self.assertEqual(
-            len(o.get("warnings") or []), len(n.get("warnings") or []), f"{rel}: warning count"
-        )
+        if not diverges:
+            self.assertEqual(
+                len(o.get("warnings") or []), len(n.get("warnings") or []), f"{rel}: warning count"
+            )
 
     def test_all_text_samples_match_oracle(self):
         samples_dir = sample_path("recon_samples")
@@ -940,7 +979,12 @@ class TestLineItems(unittest.TestCase):
         for it in items:
             self.assertIsInstance(it["no"], int)
             self.assertIsInstance(it["rcv"], int)
-            self.assertIsInstance(it["unit_price"], int)
+            if it.get("unpriced") or it.get("revised"):
+                # unpriced (PER INVOICE/BID) and REVISED rows carry no price
+                self.assertIsNone(it["unit_price"])
+                self.assertEqual(it["rcv"], 0)
+            else:
+                self.assertIsInstance(it["unit_price"], int)
             self.assertIsInstance(it["tax"], int)
             self.assertIsInstance(it["op"], int)
             self.assertIn("desc", it)

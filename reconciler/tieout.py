@@ -574,4 +574,7 @@ def draft_gate(old: Dict, new: Dict, diff: Dict) -> Dict:
         "estimate_old": to_old,
         "estimate_new": to_new,
         "diff": td,
+        # The tied-out RCVs - the only RCVs a draft may quote.
+        "old_rcv": int((old.get("totals") or {}).get("rcv") or 0),
+        "new_rcv": int((new.get("totals") or {}).get("rcv") or 0),
     }

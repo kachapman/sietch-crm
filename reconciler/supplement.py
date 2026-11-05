@@ -610,8 +610,18 @@ def _build_supplement_item(it: Dict, warnings: List[str]) -> None:
     it["pretax"] = it["rcv"] - tax - op
 
 
-def parse_supplement(path: str, force_text: bool = False) -> Dict:
-    """Parse our supplement estimate from a ``.txt`` or PDF path."""
+def parse_supplement(
+    path: str,
+    force_text: bool = False,
+    ocr: Optional[bool] = None,
+    ocr_dpi: Optional[int] = None,
+    ocr_max_pages: int = 0,
+) -> Dict:
+    """Parse our supplement estimate from a ``.txt`` or PDF path.
+
+    ``ocr`` behaves as in :func:`reconciler.parse.parse_estimate`: a scanned
+    supplement can be read with the PP-OCRv6 worker.
+    """
     path = str(path)
     if force_text or path.lower().endswith(".txt"):
         try:
@@ -639,6 +649,21 @@ def parse_supplement(path: str, force_text: bool = False) -> Dict:
 
     result = extract_text(path)
     if result.status != "ok":
+        from .ocr import DEFAULT_DPI, ocr_enabled, ocr_pdf
+
+        if ocr_enabled(ocr):
+            ores = ocr_pdf(path, dpi=ocr_dpi or DEFAULT_DPI, max_pages=ocr_max_pages)
+            if ores.ok:
+                est = parse_supplement_text(ores.text, path=path)
+                est["pdf_text_status"] = "ocr"
+                est["pdf_pages"] = ores.pages
+                est["ocr"] = ores.to_dict()
+                if est.get("status") != "ok":
+                    est["reason"] = (
+                        f"OCR ran ({ores.device}) but the recognised text could not be "
+                        f"parsed as an estimate: {est.get('reason') or est.get('fatal')}"
+                    )
+                return est
         return {
             "path": path,
             "status": result.status,

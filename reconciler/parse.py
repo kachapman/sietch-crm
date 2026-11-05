@@ -392,6 +392,11 @@ STRIKE_WORDS = re.compile(
 NOT_INCURRED_RE = re.compile(
     r"(?:has|have|had)?\s*not\s+(?:yet\s+)?(?:been\s+)?incurred\b", re.I
 )
+# State Farm prints "PER INVOICE" (or "PER BID") instead of a price when the
+# line is billed from the contractor's invoice/bid (the 24 roof lines on the K1
+# revision).  These rows are deliberately unpriced: they are excluded from the
+# printed totals, so they are not a parse failure and must not look like one.
+PER_INVOICE_RE = re.compile(r"\bPER\s+(INVOICE|BID)\b", re.I)
 FILLER_TOK = re.compile(
     r"^(\d+/\d+|\d+/NA|NA|yrs?\.?|Avg\.?|Good|Fair|Poor|Above|Below|Excellent|\*+|E|\*E|"
     r"-?[\d.]+%|\[%\]|\[M\]|CONDITION|DEP|%|[A-Z]{2}|REVISED|SEE|REVISION|·|\||Avg\.\*?)$"
@@ -556,7 +561,7 @@ def parse_items(
         build_item(it, warnings)
         _apply_bbox_continuations(it, bbox)
 
-    real = [it for it in items if it.get("ok") or it.get("revised")]
+    real = [it for it in items if it.get("ok") or it.get("revised") or it.get("unpriced")]
     for it in real:
         it.setdefault("room", "(no section)")
         it["section"] = (it.get("area") + " / " if it.get("area") else "") + it["room"]
@@ -630,6 +635,21 @@ def build_item(it: Dict, warnings: List[str]) -> None:
         return
     if not vals:
         joined = " ".join([first, *num_text, *notes[:2]])
+        if PER_INVOICE_RE.search(joined):
+            # Unpriced by design (billed from the contractor invoice).  Kept in
+            # the item list at $0 so a reviewer sees it; never a parse warning.
+            it.update(
+                ok=False,
+                unpriced=True,
+                pricing=str(PER_INVOICE_RE.search(joined).group(1)).lower(),
+                unit_price=None,
+                tax=ZERO,
+                op=ZERO,
+                rcv=ZERO,
+                deprec=ZERO,
+                acv=ZERO,
+            )
+            return
         marker_text = next(
             (t.strip() for t in reversed(num_text) if t.strip()),
             notes[0].strip() if notes else "",
@@ -1074,7 +1094,14 @@ def parse_items_schema(
                 item["starred"] = star
                 item["revised_out"] = False
                 mk = re.fullmatch(r"\s*([A-Z]{4,})\s*", tail)
-                if mk:
+                if re.fullmatch(r"\s*PER\s+(?:INVOICE|BID)\s*", tail, re.I):
+                    # Unpriced by design: billed from the contractor invoice/bid.
+                    vals = {k: Decimal(0) for k in _SCHEMA_FIELDS + ("price",)}
+                    vals["nonrec"] = Decimal(0)
+                    item["unpriced"] = True
+                    item["pricing"] = re.sub(r"\s+", "_", tail.strip().lower())
+                    item["parse_error"] = "unpriced (PER INVOICE/BID)"
+                elif mk:
                     # a status marker instead of money (REVISED / PWARR / ...)
                     vals = {k: Decimal(0) for k in _SCHEMA_FIELDS + ("price",)}
                     vals["nonrec"] = Decimal(0)
@@ -1526,6 +1553,14 @@ def _finalize_estimate(
             f"{len(rev)} item(s) printed as 'REVISED' with no amount (counted as 0): "
             + "; ".join(f"#{it['no']} {it['desc'][:40]}" for it in rev)
         )
+    unpriced = [it for it in items if it.get("unpriced")]
+    if unpriced:
+        warnings.append(
+            f"{len(unpriced)} line(s) printed 'PER INVOICE'/'PER BID' with no price - unpriced by "
+            f"the carrier, excluded from its totals, bill when the invoice is received: "
+            + "; ".join(f"#{it['no']} {it['desc'][:40]}" for it in unpriced[:8])
+            + (" ..." if len(unpriced) > 8 else "")
+        )
     est["item_flags"], est["text_flags"] = find_flags(pages, items)
     return est
 
@@ -1609,12 +1644,20 @@ def parse_text(
     return est
 
 
-def parse_estimate(path: str, force_text: bool = False) -> Dict:
+def parse_estimate(
+    path: str,
+    force_text: bool = False,
+    ocr: Optional[bool] = None,
+    ocr_dpi: Optional[int] = None,
+    ocr_max_pages: int = 0,
+) -> Dict:
     """Parse a carrier estimate from a ``.txt`` (pdftotext output) or PDF path.
 
-    For PDFs the text is extracted with :func:`reconciler.pdftext.extract_text`;
-    a missing/garbled text layer returns an estimate dict with
-    ``status == "needs_ocr"`` and a human-readable ``fatal``/``reason``.
+    For PDFs the text is extracted with :func:`reconciler.pdftext.extract_text`.
+    A missing/garbled text layer normally returns ``status == "needs_ocr"``;
+    when ``ocr`` is true (or ``RECONCILER_OCR=1``) the document is sent to the
+    PaddleOCR PP-OCRv6 worker first and the recognised text is parsed instead.
+    A failed OCR still returns a clean ``needs_ocr`` result.
     """
     path = str(path)
     if force_text or path.lower().endswith(".txt"):
@@ -1653,6 +1696,35 @@ def parse_estimate(path: str, force_text: bool = False) -> Dict:
         result = extract_text(path)
         if result.status != "ok":
             bbox_future.cancel()
+            from .ocr import DEFAULT_DPI, ocr_enabled, ocr_pdf
+
+            if ocr_enabled(ocr):
+                ores = ocr_pdf(
+                    path,
+                    dpi=ocr_dpi or DEFAULT_DPI,
+                    max_pages=ocr_max_pages,
+                )
+                if ores.ok:
+                    est = parse_text(ores.text, path=path)
+                    est["pdf_text_status"] = "ocr"
+                    est["pdf_pages"] = ores.pages
+                    est["pdf_bbox_continuations"] = 0
+                    est["ocr"] = ores.to_dict()
+                    if est.get("status") != "ok":
+                        est["reason"] = (
+                            f"OCR ran ({ores.device}) but the recognised text could not be "
+                            f"parsed as an estimate: {est.get('reason') or est.get('fatal')}"
+                        )
+                    return est
+                result = type(result)(
+                    path=result.path,
+                    status="needs_ocr",
+                    text=result.text,
+                    reason=f"{result.reason} (OCR: {ores.reason})",
+                    pages=result.pages,
+                    page_stats=result.page_stats,
+                    returncode=result.returncode,
+                )
             return {
                 "path": path,
                 "status": result.status,
