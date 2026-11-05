@@ -16,3 +16,7 @@ tmp/
 # Reconciler golden fixtures hold real claim data (PII). Never committed.
 # Tests read RECONCILER_SAMPLES_DIR (default tests/fixtures/reconciler) and skip if absent.
 tests/fixtures/reconciler/
+
+# Customer data kept local only (not in git)
+CRM_export/
+CHANGELOG.private.md

@@ -99,7 +99,7 @@ and a closed project (Won = stage type 1, Lost = stage type 2) always showed
 
 **Fix 2 — the bookmarked project panel did not show the project's unique
 ID.** The side panel that opens from a bookmark showed the project name
-(e.g. "Judy Osier") with its Details/Documents/Photos/Tasks tabs, but not the
+(e.g. "[customer]") with its Details/Documents/Photos/Tasks tabs, but not the
 project's project number. The badge renderer used by the full project page
 was extracted into a shared `renderProjectNumberBadge()` helper and is now
 also used by the bookmark preview (all three render paths: cached, freshly
@@ -218,7 +218,7 @@ accounting system.
 **Fidelity.** The old `recon.py` runs in-test as an oracle: the port matches
 it field by field (totals, item counts, item RCV/pretax sums, every summary
 block, every line item and the warning count) for all 20 text samples plus
-the Koller and Lancaster text files. Every clean estimate ties out to
+the [customer] and CRM #1228 text files. Every clean estimate ties out to
 $0.00 against the printed totals.
 
 **Tests.** `tests/test_reconciler_parse.py` (34),
@@ -753,7 +753,7 @@ effect: bot notes actually save once, and their notifications deliver once).
 ## Telegram ~91x duplicate + bot token in journal (2026-11-02, branch `fix-telegram-dupes`)
 
 Live bug (Ken, ~2026-10-30): one `reply_tagged` notification ("Claudiu
-Chereji replied to a note you're tagged on / Project: Katherine Nelson")
+Chereji replied to a note you're tagged on / Project: [customer]")
 was delivered to Telegram ~91 times in a row. Root cause: the notification
 dispatcher (the sole sender) had no idempotency — SELECT-then-SEND-then-MARK
 in separate statements (overlapping passes double-sent), any row left
@@ -858,7 +858,7 @@ Tests: new `tests/test_api_tokens.py` (28 tests, 16 fail pre-change).
 
 ## Project-page notes: note-type picker, no more forced "Files are uploaded" (2026-11-01)
 
-Live bug 2026-11-01 (production v2.3.0, project "Barbra & Ronald Sydney" #41):
+Live bug 2026-11-01 (production v2.3.0, project "[customer]" #41):
 the full project page composer hardcoded `categoryId "10"` ("Files are
 uploaded", a non-deletable system type) and offered no category choice, so
 every plain note filed there was mislabelled and permanent. The composer now
@@ -1491,7 +1491,7 @@ notified user instead of the replier in the notification string.
 Pasting images into a preview note uploaded them to /photos, whose ids were
 merged into fileIds — but the server resolves fileIds against
 project_documents, a different table. Photo ids 5/6 linked other projects'
-PDFs onto Pete Morrison's note (history_attachments 19382/19383; exactly 4
+PDFs onto CRM #79's note (history_attachments 19382/19383; exactly 4
 rows affected total, all today).
 
 ### Fixed
@@ -1508,7 +1508,7 @@ rows affected total, all today).
 
 ## Supplemental refresh allowlist for due dates (2026-10-20)
 
-Sietch follow-up dates are stale vs OnlyOffice (e.g. Eileen Olsen: Oct 7 vs
+Sietch follow-up dates are stale vs OnlyOffice (e.g. CRM #1219: Oct 7 vs
 Oct 20) and the kanban's red/follow-up views key off that field — but pure
 supplemental mode preserves them by design. New targeted refresh.
 
@@ -1594,7 +1594,7 @@ anywhere. Removed the now-unused `_normalize_tel` helper and its tests.
 
 Live-fire bug from the bot log: `Inline keyboard button url 'tel:+16306396041' is invalid`.
 Telegram rejects `tel:` in inline-keyboard buttons, 400ing the whole `sendMessage`
-(and the plain-text retry with the same keyboard) — the Flinchum search got silence.
+(and the plain-text retry with the same keyboard) — the CRM #1128 search got silence.
 
 ### Fixed
 
@@ -1777,9 +1777,9 @@ Three separate bugs:
     (was a bare 404 that the editor rendered as "Download failed")
 - **1,234 / 1,242 opportunities** now have `contact_id` (1,184 from
   `CRM_export/`, 50 more from the live OnlyOffice API).
-  - Barbara O'Malley -> MDM Construction
-  - Scott Ozark -> MDM Construction
-  - Cambridge Commons Storyboard -> Baney Construction
+  - [customer] -> MDM Construction
+  - [customer] -> MDM Construction
+  - CRM #1024 -> Baney Construction
 
 Note: the Oct 19 email `10-Customer Copy 4001405496.pdf` is not yet in
 OnlyOffice's archive for that deal (the mail aggregator has not picked it up),
@@ -1833,7 +1833,7 @@ Wired into CI. Cache-bust `app.js?v=3.7.16`.
 ### Follow-up Due is now always visible and settable
 
 The Details panel hid the entire Follow-up Due section when
-`expected_close_date` was NULL, so a deal like Barbara O'Malley (whose
+`expected_close_date` was NULL, so a deal like [customer] (whose
 OnlyOffice record genuinely has no due date) offered no way to set one.
 The section now always renders with "Not set" + click-to-edit date picker,
 PATCHing `{ expectedCloseDate }` like before.
@@ -1922,7 +1922,7 @@ The route the kanban dashboard used (`filehandler.ashx?action=mailmessage`)
 only serves **recent** ids; it 500s for anything older:
 
 ```
-2025-12-19 "Ramada interior"  crm event 30273 -> message_id 21481
+2025-12-19 "CRM #828"  crm event 30273 -> message_id 21481
   filehandler.ashx?action=mailmessage&message_id=21481  ->  HTTP 500
   ES  mail_mail/_doc/21481                             ->  1348 bytes of HTML  ✓
 ```
@@ -1965,15 +1965,14 @@ field COALESCE'd so a partial sync can't wipe existing data).
 OnlyOffice API (dry-run by default).
 
 **Result:** all 13 now have stage, stage_type, responsible user and expected
-close date. Joe Knoll correctly lands in "Closed Paid" (stage_type 1); Tony
-Gosz and Jesus Casique in "Negotiations/Supplementing". Judy Osier has no
+close date. [customer] correctly lands in "Closed Paid" (stage_type 1); [customer] and [customer] in "Negotiations/Supplementing". [customer] has no
 contact because OnlyOffice has none for her either (`contact: null`).
 
 ### 3. Message-id collision guard (found while verifying)
 
 608 events carry a `message_id` that coincides with a *different* Sietch
 `mail_messages.id` (max 1,648). The UI fetched by that id, so
-"H74219 - Manchester/Jessen" would have rendered "Here's your AccuLynx
+"[customer]" would have rendered "Here's your AccuLynx
 login code". The UI now renders the event's own body first and validates the
 subject of any fetched message before accepting it.
 
@@ -2071,8 +2070,8 @@ Full suite: 520 Python + 189 JS, 0 failures.
    "Post email body as note to linked deal" and "Auto-link by content"
    were off but links were still created.
 2. **Wrong project linked.** An email with [\#1241] ended up linked to
-   `id 1241` (WS Liquor Inc) — but the user meant `project_number 1241`
-   (Barbara O'Malley).
+   `id 1241` ([customer]) — but the user meant `project_number 1241`
+   ([customer]).
 
 ### Root causes (both one-line bugs in scanner/mail_scanner.py)
 
@@ -2086,8 +2085,8 @@ Full suite: 520 Python + 189 JS, 0 failures.
   The number users put in [\#NNNN] is the CRM project number shown in the
   UI header, NOT the row id. These agreed for 1,229 of 1,242 opportunities
   but DIVERGED for the 13 created by the 2026-10-19 sync, which is why
-  [\#1241] resolved to `id 1241` (WS Liquor Inc) instead of
-  `project_number 1241` (Barbara O'Malley). `server.py _resolve_project_id`
+  [\#1241] resolved to `id 1241` ([customer]) instead of
+  `project_number 1241` ([customer]). `server.py _resolve_project_id`
   does it correctly. Fix matches.
 
 ### Data fix on the droplet
@@ -2884,7 +2883,7 @@ Audited `telegram_bot.py` (2130 lines). Found 8 issues, fixed all of them in one
 
 ## Tasks tile: cap the linked project name (visual fix) (2026-10-15)
 
-The linked project name on a task row was rendered as a chip with no max-width. With a long project name (e.g. "424-426 Ponderosa Ave - Cambridge Commons Storyboard"), the chip claimed the full row width and the task title was truncated to "Re..." (3 chars + ellipsis). The chip container has `flex-shrink: 0`, so the title's `flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis` could only take what was left.
+The linked project name on a task row was rendered as a chip with no max-width. With a long project name (e.g. "CRM #1024"), the chip claimed the full row width and the task title was truncated to "Re..." (3 chars + ellipsis). The chip container has `flex-shrink: 0`, so the title's `flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis` could only take what was left.
 
 Fix: add a max-width + ellipsis to `.task-chip-project-text` in `public/styles.css` (4 lines: `max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap`). The full project name is already available in the `title` tooltip on hover, so the truncation is non-destructive.
 
@@ -3163,7 +3162,7 @@ User-pinned design (round 4): 10h + 14h, no per-type opt-out (existing global Te
 
 - 10h: headline `"Clocked in for 10h 23m"`, snippet `"Did you forget to log out?"`
 - 14h: headline `"Clocked in for 14h 02m"`, snippet `"Please verify your timesheet."`
-- With a project: headline `"Clocked in for 10h 23m on Roof repair — Vance St"`, snippet unchanged.
+- With a project: headline `"Clocked in for 10h 23m on Roof repair — [customer]"`, snippet unchanged.
 
 **Telegram format** (via the existing `_build_tg` helper):
 
@@ -4755,7 +4754,7 @@ Three follow-up fixes from the same session that shipped v2.3.0:
 - **Root cause.** fpdf2's built-in Helvetica only covers Latin-1 (U+0000–U+00FF). Strings containing em dash (U+2014), smart quotes (U+2018–U+201D), ellipsis (U+2026), etc. crash generation with: `Character "—" at index N in text is outside the range of characters supported by the font used: "helvetica"`. `_doc_pdf_safe` previously only stripped ASCII control chars.
 - **Fix.** `_doc_pdf_safe` now maps a table of common Unicode punctuation to ASCII equivalents (em/en/figure dash → `-`, smart quotes → `'"/`, ellipsis → `...`, bullets → `*`, arrows → `->`/`<-`/`^`/`v`, NBSP → space, line/paragraph separators → newline), drops remaining control chars, and finally strips anything still above U+00FF as a belt-and-suspenders guard.
 - **Also wrapped** every `pdf.cell()` / `pdf.multi_cell()` / `pdf.get_string_width()` call in the invoice + COC functions with `_doc_pdf_safe(...)`. The width-check call (`pdf.get_string_width(desc)` for line-item wrap) was the original crash site — `get_string_width` also throws on unsupported chars, so it has to be sanitized too.
-- **Verified** the same input that previously crashed ("Smith — Family Trust", claim number `—`, em dash in line items, signature name, footer text) now produces a valid PDF with em dashes converted to plain `-`.
+- **Verified** the same input that previously crashed ("[customer]", claim number `—`, em dash in line items, signature name, footer text) now produces a valid PDF with em dashes converted to plain `-`.
 
 ### Files changed
 - `migrations/021_add_document_templates.sql` — added `show_branding_footer` column + `ALTER TABLE … ADD COLUMN IF NOT EXISTS`.
