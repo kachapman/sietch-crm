@@ -2,6 +2,69 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Review of PR #1 (document format + preview download): fixed the CI-blocking test paths (2026-11-06, branch `cursor/document-format-preview-download-079d`)
+
+**Not merged and not deployed.** Review only. No parser/reconciler change,
+no API/MCP work, no production data, no production server or tunnel touched.
+
+**What was reviewed.** PR #1 (`cursor/document-format-preview-download-079d`,
+commit `b9ae9cf`) detects the document type from the file bytes instead of
+the editable display title, moves the OnlyOffice session key to
+`sietch-doc-{id}-{ext}`, and makes the preview toolbar Download work from a
+sandbox that has no `allow-downloads`. The implementation is sound:
+detection is fail-closed (empty, unknown, encrypted, HTML, and executable
+bytes get a 415 instead of being sent as `docx`), the preview sandbox is not
+widened, the `postMessage` is checked for origin + source frame + open
+document id, and the save callback still accepts the old unsuffixed key.
+
+**Two CI blockers, both fixed.**
+- `tests/test_documents_batch_download.py` and `tests/test_event_bus.py` put
+  `sys.path.insert(0, '/home/chapman-server/Projects/new-crm')` at the top.
+  That path does not exist on a GitHub Actions runner, and running
+  `python3 tests/<file>.py` puts `tests/` on `sys.path`, not the repo root,
+  so `import server` failed with `ModuleNotFoundError: No module named
+  'server'`. Both now use the `HERE.parent` pattern the PR's own new tests
+  already use. Verified in a clean `python:3.12-slim` container with a
+  Postgres service, matching `.github/workflows/smoke.yml`.
+- `tests/test_documents_batch_download.py::test_single_file_keeps_direct_download`
+  still asserted the pre-PR literal `/api/v2/documents/${ids[0]}`. The PR
+  moved the single-file path to `downloadDocumentAuthenticated(ids[0])`,
+  which fetches `/api/v2/documents/{id}?download=1` with the session
+  cookie. The assertion now checks the new call site and additionally
+  asserts the single-file branch does NOT use the batch/zip endpoint.
+
+**Test results (all six requested suites).** `test_document_format.py` (39),
+`test_doc_download_auth.py` (27), `test_api_tokens.py` (28),
+`test_documents_batch_download.py` (6), `test_doc_preview_download.mjs` (15),
+`test_doc_editor_title.mjs` (5) — all pass, on the host and in a CI-equivalent
+container. `test_preview_sandbox_browser.py` passes with real Chromium
+(headless): the `allow-downloads` control saved a file, the production
+sandbox did not, and the real `doc-preview.html` Download asked the
+same-origin parent for doc 42 while a parent-window spoof was rejected.
+
+**Live checks against the local Document Server.** A throwaway CRM instance
+on port 8799 ran on a throwaway database (`sietch_verify_tmp`) with synthetic
+documents only; the existing server on port 8766 was not restarted.
+- Extensionless PDF: `editor-config` returns `fileType: pdf` (not `docx`),
+  title `Estimate Packet.pdf`, key `sietch-doc-5-pdf`. The download the
+  Document Server fetches is served with `Content-Type: application/pdf` and
+  `Content-Disposition: inline; filename="Estimate Packet.pdf"`; `?download=1`
+  returns `attachment`. The real `doc-preview.html` in a headless browser
+  posts `docs-preview-download docId=5` to the parent, same-origin, from the
+  preview frame. **Partially verified**: the conversion to an editable
+  session could not be completed because this Document Server image returns
+  converter error `-8` for every input, including a PDF served by the
+  Document Server itself, so the conversion subsystem is not usable here.
+  That is an environment limitation, not a CRM or PR failure.
+- Legacy-key session can still save: a save callback carrying the pre-change
+  unsuffixed key `sietch-doc-5` was accepted (`{"error": 0}`) and the file on
+  disk was actually replaced with the synthetic saved bytes. The negative
+  control (doc 5's key posted to doc 6) was rejected with
+  `403 Invalid callback token` and left the target file untouched.
+
+**Not touched.** The 27 other test files with the same hardcoded path are
+pre-existing and unrelated to this PR; they were left alone.
+
 ## Document editor type follows the file bytes; preview Download works from the sandbox (2026-11-06, branch `cursor/document-format-preview-download-079d`)
 
 **Not merged and not deployed.** No schema change, no parser/reconciler

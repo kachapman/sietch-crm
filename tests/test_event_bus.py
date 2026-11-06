@@ -26,8 +26,10 @@ import json
 import sys
 import time
 import unittest
+from pathlib import Path
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
 
 import event_bus
 from event_bus import EventBus

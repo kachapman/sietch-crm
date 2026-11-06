@@ -11,6 +11,82 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-06 (review of PR #1, document format + preview download,
+branch `cursor/document-format-preview-download-079d`)
+
+**Status: REVIEWED on the PR branch — NOT merged, NOT deployed.** Two CI
+blockers fixed on top of `b9ae9cf`. No parser / Spock reconciler changes.
+No API or MCP work. The existing CRM server on port 8766 was NOT restarted.
+
+**The review.** PR #1 detects the document type from the file bytes instead
+of the editable display title, moves the OnlyOffice session key to
+`sietch-doc-{id}-{ext}`, and makes the preview toolbar Download work from a
+sandbox that has no `allow-downloads`. The implementation is sound — detection
+is fail-closed, the sandbox is not widened, the `postMessage` is checked for
+origin + source frame + open document id, and the save callback still accepts
+the old unsuffixed key.
+
+**CI blockers fixed (the reason this session existed).**
+- `tests/test_documents_batch_download.py` and `tests/test_event_bus.py` had
+  `sys.path.insert(0, '/home/chapman-server/Projects/new-crm')`. That path
+  does not exist on a GitHub Actions runner, and `python3 tests/<file>.py`
+  puts `tests/` on `sys.path` rather than the repo root, so `import server`
+  raised `ModuleNotFoundError: No module named 'server'`. Both now use the
+  `HERE.parent` pattern the PR's own new tests already use. Reproduced and
+  fixed in a clean `python:3.12-slim` container with a Postgres service,
+  matching `.github/workflows/smoke.yml`.
+- `test_documents_batch_download.py::test_single_file_keeps_direct_download`
+  asserted the pre-PR literal `/api/v2/documents/${ids[0]}`. The PR moved the
+  single-file path to `downloadDocumentAuthenticated(ids[0])` (which fetches
+  `/api/v2/documents/{id}?download=1`). The assertion now checks the new call
+  site and also asserts the single-file branch does not use the zip endpoint.
+
+**Test results (the six requested suites).** `test_document_format.py` (39),
+`test_doc_download_auth.py` (27), `test_api_tokens.py` (28),
+`test_documents_batch_download.py` (6), `test_doc_preview_download.mjs` (15),
+`test_doc_editor_title.mjs` (5) — all pass on the host and in the
+CI-equivalent container. `test_preview_sandbox_browser.py` passes with real
+headless Chromium: the `allow-downloads` control saved a file, the production
+sandbox did not, the real `doc-preview.html` Download asked the same-origin
+parent for doc 42, and a parent-window spoof was rejected.
+
+**Live checks.** A throwaway CRM instance on port 8799 with a throwaway
+database (`sietch_verify_tmp`, dropped afterwards) and synthetic documents
+only. The local OnlyOffice container was used. Port 8766 was left alone.
+- Extensionless PDF: `editor-config` → `fileType: pdf` (not `docx`), title
+  `Estimate Packet.pdf`, key `sietch-doc-5-pdf`. The download the Document
+  Server fetches is served as `application/pdf` with
+  `Content-Disposition: inline; filename="Estimate Packet.pdf"`;
+  `?download=1` gives `attachment`. In a headless browser the real
+  `doc-preview.html` posts `docs-preview-download docId=5` to the parent,
+  same-origin, from the preview frame. **Partial:** the conversion into an
+  editable session could not be completed — this Document Server image
+  returns converter error `-8` for every input, including a PDF served by the
+  Document Server itself, so its converter subsystem is not usable here.
+  Environment limitation, not a CRM or PR failure.
+- Legacy-key session can still save: a save callback carrying the pre-change
+  unsuffixed key `sietch-doc-5` was accepted (`{"error": 0}`) and the file on
+  disk was actually replaced by the synthetic saved bytes. Negative control
+  (doc 5's key posted to doc 6) → `403 Invalid callback token`, target file
+  untouched.
+
+**Pre-existing failures, not from this PR.** `test_email_project_copy.py`,
+`test_scanner_toggle_gating.py`, `test_sync_pull_deals_fields.py` and
+`test_invoice_coc_modern.py` fail identically on `main` and on this branch
+(the last needs the real DB). Left alone.
+
+**Not touched.** The 27 other test files carrying the same hardcoded path
+are pre-existing and unrelated to this PR.
+
+**Still open on this branch.** The PR's own CHANGELOG/SESSION_HISTORY entries
+say the generic post-rename "could not open" error was not reproduced because
+no Document Server was available. It still is not verified here for the same
+reason. Not merged, not deployed.
+
+---
+
+## Previous session summary
+
 **Date:** 2026-11-06 (document editor format + preview Download, branch
 `cursor/document-format-preview-download-079d`)
 

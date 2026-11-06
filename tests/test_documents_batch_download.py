@@ -17,7 +17,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
 
 import server as _server
 
@@ -136,8 +137,13 @@ class TestDownloadActionWiring(unittest.TestCase):
         self.assertIn("ids.length === 1", region)
 
     def test_single_file_keeps_direct_download(self):
+        # Single file: the authenticated document fetch, not the zip endpoint.
+        # The URL is built by downloadDocumentAuthenticated(); the call site
+        # passes the id and the helper appends ?download=1.
         region = self._region()
-        self.assertIn("/api/v2/documents/${ids[0]}", region)
+        self.assertIn("downloadDocumentAuthenticated(ids[0])", region)
+        self.assertNotIn("batch-download", region.split('if (action === "download")', 1)[1]
+                         .split("} else {", 1)[0])
 
 
 if __name__ == "__main__":
