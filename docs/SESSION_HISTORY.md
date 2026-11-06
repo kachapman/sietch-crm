@@ -80,6 +80,75 @@ CI because it refuses non-`sietch_test_*` databases.
 
 **Next.** Manager review + explicit approval before any push/PR/merge/deploy.
 
+**Date:** 2026-11-06 (document editor format + preview Download, branch
+`cursor/document-format-preview-download-079d`)
+
+**Status: IMPLEMENTED on a review branch — NOT merged, NOT deployed.** Cut
+from `main`. No production server, tunnel, or CRM database was touched.
+No parser / Spock reconciler changes. No API or MCP work.
+
+**The bugs.**
+- `_handle_document_editor_config` took OnlyOffice `fileType` from the
+  display title and defaulted an extensionless title to `docx`. A PDF whose
+  editable title had no suffix was announced as Word, and OnlyOffice reported
+  a PDF/docx mismatch. The stored MIME and the title are labels; the bytes
+  were never consulted.
+- `document.key` was `sietch-doc-{id}` for every type. OnlyOffice caches the
+  conversion under that key, so a session opened as the wrong type can still
+  be served after the type is corrected. Appending `.pdf` to the title would
+  clear the mismatch string and leave a generic open error. That second
+  error was **not reproduced** here (no Document Server) and is **not**
+  claimed fixed. The key now includes the detected type
+  (`sietch-doc-{id}-{ext}`) so a corrected type does not reuse the previous
+  session. The old unsuffixed key is still accepted on the save callback.
+  A content hash was not added; it would split a live forcesave session.
+- Preview toolbar Download built an `<a download>` inside an iframe sandboxed
+  without `allow-downloads`, so the browser dropped it. The document response
+  was `Content-Disposition: inline` with the raw title interpolated into the
+  header.
+
+**Fixes.**
+- New `document_format.py`. Signatures win (PDF, OOXML, ODF, OLE, images,
+  RTF). Title and MIME are hints only for ambiguous text. Extensionless,
+  upper-case, doubled, and misleading suffixes are covered. Unknown, empty,
+  encrypted, HTML/script, and executables fail the editor with a clear
+  message and are not sent as docx. Images stay on the preview path.
+- Download `Content-Type` follows the bytes. `?download=1` is an attachment
+  with a header-safe filename (no CR/LF, no path, dangerous suffixes
+  stripped). Default stays inline so preview and the Document Server fetch
+  keep working. `X-Content-Type-Options: nosniff`. Auth is unchanged:
+  session cookie, OnlyOffice JWT (`?token=`, no cookie), or bearer token,
+  and it still runs before the file is read.
+- Preview Download `postMessage`s `{type: docs-preview-download}` to
+  `window.location.origin` only. Both parents accept it only when
+  `event.origin` matches, `event.source` is that preview iframe, and the
+  id is the document already open. The parent then fetches
+  `?download=1` with `credentials: "same-origin"`. The sandbox was not
+  widened. List/context downloads use the same authenticated fetch.
+
+**Tests.** `tests/test_document_format.py` (39, no DB).
+`tests/test_doc_preview_download.mjs` (15). `tests/test_doc_editor_title.mjs`
+still passes. `tests/test_doc_download_auth.py` (27, including editor
+fileType, cookie-less token fetch, header injection, typed callback keys).
+`tests/test_api_tokens.py` passed. Headless Chrome
+(`tests/test_preview_sandbox_browser.py`): an `allow-downloads` control
+saved a file; the production sandbox did not; real `doc-preview.html`
+Download was accepted by the parent for synthetic id 42 and a spoof from
+the parent window was rejected.
+`tests/test_documents_batch_download.py` was not run: it imports `server`
+from the hardcoded path `/home/chapman-server/Projects/new-crm`.
+
+**Environment.** Importing `server` opens Postgres. A throwaway local
+cluster (empty database, no CRM rows, no `init.sql`) was used only so that
+import could succeed. The migration runner attempted the SQL files, they
+failed because the schema was absent, and the database and role were then
+dropped. No migration file was added. No Document Server was available.
+
+**Deploy (not done).** No schema change. A normal app restart picks this
+up. In-flight editor sessions keep the old key and can still save. New
+opens use the typed key. Confirming the generic post-rename open error is
+gone requires a Document Server and a synthetic PDF, not a production file.
+
 ---
 
 ## Previous session summary

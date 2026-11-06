@@ -39,6 +39,17 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse, urlencode
 
+from document_format import (
+    content_disposition_header,
+    detect_document_format,
+    detect_document_format_file,
+    document_key_bound_to,
+    document_session_key,
+    editor_format_error,
+    safe_document_filename,
+    wants_attachment_download,
+)
+
 from event_bus import event_bus
 
 try:
@@ -1598,7 +1609,6 @@ def _verify_document_callback(doc_id: int, body: dict) -> bool:
     accepted, anything else is rejected. A missing/unbound token is a loud
     403, not a silent pass.
     """
-    expected_key = f"sietch-doc-{doc_id}"
     if not DOCS_JWT_SECRET:
         # No secret configured → the editor flow can't mint tokens either
         # (editor-config 503s), so there is nothing to verify against.
@@ -1619,7 +1629,11 @@ def _verify_document_callback(doc_id: int, body: dict) -> bool:
     nested = decoded.get("document")
     if isinstance(nested, dict):
         candidates.add(nested.get("key"))
-    if expected_key not in candidates:
+    # The unsuffixed sietch-doc-{id} key is still accepted so a session that
+    # started before the detected-type suffix can save. A suffixed key must
+    # match this id only (sietch-doc-1-pdf is not document 10, and is not
+    # document 1 with an arbitrary tail).
+    if not any(document_key_bound_to(candidate, doc_id) for candidate in candidates):
         logger.warning("Document callback for doc %s rejected: token not bound to this document", doc_id)
         return False
     return True
@@ -16268,10 +16282,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self.send_error(404)
             return
         data = full_path.read_bytes()
+        # Bytes win over the stored MIME and the display title. The title is
+        # still used only to build a safe download name, with the detected
+        # suffix so OnlyOffice (and the browser) are not told this is a docx
+        # when the file is a PDF. Unknown bytes are octet-stream, never the
+        # stored label, and the filename cannot inject a second header.
+        fmt = detect_document_format(data, title, mime_type)
+        filename = safe_document_filename(title, fmt.get("ext"))
+        content_type = fmt.get("mime") or "application/octet-stream"
+        qs = parse_qs(urlparse(self.path).query)
+        disposition = "attachment" if wants_attachment_download((qs.get("download") or [""])[0]) else "inline"
         self.send_response(200)
-        self.send_header("Content-Type", mime_type or "application/octet-stream")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Content-Disposition", f'inline; filename="{title}"')
+        self.send_header("Content-Disposition", content_disposition_header(disposition, filename))
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
@@ -16285,7 +16310,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             (doc_id,), fetch="one",
         )
         if not row:
-            self.send_error(404)
+            _json_response(self, 404, {"error": "Document not found"})
             return
         opp_id, title, file_path, file_size, mime_type = row
         if not DOCS_PUBLIC_URL:
@@ -16294,23 +16319,42 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not DOCS_JWT_SECRET:
             _json_response(self, 503, {"error": "Document Server JWT secret not configured"})
             return
-        file_ext = Path(title).suffix.lstrip(".").lower() or "docx"
-        doc_type = _document_type_from_ext(file_ext)
-        # Stable key per document id so multiple users opening the same file join
-        # the same editing session (OnlyOffice keys the session off document.key).
-        # Stable keys + coEditing.mode:"fast" = real-time collaboration working.
-        doc_key = f"sietch-doc-{doc_id}"
+        full_path = ROOT / (file_path or "")
+        if not file_path or not full_path.is_file():
+            _json_response(self, 404, {"error": "This document's file is missing from storage."})
+            return
+        # fileType comes from the bytes, not the editable display title.
+        # Extensionless, upper-case, doubled, or misleading suffixes and a
+        # stored MIME that disagrees with the bytes are ignored when the
+        # signature is unambiguous. Anything we cannot safely open fails here
+        # instead of being sent to OnlyOffice as docx.
+        fmt = detect_document_format_file(full_path, title or "", mime_type)
+        if not fmt.get("onlyoffice"):
+            _json_response(self, 415, {"error": editor_format_error(fmt)})
+            return
+        file_ext = fmt["ext"]
+        doc_type = fmt["document_type"]
+        # The editor title's suffix has to match fileType. OnlyOffice treats a
+        # disagreement between those as a corrupt file. The CRM display title
+        # is left as the user saved it; this is only the name inside the editor.
+        safe_title = safe_document_filename(title or "", file_ext)
+        # Same id + same detected type share a session (co-editing). The type
+        # is part of the key because OnlyOffice caches the conversion under
+        # document.key: an id-only key kept a session that had been opened as
+        # the wrong type. A content hash is intentionally not included; it
+        # would split a live forcesave session. The unsuffixed key is still
+        # accepted on the save callback.
+        doc_key = document_session_key(doc_id, file_ext)
         # The download token stays short-lived (JWT expiry handled by the verifier)
         # so a leaked key can't be reused indefinitely.
         download_token = _sign_jwt({"id": doc_id, "path": file_path, "ts": int(time.time())}, DOCS_JWT_SECRET)
-        # Public URL that Document Server will use to download the file
+        # Public URL that Document Server will use to download the file.
+        # The token is not written to the infra log.
         download_url = f"{CRM_PUBLIC_URL}/api/v2/documents/{doc_id}?token={download_token}"
-        # Diagnostic log so we can correlate "Download failed" in the OnlyOffice
-        # editor with what we actually told the Document Server to fetch.
         try:
             log_infra_event(
                 "info",
-                f"Editor config: doc_id={doc_id} ext={file_ext} size={file_size} url={download_url}",
+                f"Editor config: doc_id={doc_id} detected={file_ext} size={file_size}",
                 source="docserver",
                 method=self.command,
                 path=f"/api/v2/documents/{doc_id}/editor-config",
@@ -16327,7 +16371,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "document": {
                 "fileType": file_ext,
                 "key": doc_key,
-                "title": title,
+                "title": safe_title,
                 "url": download_url,
                 "permissions": _build_onlyoffice_permissions(can_edit=(editor_mode == "edit")),
             },

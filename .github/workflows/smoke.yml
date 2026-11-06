@@ -151,6 +151,12 @@ jobs:
       - name: Run document download auth tests
         run: python3 tests/test_doc_download_auth.py -v
 
+      - name: Run document format tests
+        run: python3 tests/test_document_format.py -v
+
+      - name: Run preview sandbox browser test
+        run: python3 tests/test_preview_sandbox_browser.py
+
       - name: Run API token tests
         run: python3 tests/test_api_tokens.py -v
 

@@ -149,11 +149,11 @@
             }
 
             // onMetaChange: OnlyOffice BROADCASTS the title of the editing
-            // session. Because the session key is stable per document
-            // (sietch-doc-{id}), a session opened BEFORE a rename keeps the
-            // OLD title and re-broadcasts it on every later open — which
-            // silently reverted Sietch-side renames (live bug 2026-10-27:
-            // rename stuck, then "went back" after opening the file).
+            // session. The session key is stable for a document's detected
+            // format (sietch-doc-{id}-{ext}), so a session opened BEFORE a
+            // rename keeps the OLD title and re-broadcasts it on every later
+            // open — which silently reverted Sietch-side renames (live bug
+            // 2026-10-27: rename stuck, then "went back" after opening the file).
             // The DB title is authoritative, so a broadcast is NOT applied.
             // Explicit renames still sync via onRequestRename, and
             // onDocumentReady re-aligns the live session with our title.

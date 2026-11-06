@@ -5572,9 +5572,19 @@ async function bindDocumentsPreviewPane() {
     window.addEventListener("message", (ev) => {
       if (ev.origin !== window.location.origin) return;
       const data = ev.data;
-      if (!data || data.type !== "docs-preview-fallback") return;
-      if (!docsState.previewDocId || String(data.docId) !== String(docsState.previewDocId)) return;
+      if (!data) return;
       const iframe = $("#documents-preview-iframe");
+      // Preview toolbar Download. The iframe is sandboxed without
+      // allow-downloads, so it cannot start a save itself. Only the frame
+      // that is actually showing this document may ask, and the saved name
+      // is taken from the authenticated response rather than the message.
+      if (data.type === "docs-preview-download") {
+        if (!acceptPreviewDownloadMessage(ev, iframe, docsState.previewDocId)) return;
+        downloadDocumentAuthenticated(docsState.previewDocId);
+        return;
+      }
+      if (data.type !== "docs-preview-fallback") return;
+      if (!docsState.previewDocId || String(data.docId) !== String(docsState.previewDocId)) return;
       if (!iframe) return;
       iframe.src = `/doc-editor.html?id=${docsState.previewDocId}&embedded=1&mode=view`;
     });
@@ -5629,11 +5639,74 @@ function formatRelativeTime(iso) {
 
 
 
-function downloadDoc(docId, title) {
+// Saved name comes from the authenticated response, not from the display
+// title the caller happens to have. Titles are editable and may omit the
+// real suffix or contain header-breaking characters.
+function filenameFromContentDisposition(header) {
+  const raw = String(header || "");
+  let name = "";
+  const star = raw.match(/filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/i);
+  if (star) {
+    try { name = decodeURIComponent(star[1].trim().replace(/^["']|["']$/g, "")); } catch (e) { name = ""; }
+  }
+  if (!name) {
+    const quoted = raw.match(/filename\s*=\s*"([^"]*)"/i);
+    if (quoted) name = quoted[1];
+    else {
+      const plain = raw.match(/filename\s*=\s*([^;]+)/i);
+      if (plain) name = plain[1].trim().replace(/^["']|["']$/g, "");
+    }
+  }
+  name = String(name).replace(/[\r\n\0]/g, "").replace(/\\/g, "/").split("/").pop() || "";
+  name = name.replace(/["';]/g, "").trim();
+  if (!name || name === "." || name === "..") return "document";
+  return name.slice(0, 180);
+}
+
+function acceptPreviewDownloadMessage(ev, iframe, expectedDocId) {
+  if (!ev || ev.origin !== window.location.origin) return false;
+  const data = ev.data;
+  if (!data || data.type !== "docs-preview-download") return false;
+  if (typeof data.docId !== "string" && typeof data.docId !== "number") return false;
+  if (!iframe || ev.source !== iframe.contentWindow) return false;
+  if (expectedDocId == null || String(data.docId) !== String(expectedDocId)) return false;
+  return true;
+}
+
+async function downloadDocumentAuthenticated(docId) {
+  let res;
+  try {
+    res = await fetch(`/api/v2/documents/${encodeURIComponent(docId)}?download=1`, {
+      credentials: "same-origin",
+    });
+  } catch (err) {
+    showToast("Download failed", true);
+    return;
+  }
+  if (!res.ok) {
+    let msg = `Download failed (${res.status})`;
+    try {
+      const j = await res.json();
+      if (j && j.error) msg = j.error;
+    } catch (e) { /* status text is enough */ }
+    showToast(msg, true);
+    return;
+  }
+  const blob = await res.blob();
+  const name = filenameFromContentDisposition(res.headers.get("Content-Disposition"));
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = `/api/v2/documents/${docId}`;
-  a.download = title || "document";
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
   a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+function downloadDoc(docId, title) {
+  // `title` is unused on purpose: the server names the file from the bytes.
+  downloadDocumentAuthenticated(docId);
 }
 
 // Batch upload progress (project Photos tab, project Documents tab,
@@ -41320,10 +41393,14 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
 
         const dl = document.createElement("a");
         dl.className = "opp-doc-download";
-        dl.href = `/api/v2/documents/${docId}`;
+        dl.href = `/api/v2/documents/${docId}?download=1`;
         dl.title = "Download";
         dl.setAttribute("aria-label", "Download");
-        dl.setAttribute("download", title);
+        dl.setAttribute("download", "");
+        dl.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          downloadDocumentAuthenticated(docId);
+        });
         dl.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
         li.appendChild(dl);
       }
@@ -41383,12 +41460,7 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     }
     if (action === "download") {
       if (ids.length === 1) {
-        // Single file: instant direct download, unchanged behavior.
-        const doc = previewDocsState.documents.find(d => d.id === ids[0]);
-        const a = document.createElement("a");
-        a.href = `/api/v2/documents/${ids[0]}`;
-        a.download = doc ? doc.title : "";
-        a.click();
+        downloadDocumentAuthenticated(ids[0]);
       } else {
         // Multiple files: one ZIP, one dialog (server builds it).
         showToast("Preparing zip…");
@@ -41708,9 +41780,15 @@ function renderOpportunityPreviewContent(container, data, context = "modal") {
     window.addEventListener("message", (ev) => {
       if (ev.origin !== window.location.origin) return;
       const data = ev.data;
-      if (!data || data.type !== "docs-preview-fallback") return;
-      if (!previewDocsState.previewDocId || String(data.docId) !== String(previewDocsState.previewDocId)) return;
+      if (!data) return;
       const iframe = oppPreviewPane.querySelector("#opp-preview-doc-iframe");
+      if (data.type === "docs-preview-download") {
+        if (!acceptPreviewDownloadMessage(ev, iframe, previewDocsState.previewDocId)) return;
+        downloadDocumentAuthenticated(previewDocsState.previewDocId);
+        return;
+      }
+      if (data.type !== "docs-preview-fallback") return;
+      if (!previewDocsState.previewDocId || String(data.docId) !== String(previewDocsState.previewDocId)) return;
       if (iframe) iframe.src = `/doc-editor.html?id=${previewDocsState.previewDocId}&embedded=1&mode=view`;
     });
   }
