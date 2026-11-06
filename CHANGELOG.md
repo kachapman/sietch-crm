@@ -2,6 +2,47 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Document editor type follows the file bytes; preview Download works from the sandbox (2026-11-06, branch `cursor/document-format-preview-download-079d`)
+
+**Not merged and not deployed.** No schema change, no parser/reconciler
+change, no API/MCP work, no production data.
+
+**Editor.** `GET /api/v2/documents/{id}/editor-config` used to set OnlyOffice
+`fileType` from the display title and default an extensionless title to
+`docx`. A PDF with an extensionless title was opened as Word and OnlyOffice
+reported a PDF/docx mismatch. Detection now uses the file signature
+(`document_format.py`). The title and the stored MIME are ignored when they
+disagree with the bytes, including upper-case, doubled, and misleading
+suffixes. A real docx/xlsx/pptx (and the other supported Office types) still
+opens, including when the title has no suffix. PDF stays view-only. Empty,
+unknown, encrypted, HTML, and executable bytes get a clear 415 and are not
+sent to OnlyOffice as docx. The editor title's suffix matches the detected
+type; the CRM display title is not rewritten.
+
+**Session key.** `document.key` is `sietch-doc-{id}-{ext}` so two people
+editing the same file and type still share a session, but a corrected type
+does not reuse a Document Server conversion cached under the previous type.
+The unsuffixed `sietch-doc-{id}` key is still accepted on the save callback.
+This does **not** claim the generic "could not open" error seen after a
+title was renamed to end in `.pdf` is fixed: that error was not reproduced
+here because no Document Server was available.
+
+**Download and preview.** The file response's `Content-Type` follows the
+bytes. `?download=1` sends `Content-Disposition: attachment` with a
+header-safe filename (CR/LF, quotes, and paths cannot inject a second
+header). The default remains inline for the preview fetch and for the
+cookie-less OnlyOffice `?token=` fetch. Auth is unchanged and still runs
+before the file is read. The preview toolbar no longer uses `<a download>`
+inside the sandboxed iframe (that sandbox has no `allow-downloads`, and it
+was not added). The iframe posts `docs-preview-download` to its own origin;
+the parent accepts it only from that iframe and only for the document
+already on screen, then downloads with the session cookie. List and context
+downloads use the same authenticated fetch.
+
+**Tests.** Synthetic files only. `tests/test_document_format.py`,
+`tests/test_doc_preview_download.mjs`, extended `tests/test_doc_download_auth.py`,
+and a headless Chrome sandbox check in `tests/test_preview_sandbox_browser.py`.
+
 ## Mail retention re-import loop: the scanner re-imported (and re-downloaded) purged mail every 2 minutes (2026-11-04, branch `fix-mail-retention-loop`)
 
 **Symptom.** On two IMAP accounts (crm@vanguardadj.online, requests@sherwoodestimates.com)
