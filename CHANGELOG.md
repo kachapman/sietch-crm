@@ -2,6 +2,24 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Reconciler baseline compatibility record (2026-11-06, branch `cursor/reconciler-baseline-compat-8047`)
+
+Review-branch only. Not merged, not deployed, no dashboard route.
+
+The estimate parser in `reconciler/` is still the `ee6e401` code
+(package `0.2.0`). Sherwood `e04750d` (`vendor/sietch-reconciler/reconciler/`)
+could not be read from this environment, so none of its reported
+`parse.py` / `pdftext.py` / `diff.py` delta was ported. Core v30 work
+(alternate `QTY / REMOVE / REPLACE / TOTAL` dispatch, wrapped rows,
+depreciation, completeness gate, tie-out, ESX/XML) stays with Tumnus on
+`reconciler-parser-v30` and is marked waiting.
+
+Added `reconciler/sietch_compat.py` (status/provenance hooks only; no
+parser, worker, queue, or decryption), synthetic tests in
+`tests/test_reconciler_baseline_compat.py`, and the write-up in
+`docs/RECONCILER_BASELINE_COMPAT.md`. `Dockerfile` still does not copy
+`reconciler/`. CRM `full-reconcile` is unchanged and is not this parser.
+
 ## Mail retention re-import loop: the scanner re-imported (and re-downloaded) purged mail every 2 minutes (2026-11-04, branch `fix-mail-retention-loop`)
 
 **Symptom.** On two IMAP accounts (crm@vanguardadj.online, requests@sherwoodestimates.com)

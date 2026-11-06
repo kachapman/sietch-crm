@@ -11,6 +11,31 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-06 (reconciler baseline compatibility, branch
+`cursor/reconciler-baseline-compat-8047`)
+
+**Status: review branch only — NOT merged, NOT deployed, no PR.** Cut from
+`main` at `ee6e401`. No production server, database, claim corpus, or
+Sherwood checkout was touched. Core v30 parser work was **not** implemented
+here; it waits on Tumnus's patch.
+
+**What landed.** A Sietch-side record, `reconciler/sietch_compat.py`, plus
+`tests/test_reconciler_baseline_compat.py` and
+`docs/RECONCILER_BASELINE_COMPAT.md`. Parser modules are byte-locked to
+`ee6e401`. The hook does not parse, does not decide final acceptance, and is
+not imported by `server.py`. Dockerfile still does not `COPY reconciler`.
+
+**Sherwood `e04750d` was not readable** from this VM (private repo HTTP 404;
+public fork has neither that commit nor `vendor/sietch-reconciler`). No
+delta was ported. Tumnus's divergence report is recorded as unverified.
+
+**Next:** apply the code-only `reconciler-parser-v30` patch when Tumnus
+supplies it, revisit every `BASELINE GAP` test in the same commit, and run
+the local 961-PDF eval on a machine that already has the corpus. Do not
+commit that corpus.
+
+## Previous session summary
+
 **Date:** 2026-11-04 (mail retention re-import loop, branch
 `fix-mail-retention-loop`)
 
