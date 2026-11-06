@@ -27,6 +27,7 @@ the other server-importing suites this file SKIPs cleanly without one.
 Run with: python3 tests/test_doc_download_auth.py
 """
 
+import json
 import sys
 import time
 import unittest
@@ -165,24 +166,28 @@ class TestDocumentDownloadAuth(unittest.TestCase):
     def test_session_cookie_returns_file(self):
         with TemporaryDirectory() as tmp:
             (Path(tmp) / "docs").mkdir()
-            (Path(tmp) / "docs" / "report.pdf").write_bytes(b"PDFDATA")
+            (Path(tmp) / "docs" / "report.pdf").write_bytes(b"%PDF-1.4\n% synthetic unit-test pdf\n%%EOF\n")
             shim, _ = _download(
                 "/api/v2/documents/1",
                 headers={"Cookie": "sietch_session=good"},
                 row=_doc_row(), tmp=tmp)
         self.assertEqual(shim.status, 200)
-        self.assertEqual(shim.body, b"PDFDATA")
+        self.assertEqual(shim.body, b"%PDF-1.4\n% synthetic unit-test pdf\n%%EOF\n")
         self.assertEqual(shim.sent["Content-Type"], "application/pdf")
+        self.assertIn('filename="report.pdf"', shim.sent["Content-Disposition"])
+        self.assertNotIn("\r", shim.sent["Content-Disposition"])
+        self.assertNotIn("\n", shim.sent["Content-Disposition"])
+        self.assertEqual(shim.sent.get("X-Content-Type-Options"), "nosniff")
 
     def test_onlyoffice_signed_token_returns_file(self):
         token = _mint(doc_id=1)
         with TemporaryDirectory() as tmp:
             (Path(tmp) / "docs").mkdir()
-            (Path(tmp) / "docs" / "report.pdf").write_bytes(b"PDFDATA")
+            (Path(tmp) / "docs" / "report.pdf").write_bytes(b"%PDF-1.4\n% synthetic unit-test pdf\n%%EOF\n")
             shim, _ = _download(f"/api/v2/documents/1?token={token}",
                                 row=_doc_row(), tmp=tmp, session_user=None)
         self.assertEqual(shim.status, 200)
-        self.assertEqual(shim.body, b"PDFDATA")
+        self.assertEqual(shim.body, b"%PDF-1.4\n% synthetic unit-test pdf\n%%EOF\n")
 
     def test_token_signed_with_wrong_secret_rejected(self):
         token = _mint(doc_id=1, secret="attacker-secret")
@@ -295,6 +300,144 @@ class TestDocumentCallbackAuth(unittest.TestCase):
         tok = _server._sign_jwt(cfg, TEST_SECRET)
         shim, _ = self._callback(1, {"status": 1, "key": "sietch-doc-1", "token": tok})
         self.assertEqual(shim.status, 200)
+
+
+PDF_BYTES = b"%PDF-1.4\n% synthetic unit-test pdf\n%%EOF\n"
+
+
+class TestEditorFormatAndDownloadHeaders(unittest.TestCase):
+    """Editor fileType follows bytes. Download headers stay behind the same auth."""
+
+    def _editor(self, tmp, title, mime, data, rel="docs/blob.bin",
+                path="/api/v2/documents/1/editor-config", session_user="unset"):
+        dest = Path(tmp) / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        shim = Shim(path=path, headers={"Cookie": "sietch_session=good"}, command="GET")
+        if session_user is None:
+            shim.headers = {}
+        row = (43, title, rel, len(data), mime)
+        ps, mock_db = _patches(session_user=session_user, db_query_one=None)
+        mock_db.query.return_value = row
+        ps.extend([
+            patch.object(_server, "ROOT", Path(tmp)),
+            patch.object(_server, "DOCS_PUBLIC_URL", "https://docs.example.test"),
+            patch.object(_server, "CRM_PUBLIC_URL", "https://crm.example.test"),
+            patch.object(_server, "_record_document_activity"),
+        ])
+        _run(ps, _server.KanbanHandler._handle_document_editor_config, shim, 1)
+        return shim, mock_db
+
+    def test_extensionless_pdf_is_not_opened_as_docx(self):
+        with TemporaryDirectory() as tmp:
+            shim, _ = self._editor(tmp, "Estimate Packet", "application/octet-stream", PDF_BYTES)
+        self.assertEqual(shim.status, 200)
+        body = json.loads(shim.body)
+        self.assertEqual(body["document"]["fileType"], "pdf")
+        self.assertEqual(body["documentType"], "pdf")
+        self.assertEqual(body["editorConfig"]["mode"], "view")
+        self.assertEqual(body["document"]["key"], "sietch-doc-1-pdf")
+        self.assertTrue(body["document"]["title"].endswith(".pdf"))
+        self.assertNotIn("docx", body["document"]["fileType"])
+        # Cookie-less Document Server fetch: the URL token, no session.
+        from urllib.parse import parse_qs, urlparse
+        token = parse_qs(urlparse(body["document"]["url"]).query)["token"][0]
+        with TemporaryDirectory() as tmp:
+            (Path(tmp) / "docs").mkdir()
+            (Path(tmp) / "docs" / "blob.bin").write_bytes(PDF_BYTES)
+            got, _ = _download(
+                f"/api/v2/documents/1?token={token}",
+                row=_doc_row("Estimate Packet", "docs/blob.bin"),
+                tmp=tmp, session_user=None)
+        self.assertEqual(got.status, 200)
+        self.assertEqual(got.body, PDF_BYTES)
+        self.assertEqual(got.sent["Content-Type"], "application/pdf")
+        self.assertIn('filename="Estimate Packet.pdf"', got.sent["Content-Disposition"])
+
+    def test_misleading_docx_title_still_detects_pdf_bytes(self):
+        with TemporaryDirectory() as tmp:
+            shim, _ = self._editor(
+                tmp, "Estimate.PDF.DOCX",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                PDF_BYTES)
+        body = json.loads(shim.body)
+        self.assertEqual(body["document"]["fileType"], "pdf")
+        self.assertEqual(body["document"]["title"], "Estimate.pdf")
+
+    def test_real_docx_stays_editable(self):
+        data = _server._blank_docx_bytes()
+        with TemporaryDirectory() as tmp:
+            shim, _ = self._editor(
+                tmp, "Contract.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                data, path="/api/v2/documents/1/editor-config?mode=view")
+        body = json.loads(shim.body)
+        self.assertEqual(body["document"]["fileType"], "docx")
+        self.assertEqual(body["documentType"], "word")
+        # Caller asked for view. Without that flag the same bytes are editable.
+        self.assertEqual(body["editorConfig"]["mode"], "view")
+        with TemporaryDirectory() as tmp:
+            shim, _ = self._editor(tmp, "Contract", "application/octet-stream", data)
+        body = json.loads(shim.body)
+        self.assertEqual(body["document"]["fileType"], "docx")
+        self.assertEqual(body["editorConfig"]["mode"], "edit")
+        self.assertEqual(body["document"]["key"], "sietch-doc-1-docx")
+        self.assertTrue(body["document"]["permissions"]["edit"])
+
+    def test_unknown_bytes_fail_clearly_and_do_not_echo_the_title(self):
+        sentinel = "CLAIM-SECRET-9912"
+        with TemporaryDirectory() as tmp:
+            shim, _ = self._editor(tmp, f"{sentinel}.pdf", "application/pdf", b"MZ\x00\x01unsafe")
+        self.assertEqual(shim.status, 415)
+        body = json.loads(shim.body)
+        self.assertIn("can't be opened", body["error"])
+        self.assertNotIn(sentinel, body["error"])
+        self.assertNotIn("fileType", body)
+
+    def test_editor_requires_a_session(self):
+        with TemporaryDirectory() as tmp:
+            shim, mock_db = self._editor(
+                tmp, "Estimate Packet", "application/pdf", PDF_BYTES, session_user=None)
+        self.assertEqual(shim.status, 401)
+        mock_db.query.assert_not_called()
+
+    def test_download_attachment_filename_cannot_inject_headers(self):
+        title = '../../etc/passwd.pdf"\r\nSet-Cookie: pwned=1'
+        with TemporaryDirectory() as tmp:
+            (Path(tmp) / "docs").mkdir()
+            (Path(tmp) / "docs" / "report.pdf").write_bytes(PDF_BYTES)
+            shim, _ = _download(
+                "/api/v2/documents/1?download=1",
+                headers={"Cookie": "sietch_session=good"},
+                row=_doc_row(title), tmp=tmp)
+        self.assertEqual(shim.status, 200)
+        header = shim.sent["Content-Disposition"]
+        self.assertTrue(header.startswith("attachment;"))
+        self.assertIn('filename="passwd.pdf"', header)
+        self.assertNotIn("\r", header)
+        self.assertNotIn("\n", header)
+        self.assertNotIn("Set-Cookie", header)
+        self.assertEqual(shim.body, PDF_BYTES)
+
+    def test_download_flag_still_requires_auth(self):
+        with TemporaryDirectory() as tmp:
+            shim, mock_db = _download(
+                "/api/v2/documents/1?download=1", row=None, tmp=tmp, session_user=None)
+        self.assertEqual(shim.status, 401)
+        mock_db.query_one.assert_not_called()
+
+    def test_callback_accepts_typed_key_for_this_document_only(self):
+        good = _server._sign_jwt({"key": "sietch-doc-1-pdf"}, TEST_SECRET)
+        shim, _ = TestDocumentCallbackAuth()._callback(
+            1, {"status": 1, "key": "sietch-doc-1-pdf", "token": good})
+        self.assertEqual(shim.status, 200)
+        other_doc, _ = TestDocumentCallbackAuth()._callback(
+            10, {"status": 1, "key": "sietch-doc-1-pdf", "token": good})
+        self.assertEqual(other_doc.status, 403)
+        ten = _server._sign_jwt({"key": "sietch-doc-10"}, TEST_SECRET)
+        not_one, _ = TestDocumentCallbackAuth()._callback(
+            1, {"status": 1, "key": "sietch-doc-10", "token": ten})
+        self.assertEqual(not_one.status, 403)
 
 
 class TestDownloadAuthSourceGuard(unittest.TestCase):

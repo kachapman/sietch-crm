@@ -354,12 +354,70 @@
   const zoomSelect = $("zoom-select");
   const downloadBtn = $("download-btn");
 
+  // Inside the preview iframe this page is sandboxed without allow-downloads,
+  // so an <a download> click is discarded by the browser and the toolbar
+  // button does nothing. Ask the parent (same origin only) to save the file.
+  // The parent checks the source frame and downloads through the authenticated
+  // document endpoint; the filename comes from that response, not from here.
+  function filenameFromContentDisposition(header) {
+    const raw = String(header || "");
+    let name = "";
+    const star = raw.match(/filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/i);
+    if (star) {
+      try { name = decodeURIComponent(star[1].trim().replace(/^["']|["']$/g, "")); } catch (e) { name = ""; }
+    }
+    if (!name) {
+      const quoted = raw.match(/filename\s*=\s*"([^"]*)"/i);
+      if (quoted) name = quoted[1];
+      else {
+        const plain = raw.match(/filename\s*=\s*([^;]+)/i);
+        if (plain) name = plain[1].trim().replace(/^["']|["']$/g, "");
+      }
+    }
+    name = String(name).replace(/[\r\n\0]/g, "").replace(/\\/g, "/").split("/").pop() || "";
+    name = name.replace(/["';]/g, "").trim();
+    if (!name || name === "." || name === "..") return "document";
+    return name.slice(0, 180);
+  }
+
+  async function downloadPreviewFile() {
+    let res;
+    try {
+      res = await fetch(`/api/v2/documents/${encodeURIComponent(docId)}?download=1`, { credentials: "same-origin" });
+    } catch (err) {
+      showStatus("⚠", "Couldn't download this file.", null, null);
+      return;
+    }
+    if (!res.ok) {
+      showStatus("⚠", res.status === 401 || res.status === 403
+        ? "You're not signed in or don't have access to this file."
+        : `Couldn't download this file (HTTP ${res.status}).`, null, null);
+      return;
+    }
+    const blob = await res.blob();
+    const name = filenameFromContentDisposition(res.headers.get("Content-Disposition"));
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
   downloadBtn.addEventListener("click", () => {
     if (!docId) return;
-    const a = document.createElement("a");
-    a.href = `/api/v2/documents/${docId}`;
-    a.download = titleHint;
-    a.click();
+    let inFrame = false;
+    try { inFrame = !!(window.parent && window.parent !== window); } catch (err) { inFrame = true; }
+    if (inFrame) {
+      window.parent.postMessage(
+        { type: "docs-preview-download", docId: String(docId) },
+        window.location.origin
+      );
+      return;
+    }
+    downloadPreviewFile();
   });
 
   function showStatus(icon, msg, actionLabel, actionFn) {
@@ -389,6 +447,56 @@
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  // Bytes decide. titleHint is the editable display name and must not override
+  // a signature. Returns pdf | docx | sheet | image | text | unknown.
+  function classifyPreview(bytes, contentType, titleHint) {
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+    const ct = String(contentType || "").toLowerCase();
+    const title = String(titleHint || "");
+    const hasDot = title.indexOf(".") !== -1;
+    const suffix = hasDot ? title.split(".").pop().toLowerCase() : "";
+    const latin = (n) => {
+      let s = "";
+      const limit = Math.min(u8.length, n);
+      for (let i = 0; i < limit; i++) s += String.fromCharCode(u8[i]);
+      return s;
+    };
+    const starts = (sig) => {
+      if (u8.length < sig.length) return false;
+      for (let i = 0; i < sig.length; i++) if (u8[i] !== sig[i]) return false;
+      return true;
+    };
+    if (u8.length >= 5 && latin(1024).indexOf("%PDF-") !== -1 && !starts([0x50, 0x4b])) return "pdf";
+    if (starts([0x89, 0x50, 0x4e, 0x47]) || starts([0xff, 0xd8, 0xff]) || starts([0x47, 0x49, 0x46, 0x38])) return "image";
+    if (u8.length >= 12 && starts([0x52, 0x49, 0x46, 0x46]) && latin(12).slice(8, 12) === "WEBP") return "image";
+    if (starts([0x50, 0x4b, 0x03, 0x04]) || starts([0x50, 0x4b, 0x05, 0x06]) || starts([0x50, 0x4b, 0x07, 0x08])) {
+      const head = latin(8192);
+      if (head.indexOf("ppt/") !== -1) return "unknown";
+      const hasWord = head.indexOf("word/") !== -1;
+      const hasSheet = head.indexOf("xl/") !== -1 || head.indexOf("worksheets/") !== -1;
+      if (hasSheet && !hasWord) return "sheet";
+      if (hasWord && !hasSheet) return "docx";
+      if (ct.indexOf("spreadsheet") !== -1 || ct.indexOf("excel") !== -1) return "sheet";
+      if (ct.indexOf("wordprocessing") !== -1) return "docx";
+      return "unknown";
+    }
+    if (starts([0xd0, 0xcf, 0x11, 0xe0])) {
+      if (ct.indexOf("excel") !== -1 || ct.indexOf("spreadsheet") !== -1 || suffix === "xls") return "sheet";
+      return "unknown";
+    }
+    // A label that says PDF, when the bytes are not a PDF, is not a PDF.
+    if (ct.indexOf("pdf") !== -1 || suffix === "pdf") return "unknown";
+    if (ct.indexOf("wordprocessingml") !== -1 || suffix === "docx") return "docx";
+    if (ct.indexOf("spreadsheetml") !== -1 || ct.indexOf("ms-excel") !== -1 || suffix === "xlsx" || suffix === "xls" || suffix === "csv" || ct.indexOf("csv") !== -1) return "sheet";
+    if (ct.indexOf("image/") === 0) return "image";
+    if (ct.indexOf("text/") === 0 && ct.indexOf("html") === -1 && suffix !== "html" && suffix !== "htm") {
+      return (suffix === "csv" || ct.indexOf("csv") !== -1) ? "sheet" : "text";
+    }
+    if (suffix === "txt" || suffix === "text" || suffix === "md" || suffix === "log") return "text";
+    if (!suffix && ct.indexOf("octet-stream") !== -1) return "unknown";
+    return "unknown";
   }
 
   function requestAutoFallback(reason) {
@@ -452,33 +560,29 @@
     return;
   }
 
-  // Detect type
-  const ext = (titleHint.split(".").pop() || "").toLowerCase();
-  const isPdf = contentType.includes("pdf") || ext === "pdf";
-  const isDocx = contentType.includes("wordprocessingml") || ext === "docx";
-  const isXlsx = contentType.includes("spreadsheetml") || ext === "xlsx";
-  const isXls = contentType.includes("ms-excel") || ext === "xls";
-  const isCsv = contentType.includes("csv") || ext === "csv";
-  const isImage = contentType.startsWith("image/");
-  const isText = contentType.startsWith("text/") && !isCsv;
+  // Type comes from the bytes. The display title and Content-Type are hints
+  // only when the bytes are ambiguous; a PDF signature wins over a .docx
+  // title, and a title ending in .pdf does not make non-PDF bytes a PDF.
+  const headBuf = new Uint8Array(await blob.slice(0, 8192).arrayBuffer());
+  const kind = classifyPreview(headBuf, contentType, titleHint);
 
   try {
-    if (isPdf) {
+    if (kind === "pdf") {
       pdfPageGroup.hidden = false;
       pdfZoomGroup.hidden = false;
       pdfZoomSep.hidden = false;
       await renderPdf(blob);
-    } else if (isDocx) {
+    } else if (kind === "docx") {
       await renderDocx(blob);
-    } else if (isXlsx || isXls || isCsv) {
+    } else if (kind === "sheet") {
       await renderSheet(blob);
-    } else if (isImage) {
+    } else if (kind === "image") {
       renderImage(blob);
-    } else if (isText) {
+    } else if (kind === "text") {
       await renderText(blob);
     } else {
       // Unsupported type — explicit fallback (this IS auto — legacy formats we can't render).
-      showStatus("📄", `No lightweight viewer for .${escapeHtml(ext || "?")} files.`, "Open in full editor", () => {
+      showStatus("📄", "No lightweight viewer for this file.", "Open in full editor", () => {
         if (docId) window.open(`/doc-editor.html?id=${docId}`, "_blank");
       });
       requestAutoFallback("unsupported");
