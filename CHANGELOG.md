@@ -2,6 +2,48 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Admin API-token management UI (2026-11-06, branch `admin-api-token-ui-20261106`)
+
+**Feature.** The Admin Console gains an **API Tokens** tab driving the existing
+admin endpoints (`GET`/`POST /api/v2/admin/api-tokens`,
+`POST /api/v2/admin/api-tokens/{id}/revoke`). Server behaviour is unchanged;
+this is the UI those endpoints were missing.
+
+- Tabs follow the admin-console convention (inline SVG icon + label, appended
+after Import / Export; existing tab order untouched).
+- The list renders safe metadata only: name, 12-char `sietch_…` prefix, scope,
+creator email, created / last-used / revoked timestamps, and an Active/Revoked
+badge. Plaintext, `token_hash`, and any non-whitelisted field are dropped in
+`public/api-token-ui.js#summarizeToken` before rendering.
+- Create validates the name (trimmed, required, <=80 chars, no control chars)
+and POSTs exactly `{name}`, so the UI cannot request a wider scope. The returned
+secret is written with `textContent` into a one-time reveal panel with a copy
+button and an explicit "shown only once / cannot be recovered" warning. It is
+held in one module variable and cleared on tab-away, console close, sign-out,
+and `pagehide`; it is never put in browser storage, a URL, a toast, an error
+string, or the console. Copy falls back to `execCommand` and, on failure, tells
+the user to copy manually without echoing the browser error.
+- Scope disclosure is deliberately blunt: GET-only, but broad — it acts as the
+creating admin and can read most of `/api/v2` including mail and contacts, is
+not resource-scoped, and there is no guarantee every GET is side-effect-free.
+- Revoke is confirm-gated, shows in-flight state, handles 404 (already revoked),
+and re-fetches the list so metadata stays accurate.
+- Admin-only: `openAdminConsoleModal` refuses non-admins before showing the
+modal, the loader re-checks `isAdminViewer`, and the server's `_require_admin`
+gates (dispatch + handler) are untouched.
+
+**Tests.** `tests/test_admin_api_tokens_ui.mjs` (50 assertions: real helper
+behaviour, real token handlers executed in a DOM shim, markup/disclosure/source
+guards), `tests/test_admin_api_token_ui.py` (18 DB-free backend contract +
+authorization guards), `tests/test_admin_api_tokens_http.py` (6 end-to-end
+tests against a throwaway PostgreSQL and an ephemeral server: anonymous /
+non-admin denials, validation, show-once + hash-only storage, metadata refresh,
+revoke, and bearer scope). CI now also runs the backend token suite and the
+contract suite; the HTTP suite stays opt-in because it requires a disposable
+`sietch_test_*` database (never `sietch_crm`).
+
+**Version.** VERSION 2.3.0 -> 2.4.0; `app.js` cache-buster 3.7.50 -> 3.7.51.
+
 ## Mail retention re-import loop: the scanner re-imported (and re-downloaded) purged mail every 2 minutes (2026-11-04, branch `fix-mail-retention-loop`)
 
 **Symptom.** On two IMAP accounts (crm@vanguardadj.online, requests@sherwoodestimates.com)

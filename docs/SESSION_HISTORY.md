@@ -11,6 +11,50 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-06 (admin API-token management UI, branch
+`admin-api-token-ui-20261106`, based on `main` @ `ee6e401`)
+
+**Status: IMPLEMENTED on the feature branch — NOT merged, NOT pushed, NOT
+deployed.** Worktree: `~/Projects/new-crm-admin-api-token-ui-20261106`. No
+production DB/container/service was touched; no real token was minted; no
+credentials or PII were read.
+
+**What shipped.** Admin Console -> **API Tokens** tab over the pre-existing
+admin endpoints (list/create/revoke). Safe metadata only; one-time secret
+reveal with copy + "cannot be recovered" warning, cleared on tab-away / close /
+sign-out / pagehide and never stored or logged; blunt broad-read disclosure
+(GET-only, mail + contacts, not resource-scoped, no side-effect-free promise);
+confirm-gated revoke with loading/error/empty states and metadata refresh;
+admin-only navigation guard plus the server's existing `_require_admin` gates.
+
+**Files.** `public/index.html`, `public/app.js`, `public/styles.css`,
+`public/api-token-ui.js` (new), `tests/test_admin_api_tokens_ui.mjs` (new),
+`tests/test_admin_api_token_ui.py` (new),
+`tests/test_admin_api_tokens_http.py` (new), `.github/workflows/smoke.yml`,
+`VERSION`, `CHANGELOG.md`, `docs/SESSION_HISTORY.md`.
+
+**Verification run locally.**
+- `node --test tests/test_*.mjs` -> 383 pass, 0 fail (50 of them new)
+- `python3 tests/test_admin_api_token_ui.py` -> 18 pass
+- `python3 tests/test_api_tokens.py` (throwaway DB) -> 28 pass
+- `python3 tests/test_admin_gating.py` -> 10 pass
+- `python3 tests/test_admin_api_tokens_http.py` against a disposable
+  `postgres:16-alpine` container -> 6 pass (ran on both a migrated and a
+  brand-new database)
+- Deliberate mutation check: replacing `textContent` with `innerHTML` failed
+  2 tests, then was reverted.
+
+**Not run / unavailable.** No headless browser (no Chromium/Playwright in this
+environment), so there is no screenshot-driven test; the UI handlers are
+exercised for real in a vm DOM shim instead. The HTTP suite is not wired into
+CI because it refuses non-`sietch_test_*` databases.
+
+**Next.** Manager review + explicit approval before any push/PR/merge/deploy.
+
+---
+
+## Previous session summary
+
 **Date:** 2026-11-04 (mail retention re-import loop, branch
 `fix-mail-retention-loop`)
 

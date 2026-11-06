@@ -76,6 +76,12 @@ jobs:
       - name: Run admin gating tests
         run: python3 tests/test_admin_gating.py
 
+      - name: Run API token backend tests
+        run: python3 tests/test_api_tokens.py -v
+
+      - name: Run admin API token UI contract tests
+        run: python3 tests/test_admin_api_token_ui.py -v
+
       - name: Run mail template auth tests
         run: python3 tests/test_mail_template_auth.py
 
