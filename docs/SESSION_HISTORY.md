@@ -11,8 +11,47 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-11-06 (document editor format + preview Download, branch
-`cursor/document-format-preview-download-079d`)
+**Date:** 2026-11-09 (finish PR #1 — document type from bytes + preview Download)
+
+**Status: rebased onto GitHub `main` (`ee6e401`), CI suite repaired on the
+branch, pushed. NOT merged, NOT deployed.** Worktree:
+`~/.local/share/opencode/worktree/be3f73/pr1-docformat`. No production
+service, tunnel, or CRM database was touched; tests ran against a throwaway
+database (`sietch_ci_pr1`).
+
+- **Branch base.** Rebased onto **`origin/main` = `ee6e401`**, not the local
+  `main` (`cfb94e3`). Local main is 7 commits ahead and unpushed; rebasing onto
+  it pulled unrelated work (api-tokens, carrier-estimate-lines removal, reconciler
+  Docker) into PR #1 — 61 files instead of the real 12. The first push did
+  that; it was corrected with a second force-push.
+- **Why the Python job failed.** 32 test files hardcoded
+  `sys.path.insert(0, '/home/chapman-server/Projects/new-crm')` and read
+  `server.py` / `public/app.js` from that absolute path. On a runner the path
+  does not exist, so step 6 (`event_bus`) died on `import event_bus` and every
+  later step was skipped. Locally the same path made source guards read the
+  *other* checkout. Every suite now derives the repo root from `Path(__file__)`.
+- **`requirements.txt`** now lists the deps CI needs (psycopg2-binary, httpx,
+  imap-tools, Pillow, ExifRead). Verified with a fresh venv installed from that
+  file alone: the whole Python suite is green.
+- **Stale tests fixed at the source:** `test_email_project_copy` (fixed
+  4000-char source window + a `MagicMock` that answered "already copied" to
+  every dedupe query), `test_sync_pull_deals_fields` (the correction `UPDATE`
+  now precedes the full-field one), `test_scanner_toggle_gating` (the link gate
+  moved into `_link_toggle_allows`), plus the missing
+  `tests/test_mail_template_auth.py` that `smoke.yml` has referenced since
+  `dd35546` but which was never committed.
+- **Security fix found by writing that suite:** `_handle_mail_template_create`
+  called `_require_auth()` *after* the title check and then carried on, so an
+  anonymous POST was answered 401 **and still wrote the row** (`created_by`
+  NULL). Auth now runs first and returns.
+- **Verification.** 72/72 CI Python steps pass (0 failures), 399 JS tests pass,
+  syntax checks clean. Reverting the template-auth fix fails 4 of the new
+  tests, so the suite bites. `test_preview_sandbox_browser.py` SKIPs here (no
+  Chrome) but will execute on GitHub runners — unverified.
+
+---
+
+## 2026-11-06 — document editor format + preview Download (branch `cursor/document-format-preview-download-079d`)
 
 **Status: IMPLEMENTED on a review branch — NOT merged, NOT deployed.** Cut
 from `main`. No production server, tunnel, or CRM database was touched.

@@ -17,8 +17,10 @@ Run with: python3 tests/test_note_attachment_scoping.py
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
+from pathlib import Path
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 import server as _server
 
@@ -118,7 +120,7 @@ class TestCrossOppFileIdsRejected(unittest.TestCase):
         self.assertEqual(params[1], "mine.pdf")
 
     def test_lookup_scoped_by_opportunity(self):
-        src = open("/home/chapman-server/Projects/new-crm/server.py", encoding="utf-8").read()
+        src = open(REPO_ROOT / "server.py", encoding="utf-8").read()
         start = src.index("Link uploaded document IDs as history attachments")
         block = src[start:start + 1200]
         self.assertIn("opportunity_id", block)
@@ -126,7 +128,7 @@ class TestCrossOppFileIdsRejected(unittest.TestCase):
 
 class TestPreviewSubmitNoPhotoIds(unittest.TestCase):
     def test_uploaded_ids_never_feed_file_ids(self):
-        src = open("/home/chapman-server/Projects/new-crm/public/app.js", encoding="utf-8").read()
+        src = open(REPO_ROOT / "public/app.js", encoding="utf-8").read()
         start = src.index("// Upload pending images.")
         end = src.index("await createOpportunityHistoryEvent(oppId, {", start)
         region = src[start:end]

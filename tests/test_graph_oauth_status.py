@@ -18,8 +18,10 @@ import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
+from pathlib import Path
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 import server as _server
 import oauth_providers as _op
@@ -196,7 +198,7 @@ class TestAccountEmailExtraction(unittest.TestCase):
 class TestStatusMarkupGuard(unittest.TestCase):
     def test_no_textcontent_with_markup(self):
         import re
-        src = open("/home/chapman-server/Projects/new-crm/public/app.js", encoding="utf-8").read()
+        src = open(REPO_ROOT / "public/app.js", encoding="utf-8").read()
         bad = [ln.strip()[:90] for ln in src.splitlines()
                if re.search(r"\btextContent\s*=\s*['\"`][^'\"`]*<span", ln)]
         self.assertEqual(bad, [])

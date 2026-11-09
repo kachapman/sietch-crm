@@ -16,8 +16,10 @@ import sys
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
+from pathlib import Path
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 import server as _server
 
@@ -69,13 +71,13 @@ class TestHistoryEmitsOffset(unittest.TestCase):
 
     def test_no_bare_isoformat_on_db_values(self):
         import re
-        src = open("/home/chapman-server/Projects/new-crm/server.py", encoding="utf-8").read()
+        src = open(REPO_ROOT / "server.py", encoding="utf-8").read()
         bare = [ln for ln in src.splitlines()
                 if re.search(r'\.isoformat\(\) if ', ln)]
         self.assertEqual(bare, [], f"bare .isoformat() emitters remain: {bare[:5]}")
 
     def test_frontend_parses_naive_as_utc(self):
-        js = open("/home/chapman-server/Projects/new-crm/public/app.js", encoding="utf-8").read()
+        js = open(REPO_ROOT / "public/app.js", encoding="utf-8").read()
         at = js.index("function parseFeedDate(value)")
         region = js[at:at + 1200]
         self.assertIn("T${m[2]}Z", region)

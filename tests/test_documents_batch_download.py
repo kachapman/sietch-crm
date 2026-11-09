@@ -17,7 +17,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 import server as _server
 
@@ -136,8 +137,13 @@ class TestDownloadActionWiring(unittest.TestCase):
         self.assertIn("ids.length === 1", region)
 
     def test_single_file_keeps_direct_download(self):
+        # A single file must still be one direct download, not a ZIP. It now
+        # goes through the shared authenticated helper (which fetches the
+        # document endpoint with ?download=1 and names the file from the
+        # response) so the download works from the sandboxed preview too.
         region = self._region()
-        self.assertIn("/api/v2/documents/${ids[0]}", region)
+        self.assertIn("downloadDocumentAuthenticated(ids[0])", region)
+        self.assertNotIn("/api/v2/documents/batch-download", region.split("ids.length === 1", 1)[1].split("} else {", 1)[0])
 
 
 if __name__ == "__main__":

@@ -12,8 +12,10 @@ Run with: python3 tests/test_photo_report_identity.py (no Postgres)
 """
 import sys
 import unittest
+from pathlib import Path
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 import server as _server
 
@@ -54,7 +56,7 @@ class TestHeaderIdentity(unittest.TestCase):
         self.assertEqual(name, "")
 
     def test_no_company_literal_in_handler(self):
-        src = open("/home/chapman-server/Projects/new-crm/server.py", encoding="utf-8").read()
+        src = open(REPO_ROOT / "server.py", encoding="utf-8").read()
         at = src.index("def _handle_project_photo_report")
         region = src[at:at + 6000]
         self.assertNotIn('"Company"', region)

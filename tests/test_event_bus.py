@@ -26,8 +26,10 @@ import json
 import sys
 import time
 import unittest
+from pathlib import Path
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 import event_bus
 from event_bus import EventBus

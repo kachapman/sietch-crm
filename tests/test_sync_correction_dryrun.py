@@ -12,8 +12,10 @@ Run with: python3 tests/test_sync_correction_dryrun.py
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
+from pathlib import Path
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 import server as _server
 
@@ -220,9 +222,9 @@ class TestDueDateSentinel(unittest.TestCase):
 
     def test_stage_id_supported_and_ui_wired(self):
         self.assertIn("stage_id", _server.SUPPORTED_REFRESH_COLUMNS if hasattr(_server, "SUPPORTED_REFRESH_COLUMNS") else {"stage_id"})
-        src = open("/home/chapman-server/Projects/new-crm/server.py", encoding="utf-8").read()
+        src = open(REPO_ROOT / "server.py", encoding="utf-8").read()
         self.assertIn('"stage_id" in refresh_columns', src)
-        js = open("/home/chapman-server/Projects/new-crm/public/app.js", encoding="utf-8").read()
+        js = open(REPO_ROOT / "public/app.js", encoding="utf-8").read()
         self.assertIn("sync-refresh-stage", js)
         self.assertIn("skip_recent_hours", js)
 
