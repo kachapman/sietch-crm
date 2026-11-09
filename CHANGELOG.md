@@ -1,3 +1,10 @@
+## 2026-11-08 — API tokens: full access by default
+
+- Admin console tokens default to full `/api/v2` access (all methods).
+- Optional restrictions at creation: read-only, methods, resources, expiry.
+- Write audit log (`api_token_audit_log`) records token id, method, path, time.
+- Migration 046; show-once secret / hashed storage / revoke unchanged.
+
 # Changelog
 
 ## 2.4.1 — 2026-11-08

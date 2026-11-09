@@ -32,16 +32,17 @@ APP_SRC = (ROOT / "public" / "app.js").read_text(encoding="utf-8")
 HELPER_SRC = (ROOT / "public" / "api-token-ui.js").read_text(encoding="utf-8")
 
 SAFE_LIST_KEYS = {
-    "id", "name", "token_prefix", "scope", "created_by",
-    "created_by_email", "created_at", "last_used_at", "revoked_at", "revoked",
+    "id", "name", "token_prefix", "scope", "created_by", "created_by_email",
+    "created_at", "last_used_at", "revoked_at", "revoked", "expires_at", "restrictions",
 }
 
 
 def _list_row(**over):
     row = {
         "id": 4, "name": "synthetic bulk pull", "token_prefix": "sietch_abcde",
-        "scope": "read", "created_by": 1, "created_by_email": "admin@synthetic.test",
+        "scope": "full", "created_by": 1, "created_by_email": "admin@synthetic.test",
         "created_at": None, "last_used_at": None, "revoked_at": None,
+        "expires_at": None, "restrictions": {},
     }
     row.update(over)
     return row
@@ -80,7 +81,7 @@ class TestListContract(unittest.TestCase):
 
 
 class TestCreateContract(unittest.TestCase):
-    def _create(self, name="bulk pull", scope="read"):
+    def _create(self, name="bulk pull", scope="full"):
         captured = {}
         mock_db = MagicMock()
 
@@ -89,6 +90,7 @@ class TestCreateContract(unittest.TestCase):
             return {
                 "id": 9, "name": name, "token_prefix": "sietch_abcde",
                 "scope": scope, "created_by": 1, "created_at": None,
+                "expires_at": None, "restrictions": {},
             }
 
         mock_db.query_one.side_effect = fake_query_one
@@ -100,7 +102,8 @@ class TestCreateContract(unittest.TestCase):
         self.assertIn("token", rec)
         self.assertTrue(rec["token"].startswith(api_tokens.TOKEN_PREFIX))
         self.assertEqual(set(rec), {
-            "id", "name", "token", "token_prefix", "scope", "created_by", "created_at",
+            "id", "name", "token", "token_prefix", "scope", "created_by",
+            "created_at", "expires_at", "restrictions",
         })
 
     def test_only_the_hash_is_stored(self):
@@ -164,16 +167,19 @@ class TestServerAuthorizationGuards(unittest.TestCase):
                 "%s must gate before doing work" % name,
             )
 
-    def test_bearer_tokens_are_blocked_from_admin_paths(self):
-        self.assertIn('"/api/v2/admin"', SERVER_SRC)
-        self.assertIn("def _api_token_path_blocked", SERVER_SRC)
+    def test_bearer_tokens_use_full_access_gate(self):
+        self.assertIn("def _auth_api_token", SERVER_SRC)
+        self.assertIn("request_allowed", SERVER_SRC)
+        self.assertNotIn("API tokens are read-only (GET only)", SERVER_SRC)
+        self.assertIn("log_token_write", SERVER_SRC)
 
     def test_create_warning_is_returned_once(self):
         at = SERVER_SRC.index("def _handle_api_token_create(")
-        region = SERVER_SRC[at:at + 1200]
+        region = SERVER_SRC[at:at + 2500]
         self.assertIn('rec["warning"]', region)
         self.assertIn("shown only once and cannot be recovered", region)
         self.assertIn("_json_response(self, 201, rec)", region)
+        self.assertIn("SCOPE_FULL", region)
 
 
 class TestUiBackendFieldAlignment(unittest.TestCase):
@@ -189,11 +195,11 @@ class TestUiBackendFieldAlignment(unittest.TestCase):
         self.assertIn('api_path == "/api/v2/admin/api-tokens"', SERVER_SRC)
         self.assertIn("revoke$", SERVER_SRC)
 
-    def test_create_body_is_name_only(self):
-        match = re.search(r"body:\s*\{([^}]*)\}", HELPER_SRC)
-        self.assertIsNotNone(match, "buildCreateRequest must return a body")
-        self.assertIn("name", match.group(1))
-        self.assertNotIn("scope", match.group(1))
+    def test_create_body_defaults_to_full_access(self):
+        self.assertIn('body.scope = "full"', HELPER_SRC)
+        self.assertIn("name: check.value", HELPER_SRC)
+        self.assertIn("read_only", HELPER_SRC)
+        self.assertIn("restrictions", HELPER_SRC)
 
 
 class TestNoPlaintextLeaksInTokenCode(unittest.TestCase):

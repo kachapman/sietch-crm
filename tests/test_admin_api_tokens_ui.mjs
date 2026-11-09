@@ -62,13 +62,29 @@ test('token name validation rejects control characters', () => {
   assert.equal(ui.validateTokenName('bad\u007fname').ok, false);
 });
 
-// ── create request contract (exactly {name}) ─────────────────────────────
-test('create request sends only {name} — scope cannot be widened from the UI', () => {
+// ── create request contract (full by default; optional restrictions) ─────
+test('create request defaults to full access with name + scope full', () => {
   const res = ui.buildCreateRequest('  bulk pull ');
   assert.equal(res.ok, true);
-  // JSON round-trip: vm-context objects have a different realm prototype.
-  assert.deepEqual(JSON.parse(JSON.stringify(res.body)), { name: 'bulk pull' });
-  assert.deepEqual(JSON.parse(JSON.stringify(Object.keys(res.body))), ['name']);
+  const body = JSON.parse(JSON.stringify(res.body));
+  assert.equal(body.name, 'bulk pull');
+  assert.equal(body.scope, 'full');
+  assert.equal(body.read_only, undefined);
+  assert.equal(body.restrictions, undefined);
+});
+
+test('create request can opt into read-only and resource/method limits', () => {
+  const res = ui.buildCreateRequest('notes writer', {
+    readOnly: true,
+    methods: ['GET', 'POST'],
+    resources: ['notes'],
+  });
+  assert.equal(res.ok, true);
+  const body = JSON.parse(JSON.stringify(res.body));
+  assert.equal(body.scope, 'read');
+  assert.equal(body.read_only, true);
+  assert.deepEqual(body.restrictions.methods, ['GET', 'POST']);
+  assert.deepEqual(body.restrictions.resources, ['notes']);
 });
 
 test('invalid names produce no request body', () => {
@@ -109,8 +125,8 @@ test('summarizeToken whitelists safe metadata and drops secrets/hashes', () => {
   });
   const keys = Object.keys(row).sort();
   assert.deepEqual(keys, [
-    'createdAt', 'createdByEmail', 'id', 'lastUsedAt', 'name',
-    'prefix', 'revoked', 'revokedAt', 'scope',
+    'createdAt', 'createdByEmail', 'expiresAt', 'id', 'lastUsedAt', 'name',
+    'prefix', 'restrictions', 'revoked', 'revokedAt', 'scope',
   ]);
   const serialized = JSON.stringify(row);
   assert.ok(!serialized.includes('SHOULD_NOT_SURVIVE'));
@@ -352,7 +368,7 @@ test('create shows the secret once, clears the input, and locks the button', asy
   assert.equal(h.els['api-token-create-btn'].disabled, true);
   assert.equal(h.tokenUi.getSecret(), secret);
   const post = h.calls.find((c) => c.options && c.options.method === 'POST');
-  assert.deepEqual(JSON.parse(post.options.body), { name: 'nightly' });
+  assert.deepEqual(JSON.parse(post.options.body), { name: 'nightly', scope: 'full' });
   assert.ok(h.els['api-token-create-status'].textContent.includes('Copy the secret now'));
 });
 
@@ -469,18 +485,13 @@ test('API Tokens tab starts hidden like every other admin tab', () => {
   assert.ok(html.includes('id="admin-tab-tokens" class="admin-tab-content hidden"'));
 });
 
-test('scope disclosure says the read scope is broad, not resource-scoped', () => {
-  const at = html.indexOf('id="admin-tab-tokens"');
-  const end = html.indexOf('id="admin-tab-photo-reports"', at);
-  const tab = html.slice(at, end === -1 ? at + 8000 : end);
-  assert.ok(/GET-only/i.test(tab), 'must state GET-only');
-  assert.ok(tab.includes('/api/v2'), 'must name the API surface');
-  assert.ok(/mail/i.test(tab), 'must disclose mail access');
-  assert.ok(/contacts/i.test(tab), 'must disclose contacts access');
-  assert.ok(/not least-privilege/i.test(tab), 'must not market it as narrow');
-  assert.ok(/not[\s\S]{0,80}limited to specific resources/i.test(tab), 'must say the scope is not resource-scoped');
-  assert.ok(/do\s*<strong>not<\/strong>\s*guarantee|do not guarantee/i.test(tab),
-    'must not guarantee every GET is side-effect-free');
+test('scope disclosure says full access by default', () => {
+  assert.ok(html.includes('Full access by default'), html.slice(html.indexOf('api-token-scope-notice'), html.indexOf('api-token-scope-notice') + 500));
+  assert.ok(html.includes('Optional restrictions'));
+  assert.ok(html.includes('api-token-read-only'));
+  assert.ok(html.includes('data-api-token-method'));
+  assert.ok(html.includes('data-api-token-resource'));
+  assert.ok(html.includes('api-token-expires'));
 });
 
 test('create form is name-only with an 80-char cap', () => {

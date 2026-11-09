@@ -9,11 +9,19 @@
 //     one-time reveal panel;
 //   * list rendering whitelists the backend's declared safe metadata fields,
 //     so an unexpected "token"/"token_hash" key can never reach the DOM.
+//
+// Default create body is FULL ACCESS. Optional restrictions are only added
+// when the admin explicitly opts in at creation time.
 (function (root) {
   "use strict";
 
   var TOKEN_NAME_MAX = 80;
   var CONTROL_CHARS_RE = /[\u0000-\u001f\u007f]/;
+  var KNOWN_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+  var KNOWN_RESOURCES = [
+    "projects", "notes", "contacts", "documents", "tasks",
+    "mail", "calendar", "history", "admin", "users", "me", "reference"
+  ];
 
   function validateTokenName(raw) {
     var value = raw == null ? "" : String(raw);
@@ -34,15 +42,63 @@
     return { ok: true, value: value, error: "" };
   }
 
-  // The create contract is exactly {name}: scope is fixed server-side to the
-  // single "read" scope, and the UI must not try to widen it.
-  function buildCreateRequest(raw) {
-    var check = validateTokenName(raw);
-    if (!check.ok) return { ok: false, error: check.error, body: null };
-    return { ok: true, error: "", body: { name: check.value } };
+  function _cleanMethods(list) {
+    if (!Array.isArray(list) || !list.length) return null;
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var m = String(list[i] || "").trim().toUpperCase();
+      if (KNOWN_METHODS.indexOf(m) === -1) {
+        return { error: "Unknown method: " + m };
+      }
+      if (out.indexOf(m) === -1) out.push(m);
+    }
+    return { value: out };
   }
 
-  // The plaintext lives only in the create response (shown once).
+  function _cleanResources(list) {
+    if (!Array.isArray(list) || !list.length) return null;
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var r = String(list[i] || "").trim().toLowerCase();
+      if (KNOWN_RESOURCES.indexOf(r) === -1) {
+        return { error: "Unknown resource: " + r };
+      }
+      if (out.indexOf(r) === -1) out.push(r);
+    }
+    return { value: out };
+  }
+
+  /**
+   * Build the create POST body.
+   * opts: { readOnly?: boolean, methods?: string[], resources?: string[], expiresAt?: string|null }
+   * Default (no opts / empty opts) → { name } only → server grants full access.
+   */
+  function buildCreateRequest(raw, opts) {
+    var check = validateTokenName(raw);
+    if (!check.ok) return { ok: false, error: check.error, body: null };
+    var body = { name: check.value };
+    var o = opts || {};
+    if (o.readOnly === true) {
+      body.read_only = true;
+      body.scope = "read";
+    } else {
+      body.scope = "full";
+    }
+    var restrictions = {};
+    var methods = _cleanMethods(o.methods);
+    if (methods && methods.error) return { ok: false, error: methods.error, body: null };
+    if (methods && methods.value) restrictions.methods = methods.value;
+    var resources = _cleanResources(o.resources);
+    if (resources && resources.error) return { ok: false, error: resources.error, body: null };
+    if (resources && resources.value) restrictions.resources = resources.value;
+    if (Object.keys(restrictions).length) body.restrictions = restrictions;
+    if (o.expiresAt) {
+      var exp = String(o.expiresAt).trim();
+      if (exp) body.expires_at = exp;
+    }
+    return { ok: true, error: "", body: body };
+  }
+
   function extractCreatedSecret(payload) {
     var secret = payload && typeof payload.token === "string" ? payload.token : "";
     if (!secret) {
@@ -55,13 +111,12 @@
     return { ok: true, secret: secret, error: "" };
   }
 
-  // Whitelist of metadata the list endpoint declares safe to display.
-  // Deliberately drops any other key (e.g. a stray token/token_hash).
   function summarizeToken(t) {
     if (!t || typeof t !== "object") return null;
     var id = Number(t.id);
     if (!Number.isFinite(id) || id <= 0) return null;
     var revokedAt = typeof t.revoked_at === "string" && t.revoked_at ? t.revoked_at : null;
+    var restrictions = t.restrictions && typeof t.restrictions === "object" ? t.restrictions : {};
     return {
       id: id,
       name: t.name == null ? "" : String(t.name),
@@ -72,6 +127,8 @@
       lastUsedAt: typeof t.last_used_at === "string" && t.last_used_at ? t.last_used_at : null,
       revokedAt: revokedAt,
       revoked: revokedAt !== null || t.revoked === true,
+      expiresAt: typeof t.expires_at === "string" && t.expires_at ? t.expires_at : null,
+      restrictions: restrictions,
     };
   }
 
@@ -109,6 +166,23 @@
     return "Active";
   }
 
+  function describeRestrictions(row) {
+    if (!row) return "full access";
+    var bits = [];
+    var scope = (row.scope || "full").toLowerCase();
+    if (scope === "read") bits.push("read-only");
+    else bits.push("full");
+    var r = row.restrictions || {};
+    if (Array.isArray(r.methods) && r.methods.length) {
+      bits.push("methods " + r.methods.join("/"));
+    }
+    if (Array.isArray(r.resources) && r.resources.length) {
+      bits.push("resources " + r.resources.join(", "));
+    }
+    if (row.expiresAt) bits.push("expires " + formatTokenDate(row.expiresAt));
+    return bits.join(" · ");
+  }
+
   function revokeConfirm(row) {
     var name = row && row.name ? String(row.name) : "this token";
     var prefix = row && row.prefix ? String(row.prefix) : "";
@@ -123,14 +197,10 @@
     };
   }
 
-  // Strict: only a real admin session may manage tokens.
   function isAdminViewer(flag) {
     return flag === true;
   }
 
-  // Copy with a secure-context clipboard first, then a caller-supplied legacy
-  // fallback. Never throws, never leaks the secret into the result, and never
-  // surfaces the browser's error text (which could echo the payload).
   async function copySecretToClipboard(secret, deps) {
     var value = typeof secret === "string" ? secret : "";
     if (!value) return { ok: false, reason: "empty" };
@@ -140,9 +210,7 @@
       try {
         await clip.writeText(value);
         return { ok: true, method: "clipboard" };
-      } catch (_e) {
-        // fall through to the legacy path
-      }
+      } catch (_e) {}
     }
     if (typeof d.legacyCopy === "function") {
       var legacyOk = false;
@@ -157,8 +225,53 @@
     return { ok: false, reason: "unavailable" };
   }
 
+  /** Collect optional restriction fields from the admin create form (DOM). */
+  function readCreateOptionsFromForm(doc) {
+    var d = doc || (typeof document !== "undefined" ? document : null);
+    if (!d || typeof d.getElementById !== "function") {
+      return { readOnly: false, methods: [], resources: [], expiresAt: null };
+    }
+    var readOnlyEl = d.getElementById("api-token-read-only");
+    var expiresEl = d.getElementById("api-token-expires");
+    var methods = [];
+    d.querySelectorAll("[data-api-token-method]:checked").forEach(function (el) {
+      methods.push(el.value);
+    });
+    var resources = [];
+    d.querySelectorAll("[data-api-token-resource]:checked").forEach(function (el) {
+      resources.push(el.value);
+    });
+    var expiresAt = null;
+    if (expiresEl && expiresEl.value) {
+      // datetime-local → ISO-ish with local offset approximated as Z-less ISO
+      var local = expiresEl.value; // YYYY-MM-DDTHH:MM
+      var asDate = new Date(local);
+      if (!Number.isNaN(asDate.getTime())) expiresAt = asDate.toISOString();
+    }
+    return {
+      readOnly: !!(readOnlyEl && readOnlyEl.checked),
+      methods: methods,
+      resources: resources,
+      expiresAt: expiresAt,
+    };
+  }
+
+  function clearCreateOptionsForm(doc) {
+    var d = doc || (typeof document !== "undefined" ? document : null);
+    if (!d || typeof d.getElementById !== "function" || typeof d.querySelectorAll !== "function") return;
+    var readOnlyEl = d.getElementById("api-token-read-only");
+    if (readOnlyEl) readOnlyEl.checked = false;
+    var expiresEl = d.getElementById("api-token-expires");
+    if (expiresEl) expiresEl.value = "";
+    d.querySelectorAll("[data-api-token-method], [data-api-token-resource]").forEach(function (el) {
+      el.checked = false;
+    });
+  }
+
   root.SietchApiTokenUi = {
     TOKEN_NAME_MAX: TOKEN_NAME_MAX,
+    KNOWN_METHODS: KNOWN_METHODS.slice(),
+    KNOWN_RESOURCES: KNOWN_RESOURCES.slice(),
     validateTokenName: validateTokenName,
     buildCreateRequest: buildCreateRequest,
     extractCreatedSecret: extractCreatedSecret,
@@ -167,8 +280,11 @@
     countActiveTokens: countActiveTokens,
     formatTokenDate: formatTokenDate,
     tokenStatusText: tokenStatusText,
+    describeRestrictions: describeRestrictions,
     revokeConfirm: revokeConfirm,
     isAdminViewer: isAdminViewer,
     copySecretToClipboard: copySecretToClipboard,
+    readCreateOptionsFromForm: readCreateOptionsFromForm,
+    clearCreateOptionsForm: clearCreateOptionsForm,
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);

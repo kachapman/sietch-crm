@@ -3507,15 +3507,13 @@
         </div>
 
         <div class="api-token-scope-notice" role="note">
-          <strong>Read scope is broad &mdash; this is not least-privilege access.</strong>
+          <strong>Full access by default.</strong>
           <p style="margin:0.35rem 0 0;">
-            A token is <strong>GET-only</strong>, but it acts as the admin who created it and can read
-            <strong>most of <code>/api/v2</code></strong> &mdash; including <strong>mail</strong> and
-            <strong>contacts</strong> &mdash; across every project. The <code>read</code> scope is
-            <strong>not</strong> limited to specific resources, projects, or endpoints. Most GET
-            endpoints are reads, but we do <strong>not</strong> guarantee that every GET request is
-            free of side effects. Tokens cannot call auth, user-management, admin, or settings routes.
-            Revoke a token immediately if it is exposed.
+            A new token acts as the admin who created it and can call
+            <strong>all <code>/api/v2</code> methods</strong> (GET, POST, PUT, PATCH, DELETE) on every
+            resource that admin can reach &mdash; including notes, contacts, projects, documents,
+            mail, and admin routes. Optional restrictions below are the only way to narrow that.
+            The secret is shown once; revoke immediately if it is exposed.
           </p>
         </div>
 
@@ -3523,9 +3521,48 @@
           <label for="api-token-name" style="font-size:0.8rem; font-weight:600;">Token name</label>
           <div style="display:flex; gap:0.35rem;">
             <input type="text" id="api-token-name" class="form-control" maxlength="80"
-                   placeholder="e.g. Nightly archive pull" autocomplete="off" spellcheck="false" />
+                   placeholder="e.g. LLM supplement agent" autocomplete="off" spellcheck="false" />
             <button type="submit" id="api-token-create-btn" class="btn btn-primary btn-sm" style="white-space:nowrap;">Create token</button>
           </div>
+
+          <details class="api-token-restrictions" style="margin-top:0.75rem;">
+            <summary style="cursor:pointer; font-size:0.85rem; font-weight:600;">Optional restrictions</summary>
+            <p style="margin:0.4rem 0 0.6rem; font-size:0.78rem; color:var(--muted);">
+              Leave everything unchecked for full access. Restrictions are optional.
+            </p>
+            <label class="api-token-check" style="display:flex; align-items:center; gap:0.4rem; font-size:0.85rem; margin-bottom:0.5rem;">
+              <input type="checkbox" id="api-token-read-only" />
+              Read-only (GET / HEAD / OPTIONS only)
+            </label>
+            <div style="margin-bottom:0.5rem;">
+              <div style="font-size:0.8rem; font-weight:600; margin-bottom:0.25rem;">Limit methods (optional)</div>
+              <div id="api-token-methods" class="api-token-chip-row" style="display:flex; flex-wrap:wrap; gap:0.45rem; font-size:0.8rem;">
+                <label><input type="checkbox" value="GET" data-api-token-method /> GET</label>
+                <label><input type="checkbox" value="POST" data-api-token-method /> POST</label>
+                <label><input type="checkbox" value="PUT" data-api-token-method /> PUT</label>
+                <label><input type="checkbox" value="PATCH" data-api-token-method /> PATCH</label>
+                <label><input type="checkbox" value="DELETE" data-api-token-method /> DELETE</label>
+              </div>
+            </div>
+            <div style="margin-bottom:0.5rem;">
+              <div style="font-size:0.8rem; font-weight:600; margin-bottom:0.25rem;">Limit resources (optional)</div>
+              <div id="api-token-resources" class="api-token-chip-row" style="display:flex; flex-wrap:wrap; gap:0.45rem; font-size:0.8rem;">
+                <label><input type="checkbox" value="projects" data-api-token-resource /> projects</label>
+                <label><input type="checkbox" value="notes" data-api-token-resource /> notes</label>
+                <label><input type="checkbox" value="contacts" data-api-token-resource /> contacts</label>
+                <label><input type="checkbox" value="documents" data-api-token-resource /> documents</label>
+                <label><input type="checkbox" value="tasks" data-api-token-resource /> tasks</label>
+                <label><input type="checkbox" value="mail" data-api-token-resource /> mail</label>
+                <label><input type="checkbox" value="calendar" data-api-token-resource /> calendar</label>
+                <label><input type="checkbox" value="history" data-api-token-resource /> history</label>
+                <label><input type="checkbox" value="admin" data-api-token-resource /> admin</label>
+                <label><input type="checkbox" value="users" data-api-token-resource /> users</label>
+              </div>
+            </div>
+            <label for="api-token-expires" style="font-size:0.8rem; font-weight:600;">Expires (optional)</label>
+            <input type="datetime-local" id="api-token-expires" class="form-control" style="max-width:16rem; margin-top:0.25rem;" />
+          </details>
+
           <div id="api-token-create-status" class="api-token-status" role="status" aria-live="polite"></div>
         </form>
 

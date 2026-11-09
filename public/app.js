@@ -33582,7 +33582,7 @@ async function loadBackupHistory() {
 
 // ── Admin: API tokens ────────────────────────────────────────────────────────
 // Backend: GET/POST /api/v2/admin/api-tokens, POST .../{id}/revoke (admin
-// session only; Bearer API tokens are refused on /api/v2/admin/).
+// session creates/lists/revokes; full Bearer tokens may also call admin routes).
 //
 // The plaintext secret lives ONLY in _apiTokenSecret and the reveal panel
 // while it is on screen. It is never persisted in the browser, never placed
@@ -33675,7 +33675,8 @@ function _apiTokenRowHtml(row) {
     : '<span class="api-token-badge is-active">Active</span>';
   const meta = [];
   if (row.prefix) meta.push("prefix <code>" + escapeHtml(row.prefix) + "</code>");
-  if (row.scope) meta.push("scope <code>" + escapeHtml(row.scope) + "</code>");
+  if (ui && ui.describeRestrictions) meta.push(escapeHtml(ui.describeRestrictions(row)));
+  else if (row.scope) meta.push("scope <code>" + escapeHtml(row.scope) + "</code>");
   if (row.createdByEmail) meta.push("created by " + escapeHtml(row.createdByEmail));
   meta.push("created " + escapeHtml(ui ? ui.formatTokenDate(row.createdAt) : "—"));
   meta.push("last used " + escapeHtml(row.lastUsedAt && ui ? ui.formatTokenDate(row.lastUsedAt) : "never"));
@@ -33708,7 +33709,7 @@ async function loadAdminApiTokens() {
     if (listEl) {
       listEl.innerHTML = _apiTokenRows.length
         ? _apiTokenRows.map(_apiTokenRowHtml).join("")
-        : '<div class="api-token-empty">No API tokens yet. Create one above when a script needs to read CRM data.</div>';
+        : '<div class="api-token-empty">No API tokens yet. Create one above for scripts or LLM integrations.</div>';
     }
   } catch (e) {
     _apiTokenRows = [];
@@ -33731,7 +33732,8 @@ async function _createApiTokenFromForm(ev) {
   const input = $("#api-token-name");
   const btn = $("#api-token-create-btn");
   const statusEl = $("#api-token-create-status");
-  const req = ui.buildCreateRequest(input ? input.value : "");
+  const opts = ui.readCreateOptionsFromForm ? ui.readCreateOptionsFromForm(document) : {};
+  const req = ui.buildCreateRequest(input ? input.value : "", opts);
   if (!req.ok) {
     if (statusEl) { statusEl.style.color = "var(--danger)"; statusEl.textContent = req.error; }
     if (input) input.focus();
@@ -33746,6 +33748,7 @@ async function _createApiTokenFromForm(ev) {
     });
     const created = ui.extractCreatedSecret(data);
     if (input) input.value = "";
+    if (ui.clearCreateOptionsForm) ui.clearCreateOptionsForm(document);
     if (!created.ok) {
       clearApiTokenReveal();
       if (statusEl) { statusEl.style.color = "var(--danger)"; statusEl.textContent = created.error; }

@@ -922,8 +922,8 @@ try:
 except Exception:
     pass
 
-# Migration 041: api_tokens table — personal read-only API tokens (admin
-# minted, Bearer on /api/v2 GET routes). Mirrors migrations/041_api_tokens.sql
+# Migration 041: api_tokens table — personal API tokens (admin minted).
+# Mirrors migrations/041_api_tokens.sql
 # and init.sql so all three paths converge; idempotent.
 try:
     db.execute("""
@@ -943,6 +943,40 @@ except Exception:
     pass
 try:
     db.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash) WHERE revoked_at IS NULL")
+except Exception:
+    pass
+
+# Migration 046: full-access tokens — optional expiry/restrictions + write audit.
+# Mirrors migrations/046_api_tokens_full_access.sql; idempotent.
+try:
+    db.execute("ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS restrictions JSONB NOT NULL DEFAULT '{}'::jsonb")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE api_tokens ALTER COLUMN scope SET DEFAULT 'full'")
+except Exception:
+    pass
+try:
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS api_token_audit_log (
+            id          BIGSERIAL PRIMARY KEY,
+            token_id    INTEGER REFERENCES api_tokens(id) ON DELETE SET NULL,
+            method      TEXT NOT NULL,
+            path        TEXT NOT NULL,
+            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+except Exception:
+    pass
+try:
+    db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_api_token_audit_token_time
+            ON api_token_audit_log(token_id, created_at DESC)
+    """)
 except Exception:
     pass
 
@@ -1431,53 +1465,30 @@ def _require_auth(handler: SimpleHTTPRequestHandler) -> dict | None:
     return None
 
 
-# Paths a Bearer API token must never reach, even for GET. Tokens exist for
-# bulk READS of CRM data — never for identity, session, admin, or settings
-# surfaces. Exact-or-subpath match (so "/api/v2/users" also covers
-# "/api/v2/users/1/avatar"); keep entries slash-precise — e.g. "/api/v2/me"
-# must not swallow "/api/v2/mail/...".
-_API_TOKEN_BLOCKED_PREFIXES = (
-    "/api/v2/auth",    # login/logout/sessions/password reset/2FA
-    "/api/v2/admin",   # settings/user/token management/backups/sync/exports
-    "/api/v2/users",   # user management
-    "/api/v2/me",      # own profile
-    "/api/v2/my/",     # own avatar
-    "/api/v2/mail/config",  # scanner config: admins only (handler-gated)
-    "/api/v2/mail/log",     # scanner log: admins only (handler-gated)
-)
-
-
-def _api_token_path_blocked(api_path: str) -> bool:
-    """True if a Bearer API token must be refused on this path (403)."""
-    for prefix in _API_TOKEN_BLOCKED_PREFIXES:
-        if prefix.endswith("/"):
-            # Directory-style entry ("/api/v2/my/"): block the exact dir
-            # and everything under it.
-            if api_path == prefix[:-1] or api_path.startswith(prefix):
-                return True
-        elif api_path == prefix or api_path.startswith(prefix + "/"):
-            return True
-    return False
+# API tokens default to full access (same /api/v2 surface as the creating
+# admin). Optional per-token restrictions (read-only / methods / resources /
+# expiry) are enforced in api_tokens.request_allowed — there is no global
+# invented path blocklist for full tokens. Auth login/logout still requires a
+# browser session cookie in practice; a Bearer token simply acts as that admin.
 
 
 def _auth_api_token(handler: SimpleHTTPRequestHandler, raw: str) -> dict | None:
     """Validate a personal API token; send 401/403 and return None on failure.
 
-    Read-only is enforced here, before routing: any non-GET request carrying
-    a token is rejected outright, so a handler that forgot its own write
-    gate still can't be used to mutate through a token.
+    Full-access by default. Optional restrictions from create time are checked
+    here before routing. Successful writes are audit-logged with the token id.
     """
-    if handler.command != "GET":
-        _json_response(handler, 403, {"error": "API tokens are read-only (GET only)"})
-        return None
     api_path = urlparse(handler.path).path
-    if _api_token_path_blocked(api_path):
-        _json_response(handler, 403, {"error": "API tokens cannot access this route"})
-        return None
     user = api_tokens_mod.verify_api_token(raw)
     if user is None:
-        _json_response(handler, 401, {"error": "Invalid or revoked API token"})
+        _json_response(handler, 401, {"error": "Invalid, expired, or revoked API token"})
         return None
+    ok, err = api_tokens_mod.request_allowed(user, handler.command, api_path)
+    if not ok:
+        _json_response(handler, 403, {"error": err or "API token not permitted for this request"})
+        return None
+    if handler.command.upper() in api_tokens_mod.WRITE_METHODS:
+        api_tokens_mod.log_token_write(user["api_token_id"], handler.command, api_path)
     return user
 
 
@@ -4471,7 +4482,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_server_timezone_get()
             return
         # ── API tokens (admin session only; Bearer tokens are refused here
-        # by the /api/v2/admin/ block in _auth_api_token → 403) ──
+        # (full tokens may call admin routes; optional restrictions still apply) ──
         if api_path == "/api/v2/admin/api-tokens":
             user = _require_admin(self)
             if not user:
@@ -5333,7 +5344,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_backup_config_post()
             return
         # ── API token management (admin session only; Bearer tokens are
-        # refused on all of /api/v2/admin/ by _auth_api_token → 403) ──
+        # (full tokens may call admin routes; optional restrictions still apply) ──
         if api_path == "/api/v2/admin/api-tokens" and method == "POST":
             user = _require_admin(self)
             if not user:
@@ -17605,7 +17616,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         _json_response(self, 200, {"tokens": api_tokens_mod.list_api_tokens()})
 
     def _handle_api_token_create(self) -> None:
-        """Mint a token. The plaintext is returned ONCE — store it now."""
+        """Mint a token. The plaintext is returned ONCE — store it now.
+
+        Default scope is full access. Optional body fields:
+          scope: "full" | "read"
+          restrictions: {methods?: [...], resources?: [...]}
+          expires_at: ISO-8601 timestamp
+        """
         user = _require_admin(self)
         if not user:
             return
@@ -17615,9 +17632,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
         name = (payload.get("name") or "").strip()
-        scope = (payload.get("scope") or api_tokens_mod.SCOPE_READ).strip()
+        # Default FULL — do not invent a read-only default.
+        scope = (payload.get("scope") or api_tokens_mod.SCOPE_FULL).strip()
+        # Convenience: read_only:true from the admin UI maps to scope=read.
+        if payload.get("read_only") is True:
+            scope = api_tokens_mod.SCOPE_READ
         try:
-            rec = api_tokens_mod.create_api_token(name, user["id"], scope)
+            rec = api_tokens_mod.create_api_token(
+                name,
+                user["id"],
+                scope,
+                restrictions=payload.get("restrictions"),
+                expires_at=payload.get("expires_at"),
+            )
         except ValueError as exc:
             _json_response(self, 400, {"error": str(exc)})
             return
@@ -22196,7 +22223,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # Scanner config/log can expose account identifiers, error detail,
         # and behavior toggles — admins only (and never API tokens: the
         # /api/v2/mail/config + /api/v2/mail/log prefixes are blocked for
-        # tokens in _API_TOKEN_BLOCKED_PREFIXES).
+        # optional token restrictions still apply).
         user = _require_admin(self)
         if not user:
             return
@@ -22317,7 +22344,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # Scanner config/log can expose account identifiers, error detail,
         # and behavior toggles — admins only (and never API tokens: the
         # /api/v2/mail/config + /api/v2/mail/log prefixes are blocked for
-        # tokens in _API_TOKEN_BLOCKED_PREFIXES).
+        # optional token restrictions still apply).
         user = _require_admin(self)
         if not user:
             return
@@ -22327,7 +22354,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # Scanner config/log can expose account identifiers, error detail,
         # and behavior toggles — admins only (and never API tokens: the
         # /api/v2/mail/config + /api/v2/mail/log prefixes are blocked for
-        # tokens in _API_TOKEN_BLOCKED_PREFIXES).
+        # optional token restrictions still apply).
         user = _require_admin(self)
         if not user:
             return

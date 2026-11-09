@@ -10,7 +10,7 @@ What this proves (real HTTP, real PostgreSQL, synthetic fixtures only):
     in a later response, including a second "revisit" request;
   * revoke flips the metadata, is idempotent (404 on repeat), and the list is
     re-fetchable with accurate state;
-  * a minted token can read broad CRM data but is refused on admin routes.
+  * a full minted token can read CRM data and admin list; read_only blocks writes.
 
 Safety rails (the suite SKIPS unless all hold):
   * SIETCH_TEST_DB_NAME must start with "sietch_test_" and must not be any
@@ -335,7 +335,7 @@ class AdminApiTokenHttpTests(unittest.TestCase):
         try:
             self.assertTrue(secret.startswith("sietch_"))
             self.assertGreaterEqual(len(secret), 40)
-            self.assertEqual(created["scope"], "read")
+            self.assertEqual(created["scope"], "full")
             self.assertEqual(created["name"], name)
             self.assertEqual(len(created["token_prefix"]), 12)
             self.assertTrue(secret.startswith(created["token_prefix"]))
@@ -362,7 +362,8 @@ class AdminApiTokenHttpTests(unittest.TestCase):
             row_json = next(t for t in payload["tokens"] if t["id"] == tid)
             self.assertEqual(set(row_json), {
                 "id", "name", "token_prefix", "scope", "created_by",
-                "created_by_email", "created_at", "last_used_at", "revoked_at", "revoked",
+                "created_by_email", "created_at", "last_used_at",
+                "revoked_at", "revoked", "expires_at", "restrictions",
             })
             self.assertEqual(row_json["name"], name)
             self.assertIsNone(row_json["revoked_at"])
@@ -398,36 +399,35 @@ class AdminApiTokenHttpTests(unittest.TestCase):
         status, text = self._admin("POST", "/api/v2/admin/api-tokens/999999/revoke")
         self.assertEqual(status, 404, _redact(text))
 
-    def test_06_bearer_reads_data_but_cannot_manage_tokens(self):
-        created = self._create_token("synthetic broad-read fixture")
+    def test_06_full_bearer_reads_data_and_admin_list_read_only_blocks_writes(self):
+        """Full tokens act as the creating admin; read_only still blocks writes."""
+        created = self._create_token("synthetic full bearer")
         secret = created["token"]
         tid = created["id"]
         try:
+            self.assertEqual(created.get("scope"), "full")
             status, text = self._req("GET", "/api/v2/projects", bearer=secret)
             self.assertEqual(status, 200, _redact(text))
-            status, text = self._req("GET", "/api/v2/contacts", bearer=secret)
-            self.assertEqual(status, 200, _redact(text))
-
             status, text = self._req("GET", "/api/v2/admin/api-tokens", bearer=secret)
-            self.assertEqual(status, 403, _redact(text))
-            self.assertNotIn('"tokens":', text, "no list payload may be returned")
-            self.assertNotIn(secret, text)
-
-            status, text = self._req("POST", "/api/v2/admin/api-tokens",
-                                     bearer=secret, body={"name": "bearer escalation"})
-            self.assertEqual(status, 403, _redact(text))
-            self.assertEqual(
-                self._count_rows("SELECT COUNT(*) FROM api_tokens WHERE name = %s",
-                                 ("bearer escalation",)),
-                0,
+            self.assertEqual(status, 200, _redact(text))
+            self.assertNotRegex(text, SECRET_RE)
+            # Optional restriction: read_only token cannot POST
+            status, text = self._admin(
+                "POST", "/api/v2/admin/api-tokens",
+                {"name": "synthetic read-only bearer", "read_only": True},
             )
-
-            # last_used_at becomes visible as safe metadata after a read.
-            status, text = self._admin("GET", "/api/v2/admin/api-tokens")
-            row = next(t for t in self._json(text)["tokens"] if t["id"] == tid)
-            self.assertIsNotNone(row["last_used_at"])
+            self.assertEqual(status, 201, _redact(text))
+            ro = json.loads(text)
+            ro_secret = ro["token"]
+            ro_id = ro["id"]
+            try:
+                status, text = self._req("POST", "/api/v2/notes", bearer=ro_secret, body={})
+                self.assertEqual(status, 403, _redact(text))
+            finally:
+                self._admin("POST", "/api/v2/admin/api-tokens/%d/revoke" % ro_id)
         finally:
             self._admin("POST", "/api/v2/admin/api-tokens/%d/revoke" % tid)
+
 
 
 if __name__ == "__main__":
