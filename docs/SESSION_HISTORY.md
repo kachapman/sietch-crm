@@ -3,7 +3,56 @@
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-09 (MCP server + OpenAPI contract)
+
+**Status: COMMITTED LOCALLY on branch `feat/mcp-server` (worktree
+`~/Projects/new-crm-mcp-server`, off local `main` @ `fbb3531`) — merged to
+local `main` only. NOT pushed, NOT deployed** (prod deploy needs Ken's go via
+Fëanor).
+
+**Shipped first (Ken's 17:25 request): the API contract.**
+- `GET /api/v2/openapi.json` — OpenAPI 3.1 for every `/api/v2` route
+  (313 operations / 240 paths): method, path, auth (Bearer token + token
+  restrictions), params, bodies, responses, errors, `x-pagination`.
+- `api_spec_routes.py` generated from the real dispatcher by
+  `scripts/gen_api_spec.py`; `api_spec.py` enriches the ~30 important
+  endpoints. `tests/test_openapi.py` fails when the spec and the dispatcher
+  disagree — it caught a genuine bug (`get_contact` → a non-existent
+  `GET /api/v2/contacts/{id}`), so that MCP tool was removed.
+- `docs/API.md` — quick start + synthetic workflow examples.
+- MCP tool descriptions are derived from the spec (single source of truth).
+
+**MCP server (`/mcp`, streamable HTTP, same container).**
+- `mcp_server.py` (transport/sessions/auth/allowlist/audit/proposals),
+  `mcp_tools.py` (22 tools), `mcp_local_api.py` (in-process calls into the
+  real `KanbanHandler`, so auth + token restrictions are the same code).
+- Auth: the caller's normal API token; identity/"posts as" from the token;
+  restrictions enforced per request. Admin session (never a token) manages
+  the server and approves proposals.
+- Propose/apply: writes default to `propose` and wait in Admin → MCP; approve
+  re-checks the token, executes with a short-lived session for the token's
+  user, and both decisions are exportable as JSONL training data.
+- Email: draft-create only. No send tool; paths containing `/mail/send` are
+  refused (tests pin both).
+- Admin → MCP section: enable/disable, connection URL + copyable client
+  config, per-token tool allowlist, proposal approve/reject, audit log,
+  JSONL export.
+- Migration 049 (additive): `mcp_token_tools`, `mcp_audit_log`,
+  `mcp_pending_actions`.
+
+**Tests.** `tests/test_openapi.py` (20), `tests/test_mcp_server.py` (21,
+includes a real-socket MCP handshake), `tests/test_mcp_admin.mjs` (9). Full
+sweep: all JS files pass; Python has the same 5 pre-existing `main` failures
+(`test_email_project_copy`, `test_invoice_coc_modern`, `test_mail_auth_gaps`,
+`test_scanner_toggle_gating`, `test_sync_pull_deals_fields`).
+
+**Not done.** No push, no deploy, no prod data touched.
+
+---
+
 **Date:** 2026-11-09 (URGENT: OAuth account binding + mail timezone)
+
+## 2026-11-09 — OAuth account binding + mail timezone (deployed to prod)
 
 **Status: COMMITTED LOCALLY on branch `fix/oauth-account-binding` @ `9feb04b`
 (worktree `~/Projects/new-crm-oauth-fix`, off `main` @ `cfb94e3`) — NOT merged,

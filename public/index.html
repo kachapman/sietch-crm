@@ -2284,6 +2284,10 @@
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M16.555 3.843l3.602 3.602a2.877 2.877 0 0 1 0 4.069l-2.643 2.643a2.877 2.877 0 0 1 -4.069 0l-.301 -.301l-6.558 6.558a2 2 0 0 1 -1.414 .586h-2.172a1 1 0 0 1 -1 -1v-2.172a2 2 0 0 1 .586 -1.414l6.558 -6.558l-.301 -.301a2.877 2.877 0 0 1 0 -4.069l2.643 -2.643a2.877 2.877 0 0 1 4.069 0z"/><path d="M15 8l.01 0"/></svg>
             <span class="admin-tab-label">API Tokens</span>
           </button>
+          <button class="admin-tab-btn btn btn-ghost" data-tab="mcp" title="MCP">
+            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 12l-4.463 4.969a2 2 0 0 0 2.828 2.828l4.969 -4.463"/><path d="M15 12l4.463 -4.969a2 2 0 0 0 -2.828 -2.828l-4.969 4.463"/><path d="M12 9l-3 3"/><path d="M12 15l3 -3"/></svg>
+            <span class="admin-tab-label">MCP</span>
+          </button>
         </div>
         <div class="admin-main">
           <div id="admin-tab-general" class="admin-tab-content">
@@ -3585,6 +3589,51 @@
         <div style="margin-top:1rem;">
           <div id="api-token-list-status" class="api-token-status" role="status" aria-live="polite"></div>
           <div id="api-token-list" class="api-token-list" aria-label="API tokens"></div>
+        </div>
+      </div>
+      <div id="admin-tab-mcp" class="admin-tab-content hidden">
+        <h4 style="margin:0 0 0.5rem; font-size:0.85rem;">MCP server (remote tool access)</h4>
+        <p style="font-size:0.8rem; color:var(--muted); margin-bottom:0.75rem;">
+          Lets an MCP client (Claude Desktop, Cursor, VS Code, a local agent) read and write Sietch data
+          using a normal API token from the <strong>API Tokens</strong> tab. Writes default to
+          <em>propose</em> mode: they wait here for a human to approve. No tool can send email.
+        </p>
+        <div style="display:flex; align-items:center; gap:0.6rem; margin-bottom:0.75rem;">
+          <label class="toggle-switch" title="Enable the MCP server" style="cursor:pointer;">
+            <input type="checkbox" id="mcp-enabled" />
+            <span class="toggle-slider"></span>
+          </label>
+          <span style="font-size:0.85rem;">MCP server enabled</span>
+          <span id="mcp-settings-status" style="font-size:0.8rem; color:var(--muted);"></span>
+        </div>
+
+        <div style="margin-bottom:1rem;">
+          <label style="font-size:0.8rem; font-weight:600; display:block; margin-bottom:0.25rem;">Connection URL</label>
+          <div style="display:flex; gap:0.4rem; align-items:center;">
+            <input id="mcp-url" type="text" readonly style="flex:1; padding:0.35rem 0.45rem; border:1px solid var(--border); border-radius:4px; font-size:0.8rem; font-family:monospace;" />
+            <button type="button" id="mcp-copy-url" class="btn btn-ghost btn-sm">Copy</button>
+          </div>
+          <label style="font-size:0.8rem; font-weight:600; display:block; margin:0.6rem 0 0.25rem;">Client config (replace the token placeholder)</label>
+          <textarea id="mcp-snippet" readonly rows="7" style="width:100%; padding:0.45rem; border:1px solid var(--border); border-radius:4px; font-size:0.75rem; font-family:monospace; resize:vertical;"></textarea>
+          <div style="display:flex; gap:0.4rem; margin-top:0.35rem;">
+            <button type="button" id="mcp-copy-snippet" class="btn btn-ghost btn-sm">Copy config</button>
+          </div>
+        </div>
+
+        <h4 style="margin:0 0 0.4rem; font-size:0.85rem;">Pending proposals</h4>
+        <div id="mcp-proposals" style="font-size:0.8rem; margin-bottom:1rem;"></div>
+
+        <h4 style="margin:0 0 0.4rem; font-size:0.85rem;">Per-token tool allowlist</h4>
+        <p style="font-size:0.75rem; color:var(--muted); margin:0 0 0.4rem;">
+          Default is all tools. Pick a token to restrict which MCP tools it may call.
+        </p>
+        <div id="mcp-token-tools" style="font-size:0.8rem; margin-bottom:1rem;"></div>
+
+        <h4 style="margin:0 0 0.4rem; font-size:0.85rem;">MCP audit log</h4>
+        <div id="mcp-audit" style="font-size:0.78rem; margin-bottom:0.75rem;"></div>
+        <div style="display:flex; gap:0.4rem;">
+          <button type="button" id="mcp-export-btn" class="btn btn-ghost btn-sm">Export decisions (JSONL)</button>
+          <button type="button" id="mcp-refresh-btn" class="btn btn-ghost btn-sm">Refresh</button>
         </div>
       </div>
       <div id="admin-tab-photo-reports" class="admin-tab-content hidden">

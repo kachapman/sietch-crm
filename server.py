@@ -645,6 +645,9 @@ def _invalidate_bot_config_cache() -> None:
 import db
 import auth as auth_mod
 import api_tokens as api_tokens_mod
+import api_spec as api_spec_mod
+import mcp_server as mcp_server_mod
+import mcp_tools as mcp_tools_mod
 
 db.init_db()
 
@@ -1130,6 +1133,41 @@ try:
     """)
 except Exception:
     logger.warning("Could not retype mail_messages.date_received to timestamptz", exc_info=True)
+# MCP server tables (mirrors migrations/049_mcp_server.sql; idempotent).
+try:
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS mcp_token_tools (
+            token_id INTEGER NOT NULL REFERENCES api_tokens(id) ON DELETE CASCADE,
+            tool_name TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (token_id, tool_name)
+        )
+    """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS mcp_audit_log (
+            id BIGSERIAL PRIMARY KEY,
+            token_id INTEGER, token_name TEXT, tool TEXT NOT NULL, mode TEXT,
+            args_summary TEXT, result TEXT, status TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    db.execute("CREATE INDEX IF NOT EXISTS idx_mcp_audit_created ON mcp_audit_log (created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_mcp_audit_token ON mcp_audit_log (token_id, created_at DESC)")
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS mcp_pending_actions (
+            id BIGSERIAL PRIMARY KEY,
+            token_id INTEGER, token_name TEXT, user_id INTEGER, tool TEXT NOT NULL,
+            args JSONB NOT NULL DEFAULT '{}'::jsonb, method TEXT, path TEXT,
+            request_body JSONB, restrictions JSONB,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            decided_at TIMESTAMPTZ, decided_by INTEGER, decision_note TEXT, result JSONB
+        )
+    """)
+    db.execute("CREATE INDEX IF NOT EXISTS idx_mcp_pending_status ON mcp_pending_actions (status, created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_mcp_pending_token ON mcp_pending_actions (token_id, created_at DESC)")
+except Exception:
+    logger.warning("Could not create the MCP tables", exc_info=True)
 # Memory of observed SMTP AUTH disable (5.7.139). Microsoft accepts-then-drops
 # or refuses unpredictably for these mailboxes; SMTP "success" (250) is not
 # proof of delivery, so flagged accounts skip SMTP entirely and fail loudly
@@ -1553,6 +1591,22 @@ def _require_admin(handler: SimpleHTTPRequestHandler) -> dict | None:
 # intentional extra strictness, so admin gating is now uniformly `_require_admin`
 # and `role` is a descriptive/feature field only (badges, the `limited` CRM-Mail
 # restriction). Removed deliberately so a divergent gate can't creep back in.
+
+
+def _require_admin_session(handler: SimpleHTTPRequestHandler) -> dict | None:
+    """Admin SESSION only — an API token may not manage or approve MCP.
+
+    Approving an MCP proposal with a token would let a token approve its own
+    proposed writes, which defeats propose mode. Same for enabling/disabling
+    the server and editing allowlists.
+    """
+    user = _require_admin(handler)
+    if not user:
+        return None
+    if user.get("api_token_id"):
+        _json_response(handler, 403, {"error": "Admin session required (API tokens cannot manage MCP)"})
+        return None
+    return user
 
 
 def _bearer_token(handler: SimpleHTTPRequestHandler) -> str | None:
@@ -3719,6 +3773,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 pass
 
     def do_GET(self) -> None:
+        if self.path.split("?", 1)[0] == mcp_server_mod.MCP_PATH:
+            mcp_server_mod.handle_http(self)
+            return
         if self.path.startswith("/api/"):
             self._run_api_handler(self._handle_api_get)
             return
@@ -3793,6 +3850,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_POST(self) -> None:
+        if self.path.split("?", 1)[0] == mcp_server_mod.MCP_PATH:
+            mcp_server_mod.handle_http(self)
+            return
         if self.path == "/api/v2/auth/login":
             self._handle_login()
             return
@@ -3826,6 +3886,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         self.send_error(405)
 
     def do_DELETE(self) -> None:
+        if self.path.split("?", 1)[0] == mcp_server_mod.MCP_PATH:
+            mcp_server_mod.handle_http(self)
+            return
         if self.path.startswith("/api/"):
             self._run_api_handler(lambda: self._handle_api_post_put("DELETE"))
             return
@@ -4524,6 +4587,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         # ── API tokens (admin session only; Bearer tokens are refused here
         # (full tokens may call admin routes; optional restrictions still apply) ──
+        # ── MCP admin (admin SESSION only; see _require_admin_session) ──
+        if api_path.startswith("/api/v2/admin/mcp"):
+            self._handle_mcp_admin(api_path)
+            return
         if api_path == "/api/v2/admin/api-tokens":
             user = _require_admin(self)
             if not user:
@@ -4532,6 +4599,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         # ── v2 API: Projects ──
+        # ── API contract (OpenAPI 3.1) ──
+        if api_path == "/api/v2/openapi.json":
+            user = _require_auth(self)
+            if not user:
+                return
+            _json_response(self, 200, api_spec_mod.build_openapi())
+            return
+
         if api_path == "/api/v2/projects/count":
             self._handle_projects_count(qs)
             return
@@ -5381,6 +5456,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         # ── API token management (admin session only; Bearer tokens are
         # (full tokens may call admin routes; optional restrictions still apply) ──
+        # ── MCP admin (admin SESSION only; see _require_admin_session) ──
+        if api_path.startswith("/api/v2/admin/mcp"):
+            self._handle_mcp_admin(api_path)
+            return
         if api_path == "/api/v2/admin/api-tokens" and method == "POST":
             user = _require_admin(self)
             if not user:
@@ -17580,6 +17659,135 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             )
             result[str(opp_id)] = [{"id": r[0], "title": r[1], "color": r[2], "isSystem": r[3]} for r in rows]
         _json_response(self, 200, result)
+
+    # ── MCP admin (session only) ──────────────────────────────────────────
+
+    def _handle_mcp_admin(self, api_path: str) -> None:
+        """Admin API for the MCP server (admin SESSION only, never a token).
+
+        GET  /settings | PUT /settings | GET /audit | GET /proposals
+        POST /proposals/{id}/approve|reject | GET|PUT /tokens/{id}/tools
+        GET  /training-export (JSONL)
+        """
+        user = _require_admin_session(self)
+        if not user:
+            return
+        method = (self.command or "GET").upper()
+        qs = parse_qs(urlparse(self.path).query)
+        base = "/api/v2/admin/mcp"
+
+        try:
+            if api_path == base + "/settings" and method == "GET":
+                tokens = api_tokens_mod.list_api_tokens(include_revoked=False)
+                out_tokens = []
+                for t in tokens:
+                    allow = mcp_server_mod.allowed_tool_names(t["id"])
+                    out_tokens.append({
+                        "id": t["id"],
+                        "name": t["name"],
+                        "tokenPrefix": t["token_prefix"],
+                        "scope": t["scope"],
+                        "revoked": t["revoked"],
+                        "expiresAt": t["expires_at"],
+                        "tools": sorted(allow) if allow is not None else None,
+                    })
+                _json_response(self, 200, {
+                    "enabled": mcp_server_mod.is_enabled(),
+                    "url": ((os.environ.get("DASHBOARD_PUBLIC_URL") or CRM_PUBLIC_URL or "").rstrip("/")
+                            + mcp_server_mod.MCP_PATH),
+                    "protocolVersion": mcp_server_mod.PROTOCOL_VERSION,
+                    "tools": list(mcp_tools_mod.TOOL_NAMES),
+                    "tokens": out_tokens,
+                })
+                return
+
+            if api_path == base + "/settings" and method == "PUT":
+                payload = json.loads(_read_body(self) or b"{}")
+                settings = mcp_server_mod.set_enabled(bool(payload.get("enabled")))
+                log_infra_event(
+                    "info",
+                    "MCP server %s by %s" % (
+                        "enabled" if settings["enabled"] else "disabled", user.get("email")),
+                    source="mcp",
+                )
+                _json_response(self, 200, {"ok": True, **settings})
+                return
+
+            if api_path == base + "/audit" and method == "GET":
+                limit = int((qs.get("limit") or ["100"])[0])
+                _json_response(self, 200, {"entries": mcp_server_mod.list_audit(limit)})
+                return
+
+            if api_path == base + "/proposals" and method == "GET":
+                status = (qs.get("status") or ["pending"])[0]
+                _json_response(self, 200, {"proposals": mcp_server_mod.list_proposals(status)})
+                return
+
+            m = re.match(r"^" + re.escape(base) + r"/proposals/(\d+)/(approve|reject)$", api_path)
+            if m and method == "POST":
+                payload = {}
+                try:
+                    payload = json.loads(_read_body(self) or b"{}")
+                except json.JSONDecodeError:
+                    payload = {}
+                try:
+                    result = mcp_server_mod.decide_proposal(
+                        int(m.group(1)), m.group(2), user, payload.get("note") or "")
+                except LookupError as exc:
+                    _json_response(self, 404, {"error": str(exc)})
+                    return
+                except ValueError as exc:
+                    _json_response(self, 400, {"error": str(exc)})
+                    return
+                log_infra_event(
+                    "info",
+                    "MCP proposal %s %sd by %s" % (m.group(1), m.group(2), user.get("email")),
+                    source="mcp",
+                )
+                _json_response(self, 200, {"ok": True, "proposal": result})
+                return
+
+            m = re.match(r"^" + re.escape(base) + r"/tokens/(\d+)/tools$", api_path)
+            if m and method == "GET":
+                token_id = int(m.group(1))
+                allow = mcp_server_mod.allowed_tool_names(token_id)
+                _json_response(self, 200, {
+                    "tokenId": token_id,
+                    "tools": sorted(allow) if allow is not None else None,
+                    "allTools": allow is None,
+                    "available": list(mcp_tools_mod.TOOL_NAMES),
+                })
+                return
+            if m and method == "PUT":
+                payload = json.loads(_read_body(self) or b"{}")
+                tools = payload.get("tools")
+                if tools is not None and not isinstance(tools, list):
+                    _json_response(self, 400, {"error": "tools must be a list (or null for all)"})
+                    return
+                mcp_server_mod.set_tool_allowlist(int(m.group(1)), tools)
+                allow = mcp_server_mod.allowed_tool_names(int(m.group(1)))
+                _json_response(self, 200, {
+                    "ok": True,
+                    "tools": sorted(allow) if allow is not None else None,
+                    "allTools": allow is None,
+                })
+                return
+
+            if api_path == base + "/training-export" and method == "GET":
+                body = mcp_server_mod.training_jsonl().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                self.send_header("Content-Disposition",
+                                 'attachment; filename="sietch-mcp-decisions.jsonl"')
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            _json_response(self, 404, {"error": "Unknown MCP admin route"})
+        except Exception as exc:
+            logger.exception("MCP admin request failed: %s", api_path)
+            _json_response(self, 500, {"error": str(exc)})
 
     # ── API tokens (admin session only) ───────────────────────────────────
 

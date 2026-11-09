@@ -70,6 +70,38 @@
 
 # Changelog
 
+## 2.5.0 — 2026-11-09
+
+### Added
+- **OpenAPI 3.1 contract for the whole `/api/v2` surface**, served at
+  `GET /api/v2/openapi.json` (token or session auth). Every route the
+  dispatcher actually handles is documented: method, path, auth, path/query
+  parameters, request bodies, responses, the standard error set and
+  `x-pagination` for list endpoints. 313 operations across 240 paths.
+  - `api_spec_routes.py` is generated from `server.py`'s dispatch code by
+    `scripts/gen_api_spec.py`; `api_spec.py` adds real schemas for the ~30
+    endpoints that matter (projects, contacts, history/notes, tasks, mail,
+    documents, MCP admin).
+  - `tests/test_openapi.py` fails when a route exists in the dispatcher but
+    not in the spec (and vice versa). It immediately caught a real bug:
+    `get_contact` mapped to a `GET /api/v2/contacts/{id}` route that does not
+    exist; that MCP tool was removed.
+  - `docs/API.md`: quick start (Bearer auth, errors, pagination) plus
+    synthetic examples for find-project, add-note, link-email, create-task and
+    draft-email.
+- **MCP tool descriptions now come from the spec** (`api_spec.MCP_TOOL_OPERATIONS`);
+  a test asserts each tool's description contains its operation summary.
+
+### Changed
+- MCP tool list: `get_contact` removed (no such REST route); `search_contacts`
+  returns full contact records.
+- The route extractor understands `method in ("PUT", "PATCH")` guards, so
+  update/delete operations are documented too.
+
+### Notes
+- Merged to local `main` only — not pushed, not deployed.
+
+
 ## 2.4.2 — 2026-11-08
 
 ### Removed
