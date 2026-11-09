@@ -44,12 +44,37 @@ docker compose up -d
 
 ## Backups
 
-Back up the Docker volume (user profiles):
+### Pre-deploy snapshot (required before a deploy)
+
+Run **before** `git pull` / `docker compose build`:
 
 ```bash
-docker run --rm -v crm-kanban_dashboard-data:/data -v $(pwd):/backup alpine \
+cd /opt/sietch-crm
+deploy/pre-deploy-backup.sh            # writes to /mnt/sietch_backup/pre-deploy
+deploy/pre-deploy-backup.sh --help     # options and env overrides
+DRY_RUN=1 deploy/pre-deploy-backup.sh  # show the plan, write nothing
+```
+
+The destination defaults to the **attached 100 GB volume**
+(`/mnt/sietch_backup/pre-deploy`), not `/root/Backups` on the root disk. A
+full-data tarball is ~27 GB and the root volume is only 77 GB — writing it
+there is what took the droplet to 92% on 2026-11-09, and a full disk takes the
+CRM down. The script refuses to run if the destination resolves to the root
+filesystem or has less than `PRE_DEPLOY_MIN_FREE_GB` (default 35) free.
+
+Layout matches the older ad-hoc backups: `PRE_STATE.txt`, `sietch_crm.dump`
+(`pg_dump -Fc`), `code-<sha>.tar.gz`, `dashboard-data.tar.gz`,
+`dashboard-uploads.tar.gz`, plus copies of `env`, `docker-compose.yml` and
+`Dockerfile` (not tracked in git).
+
+### Ad-hoc volume backup
+
+```bash
+docker run --rm -v sietch-crm_dashboard-data:/data -v /mnt/sietch_backup:/backup alpine \
   tar czf /backup/dashboard-data-$(date +%F).tar.gz -C /data .
 ```
+
+Never write this to `/root` or any path on `/`.
 
 ---
 
