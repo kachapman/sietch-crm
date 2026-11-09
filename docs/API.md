@@ -12,7 +12,7 @@ It is generated from `server.py`'s real dispatch code and pinned by
 
 ## 1. Authentication
 
-Create a token in **Admin → API Tokens**. It is shown once.
+Create a token in **Admin → API & MCP**. It is shown once.
 
 ```bash
 export SIETCH_TOKEN='sietch_…'          # paste the value shown once
@@ -151,3 +151,8 @@ python3 tests/test_openapi.py             # fails if the dispatcher and spec dis
 The MCP server (`/mcp`) wraps the same endpoints; tool names and descriptions
 are derived from this spec (`api_spec.MCP_TOOL_OPERATIONS`). See
 `plans/sietch/sietch-mcp-server.md`.
+
+Admin → **API & MCP** is one tab: the MCP on/off switch, connection URL and
+copyable client config at the top, then the token list (each row shows the
+"posts as" user, its restrictions and its optional MCP tool allowlist), then
+the pending proposals and the MCP audit log.

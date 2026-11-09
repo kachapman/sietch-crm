@@ -23,20 +23,35 @@ function region(marker, length = 9000) {
   return appSrc.slice(at, at + length);
 }
 
-test('the admin console has an MCP tab and section', () => {
-  assert.ok(indexHtml.includes('data-tab="mcp"'));
-  assert.ok(indexHtml.includes('id="admin-tab-mcp"'));
-  assert.ok(indexHtml.includes('id="mcp-enabled"'));
-  assert.ok(indexHtml.includes('id="mcp-url"'));
-  assert.ok(indexHtml.includes('id="mcp-snippet"'));
-  assert.ok(indexHtml.includes('id="mcp-proposals"'));
-  assert.ok(indexHtml.includes('id="mcp-token-tools"'));
-  assert.ok(indexHtml.includes('id="mcp-audit"'));
-  assert.ok(indexHtml.includes('id="mcp-export-btn"'));
+test('API Tokens and MCP are ONE admin tab ("API & MCP")', () => {
+  assert.ok(indexHtml.includes('data-tab="api-mcp"'));
+  assert.ok(indexHtml.includes('id="admin-tab-api-mcp"'));
+  // the separate tabs are gone
+  assert.ok(!indexHtml.includes('data-tab="tokens"'));
+  assert.ok(!indexHtml.includes('data-tab="mcp"'));
+  assert.ok(!indexHtml.includes('id="admin-tab-tokens"'));
+  assert.ok(!indexHtml.includes('id="admin-tab-mcp"'));
 });
 
-test('switching to the MCP tab loads its data', () => {
-  assert.ok(appSrc.includes('if (tab === "mcp") loadAdminMcp();'));
+test('MCP controls sit above the token list; audit is in the same tab', () => {
+  const tab = indexHtml.slice(indexHtml.indexOf('id="admin-tab-api-mcp"'));
+  const end = tab.indexOf('id="admin-tab-photo-reports"');
+  const section = tab.slice(0, end === -1 ? undefined : end);
+  for (const id of ['mcp-enabled', 'mcp-url', 'mcp-snippet', 'api-token-create-form',
+                    'api-token-list', 'mcp-proposals', 'mcp-audit', 'mcp-export-btn']) {
+    assert.ok(section.includes('id="' + id + '"'), 'missing #' + id + ' in the combined tab');
+  }
+  const pos = (id) => section.indexOf('id="' + id + '"');
+  assert.ok(pos('mcp-enabled') < pos('api-token-list'), 'MCP switch must be above the token list');
+  assert.ok(pos('mcp-url') < pos('api-token-list'), 'connection URL must be above the token list');
+  assert.ok(pos('api-token-list') < pos('mcp-audit'), 'audit log sits below the token list');
+});
+
+test('the old tab names redirect to the combined tab', () => {
+  const at = appSrc.indexOf('function switchAdminTab(tab) {');
+  const body = appSrc.slice(at, at + 1600);
+  assert.ok(body.includes('if (tab === "tokens" || tab === "mcp") tab = "api-mcp";'));
+  assert.ok(body.includes('Promise.resolve(loadAdminMcp()).finally(() => loadAdminApiTokens())'));
 });
 
 test('enable/disable calls the settings endpoint', () => {
@@ -63,12 +78,24 @@ test('proposals can be approved and rejected from the UI', () => {
   assert.ok(decide.includes('method: "POST"'));
 });
 
-test('per-token allowlist is editable and defaults to all tools', () => {
-  const body = region('function renderMcpTokenTools', 4000);
-  assert.ok(body.includes('data-mcp-token'));
-  assert.ok(body.includes('/api/v2/admin/mcp/tokens/${tokenId}/tools'));
-  assert.ok(body.includes('picked.length === all.length ? null : picked'),
+test('per-token allowlist is inline in each token row and defaults to all tools', () => {
+  const row = region('function _apiTokenAllowlistHtml', 2500);
+  assert.ok(row.includes('data-mcp-token'));
+  assert.ok(row.includes('data-mcp-save-tools'));
+  const save = region('async function _saveTokenMcpTools', 1500);
+  assert.ok(save.includes('/api/v2/admin/mcp/tokens/'));
+  assert.ok(save.includes('picked.length === boxes.length ? null : picked'),
     'unchecking everything must mean "all tools" (null), not an empty allowlist');
+  // no separate per-token allowlist list remains
+  assert.ok(!appSrc.includes('renderMcpTokenTools'));
+  assert.ok(!indexHtml.includes('id="mcp-token-tools"'));
+});
+
+test('each token row shows the posts-as user and its restrictions', () => {
+  const row = region('function _apiTokenRowHtml', 2500);
+  assert.ok(row.includes('"posts as "'));
+  assert.ok(row.includes('describeRestrictions'));
+  assert.ok(row.includes('_apiTokenAllowlistHtml(row)'));
 });
 
 test('the audit log renders time, token, tool, mode, result and args', () => {

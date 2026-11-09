@@ -473,16 +473,19 @@ test('already-revoked (404) reports and refreshes instead of hanging', async () 
 });
 
 // ── markup: tab, disclosure, create form, reveal panel ───────────────────
-test('admin console gets an API Tokens tab with an inline SVG icon', () => {
-  const tabAt = html.indexOf('data-tab="tokens"');
-  assert.ok(tabAt > -1, 'the API Tokens tab button must exist');
+test('admin console gets the combined API & MCP tab with an inline SVG icon', () => {
+  const tabAt = html.indexOf('data-tab="api-mcp"');
+  assert.ok(tabAt > -1, 'the API & MCP tab button must exist');
   const btnRegion = html.slice(tabAt, tabAt + 1400);
   assert.ok(btnRegion.includes('<svg'), 'tab icons must stay inline SVGs (admin convention)');
-  assert.ok(btnRegion.includes('class="admin-tab-label">API Tokens<'), 'tab label');
+  assert.ok(btnRegion.includes('class="admin-tab-label">API &amp; MCP<'), 'tab label');
+  // the old separate tabs are gone (they redirect in switchAdminTab)
+  assert.ok(!html.includes('data-tab="tokens"'));
+  assert.ok(!html.includes('data-tab="mcp"'));
 });
 
-test('API Tokens tab starts hidden like every other admin tab', () => {
-  assert.ok(html.includes('id="admin-tab-tokens" class="admin-tab-content hidden"'));
+test('the combined tab starts hidden like every other admin tab', () => {
+  assert.ok(html.includes('id="admin-tab-api-mcp" class="admin-tab-content hidden"'));
 });
 
 test('scope disclosure says full access by default', () => {
@@ -582,8 +585,8 @@ test('the secret is never persisted, logged, or put in a URL', () => {
 test('the reveal is cleared on tab-away, close, sign-out, and page hide', () => {
   const switchAt = appSrc.indexOf('function switchAdminTab(tab) {');
   const switchBody = appSrc.slice(switchAt, switchAt + 1400);
-  assert.ok(switchBody.includes('if (tab !== "tokens") clearApiTokenReveal();'));
-  assert.ok(switchBody.includes('if (tab === "tokens") loadAdminApiTokens();'));
+  assert.ok(switchBody.includes('if (tab !== "api-mcp") clearApiTokenReveal();'));
+  assert.ok(switchBody.includes('loadAdminApiTokens()'), 'the combined tab loads the token list');
   const dismiss = appSrc.slice(appSrc.indexOf('[data-admin-console-dismiss]'), appSrc.indexOf('[data-admin-console-dismiss]') + 300);
   assert.ok(dismiss.includes('clearApiTokenReveal()'), 'closing the console clears the secret');
   assert.ok(appSrc.includes('window.addEventListener("pagehide", clearApiTokenReveal)'));
@@ -627,13 +630,15 @@ test('every API-token element id used by app.js exists in index.html', () => {
   }
 });
 
-test('the tokens tab button and its content panel are paired', () => {
-  assert.ok(html.includes('data-tab="tokens"'));
-  assert.ok(html.includes('id="admin-tab-tokens"'));
+test('the combined tab button and its content panel are paired', () => {
+  assert.ok(html.includes('data-tab="api-mcp"'));
+  assert.ok(html.includes('id="admin-tab-api-mcp"'));
   const switchAt = appSrc.indexOf('function switchAdminTab(tab) {');
-  const switchBody = appSrc.slice(switchAt, switchAt + 1400);
+  const switchBody = appSrc.slice(switchAt, switchAt + 1600);
   assert.ok(switchBody.includes('document.querySelectorAll("#admin-console-modal .admin-tab-content")'));
-  assert.ok(switchBody.includes('if (tab === "tokens") loadAdminApiTokens();'));
+  assert.ok(switchBody.includes('Promise.resolve(loadAdminMcp()).finally(() => loadAdminApiTokens())'));
+  // old tab names still resolve to the combined tab
+  assert.ok(switchBody.includes('if (tab === "tokens" || tab === "mcp") tab = "api-mcp";'));
 });
 
 test('create/loading/error/empty states exist', () => {

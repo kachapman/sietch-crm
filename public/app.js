@@ -33769,6 +33769,35 @@ async function _copyApiTokenSecret() {
   }
 }
 
+// Per-token MCP tool allowlist, filled by loadAdminApiTokens().
+let _mcpAllowlistState = { tools: [], byToken: {}, loaded: false };
+
+function _apiTokenAllowlistHtml(row) {
+  if (row.revoked) return "";
+  const allTools = (_mcpAllowlistState && _mcpAllowlistState.tools) || [];
+  if (!allTools.length) return "";
+  const current = _mcpAllowlistState.byToken ? _mcpAllowlistState.byToken[row.id] : null;
+  const restricted = Array.isArray(current);
+  const checked = restricted ? new Set(current) : null;
+  const label = restricted
+    ? "MCP tools: " + checked.size + " of " + allTools.length
+    : "MCP tools: all (" + allTools.length + ")";
+  return '<details class="api-token-mcp" style="margin-top:0.35rem;">' +
+    '<summary style="cursor:pointer; font-size:0.78rem; color:var(--muted);">' +
+    escapeHtml(label) + "</summary>" +
+    '<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:0.15rem; margin:0.4rem 0;">' +
+    allTools.map(function (name) {
+      return '<label style="font-size:0.75rem; display:flex; gap:0.3rem; align-items:center;">' +
+        '<input type="checkbox" data-mcp-token="' + row.id + '" value="' + escapeHtml(name) + '" ' +
+        ((!restricted || checked.has(name)) ? "checked" : "") + " />" +
+        "<span>" + escapeHtml(name) + "</span></label>";
+    }).join("") +
+    "</div>" +
+    '<button type="button" class="btn btn-ghost btn-sm" data-mcp-save-tools="' + row.id + '">Save allowlist</button> ' +
+    '<span style="font-size:0.72rem; color:var(--muted);">Unchecking everything = all tools.</span>' +
+    "</details>";
+}
+
 function _apiTokenRowHtml(row) {
   const ui = _apiTokenUi();
   const badge = row.revoked
@@ -33778,7 +33807,7 @@ function _apiTokenRowHtml(row) {
   if (row.prefix) meta.push("prefix <code>" + escapeHtml(row.prefix) + "</code>");
   if (ui && ui.describeRestrictions) meta.push(escapeHtml(ui.describeRestrictions(row)));
   else if (row.scope) meta.push("scope <code>" + escapeHtml(row.scope) + "</code>");
-  if (row.createdByEmail) meta.push("created by " + escapeHtml(row.createdByEmail));
+  if (row.createdByEmail) meta.push("posts as " + escapeHtml(row.createdByEmail));
   meta.push("created " + escapeHtml(ui ? ui.formatTokenDate(row.createdAt) : "—"));
   meta.push("last used " + escapeHtml(row.lastUsedAt && ui ? ui.formatTokenDate(row.lastUsedAt) : "never"));
   if (row.revoked) meta.push("revoked " + escapeHtml(ui ? ui.formatTokenDate(row.revokedAt) : "—"));
@@ -33789,6 +33818,7 @@ function _apiTokenRowHtml(row) {
     '<div class="api-token-row-main">' +
       '<div class="api-token-row-name">' + escapeHtml(row.name) + " " + badge + "</div>" +
       '<div class="api-token-row-meta">' + meta.join(" &middot; ") + "</div>" +
+      _apiTokenAllowlistHtml(row) +
     "</div>" + action + "</div>";
 }
 
@@ -33801,6 +33831,18 @@ async function loadAdminApiTokens() {
   try {
     const data = await api("/api/v2/admin/api-tokens");
     _apiTokenRows = ui.summarizeTokenList(data);
+    // MCP allowlists live on the same rows now. Fetch them once (loadAdminMcp
+    // shares the same cache); a failure must not hide the token list.
+    if (!_mcpAllowlistState.loaded) {
+      try {
+        const mcp = await api("/api/v2/admin/mcp/settings");
+        const byToken = {};
+        (mcp.tokens || []).forEach(function (t) { byToken[t.id] = t.tools; });
+        _mcpAllowlistState = { tools: mcp.tools || [], byToken: byToken, loaded: true };
+      } catch (_e) {
+        _mcpAllowlistState = { tools: [], byToken: {}, loaded: true };
+      }
+    }
     if (statusEl) {
       statusEl.style.color = "var(--muted)";
       statusEl.textContent = _apiTokenRows.length
@@ -33925,12 +33967,39 @@ function bindAdminApiTokens() {
   if (listEl && !listEl.dataset.bound) {
     listEl.dataset.bound = "1";
     listEl.addEventListener("click", (e) => {
+      const saveBtn = e.target.closest("[data-mcp-save-tools]");
+      if (saveBtn && !saveBtn.disabled) {
+        const tokenId = Number(saveBtn.getAttribute("data-mcp-save-tools"));
+        if (Number.isFinite(tokenId)) _saveTokenMcpTools(tokenId, saveBtn);
+        return;
+      }
       const btn = e.target.closest("[data-api-token-revoke]");
       if (!btn || btn.disabled) return;
       const id = Number(btn.getAttribute("data-api-token-revoke"));
       if (!Number.isFinite(id)) return;
       _revokeApiTokenById(id, btn);
     });
+  }
+}
+
+async function _saveTokenMcpTools(tokenId, btn) {
+  const listEl = $("#api-token-list");
+  if (!listEl) return;
+  const boxes = Array.from(listEl.querySelectorAll('input[data-mcp-token="' + tokenId + '"]'));
+  const picked = boxes.filter(function (b) { return b.checked; }).map(function (b) { return b.value; });
+  const tools = picked.length === boxes.length ? null : picked;
+  const original = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+  try {
+    await api("/api/v2/admin/mcp/tokens/" + tokenId + "/tools", {
+      method: "PUT", body: JSON.stringify({ tools: tools }),
+    });
+    _mcpAllowlistState.byToken[tokenId] = tools;
+    showToast(tools === null ? "MCP allowlist cleared (all tools)" : "MCP allowlist saved");
+    await loadAdminApiTokens();
+  } catch (e) {
+    showToast("Failed: " + (e && e.message ? e.message : "unknown error"), true);
+    if (btn) { btn.disabled = false; btn.textContent = original; }
   }
 }
 
@@ -33960,6 +34029,11 @@ async function loadAdminMcp() {
   try {
     const data = await api("/api/v2/admin/mcp/settings");
     mcpAdminState = data || {};
+    try {
+      const byToken = {};
+      (data.tokens || []).forEach(function (t) { byToken[t.id] = t.tools; });
+      _mcpAllowlistState = { tools: data.tools || [], byToken: byToken, loaded: true };
+    } catch (_e) { /* keep the previous cache */ }
     const enabled = $("#mcp-enabled");
     if (enabled) enabled.checked = !!data.enabled;
     const urlEl = $("#mcp-url");
@@ -33967,7 +34041,6 @@ async function loadAdminMcp() {
     const snip = $("#mcp-snippet");
     if (snip) snip.value = mcpSnippet(data.url);
     if (statusEl) statusEl.textContent = data.enabled ? "Enabled" : "Disabled";
-    renderMcpTokenTools(data);
     await Promise.all([loadMcpProposals(), loadMcpAudit()]);
   } catch (e) {
     if (statusEl) statusEl.textContent = "Failed to load: " + (e.message || e);
@@ -34109,53 +34182,14 @@ async function loadMcpAudit() {
   }
 }
 
-function renderMcpTokenTools(data) {
-  const box = $("#mcp-token-tools");
-  if (!box) return;
-  const tokens = (data && data.tokens) || [];
-  const allTools = (data && data.tools) || [];
-  if (!tokens.length) {
-    box.innerHTML = '<p style="color:var(--muted); margin:0;">No API tokens yet. Create one in the API Tokens tab.</p>';
-    return;
-  }
-  box.innerHTML = tokens.map(t => {
-    const restricted = Array.isArray(t.tools);
-    const checked = restricted ? new Set(t.tools) : null;
-    return `<details style="border:1px solid var(--border); border-radius:6px; padding:0.4rem 0.5rem; margin-bottom:0.35rem;">
-      <summary style="cursor:pointer;"><strong>${escapeHtml(t.name)}</strong>
-        <span style="color:var(--muted);">(${escapeHtml(t.tokenPrefix || "")}…) — ${restricted ? checked.size + " tool(s)" : "all tools"}</span></summary>
-      <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:0.15rem; margin:0.4rem 0;">
-        ${allTools.map(name => `<label style="font-size:0.75rem; display:flex; gap:0.3rem; align-items:center;">
-          <input type="checkbox" data-mcp-token="${t.id}" value="${escapeHtml(name)}" ${(!restricted || checked.has(name)) ? "checked" : ""} />
-          <span>${escapeHtml(name)}</span></label>`).join("")}
-      </div>
-      <button type="button" class="btn btn-ghost btn-sm" data-mcp-save-tools="${t.id}">Save allowlist</button>
-      <span style="font-size:0.72rem; color:var(--muted);">Unchecking everything = all tools.</span>
-    </details>`;
-  }).join("");
-  box.querySelectorAll("[data-mcp-save-tools]").forEach(btn => {
-    btn.addEventListener("click", async () => {
-      const tokenId = btn.dataset.mcpSaveTools;
-      const boxes = box.querySelectorAll(`input[data-mcp-token="${tokenId}"]`);
-      const all = Array.from(boxes);
-      const picked = all.filter(b => b.checked).map(b => b.value);
-      const tools = picked.length === all.length ? null : picked;
-      try {
-        await api(`/api/v2/admin/mcp/tokens/${tokenId}/tools`, {
-          method: "PUT", body: JSON.stringify({ tools }),
-        });
-        showToast(tools === null ? "Allowlist cleared (all tools)" : "Allowlist saved");
-        await loadAdminMcp();
-      } catch (e) {
-        showToast("Failed: " + (e.message || e), true);
-      }
-    });
-  });
-}
 
 function switchAdminTab(tab) {
-  // Never keep a one-time secret on screen after leaving the tokens tab.
-  if (tab !== "tokens") clearApiTokenReveal();
+  // API Tokens and MCP are ONE tab now ("API & MCP"). The old names still
+  // work: links, deep links and any code that calls switchAdminTab("tokens")
+  // or switchAdminTab("mcp") land on the combined tab.
+  if (tab === "tokens" || tab === "mcp") tab = "api-mcp";
+  // Never keep a one-time secret on screen after leaving the tokens section.
+  if (tab !== "api-mcp") clearApiTokenReveal();
   document.querySelectorAll("#admin-console-modal .admin-tab-content").forEach(c => c.classList.add("hidden"));
   document.querySelectorAll("#admin-console-modal .admin-tab-btn").forEach(b => b.classList.remove("active"));
   const content = $(`#admin-tab-${tab}`);
@@ -34163,8 +34197,11 @@ function switchAdminTab(tab) {
   const activeBtn = document.querySelector(`#admin-console-modal .admin-tab-btn[data-tab="${tab}"]`);
   if (activeBtn) activeBtn.classList.add("active");
   if (tab === "users") populateAdminUsersList();
-  if (tab === "tokens") loadAdminApiTokens();
-  if (tab === "mcp") loadAdminMcp();
+  if (tab === "api-mcp") {
+    // MCP first: its settings response fills the per-token allowlist cache, so
+    // the token list renders in one pass without a second settings call.
+    Promise.resolve(loadAdminMcp()).finally(() => loadAdminApiTokens());
+  }
   if (tab === "contacts") {
     const s = $("#admin-contacts-search")?.value.trim() || "";
     populateAdminContactsList(s);

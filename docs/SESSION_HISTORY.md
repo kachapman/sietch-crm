@@ -3,6 +3,29 @@
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-09 (Admin: API Tokens + MCP merged into one tab)
+
+**Status: COMMITTED LOCALLY on branch `feat/admin-api-mcp-tab` (worktree
+`~/Projects/new-crm-admin-api-mcp`, off local `main` @ `173e97a`) — merged to
+local `main` only. NOT pushed, NOT deployed.**
+
+- One **API & MCP** tab replaces the separate API Tokens and MCP tabs.
+  Order: MCP switch + connection URL + client config → token list (create,
+  revoke, "posts as" user, restrictions, inline per-token MCP allowlist,
+  default all) → pending proposals → audit log + JSONL export.
+- `switchAdminTab("tokens")` / `("mcp")` redirect to `api-mcp`; the old
+  `#admin-tab-tokens` / `#admin-tab-mcp` ids are gone.
+- The per-token allowlist is fetched once per open and cached, shared with the
+  token list (so create/revoke still make the same number of API calls).
+- No backend change; API routes and behavior are unchanged.
+- Docs: `docs/API.md`, `plans/sietch/sietch-mcp-server.md`, CHANGELOG 2.5.1.
+
+**Tests.** `tests/test_mcp_admin.mjs` (11), `tests/test_admin_api_tokens_ui.mjs`
+(51, updated for the merged tab); full JS sweep green. Python: same 5
+pre-existing `main` failures.
+
+---
+
 **Date:** 2026-11-09 (MCP server + OpenAPI contract)
 
 **Status: COMMITTED LOCALLY on branch `feat/mcp-server` (worktree

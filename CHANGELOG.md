@@ -70,6 +70,24 @@
 
 # Changelog
 
+## 2.5.1 — 2026-11-09
+
+### Changed
+- **Admin: the "API Tokens" and "MCP" tabs are one tab, "API & MCP".**
+  Layout: MCP enable/disable switch, connection URL and copyable client config
+  at the top; then the token list (create/revoke in place, each row shows the
+  "posts as" user, its restrictions and its optional MCP tool allowlist inline,
+  default all tools); then pending proposals and the MCP audit log.
+  `switchAdminTab("tokens")` and `switchAdminTab("mcp")` still resolve to the
+  combined tab, so old links and callers keep working. The per-token allowlist
+  is fetched once per open and shared with the token list (no extra round trip
+  on refresh/revoke).
+- `docs/API.md` and the MCP plan updated for the merged tab.
+
+### Notes
+- Merged to local `main` only — not pushed, not deployed.
+
+
 ## 2.5.0 — 2026-11-09
 
 ### Added
