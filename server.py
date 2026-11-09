@@ -642,6 +642,7 @@ def _invalidate_bot_config_cache() -> None:
 import db
 import auth as auth_mod
 import api_tokens as api_tokens_mod
+import carrier_estimate_lines as carrier_estimate_lines_mod
 
 db.init_db()
 
@@ -4554,6 +4555,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             opp_id = _resolve_project_id(m.group(1))
             if opp_id:
                 self._handle_project_documents_get(opp_id)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/carrier-estimate-lines$", api_path)
+        if m:
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._handle_project_carrier_estimate_lines(opp_id)
             else:
                 _json_response(self, 404, {"error": "Project not found"})
             return
@@ -12723,6 +12732,72 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             logger.exception("projects/{id}/documents failed")
             log_infra_event("error", f"projects/{opp_id}/documents failed: {exc}", source="documents", method=self.command, path=api_path)
             _json_response(self, 500, {"error": "Failed to load project documents"})
+
+    def _handle_project_carrier_estimate_lines(self, opp_id: int) -> None:
+        """GET parsed carrier estimate lines for a project (read-only).
+
+        Auth: session cookie or read-scoped Bearer API token (same as other
+        /api/v2/projects/{id}/ GET routes). Never returns filesystem paths.
+        Used by Ook MCP sietch_carrier_estimate_lines for local/Privatemode
+        supplement work — not an OpenRouter egress path.
+        """
+        user = _require_auth(self)
+        if not user:
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        raw_doc = (qs.get("document_id") or [None])[0]
+        document_id = None
+        if raw_doc not in (None, ""):
+            try:
+                document_id = int(str(raw_doc).strip())
+            except (TypeError, ValueError):
+                _json_response(self, 400, {"error": "document_id must be an integer"})
+                return
+        try:
+            rows = db.query(
+                """SELECT id, title, file_path, file_size, mime_type, uploaded_by, uploaded_at, company_scope, folder_id
+                   FROM project_documents WHERE opportunity_id = %s AND is_deleted = FALSE
+                   ORDER BY uploaded_at DESC""",
+                (opp_id,),
+            )
+            docs = []
+            for r in rows:
+                docs.append({
+                    "id": r[0], "title": r[1], "filePath": r[2],
+                    "fileSize": r[3], "mimeType": r[4], "uploadedBy": r[5],
+                    "uploadedAt": _ts(r[6]),
+                    "companyScope": r[7],
+                })
+            payload = carrier_estimate_lines_mod.build_carrier_lines_payload(
+                job_id=opp_id,
+                documents=docs,
+                root=ROOT,
+                document_id=document_id,
+            )
+            token_id = user.get("api_token_id")
+            log_infra_event(
+                "info",
+                (
+                    f"carrier-estimate-lines job={opp_id} "
+                    f"available={payload.get('available')} "
+                    f"items={payload.get('item_count')} "
+                    f"user={user.get('id')} api_token_id={token_id}"
+                ),
+                source="carrier_estimate_lines",
+                method="GET",
+                path=f"/api/v2/projects/{opp_id}/carrier-estimate-lines",
+            )
+            _json_response(self, 200, payload)
+        except Exception as exc:
+            logger.exception("projects/%s/carrier-estimate-lines failed", opp_id)
+            log_infra_event(
+                "error",
+                f"projects/{opp_id}/carrier-estimate-lines failed: {type(exc).__name__}",
+                source="carrier_estimate_lines",
+                method="GET",
+                path=f"/api/v2/projects/{opp_id}/carrier-estimate-lines",
+            )
+            _json_response(self, 500, {"error": "Failed to load carrier estimate lines"})
 
     def _handle_project_document_upload(self, opp_id: int) -> None:
         user = _require_auth(self)
