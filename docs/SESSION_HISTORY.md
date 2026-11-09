@@ -1,5 +1,86 @@
 # Session History — Sietch CRM (new-crm branch)
 
+
+## Current session summary (for next resume)
+
+**Date:** 2026-11-09 (PR #1 — document format + preview download; CI green)
+
+**Status: COMMITTED LOCALLY on branch `cursor/document-format-preview-download-079d`
+— NOT merged into main, NOT deployed.** The branch carries the PR's
+document-format work plus the api-tokens full-access feature.
+
+**What this session did.** Fetched the PR branch (git auth worked), rebased it
+onto local `main` (`cfb94e3`), reproduced the Python CI failures in a clean
+`python:3.12-slim` container with a Postgres service, and fixed them at
+source. Another agent (Ken) was committing to the same branch concurrently;
+where his version of a fix was stronger than mine I adopted his (the
+`_link_toggle_allows` gate assertions, the `copy_mail_attachments_to_project_detailed`
+region helper, and the scanner toggle guard), and I reverted my duplicates.
+
+**Real bugs fixed.**
+- `_handle_mail_template_create` called `_require_auth()` AFTER the title
+  check and then carried on, so an anonymous POST was answered 401 but still
+  INSERTed a `mail_templates` row with `created_by` NULL. Auth now runs first
+  and returns. (The api-tokens work had reverted Ken's fix.)
+- `tests/test_mail_auth_gaps.py` still asserted the old read-only API-token
+  model. Updated for full-access tokens: a full token is allowed on mail
+  config/log; a token with an explicit resource restriction or read-only
+  scope is still refused 403.
+- `test_cache_bust_bumped` pinned `app.js?v=3.7.50` while the tree was at
+  `3.7.51` — it failed for an unrelated bump. Now asserts `>= 3.7.51`.
+- `tests/test_invoice_coc_modern.py` called `subprocess.run(["pdftotext", ...])`
+  unguarded, so a missing poppler binary raised `FileNotFoundError` before
+  the `pypdf` fallback. Both PDF helpers now tolerate the missing binary and
+  `pypdf` is in `requirements.txt`.
+
+**Test results.** CI replica (clean `python:3.12-slim`, non-root uid 1000,
+`requirements.txt` only, Postgres 16 service, schema loaded like CI):
+- Python job: all 58 steps green, exit 0.
+- Node job: all 399 tests in `tests/test_*.mjs` pass.
+- Full sweep of every `tests/test_*.py`: all pass.
+- `tests/test_preview_sandbox_browser.py` passes with real headless Chromium.
+- Syntax job: `py_compile` on all 11 modules, `node --check` on app.js and
+  api-token-ui.js — clean.
+
+**Not touched.** The PR's document-format implementation
+(`document_format.py`, byte-based detection, typed session keys, the preview
+`postMessage` bridge) is byte-identical to the PR head. The parser/reconciler
+is untouched. No production server, tunnel, or CRM database was touched; no
+deploy; no merge into main.
+
+**Still open.** The PR's own note that the generic post-rename "could not
+open" editor error was not reproduced stands — no Document Server was
+available in this session.
+
+---
+
+
+**Date:** 2026-11-08 (remove carrier-estimate-lines API)
+
+**Status: REMOVED on branch `remove-carrier-estimate-lines` off `main`
+@ `515d7ef` — NOT pushed, NOT merged, NOT deployed.**
+
+- Deleted `GET /api/v2/projects/{id}/carrier-estimate-lines`, its handler,
+  `carrier_estimate_lines.py`, `tests/test_carrier_estimate_lines.py`, and
+  `tests/fixtures/carrier_estimate_lines/`.
+- Reason: the route guessed the carrier PDF by filename heuristic (oldest
+  match, fallback to any document). Ken decided the Ook-imported carrier
+  estimate is the source of truth.
+- Kept unchanged: full-access API tokens + audit log, admin API-token UI,
+  reconciler package + Dockerfile `COPY reconciler ./reconciler`.
+- VERSION 2.4.1 -> 2.4.2; CHANGELOG "Removed" entry added.
+
+---
+
+## 2026-11-08 — carrier-estimate-lines API (removed in 2.4.2)
+
+**Branch:** `feature/carrier-estimate-lines-api` off `d69182f`.
+
+- New GET `/api/v2/projects/{id}/carrier-estimate-lines` wires reconciler parse
+  to the read-only API (Bearer/session). No paths leaked; audit logged.
+- Unit tests with synthetic carrier text fixture (no real claims).
+
+---
 This file holds the rolling "last session summary" archive that was previously
 embedded at the top of AGENTS.md. New sessions prepend to this file; old
 sessions are retained for context.
@@ -10,6 +91,119 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 ---
 
 ## Current session summary (for next resume)
+
+**Date:** 2026-11-06 (admin API-token management UI, branch
+`admin-api-token-ui-20261106`, based on `main` @ `ee6e401`)
+
+**Status: IMPLEMENTED on the feature branch — NOT merged, NOT pushed, NOT
+deployed.** Worktree: `~/Projects/new-crm-admin-api-token-ui-20261106`. No
+production DB/container/service was touched; no real token was minted; no
+credentials or PII were read.
+
+**What shipped.** Admin Console -> **API Tokens** tab over the pre-existing
+admin endpoints (list/create/revoke). Safe metadata only; one-time secret
+reveal with copy + "cannot be recovered" warning, cleared on tab-away / close /
+sign-out / pagehide and never stored or logged; blunt broad-read disclosure
+(GET-only, mail + contacts, not resource-scoped, no side-effect-free promise);
+confirm-gated revoke with loading/error/empty states and metadata refresh;
+admin-only navigation guard plus the server's existing `_require_admin` gates.
+
+**Files.** `public/index.html`, `public/app.js`, `public/styles.css`,
+`public/api-token-ui.js` (new), `tests/test_admin_api_tokens_ui.mjs` (new),
+`tests/test_admin_api_token_ui.py` (new),
+`tests/test_admin_api_tokens_http.py` (new), `.github/workflows/smoke.yml`,
+`VERSION`, `CHANGELOG.md`, `docs/SESSION_HISTORY.md`.
+
+**Verification run locally.**
+- `node --test tests/test_*.mjs` -> 383 pass, 0 fail (50 of them new)
+- `python3 tests/test_admin_api_token_ui.py` -> 18 pass
+- `python3 tests/test_api_tokens.py` (throwaway DB) -> 28 pass
+- `python3 tests/test_admin_gating.py` -> 10 pass
+- `python3 tests/test_admin_api_tokens_http.py` against a disposable
+  `postgres:16-alpine` container -> 6 pass (ran on both a migrated and a
+  brand-new database)
+- Deliberate mutation check: replacing `textContent` with `innerHTML` failed
+  2 tests, then was reverted.
+
+**Not run / unavailable.** No headless browser (no Chromium/Playwright in this
+environment), so there is no screenshot-driven test; the UI handlers are
+exercised for real in a vm DOM shim instead. The HTTP suite is not wired into
+CI because it refuses non-`sietch_test_*` databases.
+
+**Next.** Manager review + explicit approval before any push/PR/merge/deploy.
+
+**Date:** 2026-11-06 (document editor format + preview Download, branch
+`cursor/document-format-preview-download-079d`)
+
+**Status: IMPLEMENTED on a review branch — NOT merged, NOT deployed.** Cut
+from `main`. No production server, tunnel, or CRM database was touched.
+No parser / Spock reconciler changes. No API or MCP work.
+
+**The bugs.**
+- `_handle_document_editor_config` took OnlyOffice `fileType` from the
+  display title and defaulted an extensionless title to `docx`. A PDF whose
+  editable title had no suffix was announced as Word, and OnlyOffice reported
+  a PDF/docx mismatch. The stored MIME and the title are labels; the bytes
+  were never consulted.
+- `document.key` was `sietch-doc-{id}` for every type. OnlyOffice caches the
+  conversion under that key, so a session opened as the wrong type can still
+  be served after the type is corrected. Appending `.pdf` to the title would
+  clear the mismatch string and leave a generic open error. That second
+  error was **not reproduced** here (no Document Server) and is **not**
+  claimed fixed. The key now includes the detected type
+  (`sietch-doc-{id}-{ext}`) so a corrected type does not reuse the previous
+  session. The old unsuffixed key is still accepted on the save callback.
+  A content hash was not added; it would split a live forcesave session.
+- Preview toolbar Download built an `<a download>` inside an iframe sandboxed
+  without `allow-downloads`, so the browser dropped it. The document response
+  was `Content-Disposition: inline` with the raw title interpolated into the
+  header.
+
+**Fixes.**
+- New `document_format.py`. Signatures win (PDF, OOXML, ODF, OLE, images,
+  RTF). Title and MIME are hints only for ambiguous text. Extensionless,
+  upper-case, doubled, and misleading suffixes are covered. Unknown, empty,
+  encrypted, HTML/script, and executables fail the editor with a clear
+  message and are not sent as docx. Images stay on the preview path.
+- Download `Content-Type` follows the bytes. `?download=1` is an attachment
+  with a header-safe filename (no CR/LF, no path, dangerous suffixes
+  stripped). Default stays inline so preview and the Document Server fetch
+  keep working. `X-Content-Type-Options: nosniff`. Auth is unchanged:
+  session cookie, OnlyOffice JWT (`?token=`, no cookie), or bearer token,
+  and it still runs before the file is read.
+- Preview Download `postMessage`s `{type: docs-preview-download}` to
+  `window.location.origin` only. Both parents accept it only when
+  `event.origin` matches, `event.source` is that preview iframe, and the
+  id is the document already open. The parent then fetches
+  `?download=1` with `credentials: "same-origin"`. The sandbox was not
+  widened. List/context downloads use the same authenticated fetch.
+
+**Tests.** `tests/test_document_format.py` (39, no DB).
+`tests/test_doc_preview_download.mjs` (15). `tests/test_doc_editor_title.mjs`
+still passes. `tests/test_doc_download_auth.py` (27, including editor
+fileType, cookie-less token fetch, header injection, typed callback keys).
+`tests/test_api_tokens.py` passed. Headless Chrome
+(`tests/test_preview_sandbox_browser.py`): an `allow-downloads` control
+saved a file; the production sandbox did not; real `doc-preview.html`
+Download was accepted by the parent for synthetic id 42 and a spoof from
+the parent window was rejected.
+`tests/test_documents_batch_download.py` was not run: it imports `server`
+from the hardcoded path `/home/chapman-server/Projects/new-crm`.
+
+**Environment.** Importing `server` opens Postgres. A throwaway local
+cluster (empty database, no CRM rows, no `init.sql`) was used only so that
+import could succeed. The migration runner attempted the SQL files, they
+failed because the schema was absent, and the database and role were then
+dropped. No migration file was added. No Document Server was available.
+
+**Deploy (not done).** No schema change. A normal app restart picks this
+up. In-flight editor sessions keep the old key and can still save. New
+opens use the typed key. Confirming the generic post-rename open error is
+gone requires a Document Server and a synthetic PDF, not a production file.
+
+---
+
+## Previous session summary
 
 **Date:** 2026-11-04 (mail retention re-import loop, branch
 `fix-mail-retention-loop`)

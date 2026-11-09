@@ -31,9 +31,10 @@ import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
-ROOT = Path('/home/chapman-server/Projects/new-crm')
+ROOT = REPO_ROOT
 
 
 class TestStreamingExport(unittest.TestCase):

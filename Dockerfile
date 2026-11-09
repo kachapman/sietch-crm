@@ -42,6 +42,7 @@ RUN pip install --no-cache-dir "reportlab>=4.0,<5"
 # Keeping this as a glob avoids the "missing module → container crash" failure
 # mode called out in AGENTS.md when a new .py file is added at the repo root.
 COPY *.py ./
+COPY reconciler ./reconciler
 # doc_pdf/ holds the modern (Sherwood-style) Invoice + Certificate of
 # Completion PDF builders (ReportLab). It is a package, not a module, so the
 # glob above does not pick it up.

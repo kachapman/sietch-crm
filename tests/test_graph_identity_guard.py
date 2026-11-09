@@ -37,8 +37,10 @@ Run with: python3 tests/test_graph_identity_guard.py
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
+from pathlib import Path
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 import oauth_providers as op
 import mail_send as ms
@@ -294,8 +296,8 @@ class TestSourceGuards(unittest.TestCase):
 
     def setUp(self):
         from pathlib import Path
-        self.server = Path('/home/chapman-server/Projects/new-crm/server.py').read_text(encoding="utf-8")
-        self.app = Path('/home/chapman-server/Projects/new-crm/public/app.js').read_text(encoding="utf-8")
+        self.server = (REPO_ROOT / "server.py").read_text(encoding="utf-8")
+        self.app = (REPO_ROOT / "public/app.js").read_text(encoding="utf-8")
 
     def test_graph_callback_refuses_unverifiable_identity(self):
         at = self.server.index("def _handle_oauth_graph_callback")

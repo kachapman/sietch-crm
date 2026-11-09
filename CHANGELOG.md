@@ -1,6 +1,155 @@
+## 2026-11-08 — API tokens: full access by default
+
+- Admin console tokens default to full `/api/v2` access (all methods).
+- Optional restrictions at creation: read-only, methods, resources, expiry.
+- Write audit log (`api_token_audit_log`) records token id, method, path, time.
+- Migration 046; show-once secret / hashed storage / revoke unchanged.
+
 # Changelog
 
+## 2026-11-09 — PR #1 (document format + preview download): CI green
+
+Branch `cursor/document-format-preview-download-079d`. Not merged, not deployed.
+
+### Fixed
+- **Anonymous mail-template create wrote a row.** `_handle_mail_template_create`
+  called `_require_auth()` AFTER the title check and then carried on, so an
+  anonymous POST was answered 401 but still INSERTed the template with
+  `created_by` NULL. Auth now runs first and returns.
+- **API-token suites still asserted the old read-only model.** With
+  full-access tokens (see 2026-11-08), a Bearer token may now read and write
+  `/api/v2`. `tests/test_mail_auth_gaps.py` updated: a full token is allowed
+  on mail config/log, while a token with an explicit resource restriction or
+  read-only scope is still refused 403.
+- **`test_cache_bust_bumped` pinned a literal version.** It asserted
+  `app.js?v=3.7.50` while the tree was already at `3.7.51`, so it failed for
+  an unrelated bump. It now asserts the cache-bust is at least the version
+  that shipped the preview-download change.
+- **`tests/test_invoice_coc_modern.py` crashed without poppler.** Its
+  `pdf_text()` / `pdf_page_count()` helpers called `subprocess.run(["pdftotext",
+  ...])` unguarded, so a missing `pdftotext` binary raised `FileNotFoundError`
+  before the `pypdf` fallback could run. Both helpers now tolerate the
+  missing binary, and `pypdf` is listed in `requirements.txt` so the fallback
+  is actually available on a bare runner.
+
+### Unchanged
+- The PR's own document-format work (`document_format.py`, byte-based type
+  detection, typed session keys, the preview `postMessage` bridge) is
+  byte-identical to the PR head.
+
+
+## 2.4.2 — 2026-11-08
+
+### Removed
+- `GET /api/v2/projects/{id}/carrier-estimate-lines`, added in 2.4.1.
+  The route guessed the carrier PDF by filename heuristic (picked the oldest
+  match and fell back to any project document), so it could return lines from
+  the wrong file. The source of truth for carrier lines is the carrier
+  estimate imported into the Ook project, not Sietch. Removed at source:
+  route + handler, `carrier_estimate_lines.py`, its unit tests, and the
+  synthetic fixture. The reconciler library and its `/api/v2` consumers are
+  unchanged.
+
+## 2.4.1 — 2026-11-08
+
+> Route removed in 2.4.2 (see above).
+
+### Added
+- Read-only `GET /api/v2/projects/{id}/carrier-estimate-lines` — parses a
+  project-attached carrier Xactimate estimate via the reconciler library and
+  returns JSON line items (integer cents). Auth: session or read-scoped Bearer
+  API token. No filesystem paths in the response. Audit via `log_infra_event`.
+- `carrier_estimate_lines.py` helper + synthetic fixture unit tests.
+
+### Notes
+- Built for Ook MCP `sietch_carrier_estimate_lines` / local + Privatemode
+  supplement work. No deploy in this change.
+
+
 All notable changes to the Sietch CRM dashboard are documented here.
+
+## Admin API-token management UI (2026-11-06, branch `admin-api-token-ui-20261106`)
+
+**Feature.** The Admin Console gains an **API Tokens** tab driving the existing
+admin endpoints (`GET`/`POST /api/v2/admin/api-tokens`,
+`POST /api/v2/admin/api-tokens/{id}/revoke`). Server behaviour is unchanged;
+this is the UI those endpoints were missing.
+
+- Tabs follow the admin-console convention (inline SVG icon + label, appended
+after Import / Export; existing tab order untouched).
+- The list renders safe metadata only: name, 12-char `sietch_…` prefix, scope,
+creator email, created / last-used / revoked timestamps, and an Active/Revoked
+badge. Plaintext, `token_hash`, and any non-whitelisted field are dropped in
+`public/api-token-ui.js#summarizeToken` before rendering.
+- Create validates the name (trimmed, required, <=80 chars, no control chars)
+and POSTs exactly `{name}`, so the UI cannot request a wider scope. The returned
+secret is written with `textContent` into a one-time reveal panel with a copy
+button and an explicit "shown only once / cannot be recovered" warning. It is
+held in one module variable and cleared on tab-away, console close, sign-out,
+and `pagehide`; it is never put in browser storage, a URL, a toast, an error
+string, or the console. Copy falls back to `execCommand` and, on failure, tells
+the user to copy manually without echoing the browser error.
+- Scope disclosure is deliberately blunt: GET-only, but broad — it acts as the
+creating admin and can read most of `/api/v2` including mail and contacts, is
+not resource-scoped, and there is no guarantee every GET is side-effect-free.
+- Revoke is confirm-gated, shows in-flight state, handles 404 (already revoked),
+and re-fetches the list so metadata stays accurate.
+- Admin-only: `openAdminConsoleModal` refuses non-admins before showing the
+modal, the loader re-checks `isAdminViewer`, and the server's `_require_admin`
+gates (dispatch + handler) are untouched.
+
+**Tests.** `tests/test_admin_api_tokens_ui.mjs` (50 assertions: real helper
+behaviour, real token handlers executed in a DOM shim, markup/disclosure/source
+guards), `tests/test_admin_api_token_ui.py` (18 DB-free backend contract +
+authorization guards), `tests/test_admin_api_tokens_http.py` (6 end-to-end
+tests against a throwaway PostgreSQL and an ephemeral server: anonymous /
+non-admin denials, validation, show-once + hash-only storage, metadata refresh,
+revoke, and bearer scope). CI now also runs the backend token suite and the
+contract suite; the HTTP suite stays opt-in because it requires a disposable
+`sietch_test_*` database (never `sietch_crm`).
+
+**Version.** VERSION 2.3.0 -> 2.4.0; `app.js` cache-buster 3.7.50 -> 3.7.51.
+
+## Document editor type follows the file bytes; preview Download works from the sandbox (2026-11-06, branch `cursor/document-format-preview-download-079d`)
+
+**Not merged and not deployed.** No schema change, no parser/reconciler
+change, no API/MCP work, no production data.
+
+**Editor.** `GET /api/v2/documents/{id}/editor-config` used to set OnlyOffice
+`fileType` from the display title and default an extensionless title to
+`docx`. A PDF with an extensionless title was opened as Word and OnlyOffice
+reported a PDF/docx mismatch. Detection now uses the file signature
+(`document_format.py`). The title and the stored MIME are ignored when they
+disagree with the bytes, including upper-case, doubled, and misleading
+suffixes. A real docx/xlsx/pptx (and the other supported Office types) still
+opens, including when the title has no suffix. PDF stays view-only. Empty,
+unknown, encrypted, HTML, and executable bytes get a clear 415 and are not
+sent to OnlyOffice as docx. The editor title's suffix matches the detected
+type; the CRM display title is not rewritten.
+
+**Session key.** `document.key` is `sietch-doc-{id}-{ext}` so two people
+editing the same file and type still share a session, but a corrected type
+does not reuse a Document Server conversion cached under the previous type.
+The unsuffixed `sietch-doc-{id}` key is still accepted on the save callback.
+This does **not** claim the generic "could not open" error seen after a
+title was renamed to end in `.pdf` is fixed: that error was not reproduced
+here because no Document Server was available.
+
+**Download and preview.** The file response's `Content-Type` follows the
+bytes. `?download=1` sends `Content-Disposition: attachment` with a
+header-safe filename (CR/LF, quotes, and paths cannot inject a second
+header). The default remains inline for the preview fetch and for the
+cookie-less OnlyOffice `?token=` fetch. Auth is unchanged and still runs
+before the file is read. The preview toolbar no longer uses `<a download>`
+inside the sandboxed iframe (that sandbox has no `allow-downloads`, and it
+was not added). The iframe posts `docs-preview-download` to its own origin;
+the parent accepts it only from that iframe and only for the document
+already on screen, then downloads with the session cookie. List and context
+downloads use the same authenticated fetch.
+
+**Tests.** Synthetic files only. `tests/test_document_format.py`,
+`tests/test_doc_preview_download.mjs`, extended `tests/test_doc_download_auth.py`,
+and a headless Chrome sandbox check in `tests/test_preview_sandbox_browser.py`.
 
 ## Mail retention re-import loop: the scanner re-imported (and re-downloaded) purged mail every 2 minutes (2026-11-04, branch `fix-mail-retention-loop`)
 

@@ -17,11 +17,13 @@ import sys
 import time
 import unittest
 from unittest.mock import MagicMock, patch
+from pathlib import Path
 
 # Import the scanner from THIS checkout (the repo root is the parent of
 # tests/), not from a hardcoded absolute path — otherwise the test patches a
 # different module object than the one it exercises.
-sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent.parent))
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 import scanner.mail_scanner as ms  # noqa: E402
 
@@ -264,7 +266,7 @@ class TestConcurrentIsolation(unittest.TestCase):
 
 class TestRefreshButtonPollsStatus(unittest.TestCase):
     def test_no_fixed_sleep_reload(self):
-        src = open("/home/chapman-server/Projects/new-crm/public/app.js", encoding="utf-8").read()
+        src = open(REPO_ROOT / "public/app.js", encoding="utf-8").read()
         at = src.index("const refBtn = $(\"#mail-refresh\")")
         region = src[at:at + 2200]
         self.assertIn("manual_in_progress", region)

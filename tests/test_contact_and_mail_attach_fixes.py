@@ -17,6 +17,7 @@ Bug C — mail attachments OnlyOffice-first:
 
 These are source-level guards, no live DB needed.
 """
+import re
 import unittest
 from pathlib import Path
 
@@ -197,7 +198,17 @@ class TestEventNoteIconStyle(unittest.TestCase):
 
     def test_cache_bust_bumped(self):
         idx_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-        self.assertIn("app.js?v=3.7.50", idx_html)
+        # The cache-bust must be at least the version that shipped the preview
+        # download change, so browsers pick up a changed app.js/styles.css.
+        # Pinning an exact number breaks on every later, unrelated bump (the
+        # API-token UI moved app.js to 3.7.51), so assert the invariant.
+        m = re.search(r'app\.js\?v=(\d+(?:\.\d+)*)', idx_html)
+        self.assertIsNotNone(m, "app.js cache-bust version not found in index.html")
+        self.assertGreaterEqual(
+            tuple(int(part) for part in m.group(1).split(".")),
+            (3, 7, 51),
+            "app.js cache-bust must be >= 3.7.51 (the preview-download release)",
+        )
         self.assertIn("styles.css?v=3.7.22", idx_html)
 
     def test_wash_radio_button_exists_in_admin_form(self):

@@ -2279,6 +2279,10 @@
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             <span class="admin-tab-label">Import / Export</span>
           </button>
+          <button class="admin-tab-btn btn btn-ghost" data-tab="tokens" title="API Tokens">
+            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M16.555 3.843l3.602 3.602a2.877 2.877 0 0 1 0 4.069l-2.643 2.643a2.877 2.877 0 0 1 -4.069 0l-.301 -.301l-6.558 6.558a2 2 0 0 1 -1.414 .586h-2.172a1 1 0 0 1 -1 -1v-2.172a2 2 0 0 1 .586 -1.414l6.558 -6.558l-.301 -.301a2.877 2.877 0 0 1 0 -4.069l2.643 -2.643a2.877 2.877 0 0 1 4.069 0z"/><path d="M15 8l.01 0"/></svg>
+            <span class="admin-tab-label">API Tokens</span>
+          </button>
         </div>
         <div class="admin-main">
           <div id="admin-tab-general" class="admin-tab-content">
@@ -3496,6 +3500,92 @@
           <span id="infra-restart-status" class="infra-status-indicator" style="margin-left:0.5rem;"></span>
         </div>
       </div>
+      <div id="admin-tab-tokens" class="admin-tab-content hidden">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-bottom:0.5rem;">
+          <h3 style="margin:0;">API Tokens</h3>
+          <button type="button" id="api-token-refresh-btn" class="btn btn-ghost btn-sm">&#8635; Refresh</button>
+        </div>
+
+        <div class="api-token-scope-notice" role="note">
+          <strong>Full access by default.</strong>
+          <p style="margin:0.35rem 0 0;">
+            A new token acts as the admin who created it and can call
+            <strong>all <code>/api/v2</code> methods</strong> (GET, POST, PUT, PATCH, DELETE) on every
+            resource that admin can reach &mdash; including notes, contacts, projects, documents,
+            mail, and admin routes. Optional restrictions below are the only way to narrow that.
+            The secret is shown once; revoke immediately if it is exposed.
+          </p>
+        </div>
+
+        <form id="api-token-create-form" autocomplete="off" class="api-token-create">
+          <label for="api-token-name" style="font-size:0.8rem; font-weight:600;">Token name</label>
+          <div style="display:flex; gap:0.35rem;">
+            <input type="text" id="api-token-name" class="form-control" maxlength="80"
+                   placeholder="e.g. LLM supplement agent" autocomplete="off" spellcheck="false" />
+            <button type="submit" id="api-token-create-btn" class="btn btn-primary btn-sm" style="white-space:nowrap;">Create token</button>
+          </div>
+
+          <details class="api-token-restrictions" style="margin-top:0.75rem;">
+            <summary style="cursor:pointer; font-size:0.85rem; font-weight:600;">Optional restrictions</summary>
+            <p style="margin:0.4rem 0 0.6rem; font-size:0.78rem; color:var(--muted);">
+              Leave everything unchecked for full access. Restrictions are optional.
+            </p>
+            <label class="api-token-check" style="display:flex; align-items:center; gap:0.4rem; font-size:0.85rem; margin-bottom:0.5rem;">
+              <input type="checkbox" id="api-token-read-only" />
+              Read-only (GET / HEAD / OPTIONS only)
+            </label>
+            <div style="margin-bottom:0.5rem;">
+              <div style="font-size:0.8rem; font-weight:600; margin-bottom:0.25rem;">Limit methods (optional)</div>
+              <div id="api-token-methods" class="api-token-chip-row" style="display:flex; flex-wrap:wrap; gap:0.45rem; font-size:0.8rem;">
+                <label><input type="checkbox" value="GET" data-api-token-method /> GET</label>
+                <label><input type="checkbox" value="POST" data-api-token-method /> POST</label>
+                <label><input type="checkbox" value="PUT" data-api-token-method /> PUT</label>
+                <label><input type="checkbox" value="PATCH" data-api-token-method /> PATCH</label>
+                <label><input type="checkbox" value="DELETE" data-api-token-method /> DELETE</label>
+              </div>
+            </div>
+            <div style="margin-bottom:0.5rem;">
+              <div style="font-size:0.8rem; font-weight:600; margin-bottom:0.25rem;">Limit resources (optional)</div>
+              <div id="api-token-resources" class="api-token-chip-row" style="display:flex; flex-wrap:wrap; gap:0.45rem; font-size:0.8rem;">
+                <label><input type="checkbox" value="projects" data-api-token-resource /> projects</label>
+                <label><input type="checkbox" value="notes" data-api-token-resource /> notes</label>
+                <label><input type="checkbox" value="contacts" data-api-token-resource /> contacts</label>
+                <label><input type="checkbox" value="documents" data-api-token-resource /> documents</label>
+                <label><input type="checkbox" value="tasks" data-api-token-resource /> tasks</label>
+                <label><input type="checkbox" value="mail" data-api-token-resource /> mail</label>
+                <label><input type="checkbox" value="calendar" data-api-token-resource /> calendar</label>
+                <label><input type="checkbox" value="history" data-api-token-resource /> history</label>
+                <label><input type="checkbox" value="admin" data-api-token-resource /> admin</label>
+                <label><input type="checkbox" value="users" data-api-token-resource /> users</label>
+              </div>
+            </div>
+            <label for="api-token-expires" style="font-size:0.8rem; font-weight:600;">Expires (optional)</label>
+            <input type="datetime-local" id="api-token-expires" class="form-control" style="max-width:16rem; margin-top:0.25rem;" />
+          </details>
+
+          <div id="api-token-create-status" class="api-token-status" role="status" aria-live="polite"></div>
+        </form>
+
+        <div id="api-token-reveal" class="api-token-reveal hidden" role="alert">
+          <div class="api-token-reveal-title">Copy this token now &mdash; it cannot be recovered.</div>
+          <p style="margin:0 0 0.5rem; font-size:0.8rem;">
+            This is the only time the secret is shown. It is not stored in the browser and it will not
+            appear again on this page or after a refresh. Store it in your password manager or secret
+            store before continuing.
+          </p>
+          <div class="api-token-secret-row">
+            <code id="api-token-secret-value" class="api-token-secret"></code>
+            <button type="button" id="api-token-copy-btn" class="btn btn-secondary btn-sm">Copy token</button>
+            <button type="button" id="api-token-reveal-done" class="btn btn-ghost btn-sm">I stored it</button>
+          </div>
+          <div id="api-token-copy-status" class="api-token-status" role="status" aria-live="polite"></div>
+        </div>
+
+        <div style="margin-top:1rem;">
+          <div id="api-token-list-status" class="api-token-status" role="status" aria-live="polite"></div>
+          <div id="api-token-list" class="api-token-list" aria-label="API tokens"></div>
+        </div>
+      </div>
       <div id="admin-tab-photo-reports" class="admin-tab-content hidden">
         <!-- Sub-tab nav inside the Reports tab -->
         <div class="reports-subtabs" id="reports-subtabs">
@@ -3910,6 +4000,7 @@
   </div>
 
   <script src="date-only.js?v=1.0.0"></script>
-  <script src="app.js?v=3.7.50" type="module"></script>
+  <script src="api-token-ui.js?v=1.0.0"></script>
+  <script src="app.js?v=3.7.51" type="module"></script>
 </body>
 </html>
