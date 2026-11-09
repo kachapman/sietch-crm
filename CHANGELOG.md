@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.4.1 — 2026-11-08
+
+### Added
+- Read-only `GET /api/v2/projects/{id}/carrier-estimate-lines` — parses a
+  project-attached carrier Xactimate estimate via the reconciler library and
+  returns JSON line items (integer cents). Auth: session or read-scoped Bearer
+  API token. No filesystem paths in the response. Audit via `log_infra_event`.
+- `carrier_estimate_lines.py` helper + synthetic fixture unit tests.
+
+### Notes
+- Built for Ook MCP `sietch_carrier_estimate_lines` / local + Privatemode
+  supplement work. No deploy in this change.
+
+
 All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Admin API-token management UI (2026-11-06, branch `admin-api-token-ui-20261106`)

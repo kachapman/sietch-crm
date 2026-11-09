@@ -1,5 +1,18 @@
 # Session History — Sietch CRM (new-crm branch)
 
+
+## Current session summary (for next resume)
+
+**Date:** 2026-11-08 (carrier-estimate-lines API for Ook MCP / local+Privatemode)
+
+**Status: MERGED to main pending — NOT deployed.** Branch
+`feature/carrier-estimate-lines-api` off `d69182f`.
+
+- New GET `/api/v2/projects/{id}/carrier-estimate-lines` wires reconciler parse
+  to the read-only API (Bearer/session). No paths leaked; audit logged.
+- Unit tests with synthetic carrier text fixture (no real claims).
+
+---
 This file holds the rolling "last session summary" archive that was previously
 embedded at the top of AGENTS.md. New sessions prepend to this file; old
 sessions are retained for context.
