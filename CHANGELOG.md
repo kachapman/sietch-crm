@@ -7,7 +7,21 @@
 
 # Changelog
 
+## 2.4.2 — 2026-11-08
+
+### Removed
+- `GET /api/v2/projects/{id}/carrier-estimate-lines`, added in 2.4.1.
+  The route guessed the carrier PDF by filename heuristic (picked the oldest
+  match and fell back to any project document), so it could return lines from
+  the wrong file. The source of truth for carrier lines is the carrier
+  estimate imported into the Ook project, not Sietch. Removed at source:
+  route + handler, `carrier_estimate_lines.py`, its unit tests, and the
+  synthetic fixture. The reconciler library and its `/api/v2` consumers are
+  unchanged.
+
 ## 2.4.1 — 2026-11-08
+
+> Route removed in 2.4.2 (see above).
 
 ### Added
 - Read-only `GET /api/v2/projects/{id}/carrier-estimate-lines` — parses a

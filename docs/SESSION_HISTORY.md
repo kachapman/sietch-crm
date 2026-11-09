@@ -3,10 +3,26 @@
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-11-08 (carrier-estimate-lines API for Ook MCP / local+Privatemode)
+**Date:** 2026-11-08 (remove carrier-estimate-lines API)
 
-**Status: MERGED to main pending — NOT deployed.** Branch
-`feature/carrier-estimate-lines-api` off `d69182f`.
+**Status: REMOVED on branch `remove-carrier-estimate-lines` off `main`
+@ `515d7ef` — NOT pushed, NOT merged, NOT deployed.**
+
+- Deleted `GET /api/v2/projects/{id}/carrier-estimate-lines`, its handler,
+  `carrier_estimate_lines.py`, `tests/test_carrier_estimate_lines.py`, and
+  `tests/fixtures/carrier_estimate_lines/`.
+- Reason: the route guessed the carrier PDF by filename heuristic (oldest
+  match, fallback to any document). Ken decided the Ook-imported carrier
+  estimate is the source of truth.
+- Kept unchanged: full-access API tokens + audit log, admin API-token UI,
+  reconciler package + Dockerfile `COPY reconciler ./reconciler`.
+- VERSION 2.4.1 -> 2.4.2; CHANGELOG "Removed" entry added.
+
+---
+
+## 2026-11-08 — carrier-estimate-lines API (removed in 2.4.2)
+
+**Branch:** `feature/carrier-estimate-lines-api` off `d69182f`.
 
 - New GET `/api/v2/projects/{id}/carrier-estimate-lines` wires reconciler parse
   to the read-only API (Bearer/session). No paths leaked; audit logged.
