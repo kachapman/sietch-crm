@@ -5,9 +5,9 @@
 
 **Date:** 2026-11-09 (URGENT: OAuth account binding + mail timezone)
 
-**Status: COMMITTED LOCALLY on branch `fix/oauth-account-binding` (worktree
-`~/Projects/new-crm-oauth-fix`, off `main` @ `cfb94e3`) — NOT merged, NOT
-deployed, no production data or token touched.**
+**Status: COMMITTED LOCALLY on branch `fix/oauth-account-binding` @ `9feb04b`
+(worktree `~/Projects/new-crm-oauth-fix`, off `main` @ `cfb94e3`) — NOT merged,
+NOT deployed, no production data or token touched.**
 
 **1) OAuth tokens on the wrong mail account (Ken, 2:08 PM).**
 Account 8 (`estimates.masterx@outlook.com`) showed "Connected as
