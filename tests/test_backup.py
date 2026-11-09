@@ -11,7 +11,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 from backup_service import sanitize_archive_member
 
@@ -77,7 +78,7 @@ class TestExportTableCoverage(unittest.TestCase):
     def _load_export_tables(self):
         import ast
 
-        src = Path("/home/chapman-server/Projects/new-crm/server.py").read_text()
+        src = (REPO_ROOT / "server.py").read_text()
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
@@ -102,7 +103,7 @@ class TestExportTableCoverage(unittest.TestCase):
     def test_sensitive_columns_stripped(self):
         import ast
 
-        src = Path("/home/chapman-server/Projects/new-crm/server.py").read_text()
+        src = (REPO_ROOT / "server.py").read_text()
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
@@ -125,7 +126,7 @@ class TestExportParts(unittest.TestCase):
     def _load_assign(self, name):
         import ast
 
-        src = Path("/home/chapman-server/Projects/new-crm/server.py").read_text()
+        src = (REPO_ROOT / "server.py").read_text()
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
@@ -171,7 +172,7 @@ class TestSqlImportStrictness(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.src = Path("/home/chapman-server/Projects/new-crm/server.py").read_text()
+        cls.src = (REPO_ROOT / "server.py").read_text()
         start = cls.src.index("def _handle_import_sql")
         # handler ends at the next def at the same indent
         nxt = cls.src.index("\n    def ", start + 10)
@@ -202,7 +203,7 @@ class TestSqlExportStreaming(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.src = Path("/home/chapman-server/Projects/new-crm/server.py").read_text()
+        cls.src = (REPO_ROOT / "server.py").read_text()
         start = cls.src.index("def _handle_export_backup")
         nxt = cls.src.index("\n    def ", start + 10)
         cls.body = cls.src[start:nxt]
@@ -294,7 +295,7 @@ class TestBackupStatusShape(unittest.TestCase):
     config so the console can render the Proton pickup hint + checkboxes."""
 
     def setUp(self):
-        self.src = Path("/home/chapman-server/Projects/new-crm/backup_service.py").read_text()
+        self.src = (REPO_ROOT / "backup_service.py").read_text()
 
     def test_host_path_surfaced(self):
         self.assertIn("BACKUP_DIR_HOST", self.src)
@@ -511,7 +512,7 @@ class TestBackupRoutePlacement(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.src = Path("/home/chapman-server/Projects/new-crm/server.py").read_text()
+        cls.src = (REPO_ROOT / "server.py").read_text()
         get_start = cls.src.index("def _handle_api_get")
         post_start = cls.src.index("def _handle_api_post_put")
         cls.get_body = cls.src[get_start:post_start]
@@ -539,7 +540,7 @@ class TestBackupRoutePlacement(unittest.TestCase):
         # endpoint includes it.
         import re
         body = re.search(r"def get_backup_status.*?return \{[^}]*\}",
-                         Path("/home/chapman-server/Projects/new-crm/backup_service.py").read_text(),
+                         (REPO_ROOT / "backup_service.py").read_text(),
                          re.S).group(0)
         self.assertIn("history_attachments_subdir", body)
         self.assertIn("include_history", body)
@@ -550,14 +551,14 @@ class TestBackupRoutePlacement(unittest.TestCase):
         # is in the status payload.
         import re
         body = re.search(r"def get_backup_status.*?return \{[^}]*\}",
-                         Path("/home/chapman-server/Projects/new-crm/backup_service.py").read_text(),
+                         (REPO_ROOT / "backup_service.py").read_text(),
                          re.S).group(0)
         self.assertIn('"configured"', body)
 
     def test_history_dir_size_endpoint_registered(self):
         # /api/v2/admin/backup/history-dir-size must be wired so the
         # console's large-file warning has something to fetch.
-        body = Path("/home/chapman-server/Projects/new-crm/server.py").read_text()
+        body = (REPO_ROOT / "server.py").read_text()
         self.assertIn("/api/v2/admin/backup/history-dir-size", body)
         self.assertIn("_handle_backup_history_dir_size", body)
 
@@ -583,7 +584,7 @@ class TestBackupRoutePlacement(unittest.TestCase):
     def test_history_tmp_cleanup_glob(self):
         # Cleanup must not leave orphan .history-*.tmp files behind
         # when a partial tar write gets interrupted.
-        body = Path("/home/chapman-server/Projects/new-crm/backup_service.py").read_text()
+        body = (REPO_ROOT / "backup_service.py").read_text()
         self.assertIn(".history-*.tmp", body)
 
 

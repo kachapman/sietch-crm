@@ -20,8 +20,10 @@ import sys
 import unittest
 from datetime import datetime
 from unittest.mock import MagicMock, patch
+from pathlib import Path
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 ADMIN = {"id": 7, "is_admin": True}
 
@@ -279,7 +281,7 @@ class TestNoLiteralPercentInScanSql(unittest.TestCase):
 
 class TestUiWiring(unittest.TestCase):
     def test_button_route_and_confirm_flow(self):
-        src = open("/home/chapman-server/Projects/new-crm/public/app.js", encoding="utf-8").read()
+        src = open(REPO_ROOT / "public/app.js", encoding="utf-8").read()
         self.assertIn("sync-relink-orphan-snapshots-btn", src)
         self.assertIn("/api/v2/admin/sync/relink-orphan-email-snapshots", src)
         at = src.index('$("#sync-relink-orphan-snapshots-btn")')
@@ -287,7 +289,7 @@ class TestUiWiring(unittest.TestCase):
         self.assertIn("dry_run", region)
         self.assertIn("confirmDialog", region)
         self.assertIn("include_sent", region)
-        idx = open("/home/chapman-server/Projects/new-crm/public/index.html", encoding="utf-8").read()
+        idx = open(REPO_ROOT / "public/index.html", encoding="utf-8").read()
         self.assertIn("sync-relink-orphan-snapshots-btn", idx)
 
 

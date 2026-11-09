@@ -13,8 +13,10 @@ import json
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
+from pathlib import Path
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 ADMIN = {"id": 7, "is_admin": True}
 
@@ -267,7 +269,7 @@ class TestBackfillEndpoint(unittest.TestCase):
         self.assertIn("date_received", link_sql[0])
 
     def test_button_dry_runs_then_confirms(self):
-        src = open("/home/chapman-server/Projects/new-crm/public/app.js", encoding="utf-8").read()
+        src = open(REPO_ROOT / "public/app.js", encoding="utf-8").read()
         at = src.index('$("#sync-backfill-email-history-btn")')
         region = src[at:at + 3500]
         self.assertIn("dry_run", region)
@@ -291,10 +293,10 @@ class TestServerDelegates(unittest.TestCase):
 
 class TestUiWiring(unittest.TestCase):
     def test_backfill_button_and_handler(self):
-        src = open("/home/chapman-server/Projects/new-crm/public/app.js", encoding="utf-8").read()
+        src = open(REPO_ROOT / "public/app.js", encoding="utf-8").read()
         self.assertIn("sync-backfill-email-history-btn", src)
         self.assertIn("/api/v2/admin/sync/backfill-email-history", src)
-        idx = open("/home/chapman-server/Projects/new-crm/public/index.html", encoding="utf-8").read()
+        idx = open(REPO_ROOT / "public/index.html", encoding="utf-8").read()
         self.assertIn("sync-backfill-email-history-btn", idx)
 
 
@@ -305,7 +307,7 @@ class TestBackfillSqlPlaceholders(unittest.TestCase):
         # placeholders ("tuple index out of range"). The existence test must
         # use strpos() so the only % in the SQL is the placeholder itself.
         import re
-        src = open("/home/chapman-server/Projects/new-crm/server.py", encoding="utf-8").read()
+        src = open(REPO_ROOT / "server.py", encoding="utf-8").read()
         at = src.index("def _handle_sync_backfill_email_history")
         region = src[at:at + 8000]
         self.assertIn("strpos(", region)

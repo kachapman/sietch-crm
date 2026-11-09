@@ -2,6 +2,36 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## 2.3.1 — 2026-11-09
+
+### Fixed
+- **Anonymous callers could create mail templates.**
+  `_handle_mail_template_create` checked the body first, called
+  `_require_auth()` afterwards, and then continued regardless — so an
+  unauthenticated `POST /api/v2/mail/templates` was answered `401` but the row
+  was still INSERTed with `created_by = NULL`. The auth gate now runs first and
+  returns; `created_by` is always the session user.
+
+### Changed (CI / tests only — no product behaviour)
+- **The Python CI job can actually run now.** 32 test files hardcoded
+  `sys.path.insert(0, '/home/chapman-server/Projects/new-crm')` and read
+  `server.py` / `public/app.js` from that absolute path. On a runner the path
+  does not exist, so the first step (`event_bus`) failed on `import event_bus`
+  and all 70 later steps were skipped. Every suite now derives the repo root
+  from `Path(__file__)`, so source guards also read the tree under test instead
+  of whichever checkout happens to live at the hardcoded path.
+- `requirements.txt` lists the runtime dependencies CI needs
+  (`psycopg2-binary`, `httpx`, `imap-tools`, `Pillow`, `ExifRead`) next to the
+  existing `fpdf2` / `reportlab`; a clean venv installed from that file alone
+  runs the whole suite.
+- Stale tests fixed at the source — each also fails on `main`:
+  `test_email_project_copy` (fixed-width source window + a `MagicMock` that
+  answered "already copied" to every dedupe query),
+  `test_sync_pull_deals_fields` (the correction `UPDATE` now precedes the
+  full-field one), `test_scanner_toggle_gating` (the link gate moved into
+  `_link_toggle_allows`), and the `tests/test_mail_template_auth.py` that
+  `smoke.yml` has referenced since `dd35546` but which was never committed.
+
 ## Document editor type follows the file bytes; preview Download works from the sandbox (2026-11-06, branch `cursor/document-format-preview-download-079d`)
 
 **Not merged and not deployed.** No schema change, no parser/reconciler

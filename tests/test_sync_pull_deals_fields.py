@@ -91,14 +91,24 @@ class TestResponsibleUser(unittest.TestCase):
             self.assertIn(col, cols, f"INSERT must write {col}")
 
     def test_update_writes_responsible_user_id(self):
+        # The pull-deals body now contains more than one
+        # `UPDATE opportunities SET … WHERE id = %s`: the stage/due
+        # correction path (partial columns) comes first, then the
+        # full-field sync UPDATE. Requiring every column in the FIRST match
+        # pinned the wrong statement, so look for a statement that carries
+        # all of them (the correction one intentionally does not).
         body = _pull_deals_body()
-        m = re.search(r"UPDATE opportunities\s+SET(.*?)WHERE id = %s", body, re.DOTALL)
-        self.assertIsNotNone(m, "opportunities UPDATE not found")
-        sets = m.group(1)
-        for col in ("stage_id", "stage_type", "bid_value", "expected_close_date",
-                    "actual_close_date", "actual_close_value", "contact_id",
-                    "responsible_user_id"):
-            self.assertIn(col, sets, f"UPDATE must write {col}")
+        wanted = ("stage_id", "stage_type", "bid_value", "expected_close_date",
+                  "actual_close_date", "actual_close_value", "contact_id",
+                  "responsible_user_id")
+        matches = re.findall(r"UPDATE opportunities\s+SET(.*?)WHERE id = %s",
+                             body, re.DOTALL)
+        self.assertTrue(matches, "opportunities UPDATE not found")
+        full = [sets for sets in matches
+                if all(col in sets for col in wanted)]
+        self.assertEqual(len(full), 1,
+                         "expected exactly one full-field UPDATE writing "
+                         f"{wanted}; found {len(full)}")
 
 
 class TestContactSyncStillWired(unittest.TestCase):

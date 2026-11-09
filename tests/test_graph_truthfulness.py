@@ -16,8 +16,10 @@ import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
+from pathlib import Path
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 import server as _server
 
@@ -254,7 +256,7 @@ class TestSmtpMemoryRouting(unittest.TestCase):
 
 class TestFrontendTruthfulnessGuards(unittest.TestCase):
     def test_three_states_and_identity_wired(self):
-        src = open("/home/chapman-server/Projects/new-crm/public/app.js", encoding="utf-8").read()
+        src = open(REPO_ROOT / "public/app.js", encoding="utf-8").read()
         for needle in ("auto-renew", "action-needed", "graphIdentity", "renews automatically on send",
                        "smtp_auth_disabled", "sending via Graph only", "Email sent"):
             self.assertIn(needle, src)
