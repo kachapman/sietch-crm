@@ -101,11 +101,20 @@ PAYLOAD = {
 
 
 def pdf_text(path):
-    """Extract text from a PDF (pdftotext when available, else pypdf)."""
+    """Extract text from a PDF (pdftotext when available, else pypdf).
+
+    poppler's pdftotext is an OS package (poppler-utils), not a Python
+    dependency, so it is absent on a bare runner. subprocess.run raises
+    FileNotFoundError when the binary is missing, which used to escape the
+    fallback entirely.
+    """
     path = str(path)
-    out = subprocess.run(["pdftotext", "-layout", path, "-"],
-                         capture_output=True, text=True)
-    if out.returncode == 0 and out.stdout.strip():
+    try:
+        out = subprocess.run(["pdftotext", "-layout", path, "-"],
+                             capture_output=True, text=True)
+    except (FileNotFoundError, OSError):
+        out = None
+    if out is not None and out.returncode == 0 and out.stdout.strip():
         return out.stdout
     try:
         from pypdf import PdfReader
@@ -120,7 +129,10 @@ def pdf_page_count(path):
         from pypdf import PdfReader
         return len(PdfReader(str(path)).pages)
     except Exception:
-        out = subprocess.run(["pdfinfo", str(path)], capture_output=True, text=True)
+        try:
+            out = subprocess.run(["pdfinfo", str(path)], capture_output=True, text=True)
+        except (FileNotFoundError, OSError):
+            return 0
         m = re.search(r"Pages:\s+(\d+)", out.stdout or "")
         return int(m.group(1)) if m else 0
 

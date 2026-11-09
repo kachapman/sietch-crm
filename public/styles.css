@@ -19356,3 +19356,79 @@ select.form-control {
   /* Icon style — accent bg set inline */
   font-size: 1rem;
 }
+
+/* ── Admin: API tokens ─────────────────────────────────────────────────────── */
+.api-token-scope-notice {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warning, #d29922);
+  border-radius: 4px;
+  background: var(--surface-2, var(--surface));
+  padding: 0.6rem 0.75rem;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  margin-bottom: 0.85rem;
+}
+.api-token-scope-notice code { font-size: 0.78rem; }
+.api-token-create {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-width: 640px;
+  margin-bottom: 0.75rem;
+}
+.api-token-status { font-size: 0.78rem; min-height: 1.1em; margin-top: 0.25rem; }
+.api-token-reveal {
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  padding: 0.75rem;
+  margin: 0.75rem 0;
+  background: rgba(248, 81, 73, 0.06);
+}
+.api-token-reveal-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--danger);
+  margin-bottom: 0.35rem;
+}
+.api-token-secret-row { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+.api-token-secret {
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  word-break: break-all;
+  white-space: normal;
+}
+.api-token-list { display: flex; flex-direction: column; gap: 0.35rem; }
+.api-token-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.5rem 0.6rem;
+  background: var(--surface);
+}
+.api-token-row.is-revoked { opacity: 0.65; }
+.api-token-row-main { flex: 1; min-width: 0; }
+.api-token-row-name { font-size: 0.85rem; font-weight: 600; }
+.api-token-row-meta { font-size: 0.72rem; color: var(--muted); margin-top: 0.15rem; word-break: break-word; }
+.api-token-badge {
+  display: inline-block;
+  font-size: 0.66rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  border: 1px solid currentColor;
+  margin-left: 0.25rem;
+  vertical-align: middle;
+}
+.api-token-badge.is-active { color: #3fb950; }
+.api-token-badge.is-revoked { color: var(--muted); }
+.api-token-empty { color: var(--muted); font-size: 0.8rem; padding: 0.5rem 0; }

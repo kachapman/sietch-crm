@@ -27,3 +27,8 @@ reportlab>=4.0,<5
 # so a runtime path does not depend on the container's extra packages.
 Pillow>=10
 ExifRead>=3
+
+# Test-only: the PDF text/page-count helpers in tests/test_invoice_coc_modern.py
+# fall back to pypdf when poppler's pdftotext is not installed (poppler-utils
+# is an OS package, not a Python dependency, so it is absent on a bare runner).
+pypdf>=4.0

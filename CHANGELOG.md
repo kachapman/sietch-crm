@@ -1,41 +1,114 @@
+## 2026-11-08 — API tokens: full access by default
+
+- Admin console tokens default to full `/api/v2` access (all methods).
+- Optional restrictions at creation: read-only, methods, resources, expiry.
+- Write audit log (`api_token_audit_log`) records token id, method, path, time.
+- Migration 046; show-once secret / hashed storage / revoke unchanged.
+
 # Changelog
+
+## 2026-11-09 — PR #1 (document format + preview download): CI green
+
+Branch `cursor/document-format-preview-download-079d`. Not merged, not deployed.
+
+### Fixed
+- **Anonymous mail-template create wrote a row.** `_handle_mail_template_create`
+  called `_require_auth()` AFTER the title check and then carried on, so an
+  anonymous POST was answered 401 but still INSERTed the template with
+  `created_by` NULL. Auth now runs first and returns.
+- **API-token suites still asserted the old read-only model.** With
+  full-access tokens (see 2026-11-08), a Bearer token may now read and write
+  `/api/v2`. `tests/test_mail_auth_gaps.py` updated: a full token is allowed
+  on mail config/log, while a token with an explicit resource restriction or
+  read-only scope is still refused 403.
+- **`test_cache_bust_bumped` pinned a literal version.** It asserted
+  `app.js?v=3.7.50` while the tree was already at `3.7.51`, so it failed for
+  an unrelated bump. It now asserts the cache-bust is at least the version
+  that shipped the preview-download change.
+- **`tests/test_invoice_coc_modern.py` crashed without poppler.** Its
+  `pdf_text()` / `pdf_page_count()` helpers called `subprocess.run(["pdftotext",
+  ...])` unguarded, so a missing `pdftotext` binary raised `FileNotFoundError`
+  before the `pypdf` fallback could run. Both helpers now tolerate the
+  missing binary, and `pypdf` is listed in `requirements.txt` so the fallback
+  is actually available on a bare runner.
+
+### Unchanged
+- The PR's own document-format work (`document_format.py`, byte-based type
+  detection, typed session keys, the preview `postMessage` bridge) is
+  byte-identical to the PR head.
+
+
+## 2.4.2 — 2026-11-08
+
+### Removed
+- `GET /api/v2/projects/{id}/carrier-estimate-lines`, added in 2.4.1.
+  The route guessed the carrier PDF by filename heuristic (picked the oldest
+  match and fell back to any project document), so it could return lines from
+  the wrong file. The source of truth for carrier lines is the carrier
+  estimate imported into the Ook project, not Sietch. Removed at source:
+  route + handler, `carrier_estimate_lines.py`, its unit tests, and the
+  synthetic fixture. The reconciler library and its `/api/v2` consumers are
+  unchanged.
+
+## 2.4.1 — 2026-11-08
+
+> Route removed in 2.4.2 (see above).
+
+### Added
+- Read-only `GET /api/v2/projects/{id}/carrier-estimate-lines` — parses a
+  project-attached carrier Xactimate estimate via the reconciler library and
+  returns JSON line items (integer cents). Auth: session or read-scoped Bearer
+  API token. No filesystem paths in the response. Audit via `log_infra_event`.
+- `carrier_estimate_lines.py` helper + synthetic fixture unit tests.
+
+### Notes
+- Built for Ook MCP `sietch_carrier_estimate_lines` / local + Privatemode
+  supplement work. No deploy in this change.
+
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
-## 2.3.1 — 2026-11-09
+## Admin API-token management UI (2026-11-06, branch `admin-api-token-ui-20261106`)
 
-### Fixed
-- **Anonymous callers could create mail templates.**
-  `_handle_mail_template_create` checked the body first, called
-  `_require_auth()` afterwards, and then continued regardless — so an
-  unauthenticated `POST /api/v2/mail/templates` was answered `401` but the row
-  was still INSERTed with `created_by = NULL`. The auth gate now runs first and
-  returns; `created_by` is always the session user.
+**Feature.** The Admin Console gains an **API Tokens** tab driving the existing
+admin endpoints (`GET`/`POST /api/v2/admin/api-tokens`,
+`POST /api/v2/admin/api-tokens/{id}/revoke`). Server behaviour is unchanged;
+this is the UI those endpoints were missing.
 
-- **Stale `app.js` after deploy.** This branch changes `public/app.js` but
-  left the cache-buster at `v=3.7.50`, so browsers that had already cached the
-  old script kept running it. `public/index.html` now loads `app.js?v=3.7.51`
-  (`styles.css` is unchanged).
+- Tabs follow the admin-console convention (inline SVG icon + label, appended
+after Import / Export; existing tab order untouched).
+- The list renders safe metadata only: name, 12-char `sietch_…` prefix, scope,
+creator email, created / last-used / revoked timestamps, and an Active/Revoked
+badge. Plaintext, `token_hash`, and any non-whitelisted field are dropped in
+`public/api-token-ui.js#summarizeToken` before rendering.
+- Create validates the name (trimmed, required, <=80 chars, no control chars)
+and POSTs exactly `{name}`, so the UI cannot request a wider scope. The returned
+secret is written with `textContent` into a one-time reveal panel with a copy
+button and an explicit "shown only once / cannot be recovered" warning. It is
+held in one module variable and cleared on tab-away, console close, sign-out,
+and `pagehide`; it is never put in browser storage, a URL, a toast, an error
+string, or the console. Copy falls back to `execCommand` and, on failure, tells
+the user to copy manually without echoing the browser error.
+- Scope disclosure is deliberately blunt: GET-only, but broad — it acts as the
+creating admin and can read most of `/api/v2` including mail and contacts, is
+not resource-scoped, and there is no guarantee every GET is side-effect-free.
+- Revoke is confirm-gated, shows in-flight state, handles 404 (already revoked),
+and re-fetches the list so metadata stays accurate.
+- Admin-only: `openAdminConsoleModal` refuses non-admins before showing the
+modal, the loader re-checks `isAdminViewer`, and the server's `_require_admin`
+gates (dispatch + handler) are untouched.
 
-### Changed (CI / tests only — no product behaviour)
-- **The Python CI job can actually run now.** 32 test files hardcoded
-  `sys.path.insert(0, '/home/chapman-server/Projects/new-crm')` and read
-  `server.py` / `public/app.js` from that absolute path. On a runner the path
-  does not exist, so the first step (`event_bus`) failed on `import event_bus`
-  and all 70 later steps were skipped. Every suite now derives the repo root
-  from `Path(__file__)`, so source guards also read the tree under test instead
-  of whichever checkout happens to live at the hardcoded path.
-- `requirements.txt` lists the runtime dependencies CI needs
-  (`psycopg2-binary`, `httpx`, `imap-tools`, `Pillow`, `ExifRead`) next to the
-  existing `fpdf2` / `reportlab`; a clean venv installed from that file alone
-  runs the whole suite.
-- Stale tests fixed at the source — each also fails on `main`:
-  `test_email_project_copy` (fixed-width source window + a `MagicMock` that
-  answered "already copied" to every dedupe query),
-  `test_sync_pull_deals_fields` (the correction `UPDATE` now precedes the
-  full-field one), `test_scanner_toggle_gating` (the link gate moved into
-  `_link_toggle_allows`), and the `tests/test_mail_template_auth.py` that
-  `smoke.yml` has referenced since `dd35546` but which was never committed.
+**Tests.** `tests/test_admin_api_tokens_ui.mjs` (50 assertions: real helper
+behaviour, real token handlers executed in a DOM shim, markup/disclosure/source
+guards), `tests/test_admin_api_token_ui.py` (18 DB-free backend contract +
+authorization guards), `tests/test_admin_api_tokens_http.py` (6 end-to-end
+tests against a throwaway PostgreSQL and an ephemeral server: anonymous /
+non-admin denials, validation, show-once + hash-only storage, metadata refresh,
+revoke, and bearer scope). CI now also runs the backend token suite and the
+contract suite; the HTTP suite stays opt-in because it requires a disposable
+`sietch_test_*` database (never `sietch_crm`).
+
+**Version.** VERSION 2.3.0 -> 2.4.0; `app.js` cache-buster 3.7.50 -> 3.7.51.
 
 ## Document editor type follows the file bytes; preview Download works from the sandbox (2026-11-06, branch `cursor/document-format-preview-download-079d`)
 

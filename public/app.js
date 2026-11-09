@@ -32927,6 +32927,9 @@ function updateSettingsDropdown() {
 function openAdminConsoleModal() {
   const modal = $("#admin-console-modal");
   if (!modal) return;
+  // Admin console is admin-only. Non-admins must never see the UI or its
+  // data; the server also rejects every /api/v2/admin/* call with 403.
+  if (state.currentUserIsAdmin !== true) return;
   modal.classList.remove("hidden");
   // default to general
   switchAdminTab("general");
@@ -32934,7 +32937,7 @@ function openAdminConsoleModal() {
   // bind once
   if (!modal.dataset.bound) {
     modal.dataset.bound = "1";
-    modal.querySelectorAll("[data-admin-console-dismiss]").forEach(el => el.addEventListener("click", () => { stopInfraPolling(); modal.classList.add("hidden"); }));
+    modal.querySelectorAll("[data-admin-console-dismiss]").forEach(el => el.addEventListener("click", () => { stopInfraPolling(); clearApiTokenReveal(); modal.classList.add("hidden"); }));
     modal.querySelectorAll(".admin-tab-btn").forEach(btn => {
       btn.addEventListener("click", () => switchAdminTab(btn.dataset.tab));
     });
@@ -32952,6 +32955,7 @@ function openAdminConsoleModal() {
     bindAdminPhotoReports();
     bindAdminDocumentTemplates();
     bindServiceFeedsAdmin();
+    bindAdminApiTokens();
     // Sync buttons — real implementation
     function getSyncPayload() {
       return {
@@ -33649,7 +33653,265 @@ async function loadBackupHistory() {
   }
 }
 
+// ── Admin: API tokens ────────────────────────────────────────────────────────
+// Backend: GET/POST /api/v2/admin/api-tokens, POST .../{id}/revoke (admin
+// session creates/lists/revokes; full Bearer tokens may also call admin routes).
+//
+// The plaintext secret lives ONLY in _apiTokenSecret and the reveal panel
+// while it is on screen. It is never persisted in the browser, never placed
+// in a URL, never included in a toast/error string, and never logged.
+// Everything else renders whitelisted metadata from SietchApiTokenUi.
+let _apiTokenSecret = null;
+let _apiTokenRows = [];
+
+function _apiTokenUi() {
+  return (typeof SietchApiTokenUi !== "undefined" && SietchApiTokenUi) ? SietchApiTokenUi : null;
+}
+
+function clearApiTokenReveal() {
+  _apiTokenSecret = null;
+  const panel = $("#api-token-reveal");
+  if (panel) panel.classList.add("hidden");
+  const code = $("#api-token-secret-value");
+  if (code) code.textContent = "";
+  const status = $("#api-token-copy-status");
+  if (status) { status.textContent = ""; status.style.color = ""; }
+  const copyBtn = $("#api-token-copy-btn");
+  if (copyBtn) { copyBtn.disabled = false; copyBtn.textContent = "Copy token"; }
+  const createBtn = $("#api-token-create-btn");
+  if (createBtn) createBtn.disabled = false;
+}
+
+function _showApiTokenReveal(secret) {
+  const panel = $("#api-token-reveal");
+  const code = $("#api-token-secret-value");
+  if (!panel || !code || !secret) return;
+  _apiTokenSecret = secret;
+  code.textContent = secret; // textContent only — never innerHTML
+  panel.classList.remove("hidden");
+  const status = $("#api-token-copy-status");
+  if (status) { status.textContent = ""; status.style.color = ""; }
+  // Block a second create while this secret is still uncopied: the previous
+  // one is unrecoverable and replacing it silently would lose it.
+  const createBtn = $("#api-token-create-btn");
+  if (createBtn) createBtn.disabled = true;
+}
+
+// Fallback for browsers/contexts where navigator.clipboard is unavailable.
+// The textarea only exists for the duration of the call.
+function _legacyCopyText(text) {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand && document.execCommand("copy");
+    ta.remove();
+    return !!ok;
+  } catch (_e) {
+    return false;
+  }
+}
+
+async function _copyApiTokenSecret() {
+  const secret = _apiTokenSecret;
+  if (!secret) return;
+  const ui = _apiTokenUi();
+  if (!ui) return;
+  const statusEl = $("#api-token-copy-status");
+  const btn = $("#api-token-copy-btn");
+  if (btn) btn.disabled = true;
+  const result = await ui.copySecretToClipboard(secret, {
+    clipboard: (typeof navigator !== "undefined" ? navigator.clipboard : null),
+    legacyCopy: _legacyCopyText,
+  });
+  if (btn) btn.disabled = false;
+  if (statusEl) {
+    if (result.ok) {
+      statusEl.textContent = "Copied to clipboard.";
+      statusEl.style.color = "var(--success, #3fb950)";
+    } else {
+      statusEl.textContent = "Copy failed — select the token above and copy it manually.";
+      statusEl.style.color = "var(--danger)";
+    }
+  }
+}
+
+function _apiTokenRowHtml(row) {
+  const ui = _apiTokenUi();
+  const badge = row.revoked
+    ? '<span class="api-token-badge is-revoked">Revoked</span>'
+    : '<span class="api-token-badge is-active">Active</span>';
+  const meta = [];
+  if (row.prefix) meta.push("prefix <code>" + escapeHtml(row.prefix) + "</code>");
+  if (ui && ui.describeRestrictions) meta.push(escapeHtml(ui.describeRestrictions(row)));
+  else if (row.scope) meta.push("scope <code>" + escapeHtml(row.scope) + "</code>");
+  if (row.createdByEmail) meta.push("created by " + escapeHtml(row.createdByEmail));
+  meta.push("created " + escapeHtml(ui ? ui.formatTokenDate(row.createdAt) : "—"));
+  meta.push("last used " + escapeHtml(row.lastUsedAt && ui ? ui.formatTokenDate(row.lastUsedAt) : "never"));
+  if (row.revoked) meta.push("revoked " + escapeHtml(ui ? ui.formatTokenDate(row.revokedAt) : "—"));
+  const action = row.revoked
+    ? ""
+    : '<button type="button" class="btn btn-secondary btn-sm" data-api-token-revoke="' + row.id + '">Revoke</button>';
+  return '<div class="api-token-row' + (row.revoked ? " is-revoked" : "") + '">' +
+    '<div class="api-token-row-main">' +
+      '<div class="api-token-row-name">' + escapeHtml(row.name) + " " + badge + "</div>" +
+      '<div class="api-token-row-meta">' + meta.join(" &middot; ") + "</div>" +
+    "</div>" + action + "</div>";
+}
+
+async function loadAdminApiTokens() {
+  const ui = _apiTokenUi();
+  if (!ui || !ui.isAdminViewer(state.currentUserIsAdmin)) return;
+  const statusEl = $("#api-token-list-status");
+  const listEl = $("#api-token-list");
+  if (statusEl) { statusEl.textContent = "Loading tokens…"; statusEl.style.color = "var(--muted)"; }
+  try {
+    const data = await api("/api/v2/admin/api-tokens");
+    _apiTokenRows = ui.summarizeTokenList(data);
+    if (statusEl) {
+      statusEl.style.color = "var(--muted)";
+      statusEl.textContent = _apiTokenRows.length
+        ? ui.countActiveTokens(_apiTokenRows) + " active / " + _apiTokenRows.length + " total"
+        : "";
+    }
+    if (listEl) {
+      listEl.innerHTML = _apiTokenRows.length
+        ? _apiTokenRows.map(_apiTokenRowHtml).join("")
+        : '<div class="api-token-empty">No API tokens yet. Create one above for scripts or LLM integrations.</div>';
+    }
+  } catch (e) {
+    _apiTokenRows = [];
+    if (listEl) listEl.innerHTML = "";
+    if (statusEl) {
+      statusEl.style.color = "var(--danger)";
+      if (e && (e.status === 401 || e.status === 403)) {
+        statusEl.textContent = "Admin access is required to manage API tokens.";
+      } else {
+        statusEl.textContent = "Could not load tokens: " + (e && e.message ? e.message : "unknown error");
+      }
+    }
+  }
+}
+
+async function _createApiTokenFromForm(ev) {
+  if (ev) ev.preventDefault();
+  const ui = _apiTokenUi();
+  if (!ui) return;
+  const input = $("#api-token-name");
+  const btn = $("#api-token-create-btn");
+  const statusEl = $("#api-token-create-status");
+  const opts = ui.readCreateOptionsFromForm ? ui.readCreateOptionsFromForm(document) : {};
+  const req = ui.buildCreateRequest(input ? input.value : "", opts);
+  if (!req.ok) {
+    if (statusEl) { statusEl.style.color = "var(--danger)"; statusEl.textContent = req.error; }
+    if (input) input.focus();
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = "Creating…"; }
+  if (statusEl) { statusEl.style.color = "var(--muted)"; statusEl.textContent = "Creating token…"; }
+  try {
+    const data = await api("/api/v2/admin/api-tokens", {
+      method: "POST",
+      body: JSON.stringify(req.body),
+    });
+    const created = ui.extractCreatedSecret(data);
+    if (input) input.value = "";
+    if (ui.clearCreateOptionsForm) ui.clearCreateOptionsForm(document);
+    if (!created.ok) {
+      clearApiTokenReveal();
+      if (statusEl) { statusEl.style.color = "var(--danger)"; statusEl.textContent = created.error; }
+    } else {
+      if (statusEl) { statusEl.style.color = ""; statusEl.textContent = "Token created. Copy the secret now."; }
+      _showApiTokenReveal(created.secret);
+    }
+    await loadAdminApiTokens();
+  } catch (e) {
+    if (statusEl) {
+      statusEl.style.color = "var(--danger)";
+      statusEl.textContent = "Could not create token: " + (e && e.message ? e.message : "unknown error");
+    }
+  } finally {
+    if (btn) {
+      btn.textContent = "Create token";
+      btn.disabled = !!_apiTokenSecret;
+    }
+  }
+}
+
+async function _revokeApiTokenById(id, btn) {
+  const ui = _apiTokenUi();
+  const row = _apiTokenRows.find(t => t.id === id);
+  if (!ui || !row) return;
+  const prompt = ui.revokeConfirm(row);
+  const ok = await confirmDialog({
+    title: prompt.title,
+    message: prompt.message,
+    confirmLabel: prompt.confirmLabel,
+    danger: true,
+  });
+  if (!ok) return;
+  const original = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Revoking…"; }
+  try {
+    await api("/api/v2/admin/api-tokens/" + encodeURIComponent(String(row.id)) + "/revoke", { method: "POST" });
+    showToast('Token "' + row.name + '" revoked');
+    await loadAdminApiTokens();
+  } catch (e) {
+    if (e && e.status === 404) {
+      showToast("That token was already revoked. Refreshed the list.");
+    } else {
+      showToast("Revoke failed: " + (e && e.message ? e.message : "unknown error"), true);
+      if (btn) { btn.disabled = false; btn.textContent = original; }
+    }
+    await loadAdminApiTokens();
+  }
+}
+
+function bindAdminApiTokens() {
+  const form = $("#api-token-create-form");
+  if (form && !form.dataset.bound) {
+    form.dataset.bound = "1";
+    form.addEventListener("submit", _createApiTokenFromForm);
+  }
+  const copyBtn = $("#api-token-copy-btn");
+  if (copyBtn && !copyBtn.dataset.bound) {
+    copyBtn.dataset.bound = "1";
+    copyBtn.addEventListener("click", _copyApiTokenSecret);
+  }
+  const doneBtn = $("#api-token-reveal-done");
+  if (doneBtn && !doneBtn.dataset.bound) {
+    doneBtn.dataset.bound = "1";
+    doneBtn.addEventListener("click", clearApiTokenReveal);
+  }
+  const refreshBtn = $("#api-token-refresh-btn");
+  if (refreshBtn && !refreshBtn.dataset.bound) {
+    refreshBtn.dataset.bound = "1";
+    refreshBtn.addEventListener("click", () => loadAdminApiTokens());
+  }
+  const listEl = $("#api-token-list");
+  if (listEl && !listEl.dataset.bound) {
+    listEl.dataset.bound = "1";
+    listEl.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-api-token-revoke]");
+      if (!btn || btn.disabled) return;
+      const id = Number(btn.getAttribute("data-api-token-revoke"));
+      if (!Number.isFinite(id)) return;
+      _revokeApiTokenById(id, btn);
+    });
+  }
+}
+
+// A refresh/navigation-away drops the one-time secret immediately.
+window.addEventListener("pagehide", clearApiTokenReveal);
+
 function switchAdminTab(tab) {
+  // Never keep a one-time secret on screen after leaving the tokens tab.
+  if (tab !== "tokens") clearApiTokenReveal();
   document.querySelectorAll("#admin-console-modal .admin-tab-content").forEach(c => c.classList.add("hidden"));
   document.querySelectorAll("#admin-console-modal .admin-tab-btn").forEach(b => b.classList.remove("active"));
   const content = $(`#admin-tab-${tab}`);
@@ -33657,6 +33919,7 @@ function switchAdminTab(tab) {
   const activeBtn = document.querySelector(`#admin-console-modal .admin-tab-btn[data-tab="${tab}"]`);
   if (activeBtn) activeBtn.classList.add("active");
   if (tab === "users") populateAdminUsersList();
+  if (tab === "tokens") loadAdminApiTokens();
   if (tab === "contacts") {
     const s = $("#admin-contacts-search")?.value.trim() || "";
     populateAdminContactsList(s);
@@ -44280,6 +44543,7 @@ async function openBrandingModal() {
 
 function closeBrandingModal() {
   // Now inside admin console; close the whole admin modal on branding actions
+  clearApiTokenReveal();
   $("#admin-console-modal")?.classList.add("hidden");
 }
 
@@ -44904,6 +45168,7 @@ function _setupProfileEvents() {
     $("#dropdown-signout-btn")?.addEventListener("click", async () => {
       settingsDropdown.classList.add("hidden");
       disconnectSSE();
+      clearApiTokenReveal();
       try {
         await fetch("/api/v2/auth/logout", { method: "POST", credentials: "same-origin" });
       } catch (_) {}

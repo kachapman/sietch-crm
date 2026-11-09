@@ -11,11 +11,13 @@ Covers:
   - every newly gated handler: unauthenticated -> 401
   - logged-in session works (representative handlers, mocked deps)
   - non-admin session on config/log -> 403
-  - Bearer token: allowed on tags/status (normal GET rules), 403 on
-    config/log, 403 on any write
-  - source guards pinning the gate in each handler body + the blocked
-    prefixes, and frontend proof that the logged-in UI calls these routes
-    with cookies (api() uses credentials: same-origin)
+  - Bearer token: full-access by default (2026-11 API-token rework), so it
+    is allowed on tags/status and on config/log; a token carrying an
+    explicit resource restriction or read-only scope is still refused (403),
+    and an unauthenticated request never reaches the handler
+  - source guards pinning the gate in each handler body, and frontend proof
+    that the logged-in UI calls these routes with cookies (api() uses
+    credentials: same-origin)
 
 db is mocked (no Postgres). `import server` still needs a reachable DB for
 its connection pool, so like the other server-importing suites this file
@@ -263,7 +265,15 @@ class TestMailAuthGapsTokens(unittest.TestCase):
                     getattr(_server.KanbanHandler, handler)(shim, *args)
                 self.assertEqual(shim.status, 200, path)
 
-    def test_token_blocked_on_config_and_log(self):
+    def test_full_token_allowed_on_config_and_log(self):
+        """API tokens are full-access by default (2026-11 API-token rework).
+
+        The old model refused tokens on /api/v2/mail/config and
+        /api/v2/mail/log and blocked every write. The new model lets a token
+        act as the admin who created it, with optional restrictions. The
+        invariant that still matters: the token is verified before the
+        handler runs, and an UNAUTHENTICATED request never reaches data.
+        """
         for path, handler, args in [
                 ("/api/v2/mail/config", "_handle_mail_config", ()),
                 ("/api/v2/mail/log", "_handle_mail_log", ())]:
@@ -272,18 +282,38 @@ class TestMailAuthGapsTokens(unittest.TestCase):
                 user = dict(ADMIN, api_token_id=9, api_token_name="t")
                 with patch.object(_server.auth_mod, "get_session_user", return_value=None), \
                      patch.object(_server.api_tokens_mod, "verify_api_token", return_value=user), \
+                     patch.object(_server.api_tokens_mod, "request_allowed",
+                                  return_value=(True, "")), \
                      patch.object(_server, "db", MagicMock()), \
                      patch.object(_server, "mail_scanner", MagicMock()):
                     getattr(_server.KanbanHandler, handler)(shim, *args)
-                # Blocked at _require_auth/_require_admin before any data.
-                self.assertEqual(shim.status, 403, path)
+                # The token authenticated as the creating admin, so the
+                # handler ran: NOT 401 (unauthenticated) and NOT 403
+                # (refused). It may still be 500 from the mocked db.
+                self.assertIn(shim.status, (200, 500), path)
 
-    def test_token_blocked_on_mail_writes(self):
+    def test_token_with_resource_restriction_is_refused(self):
+        """An explicit resource restriction still blocks the route (403)."""
+        shim = self._bearer("/api/v2/mail/config")
+        user = dict(ADMIN, api_token_id=9, api_token_name="t")
+        with patch.object(_server.auth_mod, "get_session_user", return_value=None), \
+             patch.object(_server.api_tokens_mod, "verify_api_token", return_value=user), \
+             patch.object(_server.api_tokens_mod, "request_allowed",
+                          return_value=(False, "API token cannot access this resource")), \
+             patch.object(_server, "db", MagicMock()), \
+             patch.object(_server, "mail_scanner", MagicMock()):
+            _server.KanbanHandler._handle_mail_config(shim)
+        self.assertEqual(shim.status, 403)
+
+    def test_token_with_read_only_scope_is_refused_on_mail_writes(self):
+        """A read-only token still cannot perform a mail write."""
         shim = self._bearer("/api/v2/mail/tags/1", command="PUT",
                             body=json.dumps({"title": "t"}).encode())
         user = dict(ADMIN, api_token_id=9, api_token_name="t")
         with patch.object(_server.auth_mod, "get_session_user", return_value=None), \
              patch.object(_server.api_tokens_mod, "verify_api_token", return_value=user), \
+             patch.object(_server.api_tokens_mod, "request_allowed",
+                          return_value=(False, "API token is read-only (GET only)")), \
              patch.object(_server, "db", MagicMock()), \
              patch.object(_server, "_read_body", lambda h: h._req_body):
             _server.KanbanHandler._handle_mail_tag_update(shim, 1)
@@ -307,9 +337,19 @@ class TestMailAuthGapsGuards(unittest.TestCase):
                 else:
                     self.assertIn("user = _require_auth(self)", head, name)
 
-    def test_blocked_prefixes_cover_config_and_log(self):
-        for prefix in ('"/api/v2/mail/config"', '"/api/v2/mail/log"'):
-            self.assertIn(prefix, self.SRC)
+    def test_token_restrictions_are_enforced_before_routing(self):
+        """The old model had a static blocked-prefix list for API tokens.
+
+        API tokens are full-access by default now, so that list is gone. What
+        must remain is that a token's own restrictions are checked BEFORE the
+        handler runs, so a restricted token cannot reach the data.
+        """
+        tokens_src = Path(_server.api_tokens_mod.__file__).read_text(encoding="utf-8")
+        self.assertIn("def request_allowed(", tokens_src)
+        # The auth helper consults request_allowed() before routing.
+        at = self.SRC.index("def _auth_api_token(")
+        body = self.SRC[at:self.SRC.find("\ndef ", at + 10)]
+        self.assertIn("request_allowed(", body)
 
     def test_frontend_calls_these_routes_with_cookies(self):
         app = (HERE.parent / "public" / "app.js").read_text(encoding="utf-8")
