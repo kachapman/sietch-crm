@@ -13,8 +13,10 @@ import os
 import sys
 import unittest
 from unittest.mock import patch
+from pathlib import Path
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 # mail_scanner.py does `import db` at module top, which tries to connect.
 # Stub the db import so the test can import mail_scanner in isolation.

@@ -12,8 +12,10 @@ import re
 import sys
 import unittest
 from html import unescape as _unescape
+from pathlib import Path
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 import server as _server
 import notification_dispatcher as _nd
@@ -41,7 +43,7 @@ class TestSnippetLength(unittest.TestCase):
         self.assertNotIn("<p>", snippet)
 
     def test_no_120_snippet_sites_remain(self):
-        src = open("/home/chapman-server/Projects/new-crm/server.py", encoding="utf-8").read()
+        src = open(REPO_ROOT / "server.py", encoding="utf-8").read()
         for i, ln in enumerate(src.splitlines(), 1):
             if "snippet" in ln.lower() and "[:120]" in ln:
                 self.fail(f"120-char snippet site still present at line {i}: {ln.strip()[:100]}")

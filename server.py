@@ -22004,17 +22004,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def _handle_mail_template_create(self) -> None:
+        # Auth BEFORE parsing the body: this handler used to call
+        # _require_auth() after the title check and then keep going, so an
+        # anonymous POST was answered 401 but still INSERTed the template
+        # with created_by NULL. Guard first and return.
+        user = _require_auth(self)
+        if not user:
+            return
         try:
             payload = json.loads(_read_body(self) or b"{}")
             title = (payload.get("title") or "").strip()
             if not title:
                 _json_response(self, 400, {"error": "title required"})
                 return
-            user = _require_auth(self)
-            created_by = user["id"] if user else None
             result = db.query_one(
                 "INSERT INTO mail_templates (title, subject, body_html, created_by) VALUES (%s, %s, %s, %s) RETURNING id",
-                (title, payload.get("subject", ""), payload.get("body_html", ""), created_by),
+                (title, payload.get("subject", ""), payload.get("body_html", ""), user["id"]),
             )
             _json_response(self, 201, {"id": result["id"]})
         except Exception as e:
@@ -22189,9 +22194,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_log(self) -> None:
         # Scanner config/log can expose account identifiers, error detail,
-        # and behavior toggles — admins only (and never API tokens: the
-        # /api/v2/mail/config + /api/v2/mail/log prefixes are blocked for
-        # optional token restrictions still apply).
+        # and behavior toggles — admins only. API tokens inherit their
+        # creating admin's access (commit 6d65ea5 removed the global token
+        # path blocklist), so a non-admin token is refused right here.
         user = _require_admin(self)
         if not user:
             return
@@ -22310,9 +22315,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_config(self) -> None:
         # Scanner config/log can expose account identifiers, error detail,
-        # and behavior toggles — admins only (and never API tokens: the
-        # /api/v2/mail/config + /api/v2/mail/log prefixes are blocked for
-        # optional token restrictions still apply).
+        # and behavior toggles — admins only. API tokens inherit their
+        # creating admin's access (commit 6d65ea5 removed the global token
+        # path blocklist), so a non-admin token is refused right here.
         user = _require_admin(self)
         if not user:
             return
@@ -22320,9 +22325,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_mail_config_put(self) -> None:
         # Scanner config/log can expose account identifiers, error detail,
-        # and behavior toggles — admins only (and never API tokens: the
-        # /api/v2/mail/config + /api/v2/mail/log prefixes are blocked for
-        # optional token restrictions still apply).
+        # and behavior toggles — admins only. API tokens inherit their
+        # creating admin's access (commit 6d65ea5 removed the global token
+        # path blocklist), so a non-admin token is refused right here.
         user = _require_admin(self)
         if not user:
             return

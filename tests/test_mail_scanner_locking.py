@@ -18,7 +18,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 # Stub the heavy dependencies before importing mail_scanner.
 import types

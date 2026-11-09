@@ -3,7 +3,55 @@
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-11-08 (remove carrier-estimate-lines API)
+**Date:** 2026-11-09 (finish PR #1 — document type from bytes + preview Download;
+branch `cursor/document-format-preview-download-079d`, rebased onto `main`
+@ `cfb94e3`)
+
+**Status: rebased + CI suite repaired on the branch — NOT merged, NOT pushed
+(unless git auth worked), NOT deployed.** Worktree:
+`~/.local/share/opencode/worktree/be3f73/pr1-docformat`. No production
+service, tunnel, or CRM database was touched; tests ran against a throwaway
+database (`sietch_ci_pr1`).
+
+- **Rebase.** One commit onto `main` @ `cfb94e3`. Conflicts were docs only
+  (`CHANGELOG.md`, `docs/SESSION_HISTORY.md`); both sides' entries kept.
+  `server.py` / `public/app.js` auto-merged.
+- **Root cause of "Python unit tests failing":** 32 test files hardcoded
+  `sys.path.insert(0, '/home/chapman-server/Projects/new-crm')` and read
+  `server.py` / `public/app.js` through that absolute path. On a CI runner the
+  path does not exist, so step 6 (`event_bus`) died on `import event_bus` and
+  every later step was skipped — and locally the source-guard tests were
+  reading the *other* checkout, which is why PR-only changes "failed". Now
+  every suite resolves the repo from `Path(__file__)`.
+- **`requirements.txt` now lists the runtime deps CI needs** (psycopg2-binary,
+  httpx, imap-tools, Pillow, ExifRead + the existing fpdf2/reportlab).
+  Verified with a fresh venv installed from that file alone: full Python
+  suite green.
+- **Pre-existing stale tests fixed at the source** (all failed on `main` too):
+  `test_email_project_copy` (fixed 4000-char source window + a naive
+  `MagicMock` that answered "already copied" to every dedupe query),
+  `test_sync_pull_deals_fields` (the correction `UPDATE` now precedes the
+  full-field one), `test_scanner_toggle_gating` (the link gate moved into
+  `_link_toggle_allows`), `test_mail_auth_gaps` (token behaviour changed in
+  `6d65ea5`: writes are allowed + audited, non-admin still 403), and the
+  missing `tests/test_mail_template_auth.py` that `smoke.yml` had referenced
+  since `dd35546` but which was never committed.
+- **Security fix found by writing that missing suite:**
+  `_handle_mail_template_create` called `_require_auth()` *after* the title
+  check and then continued, so an anonymous POST got 401 **and still wrote
+  the row** (`created_by` NULL). Auth now runs first and returns.
+- **Verification.** Rebased branch: 72/72 CI Python steps pass (0 failures),
+  399 JS tests pass, syntax checks clean. A deliberate revert of the
+  template-auth fix fails 4 of the new tests, so the suite bites. The
+  browser test (`test_preview_sandbox_browser.py`) SKIPs here (no Chrome) but
+  will execute on GitHub runners — unverified.
+- **Not done on purpose:** no merge, no deploy, no VERSION/cache-buster bump
+  in `public/`. Review notes live in the PR report.
+
+---
+
+## 2026-11-08 — remove carrier-estimate-lines API (branch `remove-carrier-estimate-lines`)
+
 
 **Status: REMOVED on branch `remove-carrier-estimate-lines` off `main`
 @ `515d7ef` — NOT pushed, NOT merged, NOT deployed.**
@@ -38,7 +86,7 @@ onboarding / conventions without 200+ lines of session-sprawl up front.
 
 ---
 
-## Current session summary (for next resume)
+## 2026-11-06 — Admin API-token management UI (branch `admin-api-token-ui-20261106`)
 
 **Date:** 2026-11-06 (admin API-token management UI, branch
 `admin-api-token-ui-20261106`, based on `main` @ `ee6e401`)

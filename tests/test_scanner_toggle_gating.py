@@ -50,14 +50,30 @@ class TestToggleGating(unittest.TestCase):
         )
 
     def test_link_step_uses_helper(self):
-        """The link-execution step must call _is_behavior_enabled, like the
-        other behavior sites in the file."""
+        """The link-execution step must be gated by the behaviour toggle.
+
+        The gate moved into `_link_toggle_allows()` (it picks the project-id
+        vs claim-code checkbox from the classification's link_method), so
+        assert the property rather than the old inline call shape: the link
+        block requires `link_allowed`, that value comes from
+        `_link_toggle_allows(...)`, and the helper consults
+        `_is_behavior_enabled()` — never the raw dict's truthiness.
+        """
         i = SCANNER_PY.index("if (classification[\"action\"] == \"link_deal\"")
         link_block = SCANNER_PY[i:i + 800]
-        self.assertIn(
-            "_is_behavior_enabled(toggles.get(\"auto_link_project_id\", {}), account_id)",
-            link_block,
-        )
+        self.assertIn("link_allowed", link_block)
+
+        # The gate is computed from the helper...
+        self.assertIn("_link_toggle_allows(classification, toggles, account_id)",
+                      SCANNER_PY)
+
+        # ...and the helper reads the toggle through _is_behavior_enabled.
+        at = SCANNER_PY.index("def _link_toggle_allows(")
+        helper = SCANNER_PY[at:SCANNER_PY.find("\ndef ", at + 10)]
+        self.assertIn('"auto_link_project_id"', helper)
+        self.assertIn('"auto_link_claim_code"', helper)
+        self.assertIn("_is_behavior_enabled(cfg, account_id)", helper)
+        self.assertNotIn("toggles.get(\"auto_link_project_id\", True)", helper)
 
 
 class TestProjectNumberResolution(unittest.TestCase):

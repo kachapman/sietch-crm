@@ -5,17 +5,18 @@ Dozens of /api/v2/mail/* JSON endpoints served without any login check —
 including writes (tag/template/contact/folder/contractor/rule CRUD,
 reprocess, retrain, send-undo, config PUT). They now use the same auth as
 the other /api/v2 routes: _require_auth, except scanner config + log which
-are admin-only and blocked for API tokens.
+are admin-only (for sessions AND api tokens).
 
 Covers:
   - every newly gated handler: unauthenticated -> 401
   - logged-in session works (representative handlers, mocked deps)
   - non-admin session on config/log -> 403
   - Bearer token: allowed on tags/status (normal GET rules), 403 on
-    config/log, 403 on any write
-  - source guards pinning the gate in each handler body + the blocked
-    prefixes, and frontend proof that the logged-in UI calls these routes
-    with cookies (api() uses credentials: same-origin)
+    config/log from a non-admin token, 200 from an admin token, 403 on
+    any write
+  - source guards pinning the gate in each handler body, and frontend proof
+    that the logged-in UI calls these routes with cookies (api() uses
+    credentials: same-origin)
 
 db is mocked (no Postgres). `import server` still needs a reachable DB for
 its connection pool, so like the other server-importing suites this file
@@ -263,35 +264,85 @@ class TestMailAuthGapsTokens(unittest.TestCase):
                     getattr(_server.KanbanHandler, handler)(shim, *args)
                 self.assertEqual(shim.status, 200, path)
 
-    def test_token_blocked_on_config_and_log(self):
+    def test_non_admin_token_blocked_on_config_and_log(self):
+        """Admin-only routes stay admin-only for tokens too.
+
+        Commit 6d65ea5 made API tokens act as their creating admin across
+        /api/v2 (optional per-token restrictions replace the old global path
+        blocklist). The gate that must not move is `_require_admin`: a token
+        belonging to a NON-admin gets 403 here, exactly like that user's
+        session would.
+        """
         for path, handler, args in [
                 ("/api/v2/mail/config", "_handle_mail_config", ()),
                 ("/api/v2/mail/log", "_handle_mail_log", ())]:
             with self.subTest(path=path):
                 shim = self._bearer(path)
-                user = dict(ADMIN, api_token_id=9, api_token_name="t")
+                user = dict(MEMBER, api_token_id=9, api_token_name="t")
+                scanner = MagicMock()
                 with patch.object(_server.auth_mod, "get_session_user", return_value=None), \
                      patch.object(_server.api_tokens_mod, "verify_api_token", return_value=user), \
                      patch.object(_server, "db", MagicMock()), \
-                     patch.object(_server, "mail_scanner", MagicMock()):
+                     patch.object(_server, "mail_scanner", scanner):
                     getattr(_server.KanbanHandler, handler)(shim, *args)
-                # Blocked at _require_auth/_require_admin before any data.
-                self.assertEqual(shim.status, 403, path)
+                    # Rejected by _require_admin before any scanner data is read.
+                    self.assertEqual(shim.status, 403, path)
+                    self.assertEqual(scanner.get_contractors.call_count, 0)
+                    self.assertEqual(scanner.get_scanner_log.call_count, 0)
 
-    def test_token_blocked_on_mail_writes(self):
+    def test_admin_token_reaches_config_and_log(self):
+        """A token minted by an admin has the admin's access (6d65ea5)."""
+        for path, handler, args, mock_name in [
+                ("/api/v2/mail/config", "_handle_mail_config", (), "get_contractors"),
+                ("/api/v2/mail/log", "_handle_mail_log", (), "get_scanner_log")]:
+            with self.subTest(path=path):
+                shim = self._bearer(path)
+                user = dict(ADMIN, api_token_id=9, api_token_name="t")
+                scanner = MagicMock()
+                getattr(scanner, mock_name).return_value = {"ok": True}
+                with patch.object(_server.auth_mod, "get_session_user", return_value=None), \
+                     patch.object(_server.api_tokens_mod, "verify_api_token", return_value=user), \
+                     patch.object(_server, "db", _db_for(handler)), \
+                     patch.object(_server, "mail_scanner", scanner):
+                    getattr(_server.KanbanHandler, handler)(shim, *args)
+                self.assertEqual(shim.status, 200, path)
+
+    def test_token_writes_are_audited_and_restrictions_apply(self):
+        """Tokens may write (6d65ea5), but every write is audit-logged and a
+        restricted token is still refused by `request_allowed`."""
         shim = self._bearer("/api/v2/mail/tags/1", command="PUT",
                             body=json.dumps({"title": "t"}).encode())
         user = dict(ADMIN, api_token_id=9, api_token_name="t")
         with patch.object(_server.auth_mod, "get_session_user", return_value=None), \
              patch.object(_server.api_tokens_mod, "verify_api_token", return_value=user), \
+             patch.object(_server.api_tokens_mod, "request_allowed",
+                          return_value=(True, None)), \
+             patch.object(_server.api_tokens_mod, "log_token_write") as audited, \
              patch.object(_server, "db", MagicMock()), \
              patch.object(_server, "_read_body", lambda h: h._req_body):
             _server.KanbanHandler._handle_mail_tag_update(shim, 1)
+        self.assertNotEqual(shim.status, 401)
+        audited.assert_called_once()
+        self.assertEqual(audited.call_args.args[0], 9)
+
+    def test_restricted_token_write_is_refused(self):
+        shim = self._bearer("/api/v2/mail/tags/1", command="PUT",
+                            body=json.dumps({"title": "t"}).encode())
+        user = dict(ADMIN, api_token_id=9, api_token_name="t")
+        db = MagicMock()
+        with patch.object(_server.auth_mod, "get_session_user", return_value=None), \
+             patch.object(_server.api_tokens_mod, "verify_api_token", return_value=user), \
+             patch.object(_server.api_tokens_mod, "request_allowed",
+                          return_value=(False, "API token is read-only")), \
+             patch.object(_server, "db", db), \
+             patch.object(_server, "_read_body", lambda h: h._req_body):
+            _server.KanbanHandler._handle_mail_tag_update(shim, 1)
         self.assertEqual(shim.status, 403)
+        self.assertEqual(db.execute.call_count, 0, "refused write must not reach the DB")
 
 
 class TestMailAuthGapsGuards(unittest.TestCase):
-    """Source guards: every closed handler keeps its gate; blocklist holds."""
+    """Source guards: every closed handler keeps its single gate."""
 
     SRC = Path(_server.__file__).read_text(encoding="utf-8")
 
@@ -307,9 +358,15 @@ class TestMailAuthGapsGuards(unittest.TestCase):
                 else:
                     self.assertIn("user = _require_auth(self)", head, name)
 
-    def test_blocked_prefixes_cover_config_and_log(self):
-        for prefix in ('"/api/v2/mail/config"', '"/api/v2/mail/log"'):
-            self.assertIn(prefix, self.SRC)
+    def test_config_and_log_routes_are_admin_gated(self):
+        """Both routes keep the admin gate (tokens inherit it — 6d65ea5)."""
+        for name in ("_handle_mail_config", "_handle_mail_log"):
+            with self.subTest(handler=name):
+                start = self.SRC.index(f"def {name}(")
+                nxt = self.SRC.find("\n    def ", start + 10)
+                body = self.SRC[start:nxt]
+                self.assertIn("user = _require_admin(self)", body)
+                self.assertNotIn("user = _require_auth(self)", body)
 
     def test_frontend_calls_these_routes_with_cookies(self):
         app = (HERE.parent / "public" / "app.js").read_text(encoding="utf-8")

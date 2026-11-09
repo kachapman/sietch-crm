@@ -15,8 +15,10 @@ Run with: python3 tests/test_reply_tagged_telegram.py (mocked db, no Postgres)
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
+from pathlib import Path
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 import notification_dispatcher as _nd
 import server as _server
