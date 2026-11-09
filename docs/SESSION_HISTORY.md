@@ -3,6 +3,75 @@
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-09 (URGENT: OAuth account binding + mail timezone)
+
+**Status: COMMITTED LOCALLY on branch `fix/oauth-account-binding` (worktree
+`~/Projects/new-crm-oauth-fix`, off `main` @ `cfb94e3`) — NOT merged, NOT
+deployed, no production data or token touched.**
+
+**1) OAuth tokens on the wrong mail account (Ken, 2:08 PM).**
+Account 8 (`estimates.masterx@outlook.com`) showed "Connected as
+mdm.estimates@outlook.com via Microsoft Graph"; reconnecting refused with the
+identity-mismatch error; accounts 8/9/10 reported `auth_failed`.
+
+Root causes fixed at source:
+- `server.py:_handle_oauth_authorize` minted an opaque in-memory state with NO
+  account. The callback looked the row up by the email in the token response
+  and inserted a blank-email row when the identity was unreadable. State is now
+  a signed (HMAC-SHA256) 10-minute token bound to (kind, user, provider,
+  account_id) — `oauth_state.py`. Survives a restart; cannot be edited.
+- The callback wrote `oauth_refresh_token = ""` when the provider omitted one
+  → destroyed the only renewal path → permanent `auth_failed`.
+- `mail_oauth.refresh_access_token` (used by scanner, server, IMAP flag sync)
+  never checked which mailbox the grant belongs to. Now verifies identity and
+  refuses a mismatch (`mail_oauth_binding.py`); unreadable identity is refused
+  unless the account was already verified at connect.
+- `public/app.js:updateGraphStatusBlock` bound Connect/Disconnect ONCE with
+  `dataset.bound` and the first account id — every later account acted on the
+  wrong mailbox, which is why "Disconnect first" never cleared the token the
+  error complained about. Rebound per open + id re-read at click.
+- `_handle_mail_account_update`/`_create` accepted `oauth_*` tokens from the
+  client; the list endpoint returns `""` for those fields, so an echo could
+  wipe a grant. Token columns are no longer client-writable.
+- One grant per account (shared refresh tokens rotate each other away).
+- New `POST /api/v2/mail/oauth/disconnect/{id}`; UI shows the real connected
+  identity and flags a mismatch in red.
+
+**2) Wrong mail times (an email received 1:20 PM EST showed "2:20:03 AM").**
+- `mail_messages.date_received` was `TIMESTAMP`; PostgreSQL **silently ignores
+  the offset** for that type, so the scanner stored the sender's wall clock
+  (13:20) as if it were UTC while every reader assumed UTC. Verified in a
+  rolled-back transaction on the local DB.
+- Migration 048 retypes to `timestamptz` (`USING ... AT TIME ZONE 'UTC'`, no
+  double shift), mirrored as idempotent boot DDL and in `init.sql`.
+- `mail_dates.py` (server/scanner/backfill) and `public/mail-dates.js`
+  (browser, imported by `app.js`) are the only parser/formatter: aware UTC
+  always, naive = UTC (never local), RFC-2822 + Graph `receivedDateTime`
+  (7-digit fractions), ISO output with an offset, render in the viewer's tz
+  (setting → browser → America/New_York).
+- `scripts/backfill_mail_dates.py` — idempotent, DRY RUN by default, fixes
+  stored times from each row's original `Date:` header (counts + deltas only,
+  no content), opt-in inferred offset for header-less rows. **Not run against
+  prod** — Ken approves the apply.
+
+**Tests.** `tests/test_oauth_account_binding.py` (56),
+`tests/test_oauth_account_binding.mjs` (9), `tests/test_mail_dates.py` (41),
+`tests/test_mail_dates.mjs` (14). Full sweep: all JS files pass; Python has 5
+failures, all of which also fail on pristine `main`
+(`test_email_project_copy`, `test_invoice_coc_modern`, `test_mail_auth_gaps`,
+`test_scanner_toggle_gating`, `test_sync_pull_deals_fields`). Baseline `main`
+had 6 — `test_contact_and_mail_attach_fixes` asserted a stale
+`app.js?v=3.7.50` cache-buster and was updated for the new `3.7.52`.
+Four existing suites were updated because their mocks/assertions pinned the
+old (buggy) behaviour: `test_graph_identity_guard`,
+`test_graph_truthfulness`, `test_graph_oauth_status`,
+`test_mail_imap_flag_sync`, `test_mail_retention_loop`.
+
+**Not done.** No deploy, no merge, no prod query, no token rotation, backfill
+not applied.
+
+---
+
 **Date:** 2026-11-08 (remove carrier-estimate-lines API)
 
 **Status: REMOVED on branch `remove-carrier-estimate-lines` off `main`

@@ -50,6 +50,13 @@ class OAuthProvider:
 
     name: str = ""
 
+    # True when refresh_token() reports the signed-in mailbox ("email").
+    # Only then can the refresh path prove the grant belongs to the row it
+    # is stored on. Microsoft does (scope includes openid); Google does not,
+    # so its refresh path must not pretend to verify an identity it never
+    # receives.
+    reports_identity_on_refresh: bool = False
+
     @classmethod
     def authorize_url(cls, state: str) -> str:
         raise NotImplementedError
@@ -75,6 +82,10 @@ class OAuthProvider:
 
 class MicrosoftProvider(OAuthProvider):
     name = "microsoft"
+
+    # `_SCOPE` / `_GRAPH_SCOPE` both include openid, so a refresh response
+    # carries an id_token naming the mailbox the grant belongs to.
+    reports_identity_on_refresh = True
 
     _AUTHORIZE = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize"
     _TOKEN = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
@@ -166,6 +177,12 @@ class MicrosoftProvider(OAuthProvider):
             "access_token": result.get("access_token", ""),
             "expires_in": result.get("expires_in", 3600),
             "refresh_token": result.get("refresh_token", refresh_token),
+            # Signed-in mailbox for this grant. `_SCOPE` includes openid, so
+            # the refresh response carries an id_token; the refresh helper
+            # refuses the token when it names a different mailbox (live bug
+            # 2026-11-09 — a refresh token must never be usable for a row it
+            # does not belong to).
+            "email": cls.account_email_from_token_result(result),
         }
 
     @classmethod

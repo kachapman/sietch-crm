@@ -39,6 +39,7 @@ from event_bus import event_bus
 from user_profile_store import load_user_profile, save_user_profile
 import oauth_providers
 import mail_oauth
+import mail_dates
 import infra_log
 
 logger = logging.getLogger("sietch.mail_scanner")
@@ -369,10 +370,21 @@ def _build_graph_token_refresher():
             # id_token in the refresh response is authoritative. A mismatch
             # means this account holds another mailbox's token.
             ms_email = (tok.get("email") or "").strip().lower()
-            if ms_email and acct_email and ms_email != acct_email:
-                err = (f"Graph token belongs to {ms_email}, but this mailbox is {acct_email}. "
-                       f"Disconnect Graph and reconnect while signed in as {acct_email}.")
-                logger.warning("Graph token identity mismatch on refresh for account %s: %s", account_id, err)
+            # Fail CLOSED (live bug 2026-11-09): a token whose identity cannot
+            # be read is a refusal, not a pass. The old `if ms_email and ...`
+            # let a mis-bound grant keep sending as another mailbox.
+            import mail_oauth_binding
+            state_kind, detail = mail_oauth_binding.identity_state(ms_email, acct_email)
+            if state_kind != mail_oauth_binding.IDENTITY_OK:
+                if state_kind == mail_oauth_binding.IDENTITY_MISMATCH:
+                    err = mail_oauth_binding.mismatch_message(detail, acct_email, kind="graph")
+                else:
+                    err = (
+                        "The Graph refresh did not report which mailbox it belongs to, so it "
+                        f"cannot be verified for {acct_email}. Disconnect Graph and reconnect "
+                        f"while signed in as {acct_email}."
+                    )
+                logger.warning("Graph token identity refused on refresh for account %s: %s", account_id, err)
                 try:
                     db.execute(
                         "UPDATE mail_accounts SET oauth_graph_last_error = %s, oauth_graph_last_error_at = NOW() WHERE id = %s",
@@ -381,11 +393,13 @@ def _build_graph_token_refresher():
                 except Exception:
                     pass
                 return None, err
+            new_refresh = mail_oauth_binding.refresh_token_to_store(
+                tok.get("refresh_token"), row["oauth_graph_refresh_token"])
             db.execute(
                 "UPDATE mail_accounts SET oauth_graph_access_token = %s, oauth_graph_refresh_token = %s, "
-                "oauth_graph_token_expires = to_timestamp(%s), oauth_graph_identity = COALESCE(%s, oauth_graph_identity) "
+                "oauth_graph_token_expires = to_timestamp(%s), oauth_graph_identity = %s "
                 "WHERE id = %s",
-                (new_token, new_refresh, new_expires_ts, ms_email or None, account_id),
+                (new_token, new_refresh, new_expires_ts, ms_email, account_id),
             )
             return new_token, None
         except Exception as e:
@@ -1616,7 +1630,11 @@ def _fetch_single_message(mailbox_cfg: dict[str, Any], folder: str, uid: int,
             "from_name": msg.from_values.name if msg.from_values else "",
             "to": msg.to_values[0].email if msg.to_values else "",
             "subject": msg.subject or "",
-            "date": msg.date.isoformat() if msg.date else "",
+            # Canonical UTC ISO-8601 with an explicit `Z`. The old value was
+            # `msg.date.isoformat()` — an offset-carrying string handed to a
+            # timezone-less DB column, which made the stored instant depend on
+            # the database session timezone (live bug 2026-11-09).
+            "date": mail_dates.iso_utc_z(msg.date) if msg.date else "",
             "body_text": msg.text or "",
             "body_html": msg.html or "",
             "flags": list(msg.flags) if msg.flags else [],
@@ -2384,7 +2402,7 @@ def create_email_history_snapshot(opp_id: int, message_id: int, user_id: int | N
             "to": msg["to_addr"] or "",
             "cc": msg["cc_addr"] or "",
             "subject": msg["subject"] or "",
-            "date_sent": str(msg["date_received"]) if msg["date_received"] else "",
+            "date_sent": mail_dates.iso_utc(msg["date_received"]),
             "body_html": msg["body_html"] or "",
             "body_text": msg["body_text"] or "",
             "attachments": att_snapshot,
@@ -2456,7 +2474,7 @@ def create_email_history_snapshot_detailed(opp_id: int, message_id: int,
                 "to": msg["to_addr"] or "",
                 "cc": msg["cc_addr"] or "",
                 "subject": msg["subject"] or "",
-                "date_sent": str(msg["date_received"]) if msg["date_received"] else "",
+                "date_sent": mail_dates.iso_utc(msg["date_received"]),
                 "body_html": msg["body_html"] or "",
                 "body_text": msg["body_text"] or "",
                 "attachments": att_snapshot,
@@ -2727,7 +2745,10 @@ def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | No
                 _clean_nul_str(msg.get("subject") or ""),
                 _clean_nul_str(msg.get("body_text") or ""),
                 _clean_nul_str(msg.get("body_html") or ""),
-                msg.get("date") or None,
+                # Always an aware UTC datetime (never the raw offset string):
+                # date_received is `timestamptz` since migration 048, so a
+                # naive value would be re-interpreted in the session timezone.
+                mail_dates.parse_email_date(msg.get("date")),
                 folder,
                 is_read,
                 False,
@@ -3048,44 +3069,28 @@ def _retention_cutoff(mailbox_cfg: dict[str, Any]) -> datetime | None:
     Same cutoff logic as `_enforce_retention` (now - retention_days), so the
     scanner never imports a message that retention would immediately delete.
 
-    The cutoff is NAIVE (no timezone), matching `mail_messages.date_received`
-    (a plain TIMESTAMP) and the aware-but-offset-dropped value Postgres
-    stores for it.
+    The cutoff is tz-aware UTC, matching `mail_messages.date_received` after
+    migration 048 (live bug 2026-11-09: the column was a plain TIMESTAMP, so
+    the stored instant depended on the DB session timezone and could be hours
+    off). Keeping both sides aware means the import-skip and the retention
+    purge always agree.
     """
     days = _account_retention_days(mailbox_cfg)
     if days <= 0:
         return None
-    return (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None)
+    return datetime.now(timezone.utc) - timedelta(days=days)
 
 
 def _parse_message_date(value: Any) -> datetime | None:
-    """Parse an IMAP message date into a naive datetime, or None.
+    """Parse an IMAP message date into an AWARE UTC datetime, or None.
 
-    The value is the message's own wall-clock time, WITHOUT a timezone
-    conversion, because that is exactly how Postgres stores it:
-    `mail_messages.date_received` is a plain `TIMESTAMP` (no time zone), and
-    `_store_message` writes `msg.date.isoformat()` verbatim — Postgres drops
-    the offset and keeps the wall-clock time as written.
-
-    Comparing that wall-clock value against `_enforce_retention`'s cutoff
-    (also naive, see `_retention_cutoff`) keeps the import-skip and the
-    retention purge in agreement: the scanner never skips a message that
-    retention would keep, and never imports one that retention would delete.
+    Uses the shared `mail_dates.parse_email_date`, which understands both the
+    scanner's own ISO strings and a raw RFC 2822 `Date:` header, and treats a
+    value with no offset as UTC (never as browser-local / server-local). The
+    old version stripped the offset, so a message received at 13:20 -0500 was
+    compared and stored as if it were 13:20 UTC.
     """
-    if value is None or value == "":
-        return None
-    if isinstance(value, datetime):
-        dt = value
-    else:
-        text = str(value).strip()
-        if not text:
-            return None
-        try:
-            dt = datetime.fromisoformat(text)
-        except ValueError:
-            return None
-    # Drop the offset — the stored value has none.
-    return dt.replace(tzinfo=None)
+    return mail_dates.parse_email_date(value)
 
 
 def _message_older_than_cutoff(msg: dict[str, Any], cutoff: datetime | None) -> bool:
@@ -3243,7 +3248,7 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
                 "to": to_addr,
                 "cc": msg.get("cc") or "",
                 "subject": msg.get("subject", "") or "",
-                "date_sent": str(msg.get("date") or ""),
+                "date_sent": mail_dates.iso_utc(msg.get("date")),
                 "body_html": msg.get("body_html") or "",
                 "body_text": msg.get("body_text") or "",
                 "attachments": att_snapshot,
@@ -3638,7 +3643,9 @@ def get_scanner_status() -> dict[str, Any]:
     try:
         rows = db.query_dicts(
             """SELECT id, email, imap_host, imap_port, oauth_provider,
-                      password_encrypted, last_sync, sync_enabled FROM mail_accounts
+                      password_encrypted, last_sync, sync_enabled,
+                      oauth_identity, oauth_last_error, oauth_graph_last_error
+               FROM mail_accounts
                WHERE sync_enabled = TRUE"""
         )
     except Exception:
@@ -3675,6 +3682,11 @@ def get_scanner_status() -> dict[str, Any]:
             except Exception:
                 pass
             status = "active" if token_valid else "auth_failed"
+            if status == "active" and (acct.get("oauth_last_error")
+                                       or acct.get("oauth_graph_last_error")):
+                # A refresh we observed failing is not "active" even if a
+                # token/refresh token is still on file.
+                status = "auth_failed"
         else:
             status = "active" if acct.get("password_encrypted") else "no_password"
 
@@ -3695,6 +3707,11 @@ def get_scanner_status() -> dict[str, Any]:
             "status": status,
             "active_behaviors": active_behaviors,
             "last_sync": str(acct.get("last_sync") or ""),
+            # Connected identity + last persisted OAuth failure (migration
+            # 047). Lets the admin panel and the diagnostic script explain a
+            # dead account without reading tokens.
+            "oauth_identity": acct.get("oauth_identity"),
+            "last_error": acct.get("oauth_last_error") or acct.get("oauth_graph_last_error"),
         })
 
     enabled = len(account_list) > 0

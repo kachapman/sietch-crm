@@ -789,7 +789,7 @@ def _get_crm_smtp_account() -> dict | None:
     try:
         from db import query_one
         row = query_one(
-            """SELECT email, smtp_host, smtp_port, smtp_user, smtp_password_encrypted,
+            """SELECT id, email, smtp_host, smtp_port, smtp_user, smtp_password_encrypted,
                       oauth_provider, oauth_access_token, oauth_refresh_token, oauth_token_expires
                FROM mail_accounts WHERE is_crm_mail = TRUE AND smtp_host IS NOT NULL
                ORDER BY id LIMIT 1"""
@@ -811,10 +811,15 @@ def _get_crm_smtp_account() -> dict | None:
                     new_expires = tok.get("expires_in", 3600)
                     import time as _time
                     from db import execute
+                    # Save by id, not by email (live bug 2026-11-09). Email is
+                    # unique today, but the row identity is what the token is
+                    # bound to — and this path used to bypass the
+                    # compare-and-swap in mail_oauth, so it could clobber a
+                    # token the scanner had just rotated.
                     execute(
                         "UPDATE mail_accounts SET oauth_access_token = %s, oauth_refresh_token = %s, "
-                        "oauth_token_expires = to_timestamp(%s) WHERE email = %s",
-                        (tok["access_token"], new_refresh, int(_time.time()) + new_expires, acct["email"]),
+                        "oauth_token_expires = to_timestamp(%s) WHERE id = %s",
+                        (tok["access_token"], new_refresh, int(_time.time()) + new_expires, acct["id"]),
                     )
         return acct
     except Exception:

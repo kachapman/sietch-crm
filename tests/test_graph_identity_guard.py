@@ -36,9 +36,10 @@ Run with: python3 tests/test_graph_identity_guard.py
 """
 import sys
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import oauth_providers as op
 import mail_send as ms
@@ -253,7 +254,17 @@ class TestServerCallbackFailsClosed(unittest.TestCase):
         fake_exchange = {"access_token": "AT", "refresh_token": "RT",
                          "expires_in": 3600, "email": signed_in_email}
         mock_db = MagicMock()
-        mock_db.query_one.return_value = {"id": 5, "email": account_email}
+        account_row = {"id": 5, "email": account_email, "owner_user_id": 7,
+                       "oauth_graph_refresh_token": "OLD-GRAPH-REFRESH"}
+
+        def _query_one(sql, params=None):
+            if "FROM users" in sql:
+                return {"id": 7, "is_admin": False}
+            if "oauth_graph_refresh_token = %s" in sql and "id <> %s" in sql:
+                return None  # no other account holds this grant
+            return account_row
+
+        mock_db.query_one.side_effect = _query_one
         mock_db.execute.side_effect = lambda sql, params=None, *a, **k: writes.append((sql, params))
         _server._oauth_graph_states[state_key] = (7, 5, _time.time() + 600)
         shim = Shim(f"/x?code=x&state={state_key}")
@@ -294,13 +305,15 @@ class TestSourceGuards(unittest.TestCase):
 
     def setUp(self):
         from pathlib import Path
-        self.server = Path('/home/chapman-server/Projects/new-crm/server.py').read_text(encoding="utf-8")
-        self.app = Path('/home/chapman-server/Projects/new-crm/public/app.js').read_text(encoding="utf-8")
+        self.server = (Path(__file__).resolve().parents[1] / 'server.py').read_text(encoding="utf-8")
+        self.app = (Path(__file__).resolve().parents[1] / 'public' / 'app.js').read_text(encoding="utf-8")
 
     def test_graph_callback_refuses_unverifiable_identity(self):
         at = self.server.index("def _handle_oauth_graph_callback")
         region = self.server[at:at + 6000]
-        self.assertIn("if not ms_email:", region,
+        self.assertIn("mail_oauth_binding.identity_state(ms_email, acct_email)", region,
+                      "the callback must classify the identity explicitly")
+        self.assertIn("if state_kind != mail_oauth_binding.IDENTITY_OK:", region,
                       "the callback must fail closed on an unverifiable identity")
 
     def test_inline_reply_sends_from_the_messages_account(self):

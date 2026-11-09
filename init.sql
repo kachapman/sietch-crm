@@ -818,7 +818,9 @@ CREATE TABLE mail_messages (
     subject TEXT,
     body_text TEXT,
     body_html TEXT,
-    date_received TIMESTAMP,
+    -- tz-aware UTC (migration 048, live bug 2026-11-09). A plain TIMESTAMP
+    -- made the stored instant depend on the DB session timezone.
+    date_received TIMESTAMPTZ,
     is_read BOOLEAN DEFAULT FALSE,
     is_flagged BOOLEAN DEFAULT FALSE,
     is_archived BOOLEAN DEFAULT FALSE,

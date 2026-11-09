@@ -1,3 +1,66 @@
+## 2026-11-09 — Mail OAuth account binding + UTC mail timestamps
+
+### Fixed
+- **OAuth tokens could be attached to the wrong mail account** (Ken, 2:08 PM):
+  account 8 (`estimates.masterx@outlook.com`) showed "Connected as
+  mdm.estimates@outlook.com via Microsoft Graph" and every Outlook account
+  ended up `auth_failed`.
+  - The IMAP/SMTP `state` carried no account, so the callback guessed its
+    target from the email in the token response (and inserted a blank-email
+    row when the identity was unreadable). State is now a signed, 10-minute
+    HMAC token bound to `(kind, user, provider, account_id)`.
+  - The callback wrote `oauth_refresh_token = ""` when the provider omitted
+    one, destroying the only renewal path. A blank value never overwrites a
+    stored refresh token now.
+  - Refresh (scanner / server / IMAP flag sync) never checked WHICH mailbox
+    the grant belongs to. It now verifies the identity and refuses a
+    mismatch; an unreadable identity is refused unless the account was
+    already verified at connect time.
+  - The Graph settings buttons were bound once with the first account opened
+    (`dataset.bound`), so Connect/Disconnect acted on the wrong mailbox —
+    why "Disconnect first" never cleared the token the error complained
+    about. Handlers are rebound per open and re-read the account id at click.
+  - `POST/PUT /api/v2/mail/accounts` accepted `oauth_*` tokens from the
+    client; the list endpoint hands the client `""` for those fields, so an
+    echo could wipe a grant. Token columns are no longer client-writable.
+  - One grant is allowed on exactly one account: two rows sharing a refresh
+    token rotate each other away on the next refresh (the "all accounts lost
+    access at once" failure mode).
+  - New `POST /api/v2/mail/oauth/disconnect/{id}` clears only that account's
+    IMAP/SMTP tokens. The UI shows the REAL connected identity per account
+    and flags a mismatch in red.
+- **Mail timestamps were stored and displayed in the wrong timezone**
+  (an email received 1:20 PM EST showed as "2:20:03 AM").
+  - `mail_messages.date_received` was `TIMESTAMP`; PostgreSQL **silently
+    ignores the offset** in a literal for that type, so the scanner stored
+    the sender's wall clock (13:20) as if it were UTC. Readers then assumed
+    UTC. Migration 048 retypes the column to `timestamptz` and declares the
+    existing values UTC (no double shift).
+  - New `mail_dates.py` is the single parser/serializer: aware UTC always,
+    naive input is UTC (never server-local), RFC-2822 and Graph
+    `receivedDateTime` (7-digit fractions) supported, ISO output carries an
+    offset.
+  - New `public/mail-dates.js` is the single formatter; `app.js` imports it
+    and the mail list/preview/quote/thread headers route through it. Naive
+    values are no longer parsed as browser-local, and the wall clock is
+    rendered in the viewer's timezone (setting → browser → America/New_York).
+  - `scripts/backfill_mail_dates.py` recomputes stored times from each row's
+    original `Date:` header (idempotent, **dry-run by default**, counts and
+    deltas only, no email content) with an opt-in inferred offset for rows
+    without headers.
+  - `scripts/diagnose_mail_oauth.py` — read-only per-account identity report
+    (no token values, only short fingerprints) for the OAuth incident.
+
+### Added
+- Migration 047 (`oauth_identity`, `oauth_last_error`, `oauth_last_error_at`)
+  and 048 (`date_received` → `timestamptz`). Both additive/idempotent.
+- Tests: `tests/test_oauth_account_binding.py` (56), 
+  `tests/test_oauth_account_binding.mjs` (9), `tests/test_mail_dates.py` (41),
+  `tests/test_mail_dates.mjs` (14).
+
+### Notes
+- Not deployed, not merged. Backfill is not run against production.
+
 ## 2026-11-08 — API tokens: full access by default
 
 - Admin console tokens default to full `/api/v2` access (all methods).

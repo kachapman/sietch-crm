@@ -495,7 +495,10 @@ def _load_env_file() -> None:
 
 _load_env_file()
 import oauth_providers
+import oauth_state
 import mail_oauth
+import mail_oauth_binding
+import mail_dates
 import mail_imap
 
 # mail_scanner imports oauth_providers (and reads its env-derived constants),
@@ -1088,6 +1091,45 @@ try:
     db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS oauth_graph_last_error_at TIMESTAMP")
 except Exception:
     pass
+# Identity of the IMAP/SMTP (Exchange audience) token's grant + its last
+# refresh failure (migration 047, live bug 2026-11-09). Without a recorded
+# identity the UI could only *assume* "Connected as <account email>", so a
+# mis-bound Exchange token was invisible. Mirrors the oauth_graph_* columns.
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS oauth_identity TEXT")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS oauth_last_error TEXT")
+except Exception:
+    pass
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS oauth_last_error_at TIMESTAMPTZ")
+except Exception:
+    pass
+# Mail timestamps are tz-aware UTC (migration 048, live bug 2026-11-09). The
+# column used to be `TIMESTAMP`, so the instant depended on the DB session
+# TimeZone and the UI could show a wildly wrong wall clock. The DO block is
+# idempotent: it only converts a still-naive column, and declares the stored
+# naive values to be UTC (which is what the production session wrote).
+try:
+    db.execute("""
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'mail_messages'
+              AND column_name = 'date_received'
+              AND data_type = 'timestamp without time zone'
+          ) THEN
+            ALTER TABLE mail_messages
+              ALTER COLUMN date_received TYPE timestamptz
+              USING date_received AT TIME ZONE 'UTC';
+          END IF;
+        END $$;
+    """)
+except Exception:
+    logger.warning("Could not retype mail_messages.date_received to timestamptz", exc_info=True)
 # Memory of observed SMTP AUTH disable (5.7.139). Microsoft accepts-then-drops
 # or refuses unpredictably for these mailboxes; SMTP "success" (250) is not
 # proof of delivery, so flagged accounts skip SMTP entirely and fail loudly
@@ -2360,7 +2402,7 @@ def _mail_account_manageable(user: dict, account_id: int) -> bool:
     if user.get("is_admin"):
         return True
     row = db.query_one("SELECT owner_user_id FROM mail_accounts WHERE id = %s", (account_id,))
-    return row is not None and row["owner_user_id"] == user["id"]
+    return row is not None and row.get("owner_user_id") == user["id"]
 
 
 def _coerce_retention_days(value: Any, default: int = 90) -> int:
@@ -4734,6 +4776,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         m = re.match(r"^/api/v2/mail/oauth/microsoft/graph/disconnect/(\d+)$", api_path)
         if m:
             self._handle_oauth_graph_disconnect(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/mail/oauth/disconnect/(\d+)$", api_path)
+        if m:
+            self._handle_oauth_exchange_disconnect(int(m.group(1)))
             return
 
         # ── Mail Scanner ──
@@ -13122,7 +13168,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             items = [{
                 "message_id": r["message_id"], "opportunity_id": r["opportunity_id"],
                 "subject": r.get("subject") or "", "from": r.get("from_addr") or "",
-                "date": str(r.get("date_received") or ""),
+                "date": mail_dates.iso_utc(r.get("date_received")),
                 "project": r.get("opp_title") or "",
             } for r in rows]
             for it in items:
@@ -13355,7 +13401,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     "message_id": mid, "opportunity_id": opp,
                     "subject": r.get("subject") or "",
                     "from": r.get("from_addr") or "",
-                    "date": str(r.get("date_received") or ""),
+                    "date": mail_dates.iso_utc(r.get("date_received")),
                     "project": r.get("opp_title") or "",
                     "action": "create_entry_and_copy" if not r.get("event_id") else "copy_files",
                     "copied": 0, "total": 0, "skipped": [],
@@ -13633,8 +13679,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not cands:
             return None
         target = KanbanHandler._parse_snapshot_ts(orphan.get("date_sent"))
+        # Compare canonical UTC ISO strings on both sides: `str(datetime)`
+        # emits a space separator and `date_sent` may come from a JSON
+        # snapshot, so a raw str() comparison never matched (and the
+        # 60-second fallback then had to do all the work).
+        orphan_iso = mail_dates.iso_utc(orphan.get("date_sent"))
         exact = [c for c in cands
-                 if str(c.get("date_received") or "") == str(orphan.get("date_sent") or "")]
+                 if orphan_iso and mail_dates.iso_utc(c.get("date_received")) == orphan_iso]
         if len(exact) == 1:
             return exact[0]
         if len(exact) > 1:
@@ -20810,9 +20861,52 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not oauth_providers.MICROSOFT_CLIENT_ID and not oauth_providers.GOOGLE_CLIENT_ID:
             _json_response(self, 400, {"error": "No OAuth providers configured"})
             return
-        state = oauth_providers.generate_state()
+        # Account binding (live bug 2026-11-09). When the connect button is
+        # clicked inside an EXISTING account's settings the request carries
+        # that account's id. It goes into the signed state, so the callback
+        # writes to exactly that row instead of guessing by the email that
+        # happens to come back from the provider. Without an id this is the
+        # "add a new mail account" flow, which legitimately has no row yet.
+        raw_account_id = (qs.get("account_id") or [""])[0].strip()
+        account_id: int | None = None
+        target: dict | None = None
+        if raw_account_id:
+            try:
+                account_id = int(raw_account_id)
+            except (TypeError, ValueError):
+                _json_response(self, 400, {"error": "account_id must be an integer"})
+                return
+            if not _mail_account_manageable(user, account_id):
+                _json_response(self, 403, {"error": "You don't have permission to manage this account"})
+                return
+            target = db.query_one(
+                "SELECT id, email, oauth_provider, oauth_refresh_token FROM mail_accounts WHERE id = %s",
+                (account_id,),
+            )
+            if not target:
+                _json_response(self, 404, {"error": "Mail account not found"})
+                return
+            current_provider = (target.get("oauth_provider") or "").strip().lower()
+            if current_provider and current_provider != provider_name:
+                _json_response(self, 400, {
+                    "error": f"This account is connected as {current_provider}, not {provider_name}",
+                })
+                return
+        state = oauth_state.sign_state(
+            oauth_state.KIND_EXCHANGE, user["id"], provider_name, account_id=account_id,
+            extra={"crm": bool(is_crm_mail)},
+        )
+        # Legacy in-memory entry kept for in-flight flows that started before
+        # this build (state is opaque either way).
         _oauth_states[state] = (user["id"], provider_name, time.time() + 600, is_crm_mail)
-        auth_url = prov.authorize_url(state)
+        # login_hint pre-filters the Microsoft account picker to the mailbox
+        # being connected — the single biggest cause of "signed in as MDM
+        # while connecting Aplus" (2026-10-29 / 2026-11-09).
+        login_hint = (target or {}).get("email") or None
+        if provider_name == "microsoft":
+            auth_url = prov.authorize_url(state, login_hint=login_hint)
+        else:
+            auth_url = prov.authorize_url(state)
         _json_response(self, 200, {"authUrl": auth_url})
 
     def _handle_oauth_callback(self) -> None:
@@ -20830,20 +20924,32 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "Missing code or state"})
             return
 
-        state_data = _oauth_states.pop(state_val, None)
-        if not state_data:
-            # Graph flow shares the single registered redirect_uri (Microsoft
-            # only calls back to OAUTH_REDIRECT_URI) but keeps a separate
-            # state store — delegate instead of erroring.
-            if state_val in _oauth_graph_states:
-                return self._handle_oauth_graph_callback()
-            _json_response(self, 400, {"error": "Invalid or expired state"})
-            return
-        if len(state_data) >= 4:
-            user_id, provider_name, _, is_crm_mail = state_data
+        # Signed state first: it survives a restart and names the account.
+        payload = oauth_state.consume_state(state_val, expected_kind=oauth_state.KIND_EXCHANGE)
+        account_id: int | None = None
+        if payload:
+            user_id = int(payload["u"])
+            provider_name = str(payload.get("p") or "")
+            is_crm_mail = bool((payload.get("x") or {}).get("crm"))
+            account_id = payload.get("a")
         else:
-            user_id, provider_name, _ = state_data
-            is_crm_mail = False
+            legacy = _oauth_states.pop(state_val, None)
+            if legacy:
+                # Flow started by a build that predates signed state.
+                if len(legacy) >= 4:
+                    user_id, provider_name, _, is_crm_mail = legacy
+                else:
+                    user_id, provider_name, _ = legacy
+                    is_crm_mail = False
+            else:
+                # Graph flow shares the single registered redirect_uri
+                # (Microsoft only calls back to OAUTH_REDIRECT_URI) but is a
+                # different kind of state — delegate instead of erroring.
+                if (state_val in _oauth_graph_states
+                        or oauth_state.verify_state(state_val, expected_kind=oauth_state.KIND_GRAPH)):
+                    return self._handle_oauth_graph_callback()
+                _json_response(self, 400, {"error": "Invalid or expired state"})
+                return
 
         prov = oauth_providers.get_provider(provider_name)
         if not prov:
@@ -20860,57 +20966,150 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         access_token = token_data.get("access_token", "")
         refresh_token = token_data.get("refresh_token", "")
         expires_in = token_data.get("expires_in", 3600)
-        email = token_data.get("email", "")
-        logger.info("OAuth callback: provider=%s email=%s has_access=%s has_refresh=%s",
-                     provider_name, email, bool(access_token), bool(refresh_token))
+        identity = token_data.get("email", "")
+        logger.info("OAuth callback: provider=%s identity=%s account_id=%s has_access=%s has_refresh=%s",
+                     provider_name, identity, account_id, bool(access_token), bool(refresh_token))
 
         if not access_token:
             self._oauth_redirect_with_status("error", "No access token returned")
             return
 
         expires_ts = datetime.now(timezone.utc).timestamp() + expires_in
-        imap = prov.imap_settings(email)
-        smtp = prov.smtp_settings(email)
 
-        existing = db.query_one(
-            "SELECT id FROM mail_accounts WHERE email = %s AND owner_user_id = %s",
-            (email, user_id),
+        # ── Resolve the target row ────────────────────────────────────────
+        # Bound flow: the state named the account. Anything else (identity
+        # mismatch, unreadable identity, deleted row) is refused BEFORE a
+        # token is written.
+        account: dict | None = None
+        if account_id is not None:
+            account = db.query_one(
+                "SELECT id, email, owner_user_id, oauth_refresh_token FROM mail_accounts WHERE id = %s",
+                (account_id,),
+            )
+            if not account:
+                self._oauth_redirect_with_status(
+                    "error", "The mail account this connection was started for no longer exists")
+                return
+            state_user = db.query_one("SELECT id, is_admin FROM users WHERE id = %s", (user_id,))
+            if not state_user:
+                logger.warning("OAuth callback: state user %s no longer exists — refusing", user_id)
+                self._oauth_redirect_with_status(
+                    "error", "You no longer have permission to manage this mail account")
+                return
+            # Ownership re-check (defence in depth; the signed state was
+            # already minted after an authorize-time permission check).
+            owner_id = account.get("owner_user_id")
+            if (owner_id is not None and not state_user.get("is_admin")
+                    and int(owner_id) != int(user_id)):
+                logger.warning(
+                    "OAuth callback: user %s may not write tokens for account %s — refusing",
+                    user_id, account_id)
+                self._oauth_redirect_with_status(
+                    "error", "You no longer have permission to manage this mail account")
+                return
+
+        if account is not None:
+            account_email = account.get("email") or ""
+            state_kind, detail = mail_oauth_binding.identity_state(identity, account_email)
+            if state_kind != mail_oauth_binding.IDENTITY_OK:
+                if state_kind == mail_oauth_binding.IDENTITY_MISMATCH:
+                    msg = mail_oauth_binding.mismatch_message(detail, account_email)
+                else:
+                    msg = mail_oauth_binding.unverifiable_message(account_email)
+                logger.warning(
+                    "OAuth identity refused for account %s (%s): %s",
+                    account_id, account_email, detail)
+                self._oauth_redirect_with_status("error", msg)
+                return
+        else:
+            # New-account flow: the identity IS the account, so it must be
+            # readable. An unreadable identity used to INSERT a row with an
+            # empty email address.
+            if not mail_oauth_binding.normalize_email(identity):
+                logger.warning("OAuth callback: provider returned no identity — refusing to create an account")
+                self._oauth_redirect_with_status(
+                    "error",
+                    "Could not verify which account signed in, so no mail account was created. "
+                    "Try connecting again and pick the mailbox you want to add.")
+                return
+            account = db.query_one(
+                "SELECT id, email, owner_user_id, oauth_refresh_token FROM mail_accounts "
+                "WHERE email = %s AND owner_user_id = %s",
+                (identity, user_id),
+            )
+            if account:
+                account_id = account["id"]
+
+        existing_refresh = (account or {}).get("oauth_refresh_token") or ""
+        stored_refresh = mail_oauth_binding.refresh_token_to_store(refresh_token, existing_refresh)
+        if not stored_refresh:
+            # An access-token-only row is dead within the hour and shows up as
+            # auth_failed forever — make the user retry instead.
+            self._oauth_redirect_with_status(
+                "error",
+                "Microsoft did not return a refresh token, so the connection would stop working "
+                "within an hour. Click Connect again and accept the permission screen.")
+            return
+        # A grant belongs to exactly one mailbox. Two rows holding the same
+        # refresh token rotate each other away on the next refresh, which is
+        # how every Outlook account can lose access at once.
+        conflict = mail_oauth_binding.grant_owner(
+            db, stored_refresh, "oauth_refresh_token",
+            exclude_account_id=account_id,
         )
+        if conflict:
+            logger.warning(
+                "OAuth callback: grant already attached to account %s — refusing to attach to %s",
+                conflict.get("id"), account_id)
+            self._oauth_redirect_with_status(
+                "error", mail_oauth_binding.grant_conflict_message(conflict))
+            return
 
-        if existing:
+        imap = prov.imap_settings(identity)
+        smtp = prov.smtp_settings(identity)
+
+        if account_id is not None:
             db.execute(
                 """UPDATE mail_accounts SET
                    oauth_provider = %s, oauth_access_token = %s, oauth_refresh_token = %s,
-                   oauth_token_expires = to_timestamp(%s), imap_host = COALESCE(NULLIF(imap_host, ''), %s),
+                   oauth_token_expires = to_timestamp(%s), oauth_identity = %s,
+                   oauth_last_error = NULL, oauth_last_error_at = NULL,
+                   imap_host = COALESCE(NULLIF(imap_host, ''), %s),
                    imap_port = COALESCE(NULLIF(imap_port, 0), %s),
                    smtp_host = COALESCE(NULLIF(smtp_host, ''), %s),
                    smtp_port = COALESCE(NULLIF(smtp_port, 0), %s),
+                   smtp_user = %s,
                    sync_enabled = TRUE
                    WHERE id = %s""",
-                (provider_name, access_token, refresh_token, expires_ts,
+                (provider_name, access_token, stored_refresh, expires_ts, identity,
                  imap["host"], imap["port"], smtp["host"], smtp["port"],
-                 existing["id"]),
+                 identity, account_id),
             )
+            logger.info(
+                "OAuth token stored on account %s (%s) for identity %s",
+                account_id, (account or {}).get("email"), identity)
         else:
             try:
                 db.execute(
                     """INSERT INTO mail_accounts
                        (email, imap_host, imap_port, smtp_host, smtp_port, owner_user_id,
                         oauth_provider, oauth_access_token, oauth_refresh_token,
-                        oauth_token_expires, smtp_user, sync_enabled, monitored_folders,
-                        password_encrypted, display_name, is_crm_mail)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s), %s, TRUE, 'INBOX', '', %s, %s)""",
-                    (email, imap["host"], imap["port"], smtp["host"], smtp["port"],
-                     user_id, provider_name, access_token, refresh_token, expires_ts, email,
-                     email.split("@")[0].replace(".", " ").title(), bool(is_crm_mail)),
+                        oauth_token_expires, oauth_identity, smtp_user, sync_enabled,
+                        monitored_folders, password_encrypted, display_name, is_crm_mail)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s), %s, %s,
+                               TRUE, 'INBOX', '', %s, %s)""",
+                    (identity, imap["host"], imap["port"], smtp["host"], smtp["port"],
+                     user_id, provider_name, access_token, stored_refresh, expires_ts, identity,
+                     identity, identity.split("@")[0].replace(".", " ").title(),
+                     bool(is_crm_mail)),
                 )
-                logger.info("OAuth INSERT succeeded for email=%s user_id=%s", email, user_id)
+                logger.info("OAuth INSERT succeeded for identity=%s user_id=%s", identity, user_id)
             except Exception as e:
-                logger.exception("OAuth INSERT failed for email=%s", email)
+                logger.exception("OAuth INSERT failed for identity=%s", identity)
                 self._oauth_redirect_with_status("error", f"DB insert failed: {e}")
                 return
 
-        self._oauth_redirect_with_status("success", email)
+        self._oauth_redirect_with_status("success", identity)
 
     def _oauth_redirect_with_status(self, status: str, message: str) -> None:
         base = CRM_PUBLIC_URL.rstrip("/") or DOCS_PUBLIC_URL.rstrip("/") or "/"
@@ -20944,7 +21143,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 expected_access=row.get("oauth_access_token") or None,
             )
             if not token_data:
-                _json_response(self, 500, {"error": "Token refresh failed"})
+                # mail_oauth persists the reason (identity mismatch, invalid
+                # grant, expired client secret) — surface it instead of a
+                # generic failure.
+                err_row = db.query_one(
+                    "SELECT oauth_last_error FROM mail_accounts WHERE id = %s", (account_id,))
+                detail = (err_row or {}).get("oauth_last_error") or "Token refresh failed"
+                _json_response(self, 500, {"error": detail})
                 return
             expires_ts = datetime.now(timezone.utc).timestamp() + 3600
             _json_response(self, 200, {"ok": True, "expiresAt": expires_ts})
@@ -20980,13 +21185,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "SELECT id, email, oauth_provider FROM mail_accounts WHERE id = %s AND owner_user_id = %s",
             (account_id, user["id"]),
         )
+        if not acct and user.get("is_admin"):
+            # Admins may manage shared/company accounts they do not own.
+            acct = db.query_one(
+                "SELECT id, email, oauth_provider FROM mail_accounts WHERE id = %s",
+                (account_id,),
+            )
         if not acct:
             _json_response(self, 404, {"error": "Account not found"})
             return
         if acct.get("oauth_provider") != "microsoft":
             _json_response(self, 400, {"error": "Graph sendMail only applies to Microsoft OAuth accounts"})
             return
-        state = oauth_providers.generate_state()
+        state = oauth_state.sign_state(
+            oauth_state.KIND_GRAPH, user["id"], "microsoft", account_id=account_id,
+        )
+        # Legacy in-memory entry for flows that started before this build.
         _oauth_graph_states[state] = (user["id"], account_id, time.time() + 600)
         _json_response(self, 200, {"authUrl": oauth_providers.MicrosoftProvider.graph_authorize_url(
             state, login_hint=acct.get("email") or None)})
@@ -21004,21 +21218,43 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "Missing code or state"})
             return
 
-        state_data = _oauth_graph_states.pop(state_val, None)
-        if not state_data:
-            self._oauth_redirect_with_status("error", "Graph OAuth state expired — reconnect from mail account settings")
-            return
-        user_id, account_id, _ = state_data
+        payload = oauth_state.consume_state(state_val, expected_kind=oauth_state.KIND_GRAPH)
+        if payload:
+            user_id = int(payload["u"])
+            account_id = int(payload["a"])
+        else:
+            state_data = _oauth_graph_states.pop(state_val, None)
+            if not state_data:
+                self._oauth_redirect_with_status(
+                    "error", "Graph OAuth state expired — reconnect from mail account settings")
+                return
+            user_id, account_id, _ = state_data
 
-        # Re-check ownership before writing tokens. The state only encoded
-        # user_id/account_id; checking ownership here prevents CSRF where a
-        # leaked callback URL is replayed to a different authenticated session.
+        # Re-check ownership before writing tokens. The signed state carries
+        # the user id, so a leaked callback URL replayed in another session
+        # cannot write to this row.
         acct = db.query_one(
-            "SELECT id, email FROM mail_accounts WHERE id = %s AND owner_user_id = %s",
-            (account_id, user_id),
+            "SELECT id, email, owner_user_id, oauth_graph_refresh_token FROM mail_accounts WHERE id = %s",
+            (account_id,),
         )
         if not acct:
             self._oauth_redirect_with_status("error", "Account no longer accessible")
+            return
+        state_user = db.query_one("SELECT id, is_admin FROM users WHERE id = %s", (user_id,))
+        if not state_user:
+            logger.warning("Graph OAuth callback: state user %s no longer exists — refusing", user_id)
+            self._oauth_redirect_with_status("error", "You no longer have permission to manage this mail account")
+            return
+        # Ownership re-check (defence in depth; the signed state was already
+        # minted after an authorize-time permission check). NULL owner = a
+        # shared/company inbox, which any signed-in user may connect.
+        owner_id = acct.get("owner_user_id")
+        if (owner_id is not None and not state_user.get("is_admin")
+                and int(owner_id) != int(user_id)):
+            logger.warning(
+                "Graph OAuth callback: user %s may not write tokens for account %s — refusing",
+                user_id, account_id)
+            self._oauth_redirect_with_status("error", "You no longer have permission to manage this mail account")
             return
 
         try:
@@ -21048,25 +21284,41 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # account and every send went out as MDM Construction.
         ms_email = (token_data.get("email") or "").strip().lower()
         acct_email = (acct.get("email") or "").strip().lower()
-        if not ms_email:
-            # Unverifiable = refuse. Storing an unverified token is what
-            # caused the wrong-sender incident; better to make the admin
-            # reconnect than to silently accept an unknown mailbox.
-            logger.warning("Graph OAuth identity unverifiable for account %s (%s) — refusing to store the token",
-                           account_id, acct_email)
-            self._oauth_redirect_with_status(
-                "error",
-                "Could not verify which Microsoft account signed in, so the connection was not saved. "
-                "Disconnect Graph for this mailbox and reconnect while signed in as "
-                f"{acct_email or 'the correct account'}.")
+        state_kind, detail = mail_oauth_binding.identity_state(ms_email, acct_email)
+        if state_kind != mail_oauth_binding.IDENTITY_OK:
+            if state_kind == mail_oauth_binding.IDENTITY_MISMATCH:
+                logger.warning(
+                    "Graph OAuth identity mismatch: signed in as %s, account %s is %s — refusing",
+                    detail, account_id, acct_email)
+                msg = mail_oauth_binding.mismatch_message(detail, acct_email, kind="graph")
+            else:
+                logger.warning(
+                    "Graph OAuth identity unverifiable for account %s (%s) — refusing to store the token",
+                    account_id, acct_email)
+                msg = mail_oauth_binding.unverifiable_message(acct_email, kind="graph")
+            self._oauth_redirect_with_status("error", msg)
             return
-        if acct_email and ms_email != acct_email:
-            logger.warning("Graph OAuth identity mismatch: signed in as %s, account %s is %s — refusing",
-                           ms_email, account_id, acct_email)
+
+        # Never blank an existing Graph refresh token (see
+        # mail_oauth_binding.refresh_token_to_store).
+        stored_refresh = mail_oauth_binding.refresh_token_to_store(
+            refresh_token, acct.get("oauth_graph_refresh_token"))
+        if not stored_refresh:
             self._oauth_redirect_with_status(
                 "error",
-                f"You signed in as {ms_email}, but this connects {acct_email}. "
-                f"Disconnect first, then reconnect while signed in as {acct_email}.")
+                "Microsoft did not return a Graph refresh token, so sending would stop within an "
+                "hour. Click Connect Graph again and accept the permission screen.")
+            return
+        # One grant per mailbox: two rows sharing a refresh token rotate each
+        # other away on the next refresh.
+        conflict = mail_oauth_binding.grant_owner(
+            db, stored_refresh, "oauth_graph_refresh_token", exclude_account_id=account_id)
+        if conflict:
+            logger.warning(
+                "Graph OAuth callback: grant already attached to account %s — refusing to attach to %s",
+                conflict.get("id"), account_id)
+            self._oauth_redirect_with_status(
+                "error", mail_oauth_binding.grant_conflict_message(conflict, kind="graph"))
             return
 
         expires_ts = datetime.now(timezone.utc).timestamp() + token_data.get("expires_in", 3600)
@@ -21080,8 +21332,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                oauth_graph_last_error = NULL,
                oauth_graph_last_error_at = NULL
                WHERE id = %s""",
-            (access_token, refresh_token, expires_ts,
-             oauth_providers.MicrosoftProvider._GRAPH_SCOPE, ms_email or None, account_id),
+            (access_token, stored_refresh, expires_ts,
+             oauth_providers.MicrosoftProvider._GRAPH_SCOPE, ms_email, account_id),
         )
         self._oauth_redirect_with_status("graph_success", "")
 
@@ -21089,13 +21341,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_auth(self)
         if not user:
             return
-        acct = db.query_one(
-            "SELECT id FROM mail_accounts WHERE id = %s AND owner_user_id = %s",
-            (account_id, user["id"]),
-        )
-        if not acct:
+        if not _mail_account_manageable(user, account_id):
             _json_response(self, 404, {"error": "Account not found"})
             return
+        # Scoped to this account id only. The old flow keyed everything by
+        # email, so a disconnect could clear the wrong mailbox's grant.
         db.execute(
             """UPDATE mail_accounts SET
                oauth_graph_access_token = NULL,
@@ -21105,6 +21355,33 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                oauth_graph_identity = NULL,
                oauth_graph_last_error = NULL,
                oauth_graph_last_error_at = NULL
+               WHERE id = %s""",
+            (account_id,),
+        )
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_oauth_exchange_disconnect(self, account_id: int) -> None:
+        """Clear THIS account's IMAP/SMTP OAuth tokens (nothing else).
+
+        Needed to recover from a mis-bound Exchange grant: reconnecting over
+        an existing wrong identity used to be impossible because there was no
+        way to drop the stored tokens first.
+        """
+        user = _require_auth(self)
+        if not user:
+            return
+        if not _mail_account_manageable(user, account_id):
+            _json_response(self, 404, {"error": "Account not found"})
+            return
+        db.execute(
+            """UPDATE mail_accounts SET
+               oauth_provider = NULL,
+               oauth_access_token = NULL,
+               oauth_refresh_token = NULL,
+               oauth_token_expires = NULL,
+               oauth_identity = NULL,
+               oauth_last_error = NULL,
+               oauth_last_error_at = NULL
                WHERE id = %s""",
             (account_id,),
         )
@@ -21133,8 +21410,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         send must be refused, not silently redirected.
         """
         row = db.query_one(
-            "SELECT email, oauth_graph_access_token, oauth_graph_refresh_token, oauth_graph_token_expires "
-            "FROM mail_accounts WHERE id = %s",
+            "SELECT email, oauth_graph_access_token, oauth_graph_refresh_token, oauth_graph_token_expires, "
+            "oauth_graph_identity FROM mail_accounts WHERE id = %s",
             (account_id,),
         )
         if not row or not row.get("oauth_graph_access_token"):
@@ -21149,22 +21426,34 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         try:
             tok = oauth_providers.MicrosoftProvider.graph_refresh_token(row["oauth_graph_refresh_token"])
             new_token = tok.get("access_token", "")
-            new_refresh = tok.get("refresh_token", row["oauth_graph_refresh_token"])
+            new_refresh = mail_oauth_binding.refresh_token_to_store(
+                tok.get("refresh_token"), row["oauth_graph_refresh_token"])
             new_expires_ts = datetime.now(timezone.utc).timestamp() + tok.get("expires_in", 3600)
             if not new_token:
                 return None, "Graph token refresh returned no access token"
-            # Identity of the refreshed token (empty when the grant predates
-            # `openid` and the identity cannot be read).
+            # Identity of the refreshed token. A refresh token is bound to
+            # the mailbox that granted it, so the id_token in the refresh
+            # response is the authoritative "which mailbox will this send
+            # as". Fail CLOSED (live bug 2026-11-09): an unreadable identity
+            # is a refusal, not a pass — the old `if ms_email and ...` let a
+            # mis-bound token keep sending.
             ms_email = (tok.get("email") or "").strip().lower()
-            if ms_email and acct_email and ms_email != acct_email:
-                err = (f"Graph token belongs to {ms_email}, but this mailbox is {acct_email}. "
-                       f"Disconnect Graph and reconnect while signed in as {acct_email}.")
-                logger.warning("Graph token identity mismatch on refresh for account %s: %s", account_id, err)
+            state_kind, detail = mail_oauth_binding.identity_state(ms_email, acct_email)
+            if state_kind != mail_oauth_binding.IDENTITY_OK:
+                if state_kind == mail_oauth_binding.IDENTITY_MISMATCH:
+                    err = mail_oauth_binding.mismatch_message(detail, acct_email, kind="graph")
+                else:
+                    err = (
+                        "The Graph refresh did not report which mailbox it belongs to, so it cannot "
+                        f"be verified for {acct_email}. Disconnect Graph and reconnect while signed "
+                        f"in as {acct_email}."
+                    )
+                logger.warning("Graph token identity refused on refresh for account %s: %s", account_id, err)
                 self._record_graph_error(account_id, err)
                 return None, err
             db.execute(
-                "UPDATE mail_accounts SET oauth_graph_access_token = %s, oauth_graph_refresh_token = %s, oauth_graph_token_expires = to_timestamp(%s), oauth_graph_identity = COALESCE(%s, oauth_graph_identity), oauth_graph_last_error = NULL, oauth_graph_last_error_at = NULL WHERE id = %s",
-                (new_token, new_refresh, new_expires_ts, ms_email or None, account_id),
+                "UPDATE mail_accounts SET oauth_graph_access_token = %s, oauth_graph_refresh_token = %s, oauth_graph_token_expires = to_timestamp(%s), oauth_graph_identity = %s, oauth_graph_last_error = NULL, oauth_graph_last_error_at = NULL WHERE id = %s",
+                (new_token, new_refresh, new_expires_ts, ms_email, account_id),
             )
             return new_token, None
         except Exception as e:
@@ -22038,6 +22327,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                           oauth_token_expires, oauth_scopes, is_crm_mail,
                           auto_bcc_addr, retention_days, tab_icon, tab_color,
                           last_sync, owner_user_id, created_at,
+                          oauth_identity, oauth_last_error, oauth_last_error_at,
                           oauth_graph_access_token IS NOT NULL AS has_graph_token,
                           oauth_graph_token_expires,
                           oauth_graph_identity,
@@ -22064,8 +22354,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         r["oauthStatus"] = "connected" if expires.timestamp() > now_ts else "expired"
                     else:
                         r["oauthStatus"] = "connected"
+                    # Actual identity behind the Exchange token. The UI used
+                    # to print "Connected as <account email>", which hid a
+                    # token that belonged to another mailbox (live bug
+                    # 2026-11-09).
+                    r["oauthIdentity"] = r.get("oauth_identity")
+                    r["oauthIdentityMismatch"] = bool(
+                        mail_oauth_binding.normalize_email(r.get("oauth_identity"))
+                        and mail_oauth_binding.normalize_email(r.get("oauth_identity"))
+                        != mail_oauth_binding.normalize_email(r.get("email"))
+                    )
                 else:
                     r["oauthStatus"] = None
+                    r["oauthIdentity"] = None
+                    r["oauthIdentityMismatch"] = False
                 # Graph sendMail status (Microsoft-only). Used by the
                 # connect/disconnect UI and the compose-window banner.
                 # has_graph_token is a presence flag — the token itself is
@@ -22230,7 +22532,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         "id": msg["id"],
                         "subject": msg.get("subject", ""),
                         "from": msg.get("from_addr", ""),
-                        "date": str(msg.get("date_received", "")),
+                        "date": mail_dates.iso_utc(msg.get("date_received")),
                     })
 
             _json_response(self, 200, {"matches": matches, "total": len(messages or [])})
@@ -22362,9 +22664,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     payload.get("smtp_from_name"),
                     oauth_provider,
                     folders_str,
-                    payload.get("oauth_access_token"),
-                    payload.get("oauth_refresh_token"),
-                    payload.get("oauth_token_expires"),
+                    # OAuth token material is never client-writable: the
+                    # callback (identity-verified) is the only writer.
+                    None,
+                    None,
+                    None,
                     is_crm_mail,
                     payload.get("auto_bcc_addr"),
                     _coerce_retention_days(payload.get("retention_days"), 90),
@@ -22415,10 +22719,38 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 403, {"error": "You don't have permission to manage this account"})
                 return
             payload = json.loads(_read_body(self) or b"{}")
+            # OAuth token material is NEVER client-writable (live bug
+            # 2026-11-09). These columns are set only by the connect callback
+            # and the refresh helper, which verify the signed-in identity
+            # first. The list endpoint blanks the token fields for the client,
+            # so a client that echoed an account object back could wipe a
+            # working grant.
+            for forbidden in ("oauth_access_token", "oauth_refresh_token",
+                              "oauth_token_expires", "oauth_identity",
+                              "oauth_graph_access_token", "oauth_graph_refresh_token",
+                              "oauth_graph_token_expires", "oauth_graph_identity"):
+                payload.pop(forbidden, None)
+            if "email" in payload:
+                current = db.query_one(
+                    "SELECT email, oauth_provider, oauth_access_token, oauth_refresh_token "
+                    "FROM mail_accounts WHERE id = %s",
+                    (account_id,),
+                )
+                new_email = str(payload.get("email") or "").strip().lower()
+                old_email = str((current or {}).get("email") or "").strip().lower()
+                has_oauth = bool((current or {}).get("oauth_access_token")
+                                 or (current or {}).get("oauth_refresh_token"))
+                if has_oauth and new_email != old_email:
+                    _json_response(self, 400, {
+                        "error": "Disconnect OAuth for this account before changing its email "
+                                 "address — the connected mailbox must match the account.",
+                    })
+                    return
             fields = []
             params: list[Any] = []
-            for key in ("email", "display_name", "imap_host", "smtp_host", "smtp_user", "smtp_from_name", "oauth_provider",
-                        "oauth_access_token", "oauth_refresh_token", "auto_bcc_addr", "tab_icon", "tab_color"):
+            for key in ("email", "display_name", "imap_host", "smtp_host", "smtp_user",
+                        "smtp_from_name", "oauth_provider", "auto_bcc_addr", "tab_icon",
+                        "tab_color"):
                 if key in payload:
                     fields.append(f"{key} = %s")
                     params.append(payload[key])
@@ -22428,14 +22760,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if "signature_html" in payload:
                 fields.append("signature_html = %s")
                 params.append(payload["signature_html"])
-            if "oauth_token_expires" in payload:
-                val = payload["oauth_token_expires"]
-                if isinstance(val, (int, float)):
-                    fields.append("oauth_token_expires = to_timestamp(%s)")
-                    params.append(val)
-                else:
-                    fields.append("oauth_token_expires = %s")
-                    params.append(val)
             for key in ("imap_port", "smtp_port"):
                 if key in payload:
                     fields.append(f"{key} = %s")
@@ -22857,7 +23181,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "body": f'<blockquote>{row["body_html"] or row["body_text"] or ""}</blockquote>',
                 "original_from": row["from_addr"],
                 "original_subject": row["subject"],
-                "original_date": str(row["date_received"]) if row["date_received"] else "",
+                "original_date": mail_dates.iso_utc(row["date_received"]),
             })
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
@@ -22881,7 +23205,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "body": f'<p>---------- Forwarded message ----------</p><p>From: {row["from_addr"] or ""}<br>Date: {row["date_received"] or ""}<br>Subject: {row["subject"] or ""}</p><blockquote>{row["body_html"] or row["body_text"] or ""}</blockquote>',
                 "original_from": row["from_addr"],
                 "original_subject": row["subject"],
-                "original_date": str(row["date_received"]) if row["date_received"] else "",
+                "original_date": mail_dates.iso_utc(row["date_received"]),
             })
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})

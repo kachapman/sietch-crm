@@ -193,6 +193,7 @@ class TestTokenRefresh(unittest.TestCase):
     def _token_row(self, expires_in_seconds, access="old-token", refresh="refresh-token"):
         return {
             "email": "mdm@outlook.com",
+            "oauth_identity": "mdm@outlook.com",
             "oauth_provider": "microsoft",
             "oauth_access_token": access,
             "oauth_refresh_token": refresh,
@@ -208,6 +209,7 @@ class TestTokenRefresh(unittest.TestCase):
             "access_token": "new-token",
             "refresh_token": "new-refresh",
             "expires_in": 3600,
+            "email": "mdm@outlook.com",
         }
         with patch.object(mail_oauth, "db", db, create=True), \
             patch.object(_server, "db", db), \
@@ -224,7 +226,7 @@ class TestTokenRefresh(unittest.TestCase):
         db = _mock_db()
         db.query_one.return_value = self._token_row(-60, access="old-token")
         provider = MagicMock()
-        provider.refresh_token.return_value = {"access_token": "new-token", "expires_in": 3600}
+        provider.refresh_token.return_value = {"access_token": "new-token", "expires_in": 3600, "email": "mdm@outlook.com"}
         with patch.object(mail_oauth, "db", db, create=True), \
             patch.object(_server.oauth_providers, "get_provider", return_value=provider):
             mail_oauth.refresh_access_token(
@@ -247,8 +249,8 @@ class TestTokenRefresh(unittest.TestCase):
         db.query_one.return_value = self._token_row(-60, access="old-token")
         provider = MagicMock()
         provider.refresh_token.side_effect = [
-            {"access_token": "token-A", "expires_in": 3600},
-            {"access_token": "token-B", "expires_in": 3600},
+            {"access_token": "token-A", "expires_in": 3600, "email": "mdm@outlook.com"},
+            {"access_token": "token-B", "expires_in": 3600, "email": "mdm@outlook.com"},
         ]
         # The CAS succeeds only while the row holds "old-token".
         stored = {"token": "old-token"}
@@ -287,7 +289,7 @@ class TestTokenRefresh(unittest.TestCase):
 
         def fake_refresh(_refresh_token):
             counter["n"] += 1
-            return {"access_token": f"token-{counter['n']}", "expires_in": 3600}
+            return {"access_token": f"token-{counter['n']}", "expires_in": 3600, "email": "mdm@outlook.com"}
 
         provider.refresh_token.side_effect = fake_refresh
         stored = {"token": "old-token"}
@@ -334,7 +336,7 @@ class TestTokenRefresh(unittest.TestCase):
             "oauth_token_expires": datetime.now(timezone.utc) + timedelta(hours=1),
         }
         provider = MagicMock()
-        provider.refresh_token.return_value = {"access_token": "forced-token", "expires_in": 3600}
+        provider.refresh_token.return_value = {"access_token": "forced-token", "expires_in": 3600, "email": "mdm@outlook.com"}
         with patch.object(mail_oauth, "db", db, create=True), \
             patch.object(_server.oauth_providers, "get_provider", return_value=provider):
             mail_oauth.force_refresh_access_token(5)
@@ -348,10 +350,15 @@ class TestTokenRefresh(unittest.TestCase):
         db.query_one.side_effect = [
             {  # the initial read
                 "email": "mdm@outlook.com",
+                "oauth_identity": "mdm@outlook.com",
                 "oauth_provider": "microsoft",
                 "oauth_access_token": "old-token",
                 "oauth_refresh_token": "refresh-token",
                 "oauth_token_expires": datetime.now(timezone.utc) + timedelta(hours=1),
+            },
+            {  # the identity check
+                "email": "mdm@outlook.com",
+                "oauth_identity": "mdm@outlook.com",
             },
             {  # the re-read after losing the race
                 "oauth_access_token": "newer-token",
@@ -359,7 +366,7 @@ class TestTokenRefresh(unittest.TestCase):
             },
         ]
         provider = MagicMock()
-        provider.refresh_token.return_value = {"access_token": "forced-token", "expires_in": 3600}
+        provider.refresh_token.return_value = {"access_token": "forced-token", "expires_in": 3600, "email": "mdm@outlook.com"}
         db.execute.return_value = 0  # the compare-and-swap matches no row
         with patch.object(mail_oauth, "db", db, create=True), \
             patch.object(_server.oauth_providers, "get_provider", return_value=provider):
@@ -397,7 +404,7 @@ class TestTokenRefresh(unittest.TestCase):
         db = _mock_db()
         db.query_one.return_value = self._token_row(120)
         provider = MagicMock()
-        provider.refresh_token.return_value = {"access_token": "fresh", "expires_in": 3600}
+        provider.refresh_token.return_value = {"access_token": "fresh", "expires_in": 3600, "email": "mdm@outlook.com"}
         with patch.object(mail_oauth, "db", db, create=True), \
             patch.object(_server.oauth_providers, "get_provider", return_value=provider), \
             patch.object(mail_oauth, "_save_refreshed_token", return_value=True):

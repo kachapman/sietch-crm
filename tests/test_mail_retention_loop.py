@@ -325,13 +325,19 @@ class TestRetentionSkipOnImport(unittest.TestCase):
         self.assertNotEqual(out.get("status"), "skipped_older_than_retention")
 
     def test_cutoff_matches_the_retention_purge_semantics(self):
-        """The skip and the purge must agree: `date_received` is a plain
-        TIMESTAMP, so the comparison uses the wall-clock value."""
+        """The skip and the purge must agree.
+
+        Live bug 2026-11-09: `date_received` was a plain TIMESTAMP and both
+        sides of the comparison were naive wall clock, so the stored instant
+        depended on the DB session timezone. Migration 048 makes the column
+        `timestamptz`; the cutoff is therefore AWARE UTC, exactly like the
+        stored value, and the comparison is an instant comparison.
+        """
         cfg = _cfg(retention_days=90)
         cutoff = ms._retention_cutoff(cfg)
         self.assertIsNotNone(cutoff)
-        self.assertIsNone(cutoff.tzinfo,
-                          "the cutoff must be naive, like mail_messages.date_received")
+        self.assertEqual(cutoff.tzinfo, timezone.utc,
+                         "the cutoff must be aware UTC, like mail_messages.date_received")
         # A message exactly on the boundary is NOT older (the purge uses a
         # strict `<` comparison too).
         boundary = cutoff.isoformat()
@@ -339,12 +345,21 @@ class TestRetentionSkipOnImport(unittest.TestCase):
         self.assertTrue(ms._message_older_than_cutoff(
             {"date": (cutoff - timedelta(days=1)).isoformat()}, cutoff))
 
-    def test_parsed_date_keeps_the_wall_clock_value(self):
-        """The stored date drops the offset — the skip must use the same value."""
+    def test_parsed_date_is_converted_to_utc(self):
+        """The offset must be APPLIED, not dropped.
+
+        `2026-07-19T10:00:00-04:00` is 14:00 UTC. The old code kept 10:00 and
+        threw the offset away, which is how a message could be judged (and
+        stored) hours away from when it was actually sent.
+        """
         parsed = ms._parse_message_date("2026-07-19T10:00:00-04:00")
         self.assertIsNotNone(parsed)
-        self.assertIsNone(parsed.tzinfo)
-        self.assertEqual(parsed, datetime(2026, 7, 19, 10, 0, 0))
+        self.assertEqual(parsed.tzinfo, timezone.utc)
+        self.assertEqual(parsed, datetime(2026, 7, 19, 14, 0, 0, tzinfo=timezone.utc))
+
+    def test_parsed_rfc2822_header(self):
+        parsed = ms._parse_message_date("Mon, 9 Nov 2026 13:20:03 -0500")
+        self.assertEqual(parsed, datetime(2026, 11, 9, 18, 20, 3, tzinfo=timezone.utc))
 
 
 # --------------------------------------------------------------------------

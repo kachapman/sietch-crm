@@ -16,10 +16,11 @@ import base64
 import json
 import sys
 import unittest
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, '/home/chapman-server/Projects/new-crm')
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import server as _server
 import oauth_providers as _op
@@ -125,7 +126,17 @@ def _callback(state_key, account_email, token_email):
     redirects = []
     writes = []
     mock_db = MagicMock()
-    mock_db.query_one.return_value = {"id": 5, "email": account_email}
+    account_row = {"id": 5, "email": account_email, "owner_user_id": 7,
+                   "oauth_graph_refresh_token": "OLD-GRAPH-REFRESH"}
+
+    def _query_one(sql, params=None):
+        if "FROM users" in sql:
+            return {"id": 7, "is_admin": False}
+        if "oauth_graph_refresh_token = %s" in sql and "id <> %s" in sql:
+            return None  # no other account holds this grant
+        return account_row
+
+    mock_db.query_one.side_effect = _query_one
     mock_db.execute.side_effect = lambda sql, params=None, *a, **k: writes.append((sql, params))
     _server._oauth_graph_states[state_key] = (7, 5, _time.time() + 600)
     fake_exchange = {"access_token": "AT", "refresh_token": "RT",
@@ -196,7 +207,7 @@ class TestAccountEmailExtraction(unittest.TestCase):
 class TestStatusMarkupGuard(unittest.TestCase):
     def test_no_textcontent_with_markup(self):
         import re
-        src = open("/home/chapman-server/Projects/new-crm/public/app.js", encoding="utf-8").read()
+        src = open(Path(__file__).resolve().parents[1] / "public" / "app.js", encoding="utf-8").read()
         bad = [ln.strip()[:90] for ln in src.splitlines()
                if re.search(r"\btextContent\s*=\s*['\"`][^'\"`]*<span", ln)]
         self.assertEqual(bad, [])

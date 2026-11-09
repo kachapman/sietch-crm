@@ -2,6 +2,18 @@
  * Sietch CRM — multi-group opportunity board (local test portal)
  */
 
+// One canonical formatter for every timestamp shown to a human (live bug
+// 2026-11-09: mail times were parsed as browser-local and rendered in the
+// browser timezone, so an email received 1:20 PM EST showed as 2:20 AM).
+// Pure module, unit-tested by tests/test_mail_dates.mjs.
+import {
+  formatMailDate,
+  formatMailDateOrRaw,
+  resolveMailDisplayTimezone,
+  parseMailDateInput,
+  MAIL_DEFAULT_TIMEZONE,
+} from "./mail-dates.js?v=3.7.52";
+
 /**
  * Auto-hide scrollbars: add `is-scrolling` to the SPECIFIC element
  * being scrolled, and `is-hovered` to the SPECIFIC scrollable element
@@ -13855,20 +13867,12 @@ function toPlainDisplayText(raw, maxLen = 220) {
 
 function parseFeedDate(value) {
   if (value == null || value === "") return null;
-  if (typeof value === "number") {
-    const ms = value < 1e12 ? value * 1000 : value;
-    const d = new Date(ms);
-    return Number.isNaN(d.getTime()) ? null : d.toISOString();
-  }
-  if (typeof value === "string") {
-    // Naive "YYYY-MM-DD HH:mm:ss" from the API is UTC (droplet PG is UTC).
-    // Without this, `new Date` parses it as browser-local — live bug 2026-10-21
-    // showed history notes +4h in EDT. Date-only strings already parse as UTC.
-    const m = value.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)$/);
-    if (m) value = `${m[1]}T${m[2]}Z`;
-  }
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  // Delegates to the shared parser: naive "YYYY-MM-DD HH:mm:ss" from the API
+  // is UTC (droplet PG is UTC), never browser-local. Without this, history
+  // notes showed +4h in EDT (live bug 2026-10-21) and mail times could be
+  // off by the local offset (live bug 2026-11-09).
+  const d = parseMailDateInput(value);
+  return d ? d.toISOString() : null;
 }
 
 function unwrapTalkMessages(data) {
@@ -23213,6 +23217,17 @@ function mailRetentionDaysInput(value) {
   return n;
 }
 
+function accountSettingsAccountId() {
+  // The account the settings modal is currently editing ('' for "add new").
+  // Read at CLICK time: the modal element is reused for every account, so a
+  // value captured when a handler was first bound goes stale and would act
+  // on whichever account was opened first (live bug 2026-11-09 — "Disconnect
+  // Graph" cleared the wrong mailbox).
+  const field = $('#account-settings-id');
+  const raw = field ? String(field.value || '').trim() : '';
+  return raw ? parseInt(raw, 10) : null;
+}
+
 function openAccountSettingsModal(editAccountId, opts) {
   const modal = $('#account-settings-modal');
   if (!modal) return;
@@ -23353,7 +23368,30 @@ function openAccountSettingsModal(editAccountId, opts) {
           setAuthMode(authType);
         }
         if (authType !== 'password' && oauthStatusEl) {
-          oauthStatusEl.textContent = acct.oauthStatus === 'expired' ? 'Token expired — reconnect' : `Connected as ${acct.email}`;
+          // Show the ACTUAL connected identity, not the account's email
+          // (live bug 2026-11-09: this printed "Connected as <account>" while
+          // the stored token belonged to a different Outlook mailbox).
+          const ident = (acct.oauthIdentity || '').trim();
+          if (acct.oauthStatus === 'expired') {
+            oauthStatusEl.textContent = 'Token expired — reconnect';
+            oauthStatusEl.style.color = '';
+          } else if (!ident) {
+            oauthStatusEl.textContent = 'Connected — identity not verified, reconnect to confirm which mailbox';
+            oauthStatusEl.style.color = '#ff9800';
+          } else if (acct.oauthIdentityMismatch) {
+            oauthStatusEl.textContent = `⚠ Connected as ${ident} — WRONG ACCOUNT (this is ${acct.email}). Disconnect, then reconnect as ${acct.email}.`;
+            oauthStatusEl.style.color = '#f85149';
+          } else {
+            oauthStatusEl.textContent = `Connected as ${ident}`;
+            oauthStatusEl.style.color = '';
+          }
+          if (acct.oauth_last_error) {
+            oauthStatusEl.textContent += ` — last error: ${acct.oauth_last_error}`;
+          }
+        }
+        const oauthDisconnectBtn = $('#account-settings-oauth-disconnect');
+        if (oauthDisconnectBtn) {
+          oauthDisconnectBtn.classList.toggle('hidden', authType === 'password');
         }
         // Graph sendMail status (Microsoft only). Drives the connect/disconnect UI
         // and the compose-window banner.
@@ -23454,7 +23492,13 @@ function openAccountSettingsModal(editAccountId, opts) {
       try { popup.document.title = 'Connecting…'; } catch (e) { /* cross-browser */ }
       try {
         const crmFlag = modal.dataset.crmMail === '1' ? '&is_crm_mail=1' : '';
-        const res = await api(`/api/v2/mail/oauth/authorize?provider=${provider}${crmFlag}`);
+        // Bind the flow to the account being edited (live bug 2026-11-09).
+        // Without account_id the callback had to guess its target from the
+        // email the provider returned, so "Connect" inside account 8 could
+        // refresh a different mailbox's row.
+        const boundId = accountSettingsAccountId();
+        const acctFlag = boundId ? `&account_id=${encodeURIComponent(boundId)}` : '';
+        const res = await api(`/api/v2/mail/oauth/authorize?provider=${provider}${crmFlag}${acctFlag}`);
         if (res.authUrl) {
           // The popup loads the provider consent screen, redirects back to
           // the dashboard URL with ?mailOAuth=..., and the dashboard's
@@ -23489,6 +23533,13 @@ function openAccountSettingsModal(editAccountId, opts) {
         showToast('Failed to start OAuth: ' + e.message, true);
       }
     });
+  }
+
+  // Bind OAuth disconnect (clears THIS account's IMAP/SMTP tokens only)
+  const oauthDisconnectBtn = $('#account-settings-oauth-disconnect');
+  if (oauthDisconnectBtn && !oauthDisconnectBtn.dataset.bound) {
+    oauthDisconnectBtn.dataset.bound = '1';
+    oauthDisconnectBtn.addEventListener('click', () => disconnectExchangeOAuth(accountSettingsAccountId()));
   }
 
   // Bind save
@@ -23660,7 +23711,18 @@ function updateGraphStatusBlock(acct, accountId) {
   if (!statusEl || !connectBtn || !disconnectBtn) return;
   const graphStatus = acct.graphStatus;
   const graphId = acct.graphIdentity ? ` as ${escapeHtml(acct.graphIdentity)}` : '';
-  if (graphStatus === 'connected' || graphStatus === 'auto-renew') {
+  // A Graph token whose verified identity is not this mailbox is the exact
+  // state that sent one company's mail as another (2026-10-29 / 2026-11-09).
+  // Never render it as a healthy green "Connected".
+  const graphMismatch = !!(acct.graphIdentity && acct.email
+    && String(acct.graphIdentity).trim().toLowerCase() !== String(acct.email).trim().toLowerCase());
+  if (graphMismatch) {
+    statusEl.innerHTML = `<span style="color:#f85149;">●</span> ⚠ Connected as ${escapeHtml(acct.graphIdentity)} — WRONG ACCOUNT (this is ${escapeHtml(acct.email)}). Disconnect, then reconnect as ${escapeHtml(acct.email)}.`;
+    statusEl.style.color = 'var(--text)';
+    connectBtn.classList.remove('hidden');
+    connectBtn.textContent = 'Reconnect Graph';
+    disconnectBtn.classList.remove('hidden');
+  } else if (graphStatus === 'connected' || graphStatus === 'auto-renew') {
     // Hourly access-token expiry is by Microsoft design — with a refresh
     // token on file the next send renews transparently, so auto-renew is
     // shown green, not as a problem.
@@ -23689,18 +23751,20 @@ function updateGraphStatusBlock(acct, accountId) {
     // send path might work.
     statusEl.innerHTML += '<br><span style="color:var(--muted); font-size:0.8rem;">SMTP disabled by Microsoft for this mailbox — sending via Graph only.</span>';
   }
-  // Wire click handlers (idempotent — safe to re-call on each modal open).
-  if (!connectBtn.dataset.bound) {
-    connectBtn.dataset.bound = '1';
-    connectBtn.addEventListener('click', () => connectGraphSend(accountId));
-  }
-  if (!disconnectBtn.dataset.bound) {
-    disconnectBtn.dataset.bound = '1';
-    disconnectBtn.addEventListener('click', () => disconnectGraphSend(accountId));
-  }
+  // Wire click handlers. These MUST be reassigned on every modal open:
+  // `dataset.bound` gating left them pointing at the account that was opened
+  // FIRST, so "Connect Graph"/"Disconnect" acted on the wrong mailbox (live
+  // bug 2026-11-09). The account id is also re-read from the modal at click
+  // time, so a stale closure can never win.
+  connectBtn.onclick = () => connectGraphSend(accountSettingsAccountId() || accountId);
+  disconnectBtn.onclick = () => disconnectGraphSend(accountSettingsAccountId() || accountId);
 }
 
 async function connectGraphSend(accountId) {
+  if (!accountId) {
+    showToast('Open a saved mail account first — Graph connects to one account', true);
+    return;
+  }
   // Open the popup SYNCHRONOUSLY from the click gesture (same reason as
   // oauthConnectBtn above): awaiting the API first gets the popup blocked.
   const popup = window.open('about:blank', 'graph_oauth', 'width=600,height=700');
@@ -23738,6 +23802,7 @@ async function connectGraphSend(accountId) {
 }
 
 async function disconnectGraphSend(accountId) {
+  if (!accountId) return;
   if (!confirm('Disconnect Microsoft Graph sendMail? Mail will fall back to SMTP for this account.')) return;
   try {
     await api(`/api/v2/mail/oauth/microsoft/graph/disconnect/${accountId}`, { method: 'GET' });
@@ -23752,6 +23817,29 @@ async function disconnectGraphSend(accountId) {
     } catch (e) { /* ignore */ }
   } catch (e) {
     showToast('Graph disconnect failed: ' + (e.message || ''), true);
+  }
+}
+
+async function disconnectExchangeOAuth(accountId) {
+  if (!accountId) return;
+  if (!confirm('Disconnect OAuth for this account? Its IMAP/SMTP tokens are removed; other accounts are not touched. Mail sync stops until you reconnect.')) return;
+  try {
+    await api(`/api/v2/mail/oauth/disconnect/${accountId}`, { method: 'POST' });
+    showToast('OAuth disconnected for this account');
+    try {
+      const data = await api('/api/v2/mail/accounts');
+      const acct = (data.accounts || []).find(a => a.id == accountId);
+      if (acct) {
+        const statusEl = $('#account-settings-oauth-status');
+        if (statusEl) {
+          statusEl.textContent = 'Not connected — click Connect to sign in as this mailbox';
+          statusEl.style.color = '';
+        }
+        updateGraphStatusBlock(acct, accountId);
+      }
+    } catch (e) { /* ignore */ }
+  } catch (e) {
+    showToast('Disconnect failed: ' + (e.message || e), true);
   }
 }
 
@@ -24738,7 +24826,7 @@ async function loadMailThreads() {
         <div class="mail-star"></div>
         <div class="mail-from" title="${escapeHtml(t.from_addr || '')}">${escapeHtml((t.from_addr || '').slice(0, 28))}</div>
         <div class="mail-subject" title="${escapeHtml(t.subject || '')}">${escapeHtml((t.subject || '').slice(0, 80))}</div>
-        <div class="mail-date">${t.message_count > 1 ? `<span style="color:var(--muted);">(${t.message_count})</span> ` : ''}${escapeHtml(t.latest_date ? new Date(t.latest_date).toLocaleDateString() : '')}</div>
+        <div class="mail-date">${t.message_count > 1 ? `<span style="color:var(--muted);">(${t.message_count})</span> ` : ''}${escapeHtml(t.latest_date ? formatMailDate(t.latest_date, { mode: 'date', userTimezone: mailDisplayTimezone() }) : '')}</div>
       </div>
     `).join('');
   } catch (e) {
@@ -25397,7 +25485,9 @@ function renderMailList(msgs) {
     const from = (m.from_addr || m.from || m.fromEmail || "").toString();
     const subj = (m.subject || m.Subject || "(no subject)").toString();
     const date = m.date || m.date_received || m.receivedDate || m.Date || "";
-    const dateStr = date ? new Date(date).toLocaleDateString('en-US') + " " + new Date(date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : "";
+    // Shared formatter (live bug 2026-11-09): a naive value is UTC, and the
+    // wall clock is the viewer's timezone — not the browser's.
+    const dateStr = date ? formatMailDate(date, { mode: "list", userTimezone: mailDisplayTimezone() }) : "";
 
     const item = document.createElement("div");
     item.className = "mail-item";
@@ -27709,19 +27799,11 @@ function normalizeMailMessage(mail) {
 }
 
 function formatMailHeaderDate(raw) {
-  // Outlook long form: "Monday, October 26, 2026 5:45 PM". Falls back to the
-  // raw string (or the short preview format) when unparseable.
+  // Outlook long form: "Monday, November 9, 2026 at 1:20 PM". Falls back to
+  // the raw string (or the short preview format) when unparseable.
   if (raw == null || raw === "") return "";
-  try {
-    const iso = parseFeedDate(crmDateTimeFromApi(raw) || raw);
-    const d = new Date(iso || raw);
-    if (!Number.isNaN(d.getTime())) {
-      return d.toLocaleString(undefined, {
-        weekday: "long", year: "numeric", month: "long", day: "numeric",
-        hour: "numeric", minute: "2-digit",
-      });
-    }
-  } catch { /* fall through */ }
+  const formatted = formatMailDate(raw, { mode: "header", userTimezone: mailDisplayTimezone() });
+  if (formatted) return formatted;
   return formatPreviewDateTime(raw) || String(raw);
 }
 
@@ -28646,10 +28728,29 @@ function renderHistoryEventItem(ev) {
 
 function formatPreviewDateTime(raw) {
   if (raw == null || raw === "") return "";
-  const iso = crmDateTimeFromApi(raw) || raw;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(raw);
-  return d.toLocaleString();
+  // Shared formatter: naive values are UTC (never browser-local) and the
+  // wall clock is rendered in the viewer's timezone (default
+  // America/New_York). Live bug 2026-11-09.
+  return formatMailDateOrRaw(raw, { mode: "datetime", userTimezone: mailDisplayTimezone() });
+}
+
+// The viewer's timezone for mail: explicit user setting (localStorage) →
+// browser → America/New_York. Read fresh on each call so a settings change
+// applies without a reload.
+function mailDisplayTimezone() {
+  let userTz = "";
+  try {
+    userTz = localStorage.getItem("sietch_display_timezone") || "";
+  } catch { /* storage blocked */ }
+  return resolveMailDisplayTimezone({ userTimezone: userTz });
+}
+
+// Persist the viewer's timezone choice (used by settings UI / tests).
+function setMailDisplayTimezone(tz) {
+  try {
+    if (tz) localStorage.setItem("sietch_display_timezone", String(tz));
+    else localStorage.removeItem("sietch_display_timezone");
+  } catch { /* storage blocked */ }
 }
 
 // Date-only formatter for deal due dates (Expected close) so preview matches native CRM display

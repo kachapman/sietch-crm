@@ -27,6 +27,7 @@ from typing import Any
 
 import db
 import oauth_providers
+import mail_oauth_binding
 
 logger = logging.getLogger("sietch.mail_oauth")
 
@@ -57,7 +58,8 @@ def token_needs_refresh(expires_at: datetime | None) -> bool:
 
 
 def _save_refreshed_token(account_id: int, new_access: str, new_refresh: str,
-                          expires_at_ts: float, expected_access: str | None) -> bool:
+                          expires_at_ts: float, expected_access: str | None,
+                          identity: str | None = None) -> bool:
     """Persist a refreshed token, but only if the row still holds the token
     we based the refresh on.
 
@@ -68,20 +70,46 @@ def _save_refreshed_token(account_id: int, new_access: str, new_refresh: str,
     `expected_access` is None for a forced refresh (we do not know what the
     row currently holds) — in that case the swap is skipped and the last
     write wins, which is the pre-existing behaviour.
+
+    `identity` is the signed-in mailbox reported by the refresh response.
+    It is written with COALESCE semantics so a provider that omits the claim
+    cannot erase a previously verified identity.
     """
     if expected_access is None:
         db.execute(
             "UPDATE mail_accounts SET oauth_access_token = %s, oauth_refresh_token = %s, "
-            "oauth_token_expires = to_timestamp(%s) WHERE id = %s",
-            (new_access, new_refresh, expires_at_ts, account_id),
+            "oauth_token_expires = to_timestamp(%s), "
+            "oauth_identity = COALESCE(%s, oauth_identity), "
+            "oauth_last_error = NULL, oauth_last_error_at = NULL WHERE id = %s",
+            (new_access, new_refresh, expires_at_ts, identity or None, account_id),
         )
         return True
     rowcount = db.execute(
         "UPDATE mail_accounts SET oauth_access_token = %s, oauth_refresh_token = %s, "
-        "oauth_token_expires = to_timestamp(%s) WHERE id = %s AND oauth_access_token = %s",
-        (new_access, new_refresh, expires_at_ts, account_id, expected_access),
+        "oauth_token_expires = to_timestamp(%s), "
+        "oauth_identity = COALESCE(%s, oauth_identity), "
+        "oauth_last_error = NULL, oauth_last_error_at = NULL "
+        "WHERE id = %s AND oauth_access_token = %s",
+        (new_access, new_refresh, expires_at_ts, identity or None, account_id, expected_access),
     )
     return rowcount > 0
+
+
+def record_refresh_error(account_id: int, message: str) -> None:
+    """Persist why a refresh failed so settings/the diagnostic can show it.
+
+    There was no IMAP-side error column before migration 047, so a dead
+    Exchange grant only ever existed as a log line and as the `auth_failed`
+    heuristic in the scanner status.
+    """
+    try:
+        db.execute(
+            "UPDATE mail_accounts SET oauth_last_error = %s, oauth_last_error_at = NOW() "
+            "WHERE id = %s",
+            (str(message)[:300], account_id),
+        )
+    except Exception:
+        logger.debug("Could not persist oauth_last_error for account %s", account_id, exc_info=True)
 
 
 def refresh_access_token(account_id: int, provider_name: str, current_refresh_token: str,
@@ -97,6 +125,12 @@ def refresh_access_token(account_id: int, provider_name: str, current_refresh_to
     `expected_access` is the access token the caller read. When given, the
     save is a compare-and-swap against it, so a concurrent refresh by the
     scanner cannot be overwritten. When it is None the swap is skipped.
+
+    The refreshed token's identity is checked against the account's email
+    before it is stored (live bug 2026-11-09). A refresh token is bound to
+    the mailbox that granted it, so the id_token in the refresh response is
+    authoritative — if it names another mailbox, or cannot be read at all,
+    the token is refused and the reason is persisted for the UI.
     """
     if not force and not token_needs_refresh(expires_at):
         return None
@@ -112,18 +146,71 @@ def refresh_access_token(account_id: int, provider_name: str, current_refresh_to
             token_data = prov.refresh_token(current_refresh_token)
         except Exception as e:
             logger.error("Failed to refresh OAuth token for account %d: %s", account_id, e)
+            record_refresh_error(account_id, f"Token refresh failed: {e}")
             return None
         new_access = (token_data or {}).get("access_token", "")
-        new_refresh = (token_data or {}).get("refresh_token") or current_refresh_token
+        # Never blank the stored refresh token: a response without one used
+        # to wipe the account's only means of renewal.
+        new_refresh = mail_oauth_binding.refresh_token_to_store(
+            (token_data or {}).get("refresh_token"), current_refresh_token)
         new_expires = _now_ts() + (token_data or {}).get("expires_in", 3600)
         if not new_access:
             logger.error("OAuth refresh for account %d returned no access token", account_id)
+            record_refresh_error(account_id, "Token refresh returned no access token")
+            return None
+        identity = ""
+        try:
+            acct = db.query_one(
+                "SELECT email, oauth_identity FROM mail_accounts WHERE id = %s", (account_id,))
+            identity = (token_data or {}).get("email") or ""
+            # Only providers that report the signed-in mailbox on refresh can
+            # be checked here; Google's refresh response carries no identity.
+            reports_identity = bool(getattr(prov, "reports_identity_on_refresh", False))
+            if acct and (reports_identity or identity):
+                state_kind, detail = mail_oauth_binding.identity_state(
+                    identity, acct.get("email"))
+                if state_kind == mail_oauth_binding.IDENTITY_MISMATCH:
+                    err = mail_oauth_binding.mismatch_message(detail, acct.get("email") or "")
+                    logger.warning(
+                        "OAuth refresh identity refused for account %d: %s", account_id, err)
+                    record_refresh_error(account_id, err)
+                    return None
+                if state_kind == mail_oauth_binding.IDENTITY_UNVERIFIABLE:
+                    # Unreadable identity: refuse to attach an unverified
+                    # grant to a row that was never verified. A row that WAS
+                    # verified at connect time (oauth_identity == email) may
+                    # keep refreshing — the grant is bound to that mailbox by
+                    # the provider, and refusing would break a healthy
+                    # account on a token response that simply omits the
+                    # id_token.
+                    already_verified = (
+                        mail_oauth_binding.normalize_email(acct.get("oauth_identity"))
+                        and mail_oauth_binding.normalize_email(acct.get("oauth_identity"))
+                        == mail_oauth_binding.normalize_email(acct.get("email"))
+                    )
+                    if not already_verified:
+                        err = (
+                            "The refreshed token did not report which mailbox it belongs to, so "
+                            f"it cannot be verified for {acct.get('email')}. Disconnect OAuth for "
+                            "this account and reconnect while signed in as that mailbox."
+                        )
+                        logger.warning(
+                            "OAuth refresh identity refused for account %d: %s", account_id, err)
+                        record_refresh_error(account_id, err)
+                        return None
+                    logger.info(
+                        "OAuth refresh for account %d carried no identity; keeping the "
+                        "previously verified identity", account_id)
+        except Exception:
+            logger.exception("OAuth identity check failed for account %d", account_id)
             return None
         try:
             saved = _save_refreshed_token(account_id, new_access, new_refresh,
-                                          new_expires, expected_access)
+                                          new_expires, expected_access,
+                                          identity=identity or None)
         except Exception as e:
             logger.error("Failed to persist refreshed OAuth token for account %d: %s", account_id, e)
+            record_refresh_error(account_id, f"Could not save refreshed token: {e}")
             return None
         if not saved:
             # Another refresher already stored a newer token — keep theirs.
@@ -219,6 +306,7 @@ __all__ = [
     "REFRESH_MARGIN_SECONDS",
     "force_refresh_access_token",
     "get_valid_access_token",
+    "record_refresh_error",
     "refresh_access_token",
     "token_needs_refresh",
 ]
