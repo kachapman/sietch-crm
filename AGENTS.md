@@ -9,6 +9,13 @@
 ---
 
 ## Non-negotiables (ALWAYS FOLLOW - prevent breaking)
+- **Every Sietch backup goes to the attached volume `/mnt/sietch_backup`, never
+  `/root/Backups`** (the 77 GB root disk holds the app; a 26 GB snapshot there
+  pushed it to 92 % and a full disk takes the CRM down). Pre-deploy:
+  `deploy/pre-deploy-backup.sh` (bb7b69b) — it refuses a root-filesystem
+  destination and refuses to start with too little free space. `/root/Backups`
+  is a symlink to `/mnt/sietch_backup/root-Backups` so older ROLLBACK notes
+  still resolve. Check `df -h /` before any write and keep >= 3 GB free.
 - Preserve ALL current CRM data and layout **as if we are still using the OnlyOffice API**.
   - Same note types (history_categories), opportunities, note history (embedded emails in history events), contacts, tasks, stages, tags, custom/user fields, etc.
   - When in doubt, refer to last known production version details (git show main:...) to see what user is displaying/using in deal tiles and preview modals.
