@@ -89,26 +89,64 @@ def _norm(value) -> str:
     return text
 
 
-def load_accounts(account_ids: list[int] | None) -> list[dict]:
-    import db  # project module: opens the configured pool (read-only use)
+def _readonly_conn():
+    """Open a psycopg2 connection that CANNOT write.
 
-    sql = """
-        SELECT id, email, owner_user_id, is_crm_mail, sync_enabled, oauth_provider,
-               oauth_identity, oauth_token_expires, oauth_last_error, oauth_last_error_at,
-               oauth_access_token, oauth_refresh_token,
-               oauth_graph_identity, oauth_graph_token_expires,
-               oauth_graph_last_error, oauth_graph_last_error_at,
-               oauth_graph_access_token, oauth_graph_refresh_token,
-               smtp_user, smtp_auth_disabled
-        FROM mail_accounts
+    Deliberately not `db.init_db()`: that also runs the migration runner, and
+    this script must stay read-only. `set_session(readonly=True)` makes the
+    database itself reject any write from this connection.
     """
-    params: tuple = ()
-    if account_ids:
-        sql += " WHERE id = ANY(%s)"
-        params = (list(account_ids),)
-    sql += " ORDER BY id"
-    rows = db.query_dicts(sql, params) if params else db.query_dicts(sql)
-    return [dict(r) for r in rows]
+    import psycopg2
+
+    conn = psycopg2.connect(
+        host=os.getenv("DB_HOST", "db"),
+        port=os.getenv("DB_PORT", "5432"),
+        dbname=os.getenv("DB_NAME", "sietch_crm"),
+        user=os.getenv("DB_USER", "sietch"),
+        password=os.getenv("DB_PASSWORD", ""),
+        connect_timeout=10,
+    )
+    conn.set_session(readonly=True, autocommit=True)
+    return conn
+
+
+def load_accounts(account_ids: list[int] | None) -> list[dict]:
+    """Read the mapping. Tolerates a pre-migration-047 schema.
+
+    Ken may run this on production BEFORE deploying the fix, so every column
+    added by migration 047 is selected as `NULL AS ...` when it does not exist
+    yet instead of failing the whole report.
+    """
+    from psycopg2.extras import RealDictCursor
+
+    wanted = [
+        "id", "email", "owner_user_id", "is_crm_mail", "sync_enabled", "oauth_provider",
+        "oauth_identity", "oauth_token_expires", "oauth_last_error", "oauth_last_error_at",
+        "oauth_access_token", "oauth_refresh_token",
+        "oauth_graph_identity", "oauth_graph_token_expires",
+        "oauth_graph_last_error", "oauth_graph_last_error_at",
+        "oauth_graph_access_token", "oauth_graph_refresh_token",
+        "smtp_user", "smtp_auth_disabled",
+    ]
+    conn = _readonly_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'mail_accounts'")
+            present = {r[0] for r in cur.fetchall()}
+        select_list = ", ".join(
+            (col if col in present else f"NULL AS {col}") for col in wanted)
+        sql = f"SELECT {select_list} FROM mail_accounts"
+        params: tuple = ()
+        if account_ids:
+            sql += " WHERE id = ANY(%s)"
+            params = (list(account_ids),)
+        sql += " ORDER BY id"
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql, params or None)
+            return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
 
 
 def analyze(rows: list[dict], now: datetime | None = None) -> dict:

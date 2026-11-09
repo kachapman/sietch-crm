@@ -36,6 +36,7 @@ import os
 import sys
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -521,6 +522,75 @@ class TestGraphCallbackBindsToTheAccount(unittest.TestCase):
     def test_legacy_in_memory_state_still_completes(self):
         redirects, db = self._run("estimates.masterx@outlook.com", state_kind="legacy")
         self.assertEqual(redirects[0][0], "graph_success")
+
+
+class TestDiagnosticScript(unittest.TestCase):
+    """The read-only mapping report must flag the exact incident states."""
+
+    def setUp(self):
+        import importlib.util
+        path = ROOT / "scripts" / "diagnose_mail_oauth.py"
+        spec = importlib.util.spec_from_file_location("diagnose_mail_oauth", path)
+        self.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.mod)
+
+    def _row(self, row_id, email, **kw):
+        row = {
+            "id": row_id, "email": email, "owner_user_id": 7, "is_crm_mail": False,
+            "sync_enabled": True, "oauth_provider": "microsoft",
+            "oauth_identity": None, "oauth_token_expires": None,
+            "oauth_last_error": None, "oauth_last_error_at": None,
+            "oauth_access_token": "AT", "oauth_refresh_token": "RT",
+            "oauth_graph_identity": None, "oauth_graph_token_expires": None,
+            "oauth_graph_last_error": None, "oauth_graph_last_error_at": None,
+            "oauth_graph_access_token": None, "oauth_graph_refresh_token": None,
+            "smtp_user": email, "smtp_auth_disabled": False,
+        }
+        row.update(kw)
+        return row
+
+    def test_flags_a_foreign_graph_identity(self):
+        report = self.mod.analyze([self._row(
+            8, "estimates.masterx@outlook.com",
+            oauth_graph_identity="mdm.estimates@outlook.com",
+            oauth_graph_access_token="GAT")])
+        problems = " ".join(report["accounts"][0]["problems"])
+        self.assertIn("WRONG ACCOUNT", problems)
+        self.assertIn("mdm.estimates@outlook.com", problems)
+
+    def test_flags_a_foreign_exchange_identity(self):
+        report = self.mod.analyze([self._row(
+            9, "aplus.estimates@outlook.com", oauth_identity="mdm.estimates@outlook.com")])
+        self.assertIn("WRONG ACCOUNT", " ".join(report["accounts"][0]["problems"]))
+
+    def test_flags_a_shared_grant_without_printing_it(self):
+        report = self.mod.analyze([
+            self._row(8, "a@outlook.com", oauth_refresh_token="SAME-GRANT"),
+            self._row(10, "b@outlook.com", oauth_refresh_token="SAME-GRANT"),
+        ])
+        self.assertTrue(report["shared_grants"])
+        text = self.mod.render(report, None)
+        self.assertIn("SHARED GRANT", text)
+        self.assertNotIn("SAME-GRANT", text, "the token value must never be printed")
+        # ...but a short fingerprint is shown so two accounts can be compared.
+        self.assertIn(report["accounts"][0]["exchange_refresh_fingerprint"], text)
+
+    def test_flags_expired_without_refresh(self):
+        report = self.mod.analyze([self._row(
+            8, "a@outlook.com", oauth_refresh_token="",
+            oauth_token_expires=datetime(2026, 11, 1, tzinfo=timezone.utc))])
+        self.assertIn("auth_failed", " ".join(report["accounts"][0]["problems"]))
+
+    def test_flags_smtp_user_mismatch(self):
+        report = self.mod.analyze([self._row(
+            8, "a@outlook.com", smtp_user="mdm@outlook.com")])
+        self.assertIn("smtp_user", " ".join(report["accounts"][0]["problems"]))
+
+    def test_healthy_account_has_no_problems(self):
+        report = self.mod.analyze([self._row(
+            8, "a@outlook.com", oauth_identity="a@outlook.com",
+            oauth_graph_identity="a@outlook.com", oauth_graph_access_token="GAT")])
+        self.assertEqual(report["accounts"][0]["problems"], [])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

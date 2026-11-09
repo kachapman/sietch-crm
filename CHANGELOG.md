@@ -54,7 +54,7 @@
 ### Added
 - Migration 047 (`oauth_identity`, `oauth_last_error`, `oauth_last_error_at`)
   and 048 (`date_received` → `timestamptz`). Both additive/idempotent.
-- Tests: `tests/test_oauth_account_binding.py` (56), 
+- Tests: `tests/test_oauth_account_binding.py` (62), 
   `tests/test_oauth_account_binding.mjs` (9), `tests/test_mail_dates.py` (41),
   `tests/test_mail_dates.mjs` (14).
 

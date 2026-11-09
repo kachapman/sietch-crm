@@ -54,7 +54,7 @@ Root causes fixed at source:
   no content), opt-in inferred offset for header-less rows. **Not run against
   prod** — Ken approves the apply.
 
-**Tests.** `tests/test_oauth_account_binding.py` (56),
+**Tests.** `tests/test_oauth_account_binding.py` (62),
 `tests/test_oauth_account_binding.mjs` (9), `tests/test_mail_dates.py` (41),
 `tests/test_mail_dates.mjs` (14). Full sweep: all JS files pass; Python has 5
 failures, all of which also fail on pristine `main`

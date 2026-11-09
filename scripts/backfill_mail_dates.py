@@ -166,6 +166,7 @@ def classify_rows(rows: list[dict], tolerance: int = TOLERANCE_SECONDS) -> dict:
 def load_rows(account_ids: list[int] | None, limit: int | None) -> list[dict]:
     import db
 
+    db.init_db()  # this tool writes, so the pool + migrations are wanted
     sql = "SELECT id, account_id, date_received, raw_headers FROM mail_messages"
     params: tuple = ()
     if account_ids:
