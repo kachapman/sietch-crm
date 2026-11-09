@@ -34,6 +34,9 @@ HELPER_SRC = (ROOT / "public" / "api-token-ui.js").read_text(encoding="utf-8")
 SAFE_LIST_KEYS = {
     "id", "name", "token_prefix", "scope", "created_by", "created_by_email",
     "created_at", "last_used_at", "revoked_at", "revoked", "expires_at", "restrictions",
+    # Migration 047: the identity a token posts as. Still metadata only —
+    # no secret and no hash may ever appear in this payload.
+    "acts_as_user_id", "acts_as_email", "acts_as_display_name",
 }
 
 
@@ -43,6 +46,8 @@ def _list_row(**over):
         "scope": "full", "created_by": 1, "created_by_email": "admin@synthetic.test",
         "created_at": None, "last_used_at": None, "revoked_at": None,
         "expires_at": None, "restrictions": {},
+        "acts_as_user_id": 1, "acts_as_email": "admin@synthetic.test",
+        "acts_as_display_name": "Admin",
     }
     row.update(over)
     return row
@@ -86,11 +91,17 @@ class TestCreateContract(unittest.TestCase):
         mock_db = MagicMock()
 
         def fake_query_one(sql, params):
+            # Migration 047 resolves the identity first (users lookup).
+            if "FROM users" in sql:
+                return {"id": 1, "email": "admin@synthetic.test",
+                        "display_name": "Admin", "first_name": "A", "last_name": "D",
+                        "is_admin": True, "is_active": True, "role": "admin"}
             captured["params"] = params
             return {
                 "id": 9, "name": name, "token_prefix": "sietch_abcde",
                 "scope": scope, "created_by": 1, "created_at": None,
                 "expires_at": None, "restrictions": {},
+                "acts_as_user_id": 1,
             }
 
         mock_db.query_one.side_effect = fake_query_one
@@ -104,6 +115,8 @@ class TestCreateContract(unittest.TestCase):
         self.assertEqual(set(rec), {
             "id", "name", "token", "token_prefix", "scope", "created_by",
             "created_at", "expires_at", "restrictions",
+            # "Posts as" metadata (migration 047)
+            "acts_as_user_id", "acts_as_email", "acts_as_display_name",
         })
 
     def test_only_the_hash_is_stored(self):
@@ -175,7 +188,8 @@ class TestServerAuthorizationGuards(unittest.TestCase):
 
     def test_create_warning_is_returned_once(self):
         at = SERVER_SRC.index("def _handle_api_token_create(")
-        region = SERVER_SRC[at:at + 2500]
+        nxt = SERVER_SRC.find("\n    def ", at + 10)
+        region = SERVER_SRC[at:nxt]
         self.assertIn('rec["warning"]', region)
         self.assertIn("shown only once and cannot be recovered", region)
         self.assertIn("_json_response(self, 201, rec)", region)

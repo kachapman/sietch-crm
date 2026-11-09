@@ -120,12 +120,19 @@ class TestCreateStoresHashOnly(unittest.TestCase):
         captured = {}
 
         def fake_query_one(sql, params):
+            # Migration 047: the creator is resolved as the default identity
+            # first, so answer the users lookup like the real SELECT does.
+            if "FROM users" in sql:
+                return {"id": 1, "email": "admin@example.com", "display_name": "Admin",
+                        "first_name": "A", "last_name": "D", "is_admin": True,
+                        "is_active": True, "role": "admin"}
             captured["sql"] = sql
             captured["params"] = params
             return {
                 "id": 9, "name": "agent", "token_prefix": "sietch_xxxx",
                 "scope": "full", "created_by": 1, "created_at": None,
                 "expires_at": None, "restrictions": {},
+                "acts_as_user_id": 1,
             }
 
         mock_db.query_one.side_effect = fake_query_one
@@ -153,10 +160,15 @@ class TestCreateStoresHashOnly(unittest.TestCase):
         mock_db = MagicMock()
 
         def fake_query_one(sql, params):
+            if "FROM users" in sql:
+                return {"id": 1, "email": "admin@example.com", "display_name": "Admin",
+                        "first_name": "A", "last_name": "D", "is_admin": True,
+                        "is_active": True, "role": "admin"}
             return {
                 "id": 1, "name": "ro", "token_prefix": "sietch_xxxx",
                 "scope": "read", "created_by": 1, "created_at": None,
-                "expires_at": None, "restrictions": json.loads(params[-1]),
+                "expires_at": None, "restrictions": json.loads(params[-2]),
+                "acts_as_user_id": 1,
             }
 
         mock_db.query_one.side_effect = fake_query_one

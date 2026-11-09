@@ -7,6 +7,37 @@
 
 # Changelog
 
+## 2.5.0 — 2026-11-09
+
+### Added
+- **API tokens can post as a chosen user ("Posts as").** The Admin → API
+  Tokens create form gains a user selector (default: the creating admin).
+  The token then authenticates AS that user: project activity, notes,
+  `history_events.created_by`, `personal_notes.owner` and every other
+  `created_by`/owner column carry that user's id, and the token inherits
+  that user's permissions (a member-identity token is not an admin).
+- **`via API: <token name>` tag** on activity and note entries that a token
+  wrote (`history_events.api_token_id` / `personal_notes.api_token_id`).
+  The tag is text-only, muted, and never a control.
+- **Audit** — minting a token records who created it and for whom
+  (`api_token_audit_log` gains `actor_user_id`, `acts_as_user_id`, `detail`
+  with a `TOKEN_CREATE` row); token writes record the acting owner and the
+  acted-as user.
+- Migration 047 (`047_api_token_acts_as.sql`) + mirrored idempotent DDL at
+  startup. Additive only: `ADD COLUMN IF NOT EXISTS`, no data rewrite.
+- Tests: `tests/test_api_token_acts_as.py` (29 — identity resolution,
+  create/verify, audit rows, admin-only rules, attribution columns,
+  restrictions unchanged), `tests/test_api_token_acts_as.mjs` (19 — create
+  body, selector, list/act-as labels, tag rendering, cache-busters).
+
+### Notes
+- Only admins can name another user when minting a token (the route is
+  admin-only; the rule is re-stated in the handler so it cannot drift).
+- Full access by default and the optional restrictions (read-only, methods,
+  resources, expiry) are unchanged.
+- Old tokens have `acts_as_user_id = NULL` and keep acting as their creator.
+
+
 ## 2.4.2 — 2026-11-08
 
 ### Removed

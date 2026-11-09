@@ -3,7 +3,49 @@
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-11-08 (remove carrier-estimate-lines API)
+**Date:** 2026-11-09 (API tokens "Posts as" — token acts as a chosen user)
+
+**Status: IMPLEMENTED on branch `feat/token-acts-as` off LOCAL `main`
+(`cfb94e3`) — NOT merged, NOT pushed, NOT deployed.** Worktree:
+`~/.local/share/opencode/worktree/be3f73/feat-token-acts-as`. No production
+service or CRM database touched; the end-to-end check ran against throwaway
+`sietch_ci_pr3`.
+
+- **Identity.** `api_tokens.acts_as_user_id` (migration 047). `verify_api_token`
+  joins `users ON id = COALESCE(acts_as_user_id, created_by)`, so the returned
+  user IS the chosen identity — every existing `created_by`/`owner` write is
+  attributed to them and `_require_admin` follows that user's `is_admin`.
+  Owner (`api_token_owner_id/email`) is still returned for audit.
+- **UI.** Admin → API Tokens create form has a "Posts as" `<select>` populated
+  from `/api/v2/users` (active users; the signed-in admin first and selected by
+  default). The token list shows "posts as …". Create body carries
+  `acts_as_user_id` only when a user was chosen, so a blank selector can never
+  post as nobody.
+- **Tag.** `history_events.api_token_id` + `personal_notes.api_token_id`, read
+  back as `apiTokenName` / `api_token_name`; rendered as a muted
+  "via API: <name>" chip in `renderHistoryEventMeta` (textContent) and
+  `_notesRenderCard` (escaped template). CSS `.via-api-tag`.
+- **Audit.** `api_token_audit_log` gains `actor_user_id`, `acts_as_user_id`,
+  `detail`. `log_token_create()` writes a `TOKEN_CREATE` row (who, for whom,
+  name, scope, restrictions); `log_token_write()` now records actor + acted-as
+  and still accepts a bare token id.
+- **Permissions.** Admin-only creation is unchanged; the handler also refuses
+  explicitly when a non-admin identity names another user (defence in depth),
+  and an inactive/unknown target is a 400.
+- **Tests.** New: 29 Python + 19 JS. Updated: `test_api_tokens.py`,
+  `test_admin_api_token_ui.py`, `test_admin_api_tokens_ui.mjs` (contract
+  whitelists gained the new metadata keys), and the cache-bust pin
+  (app.js 3.7.52 / styles.css 3.7.23). CI workflow runs both new suites.
+- **Results.** Feature suites green; full Python job 67/72 steps green with the
+  same **5 pre-existing failures** that `main` has (missing
+  `tests/test_mail_template_auth.py`, `test_scanner_toggle_gating`,
+  `test_sync_pull_deals_fields`, `test_mail_auth_gaps`, `test_email_project_copy`)
+  — PR #1 repairs exactly those; rebase this branch after it merges. JS: 403
+  tests, 0 failures.
+
+---
+
+## 2026-11-08 (remove carrier-estimate-lines API)
 
 **Status: REMOVED on branch `remove-carrier-estimate-lines` off `main`
 @ `515d7ef` — NOT pushed, NOT merged, NOT deployed.**

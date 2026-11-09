@@ -979,6 +979,38 @@ try:
 except Exception:
     pass
 
+# Migration 047: API tokens can act as a chosen user ("Posts as").
+# Mirrors migrations/047_api_token_acts_as.sql; idempotent.
+#   * api_tokens.acts_as_user_id — identity the token authenticates as
+#     (NULL = the creating admin, i.e. the pre-047 behaviour).
+#   * api_token_audit_log.actor_user_id / acts_as_user_id / detail — who
+#     acted and as whom, including who minted a token for whom.
+#   * history_events.api_token_id / personal_notes.api_token_id — the
+#     "via API: <name>" attribution tag on the rows a token writes.
+for _ddl in (
+    "ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS acts_as_user_id INTEGER "
+    "REFERENCES users(id) ON DELETE SET NULL",
+    "CREATE INDEX IF NOT EXISTS idx_api_tokens_acts_as "
+    "ON api_tokens(acts_as_user_id) WHERE acts_as_user_id IS NOT NULL",
+    "ALTER TABLE api_token_audit_log ADD COLUMN IF NOT EXISTS actor_user_id INTEGER "
+    "REFERENCES users(id) ON DELETE SET NULL",
+    "ALTER TABLE api_token_audit_log ADD COLUMN IF NOT EXISTS acts_as_user_id INTEGER "
+    "REFERENCES users(id) ON DELETE SET NULL",
+    "ALTER TABLE api_token_audit_log ADD COLUMN IF NOT EXISTS detail TEXT",
+    "ALTER TABLE history_events ADD COLUMN IF NOT EXISTS api_token_id INTEGER "
+    "REFERENCES api_tokens(id) ON DELETE SET NULL",
+    "ALTER TABLE personal_notes ADD COLUMN IF NOT EXISTS api_token_id INTEGER "
+    "REFERENCES api_tokens(id) ON DELETE SET NULL",
+    "CREATE INDEX IF NOT EXISTS idx_history_events_api_token "
+    "ON history_events(api_token_id) WHERE api_token_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_personal_notes_api_token "
+    "ON personal_notes(api_token_id) WHERE api_token_id IS NOT NULL",
+):
+    try:
+        db.execute(_ddl)
+    except Exception:
+        pass
+
 # ── Migrate notesTiles from profile JSON to personal_notes table ──────────────
 try:
     from pathlib import Path as _Path
@@ -1475,7 +1507,10 @@ def _auth_api_token(handler: SimpleHTTPRequestHandler, raw: str) -> dict | None:
     """Validate a personal API token; send 401/403 and return None on failure.
 
     Full-access by default. Optional restrictions from create time are checked
-    here before routing. Successful writes are audit-logged with the token id.
+    here before routing. The returned user is the identity the token POSTS AS
+    (its "Posts as" user, defaulting to the creating admin), so created_by /
+    owner columns and permissions follow that user. Successful writes are
+    audit-logged with the token id, the acting owner and the acted-as user.
     """
     api_path = urlparse(handler.path).path
     user = api_tokens_mod.verify_api_token(raw)
@@ -1487,7 +1522,7 @@ def _auth_api_token(handler: SimpleHTTPRequestHandler, raw: str) -> dict | None:
         _json_response(handler, 403, {"error": err or "API token not permitted for this request"})
         return None
     if handler.command.upper() in api_tokens_mod.WRITE_METHODS:
-        api_tokens_mod.log_token_write(user["api_token_id"], handler.command, api_path)
+        api_tokens_mod.log_token_write(user, handler.command, api_path)
     return user
 
 
@@ -7010,10 +7045,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         rows = db.query(
             """SELECT h.id, h.category_id, hc.title, h.title, h.content,
                       h.created_by, h.created_at, h.backdated_created_at,
-                      u.display_name
+                      u.display_name,
+                      h.api_token_id, t.name
                FROM history_events h
                LEFT JOIN history_categories hc ON h.category_id = hc.id
                LEFT JOIN users u ON h.created_by = u.id
+               LEFT JOIN api_tokens t ON t.id = h.api_token_id
                WHERE h.opportunity_id = %s
                ORDER BY h.created_at DESC
                LIMIT %s OFFSET %s""",
@@ -7048,6 +7085,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "created": _ts(r[6]),
                 "backdatedCreated": _ts(r[7]),
                 "author": r[8] or "",
+                "apiTokenId": r[9],
+                "apiTokenName": r[10] or None,
                 "attachments": attachments_by_event.get(r[0], []),
             })
         # Linked-email attachments: an email linked to a project now carries a COPY
@@ -7119,11 +7158,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except (TypeError, ValueError):
             category_id = 1
         backdated = str(payload.get("created") or "").strip() or None
+        # A token write records which token wrote it so the timeline can show
+        # "via API: <token name>". Session users leave it NULL.
+        api_token_id = user.get("api_token_id")
         try:
             event_id = db.insert_returning(
-                """INSERT INTO history_events (opportunity_id, category_id, content, created_by, backdated_created_at)
-                   VALUES (%s, %s, %s, %s, %s) RETURNING id""",
-                (opp_id, category_id, content, user["id"], backdated),
+                """INSERT INTO history_events
+                       (opportunity_id, category_id, content, created_by,
+                        backdated_created_at, api_token_id)
+                   VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+                (opp_id, category_id, content, user["id"], backdated,
+                 int(api_token_id) if api_token_id else None),
             )
         except Exception as e:
             print(f"[ERROR] Failed to insert history event for opp {opp_id}: {e}", file=sys.stderr)
@@ -9044,6 +9089,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 if r.get(key):
                     r[key] = _ts(r[key]) if hasattr(r[key], "isoformat") else str(r[key])
 
+        # "via API: <token name>" tag — resolve the token ids in one query
+        # rather than joining personal_notes in every branch above.
+        token_ids = sorted({int(r["api_token_id"]) for r in rows if r.get("api_token_id")})
+        token_names: dict[int, str] = {}
+        if token_ids:
+            for tr in db.query_dicts(
+                "SELECT id, name FROM api_tokens WHERE id = ANY(%s)", (token_ids,)
+            ):
+                token_names[int(tr["id"])] = tr["name"]
+        for r in rows:
+            tid = r.get("api_token_id")
+            r["api_token_id"] = int(tid) if tid else None
+            r["api_token_name"] = token_names.get(int(tid)) if tid else None
+
         _json_response(self, 200, {"notes": rows})
 
     def _handle_note_create(self) -> None:
@@ -9061,9 +9120,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         pinned = bool(payload.get("pinned", False))
 
         note_id = db.insert_returning(
-            "INSERT INTO personal_notes (owner, title, content, color, pinned) "
-            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (user["id"], title, content, color, pinned),
+            "INSERT INTO personal_notes (owner, title, content, color, pinned, api_token_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (user["id"], title, content, color, pinned,
+             int(user["api_token_id"]) if user.get("api_token_id") else None),
         )
 
         _json_response(self, 201, {"id": str(note_id), "ok": True})
@@ -17546,6 +17606,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
           scope: "full" | "read"
           restrictions: {methods?: [...], resources?: [...]}
           expires_at: ISO-8601 timestamp
+          acts_as_user_id: user the token posts as. Omitted/blank = the
+            creating admin. Only an admin may name another user (this whole
+            route is admin-only, and the check is repeated here so a
+            non-admin identity can never mint a token for someone else).
         """
         user = _require_admin(self)
         if not user:
@@ -17561,6 +17625,25 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # Convenience: read_only:true from the admin UI maps to scope=read.
         if payload.get("read_only") is True:
             scope = api_tokens_mod.SCOPE_READ
+
+        acts_as_raw = payload.get("acts_as_user_id")
+        if acts_as_raw is None:
+            acts_as_raw = payload.get("actsAsUserId")
+        acts_as_id = None
+        if acts_as_raw is not None and str(acts_as_raw).strip() != "":
+            try:
+                acts_as_id = int(acts_as_raw)
+            except (TypeError, ValueError):
+                _json_response(self, 400, {"error": "acts_as_user_id must be a user id"})
+                return
+            # Only an admin may mint a token that posts as somebody else.
+            # `_require_admin` already guarantees this for sessions and for
+            # full-access tokens, but state the rule where the decision is
+            # made so it cannot drift when the gate changes.
+            if acts_as_id != int(user["id"]) and not user.get("is_admin"):
+                _json_response(self, 403, {"error": "Only an admin can create a token for another user"})
+                return
+
         try:
             rec = api_tokens_mod.create_api_token(
                 name,
@@ -17568,10 +17651,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 scope,
                 restrictions=payload.get("restrictions"),
                 expires_at=payload.get("expires_at"),
+                acts_as_user_id=acts_as_id,
             )
         except ValueError as exc:
             _json_response(self, 400, {"error": str(exc)})
             return
+        api_tokens_mod.log_token_create(rec, actor_user_id=user["id"], actor_email=user.get("email"))
         rec["warning"] = "Store this token now — it is shown only once and cannot be recovered."
         _json_response(self, 201, rec)
 

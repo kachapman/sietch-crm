@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=3.7.22" />
+  <link rel="stylesheet" href="styles.css?v=3.7.23" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.49.0/dist/tabler-icons.min.css" />
 </head>
 <body>
@@ -3509,10 +3509,11 @@
         <div class="api-token-scope-notice" role="note">
           <strong>Full access by default.</strong>
           <p style="margin:0.35rem 0 0;">
-            A new token acts as the admin who created it and can call
-            <strong>all <code>/api/v2</code> methods</strong> (GET, POST, PUT, PATCH, DELETE) on every
-            resource that admin can reach &mdash; including notes, contacts, projects, documents,
-            mail, and admin routes. Optional restrictions below are the only way to narrow that.
+            A new token acts as the user chosen under <strong>Posts as</strong> (you, by
+            default) and can call <strong>all <code>/api/v2</code> methods</strong>
+            (GET, POST, PUT, PATCH, DELETE) on every resource that user can reach &mdash;
+            including notes, contacts, projects, documents, mail, and admin routes.
+            Optional restrictions below are the only way to narrow that.
             The secret is shown once; revoke immediately if it is exposed.
           </p>
         </div>
@@ -3524,6 +3525,16 @@
                    placeholder="e.g. LLM supplement agent" autocomplete="off" spellcheck="false" />
             <button type="submit" id="api-token-create-btn" class="btn btn-primary btn-sm" style="white-space:nowrap;">Create token</button>
           </div>
+
+          <label for="api-token-acts-as" style="display:block; font-size:0.8rem; font-weight:600; margin-top:0.65rem;">Posts as</label>
+          <select id="api-token-acts-as" class="form-control" style="max-width:22rem;">
+            <option value="">Loading users…</option>
+          </select>
+          <p id="api-token-acts-as-note" style="margin:0.3rem 0 0; font-size:0.78rem; color:var(--muted);">
+            Project activity, notes and <code>created_by</code> are attributed to this user.
+            The token also gets that user's permissions, so choosing a non-admin makes it
+            non-admin. Defaults to you (the admin creating the token).
+          </p>
 
           <details class="api-token-restrictions" style="margin-top:0.75rem;">
             <summary style="cursor:pointer; font-size:0.85rem; font-weight:600;">Optional restrictions</summary>
@@ -4001,6 +4012,6 @@
 
   <script src="date-only.js?v=1.0.0"></script>
   <script src="api-token-ui.js?v=1.0.0"></script>
-  <script src="app.js?v=3.7.51" type="module"></script>
+  <script src="app.js?v=3.7.52" type="module"></script>
 </body>
 </html>

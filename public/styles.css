@@ -19432,3 +19432,21 @@ select.form-control {
 .api-token-badge.is-active { color: #3fb950; }
 .api-token-badge.is-revoked { color: var(--muted); }
 .api-token-empty { color: var(--muted); font-size: 0.8rem; padding: 0.5rem 0; }
+
+/* "via API: <token name>" attribution on activity and note entries. Small,
+   muted, and never a link: it labels the writer, it is not a control. */
+.via-api-tag {
+  display: inline-block;
+  font-size: 0.66rem;
+  line-height: 1.4;
+  color: var(--muted);
+  border: 1px solid var(--border, rgba(140, 148, 160, 0.45));
+  border-radius: 3px;
+  padding: 0 0.28rem;
+  margin-left: 0.35rem;
+  vertical-align: middle;
+  white-space: nowrap;
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

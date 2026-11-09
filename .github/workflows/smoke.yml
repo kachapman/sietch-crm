@@ -82,6 +82,15 @@ jobs:
       - name: Run admin API token UI contract tests
         run: python3 tests/test_admin_api_token_ui.py -v
 
+      - name: Run API token "Posts as" tests
+        # Migration 047: a token authenticates as its chosen user, writes are
+        # tagged with api_token_id, and only admins may mint a token for
+        # another user.
+        run: python3 tests/test_api_token_acts_as.py -v
+
+      - name: Run API token "Posts as" UI tests
+        run: node --test tests/test_api_token_acts_as.mjs
+
       - name: Run mail template auth tests
         run: python3 tests/test_mail_template_auth.py
 

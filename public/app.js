@@ -9848,6 +9848,7 @@ function _notesRenderCard(note) {
       ${preview ? `<div class="notes-card-preview">${preview}</div>` : ""}
       <div class="notes-card-footer">
         <span class="notes-card-time">${time}</span>
+        ${viaApiTagHtml(note.api_token_name)}
         ${note.pinned ? `<span class="notes-card-pin">📌</span>` : ""}
       </div>
     </div>
@@ -26215,6 +26216,21 @@ function historyEventAuthor(ev) {
   return name || "System";
 }
 
+// Token attribution. Backend field is apiTokenName (history) / api_token_name
+// (notes). Only a short, single-line label is ever rendered: the tag lives in
+// textContent / escapeHtml'd templates, never innerHTML.
+function historyEventApiTokenName(ev) {
+  const raw = ev && (ev.apiTokenName ?? ev.ApiTokenName ?? ev.api_token_name);
+  return String(raw || "").replace(/[\r\n]+/g, " ").trim().slice(0, 80);
+}
+
+function viaApiTagHtml(name) {
+  const clean = String(name || "").replace(/[\r\n]+/g, " ").trim().slice(0, 80);
+  if (!clean) return "";
+  return '<span class="via-api-tag" title="Written by the API token">via API: ' +
+    escapeHtml(clean) + "</span>";
+}
+
 function historyEventPlainContent(ev) {
   return toPlainDisplayText(ev.content || ev.Content || ev.description || ev.Description || "", 12000);
 }
@@ -27061,6 +27077,20 @@ function renderHistoryEventMeta(metaEl, ev) {
     }
 
     metaEl.appendChild(line);
+  }
+
+  // "via API: <token name>" — the row was written by an API token. The
+  // author shown above is the user the token POSTS AS; this tag says the
+  // write itself came from a token, so a Baggins-identity token is not
+  // mistaken for Baggins typing in the UI.
+  const tokenName = historyEventApiTokenName(ev);
+  if (tokenName) {
+    if (metaEl.childElementCount) appendSep();
+    const tag = document.createElement("span");
+    tag.className = "via-api-tag";
+    tag.textContent = "via API: " + tokenName;
+    tag.title = "Written by the API token \u201C" + tokenName + "\u201D";
+    metaEl.appendChild(tag);
   }
 }
 
@@ -33675,6 +33705,10 @@ function _apiTokenRowHtml(row) {
     : '<span class="api-token-badge is-active">Active</span>';
   const meta = [];
   if (row.prefix) meta.push("prefix <code>" + escapeHtml(row.prefix) + "</code>");
+  if (ui && ui.describeActsAs) {
+    const actsAs = ui.describeActsAs(row);
+    if (actsAs) meta.push(escapeHtml(actsAs));
+  }
   if (ui && ui.describeRestrictions) meta.push(escapeHtml(ui.describeRestrictions(row)));
   else if (row.scope) meta.push("scope <code>" + escapeHtml(row.scope) + "</code>");
   if (row.createdByEmail) meta.push("created by " + escapeHtml(row.createdByEmail));
@@ -33691,11 +33725,41 @@ function _apiTokenRowHtml(row) {
     "</div>" + action + "</div>";
 }
 
+async function _loadApiTokenActsAsUsers(ui) {
+  const select = $("#api-token-acts-as");
+  if (!select) return;
+  const defaultId = state.currentUserId != null ? String(state.currentUserId) : "";
+  try {
+    const users = await api("/api/v2/users");
+    const opts = ui.actsAsOptions ? ui.actsAsOptions(users, state.currentUserId) : [];
+    if (!opts.length) {
+      select.innerHTML = '<option value="">' + (defaultId ? "You (creating admin)" : "Creating admin") + "</option>";
+    } else {
+      select.innerHTML = opts.map(o =>
+        '<option value="' + escapeHtml(o.value) + '">' + escapeHtml(o.label) + "</option>"
+      ).join("");
+    }
+    // Default = the creating admin, as the task requires. Stored so the form
+    // can reset to it after a create instead of keeping a stale choice.
+    if (defaultId) {
+      select.value = defaultId;
+      select.dataset.defaultUserId = defaultId;
+    }
+  } catch (e) {
+    // Non-fatal: the selector falls back to the server default (creator).
+    select.innerHTML = '<option value="">' + "Creating admin (default)" + "</option>";
+    if (select.dataset) select.dataset.defaultUserId = "";
+  }
+}
+
 async function loadAdminApiTokens() {
   const ui = _apiTokenUi();
   if (!ui || !ui.isAdminViewer(state.currentUserIsAdmin)) return;
   const statusEl = $("#api-token-list-status");
   const listEl = $("#api-token-list");
+  // "Posts as" choices. Same /api/v2/users list the admin console already
+  // uses; failures leave the select on the creating admin (server default).
+  _loadApiTokenActsAsUsers(ui);
   if (statusEl) { statusEl.textContent = "Loading tokens…"; statusEl.style.color = "var(--muted)"; }
   try {
     const data = await api("/api/v2/admin/api-tokens");

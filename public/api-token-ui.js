@@ -70,8 +70,10 @@
 
   /**
    * Build the create POST body.
-   * opts: { readOnly?: boolean, methods?: string[], resources?: string[], expiresAt?: string|null }
-   * Default (no opts / empty opts) → { name } only → server grants full access.
+   * opts: { readOnly?: boolean, methods?: string[], resources?: string[],
+   *         expiresAt?: string|null, actsAsUserId?: number|string|null }
+   * Default (no opts / empty opts) → { name } only → server grants full
+   * access and the token posts as the admin creating it.
    */
   function buildCreateRequest(raw, opts) {
     var check = validateTokenName(raw);
@@ -96,6 +98,17 @@
       var exp = String(o.expiresAt).trim();
       if (exp) body.expires_at = exp;
     }
+    // "Posts as": omitted means "the creating admin" (server default). Only
+    // send it when the admin actually picked a user, so a blank selector can
+    // never mint a token that posts as nobody.
+    var actsAs = o.actsAsUserId;
+    if (actsAs !== null && actsAs !== undefined && String(actsAs).trim() !== "") {
+      var id = Number(actsAs);
+      if (!Number.isFinite(id) || id <= 0 || Math.floor(id) !== id) {
+        return { ok: false, error: "Choose a valid user for 'Posts as'.", body: null };
+      }
+      body.acts_as_user_id = id;
+    }
     return { ok: true, error: "", body: body };
   }
 
@@ -117,12 +130,16 @@
     if (!Number.isFinite(id) || id <= 0) return null;
     var revokedAt = typeof t.revoked_at === "string" && t.revoked_at ? t.revoked_at : null;
     var restrictions = t.restrictions && typeof t.restrictions === "object" ? t.restrictions : {};
+    var actsAsId = Number(t.acts_as_user_id);
     return {
       id: id,
       name: t.name == null ? "" : String(t.name),
       prefix: t.token_prefix == null ? "" : String(t.token_prefix),
       scope: t.scope == null ? "" : String(t.scope),
       createdByEmail: t.created_by_email == null ? "" : String(t.created_by_email),
+      actsAsUserId: Number.isFinite(actsAsId) && actsAsId > 0 ? actsAsId : null,
+      actsAsEmail: t.acts_as_email == null ? "" : String(t.acts_as_email),
+      actsAsName: t.acts_as_display_name == null ? "" : String(t.acts_as_display_name),
       createdAt: typeof t.created_at === "string" && t.created_at ? t.created_at : null,
       lastUsedAt: typeof t.last_used_at === "string" && t.last_used_at ? t.last_used_at : null,
       revokedAt: revokedAt,
@@ -130,6 +147,49 @@
       expiresAt: typeof t.expires_at === "string" && t.expires_at ? t.expires_at : null,
       restrictions: restrictions,
     };
+  }
+
+  /** Human label for the identity a token posts as. */
+  function describeActsAs(row) {
+    if (!row) return "";
+    var name = row.actsAsName ? String(row.actsAsName) : "";
+    var email = row.actsAsEmail ? String(row.actsAsEmail) : "";
+    if (name && email) return "posts as " + name + " <" + email + ">";
+    if (name) return "posts as " + name;
+    if (email) return "posts as " + email;
+    // Older rows have no explicit identity: they post as their creator.
+    if (row.createdByEmail) return "posts as " + row.createdByEmail;
+    return "";
+  }
+
+  /**
+   * Options for the "Posts as" <select>: active users only, sorted by label,
+   * with the signed-in admin first so the default is obvious.
+   * Returns [{ value, label }] — the caller owns the DOM.
+   */
+  function actsAsOptions(users, currentUserId) {
+    var list = Array.isArray(users) ? users : [];
+    var me = Number(currentUserId);
+    var out = [];
+    var seen = {};
+    for (var i = 0; i < list.length; i++) {
+      var u = list[i];
+      if (!u || typeof u !== "object") continue;
+      var id = Number(u.id);
+      if (!Number.isFinite(id) || id <= 0 || seen[id]) continue;
+      if (u.isActive === false) continue; // an inactive user is refused by the API
+      seen[id] = true;
+      var label = u.displayName || u.email || ("User " + id);
+      if (Number.isFinite(me) && id === me) label += " (you)";
+      out.push({ value: String(id), label: String(label) });
+    }
+    out.sort(function (a, b) {
+      var aMe = Number.isFinite(me) && a.value === String(me);
+      var bMe = Number.isFinite(me) && b.value === String(me);
+      if (aMe !== bMe) return aMe ? -1 : 1;
+      return a.label.localeCompare(b.label);
+    });
+    return out;
   }
 
   function summarizeTokenList(payload) {
@@ -229,10 +289,11 @@
   function readCreateOptionsFromForm(doc) {
     var d = doc || (typeof document !== "undefined" ? document : null);
     if (!d || typeof d.getElementById !== "function") {
-      return { readOnly: false, methods: [], resources: [], expiresAt: null };
+      return { readOnly: false, methods: [], resources: [], expiresAt: null, actsAsUserId: null };
     }
     var readOnlyEl = d.getElementById("api-token-read-only");
     var expiresEl = d.getElementById("api-token-expires");
+    var actsAsEl = d.getElementById("api-token-acts-as");
     var methods = [];
     d.querySelectorAll("[data-api-token-method]:checked").forEach(function (el) {
       methods.push(el.value);
@@ -248,11 +309,16 @@
       var asDate = new Date(local);
       if (!Number.isNaN(asDate.getTime())) expiresAt = asDate.toISOString();
     }
+    var actsAsUserId = null;
+    if (actsAsEl && actsAsEl.value != null && String(actsAsEl.value).trim() !== "") {
+      actsAsUserId = String(actsAsEl.value).trim();
+    }
     return {
       readOnly: !!(readOnlyEl && readOnlyEl.checked),
       methods: methods,
       resources: resources,
       expiresAt: expiresAt,
+      actsAsUserId: actsAsUserId,
     };
   }
 
@@ -266,6 +332,12 @@
     d.querySelectorAll("[data-api-token-method], [data-api-token-resource]").forEach(function (el) {
       el.checked = false;
     });
+    // "Posts as" goes back to the default identity (the signed-in admin),
+    // never to a stale selection from the previous token.
+    var actsAsEl = d.getElementById("api-token-acts-as");
+    if (actsAsEl && actsAsEl.dataset && actsAsEl.dataset.defaultUserId) {
+      actsAsEl.value = actsAsEl.dataset.defaultUserId;
+    }
   }
 
   root.SietchApiTokenUi = {
@@ -277,6 +349,8 @@
     extractCreatedSecret: extractCreatedSecret,
     summarizeToken: summarizeToken,
     summarizeTokenList: summarizeTokenList,
+    describeActsAs: describeActsAs,
+    actsAsOptions: actsAsOptions,
     countActiveTokens: countActiveTokens,
     formatTokenDate: formatTokenDate,
     tokenStatusText: tokenStatusText,

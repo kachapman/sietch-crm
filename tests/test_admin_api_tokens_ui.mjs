@@ -125,6 +125,8 @@ test('summarizeToken whitelists safe metadata and drops secrets/hashes', () => {
   });
   const keys = Object.keys(row).sort();
   assert.deepEqual(keys, [
+    // "Posts as" identity (migration 047) is metadata only — no secret.
+    'actsAsEmail', 'actsAsName', 'actsAsUserId',
     'createdAt', 'createdByEmail', 'expiresAt', 'id', 'lastUsedAt', 'name',
     'prefix', 'restrictions', 'revoked', 'revokedAt', 'scope',
   ]);
