@@ -36,7 +36,7 @@ import os
 import sys
 import time
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -591,6 +591,95 @@ class TestDiagnosticScript(unittest.TestCase):
             8, "a@outlook.com", oauth_identity="a@outlook.com",
             oauth_graph_identity="a@outlook.com", oauth_graph_access_token="GAT")])
         self.assertEqual(report["accounts"][0]["problems"], [])
+
+
+class TestScannerHealthIsNotAFalseAlarm(unittest.TestCase):
+    """Live bug 2026-11-09: accounts 8/9/10 showed `auth_failed` while they
+    were fetching mail every poll.
+
+    `mail_accounts.oauth_token_expires` is a plain TIMESTAMP (naive UTC).
+    `get_scanner_status` compared it with an aware `now`, which raises
+    TypeError; the surrounding `except: pass` swallowed it BEFORE the
+    "has a refresh token" fallback could run, so `token_valid` stayed False
+    and every OAuth account reported `auth_failed` forever.
+    """
+
+    def _status(self, expires):
+        import scanner.mail_scanner as ms
+
+        acct = {"id": 8, "email": "estimates.masterx@outlook.com",
+                "imap_host": "outlook.office365.com", "imap_port": 993,
+                "oauth_provider": "microsoft", "password_encrypted": "",
+                "last_sync": None, "sync_enabled": True,
+                "oauth_identity": "estimates.masterx@outlook.com",
+                "oauth_last_error": None, "oauth_graph_last_error": None}
+
+        def query_dicts(sql, params=None):
+            return [dict(acct)]
+
+        def query_one(sql, params=None):
+            if "oauth_token_expires" in sql:
+                return {"oauth_token_expires": expires}
+            if "oauth_refresh_token" in sql:
+                return {"oauth_refresh_token": "RT"}
+            return None
+
+        with patch.object(ms, "db") as fake_db, \
+             patch.object(ms, "get_contractors", return_value={}):
+            fake_db.query_dicts.side_effect = query_dicts
+            fake_db.query_one.side_effect = query_one
+            status = ms.get_scanner_status()
+        return status["accounts"][0]
+
+    def test_naive_future_expiry_is_active(self):
+        future = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1)
+        self.assertEqual(self._status(future)["status"], "active")
+
+    def test_naive_expired_with_refresh_token_is_active(self):
+        past = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
+        self.assertEqual(self._status(past)["status"], "active")
+
+    def test_observed_refresh_error_still_marks_it_failed(self):
+        import scanner.mail_scanner as ms
+
+        acct = {"id": 8, "email": "a@outlook.com", "imap_host": "h", "imap_port": 993,
+                "oauth_provider": "microsoft", "password_encrypted": "",
+                "last_sync": None, "sync_enabled": True, "oauth_identity": "a@outlook.com",
+                "oauth_last_error": "invalid_grant", "oauth_graph_last_error": None}
+        future = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1)
+        with patch.object(ms, "db") as fake_db, \
+             patch.object(ms, "get_contractors", return_value={}):
+            fake_db.query_dicts.return_value = [dict(acct)]
+            fake_db.query_one.side_effect = lambda sql, params=None: (
+                {"oauth_token_expires": future} if "oauth_token_expires" in sql
+                else {"oauth_refresh_token": "RT"})
+            status = ms.get_scanner_status()
+        self.assertEqual(status["accounts"][0]["status"], "auth_failed")
+
+
+class TestTokenExpiryIsTimezoneIndependent(unittest.TestCase):
+    """A naive expiry must be read as UTC regardless of the process TZ."""
+
+    def test_naive_expiry_one_hour_ahead_is_not_due(self):
+        import time as _time
+        import mail_oauth
+
+        old_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "America/New_York"
+        _time.tzset()
+        try:
+            # 1 hour in the future, naive (as psycopg2 returns it).
+            soon = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1)
+            self.assertFalse(mail_oauth.token_needs_refresh(soon))
+            # 1 hour in the past, naive.
+            past = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
+            self.assertTrue(mail_oauth.token_needs_refresh(past))
+        finally:
+            if old_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = old_tz
+            _time.tzset()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -3670,7 +3670,14 @@ def get_scanner_status() -> dict[str, Any]:
                 if token_row and token_row.get("oauth_token_expires"):
                     expires = token_row["oauth_token_expires"]
                     if isinstance(expires, datetime):
-                        token_valid = expires > datetime.now(timezone.utc)
+                        # `mail_accounts.oauth_token_expires` is still a plain
+                        # TIMESTAMP (naive UTC). Comparing it directly with an
+                        # aware `now` raises TypeError, which the surrounding
+                        # `except` swallowed — so `token_valid` stayed False and
+                        # every OAuth account reported `auth_failed` even while
+                        # it was syncing normally (live bug 2026-11-09: 8/9/10
+                        # looked dead while fetching mail every poll).
+                        token_valid = mail_dates.to_utc(expires) > datetime.now(timezone.utc)
                 # Also check if we have a refresh token (can refresh)
                 if not token_valid:
                     refresh_row = db.query_one(

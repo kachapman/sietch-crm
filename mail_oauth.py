@@ -27,6 +27,7 @@ from typing import Any
 
 import db
 import oauth_providers
+import mail_dates
 import mail_oauth_binding
 
 logger = logging.getLogger("sietch.mail_oauth")
@@ -46,7 +47,15 @@ def _now_ts() -> float:
 
 
 def token_needs_refresh(expires_at: datetime | None) -> bool:
-    """True when the access token is expired or close enough to expiry."""
+    """True when the access token is expired or close enough to expiry.
+
+    `mail_accounts.oauth_token_expires` is a plain TIMESTAMP (naive UTC), so
+    `expires_at.timestamp()` would interpret it in the PROCESS timezone. That
+    is UTC inside the production container but not on a host running with
+    TZ=America/New_York, where the same row would look 4-5 hours off and be
+    refreshed far too early (or used long after it expired). Normalize to UTC
+    first (live bug 2026-11-09, same class as the mail display bug).
+    """
     if expires_at is None:
         # Unknown expiry — assume it needs a refresh so a stale token is
         # never used. (The refresh itself is a no-op when there is no
@@ -54,7 +63,8 @@ def token_needs_refresh(expires_at: datetime | None) -> bool:
         return True
     if not isinstance(expires_at, datetime):
         return True
-    return expires_at.timestamp() <= _now_ts() + REFRESH_MARGIN_SECONDS
+    expires = mail_dates.to_utc(expires_at)
+    return expires.timestamp() <= _now_ts() + REFRESH_MARGIN_SECONDS
 
 
 def _save_refreshed_token(account_id: int, new_access: str, new_refresh: str,
