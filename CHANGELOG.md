@@ -12,6 +12,11 @@ All notable changes to the Sietch CRM dashboard are documented here.
   was still INSERTed with `created_by = NULL`. The auth gate now runs first and
   returns; `created_by` is always the session user.
 
+- **Stale `app.js` after deploy.** This branch changes `public/app.js` but
+  left the cache-buster at `v=3.7.50`, so browsers that had already cached the
+  old script kept running it. `public/index.html` now loads `app.js?v=3.7.51`
+  (`styles.css` is unchanged).
+
 ### Changed (CI / tests only — no product behaviour)
 - **The Python CI job can actually run now.** 32 test files hardcoded
   `sys.path.insert(0, '/home/chapman-server/Projects/new-crm')` and read
