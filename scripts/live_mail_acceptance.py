@@ -158,18 +158,59 @@ def _open_account_tab(page, acct: dict) -> None:
     page.click(SEL["account_tab"].format(email=acct["email"]))
 
 
+class AbortRun(RuntimeError):
+    pass
+
+
+def _clear_and_type(page, selector: str, value: str) -> None:
+    """Clear the field, type the FULL address (never pick a suggestion), then
+    assert the DOM value is exactly the intended address."""
+    loc = page.locator(selector)
+    if not loc.count():
+        return
+    loc.first.fill("")
+    loc.first.type(value, delay=15)
+    page.keyboard.press("Escape")  # dismiss any autocomplete dropdown
+    got = loc.first.input_value().strip()
+    if got.lower() != value.lower():
+        raise AbortRun(f"field {selector} is {got!r}, expected {value!r}")
+
+
+def _assert_recipients_only(page) -> None:
+    """ABORT THE WHOLE RUN if To/Cc/Bcc is anything but the locked address."""
+    values = []
+    for key in ("to", "cc", "bcc"):
+        loc = page.locator(SEL[key])
+        if loc.count():
+            values.append(loc.first.input_value())
+    bad = validate_recipients(values[0] if values else "",
+                              values[1] if len(values) > 1 else None,
+                              values[2] if len(values) > 2 else None)
+    if bad:
+        raise AbortRun(f"recipient check failed: {bad}")
+
+
 def _send(page, acct: dict, kind: str, subject: str) -> None:
     """Drive the UI for one row. Raises on a visible failure."""
     if kind in ("reply", "reply_all", "forward"):
         page.click(SEL["reply"] if kind != "forward" else SEL["forward"])
+        # Reply/forward prefill To/Cc/Bcc — CLEAR them and set only the locked
+        # recipient (Ken 1:41).
+        for key in ("to", "cc", "bcc"):
+            loc = page.locator(SEL[key])
+            if loc.count():
+                loc.first.fill("")
     else:
         page.click(SEL["compose_btn"])
     page.wait_for_selector(SEL["from_select"])
-    # The user picks the account in the From select (like a human).
     page.select_option(SEL["from_select"], str(acct["id"]))
-    page.fill(SEL["to"], "crm@vanguardadj.online")
+    _clear_and_type(page, SEL["to"], "crm@vanguardadj.online")
+    for key in ("cc", "bcc"):
+        loc = page.locator(SEL[key])
+        if loc.count():
+            loc.first.fill("")
     page.fill(SEL["subject"], subject)
-    _assert_fields_allowed(page)
+    _assert_recipients_only(page)  # ABORTS THE ENTIRE RUN on anything else
     page.click(SEL["send"])
 
 
@@ -221,7 +262,11 @@ def run_matrix(execute: bool) -> int:
             urllib.request.urlopen(urllib.request.Request(
                 BASE.rstrip("/") + "/api/v2/mail/accounts",
                 headers={"Cookie": cookie})).read())["accounts"]}
+        sent_count = 0
+        cap = len(rows)
         for r in rows:
+            if sent_count >= cap:
+                raise AbortRun(f"hard cap {cap} reached")
             acct = accounts.get(r["account_id"])
             if not acct:
                 results.append((r["id"], "SKIP", "account not visible"))
@@ -229,10 +274,18 @@ def run_matrix(execute: bool) -> int:
             try:
                 _open_account_tab(page, acct)
                 _send(page, acct, r["kind"], r["subject"])
+                sent_count += 1
                 ok, detail = _verify(cookie, acct, r["subject"])
                 results.append((r["id"], "PASS" if ok else "FAIL", detail))
+                print(f"{time.strftime('%H:%M:%S')} {r['id']} acct {acct['id']} "
+                      f"{'PASS' if ok else 'FAIL'} ({sent_count}/{cap})", flush=True)
+                if not ok:
+                    raise AbortRun(f"{r['id']}: {detail}")
+            except AbortRun:
+                raise
             except Exception as exc:
                 results.append((r["id"], "FAIL", str(exc)[:120]))
+                raise AbortRun(f"{r['id']}: {exc}")
         browser.close()
     print("\nrow  result  detail")
     for rid, res, detail in results:

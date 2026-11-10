@@ -1181,6 +1181,7 @@ try:
     db.execute("ALTER TABLE mail_outgoing ADD COLUMN IF NOT EXISTS fallback_reason TEXT")
     db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS auth_error TEXT")
     db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS auth_error_at TIMESTAMPTZ")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS mail_send_locked_recipient TEXT")
 except Exception:
     logger.warning("Could not create the mail sender guard schema", exc_info=True)
 # Memory of observed SMTP AUTH disable (5.7.139). Microsoft accepts-then-drops
@@ -23301,6 +23302,29 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         merged.append(addr)
                 if merged:
                     bcc_addr = ", ".join(merged)
+
+            # Per-user recipient lock (2026-11-10, Ken 1:41 PM). A user flagged
+            # with users.mail_send_locked_recipient may only send to exactly that
+            # address (every To/Cc/Bcc, including auto-BCC). Normal users have
+            # NULL and are unaffected. Every compose/reply/forward path uses
+            # this handler, so there is no bypass.
+            if user:
+                lock_row = db.query_one(
+                    "SELECT mail_send_locked_recipient FROM users WHERE id = %s",
+                    (user["id"],))
+                lock_addr = ((lock_row or {}).get("mail_send_locked_recipient") or "").strip()
+                if lock_addr:
+                    import mail_recipient_lock
+                    recipients = mail_recipient_lock.parse_recipients(to_addr, cc_addr, bcc_addr)
+                    allowed, why = mail_recipient_lock.check_lock(lock_addr, recipients)
+                    if not allowed:
+                        logger.warning("Recipient lock refused send for user %s: %s",
+                                       user.get("id"), why)
+                        _json_response(self, 403, {
+                            "ok": False,
+                            "error": f"Recipient lock: {why}. Nothing was sent.",
+                        })
+                        return
 
             # All send routing — Graph-first / SMTP fallback / 5.7.139 retry — lives in
             # _try_send_for_account. _handle_mail_send only needs to call it
