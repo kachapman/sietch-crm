@@ -31,7 +31,11 @@ class ToolSpec:
     name: str
     description: str
     input_schema: dict
-    kind: str  # "read" | "write"
+    # "read"     — GET, no side effects
+    # "write"    — propose/apply (human-in-the-loop by default)
+    # "queue"    — immediate write that only inserts an internal queue row
+    #              (request_ocr); never a CRM record, so no approve step.
+    kind: str
     build: Callable[[ToolContext, dict], tuple[str, str, dict | None]] | None = None
     summarize: Callable[[dict], str] = lambda args: ""
     # For tools whose underlying route no longer exists: return this instead
@@ -41,6 +45,10 @@ class ToolSpec:
     @property
     def is_write(self) -> bool:
         return self.kind == "write"
+
+    @property
+    def is_queue(self) -> bool:
+        return self.kind == "queue"
 
 
 def _schema(properties: dict, required: list[str] | None = None) -> dict:
@@ -147,6 +155,57 @@ def _list_tasks(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
 
 def _list_project_documents(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
     return "GET", f"/api/v2/projects/{int(args['project_id'])}/documents", None
+
+
+def _paging_query(args: dict) -> str:
+    from urllib.parse import urlencode
+
+    params = {}
+    for key in ("page_start", "page_end", "max_chars"):
+        value = args.get(key)
+        if value not in (None, ""):
+            params[key] = int(value)
+    return ("?" + urlencode(params)) if params else ""
+
+
+def _get_project_document(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
+    path = (f"/api/v2/projects/{int(args['project_id'])}/documents/"
+            f"{int(args['document_id'])}/text{_paging_query(args)}")
+    return "GET", path, None
+
+
+def _download_project_document(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
+    path = (f"/api/v2/projects/{int(args['project_id'])}/documents/"
+            f"{int(args['document_id'])}/content")
+    return "GET", path, None
+
+
+def _get_mail_attachment_text(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
+    path = (f"/api/v2/mail/messages/{int(args['message_id'])}/attachments/"
+            f"{int(args['attachment_id'])}/text{_paging_query(args)}")
+    return "GET", path, None
+
+
+_OCR_TARGET_KEYS = ("project_id", "document_id", "message_id", "attachment_id")
+
+
+def _ocr_target_args(args: dict) -> dict:
+    out: dict[str, Any] = {"source": str(args.get("source") or "").strip()}
+    for key in _OCR_TARGET_KEYS:
+        if args.get(key) not in (None, ""):
+            out[key] = int(args[key])
+    return out
+
+
+def _ocr_status(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
+    from urllib.parse import urlencode
+
+    params = {k: v for k, v in _ocr_target_args(args).items() if v != ""}
+    return "GET", "/api/v2/ocr/status?" + urlencode(params), None
+
+
+def _request_ocr(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
+    return "POST", "/api/v2/ocr/request", _ocr_target_args(args)
 
 
 def _list_notes(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
@@ -393,6 +452,81 @@ TOOLS: tuple[ToolSpec, ...] = (
         "List a project's documents/attachments metadata (name, size, type, folder).",
         _schema({"project_id": _i("Project id.")}, ["project_id"]),
         "read", _list_project_documents),
+    ToolSpec(
+        "get_project_document",
+        "Read one project document as text. PDFs are extracted per page with "
+        "pdftotext; scanned pages are marked ocr_needed and come back as "
+        "ocr_pending until a laptop worker has cached their OCR text. Use "
+        "page_start/page_end (1-based, inclusive) to narrow a long file and "
+        "max_chars to bound the response.",
+        _schema({
+            "project_id": _i("Project id."),
+            "document_id": _i("Document id (project_documents.id or a "
+                              "history_attachments.id shown in the Documents tab)."),
+            "page_start": _i("First page (1-based, inclusive)."),
+            "page_end": _i("Last page (inclusive)."),
+            "max_chars": _i("Maximum characters returned (default 100000)."),
+        }, ["project_id", "document_id"]),
+        "read", _get_project_document),
+    ToolSpec(
+        "download_project_document",
+        "Download the raw bytes of one project document. The result is base64 "
+        "JSON (MCP has no binary transport) and is refused above 10 MB with the "
+        "file size but no content.",
+        _schema({
+            "project_id": _i("Project id."),
+            "document_id": _i("Document id (project_documents.id or a "
+                              "history_attachments.id shown in the Documents tab)."),
+        }, ["project_id", "document_id"]),
+        "read", _download_project_document),
+    ToolSpec(
+        "get_mail_attachment_text",
+        "Read one mail attachment as text from the bytes already stored on the "
+        "server (no IMAP, no network). Same PDF/page/OCR-cache rules as a "
+        "project document; an attachment that was never stored returns "
+        "not_stored.",
+        _schema({
+            "message_id": _i("mail_messages.id."),
+            "attachment_id": _i("mail_attachments.id belonging to that message."),
+            "page_start": _i("First page (1-based, inclusive)."),
+            "page_end": _i("Last page (inclusive)."),
+            "max_chars": _i("Maximum characters returned (default 100000)."),
+        }, ["message_id", "attachment_id"]),
+        "read", _get_mail_attachment_text),
+    ToolSpec(
+        "ocr_status",
+        "Report OCR coverage for one document or mail attachment: per-page "
+        "cache coverage, the active/queued job, file sha256 and the engine "
+        "version. Never returns OCR text.",
+        _schema({
+            "source": {
+                "type": "string",
+                "enum": ["project_document", "mail_attachment"],
+                "description": "Which kind of file the ids refer to.",
+            },
+            "project_id": _i("Project id (source=project_document)."),
+            "document_id": _i("Document id (source=project_document)."),
+            "message_id": _i("Message id (source=mail_attachment)."),
+            "attachment_id": _i("Attachment id (source=mail_attachment)."),
+        }, ["source"]),
+        "read", _ocr_status),
+    ToolSpec(
+        "request_ocr",
+        "Queue one document or mail attachment for laptop OCR. Immediate (not a "
+        "proposal): the only write is one ocr_queue row, audited with ids and "
+        "sha256. Deduped by file hash; already-cached files are not re-queued.",
+        _schema({
+            "source": {
+                "type": "string",
+                "enum": ["project_document", "mail_attachment"],
+                "description": "Which kind of file the ids refer to.",
+            },
+            "project_id": _i("Project id (source=project_document)."),
+            "document_id": _i("Document id (source=project_document)."),
+            "message_id": _i("Message id (source=mail_attachment)."),
+            "attachment_id": _i("Attachment id (source=mail_attachment)."),
+        }, ["source"]),
+        "queue", _request_ocr),
     ToolSpec(
         "list_notes",
         "List personal notes (tiles).",

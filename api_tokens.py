@@ -43,6 +43,10 @@ RESOURCE_PREFIXES: dict[str, tuple[str, ...]] = {
     "me": ("/api/v2/me", "/api/v2/my"),
     "history": ("/api/v2/history",),  # plus .../history under projects (see matcher)
     "reference": ("/api/v2/reference",),
+    # OCR worker queue + file fetch. A token restricted to this resource can
+    # poll/claim jobs and upload OCR pages, but cannot read /api/v2/documents,
+    # /api/v2/mail or any other CRM surface.
+    "ocr": ("/api/v2/ocr",),
 }
 
 ALLOWED_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})

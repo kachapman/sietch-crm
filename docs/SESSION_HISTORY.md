@@ -3,6 +3,39 @@
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-10 (MCP document read + laptop OCR queue)
+
+**Status: branch only — `feat/mcp-document-read` in
+`~/Projects/new-crm-mcp-document-read`, NO merge, NO push, NO deploy, NO
+laptop install.** Plan: `~/Projects/plans/sietch/mcp-document-read-2026-11-10.md`.
+
+- Added `document_text.py` (pdftotext per page, 20-printable-char OCR
+  threshold, txt/html/eml, `unsupported_type`, SHA-256), `document_read.py`
+  (project/history-attachment resolution, base64 download cap 10 MB, OCR
+  status/request) and `ocr_store.py` (cache + queue persistence, audit
+  whitelist).
+- Migration `052_ocr_queue_cache.sql`: `ocr_page_cache`
+  `(file_sha256, page_number)` PK; `ocr_queue` with a partial unique index for
+  one active job per hash; failed jobs can be re-queued.
+- Routes: document text/content, mail attachment text, OCR status/request and
+  the worker queue (claim/file/pages/complete). Spec regenerated
+  (326 operations / 253 paths) and `docs/API.md` updated. Token resource
+  `ocr` added (backend + Admin checkbox).
+- MCP tools: `get_project_document`, `download_project_document`,
+  `get_mail_attachment_text`, `ocr_status`, `request_ocr` (immediate
+  queue-row write, not a proposal).
+- Worker written under `scripts/ocr_worker/` (`worker.py`, `engine.py`,
+  `run.sh`, env example) and `docs/OCR_WORKER.md`. Host-agnostic: URL, token,
+  temp dir, device, MemoryMax/MemorySwapMax all from env; no laptop paths in
+  code/schema. Not installed, no unit enabled.
+- Tests: `test_document_text.py` 21, `test_ocr_queue_api.py` 34,
+  `test_ocr_worker.py` 17; synthetic fixtures only. Full-suite numbers vs
+  `200c237` recorded in the plan's results section.
+- No real customer documents, no OCR engine on this machine, no IMAP/network
+  in the read/OCR paths.
+
+## Current session summary (for resume)
+
 **Date:** 2026-11-10 (Item 5: full suites vs baseline, then merge)
 
 **Status: MERGED to local `main` by fast-forward — NOT pushed, NOT deployed.**
