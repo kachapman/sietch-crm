@@ -21715,6 +21715,22 @@ async function switchMailTab(btn) {
 // A job's Contact is the contractor identity; mail_accounts.contractorContactId
 // maps that Contact to the mailbox branded for it. Never default to the first
 // account alphabetically: with no mapping the From select starts empty.
+function selectedFromAccountId(selectEl) {
+  // The ONE place the submitted account id comes from: the visible select, at
+  // send time. Never a cached/open-time value.
+  return selectEl ? parseInt(selectEl.value, 10) || null : null;
+}
+
+function verifySentAs(accountId, sentAs) {
+  const chosen = (mailState.accounts || []).find(a => a.id === accountId);
+  if (!chosen || !sentAs) return true;
+  const same = String(sentAs).trim().toLowerCase() === String(chosen.email || '').trim().toLowerCase();
+  if (!same) {
+    showToast(`Wrong sender: mail left from ${sentAs}, not ${chosen.email}. Stop and check the mailbox mapping.`, true);
+  }
+  return same;
+}
+
 function composeAccountOptionsHtml(selectedId) {
   const out = ['<option value="">Choose account…</option>'];
   for (const a of (mailState.accounts || [])) {
@@ -21777,12 +21793,20 @@ async function openComposeModal(opts = {}) {
   // ("Choose account…") — never the first account alphabetically (2026-11-10).
   const fromSelect = $('#compose-from-account');
   if (fromSelect && mailState.accounts.length > 0) {
+    // Disable Send until the options are populated: the modal is shown before
+    // this await resolves, and a fast click used to submit the PREVIOUS open's
+    // value (2026-11-10 "sent from an account not selected").
+    fromSelect.disabled = true;
+    const sendBtn0 = $('#compose-send-btn');
+    if (sendBtn0) sendBtn0.disabled = true;
     const wanted = await resolveComposeAccountId({
       dealId: opts.dealId || null,
       messageAccountId: opts.fromAccountId || null,
     });
     fromSelect.innerHTML = composeAccountOptionsHtml(wanted || '');
     fromSelect.value = wanted ? String(wanted) : '';
+    fromSelect.disabled = false;
+    if (sendBtn0) sendBtn0.disabled = false;
   }
   modal.dataset.replyToMessageId = opts.replyToMessageId ? String(opts.replyToMessageId) : '';
   modal.dataset.dealId = opts.dealId ? String(opts.dealId) : '';
@@ -22055,7 +22079,7 @@ async function openComposeModal(opts = {}) {
   if (sendBtn && !sendBtn.dataset.bound) {
     sendBtn.dataset.bound = '1';
     sendBtn.addEventListener('click', async () => {
-      const accountId = parseInt($('#compose-from-account')?.value);
+      const accountId = selectedFromAccountId($('#compose-from-account'));
       const to = $('#compose-to')?.value.trim();
       const cc = $('#compose-cc')?.value.trim() || null;
       const bcc = $('#compose-bcc')?.value.trim() || null;
@@ -22092,6 +22116,7 @@ async function openComposeModal(opts = {}) {
         const viaLabel = result.method === 'graph' ? 'via Microsoft Graph'
           : result.method === 'smtp_oauth' ? 'via SMTP (OAuth)'
           : result.method === 'smtp_password' ? 'via SMTP' : '';
+        verifySentAs(accountId, result.sentAs);
         showToast((viaLabel ? `Email sent ${viaLabel}` : 'Email sent')
           + (result.sentAs ? ` as ${result.sentAs}` : ''));
         addEventLogEntry("email", dealId || null, "", `Email sent to ${to}`, true);
@@ -22139,7 +22164,7 @@ async function openComposeModal(opts = {}) {
   if (draftBtn && !draftBtn.dataset.bound) {
     draftBtn.dataset.bound = '1';
     draftBtn.addEventListener('click', async () => {
-      const accountId = parseInt($('#compose-from-account')?.value);
+      const accountId = selectedFromAccountId($('#compose-from-account'));
       const to = $('#compose-to')?.value.trim();
       const subject = $('#compose-subject')?.value.trim();
       const body = $('#compose-body')?.innerHTML || '';
@@ -22457,7 +22482,7 @@ async function renderComposeTabContent(container, tabId, opts = {}) {
 
   // Bind Send
   container.querySelector('.compose-tab-send')?.addEventListener('click', async () => {
-    const accountId = parseInt(container.querySelector('.compose-tab-from')?.value);
+    const accountId = selectedFromAccountId(container.querySelector('.compose-tab-from'));
     const to = container.querySelector('.compose-tab-to')?.value.trim();
     const cc = container.querySelector('.compose-tab-cc')?.value.trim() || null;
     const bcc = container.querySelector('.compose-tab-bcc')?.value.trim() || null;
@@ -22487,6 +22512,7 @@ async function renderComposeTabContent(container, tabId, opts = {}) {
       const tabVia = tabResult.method === 'graph' ? 'via Microsoft Graph'
         : tabResult.method === 'smtp_oauth' ? 'via SMTP (OAuth)'
         : tabResult.method === 'smtp_password' ? 'via SMTP' : '';
+      verifySentAs(accountId, tabResult.sentAs);
       showToast((tabVia ? `Email sent ${tabVia}` : 'Email sent')
         + (tabResult.sentAs ? ` as ${tabResult.sentAs}` : ''));
       addEventLogEntry("email", dealId || null, "", `Email sent to ${to}`, true);
@@ -28094,7 +28120,7 @@ async function renderInlineReply(panel, type, messageId, norm, messageAccountId)
       // accounts[0] (that sent every inline reply through one mailbox
       // regardless of which tab it came from; live bug 2026-10-29).
       const fromSelect = replyDiv.querySelector('.inline-reply-from');
-      const accountId = fromSelect ? parseInt(fromSelect.value, 10) : fromAccountId;
+      const accountId = selectedFromAccountId(fromSelect);
       if (!accountId) { showToast("No mail account configured for sending", true); return; }
       const acct = (mailState.accounts || []).find(a => a.id === accountId);
       const confirmed = await confirmMailSend({
@@ -28113,6 +28139,7 @@ async function renderInlineReply(panel, type, messageId, norm, messageAccountId)
       });
       const inlineVia = inlineResult.method === 'graph' ? 'via Microsoft Graph'
         : inlineResult.method && inlineResult.method.startsWith('smtp') ? 'via SMTP' : '';
+      verifySentAs(accountId, inlineResult.sentAs);
       showToast((inlineVia ? `Reply sent ${inlineVia}` : "Reply sent")
         + (inlineResult.sentAs ? ` as ${inlineResult.sentAs}` : ''));
       addEventLogEntry("email", null, "", `Reply sent to ${toVal}`, true);

@@ -23258,6 +23258,37 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             send_meta: dict = {}
 
+            # Credential identity assertion (2026-11-10). The token used must
+            # belong to THIS account's address — verified for Graph, Exchange
+            # and SMTP. This closes the "sent from an account not selected"
+            # gap where a stale/swapped token row could send as another mailbox.
+            verified_sender = (acct.get("email") or "").strip().lower()
+            ident_errors = []
+            if (acct.get("oauth_provider") or "").lower() == "microsoft":
+                ex_ident = (acct.get("oauth_identity") or "").strip().lower()
+                if ex_ident and ex_ident != verified_sender:
+                    ident_errors.append(f"the Exchange token belongs to {ex_ident}")
+                if acct.get("oauth_graph_access_token") or acct.get("oauth_graph_refresh_token"):
+                    g_ident = (acct.get("oauth_graph_identity") or "").strip().lower()
+                    if g_ident and g_ident != verified_sender:
+                        ident_errors.append(f"the Graph token belongs to {g_ident}")
+            smtp_user_ident = (acct.get("smtp_user") or "").strip().lower()
+            if smtp_user_ident and smtp_user_ident != verified_sender:
+                ident_errors.append(f"SMTP authenticates as {smtp_user_ident}")
+            if ident_errors:
+                mail_sender_guard.log_refusal(
+                    db, user_id=user["id"] if user else None,
+                    account_id=account_id, deal_id=deal_id,
+                    reason="credential_identity_mismatch",
+                )
+                _json_response(self, 409, {
+                    "ok": False,
+                    "reason": "credential_identity_mismatch",
+                    "error": ("Refusing to send: " + "; ".join(ident_errors)
+                              + f". This mailbox is {acct.get('email')}. Nothing was sent."),
+                })
+                return
+
             # Merge account-level auto-BCC addresses (comma-separated) into the outgoing BCC
             auto_bcc = (acct.get("auto_bcc_addr") or "").strip()
             if auto_bcc:
@@ -23381,7 +23412,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                            # implying (live bug 2026-10-29: the CRM recorded
                                            # "aplus.estimates@outlook.com" while Outlook showed
                                            # "MC MDM Construction").
-                                           "sentAs": acct.get("email") or ""})
+                                           "sentAs": verified_sender})
             else:
                 _json_response(self, 500, {"ok": False, "error": err or "Send failed", "method": send_method})
         except Exception as e:

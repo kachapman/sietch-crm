@@ -87,3 +87,26 @@ test('admins can map/clear the contractor Contact on an account', () => {
   assert.ok(body.includes('dataset.contactId'));
   assert.ok(app.includes('contractor_contact_id:'));
 });
+
+test('the submitted account id is read from the visible select at send time', () => {
+  const helper = region('function selectedFromAccountId', 400);
+  assert.ok(helper.includes('parseInt(selectEl.value'));
+  // all three send surfaces use the helper (no direct parseInt of the select)
+  const uses = (app.match(/selectedFromAccountId\(/g) || []).length;
+  assert.ok(uses >= 3, `expected the helper at every send surface, got ${uses}`);
+});
+
+test('a divergent actual sender is a loud error', () => {
+  const body = region('function verifySentAs', 900);
+  assert.ok(body.includes('toLowerCase()'));
+  assert.ok(body.includes('showToast'));
+  assert.ok(body.includes('Wrong sender'));
+  assert.ok((app.match(/verifySentAs\(accountId, /g) || []).length >= 3);
+});
+
+test('Send is disabled until the From options are loaded', () => {
+  const body = region('async function openComposeModal', 4500);
+  assert.ok(body.includes('fromSelect.disabled = true'));
+  assert.ok(body.includes('fromSelect.disabled = false'));
+  assert.ok(body.includes("sendBtn0.disabled = true"));
+});

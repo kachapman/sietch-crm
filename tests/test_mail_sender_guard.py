@@ -230,6 +230,24 @@ class TestHandlerIntegration(unittest.TestCase):
         self.assertEqual(row["error"], "boom")
         self.assertEqual(row["fallback_reason"], "graph: boom")
 
+    def test_credential_identity_mismatch_is_refused(self):
+        db.execute("UPDATE mail_accounts SET smtp_user = %s WHERE id = %s",
+                   ("other@example.invalid", self.acct["id"]))
+        try:
+            before = db.query_one("SELECT count(*) AS n FROM mail_outgoing")
+            resp = self._send(self.acct["id"])
+            self.assertEqual(resp.status, 409, resp.text)
+            self.assertIn("Refusing to send", resp.text)
+            after = db.query_one("SELECT count(*) AS n FROM mail_outgoing")
+            self.assertEqual(before["n"], after["n"])
+            refusal = db.query_one(
+                "SELECT reason FROM mail_send_refusals WHERE account_id = %s "
+                "ORDER BY id DESC LIMIT 1", (self.acct["id"],))
+            self.assertEqual(refusal["reason"], "credential_identity_mismatch")
+        finally:
+            db.execute("UPDATE mail_accounts SET smtp_user = NULL WHERE id = %s",
+                       (self.acct["id"],))
+
     def test_preflight_blocks_and_allows(self):
         bad = mcp_local_api.call_session(
             self.session, "POST", "/api/v2/mail/send/preflight",
