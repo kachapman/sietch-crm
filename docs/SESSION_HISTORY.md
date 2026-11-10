@@ -3,6 +3,46 @@
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-10 (Item 5: full suites vs baseline, then merge)
+
+**Status: MERGED to local `main` by fast-forward — NOT pushed, NOT deployed.**
+
+- **Baseline** (detached worktree `/tmp/opencode/mail-baseline` @ `e705ad9`,
+  scratch DB `sietch_task5_base` built from `init.sql` + that tree's
+  migrations): Python **78 files, 1,621 tests, 218 skipped, 17 failed,
+  1,386 passed**; failing ids: `test_email_project_copy` 3,
+  `test_invoice_coc_modern` 8 + 1 error, `test_mail_auth_gaps` 3,
+  `test_scanner_toggle_gating` 1, `test_sync_pull_deals_fields` 1.
+  Node **43 files, 431/431 pass**.
+- **Branch** (`fix/mail-sender-guard` @ `b8a8724` + the item-5 fix, scratch DB
+  `sietch_task5_branch`): Python **85 files, 1,777 tests, 218 skipped,
+  17 failed, 1,542 passed** — the identical 17 pre-existing failures; **zero
+  new failures**. Node **44 files, 442/442 pass**.
+- **One new failure found and fixed at the source:** `test_graph_truthfulness`
+  `TestSmtpMemoryRouting` failed 3/3 on the branch but passed at `e705ad9`.
+  Cause: `f07a125` returned `graph_err` for accounts with **no Graph
+  connection** (caller contract says None token + None error) and dropped the
+  5.7.139 `_set_smtp_auth_disabled` write. `mail_send.py` now refuses on a
+  Graph error only when the row has a Graph connection, and records the
+  dead-SMTP flag again (no Graph retry — no method switch). Fixtures carry
+  the verified `oauth_identity` item 2 requires. The 3 failures were
+  identical at the branch base `2fd765f`, i.e. inherited from the sender-guard
+  series, not from items 2–4; the fix preserves both the no-fallback policy
+  and item 2's identity gate.
+- `test_mail_scanner_locking.test_concurrent_readers_and_writers` flaked once
+  in the full run (writer starvation), passed 3/3 standalone and in the final
+  run. Timing test, untouched.
+- Mapping removal re-verified: a tree-wide grep for the job-Contact mapping
+  (its column, refusal table, guard resolver, log helper and admin section)
+  returns **zero** hits on both the branch and `main`. Migration 050 applies
+  clean twice on a scratch DB (`ON_ERROR_STOP=1`).
+- Details: `~/Projects/plans/sietch/email-fix-progress-2026-11-10.md`
+  → "Item 5 DONE".
+
+---
+
+## Previous session summary (2026-11-10 — item 4: From identity)
+
 **Date:** 2026-11-10 (Item 4: From name/address from the selected account row)
 
 **Status: COMMITTED LOCALLY on branch `fix/mail-sender-guard` — NOT pushed,

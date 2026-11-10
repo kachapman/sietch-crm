@@ -1,3 +1,41 @@
+## 2026-11-10 — Item 5: full suites vs baseline, dead-SMTP memory restored, merge
+
+### Fixed
+- **`mail_send.try_send_for_account` refused SMTP for accounts with no Graph
+  connection.** `f07a125` ("no silent fallback") returned `graph_err` before
+  the SMTP path even when the account had no Graph token at all — the caller's
+  own contract is "`None` token means no Graph token configured (not an
+  error)" (`server.py:_refresh_graph_token_if_needed`). A Microsoft account
+  that only has an Exchange/XOAUTH2 credential could therefore never fall
+  through to SMTP if its refresher reported an error string. The refusal now
+  applies only when the row actually has a Graph connection
+  (`oauth_graph_access_token`/`oauth_graph_refresh_token`), which is the case
+  `test_graph_refresh_failure_never_falls_back` covers. Graph failures on a
+  connected account still never switch method (unchanged).
+- **The 5.7.139 SMTP-AUTH-disabled memory was never written.** When the
+  fallback block was removed, the accompanying `_set_smtp_auth_disabled(...)`
+  call went with it, leaving the known-dead skip (`mail_send.py`) and the
+  Settings hint reading a flag nothing set any more. An SMTP failure matching
+  `SmtpClientAuthentication is disabled` / `5.7.139` on a Microsoft account
+  now records the flag again. The Graph retry that used to sit beside it stays
+  removed: the failure is still returned, no method switch.
+- `tests/test_graph_truthfulness.py` `TestSmtpMemoryRouting` fixtures now
+  carry the verified `oauth_identity` that item 2 requires for any XOAUTH2
+  send (they exercise dead-SMTP memory, not identity).
+
+### Verified
+- Full Python suite, one process per file, against a scratch PostgreSQL built
+  from `init.sql` + `migrations/*.sql`, same env both sides:
+  baseline `e705ad9` 78 files / 1,621 tests / 218 skipped / 17 failed;
+  branch `b8a8724`+this commit 85 files / 1,777 tests / 218 skipped / 17 failed.
+  The 17 are the same pre-existing set on both sides (auth gaps 3, invoice COC
+  9, email project copy 3, scanner toggle 1, responsible-user 1) — zero new
+  failures. Full Node suite: baseline 431/431, branch 442/442.
+- `test_mail_scanner_locking.test_concurrent_readers_and_writers` flaked once
+  under full-suite load (writers starved: 5 writes in the window) and passed
+  3/3 standalone and in the final full run; it is a timing test, untouched
+  here.
+
 ## 2026-11-10 — From name/address come from the selected account row only (item 4)
 
 ### Fixed

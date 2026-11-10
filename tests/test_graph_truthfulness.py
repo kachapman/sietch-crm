@@ -178,8 +178,13 @@ class TestIdentityLifecycle(unittest.TestCase):
 
 class TestSmtpMemoryRouting(unittest.TestCase):
     def _acct(self, **kw):
+        # `oauth_identity` is required since item 2 (2026-11-10): an XOAUTH2
+        # SMTP login must be a verified mailbox identity, so every sendable
+        # OAuth account row carries it. These tests exercise SMTP's dead-path
+        # memory, not identity, so the fixture is a normally-verified row.
         a = {"id": 5, "email": "a@outlook.com", "oauth_provider": "microsoft",
              "oauth_access_token": "EA", "oauth_refresh_token": "ER",
+             "oauth_identity": "a@outlook.com",
              "smtp_host": "smtp.office365.com", "smtp_port": 587,
              "smtp_user": "", "smtp_from_name": "", "smtp_use_tls": True}
         a.update(kw)

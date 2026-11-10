@@ -180,9 +180,14 @@ def try_send_for_account(
                 f"{acct.get('email')}. Nothing was sent."
             ), "graph"
         graph_token, graph_err = refresh_graph_token(account_id)
-        if not graph_token and graph_err:
-            # The account has a Graph connection but the token could not be
-            # minted/refreshed. Refuse; never send through another method.
+        has_graph_connection = bool(
+            acct.get("oauth_graph_access_token") or acct.get("oauth_graph_refresh_token"))
+        if not graph_token and graph_err and has_graph_connection:
+            # The account HAS a Graph connection but the token could not be
+            # minted/refreshed. Refuse; never fall back to SMTP or another
+            # credential (2026-11-10, f07a125). An account with no Graph
+            # connection at all is not a failed Graph send: the caller reports
+            # that as (None, None) and SMTP/XOAUTH2 is its only path.
             return False, graph_err, "graph"
         if graph_token:
             # The refresher may have rotated the token; re-check identity
@@ -302,5 +307,15 @@ def try_send_for_account(
         return False, str(e), "graph" if graph_token else "smtp_password"
     if ok:
         return True, None, "smtp_oauth" if use_oauth_smtp else "smtp_password"
+
+    # MEMORIZE A DEAD SMTP AUTH (restored 2026-11-10): the 5.7.139 detection
+    # and the known-dead skip above still exist, but the fallback rewrite
+    # (f07a125) dropped the write, leaving `_set_smtp_auth_disabled` dead and
+    # every send retrying an SMTP path Microsoft has disabled for the
+    # mailbox. Record the flag so later sends skip it; the Graph retry that
+    # used to accompany this write was deliberately removed (no method
+    # switch), so a failure is still returned to the caller.
+    if err and oauth_provider == "microsoft" and _looks_like_smtp_auth_disabled(err):
+        _set_smtp_auth_disabled(account_id, True)
 
     return False, err or graph_err, "graph" if graph_token else ("smtp_oauth" if use_oauth_smtp else "smtp_password")
