@@ -440,10 +440,7 @@ def _tool_list(user: dict) -> list[dict]:
 
 def _text_result(payload: Any, is_error: bool = False, summary: str | None = None) -> dict:
     if summary is None:
-        try:
-            summary = json.dumps(payload, indent=2, default=str)
-        except Exception:
-            summary = str(payload)
+        summary = _bounded_payload(payload)
     if len(summary) > 60000:
         summary = summary[:60000] + "\n…(truncated)"
     out: dict = {
@@ -453,6 +450,44 @@ def _text_result(payload: Any, is_error: bool = False, summary: str | None = Non
     if isinstance(payload, dict):
         out["structuredContent"] = payload
     return out
+
+
+TEXT_PREVIEW_CHARS = 2000
+
+
+def _trim_long_strings(value: Any, depth: int = 0) -> Any:
+    """Replace very long strings in a result summary (never in the payload)."""
+    if depth > 4:
+        return value
+    if isinstance(value, str):
+        if len(value) > TEXT_PREVIEW_CHARS:
+            return value[:TEXT_PREVIEW_CHARS] + "…(truncated)"
+        return value
+    if isinstance(value, list):
+        return [_trim_long_strings(v, depth + 1) for v in value]
+    if isinstance(value, dict):
+        return {k: _trim_long_strings(v, depth + 1) for k, v in value.items()}
+    return value
+
+
+def _bounded_payload(payload: Any) -> str:
+    """Human-readable JSON summary that stays valid for large text results.
+
+    Extracted document text can legitimately exceed the text-block budget; a
+    raw slice of the JSON would produce invalid JSON for the client. Long
+    string values are previewed instead, while `structuredContent` keeps the
+    full payload.
+    """
+    try:
+        full = json.dumps(payload, indent=2, default=str)
+    except Exception:
+        return str(payload)
+    if len(full) <= 60000:
+        return full
+    try:
+        return json.dumps(_trim_long_strings(payload), indent=2, default=str)
+    except Exception:
+        return full
 
 
 def _call_tool(user: dict, raw_token: str, name: str, args: dict) -> dict:
@@ -518,8 +553,14 @@ def _call_tool(user: dict, raw_token: str, name: str, args: dict) -> dict:
 
     if not resp.ok:
         msg = resp.error_message() or f"HTTP {resp.status}"
+        payload: dict = {"error": msg, "status": resp.status}
+        # Keep structured detail from the API error envelope (size_bytes,
+        # max_bytes, job status, …). Error envelopes never carry document text.
+        if isinstance(resp.payload, dict):
+            for key, value in resp.payload.items():
+                payload.setdefault(key, value)
         audit(user, name, mode, summary, f"HTTP {resp.status}: {msg}", "error")
-        return _text_result({"error": msg, "status": resp.status}, is_error=True)
+        return _text_result(payload, is_error=True)
 
     audit(user, name, mode, summary, f"HTTP {resp.status}", "ok")
     return _text_result(resp.payload)

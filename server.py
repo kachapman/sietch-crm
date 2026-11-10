@@ -650,6 +650,8 @@ import api_tokens as api_tokens_mod
 import api_spec as api_spec_mod
 import mcp_server as mcp_server_mod
 import mcp_tools as mcp_tools_mod
+import document_read as document_read_mod
+import ocr_store as ocr_store_mod
 
 db.init_db()
 
@@ -1170,6 +1172,49 @@ try:
     db.execute("CREATE INDEX IF NOT EXISTS idx_mcp_pending_token ON mcp_pending_actions (token_id, created_at DESC)")
 except Exception:
     logger.warning("Could not create the MCP tables", exc_info=True)
+# OCR page cache + queue (mirrors migrations/052_ocr_queue_cache.sql; idempotent).
+# The droplet NEVER runs OCR: it only detects scanned pages, serves cached OCR
+# text and exposes the queue a host-agnostic OCR worker polls. Cache rows are
+# written by the worker endpoint only; `request_ocr` writes exactly one queue row.
+try:
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS ocr_page_cache (
+            file_sha256 TEXT NOT NULL,
+            page_number INTEGER NOT NULL CHECK (page_number > 0),
+            text TEXT NOT NULL,
+            engine TEXT NOT NULL,
+            engine_version TEXT NOT NULL,
+            source TEXT NOT NULL,
+            source_id INTEGER NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (file_sha256, page_number)
+        )
+    """)
+    db.execute("CREATE INDEX IF NOT EXISTS idx_ocr_page_cache_created ON ocr_page_cache (created_at DESC)")
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS ocr_queue (
+            id BIGSERIAL PRIMARY KEY,
+            source TEXT NOT NULL,
+            source_id INTEGER NOT NULL,
+            project_id INTEGER,
+            message_id INTEGER,
+            file_sha256 TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending', 'in_progress', 'done', 'failed')),
+            error TEXT,
+            requested_by INTEGER,
+            requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            started_at TIMESTAMPTZ,
+            finished_at TIMESTAMPTZ
+        )
+    """)
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_ocr_queue_active_hash "
+               "ON ocr_queue (file_sha256) WHERE status IN ('pending', 'in_progress')")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_ocr_queue_status ON ocr_queue (status, requested_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_ocr_queue_hash ON ocr_queue (file_sha256)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_ocr_queue_source ON ocr_queue (source, source_id)")
+except Exception:
+    logger.warning("Could not create the OCR cache/queue tables", exc_info=True)
 # Mail sender guard schema (mirrors migrations/050_mail_sender_guard.sql).
 try:
     db.execute("ALTER TABLE mail_outgoing ADD COLUMN IF NOT EXISTS error TEXT")
@@ -1387,6 +1432,43 @@ def _read_body(handler: SimpleHTTPRequestHandler) -> bytes:
     if length <= 0:
         return b""
     return handler.rfile.read(length)
+
+
+# ── OCR / document-read helpers ───────────────────────────────────────────────
+# Caps for the worker endpoints. A single page of OCR text is validated by
+# ocr_store; this is the whole-request guard.
+OCR_JSON_BODY_MAX_BYTES = 32 * 1024 * 1024
+
+
+def _read_json_object(handler: SimpleHTTPRequestHandler) -> dict | None:
+    """Parse a JSON object body, or send 400 and return None."""
+    try:
+        length = int(handler.headers.get("Content-Length", "0") or 0)
+        if length > OCR_JSON_BODY_MAX_BYTES:
+            _json_response(handler, 413, {"error": "request body too large"})
+            return None
+        raw = _read_body(handler)
+        if not raw:
+            return {}
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError("body must be a JSON object")
+        return data
+    except Exception:
+        _json_response(handler, 400, {"error": "Invalid JSON body"})
+        return None
+
+
+def _qs_int(qs: dict, key: str, default: int | None = None) -> int | None:
+    """Read an integer query parameter (parse_qs values are lists)."""
+    raw = (qs.get(key) or [None])[0]
+    if raw in (None, ""):
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
 
 
 # ── Import conflict targeting ────────────────────────────────────────────────
@@ -4692,6 +4774,35 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             else:
                 _json_response(self, 404, {"error": "Project not found"})
             return
+        # Project document text (pdftotext + OCR cache) and base64 download.
+        # Read-only; the only OCR write is the queue (POST /api/v2/ocr/request).
+        m = re.match(r"^/api/v2/projects/(\d+)/documents/(\d+)/text$", api_path)
+        if m:
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._project_document_text(opp_id, int(m.group(2)), qs)
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/documents/(\d+)/content$", api_path)
+        if m:
+            opp_id = _resolve_project_id(m.group(1))
+            if opp_id:
+                self._project_document_content(opp_id, int(m.group(2)))
+            else:
+                _json_response(self, 404, {"error": "Project not found"})
+            return
+        # OCR status + worker queue (worker token: resource "ocr" only).
+        if api_path == "/api/v2/ocr/status":
+            self._handle_ocr_status(qs)
+            return
+        if api_path == "/api/v2/ocr/queue":
+            self._handle_ocr_queue_list(qs)
+            return
+        m = re.match(r"^/api/v2/ocr/queue/(\d+)/file$", api_path)
+        if m:
+            self._handle_ocr_job_file(int(m.group(1)))
+            return
         # History attachment download (serves the file from data/history-attachments/)
         m = re.match(r"^/api/v2/history-attachments/(\d+)/download$", api_path)
         if m:
@@ -4957,6 +5068,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         m = re.match(r"^/api/v2/mail/messages/(\d+)/attachments/(\d+)/editor-config$", api_path)
         if m:
             self._handle_mail_attachment_editor_config(int(m.group(1)), int(m.group(2)))
+            return
+        # Attachment text (stored bytes only; never IMAP/network)
+        m = re.match(r"^/api/v2/mail/messages/(\d+)/attachments/(\d+)/text$", api_path)
+        if m:
+            self._handle_mail_attachment_text(int(m.group(1)), int(m.group(2)), qs)
             return
         # Mail attachment serve (JWT-authenticated, for Document Server)
         if api_path == "/api/v2/mail/attachments/serve":
@@ -5726,6 +5842,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 self._handle_project_document_upload(opp_id)
             else:
                 _json_response(self, 404, {"error": "Project not found"})
+            return
+        # ── OCR worker queue (the only write in the document-read feature) ──
+        if api_path == "/api/v2/ocr/request" and method == "POST":
+            self._handle_ocr_request()
+            return
+        m = re.match(r"^/api/v2/ocr/queue/(\d+)/claim$", api_path)
+        if m and method == "POST":
+            self._handle_ocr_job_claim(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/ocr/queue/(\d+)/pages$", api_path)
+        if m and method == "POST":
+            self._handle_ocr_job_pages(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/ocr/queue/(\d+)/complete$", api_path)
+        if m and method == "POST":
+            self._handle_ocr_job_complete(int(m.group(1)))
             return
         m = re.match(r"^/api/v2/documents/(\d+)/callback$", api_path)
         if m and method == "POST":
@@ -12879,6 +13011,372 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             logger.exception("projects/{id}/documents failed")
             log_infra_event("error", f"projects/{opp_id}/documents failed: {exc}", source="documents", method=self.command, path=api_path)
             _json_response(self, 500, {"error": "Failed to load project documents"})
+
+    # ── Document text + OCR (read-only except a queue row) ───────────────────
+
+    def _document_read_error(self, exc: "document_read_mod.DocumentReadError") -> None:
+        # Payloads carry ids/status only; extracted text is never logged.
+        ocr_store_mod.audit("error", status=exc.status, error=exc.code,
+                            **{k: v for k, v in exc.extra.items()
+                               if k in ("source_id", "project_id", "message_id")})
+        _json_response(self, exc.status, exc.payload())
+
+    def _project_document_text(self, project_id: int, document_id: int,
+                               qs: dict | None = None) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        row = document_read_mod.resolve_project_document(project_id, document_id)
+        if not row:
+            _json_response(self, 404, {"error": "Document not found for this project"})
+            return
+        qs = qs or {}
+        try:
+            result = document_read_mod.extract_row(
+                row,
+                page_start=_qs_int(qs, "page_start"),
+                page_end=_qs_int(qs, "page_end"),
+                max_chars=_qs_int(qs, "max_chars"),
+            )
+            ocr_store_mod.audit(
+                "read_text", source="project_document", project_id=project_id,
+                source_id=document_id, file_sha256=result.get("file_sha256"),
+                page_count=result.get("page_count"), status=result.get("status"),
+                token_id=user.get("api_token_id"),
+            )
+            _json_response(self, 200, result)
+        except document_read_mod.DocumentReadError as exc:
+            self._document_read_error(exc)
+        except Exception as exc:
+            logger.warning("project document text failed: %s", type(exc).__name__)
+            _json_response(self, 500, {"error": "extraction_failed"})
+
+    def _project_document_content(self, project_id: int, document_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        row = document_read_mod.resolve_project_document(project_id, document_id)
+        if not row:
+            _json_response(self, 404, {"error": "Document not found for this project"})
+            return
+        try:
+            payload = document_read_mod.document_content(row)
+            ocr_store_mod.audit(
+                "read_content", source="project_document", project_id=project_id,
+                source_id=document_id, count=payload.get("size_bytes"),
+                token_id=user.get("api_token_id"),
+            )
+            _json_response(self, 200, payload)
+        except document_read_mod.DocumentReadError as exc:
+            self._document_read_error(exc)
+        except Exception as exc:
+            logger.warning("project document content failed: %s", type(exc).__name__)
+            _json_response(self, 500, {"error": "download_failed"})
+
+    def _handle_mail_attachment_text(self, message_id: int, attachment_id: int,
+                                     qs: dict | None = None) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        if not _mail_message_accessible(user, message_id):
+            _json_response(self, 403, {"error": "You don't have access to this message"})
+            return
+        row = document_read_mod.resolve_mail_attachment(message_id, attachment_id)
+        if not row:
+            _json_response(self, 404, {"error": "Attachment not found for this message"})
+            return
+        qs = qs or {}
+        try:
+            result = document_read_mod.extract_row(
+                row,
+                page_start=_qs_int(qs, "page_start"),
+                page_end=_qs_int(qs, "page_end"),
+                max_chars=_qs_int(qs, "max_chars"),
+            )
+            ocr_store_mod.audit(
+                "read_text", source="mail_attachment", message_id=message_id,
+                source_id=attachment_id, file_sha256=result.get("file_sha256"),
+                page_count=result.get("page_count"), status=result.get("status"),
+                token_id=user.get("api_token_id"),
+            )
+            _json_response(self, 200, result)
+        except document_read_mod.DocumentReadError as exc:
+            self._document_read_error(exc)
+        except Exception as exc:
+            logger.warning("mail attachment text failed: %s", type(exc).__name__)
+            _json_response(self, 500, {"error": "extraction_failed"})
+
+    def _ocr_target_from(self, params: dict) -> dict | None:
+        """Resolve an OCR target with the same access as its get-text tool."""
+        source = str(params.get("source") or "").strip()
+        def as_int(key):
+            value = params.get(key)
+            if value in (None, ""):
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        if source == "project_document":
+            project_id = as_int("project_id")
+            document_id = as_int("document_id")
+            if project_id is None or document_id is None:
+                _json_response(self, 400, {"error": "project_id and document_id are required"})
+                return None
+            project_id = _resolve_project_id(project_id)
+            if not project_id:
+                _json_response(self, 404, {"error": "Project not found"})
+                return None
+            row = document_read_mod.resolve_project_document(project_id, document_id)
+            if not row:
+                _json_response(self, 404, {"error": "Document not found for this project"})
+                return None
+            return row
+        if source == "mail_attachment":
+            message_id = as_int("message_id")
+            attachment_id = as_int("attachment_id")
+            if message_id is None or attachment_id is None:
+                _json_response(self, 400, {"error": "message_id and attachment_id are required"})
+                return None
+            user = _require_auth(self)
+            if not user:
+                return None
+            if not _mail_message_accessible(user, message_id):
+                _json_response(self, 403, {"error": "You don't have access to this message"})
+                return None
+            row = document_read_mod.resolve_mail_attachment(message_id, attachment_id)
+            if not row:
+                _json_response(self, 404, {"error": "Attachment not found for this message"})
+                return None
+            return row
+        _json_response(self, 400, {
+            "error": "source must be 'project_document' or 'mail_attachment'",
+        })
+        return None
+
+    def _handle_ocr_status(self, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        params = {key: (values or [None])[0] for key, values in (qs or {}).items()}
+        row = self._ocr_target_from(params)
+        if row is None:
+            return
+        try:
+            status = document_read_mod.ocr_status(row)
+            status["token_id"] = user.get("api_token_id")
+            ocr_store_mod.audit(
+                "status", source=status.get("source"), source_id=status.get("source_id"),
+                project_id=status.get("project_id"), message_id=status.get("message_id"),
+                file_sha256=status.get("file_sha256"), status=status.get("status"),
+                pages_needed=status.get("pages_needed_count"),
+                pages_cached=status.get("pages_cached_count"),
+                token_id=user.get("api_token_id"),
+            )
+            status.pop("token_id", None)
+            _json_response(self, 200, status)
+        except document_read_mod.DocumentReadError as exc:
+            self._document_read_error(exc)
+        except Exception as exc:
+            logger.warning("ocr status failed: %s", type(exc).__name__)
+            _json_response(self, 500, {"error": "ocr_status_failed"})
+
+    def _handle_ocr_request(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        params = _read_json_object(self)
+        if params is None:
+            return
+        row = self._ocr_target_from(params)
+        if row is None:
+            return
+        try:
+            result = document_read_mod.request_ocr(row, user.get("id"))
+            _json_response(self, 200, result)
+        except document_read_mod.DocumentReadError as exc:
+            self._document_read_error(exc)
+        except Exception as exc:
+            logger.warning("ocr request failed: %s", type(exc).__name__)
+            _json_response(self, 500, {"error": "ocr_request_failed"})
+
+    def _handle_ocr_queue_list(self, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        status = (qs.get("status") or [None])[0]
+        limit = _qs_int(qs, "limit", 50)
+        try:
+            jobs = ocr_store_mod.list_jobs(status, limit or 50)
+        except ValueError as exc:
+            _json_response(self, 400, {"error": str(exc)})
+            return
+        except Exception as exc:
+            logger.warning("ocr queue list failed: %s", type(exc).__name__)
+            _json_response(self, 500, {"error": "ocr_queue_failed"})
+            return
+        _json_response(self, 200, {"jobs": jobs, "count": len(jobs)})
+
+    def _handle_ocr_job_claim(self, job_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        job = ocr_store_mod.get_job(job_id)
+        if not job:
+            _json_response(self, 404, {"error": "OCR job not found"})
+            return
+        claimed = ocr_store_mod.claim_job(job_id)
+        if not claimed:
+            _json_response(self, 409, {
+                "error": "job_not_claimable",
+                "status": job.get("status"),
+            })
+            return
+        ocr_store_mod.audit("claim", job_id=job_id,
+                            file_sha256=claimed.get("file_sha256"),
+                            status=claimed.get("status"),
+                            token_id=user.get("api_token_id"))
+        _json_response(self, 200, {"ok": True, "job": ocr_store_mod.serialize_job(claimed)})
+
+    def _handle_ocr_job_file(self, job_id: int) -> None:
+        """Worker-only file fetch. Scoped to the job — never a general download."""
+        user = _require_auth(self)
+        if not user:
+            return
+        job = ocr_store_mod.get_job(job_id)
+        if not job:
+            _json_response(self, 404, {"error": "OCR job not found"})
+            return
+        if job.get("status") not in ("pending", "in_progress"):
+            _json_response(self, 409, {"error": "job_not_active", "status": job.get("status")})
+            return
+        if job.get("source") == "project_document":
+            row = document_read_mod.resolve_project_document(
+                int(job.get("project_id") or 0), int(job.get("source_id") or 0))
+        elif job.get("source") == "mail_attachment":
+            row = document_read_mod.resolve_mail_attachment(
+                int(job.get("message_id") or 0), int(job.get("source_id") or 0))
+        else:
+            row = None
+        if not row:
+            _json_response(self, 404, {"error": "OCR job source not found"})
+            return
+        path = document_read_mod.absolute_path(row.get("file_path"))
+        if path is None or not path.is_file():
+            # Mail attachments use stored bytes only; no IMAP/network fallback.
+            _json_response(self, 409, {"error": "not_stored", "job_id": job_id})
+            return
+        try:
+            data = path.read_bytes()
+        except OSError:
+            _json_response(self, 409, {"error": "not_stored", "job_id": job_id})
+            return
+        # The job is keyed by the file hash at request time. If the row was
+        # re-pointed (or an id collision resolved differently after a delete),
+        # refuse rather than cache OCR text for the wrong bytes.
+        if hashlib.sha256(data).hexdigest() != job.get("file_sha256"):
+            ocr_store_mod.audit("file_mismatch", job_id=job_id,
+                                file_sha256=job.get("file_sha256"),
+                                token_id=user.get("api_token_id"))
+            _json_response(self, 409, {"error": "source_changed", "job_id": job_id})
+            return
+        ocr_store_mod.audit("file_fetch", job_id=job_id,
+                            file_sha256=job.get("file_sha256"),
+                            count=len(data), status=job.get("status"),
+                            token_id=user.get("api_token_id"))
+        self.send_response(200)
+        self.send_header("Content-Type", row.get("mime_type") or "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _handle_ocr_job_pages(self, job_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        job = ocr_store_mod.get_job(job_id)
+        if not job:
+            _json_response(self, 404, {"error": "OCR job not found"})
+            return
+        if job.get("status") != "in_progress":
+            _json_response(self, 409, {"error": "job_not_claimed", "status": job.get("status")})
+            return
+        body = _read_json_object(self)
+        if body is None:
+            return
+        pages = body.get("pages")
+        if not isinstance(pages, list) or not pages:
+            _json_response(self, 400, {"error": "pages must be a non-empty array"})
+            return
+        if len(pages) > ocr_store_mod.MAX_PAGES_PER_CALL:
+            _json_response(self, 400, {"error": "too many pages in one call"})
+            return
+        engine = str(body.get("engine") or ocr_store_mod.ENGINE_NAME)[:100]
+        engine_version = str(body.get("engine_version") or ocr_store_mod.ENGINE_VERSION)[:100]
+        cleaned = []
+        for item in pages:
+            if not isinstance(item, dict):
+                _json_response(self, 400, {"error": "each page must be an object"})
+                return
+            try:
+                page_no = int(item.get("page"))
+            except (TypeError, ValueError):
+                _json_response(self, 400, {"error": "each page needs an integer page number"})
+                return
+            text = item.get("text")
+            if not isinstance(text, str) or page_no < 1:
+                _json_response(self, 400, {"error": "each page needs page >= 1 and a text string"})
+                return
+            if len(text) > ocr_store_mod.MAX_PAGE_TEXT_CHARS:
+                _json_response(self, 413, {"error": "page text too large", "page": page_no})
+                return
+            cleaned.append({"page": page_no, "text": text})
+        try:
+            written = ocr_store_mod.write_pages(
+                job, cleaned, engine=engine, engine_version=engine_version)
+        except Exception as exc:
+            logger.warning("ocr pages write failed: %s", type(exc).__name__)
+            _json_response(self, 500, {"error": "ocr_pages_failed"})
+            return
+        ocr_store_mod.audit(
+            "pages", job_id=job_id, file_sha256=job.get("file_sha256"),
+            pages=[p["page"] for p in cleaned], count=written,
+            engine=engine, engine_version=engine_version,
+            token_id=user.get("api_token_id"),
+        )
+        _json_response(self, 200, {"ok": True, "pages_written": written})
+
+    def _handle_ocr_job_complete(self, job_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        job = ocr_store_mod.get_job(job_id)
+        if not job:
+            _json_response(self, 404, {"error": "OCR job not found"})
+            return
+        body = _read_json_object(self)
+        if body is None:
+            return
+        status = str(body.get("status") or "done").strip().lower()
+        if status not in ("done", "failed"):
+            _json_response(self, 400, {"error": "status must be 'done' or 'failed'"})
+            return
+        error = body.get("error")
+        if error is not None and not isinstance(error, str):
+            error = str(error)
+        try:
+            updated = ocr_store_mod.complete_job(job_id, status, error)
+        except Exception as exc:
+            logger.warning("ocr complete failed: %s", type(exc).__name__)
+            _json_response(self, 500, {"error": "ocr_complete_failed"})
+            return
+        ocr_store_mod.audit("complete", job_id=job_id,
+                            file_sha256=job.get("file_sha256"), status=status,
+                            engine=ocr_store_mod.ENGINE_NAME,
+                            engine_version=ocr_store_mod.ENGINE_VERSION,
+                            token_id=user.get("api_token_id"))
+        _json_response(self, 200, {"ok": True, "job": ocr_store_mod.serialize_job(updated)})
 
     def _handle_project_document_upload(self, opp_id: int) -> None:
         user = _require_auth(self)

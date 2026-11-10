@@ -1,3 +1,60 @@
+## 2026-11-10 — MCP document read + OCR worker queue (branch `feat/mcp-document-read`)
+
+### Added
+- **Shared text extractor** `document_text.py`: `pdftotext -layout` per page
+  (list-form subprocess, never a shell string), `pdfinfo` page count, txt /
+  html / eml decode (tags stripped with the stdlib parser), structured
+  `unsupported_type`, SHA-256 cache key. A page with fewer than **20**
+  printable characters (`OCR_NEEDED_MIN_PRINTABLE`) is `ocr_needed`; cached
+  OCR text wins for those pages; otherwise the document reports
+  `ocr_pending`. Never runs OCR.
+- **Read service** `document_read.py` + **persistence** `ocr_store.py`:
+  project-document resolution (`project_documents` scoped by
+  `opportunity_id`, fallback to `history_attachments` joined to that project —
+  never cross-project), mail attachments from `stored_path` only (no IMAP),
+  base64 download with a 10 MB cap, OCR status/coverage and a queue-only
+  request path.
+- **Migration 052** `ocr_queue_cache.sql`: `ocr_page_cache` keyed by
+  `(file_sha256, page_number)` (dedupe: one OCR per file content) and
+  `ocr_queue` with `pending|in_progress|done|failed`, a partial unique index
+  for one active job per hash, and a 2h stale-claim window.
+- **REST routes**: `GET /api/v2/projects/{id}/documents/{document_id}/text`,
+  `.../content`, `GET /api/v2/mail/messages/{id}/attachments/{attachment_id}/text`,
+  `GET /api/v2/ocr/status`, `POST /api/v2/ocr/request`, plus worker-only
+  `GET /api/v2/ocr/queue`, `POST /api/v2/ocr/queue/{id}/claim`,
+  `GET .../file`, `POST .../pages`, `POST .../complete`. Spec regenerated
+  (326 operations / 253 paths) and documented in `docs/API.md`.
+- **MCP tools** `get_project_document`, `download_project_document`,
+  `get_mail_attachment_text`, `ocr_status`, `request_ocr`. `request_ocr` is
+  immediate (`queue` kind, not propose/apply) and only inserts one queue row.
+- **Token resource `ocr`** (`/api/v2/ocr`) with an Admin checkbox. A token
+  restricted to it cannot read documents, mail, or admin routes; the worker
+  file fetch is job-scoped.
+- **Worker (written, NOT installed)** `scripts/ocr_worker/`: poll/claim/
+  download/render (`pdftoppm`) → PP-StructureV3 → upload pages → complete,
+  `finally` cleanup. Pinned `paddleocr==3.7.0` (PP-OCRv6 models,
+  PP-StructureV3), slim 8 GB config (`use_table_recognition=True`, seal/
+  formula/chart/unwarping/orientation off). Host-agnostic: URL, token, temp
+  dir, device and memory limits come from env; `run.sh` applies
+  `MemoryMax`/`MemorySwapMax` via `systemd-run --user`. Full guide:
+  `docs/OCR_WORKER.md`.
+- **Tests** `tests/test_document_text.py` (21), `tests/test_ocr_queue_api.py`
+  (36), `tests/test_ocr_worker.py` (17), synthetic fixtures in
+  `tests/fixtures/ocr/` (hand-rolled PDF writer; no real documents).
+
+### Safety
+- Server modules never import `paddleocr`/`paddle` (test-pinned). OCR runs
+  only on the worker host.
+- Extracted text, attachment text and tokens are never logged; the OCR audit
+  helper whitelists ids, SHA-256, page numbers, status and engine versions.
+
+### Status
+- Merged into `main` with a clean `--no-ff` merge (`60f2b4d` + `bb9623d`);
+  wording is host-agnostic ("OCR worker"), laptop values only as labelled
+  examples in `docs/OCR_WORKER.md`. Deploy to production follows the
+  `200c237` flow (pre-deploy backup on `/mnt/sietch_backup`, ff-only on the
+  droplet, standard boot-runner migration 052).
+
 ## 2026-11-10 — DEPLOYED to production: `200c237` (v2.5.3)
 
 Deployed the mail sender/identity series to `crm.publicadjustermidwest.com`

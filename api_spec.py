@@ -47,6 +47,7 @@ TAGS = [
     {"name": "notes", "description": "Personal notes."},
     {"name": "mail", "description": "Synced mail, threads, drafts, accounts, tags."},
     {"name": "documents", "description": "Documents and attachments metadata."},
+    {"name": "ocr", "description": "Document text extraction, OCR cache and the host-agnostic OCR worker queue."},
     {"name": "calendar", "description": "Calendar sources and events."},
     {"name": "users", "description": "Users, avatars, sessions."},
     {"name": "me", "description": "The authenticated user's own settings."},
@@ -145,6 +146,62 @@ DOCUMENT = _obj({
     "createdAt": {"type": "string", "format": "date-time"},
 }, ["id", "filename"])
 
+DOCUMENT_TEXT_PAGE = _obj({
+    "page": _INT,
+    "text": _STR,
+    "source": _STR,
+    "char_count": _INT,
+    "ocr_needed": _BOOL,
+    "ocr_status": {"type": ["string", "null"]},
+}, ["page", "text", "source", "char_count", "ocr_needed"])
+
+DOCUMENT_TEXT = _obj({
+    "status": _STR,
+    "error": _STR,
+    "filename": _STR,
+    "mime_type": _STR,
+    "size_bytes": _INT,
+    "file_sha256": _STR,
+    "page_count": _INT,
+    "page_start": {"type": ["integer", "null"]},
+    "page_end": {"type": ["integer", "null"]},
+    "truncated": _BOOL,
+    "text": _STR,
+    "pages": _arr(_ref("DocumentTextPage")),
+}, ["status", "filename", "page_count", "text", "pages"])
+
+OCR_JOB = _obj({
+    "id": _INT,
+    "source": _STR,
+    "source_id": _INT,
+    "project_id": {"type": ["integer", "null"]},
+    "message_id": {"type": ["integer", "null"]},
+    "file_sha256": _STR,
+    "status": _STR,
+    "error": {"type": ["string", "null"]},
+    "requested_at": {"type": ["string", "null"], "format": "date-time"},
+    "started_at": {"type": ["string", "null"], "format": "date-time"},
+    "finished_at": {"type": ["string", "null"], "format": "date-time"},
+}, ["id", "source", "source_id", "file_sha256", "status"])
+
+OCR_STATUS = _obj({
+    "source": _STR,
+    "source_id": _INT,
+    "project_id": {"type": ["integer", "null"]},
+    "message_id": {"type": ["integer", "null"]},
+    "filename": _STR,
+    "mime_type": _STR,
+    "file_sha256": _STR,
+    "page_count": _INT,
+    "pages_needed": _arr(_INT),
+    "pages_cached": _arr(_INT),
+    "pages_missing": _arr(_INT),
+    "status": _STR,
+    "queue": {"anyOf": [_ref("OcrJob"), {"type": "null"}]},
+    "engine": {"type": ["string", "null"]},
+    "engine_version": {"type": ["string", "null"]},
+}, ["source", "status", "file_sha256"])
+
 USER = _obj({
     "id": _INT, "email": _STR, "displayName": _STR,
     "firstName": _STR, "lastName": _STR, "isAdmin": _BOOL,
@@ -164,6 +221,10 @@ COMPONENTS = {
         "HistoryEvent": HISTORY_EVENT,
         "MailMessage": MAIL_MESSAGE,
         "Document": DOCUMENT,
+        "DocumentText": DOCUMENT_TEXT,
+        "DocumentTextPage": DOCUMENT_TEXT_PAGE,
+        "OcrJob": OCR_JOB,
+        "OcrStatus": OCR_STATUS,
         "User": USER,
         "Pagination": PAGINATION,
     },
@@ -430,6 +491,168 @@ _ENRICH: dict[tuple[str, str], dict] = {
         "parameters": [_path_param("id", "Project id.")],
         "responses": {"200": _json_response("Documents", _arr(_ref("Document")))},
     },
+    # ── document text + OCR ────────────────────────────────────────────────
+    ("GET", "/api/v2/projects/{id}/documents/{document_id}/text"): {
+        "summary": "Extract text from a project document (pdftotext + cached OCR)",
+        "description": (
+            "Read-only. PDF pages are extracted with `pdftotext -layout`. A page "
+            "with fewer than 20 printable characters is marked `ocr_needed`: "
+            "cached OCR text is returned when present, otherwise the document "
+            "status is `ocr_pending` until an OCR worker fills the cache. "
+            "Images and other binary types return `status: unsupported_type` "
+            "with filename/mime and no body. Never runs OCR on the server."
+        ),
+        "tags": ["documents", "ocr"],
+        "parameters": [
+            _path_param("id", "Project id."),
+            _path_param("document_id", "project_documents.id or a history_attachments.id shown in the Documents tab."),
+            _q("page_start", "First page (1-based, inclusive).", "integer"),
+            _q("page_end", "Last page (inclusive).", "integer"),
+            _q("max_chars", "Maximum characters returned (default 100000).", "integer"),
+        ],
+        "responses": {"200": _json_response("Extracted text", _ref("DocumentText"))},
+    },
+    ("GET", "/api/v2/projects/{id}/documents/{document_id}/content"): {
+        "summary": "Download a project document (base64, size-capped)",
+        "description": (
+            "JSON `{filename, mime_type, size_bytes, encoding: 'base64', content}`. "
+            "Refused with 413 and `size_bytes` (no content) above 10 MB: MCP is "
+            "JSON-RPC over HTTP, so base64 is the only transport that reaches a "
+            "remote client."
+        ),
+        "tags": ["documents"],
+        "parameters": [
+            _path_param("id", "Project id."),
+            _path_param("document_id", "project_documents.id or a history_attachments.id."),
+        ],
+        "responses": {"200": _json_response("Base64 document", _obj({
+            "filename": _STR, "mime_type": _STR, "size_bytes": _INT,
+            "encoding": _STR, "content": _STR,
+        }, ["filename", "size_bytes", "encoding", "content"]))},
+    },
+    ("GET", "/api/v2/mail/messages/{id}/attachments/{attachment_id}/text"): {
+        "summary": "Extract text from a mail attachment (stored bytes only)",
+        "description": (
+            "Same extraction and OCR-cache rules as a project document. Reads "
+            "`mail_attachments.stored_path` only — never IMAP, never the "
+            "network. Returns 409 `not_stored` when the bytes are not on disk."
+        ),
+        "tags": ["mail", "ocr"],
+        "parameters": [
+            _path_param("id", "mail_messages.id."),
+            _path_param("attachment_id", "mail_attachments.id belonging to that message."),
+            _q("page_start", "First page (1-based, inclusive).", "integer"),
+            _q("page_end", "Last page (inclusive).", "integer"),
+            _q("max_chars", "Maximum characters returned (default 100000).", "integer"),
+        ],
+        "responses": {"200": _json_response("Extracted text", _ref("DocumentText"))},
+    },
+    ("GET", "/api/v2/ocr/status"): {
+        "summary": "OCR cache and queue status for a document or attachment",
+        "description": (
+            "Per-page coverage (`pages_needed`, `pages_cached`, `pages_missing`), "
+            "the active/last job, file sha256 and the engine that produced the "
+            "cache. Never returns OCR text."
+        ),
+        "tags": ["ocr"],
+        "parameters": [
+            _q("source", "project_document | mail_attachment.", required=True),
+            _q("project_id", "Project id (project_document).", "integer"),
+            _q("document_id", "Document id (project_document).", "integer"),
+            _q("message_id", "Message id (mail_attachment).", "integer"),
+            _q("attachment_id", "Attachment id (mail_attachment).", "integer"),
+        ],
+        "responses": {"200": _json_response("OCR status", _ref("OcrStatus"))},
+    },
+    ("POST", "/api/v2/ocr/request"): {
+        "summary": "Queue a document or attachment for OCR (queue row only)",
+        "description": (
+            "Deduped by file sha256. The only write is one `ocr_queue` row "
+            "(audited with ids + hash). Fully cached files are not re-queued; "
+            "an active job is returned instead of creating a duplicate."
+        ),
+        "tags": ["ocr"],
+        "requestBody": _json_body(_obj({
+            "source": _STR, "project_id": _INT, "document_id": _INT,
+            "message_id": _INT, "attachment_id": _INT,
+        }, ["source"]), "OCR target (source plus the matching ids)."),
+        "responses": {"200": _json_response("Queue result", _obj({
+            "queued": _BOOL, "cache_reusable": _BOOL, "status": _STR,
+            "job": {"type": ["object", "null"]},
+        }))},
+    },
+    ("GET", "/api/v2/ocr/queue"): {
+        "summary": "List OCR worker jobs",
+        "description": "Worker-only surface (token resource `ocr`). No text, ids and hashes only.",
+        "tags": ["ocr"],
+        "parameters": [
+            _q("status", "pending | in_progress | done | failed."),
+            _q("limit", "Max rows (default 50).", "integer"),
+        ],
+        "responses": {"200": _json_response("OCR jobs", _obj({
+            "jobs": _arr(_ref("OcrJob")), "count": _INT,
+        }))},
+    },
+    ("POST", "/api/v2/ocr/queue/{id}/claim"): {
+        "summary": "Claim an OCR job (pending -> in_progress)",
+        "description": (
+            "A stale in_progress job (default 2h) may be reclaimed so a crashed "
+            "worker does not block the hash forever."
+        ),
+        "tags": ["ocr"],
+        "parameters": [_path_param("id", "ocr_queue.id.")],
+        "responses": {"200": _json_response("Claimed", _obj({
+            "ok": _BOOL, "job": _ref("OcrJob"),
+        }))},
+    },
+    ("GET", "/api/v2/ocr/queue/{id}/file"): {
+        "summary": "Download the file for a claimed OCR job (worker only)",
+        "description": (
+            "Raw bytes, scoped to the job and only while the job is pending or "
+            "in_progress — this is NOT a general document download. Mail "
+            "attachments require stored bytes (409 `not_stored`, never IMAP). "
+            "409 `source_changed` means the stored file no longer matches the "
+            "job's sha256, so no OCR text is cached for the wrong bytes."
+        ),
+        "tags": ["ocr"],
+        "parameters": [_path_param("id", "ocr_queue.id.")],
+        "responses": {"200": {
+            "description": "Raw file bytes",
+            "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}},
+        }},
+    },
+    ("POST", "/api/v2/ocr/queue/{id}/pages"): {
+        "summary": "Upload OCR text for job pages (writes the page cache)",
+        "description": (
+            "Cache rows are written ONLY here. Body pages carry `page` and "
+            "`text`; the response never echoes text. Engine/version default to "
+            "pp-structurev3 / paddleocr-3.7.0."
+        ),
+        "tags": ["ocr"],
+        "parameters": [_path_param("id", "ocr_queue.id.")],
+        "requestBody": _json_body(_obj({
+            "engine": _STR, "engine_version": _STR,
+            "pages": _arr(_obj({"page": _INT, "text": _STR}, ["page", "text"])),
+        }, ["pages"]), "Per-page OCR text."),
+        "responses": {"200": _json_response("Cached", _obj({
+            "ok": _BOOL, "pages_written": _INT,
+        }))},
+    },
+    ("POST", "/api/v2/ocr/queue/{id}/complete"): {
+        "summary": "Complete an OCR job (done or failed)",
+        "description": (
+            "`done` after pages are uploaded; `failed` with a short machine "
+            "error (never document text). A failed hash may be re-queued."
+        ),
+        "tags": ["ocr"],
+        "parameters": [_path_param("id", "ocr_queue.id.")],
+        "requestBody": _json_body(_obj({
+            "status": _STR, "error": _STR,
+        }, ["status"]), "done | failed, plus an optional short error code."),
+        "responses": {"200": _json_response("Completed", _obj({
+            "ok": _BOOL, "job": _ref("OcrJob"),
+        }))},
+    },
     ("GET", "/api/v2/documents/search"): {
         "summary": "Search documents",
         "tags": ["documents"],
@@ -614,6 +837,11 @@ MCP_TOOL_OPERATIONS: dict[str, tuple[str, str]] = {
     "list_mail_threads": ("GET", "/api/v2/mail/threads"),
     "list_tasks": ("GET", "/api/v2/tasks"),
     "list_project_documents": ("GET", "/api/v2/projects/{id}/documents"),
+    "get_project_document": ("GET", "/api/v2/projects/{id}/documents/{document_id}/text"),
+    "download_project_document": ("GET", "/api/v2/projects/{id}/documents/{document_id}/content"),
+    "get_mail_attachment_text": ("GET", "/api/v2/mail/messages/{id}/attachments/{attachment_id}/text"),
+    "ocr_status": ("GET", "/api/v2/ocr/status"),
+    "request_ocr": ("POST", "/api/v2/ocr/request"),
     "list_notes": ("GET", "/api/v2/notes"),
     "list_history_categories": ("GET", "/api/v2/history-categories"),
     "add_note": ("POST", "/api/v2/projects/{id}/history"),

@@ -20,7 +20,7 @@
   var KNOWN_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
   var KNOWN_RESOURCES = [
     "projects", "notes", "contacts", "documents", "tasks",
-    "mail", "calendar", "history", "admin", "users", "me", "reference"
+    "mail", "calendar", "history", "admin", "users", "me", "reference", "ocr"
   ];
 
   function validateTokenName(raw) {

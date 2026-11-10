@@ -3,6 +3,45 @@
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-10 (MCP document read + OCR worker queue)
+
+**Status: merged into local `main` (merge commit, clean `--no-ff`; no rebase of
+`origin/main`), NOT pushed / NOT deployed at the time of writing.** Plan:
+`~/Projects/plans/sietch/mcp-document-read-2026-11-10.md` (section 10).
+Branch `feat/mcp-document-read`: `a10dca8` + wording/fixture fix `bb9623d`.
+Wording is host-agnostic ("OCR worker", no laptop host in tool descriptions,
+spec, migration comments or worker docstrings); laptop values remain only as
+labelled examples in `docs/OCR_WORKER.md`.
+
+- Added `document_text.py` (pdftotext per page, 20-printable-char OCR
+  threshold, txt/html/eml, `unsupported_type`, SHA-256), `document_read.py`
+  (project/history-attachment resolution, base64 download cap 10 MB, OCR
+  status/request) and `ocr_store.py` (cache + queue persistence, audit
+  whitelist).
+- Migration `052_ocr_queue_cache.sql`: `ocr_page_cache`
+  `(file_sha256, page_number)` PK; `ocr_queue` with a partial unique index for
+  one active job per hash; failed jobs can be re-queued.
+- Routes: document text/content, mail attachment text, OCR status/request and
+  the worker queue (claim/file/pages/complete). Spec regenerated
+  (326 operations / 253 paths) and `docs/API.md` updated. Token resource
+  `ocr` added (backend + Admin checkbox).
+- MCP tools: `get_project_document`, `download_project_document`,
+  `get_mail_attachment_text`, `ocr_status`, `request_ocr` (immediate
+  queue-row write, not a proposal).
+- Worker written under `scripts/ocr_worker/` (`worker.py`, `engine.py`,
+  `run.sh`, env example) and `docs/OCR_WORKER.md`. Host-agnostic: URL, token,
+  temp dir, device, MemoryMax/MemorySwapMax all from env; no laptop paths in
+  code/schema. Not installed, no unit enabled.
+- Tests: `test_document_text.py` 21, `test_ocr_queue_api.py` 34,
+  `test_ocr_worker.py` 17; synthetic fixtures only. Full-suite numbers vs
+  `200c237` recorded in the plan's results section.
+- No real customer documents, no OCR engine on this machine, no IMAP/network
+  in the read/OCR paths.
+
+---
+
+## Previous session summary (2026-11-10 — DEPLOY of `200c237` to production)
+
 **Date:** 2026-11-10 (DEPLOY of `200c237` to production — approved by Ken 4:44 PM ET)
 
 **Status: DEPLOYED and verified. Prod `crm.publicadjustermidwest.com`
@@ -33,6 +72,8 @@
   signs in to Microsoft **as account 8** in Settings → Mail Accounts. 9 and 10
   are fully connected (Graph `auto-renew`).
 - Full log: `~/Projects/plans/sietch/email-fix-deploy-2026-11-10.md`.
+
+---
 
 ---
 
