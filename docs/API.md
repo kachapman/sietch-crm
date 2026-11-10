@@ -136,7 +136,7 @@ curl -s "…/api/v2/ocr/status?source=project_document&project_id=101&document_i
  "file_sha256": "…", "queue": null}
 ```
 
-Queue the file for a laptop worker (the only write; deduped by file hash):
+Queue the file for an OCR worker (the only write; deduped by file hash):
 
 ```bash
 curl -s -X POST "…/api/v2/ocr/request" \

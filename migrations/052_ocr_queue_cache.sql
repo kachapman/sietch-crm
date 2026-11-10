@@ -2,10 +2,11 @@
 -- OCR page cache + worker queue for scanned documents.
 --
 -- WHY: carrier PDFs are often scans with no text layer. The droplet must never
--- run OCR (no CPU/GPU budget, and Ken's rule is laptop-only). It extracts with
--- pdftotext, detects pages that need OCR, serves cached OCR text when a worker
--- has already produced it, and exposes a queue that a scoped API token can
--- poll from the laptop.
+-- run OCR (no CPU/GPU budget). It extracts with pdftotext, detects pages that
+-- need OCR, serves cached OCR text when a worker has already produced it, and
+-- exposes a queue that a scoped API token can poll. The worker is
+-- host-agnostic: it runs on any host with the GPU/CPU budget, and no hostname,
+-- machine id or path is stored here.
 --
 -- KEYS: the cache is keyed by file content hash + page number, so two copies
 -- of the same carrier PDF (a mail attachment and a project document, or two

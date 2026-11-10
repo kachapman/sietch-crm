@@ -1,4 +1,4 @@
-## 2026-11-10 — MCP document read + laptop OCR queue (branch `feat/mcp-document-read`)
+## 2026-11-10 — MCP document read + OCR worker queue (branch `feat/mcp-document-read`)
 
 ### Added
 - **Shared text extractor** `document_text.py`: `pdftotext -layout` per page
@@ -49,7 +49,7 @@
   helper whitelists ids, SHA-256, page numbers, status and engine versions.
 
 ### Not done (deliberate)
-- No merge, no push, no deploy, no laptop install, no unit enabled.
+- No merge, no push, no deploy, no worker install, no unit enabled.
 
 ## 2026-11-10 — Item 5: full suites vs baseline, dead-SMTP memory restored, merge
 

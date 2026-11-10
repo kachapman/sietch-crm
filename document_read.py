@@ -251,7 +251,7 @@ def ocr_status(row: dict) -> dict:
 
 
 def request_ocr(row: dict, requested_by: int | None) -> dict:
-    """Queue the file for laptop OCR (the only allowed write: one queue row)."""
+    """Queue the file for OCR (the only allowed write: one queue row)."""
     extraction = extract_row(row, max_chars=1)
     coverage = _coverage(row, extraction)
     if coverage["status"] == "unsupported_type":

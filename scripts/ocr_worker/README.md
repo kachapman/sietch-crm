@@ -1,4 +1,4 @@
-# Sietch OCR worker (laptop / model host)
+# Sietch OCR worker (host-agnostic)
 
 Runs PaddleOCR **PP-StructureV3** (`paddleocr==3.7.0`) on files that the Sietch
 server could not read with `pdftotext` (scans). The server never runs OCR.

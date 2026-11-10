@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Sietch OCR worker — laptop side of the document-read queue.
+"""Sietch OCR worker — client side of the document-read queue.
 
-Runs PaddleOCR **on Ken's laptop only**. The droplet never runs OCR.
+Runs PaddleOCR **on the worker host only** (a laptop or any GPU/CPU host).
+The Sietch droplet never runs OCR.
 
 Flow
 ----
@@ -250,7 +251,7 @@ def run_once(client: SietchClient, ocr, *, workdir: str | None = None,
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Sietch laptop OCR worker (PaddleOCR PP-StructureV3)")
+    parser = argparse.ArgumentParser(description="Sietch OCR worker (PaddleOCR PP-StructureV3)")
     parser.add_argument("--once", action="store_true", help="process one job (or none) and exit")
     parser.add_argument("--poll-seconds", type=int, default=None,
                         help="idle sleep between polls (default 15; env SIETCH_OCR_POLL_SECONDS)")

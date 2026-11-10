@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PP-StructureV3 OCR engine wrapper (lazy import; laptop GPU only).
+"""PP-StructureV3 OCR engine wrapper (lazy import; GPU host only).
 
 Pinned stack (2026-11-10):
     paddleocr==3.7.0        # PP-OCRv6 text models are the default here

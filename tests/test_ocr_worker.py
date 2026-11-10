@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline tests for the laptop OCR worker (client + engine glue).
+"""Offline tests for the OCR worker (client + engine glue).
 
 No real PaddleOCR, no model download, no GPU, no network: HTTP is a fake client
 and the OCR pipeline is a fake object. The only real subprocess is `pdftoppm`

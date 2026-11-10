@@ -456,7 +456,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         "get_project_document",
         "Read one project document as text. PDFs are extracted per page with "
         "pdftotext; scanned pages are marked ocr_needed and come back as "
-        "ocr_pending until a laptop worker has cached their OCR text. Use "
+        "ocr_pending until an OCR worker has cached their OCR text. Use "
         "page_start/page_end (1-based, inclusive) to narrow a long file and "
         "max_chars to bound the response.",
         _schema({
@@ -512,9 +512,10 @@ TOOLS: tuple[ToolSpec, ...] = (
         "read", _ocr_status),
     ToolSpec(
         "request_ocr",
-        "Queue one document or mail attachment for laptop OCR. Immediate (not a "
-        "proposal): the only write is one ocr_queue row, audited with ids and "
-        "sha256. Deduped by file hash; already-cached files are not re-queued.",
+        "Queue a document or attachment for OCR (queue row only). Immediate "
+        "(not a proposal): the only write is one ocr_queue row, audited with "
+        "ids and sha256. OCR runs on a host-agnostic worker, never on this "
+        "server. Deduped by file hash; already-cached files are not re-queued.",
         _schema({
             "source": {
                 "type": "string",

@@ -1174,8 +1174,8 @@ except Exception:
     logger.warning("Could not create the MCP tables", exc_info=True)
 # OCR page cache + queue (mirrors migrations/052_ocr_queue_cache.sql; idempotent).
 # The droplet NEVER runs OCR: it only detects scanned pages, serves cached OCR
-# text and exposes the queue a laptop worker polls. Cache rows are written by
-# the worker endpoint only; `request_ocr` writes exactly one queue row.
+# text and exposes the queue a host-agnostic OCR worker polls. Cache rows are
+# written by the worker endpoint only; `request_ocr` writes exactly one queue row.
 try:
     db.execute("""
         CREATE TABLE IF NOT EXISTS ocr_page_cache (

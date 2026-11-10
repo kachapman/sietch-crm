@@ -152,6 +152,19 @@ def setUpModule():  # noqa: C901 - fixture setup is intentionally explicit
         "VALUES (%s, %s, 'synthetic', %s) RETURNING id",
         (PROJECT_A, f"OCR history {SUFFIX}", USER_ID),
     )
+    # `project_documents` and `history_attachments` have independent id
+    # sequences, and resolve_project_document() prefers project_documents (the
+    # Documents-tab id) before falling back. On a freshly initialized database
+    # both sequences start at 1, so the attachment id can collide with a
+    # project_documents id of the same project and the fallback test would get
+    # the mirrored row instead. Push the attachment sequence past every
+    # project_documents id so the fixture is deterministic on any database.
+    pg_max = db.query_one(
+        "SELECT COALESCE(MAX(id), 0) AS m FROM project_documents")["m"]
+    db.execute(
+        "SELECT setval(pg_get_serial_sequence('history_attachments', 'id'), %s, true)",
+        (max(int(pg_max), 1),),
+    )
     HISTORY_ATTACHMENT_ID = db.insert_returning(
         """INSERT INTO history_attachments
              (event_id, filename, file_path, file_size, mime_type, uploaded_by)

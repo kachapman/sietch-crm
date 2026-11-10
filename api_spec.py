@@ -47,7 +47,7 @@ TAGS = [
     {"name": "notes", "description": "Personal notes."},
     {"name": "mail", "description": "Synced mail, threads, drafts, accounts, tags."},
     {"name": "documents", "description": "Documents and attachments metadata."},
-    {"name": "ocr", "description": "Document text extraction, OCR cache and the laptop OCR worker queue."},
+    {"name": "ocr", "description": "Document text extraction, OCR cache and the host-agnostic OCR worker queue."},
     {"name": "calendar", "description": "Calendar sources and events."},
     {"name": "users", "description": "Users, avatars, sessions."},
     {"name": "me", "description": "The authenticated user's own settings."},
@@ -498,7 +498,7 @@ _ENRICH: dict[tuple[str, str], dict] = {
             "Read-only. PDF pages are extracted with `pdftotext -layout`. A page "
             "with fewer than 20 printable characters is marked `ocr_needed`: "
             "cached OCR text is returned when present, otherwise the document "
-            "status is `ocr_pending` until a laptop worker fills the cache. "
+            "status is `ocr_pending` until an OCR worker fills the cache. "
             "Images and other binary types return `status: unsupported_type` "
             "with filename/mime and no body. Never runs OCR on the server."
         ),
@@ -565,7 +565,7 @@ _ENRICH: dict[tuple[str, str], dict] = {
         "responses": {"200": _json_response("OCR status", _ref("OcrStatus"))},
     },
     ("POST", "/api/v2/ocr/request"): {
-        "summary": "Queue a document or attachment for laptop OCR (queue row only)",
+        "summary": "Queue a document or attachment for OCR (queue row only)",
         "description": (
             "Deduped by file sha256. The only write is one `ocr_queue` row "
             "(audited with ids + hash). Fully cached files are not re-queued; "

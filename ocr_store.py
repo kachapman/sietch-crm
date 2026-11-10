@@ -12,8 +12,8 @@ one place:
   numbers, status, engine, engine_version). Text, filenames and tokens are
   dropped even if a caller passes them.
 
-Nothing here imports paddleocr/paddle — OCR runs on Ken's laptop, never on the
-server.
+Nothing here imports paddleocr/paddle — OCR runs on a host-agnostic worker,
+never on the server.
 """
 
 from __future__ import annotations
