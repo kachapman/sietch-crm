@@ -173,6 +173,10 @@ def try_send_for_account(
                 f"{acct.get('email')}. Nothing was sent."
             ), "graph"
         graph_token, graph_err = refresh_graph_token(account_id)
+        if not graph_token and graph_err:
+            # The account has a Graph connection but the token could not be
+            # minted/refreshed. Refuse; never send through another method.
+            return False, graph_err, "graph"
         if graph_token:
             # The refresher may have rotated the token; re-check identity
             # against the freshly minted token's verified identity.
@@ -202,9 +206,11 @@ def try_send_for_account(
                 )
                 if ok:
                     return True, None, "graph"
-                logger.warning("Graph send failed for account=%s, falling back to SMTP: %s", account_id, err)
-                meta["fallback_reason"] = f"graph: {err}"
-                graph_err = err
+                # NO FALLBACK (2026-11-10, Ken): Graph is this account's
+                # configured method. A failure is returned to the caller — we
+                # never switch to SMTP or to another credential.
+                logger.error("Graph send failed for account=%s: %s (no fallback)", account_id, err)
+                return False, err, "graph"
             except Exception as e:
                 logger.exception("Graph send threw for account=%s", account_id)
                 graph_err = str(e)
@@ -263,35 +269,4 @@ def try_send_for_account(
     if ok:
         return True, None, "smtp_oauth" if use_oauth_smtp else "smtp_password"
 
-    # Step 3: if SMTP failed with the canonical "SMTP AUTH disabled" error
-    # AND a Graph token is available, retry Graph. Covers the case where the
-    # routing above skipped Graph (e.g. the token expired between step 1 and
-    # step 2). The failure is also memorized per account so future sends for
-    # a Microsoft mailbox skip the dead SMTP path entirely.
-    if err and _looks_like_smtp_auth_disabled(err):
-        if oauth_provider == "microsoft":
-            _set_smtp_auth_disabled(account_id, True)
-        if oauth_provider == "microsoft" and refresh_graph_token is not None:
-            retry_token, _retry_err = refresh_graph_token(account_id)
-            if retry_token:
-                from mail_graph_client import send_email_via_graph
-                try:
-                    ok2, err2 = send_email_via_graph(
-                        graph_access_token=retry_token,
-                        from_addr=acct.get("email", ""),
-                        to_addr=to_addr,
-                        subject=subject,
-                        html_body=html_body,
-                        text_body=text_body,
-                        cc_addr=cc_addr,
-                        bcc_addr=bcc_addr,
-                        attachments=attachments,
-                    )
-                    if ok2:
-                        meta["fallback_reason"] = f"smtp 5.7.139 -> graph: {err}"
-                        return True, None, "graph"
-                    err = err2 or err
-                except Exception as e:
-                    logger.exception("Graph retry after SMTP 5.7.139 threw")
-                    err = str(e) or err
     return False, err or graph_err, "graph" if graph_token else ("smtp_oauth" if use_oauth_smtp else "smtp_password")

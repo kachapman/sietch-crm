@@ -28,6 +28,7 @@ try:
     import mcp_local_api
     import server
     import mail_oauth
+    import mail_send
     HAVE_DB = True
 except Exception as exc:  # pragma: no cover
     print(f"SKIP: {exc}")
@@ -276,6 +277,82 @@ class TestHandlerIntegration(unittest.TestCase):
         self.assertIsNone(row["contractor_contact_id"])
         db.execute("UPDATE mail_accounts SET contractor_contact_id = %s WHERE id = %s",
                    (self.contact["id"], self.acct["id"]))
+
+
+class TestNoFallback(unittest.TestCase):
+    """No failure may substitute another account, credential or method."""
+
+    def _acct(self, **kw):
+        a = {"id": 5, "email": "a@example.invalid", "oauth_provider": "microsoft",
+             "oauth_access_token": "AT", "oauth_refresh_token": "RT",
+             "oauth_token_expires": None,
+             "oauth_graph_access_token": "GAT", "oauth_graph_refresh_token": "GRT",
+             "oauth_graph_identity": "a@example.invalid",
+             "smtp_host": "smtp.example.invalid", "smtp_port": 587,
+             "smtp_user": "a@example.invalid", "smtp_from_name": "A",
+             "smtp_use_tls": True}
+        a.update(kw)
+        return a
+
+    def test_graph_error_does_not_fall_back_to_smtp(self):
+        with patch("mail_graph_client.send_email_via_graph", return_value=(False, "graph boom")), \
+             patch("smtp_client.send_email_from_account") as smtp:
+            ok, err, method = mail_send.try_send_for_account(
+                self._acct(), to_addr="x@example.invalid", subject="s",
+                refresh_graph_token=lambda aid: ("TOKEN", None))
+        self.assertFalse(ok)
+        self.assertEqual(method, "graph")
+        self.assertIn("graph boom", err)
+        smtp.assert_not_called()
+
+    def test_graph_identity_mismatch_never_sends(self):
+        with patch("mail_graph_client.send_email_via_graph") as g, \
+             patch("smtp_client.send_email_from_account") as smtp:
+            ok, err, method = mail_send.try_send_for_account(
+                self._acct(oauth_graph_identity="other@example.invalid"),
+                to_addr="x@example.invalid", subject="s",
+                refresh_graph_token=lambda aid: ("TOKEN", None))
+        self.assertFalse(ok)
+        g.assert_not_called()
+        smtp.assert_not_called()
+
+    def test_graph_refresh_failure_never_falls_back(self):
+        with patch("mail_graph_client.send_email_via_graph") as g, \
+             patch("smtp_client.send_email_from_account") as smtp:
+            ok, err, method = mail_send.try_send_for_account(
+                self._acct(), to_addr="x@example.invalid", subject="s",
+                refresh_graph_token=lambda aid: (None, "refresh failed"))
+        self.assertFalse(ok)
+        self.assertIn("refresh failed", err)
+        g.assert_not_called()
+        smtp.assert_not_called()
+
+    def test_smtp_only_account_never_uses_graph(self):
+        with patch("mail_graph_client.send_email_via_graph") as g, \
+             patch("smtp_client.send_email_from_account", return_value=(False, "535 auth")) as smtp:
+            ok, err, method = mail_send.try_send_for_account(
+                self._acct(oauth_graph_access_token=None, oauth_graph_refresh_token=None,
+                           oauth_graph_identity=None),
+                to_addr="x@example.invalid", subject="s",
+                refresh_graph_token=lambda aid: (None, None))
+        self.assertFalse(ok)
+        g.assert_not_called()
+        smtp.assert_called_once()
+        self.assertEqual(smtp.call_args.kwargs["smtp_user"], "a@example.invalid")
+        self.assertEqual(smtp.call_args.kwargs["from_addr"], "a@example.invalid")
+
+    def test_smtp_auth_failure_is_not_retried_via_graph(self):
+        with patch("mail_graph_client.send_email_via_graph") as g, \
+             patch("mail_send._set_smtp_auth_disabled"), \
+             patch("smtp_client.send_email_from_account",
+                   return_value=(False, "535 5.7.139 SmtpClientAuthentication is disabled")):
+            ok, err, method = mail_send.try_send_for_account(
+                self._acct(oauth_graph_access_token=None, oauth_graph_refresh_token=None,
+                           oauth_graph_identity=None),
+                to_addr="x@example.invalid", subject="s",
+                refresh_graph_token=lambda aid: (None, None))
+        self.assertFalse(ok)
+        g.assert_not_called()
 
 
 class TestTokens(unittest.TestCase):
