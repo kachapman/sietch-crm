@@ -24342,15 +24342,33 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not name:
                 _json_response(self, 400, {"error": "Name required"})
                 return
-            folder = db.query_one("SELECT name, is_system FROM mail_folders WHERE id = %s", (folder_id,))
+            folder = db.query_one(
+                "SELECT name, is_system, imap_account_id FROM mail_folders WHERE id = %s",
+                (folder_id,))
             if not folder:
                 _json_response(self, 404, {"error": "Folder not found"})
                 return
             if folder["is_system"]:
                 _json_response(self, 400, {"error": "Cannot rename system folder"})
                 return
-            # Update messages in this folder
-            db.execute("UPDATE mail_messages SET folder = %s WHERE folder = %s", (name, folder["name"]))
+            # Scope the relabel to the FOLDER'S OWN account (2026-11-10,
+            # receive-side audit). `UPDATE … WHERE folder = name` had no
+            # account predicate, so renaming (or deleting) a folder in one
+            # mailbox also relabelled every other mailbox's folder that
+            # happened to share the name — messages filed under the wrong
+            # account's folder. Messages can only live in a folder of their
+            # own account (the create/move allowlist requires
+            # mail_folders.imap_account_id = the message's account), so a
+            # folder without an account holds no messages and is left alone.
+            if not folder.get("imap_account_id"):
+                logger.info(
+                    "Mail folder %s (%r) is not bound to an account; no messages relabelled",
+                    folder_id, folder.get("name"))
+            else:
+                db.execute(
+                    "UPDATE mail_messages SET folder = %s WHERE folder = %s AND account_id = %s",
+                    (name, folder["name"], folder["imap_account_id"]),
+                )
             db.execute("UPDATE mail_folders SET name = %s WHERE id = %s", (name, folder_id))
             _json_response(self, 200, {"ok": True})
         except Exception as e:
@@ -24361,15 +24379,28 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not user:
             return
         try:
-            folder = db.query_one("SELECT name, is_system FROM mail_folders WHERE id = %s", (folder_id,))
+            folder = db.query_one(
+                "SELECT name, is_system, imap_account_id FROM mail_folders WHERE id = %s",
+                (folder_id,))
             if not folder:
                 _json_response(self, 404, {"error": "Folder not found"})
                 return
             if folder["is_system"]:
                 _json_response(self, 400, {"error": "Cannot delete system folder"})
                 return
-            # Move messages in this folder to INBOX
-            db.execute("UPDATE mail_messages SET folder = 'INBOX' WHERE folder = %s", (folder["name"],))
+            # Only this folder's own account's messages move (2026-11-10,
+            # receive-side audit — see _handle_mail_folder_update). The old
+            # `UPDATE … WHERE folder = name` relocated every account's
+            # same-named folder into INBOX.
+            if not folder.get("imap_account_id"):
+                logger.info(
+                    "Mail folder %s (%r) is not bound to an account; no messages moved",
+                    folder_id, folder.get("name"))
+            else:
+                db.execute(
+                    "UPDATE mail_messages SET folder = 'INBOX' WHERE folder = %s AND account_id = %s",
+                    (folder["name"], folder["imap_account_id"]),
+                )
             db.execute("DELETE FROM mail_folders WHERE id = %s", (folder_id,))
             _json_response(self, 200, {"ok": True})
         except Exception as e:

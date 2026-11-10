@@ -3,10 +3,54 @@
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-11-10 (Item 2: strict per-account mail credentials)
+**Date:** 2026-11-10 (Item 3: receive-side audit)
 
-**Status: COMMITTED LOCALLY on branch `fix/mail-sender-guard`
-(`4eab58b` + this docs commit) — NOT pushed, NOT deployed. Prod read-only.**
+**Status: COMMITTED LOCALLY on branch `fix/mail-sender-guard` — NOT pushed,
+NOT deployed. Prod read-only (SELECT only, `BEGIN READ ONLY`).**
+
+- **Audited every receive path** (scanner poll, folder LIST, attachment
+  fetch, mark read/move/delete, retention loop, drafts/sent copies,
+  `import_email.py`) for a message that could be filed under the wrong
+  `mail_account` or folder. 7 real defects fixed at the source:
+  1. Folder **rename** in the UI relabelled every account's same-named
+     messages; 2. same for folder **delete** (all accounts moved to INBOX) —
+     both now scoped to the folder's own `imap_account_id`.
+  3. `import_email.py` copied the source `account_id` verbatim (wrong
+     mailbox); now remapped **by email**, unmapped messages skipped.
+  4. Same importer copied `mail_deal_links.message_id` verbatim (a project's
+     timeline attached to another customer's email); now remapped on
+     `(account, imap_uid, folder)`.
+  5. `_list_imap_folders` was the only credential use that bypassed
+     `_login_mailbox`, i.e. item 2's identity gate; now gated.
+  6. Sent-copy reconciliation only matched `folder = 'Sent'`, so Outlook's
+     "Sent Items" stored the same email twice; the whole sent family matches.
+  7. The three dedupe paths returned an existing row without marking it
+     processed → re-classification / duplicate deal notes on a re-fetched
+     window; all mark processed now.
+- **Verified already correct:** `UNIQUE(account_id, imap_uid, folder)` +
+  `(account_id, message_id)`, per-account folder watermarks, every sync entry
+  gated, no email-keyed receive lookup, retention scoped by account, Graph is
+  send-only, reply/forward keep the original account.
+- **Documented, not fixed:** `mail_folders` has no unique index on
+  `(account, imap_path)` (no duplicates in prod); auto-link is not scoped to
+  the receiving mailbox (no deal↔mailbox mapping exists any more); the
+  content matcher's `contacts.id` substring test can false-link a mail.
+- **Prod evidence (1,909 messages, all 5 accounts, 2026-07-21 →
+  2026-11-10, ET): 0 real mismatches.** 405 outbound From == account;
+  421 inbound addressed to the account; 568 addressed to a catch-all alias on
+  the account's own domain; 8 relay/thread-BCC; 2 unverifiable (no
+  `Delivered-To` is stored); **495 account-2 CRM-inbox BCC copies excluded**.
+  `~/Projects/plans/sietch/account-mismatch-headers-2026-11-10.csv` therefore
+  contains the header only.
+- **Tests:** new `tests/test_mail_receive_attribution.py` 21 (verified to fail
+  on the pre-fix tree), plus every mail suite + the mail JS suites; the 4
+  pre-existing failures are identical at HEAD. Added to CI.
+- Details: `~/Projects/plans/sietch/email-fix-progress-2026-11-10.md`
+  → "Item 3 DONE" (findings with file:line, prod tables, reviewed rows).
+
+---
+
+## Previous session summary (2026-11-10 — item 2: strict per-account mail credentials)
 
 - **One mailbox == one account.** Every mail credential read/write is keyed
   by `mail_accounts.id`; the new `mail_identity.py` is the only credential

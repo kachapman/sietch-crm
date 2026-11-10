@@ -209,6 +209,12 @@ jobs:
       - name: Run incremental mail sync tests
         run: python3 tests/test_mail_incremental.py -v
 
+      - name: Run receive-side attribution tests
+        # Wrong-account / wrong-folder filing: account-scoped UID + Message-ID
+        # and sent-copy reconciliation, the folder-listing identity gate,
+        # folder rename/delete scoping, and the legacy import id remap.
+        run: python3 tests/test_mail_receive_attribution.py -v
+
       - name: Run mail forward quote tests
         run: node --test tests/test_mail_forward_quote.mjs
 

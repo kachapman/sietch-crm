@@ -99,10 +99,39 @@ def import_mail_accounts(source_conn, target_conn) -> int:
     return count
 
 
-def import_mail_messages(source_conn, target_conn) -> int:
-    """Import mail messages from source to target database."""
+def load_account_id_map(source_conn, target_conn) -> dict[int, int]:
+    """Map source `mail_accounts.id` -> target id, matched by EMAIL.
+
+    The legacy dump and the live CRM have unrelated id sequences: copying a
+    message's `account_id` verbatim files it under whatever mailbox happens to
+    own that id in the target — i.e. some other person's mailbox (receive-side
+    audit, 2026-11-10). The mailbox ADDRESS is the only identity both sides
+    agree on, so the map is built from that and never from the id.
+    """
     src_cur = source_conn.cursor()
     tgt_cur = target_conn.cursor()
+    src_cur.execute("SELECT id, lower(email) FROM mail_accounts WHERE email IS NOT NULL")
+    src_rows = src_cur.fetchall()
+    tgt_cur.execute("SELECT id, lower(email) FROM mail_accounts WHERE email IS NOT NULL")
+    target_by_email = {row[1]: int(row[0]) for row in tgt_cur.fetchall()}
+    mapping: dict[int, int] = {}
+    for src_id, email in src_rows:
+        target_id = target_by_email.get(email)
+        if target_id is not None:
+            mapping[int(src_id)] = target_id
+    return mapping
+
+
+def import_mail_messages(source_conn, target_conn) -> int:
+    """Import mail messages from source to target database.
+
+    The owning account is remapped through `load_account_id_map` (email, never
+    the raw source id). A message whose source account has no target mailbox is
+    SKIPPED and reported instead of being filed under an unrelated account.
+    """
+    src_cur = source_conn.cursor()
+    tgt_cur = target_conn.cursor()
+    account_map = load_account_id_map(source_conn, target_conn)
 
     src_cur.execute("""
         SELECT account_id, imap_uid, message_id, in_reply_to, from_addr, to_addr,
@@ -113,8 +142,14 @@ def import_mail_messages(source_conn, target_conn) -> int:
     """)
     messages = src_cur.fetchall()
     count = 0
+    skipped = 0
     for row in messages:
         try:
+            source_account_id = row[0]
+            target_account_id = account_map.get(int(source_account_id)) if source_account_id is not None else None
+            if source_account_id is not None and target_account_id is None:
+                skipped += 1
+                continue
             tgt_cur.execute("""
                 INSERT INTO mail_messages
                 (account_id, imap_uid, message_id, from_addr, to_addr, cc_addr,
@@ -123,7 +158,7 @@ def import_mail_messages(source_conn, target_conn) -> int:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (account_id, imap_uid, folder) DO NOTHING
             """, (
-                row[0], row[1], row[2], row[4], row[5], row[6],
+                target_account_id, row[1], row[2], row[4], row[5], row[6],
                 row[7], row[8], row[9], row[10], row[11],
                 row[12], row[13], row[14],
             ))
@@ -131,13 +166,57 @@ def import_mail_messages(source_conn, target_conn) -> int:
         except Exception as e:
             logger.warning("Failed to import message uid=%s: %s", row[1], e)
     target_conn.commit()
+    if skipped:
+        logger.warning(
+            "Skipped %d message(s) whose source account has no matching mailbox in the "
+            "target (filed under nothing rather than another account)", skipped)
     return count
 
 
-def import_mail_deal_links(source_conn, target_conn) -> int:
-    """Import mail-deal links from source to target database."""
+def load_message_id_map(source_conn, target_conn, account_map: dict[int, int]) -> dict[int, int]:
+    """Map source `mail_messages.id` -> target id.
+
+    A deal link is a FK to a message row, so copying `message_id` verbatim
+    attaches a project's history to whatever message owns that id in the
+    target — a different customer's email (receive-side audit, 2026-11-10).
+    The rows are matched on their real identity: (remapped account_id,
+    imap_uid, folder), which is exactly the mail_messages unique key.
+    """
     src_cur = source_conn.cursor()
     tgt_cur = target_conn.cursor()
+    src_cur.execute("SELECT id, account_id, imap_uid, folder FROM mail_messages")
+    src_rows = src_cur.fetchall()
+    tgt_cur.execute("SELECT id, account_id, imap_uid, folder FROM mail_messages")
+    target_by_key = {
+        (row[1], str(row[2]), row[3]): int(row[0])
+        for row in tgt_cur.fetchall()
+    }
+    mapping: dict[int, int] = {}
+    for src_id, account_id, imap_uid, folder in src_rows:
+        if account_id is None:
+            target_account_id = None
+        else:
+            target_account_id = account_map.get(int(account_id))
+            if target_account_id is None:
+                continue
+        target_id = target_by_key.get((target_account_id, str(imap_uid), folder))
+        if target_id is not None:
+            mapping[int(src_id)] = target_id
+    return mapping
+
+
+def import_mail_deal_links(source_conn, target_conn) -> int:
+    """Import mail-deal links from source to target database.
+
+    Both ids are remapped: the message through `load_message_id_map` (a link
+    must point at the SAME email in the target) and the account through the
+    email-keyed account map. Links whose message is not present in the target
+    are skipped and reported.
+    """
+    src_cur = source_conn.cursor()
+    tgt_cur = target_conn.cursor()
+    account_map = load_account_id_map(source_conn, target_conn)
+    message_map = load_message_id_map(source_conn, target_conn, account_map)
 
     src_cur.execute("""
         SELECT message_id, opportunity_id, linked_by_user_id, linked_at
@@ -145,17 +224,26 @@ def import_mail_deal_links(source_conn, target_conn) -> int:
     """)
     links = src_cur.fetchall()
     count = 0
+    skipped = 0
     for row in links:
         try:
+            target_message_id = message_map.get(int(row[0]))
+            if target_message_id is None:
+                skipped += 1
+                continue
             tgt_cur.execute("""
                 INSERT INTO mail_deal_links (message_id, opportunity_id, linked_by_user_id, linked_at)
                 VALUES (%s, %s, %s, %s)
                 ON CONFLICT (message_id, opportunity_id) DO NOTHING
-            """, (row[0], row[1], row[2], row[3]))
+            """, (target_message_id, row[1], row[2], row[3]))
             count += 1
         except Exception as e:
             logger.warning("Failed to import link msg=%d opp=%d: %s", row[0], row[1], e)
     target_conn.commit()
+    if skipped:
+        logger.warning(
+            "Skipped %d link(s) whose message was not imported into the target "
+            "(never attached to a different email)", skipped)
     return count
 
 

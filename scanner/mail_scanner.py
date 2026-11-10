@@ -1719,21 +1719,35 @@ def _fetch_single_message(mailbox_cfg: dict[str, Any], folder: str, uid: int,
 
 
 def _list_imap_folders(mailbox_cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    """LIST the folders of THIS account (2026-11-10: receive-side audit).
+
+    This used to build its own MailBox + login, the only credential use in the
+    scanner that did not go through `_login_mailbox` — so it was the one place
+    the mailbox-identity assertion did not apply. It now shares the gated
+    login: the login user must be the account's own address and an XOAUTH2
+    login must carry a verified identity.
+    """
     folders = []
+    mailbox = None
     try:
-        mailbox = MailBox(mailbox_cfg["host"], port=mailbox_cfg["port"])
-        if mailbox_cfg.get("auth_type") == "xoauth2":
-            mailbox.xoauth2(mailbox_cfg["user"], mailbox_cfg["oauth_token"])
-        else:
-            mailbox.login(mailbox_cfg["user"], mailbox_cfg["password"])
+        mailbox = _login_mailbox(mailbox_cfg)
         for folder_info in mailbox.folder.list():
             folders.append({
                 "name": folder_info.name,
                 "flags": list(folder_info.flags) if hasattr(folder_info, 'flags') else [],
             })
-        mailbox.logout()
+    except MailboxIdentityError:
+        # Never swallow this: the poll loop records the refusal for the account
+        # so the UI asks for a reconnect instead of silently listing nothing.
+        raise
     except Exception as e:
         logger.error("IMAP folder list error: %s", e)
+    finally:
+        if mailbox is not None:
+            try:
+                mailbox.logout()
+            except Exception:
+                pass
     return folders
 
 
@@ -1755,6 +1769,19 @@ def _normalize_folder_name(name: str) -> str:
     if lower in _SYSTEM_FOLDER_NORMALIZE:
         return _SYSTEM_FOLDER_NORMALIZE[lower]
     return name
+
+
+# The folder names a mail client may give the "sent" folder. `_normalize_folder_name`
+# only maps the plain "Sent", so a provider naming it "Sent Items" (Outlook IMAP)
+# keeps its own name — the CRM's own sent copies, however, are always written to
+# the folder 'Sent' (server.py). Reconciliation must therefore compare the whole
+# family instead of one literal name (receive-side audit, 2026-11-10).
+_SENT_FOLDER_NAMES = frozenset({"sent", "sent items", "sent messages", "sent mail"})
+
+
+def _is_sent_folder(name: str | None) -> bool:
+    """True when `name` is a sent-folder name in any provider spelling."""
+    return (name or "").strip().lower() in _SENT_FOLDER_NAMES
 
 
 _EXCHANGE_DIAGNOSTIC_PREFIXES = ("sync issues", "conversation history", "outbox")
@@ -2798,27 +2825,40 @@ def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | No
                     )
                 except Exception:
                     logger.debug("Could not refresh UID for message %s", prior["id"])
+                # Mark the re-import as processed too. Without this the row was
+                # re-classified (and could re-post deal notes) on every poll
+                # that re-fetched the window — e.g. after a UIDVALIDITY change.
+                _mark_processed(account_id, uid_key or message_id_val, folder)
                 return prior["id"]
-        if account_id is not None and folder == "Sent":
+        if account_id is not None and _is_sent_folder(folder):
             # Skip the IMAP copy of a message the CRM stored when it was sent
             # (synthetic uid sent:outgoing:*). The CRM copy has a generated
             # Message-ID, so subject+recipient+time is the stable join.
+            #
+            # 2026-11-10 (receive-side audit): the match was hard-coded to the
+            # literal folder 'Sent'. A mailbox whose sent folder is called
+            # "Sent Items" / "Sent Messages" / "Sent Mail" therefore never
+            # reconciled, so the same email was stored twice — once as the CRM
+            # copy and once as the IMAP copy. The whole sent-family matches
+            # now, and the account scope is unchanged (one account only).
             try:
                 sent_date = mail_dates.parse_email_date(msg.get("date"))
                 if sent_date is not None:
                     dupe = db.query_one(
                         """SELECT id FROM mail_messages
-                            WHERE account_id = %s AND folder = 'Sent'
+                            WHERE account_id = %s AND lower(coalesce(folder, '')) = ANY(%s)
                               AND imap_uid LIKE 'sent:outgoing:%%'
                               AND lower(coalesce(subject, '')) = lower(%s)
                               AND lower(coalesce(to_addr, '')) = lower(%s)
                               AND date_received BETWEEN %s - interval '10 minutes'
                                                     AND %s + interval '10 minutes'
                             LIMIT 1""",
-                        (account_id, msg.get("subject") or "", msg.get("to") or "",
+                        (account_id, sorted(_SENT_FOLDER_NAMES),
+                         msg.get("subject") or "", msg.get("to") or "",
                          sent_date, sent_date),
                     )
                     if dupe:
+                        _mark_processed(account_id, uid_key, folder)
                         return dupe["id"]
             except Exception:
                 logger.debug("Sent-copy reconciliation failed", exc_info=True)
@@ -2833,6 +2873,7 @@ def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | No
                 (uid_key, folder),
             )
         if existing:
+            _mark_processed(account_id, uid_key, folder)
             return existing["id"]
 
         attachments = msg.get("attachments", [])

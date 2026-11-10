@@ -1,3 +1,54 @@
+## 2026-11-10 — Receive-side audit: wrong-account / wrong-folder filing (item 3)
+
+### Fixed
+- **Renaming or deleting a mail folder relabelled other accounts' messages.**
+  `_handle_mail_folder_update` / `_handle_mail_folder_delete` ran
+  `UPDATE mail_messages SET folder = … WHERE folder = <name>` with no account
+  predicate, so a folder in one mailbox also moved every other mailbox's
+  same-named folder (rename) or dumped it into INBOX (delete). Both are now
+  scoped to the folder's own `mail_folders.imap_account_id`; a folder with no
+  account relabels nothing.
+- **The legacy email import filed messages under the wrong mailbox.**
+  `import_email.py` copied the source `mail_messages.account_id` verbatim;
+  source and target id sequences are unrelated, so a message could land in
+  another person's mailbox. Accounts are now remapped **by email**
+  (`load_account_id_map`) and a message with no matching target mailbox is
+  skipped and reported.
+- **The legacy email import attached deal history to the wrong email.**
+  `mail_deal_links.message_id` was copied verbatim (a FK to a message row).
+  Links are now remapped through `load_message_id_map` on the real identity
+  `(account_id, imap_uid, folder)`; an unmapped link is skipped.
+- **`_list_imap_folders` bypassed the mailbox identity gate.** It built its
+  own `MailBox` + login, the only credential use in the scanner that did not
+  go through `_login_mailbox`. It now shares the gated login and re-raises
+  `MailboxIdentityError`, so a mis-bound credential cannot even LIST folders.
+- **CRM sent copy vs IMAP sent copy.** Reconciliation was pinned to the
+  literal folder `'Sent'`, so a mailbox whose sent folder is "Sent Items"
+  (Outlook IMAP) stored the same email twice (`sent:outgoing:*` copy plus the
+  IMAP copy). `_is_sent_folder` / `_SENT_FOLDER_NAMES` match the whole sent
+  family, still scoped to one account.
+- **Re-classification loop on a re-fetched window.** The Message-ID, sent-copy
+  and UID dedupe branches of `_store_message` returned an existing row without
+  marking it processed, so a UIDVALIDITY change or watermark reset re-ran
+  classification (and could re-post deal notes). All three mark processed now.
+
+### Verified
+- Every receive-side credential use is gated (`_mailbox_cfg_from_row`,
+  `_login_mailbox`, attachment fetch, server `_imap_connect`); no account is
+  resolved by email on the receive side; `mail_messages` dedupe identity is
+  `UNIQUE(account_id, imap_uid, folder)` and watermarks are per account.
+- **Prod (read-only, 1,909 messages, all 5 accounts): 0 real account/folder
+  mismatches.** 495 CRM-inbox (account 2) BCC copies counted separately; the
+  35 non-addressed messages are catch-all aliases, relay copies or BCC'd
+  thread replies. `~/Projects/plans/sietch/account-mismatch-headers-2026-11-10.csv`
+  is header-only as a result.
+
+### Tests
+- New `tests/test_mail_receive_attribution.py` (21, offline; verified to fail
+  on the pre-fix tree), added to `.github/workflows/smoke.yml`. All mail
+  suites and mail JS suites re-run green; the 4 pre-existing failures are
+  unchanged at HEAD.
+
 ## 2026-11-10 — Strict per-account mail credentials (item 2)
 
 ### Fixed
