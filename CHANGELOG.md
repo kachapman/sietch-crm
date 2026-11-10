@@ -1,4 +1,4 @@
-## 2026-11-10 — MCP document read + OCR worker queue (branch `feat/mcp-document-read`)
+## 2026-11-10 — MCP document read + OCR worker queue (v2.5.4)
 
 ### Added
 - **Shared text extractor** `document_text.py`: `pdftotext -layout` per page
@@ -49,6 +49,7 @@
   helper whitelists ids, SHA-256, page numbers, status and engine versions.
 
 ### Status
+- **VERSION 2.5.4** (patch bump for the production API deploy).
 - Merged into `main` with a clean `--no-ff` merge (`60f2b4d` + `bb9623d`);
   wording is host-agnostic ("OCR worker"), laptop values only as labelled
   examples in `docs/OCR_WORKER.md`. Deploy to production follows the
