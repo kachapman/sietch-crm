@@ -70,6 +70,37 @@
 
 # Changelog
 
+## 2.5.3 — 2026-11-10
+
+### Added
+- **Send-time sender guard.** A job's Contact is the contractor; admins map a
+  Contact to the branded mailbox (`mail_accounts.contractor_contact_id`).
+  Sends from any other mailbox for that job are refused (409) and recorded in
+  `mail_send_refusals`. Replies must come from the account that received the
+  original message; a thread/mapping conflict is blocked with a clear reason.
+  `POST /api/v2/mail/send/preflight` lets the compose dialog block before Send.
+- Compose auto-selects the job's mapped mailbox at every entry point and shows
+  "Sending as …"; with no mapping the From select starts empty ("Choose
+  account…") instead of defaulting to the first account alphabetically.
+  `sentAs` is shown after sending; history snapshots record the account.
+- Admin → Email accounts: set/clear the contractor Contact mapping (search).
+- Durable outgoing errors (`mail_outgoing.error`, `fallback_reason`), persistent
+  auth banner in the mail tab and compose, and an admin notification when an
+  account transitions into `auth_error`.
+- IMAP: Message-ID reconciliation (no duplicate rows on UIDVALIDITY change),
+  Sent CRM-copy reconciliation, contractor-scoped auto-link, and
+  `scripts/dedupe_mail_messages.py` (dry-run) for existing duplicates.
+
+### Fixed
+- The send path no longer clobbers a token the scanner just rotated:
+  `_persist_exchange_refresh` was removed; all Exchange refreshes use the
+  `mail_oauth` compare-and-swap and failures set `auth_error`.
+- Graph→SMTP fallback is recorded on the outgoing row instead of being silent.
+
+### Migrations
+- 050_mail_sender_guard.sql (additive; safe partial unique index).
+
+
 ## 2.5.2 — 2026-11-09
 
 ### Changed
