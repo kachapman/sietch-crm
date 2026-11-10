@@ -1712,11 +1712,37 @@ function applyComposeFromAccent() {
  * @param {string} opts.subject
  * @returns {Promise<boolean>} true when the user confirmed
  */
-async function confirmMailSend({ account, to = "", subject = "" }) {
+async function confirmMailSend({ account, to = "", subject = "", dealId = null, replyToMessageId = null }) {
   const email = (account && account.email) || "";
   const label = (account && (account.smtp_from_name || account.display_name)) || "";
   const accent = (account && account.tab_color) || "var(--accent)";
   const verification = (account && account.sendVerification) || "n/a";
+  // Server-side preflight: BLOCK a send the guard will refuse (2026-11-10).
+  let preflight = null;
+  if (account && account.id) {
+    try {
+      preflight = await api("/api/v2/mail/send/preflight", {
+        method: "POST",
+        body: JSON.stringify({
+          account_id: account.id,
+          deal_id: dealId || null,
+          reply_to_message_id: replyToMessageId || null,
+        }),
+      });
+    } catch (e) {
+      preflight = { ok: false, error: (e && e.message) || "This mailbox cannot send for this job." };
+    }
+  }
+  if (preflight && preflight.ok === false) {
+    await confirmDialog({
+      title: "Wrong sending account",
+      message: preflight.error || "This mailbox cannot send for this job.",
+      confirmLabel: "OK",
+      danger: true,
+      hideCancel: true,
+    });
+    return false;
+  }
   const identityMismatch = verification === "mismatch";
   const unverified = verification === "unverified";
 
@@ -1739,6 +1765,7 @@ async function confirmMailSend({ account, to = "", subject = "" }) {
         <div style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted);">Sending from</div>
         <div style="font-size:1rem; font-weight:700; color:${accent}; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-all;">${escapeHtml(email)}</div>
         ${label && label !== email ? `<div style="font-size:0.8rem; color:var(--muted); margin-top:0.1rem;">${escapeHtml(label)}</div>` : ''}
+        ${preflight && preflight.contactName ? `<div style="font-size:0.78rem; color:var(--muted); margin-top:0.1rem;">for ${escapeHtml(preflight.contactName)}</div>` : ''}
       </div>
     </div>
     <div style="margin-top:0.6rem; font-size:0.85rem; color:var(--text);">
@@ -21464,6 +21491,7 @@ async function openMailInboxModal() {
     const data = await api("/api/v2/mail/accounts");
     const accounts = data.accounts || [];
     mailState.accounts = accounts;
+    renderMailAuthBanner(accounts);
 
     let html = '';
 
@@ -21683,6 +21711,41 @@ async function switchMailTab(btn) {
   }
 }
 
+// ── Sender guard helpers (2026-11-10) ──────────────────────────────────────
+// A job's Contact is the contractor identity; mail_accounts.contractorContactId
+// maps that Contact to the mailbox branded for it. Never default to the first
+// account alphabetically: with no mapping the From select starts empty.
+function composeAccountOptionsHtml(selectedId) {
+  const out = ['<option value="">Choose account…</option>'];
+  for (const a of (mailState.accounts || [])) {
+    out.push(`<option value="${a.id}"${String(a.id) === String(selectedId) ? ' selected' : ''}>${escapeHtml(a.smtp_from_name || a.email)} &lt;${escapeHtml(a.email)}&gt;</option>`);
+  }
+  return out.join('');
+}
+
+function mappedAccountIdsForContact(contactId) {
+  const cid = Number(contactId);
+  if (!cid) return [];
+  return (mailState.accounts || [])
+    .filter(a => Number(a.contractorContactId) === cid)
+    .map(a => a.id);
+}
+
+async function resolveComposeAccountId({ dealId = null, messageAccountId = null } = {}) {
+  if (dealId) {
+    try {
+      const project = await api(`/api/v2/projects/${dealId}`);
+      const cid = project?.contactId ?? project?.contact?.id ?? null;
+      const ids = mappedAccountIdsForContact(cid);
+      if (ids.length) return ids[0];
+    } catch (_e) { /* fall through to the message account */ }
+  }
+  // The mailbox that received the original message is the correct reply
+  // account (Ken 12:39). Still never the first account alphabetically.
+  if (messageAccountId) return Number(messageAccountId) || null;
+  return null;
+}
+
 async function openComposeModal(opts = {}) {
   const modal = $('#compose-email-modal');
   if (!modal) return;
@@ -21709,22 +21772,20 @@ async function openComposeModal(opts = {}) {
   const dealSel = $('#compose-deal-selected');
   if (dealSel) { dealSel.innerHTML = ''; delete dealSel.dataset.dealId; }
 
-  // Populate From dropdown
+  // Populate From dropdown. Default = the mailbox mapped to the job's
+  // Contact, else the mailbox that received the original message, else EMPTY
+  // ("Choose account…") — never the first account alphabetically (2026-11-10).
   const fromSelect = $('#compose-from-account');
   if (fromSelect && mailState.accounts.length > 0) {
-    fromSelect.innerHTML = mailState.accounts.map(a =>
-      `<option value="${a.id}">${escapeHtml(a.smtp_from_name || a.email)} &lt;${escapeHtml(a.email)}&gt;</option>`
-    ).join('');
-    // Default to the account of the message being replied to / forwarded
-    // (live bug 2026-10-29: the dropdown defaulted to accounts[0], so a
-    // reply to an MDM message offered the Aplus mailbox).
-    if (opts.fromAccountId) {
-      const wanted = parseInt(opts.fromAccountId, 10);
-      if (!Number.isNaN(wanted) && mailState.accounts.some(a => a.id === wanted)) {
-        fromSelect.value = String(wanted);
-      }
-    }
+    const wanted = await resolveComposeAccountId({
+      dealId: opts.dealId || null,
+      messageAccountId: opts.fromAccountId || null,
+    });
+    fromSelect.innerHTML = composeAccountOptionsHtml(wanted || '');
+    fromSelect.value = wanted ? String(wanted) : '';
   }
+  modal.dataset.replyToMessageId = opts.replyToMessageId ? String(opts.replyToMessageId) : '';
+  modal.dataset.dealId = opts.dealId ? String(opts.dealId) : '';
   applyComposeFromAccent();
 
   // Show the Graph sendMail banner if the active from-account is a
@@ -22020,7 +22081,9 @@ async function openComposeModal(opts = {}) {
           });
           attachments.push({ filename: file.name, content: b64, mime_type: file.type || 'application/octet-stream' });
         }
+        const replyTo = parseInt($('#compose-email-modal')?.dataset?.replyToMessageId) || null;
         const payload = { account_id: accountId, to, cc, bcc, subject, body, deal_id: dealId };
+        if (replyTo) payload.reply_to_message_id = replyTo;
         if (attachments.length > 0) payload.attachments = attachments;
         const result = await api('/api/v2/mail/send', {
           method: 'POST',
@@ -22029,7 +22092,8 @@ async function openComposeModal(opts = {}) {
         const viaLabel = result.method === 'graph' ? 'via Microsoft Graph'
           : result.method === 'smtp_oauth' ? 'via SMTP (OAuth)'
           : result.method === 'smtp_password' ? 'via SMTP' : '';
-        showToast(viaLabel ? `Email sent ${viaLabel}` : 'Email sent');
+        showToast((viaLabel ? `Email sent ${viaLabel}` : 'Email sent')
+          + (result.sentAs ? ` as ${result.sentAs}` : ''));
         addEventLogEntry("email", dealId || null, "", `Email sent to ${to}`, true);
         modal.classList.add('hidden');
         // Reset form
@@ -22225,7 +22289,7 @@ function createComposeTab(opts = {}) {
   switchToComposeTab(tabId);
 }
 
-function renderComposeTabContent(container, tabId, opts = {}) {
+async function renderComposeTabContent(container, tabId, opts = {}) {
   container.innerHTML = `
     <div style="flex-shrink:0; padding:0.5rem 0.75rem; border-bottom:1px solid var(--border); display:flex; gap:0.5rem; align-items:center;">
       <div style="flex:1;">
@@ -22295,13 +22359,18 @@ function renderComposeTabContent(container, tabId, opts = {}) {
     </div>
   `;
 
-  // Populate From dropdown
+  // Populate From dropdown: job-mapped mailbox, else the original message's
+  // mailbox, else EMPTY (never the first account alphabetically, 2026-11-10).
   const fromSelect = container.querySelector('.compose-tab-from');
   if (fromSelect && mailState.accounts.length > 0) {
-    fromSelect.innerHTML = mailState.accounts.map(a =>
-      `<option value="${a.id}">${escapeHtml(a.smtp_from_name || a.email)} &lt;${escapeHtml(a.email)}&gt;</option>`
-    ).join('');
+    const wanted = await resolveComposeAccountId({
+      dealId: opts.dealId || null,
+      messageAccountId: opts.fromAccountId || null,
+    });
+    fromSelect.innerHTML = composeAccountOptionsHtml(wanted || '');
+    fromSelect.value = wanted ? String(wanted) : '';
   }
+  container.dataset.replyToMessageId = opts.replyToMessageId ? String(opts.replyToMessageId) : '';
 
   // Apply opts
   if (opts.to) container.querySelector('.compose-tab-to').value = opts.to;
@@ -22398,7 +22467,8 @@ function renderComposeTabContent(container, tabId, opts = {}) {
     if (!accountId || !to || !subject) { showToast('From, To, and Subject are required', true); return; }
     // Confirm the sending mailbox (the account is accented in the dialog).
     const _tabAcct = (mailState.accounts || []).find(a => a.id === accountId) || null;
-    if (!await confirmMailSend({ account: _tabAcct, to, subject })) { return; }
+    if (!await confirmMailSend({ account: _tabAcct, to, subject, dealId: dealId,
+                                 replyToMessageId: parseInt(container.dataset.replyToMessageId) || null })) { return; }
     const sendBtn = container.querySelector('.compose-tab-send');
     sendBtn.disabled = true;
     sendBtn.innerHTML = '<i class="ti ti-loader" style="margin-right:0.3rem;"></i>Sending...';
@@ -22409,13 +22479,16 @@ function renderComposeTabContent(container, tabId, opts = {}) {
         const b64 = await new Promise(resolve => { reader.onload = () => resolve(reader.result.split(',')[1]); reader.readAsDataURL(file); });
         attachments.push({ filename: file.name, content: b64, mime_type: file.type || 'application/octet-stream' });
       }
+      const replyTo = parseInt(container.dataset.replyToMessageId) || null;
       const payload = { account_id: accountId, to, cc, bcc, subject, body, deal_id: dealId };
+      if (replyTo) payload.reply_to_message_id = replyTo;
       if (attachments.length > 0) payload.attachments = attachments;
       const tabResult = await api('/api/v2/mail/send', { method: 'POST', body: JSON.stringify(payload) });
       const tabVia = tabResult.method === 'graph' ? 'via Microsoft Graph'
         : tabResult.method === 'smtp_oauth' ? 'via SMTP (OAuth)'
         : tabResult.method === 'smtp_password' ? 'via SMTP' : '';
-      showToast(tabVia ? `Email sent ${tabVia}` : 'Email sent');
+      showToast((tabVia ? `Email sent ${tabVia}` : 'Email sent')
+        + (tabResult.sentAs ? ` as ${tabResult.sentAs}` : ''));
       addEventLogEntry("email", dealId || null, "", `Email sent to ${to}`, true);
       closeComposeTabNoConfirm(tabId);
     } catch (e) { showToast('Send failed: ' + e.message, true); }
@@ -22937,6 +23010,9 @@ async function openReplyCompose(messageId, type = 'reply') {
       subject: data.subject || '',
       body: data.body || '',
       title: type === 'forward' ? 'Forward Email' : 'Reply to Email',
+      fromAccountId: data.account_id || null,
+      dealId: data.deal_id || null,
+      replyToMessageId: messageId,
     });
   } catch (e) {
     showToast('Failed to load message: ' + e.message, true);
@@ -23400,6 +23476,16 @@ function openAccountSettingsModal(editAccountId, opts) {
         // Graph sendMail status (Microsoft only). Drives the connect/disconnect UI
         // and the compose-window banner.
         updateGraphStatusBlock(acct, editAccountId);
+        // Contractor → mailbox mapping (2026-11-10).
+        const cSection = $('#account-settings-contractor-section');
+        if (cSection) {
+          cSection.classList.remove('hidden');
+          cSection.dataset.contactId = acct.contractorContactId ? String(acct.contractorContactId) : '';
+          const cur = $('#account-settings-contractor-current');
+          if (cur) cur.textContent = acct.contractorContactName
+            ? `Mapped to: ${acct.contractorContactName} (#${acct.contractorContactId})`
+            : 'Not mapped — compose will not auto-select this mailbox for any job.';
+        }
         // Sharing section
         if (sharingSection) {
           if (acct.is_crm_mail === true) {
@@ -23539,6 +23625,50 @@ function openAccountSettingsModal(editAccountId, opts) {
     });
   }
 
+  // Contractor mapping search (bind once).
+  const cSearch = $('#account-settings-contractor-search');
+  if (cSearch && !cSearch.dataset.bound) {
+    cSearch.dataset.bound = '1';
+    let t = null;
+    cSearch.addEventListener('input', () => {
+      clearTimeout(t);
+      t = setTimeout(async () => {
+        const q = cSearch.value.trim();
+        const box = $('#account-settings-contractor-results');
+        if (!box) return;
+        if (q.length < 2) { box.innerHTML = ''; return; }
+        try {
+          const rows = await api('/api/v2/contacts?q=' + encodeURIComponent(q) + '&count=8');
+          const list = Array.isArray(rows) ? rows : (rows.contacts || []);
+          box.innerHTML = list.map(c => {
+            const name = c.isCompany ? (c.company || c.displayName) : `${c.firstName || ''} ${c.lastName || ''}`.trim();
+            return `<button type="button" class="btn btn-ghost btn-sm" data-mcp-contractor="${c.id}" data-name="${escapeHtml(name || c.email || '')}" style="display:block;text-align:left;width:100%;">${escapeHtml(name || c.email || '')} <span style="color:var(--muted);">#${c.id}</span></button>`;
+          }).join('') || '<div style="color:var(--muted);font-size:0.78rem;">No matches</div>';
+          box.querySelectorAll('[data-mcp-contractor]').forEach(btn => {
+            btn.addEventListener('click', () => {
+              const sec = $('#account-settings-contractor-section');
+              if (sec) sec.dataset.contactId = btn.dataset.mcpContractor;
+              const cur = $('#account-settings-contractor-current');
+              if (cur) cur.textContent = `Mapped to: ${btn.dataset.name} (#${btn.dataset.mcpContractor})`;
+              box.innerHTML = '';
+              cSearch.value = '';
+            });
+          });
+        } catch (_e) { box.innerHTML = ''; }
+      }, 250);
+    });
+  }
+  const cClear = $('#account-settings-contractor-clear');
+  if (cClear && !cClear.dataset.bound) {
+    cClear.dataset.bound = '1';
+    cClear.addEventListener('click', () => {
+      const sec = $('#account-settings-contractor-section');
+      if (sec) sec.dataset.contactId = '';
+      const cur = $('#account-settings-contractor-current');
+      if (cur) cur.textContent = 'Not mapped — compose will not auto-select this mailbox for any job.';
+    });
+  }
+
   // Bind OAuth disconnect (clears THIS account's IMAP/SMTP tokens only)
   const oauthDisconnectBtn = $('#account-settings-oauth-disconnect');
   if (oauthDisconnectBtn && !oauthDisconnectBtn.dataset.bound) {
@@ -23578,6 +23708,8 @@ function openAccountSettingsModal(editAccountId, opts) {
           signature_html: $('#account-settings-signature').value,
           tab_icon: $('#account-settings-tab-icons')?.dataset.value || 'user',
           tab_color: $('#account-settings-tab-colors')?.dataset.value || 'var(--accent)',
+          contractor_contact_id: $('#account-settings-contractor-section')?.dataset.contactId
+            ? parseInt($('#account-settings-contractor-section').dataset.contactId, 10) : null,
         };
         if (modal.dataset.crmMail === '1') payload.is_crm_mail = true;
       if (!payload.email || !payload.imap_host) { showToast('Email and IMAP host required', true); return; }
@@ -23850,6 +23982,19 @@ async function disconnectExchangeOAuth(accountId) {
 // Show the amber banner at the top of the compose modal when the active
 // from-account is a Microsoft OAuth account without a connected Graph token.
 // Re-run on every send failure + every modal open.
+function renderMailAuthBanner(accounts) {
+  // Persistent banner (2026-11-10): a dead token or identity mismatch must be
+  // visible, not discovered when a send fails.
+  const banner = $('#mail-auth-banner');
+  if (!banner) return;
+  const broken = (accounts || []).filter(a => a && a.authError);
+  if (!broken.length) { banner.classList.add('hidden'); banner.innerHTML = ''; return; }
+  banner.classList.remove('hidden');
+  banner.innerHTML = '<i class="ti ti-alert-triangle"></i> <strong>Mail account needs reconnecting:</strong> '
+    + broken.map(a => escapeHtml(a.email || ('account ' + a.id))).join(', ')
+    + ' <span style="color:var(--muted);">— sending and sync for it will fail until it is reconnected.</span>';
+}
+
 function updateComposeGraphBanner() {
   const banner = $('#compose-graph-banner');
   if (!banner) return;
@@ -23863,6 +24008,12 @@ function updateComposeGraphBanner() {
     const acct = (data.accounts || []).find(a => a.id == accountId);
     if (!acct || (acct.authType || '').toLowerCase() !== 'microsoft') {
       banner.classList.add('hidden');
+      return;
+    }
+    const textEl = $('#compose-graph-banner-text');
+    if (acct.authError) {
+      if (textEl) textEl.textContent = `${acct.email} needs reconnecting: ${acct.authError}`;
+      banner.classList.remove('hidden');
       return;
     }
     if (acct.graphStatus === 'connected' || acct.graphStatus === 'auto-renew') {
@@ -27695,6 +27846,8 @@ function bindEmailPreviewActionButtons(modal, norm, fullMail, messageId, close, 
           // 2026-10-29: it defaulted to accounts[0], so replying to an MDM
           // message offered the Aplus mailbox).
           fromAccountId: fullMail && (fullMail.account_id ?? fullMail.accountId) ? (fullMail.account_id ?? fullMail.accountId) : null,
+          dealId: oppPreviewContext?.oppId || null,
+          replyToMessageId: messageId,
         });
       } else if (action === 'archive') {
         api(`/api/v2/mail/messages/${encodeURIComponent(messageId)}/move`, { method: 'POST', body: JSON.stringify({ folder: 'Archive' }) })
@@ -27736,6 +27889,8 @@ async function openDraftInComposeById(id) {
       body: draft.body_html || draft.body_text || '',
       title: 'Edit Draft',
       draftId: draft.id,
+      fromAccountId: draft.account_id || null,
+      dealId: draft.deal_id || null,
     });
   } catch (err) { showToast('Failed to load draft: ' + (err.message || err), true); }
 }
@@ -27836,7 +27991,7 @@ function mailForwardHeader(norm, fullMail) {
     + `<p style="margin:0 0 0.6rem;"><strong>Subject:</strong> ${escapeHtml(subject)}</p>`;
 }
 
-function renderInlineReply(panel, type, messageId, norm, messageAccountId) {
+async function renderInlineReply(panel, type, messageId, norm, messageAccountId) {
   // Remove any existing inline reply
   const existing = panel.querySelector('.mail-inline-reply');
   if (existing) { existing.remove(); return; }
@@ -27854,13 +28009,12 @@ function renderInlineReply(panel, type, messageId, norm, messageAccountId) {
   // through the same account regardless of the tab it was sent from
   // (live bug 2026-10-29).
   const accounts = mailState.accounts || [];
-  const fallbackAccountId = (() => {
-    const active = mailState.activeAccount;
-    if (active && active !== 'crm' && !Number.isNaN(parseInt(active, 10))) return parseInt(active, 10);
-    return accounts.length ? accounts[0].id : null;
-  })();
-  let fromAccountId = parseInt(messageAccountId, 10);
-  if (Number.isNaN(fromAccountId)) fromAccountId = fallbackAccountId;
+  // Job-mapped mailbox first, then the mailbox that received the message.
+  // Never the first account alphabetically (2026-11-10).
+  const fromAccountId = await resolveComposeAccountId({
+    dealId: oppPreviewContext?.oppId || null,
+    messageAccountId: messageAccountId,
+  });
   const fromAccount = accounts.find(a => a.id === fromAccountId) || null;
   const fromAccountEmail = fromAccount ? (fromAccount.email || '') : '';
   const fromAccountName = fromAccount ? (fromAccount.smtp_from_name || fromAccount.email || '') : '';
@@ -27886,7 +28040,7 @@ function renderInlineReply(panel, type, messageId, norm, messageAccountId) {
   replyDiv.innerHTML = `
     <div class="mail-from-accent" style="display:flex; gap:0.5rem; margin-bottom:0.4rem; align-items:center; padding:0.3rem 0.5rem; border:1px solid var(--border); border-left:4px solid var(--accent); border-radius:4px; background:linear-gradient(90deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent 60%);">
       <label style="font-size:0.8rem; color:var(--muted); width:2rem;">From</label>
-      <select class="inline-reply-from" style="flex:1; padding:0.3rem 0.4rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem; background:var(--bg); color:var(--text);">${accounts.map(a => `<option value="${a.id}"${a.id === fromAccountId ? ' selected' : ''}>${escapeHtml(a.smtp_from_name || a.email || '')} &lt;${escapeHtml(a.email || '')}&gt;</option>`).join('')}</select>
+      <select class="inline-reply-from" style="flex:1; padding:0.3rem 0.4rem; border:1px solid var(--border); border-radius:4px; font-size:0.85rem; background:var(--bg); color:var(--text);">${composeAccountOptionsHtml(fromAccountId || '')}</select>
     </div>
     ${fromAccountEmail ? `<div class="mail-from-accent-label" style="margin:-0.2rem 0 0.4rem 2.5rem; font-size:0.78rem; color:var(--accent); font-weight:600;">${escapeHtml(fromAccountName)}${fromAccountName && fromAccountName !== fromAccountEmail ? ' — ' : ''}${escapeHtml(fromAccountEmail)}</div>` : ''}
     <div style="display:flex; gap:0.5rem; margin-bottom:0.4rem;">
@@ -27947,15 +28101,20 @@ function renderInlineReply(panel, type, messageId, norm, messageAccountId) {
         account: acct,
         to: toVal,
         subject: subjectVal,
+        dealId: oppPreviewContext?.oppId || null,
+        replyToMessageId: messageId,
       });
       if (!confirmed) return;
       const inlineResult = await api("/api/v2/mail/send", {
         method: "POST",
-        body: JSON.stringify({ account_id: accountId, to: toVal, subject: subjectVal, body: bodyHtml })
+        body: JSON.stringify({ account_id: accountId, to: toVal, subject: subjectVal, body: bodyHtml,
+                               deal_id: oppPreviewContext?.oppId || null,
+                               reply_to_message_id: messageId })
       });
       const inlineVia = inlineResult.method === 'graph' ? 'via Microsoft Graph'
         : inlineResult.method && inlineResult.method.startsWith('smtp') ? 'via SMTP' : '';
-      showToast(inlineVia ? `Reply sent ${inlineVia}` : "Reply sent");
+      showToast((inlineVia ? `Reply sent ${inlineVia}` : "Reply sent")
+        + (inlineResult.sentAs ? ` as ${inlineResult.sentAs}` : ''));
       addEventLogEntry("email", null, "", `Reply sent to ${toVal}`, true);
       replyDiv.remove();
     } catch (e) { showToast("Send failed: " + e.message, true); }

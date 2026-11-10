@@ -692,6 +692,7 @@
       <div class="mail-main-area">
         <div id="mail-list-container" class="mail-list-container">
           <!-- rows populated by JS -->
+          <div id="mail-auth-banner" class="hidden" role="alert" style="margin:0.4rem 0.6rem; padding:0.45rem 0.6rem; border:1px solid #ef4444; border-left:4px solid #ef4444; border-radius:4px; background:rgba(239,68,68,0.10); color:var(--text); font-size:0.8rem; display:flex; gap:0.4rem; align-items:center;"></div>
           <div id="mail-list" class="mail-list"></div>
         </div>
 
@@ -1253,6 +1254,17 @@
             <button type="button" id="account-settings-graph-connect" class="btn btn-primary" style="margin-left:auto;"><i class="ti ti-brand-windows"></i> Connect Graph</button>
             <button type="button" id="account-settings-graph-disconnect" class="btn btn-ghost btn-small hidden"><i class="ti ti-unlink"></i> Disconnect</button>
           </div>
+        </div>
+
+        <div id="account-settings-contractor-section" class="hidden" style="border-top:1px solid var(--border); margin-top:0.75rem; padding-top:0.75rem;">
+          <h4 style="margin:0 0 0.3rem; font-size:0.85rem; color:var(--text);"><i class="ti ti-building" style="margin-right:0.25rem;"></i>Contractor contact (sender mapping)</h4>
+          <p style="font-size:0.8rem; color:var(--muted); margin:0 0 0.5rem;">The job's Contact is the contractor. When this mailbox is mapped to that Contact, compose auto-selects it for that contractor's jobs and the server refuses to send those jobs from any other mailbox.</p>
+          <div id="account-settings-contractor-current" style="font-size:0.8rem; margin-bottom:0.4rem;"></div>
+          <div style="display:flex; gap:0.4rem; align-items:center;">
+            <input id="account-settings-contractor-search" type="text" placeholder="Search contacts by name or company…" style="flex:1; padding:0.35rem 0.45rem; border:1px solid var(--border); border-radius:4px; font-size:0.82rem;" />
+            <button type="button" id="account-settings-contractor-clear" class="btn btn-ghost btn-sm">Clear</button>
+          </div>
+          <div id="account-settings-contractor-results" style="margin-top:0.3rem;"></div>
         </div>
 
         <div id="account-settings-sharing-section" class="hidden" style="border-top:1px solid var(--border); margin-top:0.75rem; padding-top:0.75rem;">
@@ -4048,6 +4060,6 @@
 
   <script src="date-only.js?v=1.0.0"></script>
   <script src="api-token-ui.js?v=1.0.0"></script>
-  <script src="app.js?v=3.7.53" type="module"></script>
+  <script src="app.js?v=3.7.54" type="module"></script>
 </body>
 </html>
