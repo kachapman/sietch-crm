@@ -8,18 +8,17 @@
 **Status: COMMITTED LOCALLY on branch `fix/mail-sender-guard` (off `main` @
 `e705ad9`) — merged to local `main` only. NOT pushed, NOT deployed.**
 
-- Job Contact → mailbox mapping (`mail_accounts.contractor_contact_id`) with an
-  admin UI (Email accounts); compose auto-selects it at every entry point and
-  the server refuses (409 + `mail_send_refusals`) any other mailbox for that
-  job; replies must come from the original message's account; thread/mapping
-  conflicts are blocked with a clear reason; no alphabetical default.
+- Send-time guard is reply-only: a reply/forward must come from the original
+  message's account (plain visible 409); the selected account's credential
+  identity is verified. The job/Contact → mailbox mapping was removed entirely
+  (2026-11-10) — no mapping columns, audit table, admin UI or client helpers.
 - `POST /api/v2/mail/send/preflight` blocks before Send; `sentAs` shown after;
   history snapshots record the account.
 - Tokens: `_persist_exchange_refresh` removed; all Exchange refreshes use the
   `mail_oauth` CAS; failures set `auth_error` + notify admins.
 - Durable outgoing errors + fallback reason; persistent auth banners.
-- IMAP: Message-ID reconciliation, Sent CRM-copy reconciliation,
-  contractor-scoped auto-link, dedupe script (dry-run).
+- IMAP: Message-ID reconciliation, Sent CRM-copy reconciliation, dedupe script
+  (dry-run).
 - Migration 050; backfill proposal at
   `~/Projects/plans/sietch/email-audit-backfill-proposal.md`.
 - Tests: `test_mail_sender_guard.py` (18), `test_mail_sender_guard_ui.mjs` (7),

@@ -63,57 +63,26 @@ class FakeDB:
 
 
 class TestGuardLogic(unittest.TestCase):
-    def test_mapped_account_allowed(self):
-        dbx = FakeDB(one=lambda sql, p: (
-            {"contact_id": 55} if "opportunities" in sql else {"id": 1}),
-            rows=[{"id": 1, "email": "a@example.invalid"},
-                  {"id": 2, "email": "b@example.invalid"}])
-        out = guard.evaluate(dbx, account={"id": 1, "email": "a@example.invalid"}, deal_id=9)
-        self.assertTrue(out["allowed"])
-        self.assertEqual(out["contact_id"], 55)
-
-    def test_other_account_blocked(self):
-        dbx = FakeDB(one=lambda sql, p: (
-            {"contact_id": 55} if "opportunities" in sql else {"id": 1}),
-            rows=[{"id": 1, "email": "a@example.invalid"}])
-        out = guard.evaluate(dbx, account={"id": 2, "email": "b@example.invalid"}, deal_id=9)
-        self.assertFalse(out["allowed"])
-        self.assertEqual(out["reason"], guard.REASON_MAPPED_MISMATCH)
-
-    def test_no_mapping_allows_manual_pick(self):
-        dbx = FakeDB(one=lambda sql, p: {"contact_id": 55}, rows=[])
+    def test_new_email_is_allowed_from_any_account(self):
+        dbx = FakeDB(one={}, rows=[])
         out = guard.evaluate(dbx, account={"id": 3, "email": "c@example.invalid"}, deal_id=9)
         self.assertTrue(out["allowed"])
+        self.assertIsNone(out["original_account_id"])
 
     def test_reply_from_wrong_account_blocked(self):
-        dbx = FakeDB(one=lambda sql, p: (
-            {"account_id": 1} if "mail_messages" in sql else {"contact_id": None}),
-            rows=[])
+        dbx = FakeDB(one=lambda sql, p: {"account_id": 1})
         out = guard.evaluate(dbx, account={"id": 2, "email": "b@example.invalid"},
                              reply_to_message_id=44)
         self.assertFalse(out["allowed"])
         self.assertEqual(out["reason"], guard.REASON_ORIGINAL_MISMATCH)
+        self.assertEqual(out["original_account_id"], 1)
 
-    def test_thread_conflict_blocked(self):
-        # thread received on account 2, job mapped to account 1
-        def one(sql, p):
-            if "mail_deal_links" in sql:
-                return {"opportunity_id": 9}
-            if "mail_messages" in sql:
-                return {"account_id": 2}
-            if "opportunities" in sql:
-                return {"contact_id": 55}
-            return {"id": 1}
-        dbx = FakeDB(one=one, rows=[{"id": 1, "email": "a@example.invalid"}])
-        out = guard.evaluate(dbx, account={"id": 1, "email": "a@example.invalid"},
+    def test_reply_from_original_account_allowed(self):
+        dbx = FakeDB(one=lambda sql, p: {"account_id": 2})
+        out = guard.evaluate(dbx, account={"id": 2, "email": "b@example.invalid"},
                              reply_to_message_id=44)
-        self.assertFalse(out["allowed"])
-        self.assertEqual(out["reason"], guard.REASON_THREAD_CONFLICT)
-
-    def test_refusal_is_logged(self):
-        dbx = FakeDB()
-        guard.log_refusal(dbx, user_id=7, account_id=2, deal_id=9, reason="mapped_mismatch")
-        self.assertIn("mail_send_refusals", dbx.writes[0][0])
+        self.assertTrue(out["allowed"])
+        self.assertEqual(out["original_account_id"], 2)
 
 
 class TestNetworkGuard(unittest.TestCase):
@@ -140,35 +109,35 @@ class TestNetworkGuard(unittest.TestCase):
 class TestHandlerIntegration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        if db.query_one("SELECT 1 AS ok FROM information_schema.tables "
-                        "WHERE table_name='mail_send_refusals'") is None:
+        if db.query_one(
+            "SELECT 1 AS ok FROM information_schema.columns "
+            "WHERE table_name='mail_outgoing' AND column_name='error'"
+        ) is None:
             raise unittest.SkipTest("migration 050 not applied")
         cls.user = db.query_one(
             """INSERT INTO users (email, display_name, password_hash, password_salt,
                                   is_admin, is_active, role)
                VALUES (%s, 'Guard Test', 'x', 'x', TRUE, TRUE, 'admin') RETURNING id""",
             (f"guard-{S}@example.invalid",))
-        cls.contact = db.query_one(
-            "INSERT INTO contacts (company, is_company) VALUES (%s, TRUE) RETURNING id",
-            (f"Guard Contractor {S}",))
-        cls.other_contact = db.query_one(
-            "INSERT INTO contacts (company, is_company) VALUES (%s, TRUE) RETURNING id",
-            (f"Other Contractor {S}",))
         cls.acct = db.query_one(
             """INSERT INTO mail_accounts (email, display_name, smtp_from_name, imap_host,
-                   password_encrypted, owner_user_id, contractor_contact_id)
-               VALUES (%s, 'Mapped', 'Mapped Brand', 'imap.example.invalid', 'x', %s, %s)
+                   password_encrypted, owner_user_id)
+               VALUES (%s, 'Mapped', 'Mapped Brand', 'imap.example.invalid', 'x', %s)
                RETURNING id""",
-            (f"mapped-{S}@example.invalid", cls.user["id"], cls.contact["id"]))
+            (f"mapped-{S}@example.invalid", cls.user["id"]))
         cls.other_acct = db.query_one(
             """INSERT INTO mail_accounts (email, display_name, imap_host,
-                   password_encrypted, owner_user_id, contractor_contact_id)
-               VALUES (%s, 'Other', 'imap.example.invalid', 'x', %s, %s) RETURNING id""",
-            (f"other-{S}@example.invalid", cls.user["id"], cls.other_contact["id"]))
+                   password_encrypted, owner_user_id)
+               VALUES (%s, 'Other', 'imap.example.invalid', 'x', %s) RETURNING id""",
+            (f"other-{S}@example.invalid", cls.user["id"]))
         cls.deal = db.query_one(
-            """INSERT INTO opportunities (title, contact_id, responsible_user_id, created_by)
-               VALUES (%s, %s, %s, %s) RETURNING id""",
-            (f"Guard job {S}", cls.contact["id"], cls.user["id"], cls.user["id"]))
+            """INSERT INTO opportunities (title, responsible_user_id, created_by)
+               VALUES (%s, %s, %s) RETURNING id""",
+            (f"Guard job {S}", cls.user["id"], cls.user["id"]))
+        cls.message = db.query_one(
+            """INSERT INTO mail_messages (account_id, imap_uid, message_id, subject)
+               VALUES (%s, %s, %s, 'original') RETURNING id""",
+            (cls.acct["id"], f"uid-{S}", f"orig-{S}@example.invalid"))
         cls.session = auth.create_session(cls.user["id"], ip_address="test")
 
     @classmethod
@@ -178,15 +147,11 @@ class TestHandlerIntegration(unittest.TestCase):
                        (cls.acct["id"], cls.other_acct["id"]))
             db.execute("DELETE FROM mail_messages WHERE account_id IN (%s, %s)",
                        (cls.acct["id"], cls.other_acct["id"]))
-            db.execute("DELETE FROM mail_send_refusals WHERE account_id IN (%s, %s)",
-                       (cls.acct["id"], cls.other_acct["id"]))
             db.execute("DELETE FROM api_tokens WHERE created_by = %s", (cls.user["id"],))
             db.execute("DELETE FROM sessions WHERE user_id = %s", (cls.user["id"],))
             db.execute("DELETE FROM opportunities WHERE id = %s", (cls.deal["id"],))
             db.execute("DELETE FROM mail_accounts WHERE id IN (%s, %s)",
                        (cls.acct["id"], cls.other_acct["id"]))
-            db.execute("DELETE FROM contacts WHERE id IN (%s, %s)",
-                       (cls.contact["id"], cls.other_contact["id"]))
             db.execute("DELETE FROM users WHERE id = %s", (cls.user["id"],))
         except Exception as exc:  # pragma: no cover
             print(f"cleanup warning: {exc}")
@@ -197,24 +162,31 @@ class TestHandlerIntegration(unittest.TestCase):
         body.update(extra)
         return mcp_local_api.call_session(self.session, "POST", "/api/v2/mail/send", body)
 
-    def test_mismatch_returns_409_and_writes_nothing(self):
+    def test_reply_from_wrong_account_returns_409_and_writes_nothing(self):
         before = db.query_one("SELECT count(*) AS n FROM mail_outgoing")
-        resp = self._send(self.other_acct["id"])
+        resp = self._send(self.other_acct["id"],
+                          reply_to_message_id=self.message["id"])
         self.assertEqual(resp.status, 409, resp.text)
-        self.assertIn("mapped", resp.text.lower())
+        self.assertIn("reply/forward", resp.text.lower())
         after = db.query_one("SELECT count(*) AS n FROM mail_outgoing")
         self.assertEqual(before["n"], after["n"])
-        refusal = db.query_one(
-            "SELECT reason FROM mail_send_refusals WHERE account_id = %s ORDER BY id DESC LIMIT 1",
-            (self.other_acct["id"],))
-        self.assertEqual(refusal["reason"], guard.REASON_MAPPED_MISMATCH)
 
-    def test_mapped_account_sends_and_records_sent_as(self):
+    def test_new_email_can_use_any_account(self):
         with patch.object(server.KanbanHandler, "_try_send_for_account",
                           return_value=(True, None, "smtp_password")), \
              patch.object(server.KanbanHandler, "_create_email_history_event",
                           return_value=True):
-            resp = self._send(self.acct["id"])
+            resp = self._send(self.other_acct["id"])
+        self.assertEqual(resp.status, 200, resp.text)
+        self.assertEqual(resp.payload["sentAs"], f"other-{S}@example.invalid")
+
+    def test_reply_from_original_account_sends_and_records_sent_as(self):
+        with patch.object(server.KanbanHandler, "_try_send_for_account",
+                          return_value=(True, None, "smtp_password")), \
+             patch.object(server.KanbanHandler, "_create_email_history_event",
+                          return_value=True):
+            resp = self._send(self.acct["id"],
+                              reply_to_message_id=self.message["id"])
         self.assertEqual(resp.status, 200, resp.text)
         self.assertEqual(resp.payload["sentAs"], f"mapped-{S}@example.invalid")
 
@@ -241,10 +213,6 @@ class TestHandlerIntegration(unittest.TestCase):
             self.assertIn("Refusing to send", resp.text)
             after = db.query_one("SELECT count(*) AS n FROM mail_outgoing")
             self.assertEqual(before["n"], after["n"])
-            refusal = db.query_one(
-                "SELECT reason FROM mail_send_refusals WHERE account_id = %s "
-                "ORDER BY id DESC LIMIT 1", (self.acct["id"],))
-            self.assertEqual(refusal["reason"], "credential_identity_mismatch")
         finally:
             db.execute("UPDATE mail_accounts SET smtp_user = NULL WHERE id = %s",
                        (self.acct["id"],))
@@ -252,31 +220,16 @@ class TestHandlerIntegration(unittest.TestCase):
     def test_preflight_blocks_and_allows(self):
         bad = mcp_local_api.call_session(
             self.session, "POST", "/api/v2/mail/send/preflight",
-            {"account_id": self.other_acct["id"], "deal_id": self.deal["id"]})
-        self.assertEqual(bad.status, 409)
+            {"account_id": self.other_acct["id"], "deal_id": self.deal["id"],
+             "reply_to_message_id": self.message["id"]})
+        self.assertEqual(bad.status, 409, bad.text)
+        self.assertEqual(bad.payload["reason"], guard.REASON_ORIGINAL_MISMATCH)
         good = mcp_local_api.call_session(
             self.session, "POST", "/api/v2/mail/send/preflight",
-            {"account_id": self.acct["id"], "deal_id": self.deal["id"]})
+            {"account_id": self.acct["id"], "deal_id": self.deal["id"],
+             "reply_to_message_id": self.message["id"]})
         self.assertEqual(good.status, 200, good.text)
-        self.assertEqual(good.payload["contactId"], self.contact["id"])
-
-    def test_accounts_list_exposes_mapping(self):
-        resp = mcp_local_api.call_session(self.session, "GET", "/api/v2/mail/accounts")
-        self.assertEqual(resp.status, 200)
-        row = next(a for a in resp.payload["accounts"] if a["id"] == self.acct["id"])
-        self.assertEqual(row["contractorContactId"], self.contact["id"])
-        self.assertTrue(row["contractorContactName"])
-
-    def test_admin_can_set_and_clear_mapping(self):
-        resp = mcp_local_api.call_session(
-            self.session, "PUT", f"/api/v2/mail/accounts/{self.acct['id']}",
-            {"contractor_contact_id": None})
-        self.assertEqual(resp.status, 200, resp.text)
-        row = db.query_one("SELECT contractor_contact_id FROM mail_accounts WHERE id = %s",
-                           (self.acct["id"],))
-        self.assertIsNone(row["contractor_contact_id"])
-        db.execute("UPDATE mail_accounts SET contractor_contact_id = %s WHERE id = %s",
-                   (self.contact["id"], self.acct["id"]))
+        self.assertEqual(good.payload["originalAccountId"], self.acct["id"])
 
 
 class TestNoFallback(unittest.TestCase):
@@ -392,14 +345,6 @@ class TestImapHelpers(unittest.TestCase):
                 {"account_id": 3, "inbox": "INBOX"})
         self.assertEqual(out, 77)
         self.assertFalse(any("INSERT INTO mail_messages" in sql for sql, _ in dbx.writes))
-
-    def test_auto_link_scoping(self):
-        import scanner.mail_scanner as ms
-        dbx = FakeDB(one={"contact_id": 55})
-        with patch.object(ms, "db", dbx):
-            self.assertTrue(ms._contractor_allows_link({}, 9))
-            self.assertFalse(ms._contractor_allows_link({"contractor_contact_id": 66}, 9))
-            self.assertTrue(ms._contractor_allows_link({"contractor_contact_id": 55}, 9))
 
 
 if __name__ == "__main__":

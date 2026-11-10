@@ -1765,7 +1765,6 @@ async function confirmMailSend({ account, to = "", subject = "", dealId = null, 
         <div style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted);">Sending from</div>
         <div style="font-size:1rem; font-weight:700; color:${accent}; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-all;">${escapeHtml(email)}</div>
         ${label && label !== email ? `<div style="font-size:0.8rem; color:var(--muted); margin-top:0.1rem;">${escapeHtml(label)}</div>` : ''}
-        ${preflight && preflight.contactName ? `<div style="font-size:0.78rem; color:var(--muted); margin-top:0.1rem;">for ${escapeHtml(preflight.contactName)}</div>` : ''}
       </div>
     </div>
     <div style="margin-top:0.6rem; font-size:0.85rem; color:var(--text);">
@@ -21712,9 +21711,9 @@ async function switchMailTab(btn) {
 }
 
 // ── Sender guard helpers (2026-11-10) ──────────────────────────────────────
-// A job's Contact is the contractor identity; mail_accounts.contractorContactId
-// maps that Contact to the mailbox branded for it. Never default to the first
-// account alphabetically: with no mapping the From select starts empty.
+// A reply/forward must use the original message's account. A new email starts
+// with the open account tab; never default to the first account
+// alphabetically — with no tab open the From select starts empty.
 function selectedFromAccountId(selectEl) {
   // The ONE place the submitted account id comes from: the visible select, at
   // send time. Never a cached/open-time value.
@@ -21755,29 +21754,6 @@ function composeAccountOptionsHtml(selectedId) {
     out.push(`<option value="${a.id}"${String(a.id) === String(selectedId) ? ' selected' : ''}>${escapeHtml(a.smtp_from_name || a.email)} &lt;${escapeHtml(a.email)}&gt;</option>`);
   }
   return out.join('');
-}
-
-function mappedAccountIdsForContact(contactId) {
-  const cid = Number(contactId);
-  if (!cid) return [];
-  return (mailState.accounts || [])
-    .filter(a => Number(a.contractorContactId) === cid)
-    .map(a => a.id);
-}
-
-async function resolveComposeAccountId({ dealId = null, messageAccountId = null } = {}) {
-  if (dealId) {
-    try {
-      const project = await api(`/api/v2/projects/${dealId}`);
-      const cid = project?.contactId ?? project?.contact?.id ?? null;
-      const ids = mappedAccountIdsForContact(cid);
-      if (ids.length) return ids[0];
-    } catch (_e) { /* fall through to the message account */ }
-  }
-  // The mailbox that received the original message is the correct reply
-  // account (Ken 12:39). Still never the first account alphabetically.
-  if (messageAccountId) return Number(messageAccountId) || null;
-  return null;
 }
 
 async function openComposeModal(opts = {}) {
@@ -23515,16 +23491,6 @@ function openAccountSettingsModal(editAccountId, opts) {
         // Graph sendMail status (Microsoft only). Drives the connect/disconnect UI
         // and the compose-window banner.
         updateGraphStatusBlock(acct, editAccountId);
-        // Contractor → mailbox mapping (2026-11-10).
-        const cSection = $('#account-settings-contractor-section');
-        if (cSection) {
-          cSection.classList.remove('hidden');
-          cSection.dataset.contactId = acct.contractorContactId ? String(acct.contractorContactId) : '';
-          const cur = $('#account-settings-contractor-current');
-          if (cur) cur.textContent = acct.contractorContactName
-            ? `Mapped to: ${acct.contractorContactName} (#${acct.contractorContactId})`
-            : 'Not mapped — compose will not auto-select this mailbox for any job.';
-        }
         // Sharing section
         if (sharingSection) {
           if (acct.is_crm_mail === true) {
@@ -23664,50 +23630,6 @@ function openAccountSettingsModal(editAccountId, opts) {
     });
   }
 
-  // Contractor mapping search (bind once).
-  const cSearch = $('#account-settings-contractor-search');
-  if (cSearch && !cSearch.dataset.bound) {
-    cSearch.dataset.bound = '1';
-    let t = null;
-    cSearch.addEventListener('input', () => {
-      clearTimeout(t);
-      t = setTimeout(async () => {
-        const q = cSearch.value.trim();
-        const box = $('#account-settings-contractor-results');
-        if (!box) return;
-        if (q.length < 2) { box.innerHTML = ''; return; }
-        try {
-          const rows = await api('/api/v2/contacts?q=' + encodeURIComponent(q) + '&count=8');
-          const list = Array.isArray(rows) ? rows : (rows.contacts || []);
-          box.innerHTML = list.map(c => {
-            const name = c.isCompany ? (c.company || c.displayName) : `${c.firstName || ''} ${c.lastName || ''}`.trim();
-            return `<button type="button" class="btn btn-ghost btn-sm" data-mcp-contractor="${c.id}" data-name="${escapeHtml(name || c.email || '')}" style="display:block;text-align:left;width:100%;">${escapeHtml(name || c.email || '')} <span style="color:var(--muted);">#${c.id}</span></button>`;
-          }).join('') || '<div style="color:var(--muted);font-size:0.78rem;">No matches</div>';
-          box.querySelectorAll('[data-mcp-contractor]').forEach(btn => {
-            btn.addEventListener('click', () => {
-              const sec = $('#account-settings-contractor-section');
-              if (sec) sec.dataset.contactId = btn.dataset.mcpContractor;
-              const cur = $('#account-settings-contractor-current');
-              if (cur) cur.textContent = `Mapped to: ${btn.dataset.name} (#${btn.dataset.mcpContractor})`;
-              box.innerHTML = '';
-              cSearch.value = '';
-            });
-          });
-        } catch (_e) { box.innerHTML = ''; }
-      }, 250);
-    });
-  }
-  const cClear = $('#account-settings-contractor-clear');
-  if (cClear && !cClear.dataset.bound) {
-    cClear.dataset.bound = '1';
-    cClear.addEventListener('click', () => {
-      const sec = $('#account-settings-contractor-section');
-      if (sec) sec.dataset.contactId = '';
-      const cur = $('#account-settings-contractor-current');
-      if (cur) cur.textContent = 'Not mapped — compose will not auto-select this mailbox for any job.';
-    });
-  }
-
   // Bind OAuth disconnect (clears THIS account's IMAP/SMTP tokens only)
   const oauthDisconnectBtn = $('#account-settings-oauth-disconnect');
   if (oauthDisconnectBtn && !oauthDisconnectBtn.dataset.bound) {
@@ -23747,8 +23669,6 @@ function openAccountSettingsModal(editAccountId, opts) {
           signature_html: $('#account-settings-signature').value,
           tab_icon: $('#account-settings-tab-icons')?.dataset.value || 'user',
           tab_color: $('#account-settings-tab-colors')?.dataset.value || 'var(--accent)',
-          contractor_contact_id: $('#account-settings-contractor-section')?.dataset.contactId
-            ? parseInt($('#account-settings-contractor-section').dataset.contactId, 10) : null,
         };
         if (modal.dataset.crmMail === '1') payload.is_crm_mail = true;
       if (!payload.email || !payload.imap_host) { showToast('Email and IMAP host required', true); return; }

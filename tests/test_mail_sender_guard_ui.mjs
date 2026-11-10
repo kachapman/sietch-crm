@@ -54,7 +54,6 @@ test('the send dialog calls the server preflight and blocks on 409', () => {
   assert.ok(body.includes('preflight.ok === false'));
   assert.ok(body.includes('return false'));
   assert.ok(body.includes('Sending from'));
-  assert.ok(body.includes('contactName'));
 });
 
 test('sends carry the thread id and show sentAs', () => {
@@ -72,14 +71,13 @@ test('a dead token is shown in the mail tab and the compose banner', () => {
   assert.ok(app.includes('acct.authError'));
 });
 
-test('admins can map/clear the contractor Contact on an account', () => {
-  assert.ok(html.includes('id="account-settings-contractor-section"'));
-  assert.ok(html.includes('id="account-settings-contractor-search"'));
-  assert.ok(html.includes('id="account-settings-contractor-clear"'));
-  const body = region('// Contractor mapping search (bind once).', 2500);
-  assert.ok(body.includes('/api/v2/contacts?q='));
-  assert.ok(body.includes('dataset.contactId'));
-  assert.ok(app.includes('contractor_contact_id:'));
+test('the job/Contact mapping is gone from the UI', () => {
+  for (const sym of ['contractor' + 'ContactId', 'contractor' + '_contact' + '_id',
+                     'mappedAccountIds' + 'ForContact', 'resolveCompose' + 'AccountId',
+                     'account-settings-' + 'contractor']) {
+    assert.ok(!app.includes(sym), `app.js must not reference ${sym}`);
+    assert.ok(!html.includes(sym), `index.html must not reference ${sym}`);
+  }
 });
 
 test('the submitted account id is read from the visible select at send time', () => {

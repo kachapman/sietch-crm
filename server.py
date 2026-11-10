@@ -1171,12 +1171,6 @@ except Exception:
     logger.warning("Could not create the MCP tables", exc_info=True)
 # Mail sender guard schema (mirrors migrations/050_mail_sender_guard.sql).
 try:
-    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS contractor_contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL")
-    db.execute("CREATE INDEX IF NOT EXISTS idx_mail_accounts_contractor_contact ON mail_accounts (contractor_contact_id)")
-    db.execute("""CREATE TABLE IF NOT EXISTS mail_send_refusals (
-        id BIGSERIAL PRIMARY KEY, user_id INTEGER, account_id INTEGER, deal_id INTEGER,
-        reason TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
-    db.execute("CREATE INDEX IF NOT EXISTS idx_mail_send_refusals_created ON mail_send_refusals (created_at DESC)")
     db.execute("ALTER TABLE mail_outgoing ADD COLUMN IF NOT EXISTS error TEXT")
     db.execute("ALTER TABLE mail_outgoing ADD COLUMN IF NOT EXISTS fallback_reason TEXT")
     db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS auth_error TEXT")
@@ -22555,10 +22549,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                           auto_bcc_addr, retention_days, tab_icon, tab_color,
                           last_sync, owner_user_id, created_at,
                           oauth_identity, oauth_last_error, oauth_last_error_at,
-                          contractor_contact_id, auth_error,
-                          (SELECT COALESCE(NULLIF(c.company, ''),
-                                  NULLIF(TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')), ''))
-                             FROM contacts c WHERE c.id = mail_accounts.contractor_contact_id) AS contractor_contact_name,
+                          auth_error,
                           oauth_graph_access_token IS NOT NULL AS has_graph_token,
                           oauth_graph_token_expires,
                           oauth_graph_identity,
@@ -22579,8 +22570,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 r["authType"] = r.get("oauth_provider") or "password"
                 r["isOwner"] = r["owner_user_id"] == user["id"] or bool(user.get("is_admin"))
                 r["canManage"] = _mail_account_manageable(user, r["id"])
-                r["contractorContactId"] = r.get("contractor_contact_id")
-                r["contractorContactName"] = r.get("contractor_contact_name") or ""
                 r["authError"] = (r.get("auth_error") or r.get("oauth_last_error")
                                   or r.get("oauth_graph_last_error") or "")
                 if r.get("oauth_provider"):
@@ -22983,23 +22972,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     return
             fields = []
             params: list[Any] = []
-            if "contractor_contact_id" in payload:
-                cid = payload.get("contractor_contact_id")
-                if cid in (None, "", 0, "0"):
-                    payload["contractor_contact_id"] = None
-                else:
-                    try:
-                        cid = int(cid)
-                    except (TypeError, ValueError):
-                        _json_response(self, 400, {"error": "contractor_contact_id must be a contact id"})
-                        return
-                    if not db.query_one("SELECT id FROM contacts WHERE id = %s", (cid,)):
-                        _json_response(self, 404, {"error": "Contact not found"})
-                        return
-                    payload["contractor_contact_id"] = cid
             for key in ("email", "display_name", "imap_host", "smtp_host", "smtp_user",
                         "smtp_from_name", "oauth_provider", "auto_bcc_addr", "tab_icon",
-                        "tab_color", "contractor_contact_id"):
+                        "tab_color"):
                 if key in payload:
                     fields.append(f"{key} = %s")
                     params.append(payload[key])
@@ -23175,7 +23150,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "account_id is required"})
             return
         acct = db.query_one(
-            "SELECT id, email, display_name, smtp_from_name, contractor_contact_id "
+            "SELECT id, email, display_name, smtp_from_name "
             "FROM mail_accounts WHERE id = %s", (account_id,))
         if not acct:
             _json_response(self, 404, {"error": "Account not found"})
@@ -23193,10 +23168,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "accountEmail": acct.get("email") or "",
             "accountName": acct.get("smtp_from_name") or acct.get("display_name") or "",
             "dealId": guard["deal_id"],
-            "contactId": guard["contact_id"],
-            "contactName": guard["contact_name"],
-            "mappedAccountIds": [m["id"] for m in guard["mapped"]],
-            "mappedEmails": [m["email"] for m in guard["mapped"]],
             "originalAccountId": guard["original_account_id"],
         }
         if not guard["allowed"]:
@@ -23237,20 +23208,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 403, {"error": "You don't have access to this account"})
                 return
 
-            # Send-time sender guard (2026-11-10). The job's Contact is the
-            # contractor identity; an account mapped to that Contact is the
-            # only account allowed to send for the job. Replies must also come
-            # from the account that received the original message.
+            # Send-time sender guard (2026-11-10). A reply/forward must be sent
+            # from the account that received the original message; nothing is
+            # ever re-routed to a different mailbox.
             guard = mail_sender_guard.evaluate(
                 db, account=acct, deal_id=deal_id,
                 reply_to_message_id=payload.get("reply_to_message_id"),
             )
             if not guard["allowed"]:
-                mail_sender_guard.log_refusal(
-                    db, user_id=user["id"] if user else None,
-                    account_id=account_id, deal_id=deal_id,
-                    reason=guard["reason"],
-                )
                 _json_response(self, 409, {
                     "ok": False,
                     "error": guard["message"],
@@ -23277,11 +23242,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if smtp_user_ident and smtp_user_ident != verified_sender:
                 ident_errors.append(f"SMTP authenticates as {smtp_user_ident}")
             if ident_errors:
-                mail_sender_guard.log_refusal(
-                    db, user_id=user["id"] if user else None,
-                    account_id=account_id, deal_id=deal_id,
-                    reason="credential_identity_mismatch",
-                )
                 _json_response(self, 409, {
                     "ok": False,
                     "reason": "credential_identity_mismatch",

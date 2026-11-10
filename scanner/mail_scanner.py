@@ -1207,7 +1207,7 @@ def _get_mailboxes() -> list[dict[str, Any]]:
             """SELECT id, email, imap_host, imap_port, password_encrypted,
                       oauth_provider, oauth_access_token, oauth_refresh_token,
                       oauth_token_expires, sync_enabled, monitored_folders,
-                      retention_days, contractor_contact_id
+                      retention_days
                FROM mail_accounts WHERE sync_enabled = TRUE"""
         )
         results = []
@@ -1253,7 +1253,6 @@ def _get_mailboxes() -> list[dict[str, Any]]:
                     "account_id": row["id"],
                     "auth_type": "xoauth2",
                     "retention_days": int(row.get("retention_days") or 0),
-                    "contractor_contact_id": row.get("contractor_contact_id"),
                 })
             else:
                 pwd = row.get("password_encrypted", "")
@@ -1272,7 +1271,6 @@ def _get_mailboxes() -> list[dict[str, Any]]:
                     "account_id": row["id"],
                     "auth_type": "password",
                     "retention_days": int(row.get("retention_days") or 0),
-                    "contractor_contact_id": row.get("contractor_contact_id"),
                 })
         return results
     except Exception as e:
@@ -3152,27 +3150,6 @@ def _message_older_than_cutoff(msg: dict[str, Any], cutoff: datetime | None) -> 
     return dt < cutoff
 
 
-def _contractor_allows_link(mailbox_cfg: dict[str, Any], deal_id: Any) -> bool:
-    """True when the receiving mailbox may auto-link mail to this deal.
-
-    A mailbox mapped to a contractor Contact only auto-links jobs whose
-    Contact is that same contractor. Unmapped mailboxes keep the old
-    behaviour (no scoping), so this cannot silently stop existing linking.
-    """
-    try:
-        acct_cid = mailbox_cfg.get("contractor_contact_id")
-        if not acct_cid:
-            return True
-        row = db.query_one("SELECT contact_id FROM opportunities WHERE id = %s", (int(deal_id),))
-        deal_cid = (row or {}).get("contact_id")
-        if not deal_cid:
-            return True
-        return int(acct_cid) == int(deal_cid)
-    except Exception:
-        logger.debug("Contractor link check failed; allowing", exc_info=True)
-        return True
-
-
 def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[str, Any]:
     uid = msg.get("uid") or ""
     account_id = mailbox_cfg.get("account_id")
@@ -3254,7 +3231,6 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
     # (historical behavior).
     link_allowed, link_dry = _link_toggle_allows(classification, toggles, account_id)
     if (classification["action"] == "link_deal" and classification["linked_deal_id"]
-            and _contractor_allows_link(mailbox_cfg, classification["linked_deal_id"])
             and link_allowed):
         if link_dry:
             log_entry["status"] = "dry_run"
@@ -3278,10 +3254,7 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
         body_html = msg.get("body_html") or ""
         body = body_text or _sanitize_body(body_html)
 
-        content_matches = [
-            m for m in _match_by_content(subject, body, _deal_index)
-            if _contractor_allows_link(mailbox_cfg, m["deal_id"])
-        ]
+        content_matches = _match_by_content(subject, body, _deal_index)
         if content_matches:
             best = content_matches[0]
             if dry:
