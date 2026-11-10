@@ -1,3 +1,63 @@
+## 2026-11-10 — Strict per-account mail credentials (item 2)
+
+### Fixed
+- **Credentials could be shared or mis-bound between mail accounts.** Every
+  read/write of `password_encrypted`, `smtp_password_encrypted`,
+  `oauth_*`, `oauth_graph_*` and `smtp_user` is now keyed by
+  `mail_accounts.id` only; new `mail_identity.py` is the single accessor and
+  rejects an email/tenant/provider key.
+  - **OAuth callback (new-account flow)** looked a row up by email and wrote
+    tokens onto whatever matched. It now refuses an existing mailbox
+    ("already connected as a mail account") and writes nothing.
+  - **Scanner env credentials** (`SCANNER_IMAP_*`) were returned *first*, so
+    one env mailbox authenticated every scan. They are used only when the
+    database has no mail accounts.
+  - **`import_email.py`** rewrote `password_encrypted` via
+    `ON CONFLICT (email) DO UPDATE`; existing mailboxes are now skipped.
+  - **Notification / automation / system mail** picked
+    "`is_crm_mail` … `ORDER BY id LIMIT 1`" and the dispatcher refreshed
+    tokens inline (no identity check, no CAS). They now resolve ONE account
+    by id (`system_settings.system_mail_account_id` when set), verify its
+    identity, and refresh through the shared CAS helper — and refuse instead
+    of falling back to the env SMTP sender.
+- **Identity check before every sync and every send.**
+  - Sync (scanner poll, IMAP connect for mark-read/move/delete, attachment
+    fetch): the login user must be the account's address and the Exchange
+    token's verified identity must match it; a mismatch or an unverified
+    token skips the account and records `auth_error`.
+  - Send: XOAUTH2 SMTP now requires a verified `oauth_identity` (Graph
+    already did); the send endpoint treats a missing identity as a refusal;
+    `/send/preflight` and `/accounts/{id}/sync-now` return
+    `409 credential_identity_mismatch` before anything happens.
+  - The API exposes `identityStatus` (`ok` / `mismatch` / `unverified`) and
+    `identityError`; the account settings and the persistent mail banner show
+    them.
+  - The sync gate checks only the IMAP family: a mis-bound Graph token
+    blocks sending, not receiving.
+- **Account create/update**: a duplicate mailbox is refused (409), a
+  `smtp_user` naming another mailbox is refused (400), changing the provider
+  or the address requires disconnecting OAuth first, and an address change
+  clears the per-address identities and auth error.
+- **Settings "Disconnect OAuth" returned 404.** Both disconnect endpoints
+  were routed for GET only while the UI posts; POST routes were added.
+- **New `scripts/split_shared_mail_credentials.py`** — dry-run by default on
+  a read-only connection; reports shared grants (fingerprints only), identity
+  mismatches, foreign `smtp_user` and duplicate addresses. `--apply --yes`
+  clears (never copies) the credentials a row cannot own, compare-and-swap on
+  the token it read, and sets `auth_error` so the UI asks for a reconnect.
+  Refuses the production DB name unless `--allow-prod`.
+
+### Tests
+- New `tests/test_mail_credential_isolation.py` (59): credential reads keyed
+  by id only, account-A-cannot-use-B for store/refresh/send/sync/disconnect/
+  dispatcher/helpers, split-script dry-run and apply, plus a **static scan
+  that fails on any credential SQL keyed by email/provider and on credential
+  UPDATEs that are not `WHERE id = %s`**.
+- `test_mail_sender_guard.py` 23, `test_oauth_account_binding.py` 67,
+  `test_email_matrix.py` 5, `test_mail_sender_guard_ui.mjs` 11,
+  `test_mail_link_attachments.py` 91, all other mail suites and the full JS
+  sweep pass. Prod read-only check: 0 shared rows.
+
 ## 2026-11-09 — Mail OAuth account binding + UTC mail timestamps
 
 ### Fixed

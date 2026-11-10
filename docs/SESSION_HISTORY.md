@@ -3,6 +3,58 @@
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-10 (Item 2: strict per-account mail credentials)
+
+**Status: COMMITTED LOCALLY on branch `fix/mail-sender-guard`
+(`4eab58b` + this docs commit) — NOT pushed, NOT deployed. Prod read-only.**
+
+- **One mailbox == one account.** Every mail credential read/write is keyed
+  by `mail_accounts.id`; the new `mail_identity.py` is the only credential
+  accessor and rejects an email/tenant/provider key.
+- **Identity check before every sync and send.** Exchange OAuth
+  (`oauth_identity`), Graph (`oauth_graph_identity`) and SMTP (`smtp_user`)
+  must equal the row's address. Unverified = refusal (fail closed). Refusals
+  set `auth_error` and are shown as `identityStatus` / `identityError` in the
+  account settings + persistent mail banner.
+- **Sync gate:** `sync_gate`/`sync_gate_by_id` in the scanner, the server's
+  IMAP connect (mark read/move/delete) and the attachment fetch. The scanner
+  login asserts the login user + token identity before opening a socket.
+  `SCANNER_IMAP_*` env credentials no longer apply to database accounts.
+- **Send gate:** XOAUTH2 SMTP now requires a verified `oauth_identity`
+  (Graph already did); the send endpoint treats a missing identity as a
+  refusal; preflight and sync-now return 409 before anything happens.
+- **Store:** the OAuth callback no longer writes tokens onto a row found by
+  email (an existing mailbox is refused as "already connected"); account
+  create/update reject a duplicate mailbox and a foreign `smtp_user`;
+  `import_email.py` no longer overwrites `password_encrypted` via
+  `ON CONFLICT (email)`.
+- **System mail** (notifications / automation / password reset) resolves ONE
+  account by id (`system_settings.system_mail_account_id`, else the
+  deterministic CRM inbox), identity-checked, refreshed via the shared CAS
+  helper. No inline provider refresh, no env-SMTP fallback on refusal.
+- **Fixed** the settings "Disconnect OAuth" 404: both disconnect routes are
+  now routed for POST (the UI always posted).
+- **New** `scripts/split_shared_mail_credentials.py` (dry-run default,
+  read-only connection; `--apply --yes` clears — never copies — credentials a
+  row cannot own, CAS on the token read).
+- **Prod read-only check (SELECT only):** 5 accounts, 0 shared grants,
+  0 identity mismatches, 0 foreign `smtp_user`, 0 unverified OAuth tokens,
+  0 duplicate addresses. No shared rows exist today; the risk was in the code.
+- **Tests:** new `test_mail_credential_isolation.py` 59 (incl. a static
+  email-keyed-credential scan); `test_mail_sender_guard.py` 23;
+  `test_oauth_account_binding.py` 67; `test_email_matrix.py` 5;
+  `test_mail_sender_guard_ui.mjs` 11; `test_mail_link_attachments.py` 91;
+  all mail suites + full JS sweep pass. The failing suites
+  (`test_mail_auth_gaps` 3, `test_email_project_copy` 3,
+  `test_graph_truthfulness` 3, `test_invoice_coc_modern`, etc.) are identical
+  at baseline `53ff4d1`.
+- Details: `~/Projects/plans/sietch/email-fix-progress-2026-11-10.md`
+  → "Item 2 DONE" (full sharing list with file:line).
+
+---
+
+## Previous session summary (2026-11-10 — sender guard, item 1)
+
 **Date:** 2026-11-10 (Mail sender guard + token/IMAP fixes)
 
 **Status: COMMITTED LOCALLY on branch `fix/mail-sender-guard` (off `main` @
