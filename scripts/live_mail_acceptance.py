@@ -96,16 +96,67 @@ def login() -> tuple[str | None, str | None]:
         return None, None
 
 
-def plan_rows() -> list[dict]:
+AUTOMATED_KINDS = ("new", "reply", "reply_all", "forward")
+CONCURRENT_PAIRS = ((2, 9), (9, 10), (8, 9))
+SEQUENTIAL_PAIRS = ((2, 10), (6, 9), (8, 10))
+
+# Manual rows are UI-only; the operator fills the result table in the plan.
+MANUAL_ROWS = [
+    ("M1", "Open each account tab (2,6,8,9,10) -> compose shows that account"),
+    ("M2", "All-inboxes view -> compose From is empty"),
+    ("M3", "Job page -> compose From is empty"),
+    ("M4", "Contact page -> compose From is empty"),
+    ("M5", "Template -> compose From is empty, user picks"),
+    ("M6", "Switch From after opening, then Send -> sent via the switched account"),
+    ("M7", "Switch tabs/From quickly right before Send -> sent via the visible account"),
+    ("M8", "Send immediately on open (before the account list loads) -> blocked or visible error"),
+    ("M9", "Two browser windows with different accounts open at once -> each sends its own"),
+    ("M10", "Page left open for several hours -> send still uses the selected account"),
+    ("M11", "Send with an attachment -> delivered attachment, From correct"),
+    ("M12", "Reply to a message received as a CRM BCC copy -> original account"),
+    ("M13", "Send right after a server restart -> correct account, visible errors if not ready"),
+    ("M14", "Expired access token (wait for hourly expiry; do NOT revoke) -> forced refresh, correct account"),
+]
+
+
+def matrix_rows() -> list[dict]:
+    """Automated live matrix. Every row has an id; recipients are hard-locked."""
     rows = []
+    n = 0
     for acct in ACCOUNTS:
-        for kind in ("new", "reply", "forward"):
-            rows.append({
-                "account_id": acct,
-                "kind": kind,
-                "to": "crm@vanguardadj.online",
-                "subject": f"{TAG} acct {acct} {kind}]",
-            })
+        for kind in AUTOMATED_KINDS:
+            n += 1
+            rows.append({"id": f"A{n:02d}", "account_id": acct, "kind": kind,
+                         "to": "crm@vanguardadj.online",
+                         "subject": f"{TAG} acct {acct} {kind}]",
+                         "note": ""})
+    for acct in ACCOUNTS:
+        n += 1
+        rows.append({"id": f"A{n:02d}", "account_id": acct, "kind": "draft_reopen",
+                     "to": "crm@vanguardadj.online",
+                     "subject": f"{TAG} acct {acct} draft_reopen]", "note": "save draft, reopen, send"})
+    for acct in ACCOUNTS:
+        n += 1
+        rows.append({"id": f"A{n:02d}", "account_id": acct, "kind": "switch_from",
+                     "to": "crm@vanguardadj.online",
+                     "subject": f"{TAG} acct {acct} switch_from]", "note": "open on another account, switch"})
+    for acct in ACCOUNTS:
+        n += 1
+        rows.append({"id": f"A{n:02d}", "account_id": acct, "kind": "fast_send",
+                     "to": "crm@vanguardadj.online",
+                     "subject": f"{TAG} acct {acct} fast_send]", "note": "send immediately on open"})
+    for a, b in CONCURRENT_PAIRS:
+        n += 1
+        rows.append({"id": f"A{n:02d}", "account_id": a, "kind": "concurrent_pair",
+                     "to": "crm@vanguardadj.online",
+                     "subject": f"{TAG} acct {a}+{b} concurrent]",
+                     "note": f"concurrent with account {b}"})
+    for a, b in SEQUENTIAL_PAIRS:
+        n += 1
+        rows.append({"id": f"A{n:02d}", "account_id": a, "kind": "sequential_pair",
+                     "to": "crm@vanguardadj.online",
+                     "subject": f"{TAG} acct {a}+{b} sequential]",
+                     "note": f"back-to-back with account {b}"})
     return rows
 
 
@@ -142,10 +193,18 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Live mail acceptance (dry-run by default)")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--account", action="append", type=int, default=None)
+    parser.add_argument("--matrix", action="store_true", help="list the matrix and exit")
     args = parser.parse_args(argv)
 
     accounts = args.account or ACCOUNTS
-    rows = [r for r in plan_rows() if r["account_id"] in accounts]
+    rows = [r for r in matrix_rows() if r["account_id"] in accounts]
+    if args.matrix:
+        print(f"LIVE MATRIX: {len(matrix_rows())} automated rows, {len(MANUAL_ROWS)} manual rows")
+        for r in matrix_rows():
+            print(f"  {r['id']} acct {r['account_id']:>2} {r['kind']:<15} {r['note']}")
+        for mid, text in MANUAL_ROWS:
+            print(f"  {mid} MANUAL  {text}")
+        return 0
     for r in rows:
         bad = validate_recipients(r["to"])
         if bad:
@@ -194,9 +253,9 @@ def main(argv=None) -> int:
         results.append((acct_id, r["kind"], "PASS" if ok else "FAIL",
                         f"sentAs={sent_as} {detail}"))
 
-    print("\naccount kind    result  detail")
-    for acct_id, kind, res, detail in results:
-        print(f"{acct_id:>7} {kind:<7} {res:<7} {detail[:120]}")
+    print("\nrow  account kind             result  detail")
+    for idx, (acct_id, kind, res, detail) in enumerate(results):
+        print(f"A{idx+1:02d} {acct_id:>7} {kind:<15} {res:<7} {detail[:100]}")
     fails = sum(1 for _, _, res, _ in results if res == "FAIL")
     print(f"\npass={sum(1 for _,_,r,_ in results if r=='PASS')} fail={fails} skip={sum(1 for _,_,r,_ in results if r=='SKIP')}")
     return 1 if fails else 0

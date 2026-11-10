@@ -113,6 +113,54 @@ class TestMatrix(unittest.TestCase):
                                             expected_access="old")
         self.assertTrue(True)  # fake DB only ever resolves account 5
 
+    def test_concurrent_sends_never_cross_credentials(self):
+        import threading
+        seen = []
+        lock = threading.Lock()
+
+        def fake_graph(**kw):
+            with lock:
+                seen.append(("graph", kw["from_addr"]))
+            return (True, None)
+
+        accts = [make_acct("graph", f"a{i}@example.invalid", f"A{i}") for i in (1, 2)]
+        with patch("mail_graph_client.send_email_via_graph", side_effect=fake_graph):
+            threads = [threading.Thread(target=mail_send.try_send_for_account,
+                                        args=(a,), kwargs={"to_addr": "t@example.invalid",
+                                                           "subject": "s",
+                                                           "refresh_graph_token": lambda aid: ("T", None)})
+                       for a in accts]
+            for t in threads: t.start()
+            for t in threads: t.join()
+        self.assertEqual(sorted(s[1] for s in seen),
+                         ["a1@example.invalid", "a2@example.invalid"])
+
+    def test_refresh_races_keep_tokens_per_account(self):
+        import threading
+        writes = []
+        class D:
+            def query_one(self, sql, p=None):
+                if "SELECT email" in sql:
+                    return {"email": "x@example.invalid", "oauth_identity": None}
+                return None
+            def execute(self, sql, p=None):
+                writes.append((sql, p)); return 1
+        prov = type("P", (), {"reports_identity_on_refresh": True,
+                              "refresh_token": staticmethod(lambda rt: {
+                                  "access_token": "new", "refresh_token": "nr",
+                                  "expires_in": 3600, "email": "x@example.invalid"})})()
+        with patch.object(mail_oauth, "db", D()), \
+             patch("oauth_providers.get_provider", return_value=prov):
+            ts = [threading.Thread(target=mail_oauth.refresh_access_token,
+                                   args=(aid, "microsoft", "old", None),
+                                   kwargs={"force": True, "expected_access": "old"})
+                  for aid in (11, 12)]
+            for t in ts: t.start()
+            for t in ts: t.join()
+        ids = sorted(p[-2] if "AND oauth_access_token = %s" in sql else p[-1]
+                     for sql, p in writes if "oauth_access_token = %s" in sql)
+        self.assertEqual(ids, [11, 12], "each refresh writes only its own row")
+
     def test_egress_blocked(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
