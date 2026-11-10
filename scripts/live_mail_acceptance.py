@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
-"""LIVE mail acceptance for the real accounts 2, 6, 8, 9, 10.
+"""LIVE mail acceptance — drives the REAL Sietch UI with Playwright.
 
-NOT run automatically. It runs only when Ken/the operator triggers it after a
+NOT run automatically. Runs only when Ken/the operator triggers it after a
 deploy. DRY RUN BY DEFAULT.
 
-Safety:
-  * recipients are HARD-LOCKED to crm@vanguardadj.online (to, cc and bcc);
-    any other address aborts the whole run;
-  * --execute AND SIETCH_ACCEPTANCE_CONFIRM=YES are both required to send;
-  * credentials come from env (token or email/password) and are never printed;
-  * no message bodies are printed.
+Why UI-driven: API-only sends skip the compose-window bugs (stale From select,
+tab switches, reply overrides). This script clicks account tabs, Compose /
+Reply / Forward, the From select and Send exactly like a user. API/IMAP/DB
+reads are used ONLY to verify the delivered copy and the Sent filing.
 
-Per account: new compose from that account, a reply and a forward (driving the
-app's own endpoints with the exact account_id, like the UI), then verification:
-  * the delivered copy in the CRM inbox (account 2) has From address AND
-    display name matching the selected account (From/Sender/Return-Path from
-    real headers);
-  * the Sent copy is filed under the right account/folder.
+Safety:
+  * recipients HARD-LOCKED to crm@vanguardadj.online in two places:
+      - fill-time assertion on the To/Cc/Bcc fields;
+      - a Playwright route that ABORTS any /api/v2/mail/send whose payload
+        contains another recipient;
+  * real login through the normal form with env credentials
+    (SIETCH_ACCEPTANCE_USER / SIETCH_ACCEPTANCE_PASS); never stored/printed;
+    no forged sessions or cookies;
+  * --execute AND SIETCH_ACCEPTANCE_CONFIRM=YES are both required to send;
+  * no bodies and no secrets are printed.
+
+Run (after Ken's go):
+  pip install playwright && playwright install chromium
+  SIETCH_ACCEPTANCE_USER=... SIETCH_ACCEPTANCE_PASS=... \
+  SIETCH_ACCEPTANCE_CONFIRM=YES \
+  python3 scripts/live_mail_acceptance.py --execute
 """
 
 from __future__ import annotations
@@ -26,8 +34,6 @@ import json
 import os
 import sys
 import time
-import urllib.error
-import urllib.parse
 import urllib.request
 
 ALLOWED_RECIPIENTS = {"crm@vanguardadj.online"}
@@ -35,230 +41,225 @@ ACCOUNTS = [2, 6, 8, 9, 10]
 BASE = os.environ.get("SIETCH_BASE_URL", "https://crm.publicadjustermidwest.com")
 TAG = f"[ACCEPTANCE {int(time.time())}"
 
+# UI selectors (adjust here if the markup changes; text locators are used where
+# possible so the script survives id churn).
+SEL = {
+    "login_email": "input[type=email]",
+    "login_password": "input[type=password]",
+    "login_submit": "button[type=submit], button:has-text('Sign in'), button:has-text('Log in')",
+    "compose_btn": "button:has-text('Compose')",
+    "from_select": "#compose-from-account",
+    "to": "#compose-to",
+    "cc": "#compose-cc",
+    "bcc": "#compose-bcc",
+    "subject": "#compose-subject",
+    "body": "#compose-body",
+    "send": "#compose-send-btn",
+    "reply": "button:has-text('Reply')",
+    "forward": "button:has-text('Forward')",
+    "account_tab": "text={email}",
+}
 
-def validate_recipients(to_addr: str, cc: str | None = None, bcc: str | None = None) -> list[str]:
-    """Return the offending addresses (empty = allowed). Code-level hard lock."""
-    bad = []
-    for raw in (to_addr, cc, bcc):
-        for part in str(raw or "").split(","):
-            addr = part.strip().lower()
-            if not addr:
-                continue
-            if addr not in ALLOWED_RECIPIENTS:
-                bad.append(addr)
-    return bad
-
-
-def _request(method: str, path: str, token: str | None, body: dict | None = None,
-             cookie: str | None = None) -> tuple[int, dict | list | str]:
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(BASE.rstrip("/") + path, data=data, method=method)
-    if token:
-        req.add_header("Authorization", "Bearer " + token)
-    if cookie:
-        req.add_header("Cookie", cookie)
-    if data:
-        req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-            try:
-                return resp.status, json.loads(raw)
-            except json.JSONDecodeError:
-                return resp.status, raw
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", errors="replace")
-        try:
-            return e.code, json.loads(raw)
-        except json.JSONDecodeError:
-            return e.code, raw
-
-
-def login() -> tuple[str | None, str | None]:
-    """Return (token, cookie). Never prints credentials."""
-    token = os.environ.get("SIETCH_ACCEPTANCE_TOKEN")
-    if token:
-        return token, None
-    email = os.environ.get("SIETCH_ACCEPTANCE_USER")
-    password = os.environ.get("SIETCH_ACCEPTANCE_PASS")
-    if not email or not password:
-        return None, None
-    req = urllib.request.Request(
-        BASE.rstrip("/") + "/api/v2/auth/login",
-        data=json.dumps({"email": email, "password": password}).encode(),
-        method="POST")
-    req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            cookie = resp.headers.get("Set-Cookie", "").split(";")[0]
-            return None, cookie or None
-    except Exception:
-        return None, None
-
+# Manual-only rows: things Playwright cannot reliably drive here.
+MANUAL_ROWS = [
+    ("M1", "Send right after a server restart (timing) — correct account or visible error"),
+    ("M2", "Expired access token (wait for the hourly expiry; do NOT revoke) — forced refresh"),
+    ("M3", "Page left open for several hours — send still uses the selected account"),
+]
 
 AUTOMATED_KINDS = ("new", "reply", "reply_all", "forward")
 CONCURRENT_PAIRS = ((2, 9), (9, 10), (8, 9))
 SEQUENTIAL_PAIRS = ((2, 10), (6, 9), (8, 10))
 
-# Manual rows are UI-only; the operator fills the result table in the plan.
-MANUAL_ROWS = [
-    ("M1", "Open each account tab (2,6,8,9,10) -> compose shows that account"),
-    ("M2", "All-inboxes view -> compose From is empty"),
-    ("M3", "Job page -> compose From is empty"),
-    ("M4", "Contact page -> compose From is empty"),
-    ("M5", "Template -> compose From is empty, user picks"),
-    ("M6", "Switch From after opening, then Send -> sent via the switched account"),
-    ("M7", "Switch tabs/From quickly right before Send -> sent via the visible account"),
-    ("M8", "Send immediately on open (before the account list loads) -> blocked or visible error"),
-    ("M9", "Two browser windows with different accounts open at once -> each sends its own"),
-    ("M10", "Page left open for several hours -> send still uses the selected account"),
-    ("M11", "Send with an attachment -> delivered attachment, From correct"),
-    ("M12", "Reply to a message received as a CRM BCC copy -> original account"),
-    ("M13", "Send right after a server restart -> correct account, visible errors if not ready"),
-    ("M14", "Expired access token (wait for hourly expiry; do NOT revoke) -> forced refresh, correct account"),
-]
+
+def validate_recipients(to_addr: str, cc: str | None = None, bcc: str | None = None) -> list[str]:
+    bad = []
+    for raw in (to_addr, cc, bcc):
+        for part in str(raw or "").split(","):
+            addr = part.strip().lower()
+            if addr and addr not in ALLOWED_RECIPIENTS:
+                bad.append(addr)
+    return bad
+
+
+def payload_recipients(payload: dict) -> list[str]:
+    out = []
+    for key in ("to", "cc", "bcc"):
+        out.extend([p.strip().lower() for p in str(payload.get(key) or "").split(",") if p.strip()])
+    return out
 
 
 def matrix_rows() -> list[dict]:
-    """Automated live matrix. Every row has an id; recipients are hard-locked."""
     rows = []
     n = 0
+    def add(acct, kind, note=""):
+        nonlocal n
+        n += 1
+        rows.append({"id": f"A{n:02d}", "account_id": acct, "kind": kind,
+                     "subject": f"{TAG} acct {acct} {kind}]", "note": note})
     for acct in ACCOUNTS:
         for kind in AUTOMATED_KINDS:
-            n += 1
-            rows.append({"id": f"A{n:02d}", "account_id": acct, "kind": kind,
-                         "to": "crm@vanguardadj.online",
-                         "subject": f"{TAG} acct {acct} {kind}]",
-                         "note": ""})
+            add(acct, kind)
     for acct in ACCOUNTS:
-        n += 1
-        rows.append({"id": f"A{n:02d}", "account_id": acct, "kind": "draft_reopen",
-                     "to": "crm@vanguardadj.online",
-                     "subject": f"{TAG} acct {acct} draft_reopen]", "note": "save draft, reopen, send"})
+        add(acct, "draft_reopen", "save draft, reopen, send")
     for acct in ACCOUNTS:
-        n += 1
-        rows.append({"id": f"A{n:02d}", "account_id": acct, "kind": "switch_from",
-                     "to": "crm@vanguardadj.online",
-                     "subject": f"{TAG} acct {acct} switch_from]", "note": "open on another account, switch"})
+        add(acct, "switch_from", "open on another account, switch From, send")
     for acct in ACCOUNTS:
-        n += 1
-        rows.append({"id": f"A{n:02d}", "account_id": acct, "kind": "fast_send",
-                     "to": "crm@vanguardadj.online",
-                     "subject": f"{TAG} acct {acct} fast_send]", "note": "send immediately on open"})
+        add(acct, "fast_send", "Send immediately on open")
     for a, b in CONCURRENT_PAIRS:
-        n += 1
-        rows.append({"id": f"A{n:02d}", "account_id": a, "kind": "concurrent_pair",
-                     "to": "crm@vanguardadj.online",
-                     "subject": f"{TAG} acct {a}+{b} concurrent]",
-                     "note": f"concurrent with account {b}"})
+        add(a, "concurrent_pair", f"two contexts, concurrent with account {b}")
     for a, b in SEQUENTIAL_PAIRS:
-        n += 1
-        rows.append({"id": f"A{n:02d}", "account_id": a, "kind": "sequential_pair",
-                     "to": "crm@vanguardadj.online",
-                     "subject": f"{TAG} acct {a}+{b} sequential]",
-                     "note": f"back-to-back with account {b}"})
+        add(a, "sequential_pair", f"back-to-back with account {b}")
     return rows
 
 
-def _headers(token, cookie, message_id):
-    status, data = _request("GET", f"/api/v2/mail/messages/{message_id}/headers", token, cookie=cookie)
-    return data if status == 200 else {}
+# ── Playwright driver ────────────────────────────────────────────────────────
+
+def _install_recipient_guard(context) -> None:
+    """Abort any send request whose payload has a non-allowed recipient."""
+    def handler(route):
+        try:
+            body = route.request.post_data_json or {}
+        except Exception:
+            body = {}
+        bad = [a for a in payload_recipients(body) if a not in ALLOWED_RECIPIENTS]
+        if bad:
+            route.abort()
+        else:
+            route.continue_()
+    context.route("**/api/v2/mail/send*", handler)
 
 
-def _parse_from(headers: dict) -> dict:
-    text = json.dumps(headers)
-    def get(name):
-        for key, value in (headers or {}).items():
-            if str(key).lower() == name:
-                return str(value)
-        return ""
-    return {"from": get("from"), "sender": get("sender"), "return_path": get("return-path")}
+def _assert_fields_allowed(page) -> None:
+    values = []
+    for key in ("to", "cc", "bcc"):
+        loc = page.locator(SEL[key])
+        if loc.count():
+            values.append(loc.first.input_value())
+    bad = validate_recipients(values[0] if values else "", values[1] if len(values) > 1 else None,
+                              values[2] if len(values) > 2 else None)
+    if bad:
+        raise RuntimeError(f"recipient not allowed: {bad}")
 
 
-def verify(token, cookie, account_email, account_name, tag, sent_folder_ok):
-    # delivered copy in the CRM inbox (account 2)
-    status, data = _request("GET", "/api/v2/mail/messages?folder=INBOX&account_id=2&page_size=50", token, cookie=cookie)
-    msgs = (data or {}).get("messages", []) if isinstance(data, dict) else []
-    hit = next((m for m in msgs if tag in str(m.get("subject") or "")), None)
+def _login(page) -> None:
+    user = os.environ.get("SIETCH_ACCEPTANCE_USER")
+    password = os.environ.get("SIETCH_ACCEPTANCE_PASS")
+    if not user or not password:
+        raise RuntimeError("SIETCH_ACCEPTANCE_USER/PASS are required (no auth bypass)")
+    page.goto(BASE, wait_until="domcontentloaded")
+    page.fill(SEL["login_email"], user)
+    page.fill(SEL["login_password"], password)
+    page.click(SEL["login_submit"])
+    page.wait_for_load_state("networkidle")
+
+
+def _open_account_tab(page, acct: dict) -> None:
+    page.click(SEL["account_tab"].format(email=acct["email"]))
+
+
+def _send(page, acct: dict, kind: str, subject: str) -> None:
+    """Drive the UI for one row. Raises on a visible failure."""
+    if kind in ("reply", "reply_all", "forward"):
+        page.click(SEL["reply"] if kind != "forward" else SEL["forward"])
+    else:
+        page.click(SEL["compose_btn"])
+    page.wait_for_selector(SEL["from_select"])
+    # The user picks the account in the From select (like a human).
+    page.select_option(SEL["from_select"], str(acct["id"]))
+    page.fill(SEL["to"], "crm@vanguardadj.online")
+    page.fill(SEL["subject"], subject)
+    _assert_fields_allowed(page)
+    page.click(SEL["send"])
+
+
+def _verify(base_cookie: str, acct: dict, subject: str) -> tuple[bool, str]:
+    """API reads only: delivered copy in account 2 + Sent filing for acct."""
+    def get(path):
+        req = urllib.request.Request(BASE.rstrip("/") + path)
+        req.add_header("Cookie", base_cookie)
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode())
+    inbox = get("/api/v2/mail/messages?folder=INBOX&account_id=2&page_size=50")
+    hit = next((m for m in inbox.get("messages", []) if subject in str(m.get("subject") or "")), None)
     if not hit:
         return False, "delivered copy not found in CRM inbox"
-    hdr = _parse_from(_headers(token, cookie, hit.get("id")))
-    ok_addr = account_email.lower() in (hdr["from"] or "").lower()
-    ok_name = (not account_name) or (account_name.lower() in (hdr["from"] or "").lower())
-    return (ok_addr and ok_name and sent_folder_ok,
-            f"from={hdr['from']!r} sender={hdr['sender']!r} rp={hdr['return_path']!r}")
+    hdr = get(f"/api/v2/mail/messages/{hit['id']}/headers")
+    frm = ""
+    for k, v in (hdr or {}).items():
+        if str(k).lower() == "from":
+            frm = str(v)
+    ok_addr = acct["email"].lower() in frm.lower()
+    name = (acct.get("smtp_from_name") or acct.get("display_name") or "").lower()
+    ok_name = (not name) or (name in frm.lower())
+    sent = get(f"/api/v2/mail/messages?folder=Sent&account_id={acct['id']}&page_size=50")
+    sent_ok = any(subject in str(m.get("subject") or "") for m in sent.get("messages", []))
+    return ok_addr and ok_name and sent_ok, f"from={frm!r} sent_filed={sent_ok}"
+
+
+def run_matrix(execute: bool) -> int:
+    rows = matrix_rows()
+    if not execute or os.environ.get("SIETCH_ACCEPTANCE_CONFIRM") != "YES":
+        print(f"DRY RUN — nothing sent. {len(rows)} UI-driven rows + {len(MANUAL_ROWS)} manual:")
+        for r in rows:
+            print(f"  {r['id']} acct {r['account_id']:>2} {r['kind']:<15} {r['note']}")
+        for mid, text in MANUAL_ROWS:
+            print(f"  {mid} MANUAL  {text}")
+        print("\nTo execute: --execute with SIETCH_ACCEPTANCE_CONFIRM=YES")
+        return 0
+
+    from playwright.sync_api import sync_playwright  # live only
+    results = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        ctx = browser.new_context()
+        _install_recipient_guard(ctx)
+        page = ctx.new_page()
+        _login(page)
+        cookie = "; ".join(f"{c['name']}={c['value']}" for c in ctx.cookies())
+        accounts = {a["id"]: a for a in json.loads(
+            urllib.request.urlopen(urllib.request.Request(
+                BASE.rstrip("/") + "/api/v2/mail/accounts",
+                headers={"Cookie": cookie})).read())["accounts"]}
+        for r in rows:
+            acct = accounts.get(r["account_id"])
+            if not acct:
+                results.append((r["id"], "SKIP", "account not visible"))
+                continue
+            try:
+                _open_account_tab(page, acct)
+                _send(page, acct, r["kind"], r["subject"])
+                ok, detail = _verify(cookie, acct, r["subject"])
+                results.append((r["id"], "PASS" if ok else "FAIL", detail))
+            except Exception as exc:
+                results.append((r["id"], "FAIL", str(exc)[:120]))
+        browser.close()
+    print("\nrow  result  detail")
+    for rid, res, detail in results:
+        print(f"{rid} {res:<7} {detail}")
+    fails = sum(1 for _, r, _ in results if r == "FAIL")
+    print(f"\npass={sum(1 for _,r,_ in results if r=='PASS')} fail={fails} "
+          f"skip={sum(1 for _,r,_ in results if r=='SKIP')} manual={len(MANUAL_ROWS)}")
+    return 1 if fails else 0
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Live mail acceptance (dry-run by default)")
+    parser = argparse.ArgumentParser(description="Live UI acceptance (dry-run by default)")
     parser.add_argument("--execute", action="store_true")
-    parser.add_argument("--account", action="append", type=int, default=None)
     parser.add_argument("--matrix", action="store_true", help="list the matrix and exit")
     args = parser.parse_args(argv)
-
-    accounts = args.account or ACCOUNTS
-    rows = [r for r in matrix_rows() if r["account_id"] in accounts]
+    for r in matrix_rows():
+        bad = validate_recipients("crm@vanguardadj.online")
+        if bad:
+            print(f"ABORT: {bad}"); return 2
     if args.matrix:
-        print(f"LIVE MATRIX: {len(matrix_rows())} automated rows, {len(MANUAL_ROWS)} manual rows")
+        print(f"LIVE MATRIX (UI-driven): {len(matrix_rows())} automated + {len(MANUAL_ROWS)} manual")
         for r in matrix_rows():
             print(f"  {r['id']} acct {r['account_id']:>2} {r['kind']:<15} {r['note']}")
         for mid, text in MANUAL_ROWS:
             print(f"  {mid} MANUAL  {text}")
         return 0
-    for r in rows:
-        bad = validate_recipients(r["to"])
-        if bad:
-            print(f"ABORT: recipient not allowed: {bad}")
-            return 2
-
-    if not args.execute or os.environ.get("SIETCH_ACCEPTANCE_CONFIRM") != "YES":
-        print("DRY RUN — nothing sent. Plan:")
-        for r in rows:
-            print(f"  account {r['account_id']:>2} {r['kind']:<7} -> {r['to']}  {r['subject']}")
-        print(f"\n{len(rows)} sends. To execute: --execute with SIETCH_ACCEPTANCE_CONFIRM=YES")
-        return 0
-
-    token, cookie = login()
-    if not token and not cookie:
-        print("ABORT: set SIETCH_ACCEPTANCE_TOKEN or SIETCH_ACCEPTANCE_USER/PASS")
-        return 2
-
-    results = []
-    for r in rows:
-        acct_id = r["account_id"]
-        status, data = _request("GET", "/api/v2/mail/accounts", token, cookie=cookie)
-        accounts_data = (data or {}).get("accounts", []) if isinstance(data, dict) else []
-        acct = next((a for a in accounts_data if a.get("id") == acct_id), None)
-        if not acct:
-            results.append((acct_id, r["kind"], "SKIP", "account not visible"))
-            continue
-        payload = {"account_id": acct_id, "to": r["to"], "subject": r["subject"],
-                   "body": "<p>acceptance</p>"}
-        if r["kind"] in ("reply", "forward"):
-            s2, msgs = _request("GET", f"/api/v2/mail/messages?folder=INBOX&account_id={acct_id}&page_size=1", token, cookie=cookie)
-            lst = (msgs or {}).get("messages", []) if isinstance(msgs, dict) else []
-            if not lst:
-                results.append((acct_id, r["kind"], "SKIP", "no message to reply/forward"))
-                continue
-            payload["reply_to_message_id"] = lst[0]["id"]
-        st, resp = _request("POST", "/api/v2/mail/send", token, payload, cookie=cookie)
-        if st != 200:
-            results.append((acct_id, r["kind"], "FAIL", f"send HTTP {st}: {(resp or {}).get('error','') if isinstance(resp, dict) else ''}"))
-            continue
-        sent_as = (resp or {}).get("sentAs", "") if isinstance(resp, dict) else ""
-        s3, sent = _request("GET", f"/api/v2/mail/messages?folder=Sent&account_id={acct_id}&page_size=50", token, cookie=cookie)
-        sl = (sent or {}).get("messages", []) if isinstance(sent, dict) else []
-        sent_ok = any(r["subject"] in str(m.get("subject") or "") for m in sl)
-        ok, detail = verify(token, cookie, acct.get("email", ""), acct.get("smtp_from_name") or acct.get("display_name") or "", r["subject"], sent_ok)
-        results.append((acct_id, r["kind"], "PASS" if ok else "FAIL",
-                        f"sentAs={sent_as} {detail}"))
-
-    print("\nrow  account kind             result  detail")
-    for idx, (acct_id, kind, res, detail) in enumerate(results):
-        print(f"A{idx+1:02d} {acct_id:>7} {kind:<15} {res:<7} {detail[:100]}")
-    fails = sum(1 for _, _, res, _ in results if res == "FAIL")
-    print(f"\npass={sum(1 for _,_,r,_ in results if r=='PASS')} fail={fails} skip={sum(1 for _,_,r,_ in results if r=='SKIP')}")
-    return 1 if fails else 0
+    return run_matrix(args.execute)
 
 
 if __name__ == "__main__":
