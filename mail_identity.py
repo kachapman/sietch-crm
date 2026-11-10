@@ -38,6 +38,7 @@ exposes as `authError` and the UI shows as "needs reconnecting".
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import mail_oauth_binding
@@ -347,6 +348,73 @@ def system_account_id(db_mod: Any = None) -> int | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# From display name: what the provider put on the wire vs what the CRM row says
+# (item 4, 2026-11-10).
+#
+# The CRM can only SEND a display name (`smtp_from_name`, set as Graph
+# `message.from` / SMTP `From`). Outlook may still rewrite it to the mailbox
+# profile name, and the only record of what actually went out is the From
+# header of the Sent copy / the CRM's BCC copy. These helpers parse that
+# header, so Settings can show the real name next to the configured one.
+# ---------------------------------------------------------------------------
+
+_FROM_LINE_RE = re.compile(r"^from:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+_NAME_ANGLE_RE = re.compile(r'^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$')
+
+
+def parse_from_header(raw_headers: str | None) -> tuple[str, str]:
+    """(display_name, address) from a stored `raw_headers` blob.
+
+    The scanner keeps only from/to/cc/subject/date/message-id/in-reply-to/
+    references/content-type, so `Sender` and `Return-Path` are NOT available
+    here — callers must not imply they are. Returns ("", "") when there is no
+    From line.
+    """
+    if not raw_headers:
+        return "", ""
+    match = _FROM_LINE_RE.search(raw_headers)
+    if not match:
+        return "", ""
+    value = match.group(1).strip()
+    angled = _NAME_ANGLE_RE.match(value)
+    if angled:
+        name = angled.group(1).strip().strip('"').strip()
+        return name, angled.group(2).strip()
+    if "@" in value:
+        return "", value.strip()
+    return value, ""
+
+
+def normalize_display_name(name: str | None) -> str:
+    """Compare-ready form: case-insensitive, punctuation-insensitive.
+
+    "A-Plus Restoration GC" and "A Plus Restoration GC" are the same name as
+    far as a reader is concerned; flagging that as a wrong company would be
+    noise. Anything else (a genuinely different name) still differs.
+    """
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", (name or "").lower()).split())
+
+
+def display_names_match(configured: str | None, observed: str | None) -> bool:
+    """True when the observed name is the configured name (mod punctuation)."""
+    if not normalize_display_name(configured) or not normalize_display_name(observed):
+        # An empty name is not a match — it means "no name was sent/observed".
+        return False
+    return normalize_display_name(configured) == normalize_display_name(observed)
+
+
+def from_name_drift(configured: str | None, observed: str | None) -> bool:
+    """True when the provider's From name differs from the account's row.
+
+    Empty on either side is drift: an empty `smtp_from_name` means the CRM
+    sends no name at all, so a provider name means the provider supplied one.
+    """
+    if not normalize_display_name(observed):
+        return False
+    return not display_names_match(configured, observed)
+
+
 __all__ = [
     "CREDENTIAL_COLUMNS",
     "IDENTITY_MISMATCH",
@@ -356,8 +424,12 @@ __all__ = [
     "account_row",
     "check_account",
     "credentials_for_account",
+    "display_names_match",
+    "from_name_drift",
     "identity_message",
+    "normalize_display_name",
     "normalize_email",
+    "parse_from_header",
     "record_identity_refusal",
     "refuse",
     "sync_gate",

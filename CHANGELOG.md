@@ -1,3 +1,54 @@
+## 2026-11-10 — From name/address come from the selected account row only (item 4)
+
+### Fixed
+- **Graph `sendMail` never set `message.from`.** The From display name was
+  whatever the Outlook mailbox profile said, so an email sent from
+  `aplus.estimates@outlook.com` arrived as "A-Plus Restoration GC" while the
+  CRM row said "A Plus Restoration GC" (and account 8, which has no
+  `smtp_from_name`, arrived as "MasterX Construction"). `message.from` is now
+  built explicitly from the selected row's `email` + `smtp_from_name`
+  (`mail_graph_client.build_from_identity`). `sender` is deliberately not set:
+  for `/me/sendMail` it needs Send As permission and can be rejected.
+- **The explicit From is asserted against the verified mailbox.** Graph only
+  permits `from` == the signed-in mailbox, so `send_email_via_graph` now
+  REQUIRES `verified_identity` (the row's `oauth_graph_identity`) and refuses
+  before any HTTP request when it is missing or differs from `from_addr`.
+  A wrong-account send can no longer be attempted, let alone disguised.
+- **A caller could override the SMTP From name.** `mail_send.try_send_for_account`
+  accepted `from_name=...`, so a global/default/other name could reach the
+  envelope. The parameter is gone: name and address come from the account row
+  only, and an empty `smtp_from_name` sends the address alone (never a
+  `display_name` or brand fallback).
+- **SMTP envelope vs login.** `smtp_client.send_email_from_account` now refuses
+  a From address that differs from the authenticated login, and builds the
+  header with `formataddr` so a name containing a comma is quoted instead of
+  producing a malformed header.
+
+### Added
+- **Visible provider-name check.** Outlook may still rewrite the display name
+  to the mailbox profile name (no send API can force it), so the CRM now shows
+  what actually went out: the accounts API returns `observedFromName` /
+  `fromNameDrift` (parsed from the newest Sent copy this account sent from its
+  own address) and Settings displays it next to the Display Name field and in
+  the account list. Sent-copy reconciliation keeps the provider's `raw_headers`
+  on the CRM's own sent row so the evidence is not discarded.
+- `mail_identity.parse_from_header` / `normalize_display_name` /
+  `from_name_drift` — the shared comparison helpers (punctuation-only
+  differences like "A-Plus" vs "A Plus" are NOT drift).
+
+### Verified
+- **Prod evidence regenerated** (read-only): 501 rows — every `mail_outgoing`
+  row for accounts 2/6/8/9/10 plus every Sent-folder row plus the CRM-inbox
+  BCC copies. **Address mismatches: 0.** Display-name mismatches: 402 exact
+  strings, **3 after normalization** (account 8 only — the CRM row has no
+  `smtp_from_name`; the other 399 are "A Plus" vs "A-Plus" on account 9).
+  `Sender` / `Return-Path` are not stored by the scanner, so those columns are
+  marked `not_stored` rather than guessed.
+- `tests/test_mail_from_identity.py` 31 (offline; 27 of them fail on the
+  pre-fix tree). Full mail Python suites + all 44 mail JS files pass; the
+  pre-existing failures (auth gaps, graph truthfulness, email project copy)
+  are identical at HEAD.
+
 ## 2026-11-10 — Receive-side audit: wrong-account / wrong-folder filing (item 3)
 
 ### Fixed

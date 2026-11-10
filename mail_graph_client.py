@@ -9,6 +9,20 @@ through a separate code path.
 Body content type is chosen as HTML when an HTML body is provided,
 otherwise Text. Attachments are uploaded as base64 fileAttachment items
 (Graph caps total message size at ~25MB including attachments).
+
+From identity (2026-11-10, Ken): the message's `from` is set explicitly
+from the SELECTED mail_accounts row — that row's address plus its
+`smtp_from_name` — never from a global default, another account, or the
+token owner's profile. Graph only honours `from` when it names the
+signed-in mailbox itself, so `verified_identity` (the identity stored for
+the Graph token) is REQUIRED and must equal `from_addr`; a mismatch or an
+unknown identity is refused before any HTTP request. This is what stops a
+send going out under another mailbox's name/address.
+
+The provider may still rewrite the display name to the mailbox profile
+name (Outlook does this for consumer mailboxes); setting `from` is the
+most we can do from the sending API, so the CRM also surfaces the
+display name the provider actually applied (Settings → account).
 """
 
 from __future__ import annotations
@@ -26,6 +40,24 @@ _GRAPH_SENDMAIL = "https://graph.microsoft.com/v1.0/me/sendMail"
 
 def _recipient(address: str) -> dict:
     return {"emailAddress": {"address": address}}
+
+
+def _norm_addr(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def build_from_identity(from_addr: str, from_name: str | None) -> dict:
+    """Build the Graph `from` (and `sender`) emailAddress from an account row.
+
+    The display name comes ONLY from the selected account's `smtp_from_name`.
+    An empty/blank name yields the address with no `name` key at all, so the
+    provider decides — it never borrows a name from another account.
+    """
+    email_address: dict[str, str] = {"address": (from_addr or "").strip()}
+    name = (from_name or "").strip()
+    if name:
+        email_address["name"] = name
+    return {"emailAddress": email_address}
 
 
 def _build_recipients(
@@ -75,15 +107,40 @@ def send_email_via_graph(
     cc_addr: str | None = None,
     bcc_addr: str | None = None,
     attachments: list[dict] | None = None,
+    from_name: str | None = None,
+    verified_identity: str | None = None,
 ) -> tuple[bool, str | None]:
     """Send mail via Graph /me/sendMail. Returns (success, error_message).
 
-    `from_addr` is informational only — Graph derives the sender from the
-    access token. Used for logging and for the caller to record the
-    sending account.
+    `from_addr` / `from_name` must come from the selected mail_accounts row.
+    `verified_identity` is the mailbox the Graph token was verified to
+    belong to; Graph only permits `from` == that mailbox, so this is
+    asserted BEFORE the request and a mismatch is refused (never sent
+    under another mailbox's identity).
     """
     if not graph_access_token:
         return False, "Graph access token is missing"
+
+    sender_addr = _norm_addr(from_addr)
+    identity = _norm_addr(verified_identity)
+    if not sender_addr:
+        return False, (
+            "Refusing to send: this mail account has no address, so no From "
+            "identity can be asserted. Nothing was sent."
+        )
+    if not identity:
+        return False, (
+            "Refusing to send: the Graph connection's mailbox identity is not "
+            "verified, so the From address cannot be asserted. Reconnect Graph "
+            "for this mailbox. Nothing was sent."
+        )
+    if identity != sender_addr:
+        logger.warning(
+            "Refusing Graph send: from=%s but the token belongs to %s", sender_addr, identity)
+        return False, (
+            f"Refusing to send: the From address is {from_addr} but this mailbox's "
+            f"Graph token belongs to {verified_identity}. Nothing was sent."
+        )
 
     to_recipients, cc_recipients, bcc_recipients = _build_recipients(to_addr, cc_addr, bcc_addr)
     if not to_recipients:
@@ -96,9 +153,16 @@ def send_email_via_graph(
     else:
         body = {"contentType": "Text", "content": ""}
 
+    # Explicit From identity from the account row. `sender` is intentionally
+    # NOT set: for /me/sendMail the authenticated mailbox is the sender, and
+    # `sender` is only meaningful with shared-mailbox (Send As) permission —
+    # setting it here can be rejected with ErrorSendAsDenied. `from` is the
+    # one identity the caller selects, and it is proven equal to the token's
+    # mailbox above.
     message: dict = {
         "subject": subject or "",
         "body": body,
+        "from": build_from_identity(from_addr, from_name),
         "toRecipients": to_recipients,
     }
     if cc_recipients:

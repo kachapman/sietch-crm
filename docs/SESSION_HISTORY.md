@@ -3,10 +3,44 @@
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-11-10 (Item 3: receive-side audit)
+**Date:** 2026-11-10 (Item 4: From name/address from the selected account row)
 
 **Status: COMMITTED LOCALLY on branch `fix/mail-sender-guard` — NOT pushed,
 NOT deployed. Prod read-only (SELECT only, `BEGIN READ ONLY`).**
+
+- **From identity is now the selected account row, explicitly.** Graph
+  `sendMail` builds `message.from` from that row's `email` + `smtp_from_name`
+  and asserts the explicit From equals the Graph token's verified mailbox
+  before any HTTP request (mismatch / unverified = refusal). SMTP/XOAUTH2
+  builds the `From` header from the same two fields, quotes the name
+  (`formataddr`), and refuses a From that differs from the SMTP login.
+  `mail_send.try_send_for_account` no longer accepts a `from_name` override,
+  so no caller, global default or `display_name` can reach the envelope. A
+  blank `smtp_from_name` sends the address only.
+- **Honest limit:** Outlook may still rewrite the display name to the mailbox
+  profile name (Graph/SMTP cannot force it). So the accounts API now reports
+  the name the provider actually sent (`observedFromName` / `fromNameDrift`)
+  from the newest Sent copy of that account, and Settings shows a hint next to
+  the Display Name field (and in the account list). Sent-copy reconciliation
+  keeps the provider's `raw_headers` on the CRM copy so the evidence survives.
+- **Corrected evidence:** `~/Projects/plans/sietch/wrong-from-headers-2026-11-10.csv`
+  regenerated from prod (read-only) with Python's `csv` module — 501 rows
+  covering all mail_outgoing rows + every Sent-folder row + the CRM-inbox BCC
+  copies. **Address mismatches 0. Display-name mismatches: 402 exact, 3 after
+  punctuation/case normalization** (account 9 "A Plus" vs "A-Plus" = 399
+  punctuation-only; account 8 has no `smtp_from_name` while Outlook sends
+  "MasterX Construction"). The audit doc's "17" was a partial 18-row sample of
+  the same class; item 3's "0" answered a different question (delivery/filing).
+- **Tests:** new `tests/test_mail_from_identity.py` 31 (verified to fail on
+  the pre-fix tree: 27 of 31), plus every mail suite + all 44 mail JS files;
+  the 3 pre-existing failures per suite (auth gaps / graph truthfulness /
+  email project copy) are identical at HEAD. Added to CI.
+- Details: `~/Projects/plans/sietch/email-fix-progress-2026-11-10.md`
+  → "Item 4 DONE" (code paths, prod counts, copyable rows).
+
+---
+
+## Previous session summary (2026-11-10 — item 3: receive-side audit)
 
 - **Audited every receive path** (scanner poll, folder LIST, attachment
   fetch, mark read/move/delete, retention loop, drafts/sent copies,

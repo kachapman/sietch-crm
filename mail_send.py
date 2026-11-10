@@ -93,7 +93,6 @@ def try_send_for_account(
     text_body: str | None = None,
     cc_addr: str | None = None,
     bcc_addr: str | None = None,
-    from_name: str | None = None,
     attachments: list[dict] | None = None,
     refresh_graph_token: callable | None = None,
     result_meta: dict | None = None,
@@ -106,10 +105,18 @@ def try_send_for_account(
             Used to obtain a fresh Graph access token; the caller can persist
             updates via the helper returned value. If None, the Graph path
             is skipped (callers without DB write access pass None).
+
+    The From name/address is taken ONLY from this account row: `email` for the
+    address and `smtp_from_name` for the display name. There is deliberately
+    no `from_name` parameter — a caller (or a global default) must never be
+    able to put another name on the envelope. Blank `smtp_from_name` means
+    "address only", not "borrow display_name or a brand name".
     """
     from smtp_client import send_email_from_account
 
     meta = result_meta if result_meta is not None else {}
+    account_from_addr = (acct.get("email") or "").strip()
+    account_from_name = (acct.get("smtp_from_name") or "").strip()
     oauth_provider = acct.get("oauth_provider")
     oauth_access_token = acct.get("oauth_access_token")
     smtp_password = acct.get("smtp_password_encrypted") or ""
@@ -195,7 +202,11 @@ def try_send_for_account(
             try:
                 ok, err = send_email_via_graph(
                     graph_access_token=graph_token,
-                    from_addr=acct.get("email", ""),
+                    from_addr=account_from_addr,
+                    from_name=account_from_name,
+                    # The explicit From must BE the mailbox the token belongs
+                    # to; send_email_via_graph refuses anything else.
+                    verified_identity=acct.get("oauth_graph_identity"),
                     to_addr=to_addr,
                     subject=subject,
                     html_body=html_body,
@@ -271,8 +282,10 @@ def try_send_for_account(
             smtp_port=int(acct.get("smtp_port") or 587),
             smtp_user=acct.get("smtp_user") or acct.get("email", ""),
             smtp_password=smtp_password,
-            from_name=from_name or acct.get("smtp_from_name"),
-            from_addr=acct.get("email", ""),
+            # From name AND address come from this account row only (2026-11-10).
+            # Never a caller override, a global default, or display_name.
+            from_name=account_from_name or None,
+            from_addr=account_from_addr,
             to_addr=to_addr,
             subject=subject,
             html_body=html_body,

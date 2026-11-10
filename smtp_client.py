@@ -9,6 +9,7 @@ from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email import encoders
+from email.utils import formataddr
 
 logger = logging.getLogger("sietch.smtp")
 
@@ -66,13 +67,38 @@ def send_email_from_account(
     oauth_provider: str | None = None,
     oauth_access_token: str | None = None,
 ) -> tuple[bool, str | None]:
-    """Send email via per-account SMTP settings. Returns (success, error_message)."""
+    """Send email via per-account SMTP settings. Returns (success, error_message).
+
+    From identity rules (2026-11-10):
+      * `from_name` / `from_addr` are the selected mail_accounts row's
+        `smtp_from_name` / `email` (mail_send passes nothing else). The
+        system-mail callers pass the CRM brand name deliberately — they are
+        not a user-facing compose path.
+      * a blank `from_name` produces `From: <address>` and nothing else — no
+        borrowed display name.
+      * the envelope sender equals the SMTP login, and the header From must
+        equal that same mailbox: an account authenticating as a different
+        address would be sending as the wrong mailbox, so it is refused.
+    """
     if not smtp_host or not smtp_user:
         return False, "SMTP not configured for this account"
 
+    sender = (from_addr or "").strip()
+    login = (smtp_user or "").strip()
+    if not sender:
+        return False, "Refusing to send: this mail account has no From address. Nothing was sent."
+    if login and login.lower() != sender.lower():
+        logger.warning("Refusing SMTP send: From %s but authenticating as %s", sender, login)
+        return False, (
+            f"Refusing to send: the From address is {sender} but this account "
+            f"authenticates as {login}. Nothing was sent."
+        )
+
     msg = MIMEMultipart("alternative")
-    display_from = f"{from_name} <{from_addr}>" if from_name else from_addr
-    msg["From"] = display_from
+    # formataddr quotes/encodes display names correctly ("Est, LLC" would
+    # otherwise produce a malformed header).
+    name = (from_name or "").strip()
+    msg["From"] = formataddr((name, sender)) if name else sender
     msg["To"] = to_addr
     msg["Subject"] = subject
     if cc_addr:
@@ -116,7 +142,7 @@ def send_email_from_account(
                 server.auth("XOAUTH2", lambda x=None: auth_str)
             else:
                 server.login(smtp_user, smtp_password)
-            server.sendmail(from_addr, all_recipients, msg.as_string())
+            server.sendmail(sender, all_recipients, msg.as_string())
         return True, None
     except smtplib.SMTPAuthenticationError as e:
         logger.error("SMTP auth failed for %s: %s", from_addr, e)

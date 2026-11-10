@@ -218,6 +218,13 @@ jobs:
       - name: Run mail forward quote tests
         run: node --test tests/test_mail_forward_quote.mjs
 
+      - name: Run mail From-identity tests
+        # From name/address come ONLY from the selected mail account row:
+        # Graph message.from + SMTP From header, explicit-from == verified
+        # mailbox asserted before sending, blank name -> address only, no
+        # cross-account/global bleed, and the observed-name drift helpers.
+        run: python3 tests/test_mail_from_identity.py -v
+
       - name: Run mail forward header tests
         run: node --test tests/test_mail_forward_header.mjs
 

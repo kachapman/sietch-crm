@@ -2858,6 +2858,22 @@ def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | No
                          sent_date, sent_date),
                     )
                     if dupe:
+                        # Keep the provider's real headers on the CRM copy
+                        # (item 4, 2026-11-10): the CRM's own sent row carries
+                        # no From header, so the only record of the display
+                        # name the provider actually applied (Outlook rewrites
+                        # it to the mailbox profile name) is the Sent copy's.
+                        # Store it once; never overwrite headers we already have.
+                        _raw = msg.get("raw_headers")
+                        if _raw:
+                            try:
+                                db.execute(
+                                    "UPDATE mail_messages SET raw_headers = %s "
+                                    "WHERE id = %s AND (raw_headers IS NULL OR raw_headers = '')",
+                                    (_clean_nul_str(_raw), dupe["id"]),
+                                )
+                            except Exception:
+                                logger.debug("Could not keep sent-copy headers for %s", dupe["id"])
                         _mark_processed(account_id, uid_key, folder)
                         return dupe["id"]
             except Exception:

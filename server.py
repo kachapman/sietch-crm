@@ -22693,6 +22693,39 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         "displayName": sr["display_name"],
                         "email": sr["email"],
                     })
+            # From-name drift (item 4, 2026-11-10). The CRM can only SET the
+            # display name (Graph message.from / SMTP From); Outlook may still
+            # rewrite it to the mailbox profile name, which the CRM cannot
+            # change. The provider's real From name survives only in the
+            # raw_headers of a copy this account sent from its own address, so
+            # read the most recent one per account and let Settings show it.
+            # One query, no secrets, no bodies.
+            try:
+                drift_rows = db.query_dicts(
+                    """SELECT DISTINCT ON (m.account_id) m.account_id, m.raw_headers
+                         FROM mail_messages m
+                         JOIN mail_accounts a ON a.id = m.account_id
+                        WHERE m.account_id = ANY(%s)
+                          AND m.raw_headers IS NOT NULL AND m.raw_headers <> ''
+                          AND lower(coalesce(m.from_addr, '')) = lower(a.email)
+                        ORDER BY m.account_id, m.date_received DESC NULLS LAST""",
+                    (acct_ids,),
+                ) if acct_ids else []
+                observed = {row["account_id"]: row["raw_headers"] for row in drift_rows}
+            except Exception:
+                logger.debug("From-name observation failed", exc_info=True)
+                observed = {}
+            for r in rows:
+                _name, _addr = mail_identity.parse_from_header(observed.get(r["id"]))
+                # Only meaningful when the header really is this account's
+                # own address (the query already guarantees it).
+                r["observedFromName"] = _name
+                r["fromNameDrift"] = bool(
+                    _name
+                    and mail_identity.from_name_drift(r.get("smtp_from_name"), _name)
+                    and (not _addr or mail_identity.normalize_email(_addr)
+                         == mail_identity.normalize_email(r.get("email")))
+                )
             for r in rows:
                 r["sharedWith"] = shares.get(r["id"], [])
             _json_response(self, 200, {"accounts": rows})

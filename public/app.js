@@ -23415,6 +23415,26 @@ function openAccountSettingsModal(editAccountId, opts) {
         $('#account-settings-smtp-host').value = acct.smtp_host || '';
         $('#account-settings-smtp-port').value = acct.smtp_port || 587;
         $('#account-settings-from-name').value = acct.smtp_from_name || '';
+        // From-name check (item 4, 2026-11-10). The CRM sets the display name
+        // at send time, but Outlook may replace it with the mailbox profile
+        // name. The server reports the name the provider actually sent (from
+        // a Sent copy of this account). Show it here, next to the field that
+        // is supposed to control it, so a divergence is visible instead of
+        // being discovered by an adjuster.
+        const fromHint = $('#account-settings-from-name-hint');
+        if (fromHint) {
+          if (acct.fromNameDrift && acct.observedFromName) {
+            const wanted = (acct.smtp_from_name || '').trim();
+            fromHint.textContent = wanted
+              ? `⚠ Outlook is sending "${acct.observedFromName}" instead of "${wanted}". The provider uses the mailbox profile name — set it in Outlook (Settings → Account → Your name) to match.`
+              : `⚠ Outlook is sending "${acct.observedFromName}" although no display name is set here. The provider fills it from the mailbox profile — set one here to control it, or clear it in Outlook.`;
+            fromHint.style.color = '#ff9800';
+            fromHint.classList.remove('hidden');
+          } else {
+            fromHint.textContent = '';
+            fromHint.classList.add('hidden');
+          }
+        }
         $('#account-settings-auto-bcc').value = acct.auto_bcc_addr || '';
         // 0 means "keep forever" — a valid value, so it must survive the
         // round-trip (it used to be turned back into 90 by `|| 90`).
@@ -23539,6 +23559,8 @@ function openAccountSettingsModal(editAccountId, opts) {
       const el = $(`#${id}`);
       if (el) el.value = '';
     });
+    const newFromHint = $('#account-settings-from-name-hint');
+    if (newFromHint) { newFromHint.textContent = ''; newFromHint.classList.add('hidden'); }
     // NOTE: the field id was renamed to account-settings-retention-days in
     // 478eb6e; the stale id below threw on null and aborted every binding
     // after it (X/Cancel/Test/Save/Connect). Always null-guard here.
@@ -35251,6 +35273,7 @@ async function populateEmailScannerTab() {
             </span>
             </div>
             <div style="font-size:0.7rem; color:var(--muted); margin-top:0.15rem;">Folders: ${escapeHtml(folderStr)}</div>
+            ${a.fromNameDrift && a.observedFromName ? `<div style="font-size:0.7rem; color:#ff9800; margin-top:0.15rem;">⚠ Sent mail shows the name "${escapeHtml(a.observedFromName)}" — set by the provider profile, not this account's display name</div>` : ''}
           </div>`}).join("");
         acctList.querySelectorAll(".scanner-acct-edit").forEach(btn => {
           btn.addEventListener("click", () => openAccountSettingsModal(parseInt(btn.dataset.id)));
