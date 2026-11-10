@@ -21731,6 +21731,24 @@ function verifySentAs(accountId, sentAs) {
   return same;
 }
 
+function activeMailAccountId() {
+  // The only allowed non-reply preselect (Ken 1:01 PM): the account tab that
+  // is open. All-inboxes ('crm'), a job/contact page, or no tab => null.
+  const active = mailState.activeAccount;
+  if (!active || active === 'crm') return null;
+  const id = parseInt(active, 10);
+  return Number.isNaN(id) ? null : id;
+}
+
+function composePreselectId(opts) {
+  // 1) reply/forward: the original message's account (Ken 12:39)
+  if (opts.originalAccountId) return Number(opts.originalAccountId) || null;
+  // 2) editing a draft: the account explicitly chosen when it was saved
+  if (opts.draftAccountId) return Number(opts.draftAccountId) || null;
+  // 3) otherwise: the open account tab only (never alphabetical/last-used)
+  return activeMailAccountId();
+}
+
 function composeAccountOptionsHtml(selectedId) {
   const out = ['<option value="">Choose account…</option>'];
   for (const a of (mailState.accounts || [])) {
@@ -21799,10 +21817,8 @@ async function openComposeModal(opts = {}) {
     fromSelect.disabled = true;
     const sendBtn0 = $('#compose-send-btn');
     if (sendBtn0) sendBtn0.disabled = true;
-    const wanted = await resolveComposeAccountId({
-      dealId: opts.dealId || null,
-      messageAccountId: opts.fromAccountId || null,
-    });
+    let wanted = composePreselectId(opts);
+    if (wanted && !mailState.accounts.some(a => a.id === wanted)) wanted = null;
     fromSelect.innerHTML = composeAccountOptionsHtml(wanted || '');
     fromSelect.value = wanted ? String(wanted) : '';
     fromSelect.disabled = false;
@@ -22388,10 +22404,8 @@ async function renderComposeTabContent(container, tabId, opts = {}) {
   // mailbox, else EMPTY (never the first account alphabetically, 2026-11-10).
   const fromSelect = container.querySelector('.compose-tab-from');
   if (fromSelect && mailState.accounts.length > 0) {
-    const wanted = await resolveComposeAccountId({
-      dealId: opts.dealId || null,
-      messageAccountId: opts.fromAccountId || null,
-    });
+    let wanted = composePreselectId(opts);
+    if (wanted && !mailState.accounts.some(a => a.id === wanted)) wanted = null;
     fromSelect.innerHTML = composeAccountOptionsHtml(wanted || '');
     fromSelect.value = wanted ? String(wanted) : '';
   }
@@ -23036,8 +23050,7 @@ async function openReplyCompose(messageId, type = 'reply') {
       subject: data.subject || '',
       body: data.body || '',
       title: type === 'forward' ? 'Forward Email' : 'Reply to Email',
-      fromAccountId: data.account_id || null,
-      dealId: data.deal_id || null,
+      originalAccountId: data.account_id || null,
       replyToMessageId: messageId,
     });
   } catch (e) {
@@ -27871,8 +27884,7 @@ function bindEmailPreviewActionButtons(modal, norm, fullMail, messageId, close, 
           // Default the From dropdown to THIS message's mailbox (live bug
           // 2026-10-29: it defaulted to accounts[0], so replying to an MDM
           // message offered the Aplus mailbox).
-          fromAccountId: fullMail && (fullMail.account_id ?? fullMail.accountId) ? (fullMail.account_id ?? fullMail.accountId) : null,
-          dealId: oppPreviewContext?.oppId || null,
+          originalAccountId: fullMail && (fullMail.account_id ?? fullMail.accountId) ? (fullMail.account_id ?? fullMail.accountId) : null,
           replyToMessageId: messageId,
         });
       } else if (action === 'archive') {
@@ -27915,8 +27927,7 @@ async function openDraftInComposeById(id) {
       body: draft.body_html || draft.body_text || '',
       title: 'Edit Draft',
       draftId: draft.id,
-      fromAccountId: draft.account_id || null,
-      dealId: draft.deal_id || null,
+      draftAccountId: draft.account_id || null,
     });
   } catch (err) { showToast('Failed to load draft: ' + (err.message || err), true); }
 }
@@ -28037,10 +28048,7 @@ async function renderInlineReply(panel, type, messageId, norm, messageAccountId)
   const accounts = mailState.accounts || [];
   // Job-mapped mailbox first, then the mailbox that received the message.
   // Never the first account alphabetically (2026-11-10).
-  const fromAccountId = await resolveComposeAccountId({
-    dealId: oppPreviewContext?.oppId || null,
-    messageAccountId: messageAccountId,
-  });
+  const fromAccountId = Number(messageAccountId) || activeMailAccountId();
   const fromAccount = accounts.find(a => a.id === fromAccountId) || null;
   const fromAccountEmail = fromAccount ? (fromAccount.email || '') : '';
   const fromAccountName = fromAccount ? (fromAccount.smtp_from_name || fromAccount.email || '') : '';

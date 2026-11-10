@@ -19,39 +19,33 @@ function region(marker, len = 3000) {
   return app.slice(at, at + len);
 }
 
-test('the From select starts empty and never defaults to the first account', () => {
+test('the only preselects are the open account tab, a reply original, or a draft account', () => {
   const body = region('function composeAccountOptionsHtml', 700);
   assert.ok(body.includes('<option value="">Choose account…</option>'));
-  const mapped = region('function mappedAccountIdsForContact', 600);
-  assert.ok(mapped.includes('contractorContactId'));
-  const resolve = region('async function resolveComposeAccountId', 1200);
-  assert.ok(resolve.includes('mappedAccountIdsForContact'));
-  assert.ok(resolve.includes('messageAccountId'));
-  assert.ok(!resolve.includes('accounts[0]'));
-  // the old alphabetical fallback is gone from the inline reply
-  const inline = region('async function renderInlineReply', 1500);
-  assert.ok(!inline.includes('accounts[0].id'), 'no first-account fallback');
+  const pre = region('function composePreselectId', 900);
+  assert.ok(pre.includes('opts.originalAccountId'));
+  assert.ok(pre.includes('opts.draftAccountId'));
+  assert.ok(pre.includes('activeMailAccountId()'));
+  const active = region('function activeMailAccountId', 700);
+  assert.ok(active.includes("active === 'crm'"));
+  assert.ok(!app.includes('accounts[0].id'), 'no alphabetical first-account fallback');
 });
 
-test('the compose modal uses the job mapping and records thread context', () => {
+test('the compose modal applies the approved preselect and records thread context', () => {
   const body = region('async function openComposeModal', 4000);
-  assert.ok(body.includes('resolveComposeAccountId'));
-  assert.ok(body.includes('dealId: opts.dealId'));
+  assert.ok(body.includes('composePreselectId(opts)'));
   assert.ok(body.includes('replyToMessageId'));
   assert.ok(body.includes('composeAccountOptionsHtml'));
 });
 
-test('all compose entry points bind an account/deal/thread', () => {
+test('replies/forwards preselect the original account at every entry point', () => {
   const reply = region('async function openReplyCompose', 1200);
-  assert.ok(reply.includes('fromAccountId: data.account_id'));
-  assert.ok(reply.includes('dealId: data.deal_id'));
+  assert.ok(reply.includes('originalAccountId: data.account_id'));
   assert.ok(reply.includes('replyToMessageId: messageId'));
   const draft = region('async function openDraftInComposeById', 1200);
-  assert.ok(draft.includes('fromAccountId: draft.account_id'));
-  assert.ok(draft.includes('dealId: draft.deal_id'));
-  // preview reply passes the job + thread
-  const at = app.indexOf('dealId: oppPreviewContext?.oppId || null,');
-  assert.ok(at > -1);
+  assert.ok(draft.includes('draftAccountId: draft.account_id'));
+  // preview reply passes the original account + thread
+  assert.ok(app.includes('originalAccountId: fullMail &&'));
 });
 
 test('the send dialog calls the server preflight and blocks on 409', () => {
@@ -104,9 +98,10 @@ test('a divergent actual sender is a loud error', () => {
   assert.ok((app.match(/verifySentAs\(accountId, /g) || []).length >= 3);
 });
 
-test('Send is disabled until the From options are loaded', () => {
-  const body = region('async function openComposeModal', 4500);
-  assert.ok(body.includes('fromSelect.disabled = true'));
-  assert.ok(body.includes('fromSelect.disabled = false'));
-  assert.ok(body.includes("sendBtn0.disabled = true"));
+test('consecutive compose opens cannot leak a previous selection', () => {
+  // Every open rebuilds the options from composePreselectId(opts) and assigns
+  // the value from that result — no cached value survives.
+  const body = region('async function openComposeModal', 4000);
+  assert.ok(body.includes("fromSelect.innerHTML = composeAccountOptionsHtml(wanted || '')"));
+  assert.ok(body.includes("fromSelect.value = wanted ? String(wanted) : ''"));
 });
