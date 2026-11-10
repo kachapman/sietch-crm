@@ -1,3 +1,27 @@
+## 2026-11-10 — DEPLOYED to production: `f3083c8` (v2.5.4)
+
+Deployed the MCP document read + OCR worker queue work to
+`crm.publicadjustermidwest.com` (`147.182.164.19`): clean `--no-ff` merge of
+`feat/mcp-document-read` (`a10dca8` + host-agnostic wording/fixture fix
+`bb9623d`) into `main` `60f2b4d` = merge `b149a3e`, then the 2.5.4 bump
+`f3083c8`. Standard flow: pre-deploy backup on
+`/mnt/sietch_backup/sietch-prod-pre-deploy-f3083c8-20261110-173920ET`
+(926 MB: `pg_dump -Fc` 30.2 MB with 735 TOC entries, code archive of
+`200c237`, data volume minus `history-attachments/`, uploads, env/compose/
+Dockerfile 0600, `PRE_STATE.txt`, `ROLLBACK.md`), `git push`, droplet
+`git fetch` + `git merge --ff-only` (`200c237` → `f3083c8`, no reset — the six
+intentionally deleted `scripts/backfill_*.py` stayed deleted),
+`docker compose build dashboard`, `up -d dashboard`. Migration **052** applied by
+the boot runner at `22:42:12Z` (55 → 56 rows); `ocr_page_cache` + `ocr_queue`
+and their indexes created, no migration failure. All smokes passed (health
+`dbReachable`, login page, `app.js`/`styles.css` byte-identical to the commit,
+unauth API + `/mcp` 401, one clean scanner poll cycle with zero auth/identity
+errors, authenticated MCP `tools/list` = 26 tools including the five new ones,
+a read-only `get_project_document` returning `ocr_pending` for a 20-page scan).
+**No email was sent and no mail account/token was touched.** The OCR worker is
+not installed anywhere and no unit is enabled. Deploy log:
+`~/Projects/plans/sietch/mcp-document-read-2026-11-10.md` (section 10).
+
 ## 2026-11-10 — MCP document read + OCR worker queue (v2.5.4)
 
 ### Added

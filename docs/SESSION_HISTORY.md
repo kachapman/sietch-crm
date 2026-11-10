@@ -3,7 +3,63 @@
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-11-10 (MCP document read + OCR worker queue)
+**Date:** 2026-11-10 (merge + DEPLOY of the MCP document read / OCR worker queue — Ken's go at 5:25 PM ET)
+
+**Status: MERGED and DEPLOYED. Prod `crm.publicadjustermidwest.com`
+(`147.182.164.19`) runs `f3083c8` / v2.5.4** (was `200c237` / v2.5.3).
+
+- Merge: clean `--no-ff` of `feat/mcp-document-read` into `main` `60f2b4d`
+  = merge `b149a3e` (parents `60f2b4d` + `bb9623d`); VERSION bump commit
+  `f3083c8` (2.5.3 → 2.5.4). Conflicts only in `CHANGELOG.md` +
+  `docs/SESSION_HISTORY.md`, resolved by keeping both. Pushed
+  `60f2b4d..f3083c8`; droplet `git fetch` + `merge --ff-only` (no reset — the
+  six intentionally deleted `scripts/backfill_*.py` stayed deleted).
+- Wording: tool descriptions, `api_spec.py` tag/summary/description,
+  `docs/API.md`, migration 052 comments, `server.py` comment, module
+  docstrings and the worker docstrings now say host-agnostic "OCR worker";
+  laptop values remain only as labelled examples in `docs/OCR_WORKER.md`.
+- Test flake found and fixed at the source (`bb9623d`):
+  `tests/test_ocr_queue_api.py` assumed `history_attachments.id` never
+  collides with `project_documents.id`. On a freshly initialized DB both
+  sequences start at 1 and `resolve_project_document()` prefers
+  `project_documents` by design, so `test_history_attachment_fallback` got the
+  mirrored row. The fixture now pushes the `history_attachments` sequence past
+  every `project_documents.id`; verified 36/36 twice on a brand-new DB.
+- Tests vs baseline `200c237` (both DBs rebuilt from `init.sql` + each tree's
+  migrations, one process per file, timeout 900): baseline **85 files, 1,673
+  tests, 218 skipped, 24 failed, 1 error**; merged **88 files, 1,747 tests,
+  218 skipped, 24 failed, 1 error** — identical failing files
+  (`test_email_project_copy` 3F, `test_invoice_coc_modern` 16F+1E,
+  `test_mail_auth_gaps` 3F, `test_scanner_toggle_gating` 1F,
+  `test_sync_pull_deals_fields` 1F). **Zero new failures.** Node **44/44**.
+- Backup: `/mnt/sietch_backup/sietch-prod-pre-deploy-f3083c8-20261110-173920ET`
+  (926 MB; dump 30.2 MB / 735 TOC entries; code archive of `200c237`; data
+  volume minus `history-attachments/`; env/compose/Dockerfile 0600;
+  `PRE_STATE.txt`, `mail_accounts-pre.tsv`, `ROLLBACK.md`). Rollback image
+  `sietch-crm-dashboard:rollback-200c237`. 052 is additive → code rollback
+  needs no DB restore.
+- Migration **052** applied by the boot runner at `22:42:12Z` (55 → 56 rows);
+  `ocr_page_cache` + `ocr_queue` and all their indexes created.
+- Smokes all green: health 200 `dbReachable`; login page 200; `app.js` /
+  `styles.css` byte-identical to `f3083c8`; unauth `/api/v2/*` and `/mcp` →
+  401; one clean scanner poll cycle (`22:42:13` → `22:42:25`) with zero
+  auth/identity errors (only the documented pre-existing Spam/Trash
+  `[NONEXISTENT]` lines); authenticated MCP `tools/list` = 26 tools incl.
+  `get_project_document`, `download_project_document`,
+  `get_mail_attachment_text`, `ocr_status`, `request_ocr`; read-only
+  `get_project_document` on project 958 / document 14756 returned
+  `ocr_pending`, 20 pages (scanned, no cache); served spec v2.5.4 / 253 paths.
+- **No email sent; no mail account, token, reconnect, dedupe or split script
+  touched.** The "OCR worker (laptop)" API token was **not** created (no admin
+  session available in this run) — the laptop step creates it via Admin →
+  API & MCP. Worker not installed; no systemd unit enabled or lingering
+  changed.
+- Full log: `~/Projects/plans/sietch/mcp-document-read-2026-11-10.md` §10.
+
+---
+
+## Previous session summary (2026-11-10 — MCP document read + OCR worker queue)
+
 
 **Status: merged into local `main` (merge commit, clean `--no-ff`; no rebase of
 `origin/main`), NOT pushed / NOT deployed at the time of writing.** Plan:
