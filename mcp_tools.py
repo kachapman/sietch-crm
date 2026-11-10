@@ -174,12 +174,6 @@ def _get_project_document(ctx: ToolContext, args: dict) -> tuple[str, str, dict 
     return "GET", path, None
 
 
-def _download_project_document(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
-    path = (f"/api/v2/projects/{int(args['project_id'])}/documents/"
-            f"{int(args['document_id'])}/content")
-    return "GET", path, None
-
-
 def _get_mail_attachment_text(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
     path = (f"/api/v2/mail/messages/{int(args['message_id'])}/attachments/"
             f"{int(args['attachment_id'])}/text{_paging_query(args)}")
@@ -468,17 +462,6 @@ TOOLS: tuple[ToolSpec, ...] = (
             "max_chars": _i("Maximum characters returned (default 100000)."),
         }, ["project_id", "document_id"]),
         "read", _get_project_document),
-    ToolSpec(
-        "download_project_document",
-        "Download the raw bytes of one project document. The result is base64 "
-        "JSON (MCP has no binary transport) and is refused above 10 MB with the "
-        "file size but no content.",
-        _schema({
-            "project_id": _i("Project id."),
-            "document_id": _i("Document id (project_documents.id or a "
-                              "history_attachments.id shown in the Documents tab)."),
-        }, ["project_id", "document_id"]),
-        "read", _download_project_document),
     ToolSpec(
         "get_mail_attachment_text",
         "Read one mail attachment as text from the bytes already stored on the "

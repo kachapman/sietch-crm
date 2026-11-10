@@ -1,3 +1,28 @@
+## 2026-11-10 — v2.5.5: drop the duplicate document-download tool + route
+
+Ken (5:44 PM ET): no duplicate tools — only add what is missing (text + OCR).
+The API/MCP already served PDFs, so this removes the two additions that
+duplicated existing file serving:
+
+| removed | was | already covered by |
+|---|---|---|
+| MCP tool `download_project_document` | base64-in-JSON project-document download | `GET /api/v2/documents/{id}` (raw project document bytes — pre-existing) |
+| `GET /api/v2/projects/{id}/documents/{document_id}/content` | base64 JSON download route + handler + `document_read.document_content()` + the 10 MB `MAX_DOCUMENT_CONTENT_BYTES` cap | `GET /api/v2/documents/{id}` (raw) and `GET /api/v2/history-attachments/{id}/download` (raw history attachment); `list_project_documents` gives the metadata + ids |
+
+**Kept (genuinely new, not file serving):** `get_project_document` →
+`GET /api/v2/projects/{id}/documents/{document_id}/text`,
+`get_mail_attachment_text` →
+`GET /api/v2/mail/messages/{id}/attachments/{attachment_id}/text`,
+`ocr_status`, `request_ocr`, and the OCR worker routes under
+`/api/v2/ocr/queue*` (job-scoped `/file` for the `ocr`-only token).
+
+Also removed: `api_spec.MCP_TOOL_OPERATIONS["download_project_document"]`, the
+`/content` OpenAPI entry, the regenerated `api_spec_routes.py` row (326 → 325
+operations, 253 → 252 paths), the `docs/API.md` base64 section + endpoint row,
+and the `/content`/download tests (`TestDocumentContent`, the two MCP download
+tests, the oversized fixture). Docs now point at the pre-existing raw download
+routes so clients do not look for a download tool.
+
 ## 2026-11-10 — DEPLOYED to production: `f3083c8` (v2.5.4)
 
 Deployed the MCP document read + OCR worker queue work to

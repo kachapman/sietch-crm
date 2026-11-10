@@ -286,7 +286,6 @@ ROUTES = [
     {"method": 'PUT', "path": '/api/v2/projects/{id}/custom-fields', "params": ['id'], "tag": 'projects', "summary": 'Update custom field'},
     {"method": 'GET', "path": '/api/v2/projects/{id}/documents', "params": ['id'], "tag": 'projects', "summary": 'Get one document'},
     {"method": 'POST', "path": '/api/v2/projects/{id}/documents', "params": ['id'], "tag": 'projects', "summary": 'Create document'},
-    {"method": 'GET', "path": '/api/v2/projects/{id}/documents/{document_id}/content', "params": ['id', 'document_id'], "tag": 'projects', "summary": 'Get one content'},
     {"method": 'GET', "path": '/api/v2/projects/{id}/documents/{document_id}/text', "params": ['id', 'document_id'], "tag": 'projects', "summary": 'Get one text'},
     {"method": 'GET', "path": '/api/v2/projects/{id}/history', "params": ['id'], "tag": 'projects', "summary": 'Get one history'},
     {"method": 'POST', "path": '/api/v2/projects/{id}/history', "params": ['id'], "tag": 'projects', "summary": 'Create history'},

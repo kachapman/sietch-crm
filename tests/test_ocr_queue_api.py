@@ -11,7 +11,6 @@ rows) is deleted in tearDownModule.
 Run with: python3 tests/test_ocr_queue_api.py
 """
 
-import base64
 import json
 import shutil
 import sys
@@ -138,13 +137,6 @@ def setUpModule():  # noqa: C901 - fixture setup is intentionally explicit
     DOCS["missing"] = _add_project_document(
         PROJECT_A, "deleted.pdf", missing, "application/pdf")
     missing.unlink()
-
-    # Size cap: a sparse file just over the constant (no disk usage).
-    big = Path(TMPDIR) / "oversized.pdf"
-    with open(big, "wb") as fh:
-        fh.truncate(document_read.MAX_DOCUMENT_CONTENT_BYTES + 1)
-    DOCS["oversized"] = _add_project_document(
-        PROJECT_A, "oversized.pdf", big, "application/pdf")
 
     # History attachment that was never mirrored into project_documents.
     event_id = db.insert_returning(
@@ -366,31 +358,6 @@ class TestProjectDocumentText(OcrApiBase):
         self.assertEqual(resp.status, 401)
 
 
-class TestDocumentContent(OcrApiBase):
-    def test_base64_roundtrip(self):
-        resp = self.call("GET", f"/api/v2/projects/{PROJECT_A}/documents/{DOCS['txt']}/content")
-        self.assertEqual(resp.status, 200)
-        self.assertEqual(resp.payload["encoding"], "base64")
-        decoded = base64.b64decode(resp.payload["content"])
-        self.assertEqual(decoded, FIXTURES["txt"].read_bytes())
-        self.assertEqual(resp.payload["size_bytes"], FIXTURES["txt"].stat().st_size)
-
-    def test_size_cap_refuses_without_body(self):
-        resp = self.call("GET",
-                         f"/api/v2/projects/{PROJECT_A}/documents/{DOCS['oversized']}/content")
-        self.assertEqual(resp.status, 413)
-        self.assertNotIn("content", resp.payload)
-        self.assertEqual(resp.payload["size_bytes"],
-                         document_read.MAX_DOCUMENT_CONTENT_BYTES + 1)
-        self.assertEqual(resp.payload["max_bytes"],
-                         document_read.MAX_DOCUMENT_CONTENT_BYTES)
-
-    def test_cross_project_content_is_404(self):
-        resp = self.call("GET", f"/api/v2/projects/{PROJECT_A}/documents/"
-                                f"{DOCS['other_project']}/content")
-        self.assertEqual(resp.status, 404)
-
-
 class TestMailAttachments(OcrApiBase):
     def test_stored_attachment_text(self):
         resp = self.call("GET", f"/api/v2/mail/messages/{MAIL_MESSAGE_ID}/attachments/"
@@ -596,7 +563,7 @@ class TestWorkerTokenScope(OcrApiBase):
     def test_ocr_token_cannot_read_documents_or_mail(self):
         for path in (
             self.project_text_path(DOCS["digital"]),
-            f"/api/v2/projects/{PROJECT_A}/documents/{DOCS['digital']}/content",
+            f"/api/v2/documents/{DOCS['digital']}",
             f"/api/v2/mail/messages/{MAIL_MESSAGE_ID}/attachments/{ATTACHMENTS['txt']}/text",
             "/api/v2/documents/search?q=synthetic",
             f"/api/v2/projects/{PROJECT_A}/documents",
@@ -679,9 +646,12 @@ class TestMcpTools(OcrApiBase):
     def test_tools_are_listed(self):
         user = mcp_server.authenticate(FULL_TOKEN)
         names = {t["name"] for t in mcp_server._tool_list(user)}
-        for name in ("get_project_document", "download_project_document",
-                     "get_mail_attachment_text", "ocr_status", "request_ocr"):
+        for name in ("get_project_document", "get_mail_attachment_text",
+                     "ocr_status", "request_ocr"):
             self.assertIn(name, names)
+        # Raw file bytes are served by the pre-existing document/history-attachment
+        # download routes; there is deliberately no duplicate MCP download tool.
+        self.assertNotIn("download_project_document", names)
 
     def test_get_project_document_via_mcp(self):
         out = self.call_tool("get_project_document",
@@ -706,24 +676,6 @@ class TestMcpTools(OcrApiBase):
                 "SELECT id FROM ocr_queue WHERE file_sha256 = %s", (SCANNED_SHA,)))
         finally:
             self.clear_cache_and_queue(SCANNED_SHA)
-
-    def test_download_via_mcp_is_base64_json(self):
-        out = self.call_tool("download_project_document",
-                             {"project_id": PROJECT_A, "document_id": DOCS["txt"]})
-        payload = out["result"]["structuredContent"]
-        self.assertEqual(payload["encoding"], "base64")
-        self.assertEqual(base64.b64decode(payload["content"]), FIXTURES["txt"].read_bytes())
-
-
-    def test_download_over_cap_reports_size_bytes(self):
-        out = self.call_tool("download_project_document",
-                             {"project_id": PROJECT_A, "document_id": DOCS["oversized"]})
-        self.assertTrue(out["result"]["isError"])
-        payload = out["result"]["structuredContent"]
-        self.assertEqual(payload["error"], "document_too_large")
-        self.assertNotIn("content", payload)
-        self.assertEqual(payload["size_bytes"],
-                         document_read.MAX_DOCUMENT_CONTENT_BYTES + 1)
 
 
 if __name__ == "__main__":

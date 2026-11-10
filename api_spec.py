@@ -512,24 +512,6 @@ _ENRICH: dict[tuple[str, str], dict] = {
         ],
         "responses": {"200": _json_response("Extracted text", _ref("DocumentText"))},
     },
-    ("GET", "/api/v2/projects/{id}/documents/{document_id}/content"): {
-        "summary": "Download a project document (base64, size-capped)",
-        "description": (
-            "JSON `{filename, mime_type, size_bytes, encoding: 'base64', content}`. "
-            "Refused with 413 and `size_bytes` (no content) above 10 MB: MCP is "
-            "JSON-RPC over HTTP, so base64 is the only transport that reaches a "
-            "remote client."
-        ),
-        "tags": ["documents"],
-        "parameters": [
-            _path_param("id", "Project id."),
-            _path_param("document_id", "project_documents.id or a history_attachments.id."),
-        ],
-        "responses": {"200": _json_response("Base64 document", _obj({
-            "filename": _STR, "mime_type": _STR, "size_bytes": _INT,
-            "encoding": _STR, "content": _STR,
-        }, ["filename", "size_bytes", "encoding", "content"]))},
-    },
     ("GET", "/api/v2/mail/messages/{id}/attachments/{attachment_id}/text"): {
         "summary": "Extract text from a mail attachment (stored bytes only)",
         "description": (
@@ -838,7 +820,6 @@ MCP_TOOL_OPERATIONS: dict[str, tuple[str, str]] = {
     "list_tasks": ("GET", "/api/v2/tasks"),
     "list_project_documents": ("GET", "/api/v2/projects/{id}/documents"),
     "get_project_document": ("GET", "/api/v2/projects/{id}/documents/{document_id}/text"),
-    "download_project_document": ("GET", "/api/v2/projects/{id}/documents/{document_id}/content"),
     "get_mail_attachment_text": ("GET", "/api/v2/mail/messages/{id}/attachments/{attachment_id}/text"),
     "ocr_status": ("GET", "/api/v2/ocr/status"),
     "request_ocr": ("POST", "/api/v2/ocr/request"),

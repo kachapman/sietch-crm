@@ -17,8 +17,6 @@ No OCR runs here. No network calls. No CRM writes except a queue row in
 
 from __future__ import annotations
 
-import base64
-import mimetypes
 from pathlib import Path
 
 import db
@@ -26,15 +24,6 @@ import document_text
 import ocr_store
 
 ROOT = Path(__file__).resolve().parent
-
-# Hard cap for the base64 download tool. MCP is JSON-RPC over HTTP and the
-# in-process shim only parses JSON/text, so there is no binary transport. A
-# short-lived path on chapmanserver is useless to a remote MCP client, and a
-# signed URL would mint a second download auth surface. Base64 in the JSON
-# result is the option that fits the existing transport — with a cap so a
-# 200 MB scan cannot blow up the MCP response. Refused calls still report
-# ``size_bytes`` and send no body.
-MAX_DOCUMENT_CONTENT_BYTES = 10 * 1024 * 1024
 
 MAX_CHARS_DEFAULT = document_text.DEFAULT_MAX_CHARS
 
@@ -176,29 +165,6 @@ def extract_row(row: dict, *, page_start=None, page_end=None,
     return result
 
 
-def document_content(row: dict) -> dict:
-    """Base64 payload for the download tool, with a hard size cap."""
-    path = _require_file(row)
-    size = _stat_size(path, row.get("file_size"))
-    if size > MAX_DOCUMENT_CONTENT_BYTES:
-        raise DocumentReadError(
-            "document_too_large", 413,
-            size_bytes=size,
-            max_bytes=MAX_DOCUMENT_CONTENT_BYTES,
-            filename=row.get("filename"),
-            mime_type=row.get("mime_type"),
-        )
-    data = path.read_bytes()
-    mime_type = row.get("mime_type") or mimetypes.guess_type(row.get("filename") or "")[0]
-    return {
-        "filename": row.get("filename"),
-        "mime_type": mime_type or "application/octet-stream",
-        "size_bytes": len(data),
-        "encoding": "base64",
-        "content": base64.b64encode(data).decode("ascii"),
-    }
-
-
 def _coverage(row: dict, extraction: dict) -> dict:
     pages = extraction.get("pages") or []
     needed = [int(p["page"]) for p in pages if p.get("ocr_needed")]
@@ -296,9 +262,7 @@ def request_ocr(row: dict, requested_by: int | None) -> dict:
 __all__ = [
     "DocumentReadError",
     "MAX_CHARS_DEFAULT",
-    "MAX_DOCUMENT_CONTENT_BYTES",
     "absolute_path",
-    "document_content",
     "extract_row",
     "ocr_status",
     "request_ocr",

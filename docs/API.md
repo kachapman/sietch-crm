@@ -156,17 +156,6 @@ Images and other binary types return `{"status": "unsupported_type", …}` with
 the filename and MIME type but no body. An attachment that was never mirrored
 returns 409 `{"error": "not_stored"}`.
 
-Download raw project document bytes as base64 (JSON only; 10 MB cap, refused
-with `size_bytes` above it):
-
-```bash
-curl -s "…/api/v2/projects/101/documents/5531/content" \
-  -H "Authorization: Bearer $SIETCH_TOKEN"
-```
-
-A raw `GET /api/v2/documents/{id}` also exists for the dashboard; the JSON
-content route is what the MCP tool returns because MCP has no binary transport.
-
 ### Run the OCR worker
 
 The server never runs OCR. A worker with a token restricted to the `ocr`
@@ -190,7 +179,8 @@ completes the job. Cache rows are written only by that pages endpoint. See
 | draft an email | `POST /api/v2/mail/drafts` |
 | list documents | `GET /api/v2/projects/{id}/documents` |
 | read document text | `GET /api/v2/projects/{id}/documents/{document_id}/text` |
-| download document (base64) | `GET /api/v2/projects/{id}/documents/{document_id}/content` |
+| download a document file | `GET /api/v2/documents/{id}` (raw bytes; pre-existing) |
+| download a history-attachment file | `GET /api/v2/history-attachments/{id}/download` (raw bytes; pre-existing) |
 | read attachment text | `GET /api/v2/mail/messages/{id}/attachments/{attachment_id}/text` |
 | OCR status | `GET /api/v2/ocr/status` |
 | queue OCR | `POST /api/v2/ocr/request` |
@@ -201,8 +191,8 @@ List endpoints advertise their pagination in the spec under `x-pagination`
 
 ## 4. What is documented
 
-Every route the server dispatches under `/api/v2` is in the spec: 326
-operations across 253 paths (projects, contacts, history, tasks, notes, mail,
+Every route the server dispatches under `/api/v2` is in the spec: 325
+operations across 252 paths (projects, contacts, history, tasks, notes, mail,
 documents, OCR, calendar, users, admin, meta). The endpoints used by the MCP
 tools carry full query/body/response schemas; the rest are listed with method,
 path, auth, path parameters and the standard error set.
@@ -220,11 +210,17 @@ The MCP server (`/mcp`) wraps the same endpoints; tool names and descriptions
 are derived from this spec (`api_spec.MCP_TOOL_OPERATIONS`). See
 `plans/sietch/sietch-mcp-server.md`.
 
-Document-read tools: `get_project_document`, `download_project_document`,
-`get_mail_attachment_text`, `ocr_status`, `request_ocr`. They are read-only
-except `request_ocr`, which is immediate (not a proposal) and only inserts one
-OCR queue row; a fully cached file is never re-queued. The worker token scope
-is `ocr` only, so it cannot read documents, mail or admin routes.
+Document-read tools: `get_project_document`, `get_mail_attachment_text`,
+`ocr_status`, `request_ocr`. They are read-only except `request_ocr`, which is
+immediate (not a proposal) and only inserts one OCR queue row; a fully cached
+file is never re-queued. The worker token scope is `ocr` only, so it cannot
+read documents, mail or admin routes.
+
+There is **no** MCP download tool: raw file bytes are already served by the
+pre-existing `GET /api/v2/documents/{id}` (project document) and
+`GET /api/v2/history-attachments/{id}/download` (history attachment), and
+`list_project_documents` gives the metadata/ids. The OCR tools add text
+extraction and the OCR queue, not file transport.
 
 Admin → **API & MCP** is one tab: the MCP on/off switch, connection URL and
 copyable client config at the top, then the token list (each row shows the

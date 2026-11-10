@@ -4774,21 +4774,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             else:
                 _json_response(self, 404, {"error": "Project not found"})
             return
-        # Project document text (pdftotext + OCR cache) and base64 download.
+        # Project document text (pdftotext + OCR cache).
         # Read-only; the only OCR write is the queue (POST /api/v2/ocr/request).
         m = re.match(r"^/api/v2/projects/(\d+)/documents/(\d+)/text$", api_path)
         if m:
             opp_id = _resolve_project_id(m.group(1))
             if opp_id:
                 self._project_document_text(opp_id, int(m.group(2)), qs)
-            else:
-                _json_response(self, 404, {"error": "Project not found"})
-            return
-        m = re.match(r"^/api/v2/projects/(\d+)/documents/(\d+)/content$", api_path)
-        if m:
-            opp_id = _resolve_project_id(m.group(1))
-            if opp_id:
-                self._project_document_content(opp_id, int(m.group(2)))
             else:
                 _json_response(self, 404, {"error": "Project not found"})
             return
@@ -13050,28 +13042,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             logger.warning("project document text failed: %s", type(exc).__name__)
             _json_response(self, 500, {"error": "extraction_failed"})
-
-    def _project_document_content(self, project_id: int, document_id: int) -> None:
-        user = _require_auth(self)
-        if not user:
-            return
-        row = document_read_mod.resolve_project_document(project_id, document_id)
-        if not row:
-            _json_response(self, 404, {"error": "Document not found for this project"})
-            return
-        try:
-            payload = document_read_mod.document_content(row)
-            ocr_store_mod.audit(
-                "read_content", source="project_document", project_id=project_id,
-                source_id=document_id, count=payload.get("size_bytes"),
-                token_id=user.get("api_token_id"),
-            )
-            _json_response(self, 200, payload)
-        except document_read_mod.DocumentReadError as exc:
-            self._document_read_error(exc)
-        except Exception as exc:
-            logger.warning("project document content failed: %s", type(exc).__name__)
-            _json_response(self, 500, {"error": "download_failed"})
 
     def _handle_mail_attachment_text(self, message_id: int, attachment_id: int,
                                      qs: dict | None = None) -> None:
