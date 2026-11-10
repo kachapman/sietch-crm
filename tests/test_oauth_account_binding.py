@@ -452,8 +452,14 @@ class TestExchangeCallbackBindsToTheAccount(unittest.TestCase):
         self.assertEqual(redirects[0][0], "error")
         self.assertEqual(db.token_writes(), [])
 
-    def test_legacy_in_memory_state_still_completes(self):
-        """A flow started by the previous build must not dead-end."""
+    def test_legacy_flow_never_writes_tokens_onto_an_existing_row(self):
+        """A flow started before signed state carries no account id.
+
+        It may create the account named by the provider identity, but it must
+        never write tokens onto an existing row found by email (2026-11-10) —
+        that is a credential write keyed by email, which is how mailbox A's
+        grant lands on mailbox B's row.
+        """
         import server as _server
         legacy = "legacy-state-token"
         _server._oauth_states[legacy] = (7, "microsoft", time.time() + 600, False)
@@ -461,6 +467,19 @@ class TestExchangeCallbackBindsToTheAccount(unittest.TestCase):
             redirects, db = _run_exchange_callback(
                 legacy, "estimates.masterx@outlook.com",
                 by_email=self.account, users=self.users)
+        finally:
+            _server._oauth_states.pop(legacy, None)
+        self.assertEqual(redirects[0][0], "error")
+        self.assertIn("already connected", redirects[0][1])
+        self.assertEqual(db.token_writes(), [])
+
+    def test_new_account_flow_creates_a_row_when_the_mailbox_is_new(self):
+        import server as _server
+        legacy = "legacy-state-token"
+        _server._oauth_states[legacy] = (7, "microsoft", time.time() + 600, False)
+        try:
+            redirects, db = _run_exchange_callback(
+                legacy, "new@outlook.com", by_email=None, users=self.users)
         finally:
             _server._oauth_states.pop(legacy, None)
         self.assertEqual(redirects[0][0], "success")
@@ -743,11 +762,15 @@ class TestSourceGuards(unittest.TestCase):
         self.assertIn('id="account-settings-oauth-disconnect"', self.index_src)
         self.assertIn("async function disconnectExchangeOAuth", self.app_src)
 
-    def test_notification_refresh_updates_by_id_not_email(self):
-        at = self.dispatcher_src.index("Refresh OAuth token if expired")
-        region = self.dispatcher_src[at:at + 1800]
-        self.assertNotIn("WHERE email = %s", region)
-        self.assertIn("WHERE id = %s", region)
+    def test_notification_sender_uses_the_per_account_resolver(self):
+        """Item 2 (2026-11-10): the dispatcher no longer picks "the first CRM
+        inbox" or refreshes a token inline — it resolves ONE account by id and
+        refreshes through the shared, identity-checked helper."""
+        at = self.dispatcher_src.index("def _get_crm_smtp_account")
+        region = self.dispatcher_src[at:at + 2000]
+        self.assertIn("mail_identity.system_account(db)", region)
+        self.assertNotIn("FROM mail_accounts", region)
+        self.assertNotIn("prov.refresh_token(", region)
 
     def test_migration_047_is_additive(self):
         sql = (ROOT / "migrations" / "047_mail_oauth_identity.sql").read_text(encoding="utf-8")

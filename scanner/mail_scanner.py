@@ -39,6 +39,7 @@ from event_bus import event_bus
 from user_profile_store import load_user_profile, save_user_profile
 import oauth_providers
 import mail_oauth
+import mail_identity
 import mail_dates
 import infra_log
 
@@ -1189,97 +1190,161 @@ def _refresh_oauth_token_if_needed(account_id: int, provider_name: str, current_
     )
 
 
-def _get_mailboxes() -> list[dict[str, Any]]:
-    # Try env vars first (for standalone/testing)
+def _env_mailbox_config() -> dict[str, Any] | None:
+    """Single dev-only mailbox from SCANNER_IMAP_* environment variables.
+
+    These credentials are NOT associated with any `mail_accounts` row, so they
+    must never be applied to database accounts: before 2026-11-10 this block
+    ran FIRST and returned one config for every scan, which meant the env
+    mailbox's credentials were used for the whole CRM whenever they were set.
+    They are now only used when the database has no mail accounts at all.
+    """
     host = os.environ.get("SCANNER_IMAP_HOST", "")
     port = int(os.environ.get("SCANNER_IMAP_PORT", str(IMAP_PORT_SSL)))
     user = os.environ.get("SCANNER_IMAP_USER", "")
     password = os.environ.get("SCANNER_IMAP_PASSWORD", "")
     inbox = os.environ.get("SCANNER_INBOX", "INBOX")
-    if host and user and password:
-        return [{"host": host, "port": port, "user": user, "password": password,
-                 "inbox": inbox, "use_ssl": port == IMAP_PORT_SSL, "account_id": None,
-                 "auth_type": "password"}]
+    if not (host and user and password):
+        return None
+    return {"host": host, "port": port, "user": user, "password": password,
+            "inbox": inbox, "use_ssl": port == IMAP_PORT_SSL, "account_id": None,
+            "email": user, "auth_type": "password", "identity_state": "env"}
 
-    # Fall back to mail_accounts table
+
+def _mailbox_cfg_from_row(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Build one scanner config from a mail_accounts row, or None to skip it.
+
+    The row's id is carried into the config and every later credential use is
+    keyed by it. `mail_identity.sync_gate` refuses an account whose stored
+    credentials belong to a different mailbox (or cannot be proven to belong
+    to this one) BEFORE a single IMAP command is sent.
+    """
+    if not row.get("imap_host") or not row.get("email"):
+        logger.warning("Skipping mail account %s (%s): missing host or email",
+                       row.get("id"), row.get("email") or "?")
+        return None
+    allowed, why = mail_identity.sync_gate(row, login_user=row.get("email"))
+    if not allowed:
+        logger.warning("Skipping mail account %s (%s): %s",
+                       row.get("id"), row.get("email") or "?", why)
+        mail_identity.record_identity_refusal(row.get("id"), why)
+        return None
+    raw = (row.get("monitored_folders") or "").strip()
+    folders = [f.strip() for f in raw.split(",") if f.strip()] if raw else ["INBOX"]
+    oauth_provider = row.get("oauth_provider")
+    if oauth_provider:
+        token_refreshed = _refresh_oauth_token_if_needed(
+            row["id"], oauth_provider,
+            row.get("oauth_refresh_token") or "",
+            row.get("oauth_token_expires"),
+            expected_access=row.get("oauth_access_token") or None,
+        )
+        if token_refreshed:
+            access_token = token_refreshed[0]
+        else:
+            # The refresh failed, or another refresher (the server) won the
+            # race and stored a newer token. Re-read the row so we do NOT
+            # keep using the stale token we read before the attempt.
+            fresh = db.query_one(
+                "SELECT oauth_access_token FROM mail_accounts WHERE id = %s",
+                (row["id"],),
+            )
+            access_token = ((fresh or {}).get("oauth_access_token")
+                            or row.get("oauth_access_token") or "")
+        if not access_token:
+            logger.warning("No access token for OAuth account %d (%s), skipping",
+                           row["id"], row["email"])
+            return None
+        return {
+            "host": row["imap_host"],
+            "port": int(row.get("imap_port", 993)),
+            "user": row["email"],
+            "email": row["email"],
+            "oauth_token": access_token,
+            "inbox": folders[0],
+            "folders": folders,
+            "use_ssl": int(row.get("imap_port", 993)) == IMAP_PORT_SSL,
+            "account_id": row["id"],
+            "auth_type": "xoauth2",
+            "identity_state": "verified",
+            "retention_days": int(row.get("retention_days") or 0),
+        }
+    pwd = row.get("password_encrypted", "")
+    if not pwd:
+        logger.warning("Skipping mail account %s (%s): no password stored",
+                       row.get("id"), row.get("email") or "?")
+        return None
+    return {
+        "host": row["imap_host"],
+        "port": int(row.get("imap_port", 993)),
+        "user": row["email"],
+        "email": row["email"],
+        "password": pwd,
+        "inbox": folders[0],
+        "folders": folders,
+        "use_ssl": int(row.get("imap_port", 993)) == IMAP_PORT_SSL,
+        "account_id": row["id"],
+        "auth_type": "password",
+        "identity_state": "login-user",
+        "retention_days": int(row.get("retention_days") or 0),
+    }
+
+
+def _get_mailboxes() -> list[dict[str, Any]]:
+    # Database accounts first: they are the only per-account credentials.
     try:
         rows = db.query_dicts(
             """SELECT id, email, imap_host, imap_port, password_encrypted,
                       oauth_provider, oauth_access_token, oauth_refresh_token,
-                      oauth_token_expires, sync_enabled, monitored_folders,
-                      retention_days
+                      oauth_token_expires, oauth_identity, sync_enabled,
+                      monitored_folders, retention_days
                FROM mail_accounts WHERE sync_enabled = TRUE"""
         )
-        results = []
-        for row in rows:
-            if not row.get("imap_host") or not row.get("email"):
-                logger.warning("Skipping mail account %s (%s): missing host or email",
-                               row.get("id"), row.get("email") or "?")
-                continue
-            raw = (row.get("monitored_folders") or "").strip()
-            folders = [f.strip() for f in raw.split(",") if f.strip()] if raw else ["INBOX"]
-            oauth_provider = row.get("oauth_provider")
-            if oauth_provider:
-                token_refreshed = _refresh_oauth_token_if_needed(
-                    row["id"], oauth_provider,
-                    row.get("oauth_refresh_token") or "",
-                    row.get("oauth_token_expires"),
-                    expected_access=row.get("oauth_access_token") or None,
-                )
-                if token_refreshed:
-                    access_token = token_refreshed[0]
-                else:
-                    # The refresh failed, or another refresher (the server)
-                    # won the race and stored a newer token. Re-read the row
-                    # so we do NOT keep using the stale token we read before
-                    # the attempt.
-                    fresh = db.query_one(
-                        "SELECT oauth_access_token FROM mail_accounts WHERE id = %s",
-                        (row["id"],),
-                    )
-                    access_token = ((fresh or {}).get("oauth_access_token")
-                                    or row.get("oauth_access_token") or "")
-                if not access_token:
-                    logger.warning("No access token for OAuth account %d (%s), skipping", row["id"], row["email"])
-                    continue
-                results.append({
-                    "host": row["imap_host"],
-                    "port": int(row.get("imap_port", 993)),
-                    "user": row["email"],
-                    "oauth_token": access_token,
-                    "inbox": folders[0],
-                    "folders": folders,
-                    "use_ssl": int(row.get("imap_port", 993)) == IMAP_PORT_SSL,
-                    "account_id": row["id"],
-                    "auth_type": "xoauth2",
-                    "retention_days": int(row.get("retention_days") or 0),
-                })
-            else:
-                pwd = row.get("password_encrypted", "")
-                if not pwd:
-                    logger.warning("Skipping mail account %s (%s): no password stored",
-                                   row.get("id"), row.get("email") or "?")
-                    continue
-                results.append({
-                    "host": row["imap_host"],
-                    "port": int(row.get("imap_port", 993)),
-                    "user": row["email"],
-                    "password": pwd,
-                    "inbox": folders[0],
-                    "folders": folders,
-                    "use_ssl": int(row.get("imap_port", 993)) == IMAP_PORT_SSL,
-                    "account_id": row["id"],
-                    "auth_type": "password",
-                    "retention_days": int(row.get("retention_days") or 0),
-                })
-        return results
     except Exception as e:
         logger.error("Failed to load mail accounts: %s", e)
+        rows = []
+    if not rows:
+        env_cfg = _env_mailbox_config()
+        if env_cfg:
+            logger.warning(
+                "No mail_accounts rows: using SCANNER_IMAP_* environment credentials for a "
+                "single mailbox. These are never applied to database accounts.")
+            return [env_cfg]
         return []
+
+    results = []
+    for row in rows:
+        cfg = _mailbox_cfg_from_row(row)
+        if cfg:
+            results.append(cfg)
+    return results
+
+
+class MailboxIdentityError(RuntimeError):
+    """Raised before an IMAP login when the config does not belong to one account."""
 
 
 def _login_mailbox(mailbox_cfg: dict[str, Any]):
-    """Open + authenticate one IMAP connection (shared by fetch and STATUS)."""
+    """Open + authenticate one IMAP connection (shared by fetch and STATUS).
+
+    Every credential use goes through here, so the identity assertion lives
+    here too (2026-11-10): the login user must be the account's OWN address
+    and an XOAUTH2 login must carry a verified identity. A config that fails
+    either check is refused before a socket is opened, so one account's
+    credentials can never authenticate another account's mailbox.
+    """
+    user = mailbox_cfg.get("user") or ""
+    email = mailbox_cfg.get("email")
+    if email and mail_identity.normalize_email(user) != mail_identity.normalize_email(email):
+        raise MailboxIdentityError(
+            "IMAP login user is not this account's address "
+            f"({mail_identity.normalize_email(user)} != {mail_identity.normalize_email(email)})")
+    if mailbox_cfg.get("auth_type") == "xoauth2":
+        if not mailbox_cfg.get("oauth_token"):
+            raise MailboxIdentityError("no OAuth access token for this mailbox")
+        if mailbox_cfg.get("identity_state") not in ("verified", "env"):
+            raise MailboxIdentityError(
+                "the OAuth token's mailbox identity was not verified for this account")
     mailbox = MailBox(mailbox_cfg["host"], port=mailbox_cfg["port"])
     if mailbox_cfg.get("auth_type") == "xoauth2":
         mailbox.xoauth2(mailbox_cfg["user"], mailbox_cfg["oauth_token"])
@@ -2249,12 +2314,20 @@ def _fetch_mail_attachment_bytes_once(message_id: int,
         if not att:
             return None, "attachment row not found", None
         acct = db.query_one(
-            "SELECT email, imap_host, imap_port, password_encrypted, oauth_provider, oauth_access_token "
+            "SELECT id, email, imap_host, imap_port, password_encrypted, oauth_provider, "
+            "oauth_access_token, oauth_identity, oauth_graph_identity, smtp_user "
             "FROM mail_accounts WHERE id = %s",
             (msg["account_id"],),
         )
         if not acct or not acct.get("imap_host"):
             return None, "mail account has no IMAP host configured", None
+        # Same identity gate as the poll loop: a message row's account id
+        # selects the credentials, and those credentials must belong to that
+        # mailbox before we authenticate with them.
+        allowed, why = mail_identity.sync_gate(acct, login_user=acct.get("email"))
+        if not allowed:
+            mail_identity.record_identity_refusal(acct.get("id"), why)
+            return None, why, None
         from imap_tools import A, MailBox
         port = int(acct.get("imap_port") or 993)
         mailbox = MailBox(acct["imap_host"], port=port)
@@ -3414,6 +3487,12 @@ def _poll_mailbox_cfg(cfg: dict[str, Any]) -> list[dict[str, Any]]:
             _save_folder_watermark(cfg.get("account_id"), imap_folder,
                                    cur_validity if cur_validity is not None else stored_validity,
                                    new_last)
+    except MailboxIdentityError as e:
+        logger.error("Refusing to poll %s: %s", cfg.get("user"), e)
+        if cfg.get("account_id") is not None:
+            mail_identity.record_identity_refusal(cfg.get("account_id"), str(e))
+        infra_log.log_infra_event(
+            "error", f"Mail poll refused for {cfg.get('host')}: {e}", source="mail_scanner")
     except Exception as e:
         logger.error("Polling error for %s: %s", cfg["host"], e)
         infra_log.log_infra_event("error", f"Mail scanner poll failed for {cfg.get('host')}: {e}", source="mail_scanner")

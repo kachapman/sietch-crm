@@ -23488,6 +23488,24 @@ function openAccountSettingsModal(editAccountId, opts) {
         if (oauthDisconnectBtn) {
           oauthDisconnectBtn.classList.toggle('hidden', authType === 'password');
         }
+        // Credential identity (2026-11-10). The server reports whether every
+        // stored credential family (Exchange, Graph, SMTP login) provably
+        // belongs to THIS account's address. A mismatch or an unverifiable
+        // token means sync and send are refused, so say it here — never show
+        // a healthy-looking account that cannot use its own credentials.
+        const identityEl = $('#account-settings-identity-status');
+        if (identityEl) {
+          const identityState = acct.identityStatus || 'ok';
+          if (identityState === 'mismatch' || identityState === 'unverified') {
+            identityEl.textContent = '⚠ ' + (acct.identityError
+              || 'This account\'s credentials are not verified for its own address.');
+            identityEl.style.color = identityState === 'mismatch' ? '#f85149' : '#ff9800';
+            identityEl.classList.remove('hidden');
+          } else {
+            identityEl.textContent = '';
+            identityEl.classList.add('hidden');
+          }
+        }
         // Graph sendMail status (Microsoft only). Drives the connect/disconnect UI
         // and the compose-window banner.
         updateGraphStatusBlock(acct, editAccountId);
@@ -23942,11 +23960,12 @@ async function disconnectExchangeOAuth(accountId) {
 // from-account is a Microsoft OAuth account without a connected Graph token.
 // Re-run on every send failure + every modal open.
 function renderMailAuthBanner(accounts) {
-  // Persistent banner (2026-11-10): a dead token or identity mismatch must be
-  // visible, not discovered when a send fails.
+  // Persistent banner (2026-11-10): a dead token, a credential identity
+  // mismatch or an unverifiable credential must be visible, not discovered
+  // when a send or a sync fails.
   const banner = $('#mail-auth-banner');
   if (!banner) return;
-  const broken = (accounts || []).filter(a => a && a.authError);
+  const broken = (accounts || []).filter(a => a && (a.authError || a.identityError));
   if (!broken.length) { banner.classList.add('hidden'); banner.innerHTML = ''; return; }
   banner.classList.remove('hidden');
   banner.innerHTML = '<i class="ti ti-alert-triangle"></i> <strong>Mail account needs reconnecting:</strong> '

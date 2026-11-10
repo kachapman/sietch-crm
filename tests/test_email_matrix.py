@@ -44,7 +44,7 @@ def make_acct(transport, email="a@example.invalid", name="A Brand"):
                  oauth_graph_identity=email)
     elif transport == "smtp_oauth":
         a.update(oauth_provider="microsoft", oauth_access_token="AT",
-                 oauth_refresh_token="RT")
+                 oauth_refresh_token="RT", oauth_identity=email)
     else:
         a.update(oauth_provider=None)
     return a

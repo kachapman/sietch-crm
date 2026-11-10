@@ -335,25 +335,36 @@ def _resolve_email_recipient(to_type: str, opp: dict, config: dict) -> str | Non
 
 
 def _get_smtp_config(from_type: str, config: dict) -> dict | None:
-    """Get SMTP configuration based on from_type."""
+    """Get SMTP configuration based on from_type.
+
+    The CRM account is resolved by `mail_accounts.id` through
+    `mail_identity.system_account` (2026-11-10). The old query picked
+    `is_crm_mail ... ORDER BY id LIMIT 1` and read `smtp_password_encrypted`
+    from whatever row sorted first — a shared-credential pick, and it ignored
+    OAuth entirely (an OAuth CRM inbox has no app password, so the send
+    silently used an empty one).
+    """
     if from_type == "crm_mail":
         try:
-            row = db.query_one(
-                """SELECT email, smtp_host, smtp_port, smtp_user, smtp_password_encrypted
-                   FROM mail_accounts WHERE is_crm_mail = TRUE AND smtp_host IS NOT NULL
-                   ORDER BY id LIMIT 1"""
-            )
+            import mail_identity
+            row = mail_identity.system_account(db)
             if row:
+                if row.get("oauth_provider") and not row.get("smtp_password_encrypted"):
+                    # Sending with OAuth from the automation path is not
+                    # implemented; refuse instead of attempting a login with
+                    # an empty password (which providers may still treat as an
+                    # unauthenticated relay attempt).
+                    return None
                 return {
-                    "host": row["smtp_host"],
+                    "host": row.get("smtp_host"),
                     "port": row.get("smtp_port", 587),
-                    "user": row.get("smtp_user", ""),
+                    "user": row.get("smtp_user") or row.get("email", ""),
                     "password": row.get("smtp_password_encrypted", ""),
-                    "from_addr": row["email"],
+                    "from_addr": row.get("email"),
                     "from_name": "Sietch CRM",
                 }
         except Exception:
-            pass
+            logger.debug("Could not resolve the CRM mail account for automation", exc_info=True)
 
     elif from_type == "alternate_smtp":
         try:

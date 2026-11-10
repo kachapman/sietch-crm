@@ -269,9 +269,10 @@ class BaseCase(unittest.TestCase):
         self.acct_email = f"mailatt-{uuid.uuid4().hex[:12]}@test.local"
         self.acct_id = db.insert_returning(
             "INSERT INTO mail_accounts (email, imap_host, imap_port, password_encrypted, "
-            "oauth_provider, oauth_access_token, sync_enabled) "
-            "VALUES (%s, %s, %s, %s, %s, %s, TRUE) RETURNING id",
-            (self.acct_email, "imap.test.local", 993, "x", "microsoft", "fake-token"))
+            "oauth_provider, oauth_access_token, oauth_identity, sync_enabled) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE) RETURNING id",
+            (self.acct_email, "imap.test.local", 993, "x", "microsoft", "fake-token",
+             self.acct_email))
         self.msg_id = db.insert_returning(
             "INSERT INTO mail_messages (account_id, folder, imap_uid, subject, from_addr, "
             "to_addr, body_text, date_received) VALUES (%s, 'INBOX', %s, %s, %s, %s, %s, NOW()) "

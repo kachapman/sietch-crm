@@ -387,6 +387,7 @@ class TestTokenRefresh(unittest.TestCase):
             "oauth_provider": "microsoft",
             "oauth_access_token": "stale-token",
             "oauth_refresh_token": "refresh-token",
+            "oauth_identity": "mdm@outlook.com",
             "oauth_token_expires": datetime.now(timezone.utc) - timedelta(minutes=5),
             "sync_enabled": True,
             "monitored_folders": "",

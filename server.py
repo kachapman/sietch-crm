@@ -498,6 +498,7 @@ import oauth_providers
 import oauth_state
 import mail_oauth
 import mail_oauth_binding
+import mail_identity
 import mail_dates
 import mail_sender_guard
 import mail_imap
@@ -2498,14 +2499,28 @@ def _coerce_retention_days(value: Any, default: int = 90) -> int:
 
 
 def _get_system_smtp_account() -> dict | None:
-    """Find the best SMTP config for system emails (password resets, 2FA, notifications).
-    Priority: 1) Alternate SMTP if enabled, 2) CRM mail account.
-    Returns dict with SMTP settings or None if nothing configured."""
-    # Check alternate SMTP first
+    """The ONE mail account allowed to send system email (reset links, 2FA, notifications).
+
+    Selection is by `mail_accounts.id` only (2026-11-10): an explicit
+    `system_settings.system_mail_account_id` wins, otherwise the single
+    `is_crm_mail` account is used. The old `ORDER BY id LIMIT 1` query was a
+    shared-credential pick — with two CRM inboxes it silently used whichever
+    row sorted first.
+
+    The account must be identity-verified (`mail_identity.check_account`):
+    its OAuth/Graph/SMTP identity has to be its own address. On a mismatch
+    this returns None and records the refusal; it never falls back to another
+    mailbox or to env SMTP (that fallback is what would send mail as the
+    wrong account).
+
+    The operator-configured `alternate_smtp` system setting is checked first
+    — it is an explicit system sender (not another user's mailbox), so it is
+    not part of the per-account credential pool.
+    """
     try:
         alt_row = db.query_one("SELECT value FROM system_settings WHERE key = 'alternate_smtp'")
         if alt_row and alt_row["value"]:
-            alt = json.loads(alt_row["value"])
+            alt = alt_row["value"] if isinstance(alt_row["value"], dict) else json.loads(alt_row["value"])
             if alt.get("enabled") and alt.get("host"):
                 return {
                     "email": alt.get("from_email", ""),
@@ -2518,40 +2533,9 @@ def _get_system_smtp_account() -> dict | None:
                 }
     except Exception:
         logger.debug("Failed to load alternate SMTP config", exc_info=True)
-    # Fall back to CRM mail account
-    row = db.query_one(
-        """SELECT id, email, smtp_host, smtp_port, smtp_user, smtp_password_encrypted,
-                  oauth_provider, oauth_access_token, oauth_refresh_token, oauth_token_expires
-           FROM mail_accounts WHERE is_crm_mail = TRUE AND smtp_host IS NOT NULL
-           ORDER BY id LIMIT 1"""
-    )
-    if not row:
+    acct = mail_identity.system_account(db)
+    if not acct:
         return None
-    acct = dict(row)
-    # Refresh OAuth token if expired — shared helper, same compare-and-swap
-    # save as the scanner and the IMAP flag path.
-    if acct.get("oauth_provider") and acct.get("oauth_refresh_token"):
-        try:
-            expires = acct.get("oauth_token_expires")
-            if expires and expires < datetime.now(timezone.utc):
-                refreshed = mail_oauth.refresh_access_token(
-                    acct["id"], acct["oauth_provider"], acct["oauth_refresh_token"],
-                    expires, expected_access=acct.get("oauth_access_token") or None,
-                )
-                if refreshed:
-                    acct["oauth_access_token"] = refreshed[0]
-                    acct["oauth_refresh_token"] = refreshed[1]
-                else:
-                    # Refresh lost a race or failed — use whatever is stored.
-                    fresh = db.query_one(
-                        "SELECT oauth_access_token, oauth_refresh_token FROM mail_accounts WHERE id = %s",
-                        (acct["id"],),
-                    )
-                    if fresh:
-                        acct["oauth_access_token"] = fresh.get("oauth_access_token") or acct["oauth_access_token"]
-                        acct["oauth_refresh_token"] = fresh.get("oauth_refresh_token") or acct["oauth_refresh_token"]
-        except Exception:
-            logger.exception("Failed to refresh OAuth token for system SMTP")
     return acct
 
 
@@ -2721,14 +2705,27 @@ def _imap_account_token(account_id: int) -> tuple[str, str]:
 
 
 def _imap_connect(account_id: int):
-    """Connect to IMAP for the given account. Returns MailBox or None."""
+    """Connect to IMAP for the given account. Returns MailBox or None.
+
+    Identity gate before the login (2026-11-10): the row's stored credentials
+    must provably belong to this account's address, and the login user is that
+    address. A mailbox holding another account's token is refused here too —
+    this is the path mark-read / move / delete use, so it must match the
+    scanner's rule.
+    """
     from imap_tools import MailBox
     acct = db.query_one(
-        "SELECT email, imap_host, imap_port, password_encrypted, oauth_provider, oauth_access_token "
+        "SELECT email, imap_host, imap_port, password_encrypted, oauth_provider, "
+        "oauth_access_token, oauth_identity, oauth_graph_identity, smtp_user "
         "FROM mail_accounts WHERE id = %s",
         (account_id,),
     )
     if not acct or not acct.get("imap_host"):
+        return None
+    allowed, why = mail_identity.sync_gate(acct, login_user=acct.get("email"))
+    if not allowed:
+        logger.error("IMAP: refusing account %d (%s): %s", account_id, acct.get("email"), why)
+        mail_identity.record_identity_refusal(account_id, why)
         return None
     port = int(acct.get("imap_port") or 993)
     mb = MailBox(acct["imap_host"], port=port)
@@ -6072,6 +6069,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         m = re.match(r"^/api/v2/mail/accounts/(\d+)/sync-now$", api_path)
         if m and method == "POST":
             self._handle_mail_account_sync_now(int(m.group(1)))
+            return
+        # The settings UI disconnects with POST (app.js). These were routed
+        # only for GET, so the button 404'd (found 2026-11-10). Both handlers
+        # clear exactly one account by id.
+        m = re.match(r"^/api/v2/mail/oauth/microsoft/graph/disconnect/(\d+)$", api_path)
+        if m and method == "POST":
+            self._handle_oauth_graph_disconnect(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/mail/oauth/disconnect/(\d+)$", api_path)
+        if m and method == "POST":
+            self._handle_oauth_exchange_disconnect(int(m.group(1)))
             return
         # Account sharing
         m = re.match(r"^/api/v2/mail/accounts/(\d+)/share$", api_path)
@@ -21253,13 +21261,27 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     "Could not verify which account signed in, so no mail account was created. "
                     "Try connecting again and pick the mailbox you want to add.")
                 return
-            account = db.query_one(
-                "SELECT id, email, owner_user_id, oauth_refresh_token FROM mail_accounts "
-                "WHERE email = %s AND owner_user_id = %s",
-                (identity, user_id),
+            # NEVER key a credential write by email (2026-11-10). The old code
+            # looked the row up with `WHERE email = %s AND owner_user_id = %s`
+            # and then wrote tokens onto whatever row matched. Here the email
+            # is only used to detect that the mailbox is already connected:
+            # an existing row is never written by the new-account flow — the
+            # user must reconnect from inside that account (bound state) or
+            # ask an admin to share it.
+            existing = db.query_one(
+                "SELECT id, owner_user_id, is_crm_mail FROM mail_accounts WHERE email = %s",
+                (identity,),
             )
-            if account:
-                account_id = account["id"]
+            if existing:
+                logger.warning(
+                    "OAuth callback: %s is already connected as account %s — refusing to "
+                    "create a duplicate row", identity, existing.get("id"))
+                self._oauth_redirect_with_status(
+                    "error",
+                    f"{identity} is already connected as a mail account. Open that "
+                    "account's settings to reconnect it, or ask an admin to share it "
+                    "with you. No token was written.")
+                return
 
         existing_refresh = (account or {}).get("oauth_refresh_token") or ""
         stored_refresh = mail_oauth_binding.refresh_token_to_store(refresh_token, existing_refresh)
@@ -22572,6 +22594,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 r["canManage"] = _mail_account_manageable(user, r["id"])
                 r["authError"] = (r.get("auth_error") or r.get("oauth_last_error")
                                   or r.get("oauth_graph_last_error") or "")
+                # Credential identity (2026-11-10): does every stored
+                # credential family provably belong to THIS row's address?
+                #   ok         — verified / nothing to verify
+                #   mismatch   — a token or SMTP login belongs to another mailbox
+                #   unverified — OAuth/Graph connected without a verified identity
+                # The settings modal and the mail banner show this, so a
+                # wrong-mailbox credential is visible before a send or sync.
+                _ident_state, _ident_detail = mail_identity.check_account(r)
+                r["identityStatus"] = _ident_state
+                r["identityError"] = (
+                    "" if _ident_state == mail_identity.IDENTITY_OK
+                    else mail_identity.identity_message(r, _ident_state, _ident_detail)
+                )
+                if r["identityError"] and not r["authError"]:
+                    r["authError"] = r["identityError"]
                 if r.get("oauth_provider"):
                     expires = r.get("oauth_token_expires")
                     if expires and isinstance(expires, datetime):
@@ -22864,6 +22901,26 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 folders_str = str(folders_raw or "INBOX")
             oauth_provider = payload.get("oauth_provider") or None
             is_crm_mail = bool(payload.get("is_crm_mail")) and bool(user.get("is_admin")) if user else False
+            # One row per mailbox, and an account may only authenticate as
+            # itself (2026-11-10): both rules are enforced at create time so a
+            # second row can never hold a copy of another mailbox's credentials.
+            new_email = mail_identity.normalize_email(payload.get("email"))
+            smtp_ident = mail_identity.normalize_email(payload.get("smtp_user"))
+            if smtp_ident and "@" in smtp_ident and new_email and smtp_ident != new_email:
+                _json_response(self, 400, {
+                    "error": f"SMTP user {smtp_ident} is a different mailbox than this account "
+                             f"({new_email}). An account may only send as itself.",
+                })
+                return
+            if new_email:
+                dupe = db.query_one(
+                    "SELECT id FROM mail_accounts WHERE lower(email) = %s LIMIT 1", (new_email,))
+                if dupe:
+                    _json_response(self, 409, {
+                        "error": f"{new_email} is already connected as mail account {dupe['id']}. "
+                                 "Ask an admin to share that account instead of adding a second copy.",
+                    })
+                    return
             result = db.query_one(
                 """INSERT INTO mail_accounts
                    (email, display_name, imap_host, imap_port, password_encrypted, owner_user_id,
@@ -22954,22 +23011,59 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                               "oauth_graph_access_token", "oauth_graph_refresh_token",
                               "oauth_graph_token_expires", "oauth_graph_identity"):
                 payload.pop(forbidden, None)
-            if "email" in payload:
+            if "email" in payload or "smtp_user" in payload or "oauth_provider" in payload:
                 current = db.query_one(
-                    "SELECT email, oauth_provider, oauth_access_token, oauth_refresh_token "
+                    "SELECT id, email, oauth_provider, oauth_access_token, oauth_refresh_token, "
+                    "oauth_graph_access_token, oauth_graph_refresh_token "
                     "FROM mail_accounts WHERE id = %s",
                     (account_id,),
                 )
-                new_email = str(payload.get("email") or "").strip().lower()
-                old_email = str((current or {}).get("email") or "").strip().lower()
-                has_oauth = bool((current or {}).get("oauth_access_token")
-                                 or (current or {}).get("oauth_refresh_token"))
-                if has_oauth and new_email != old_email:
-                    _json_response(self, 400, {
-                        "error": "Disconnect OAuth for this account before changing its email "
-                                 "address — the connected mailbox must match the account.",
-                    })
+                if not current:
+                    _json_response(self, 404, {"error": "Mail account not found"})
                     return
+                if "email" in payload:
+                    new_email = str(payload.get("email") or "").strip().lower()
+                    old_email = str(current.get("email") or "").strip().lower()
+                    has_oauth = bool(current.get("oauth_access_token")
+                                     or current.get("oauth_refresh_token")
+                                     or current.get("oauth_graph_access_token")
+                                     or current.get("oauth_graph_refresh_token"))
+                    if has_oauth and new_email != old_email:
+                        _json_response(self, 400, {
+                            "error": "Disconnect OAuth for this account before changing its email "
+                                     "address — the connected mailbox must match the account.",
+                        })
+                        return
+                if "oauth_provider" in payload:
+                    # The provider names the credential family the stored
+                    # tokens belong to. Switching it while tokens exist would
+                    # attach another provider's (another mailbox's) grant to
+                    # this row, so an explicit disconnect is required.
+                    new_provider = str(payload.get("oauth_provider") or "").strip().lower()
+                    if (new_provider != (current.get("oauth_provider") or "").strip().lower()
+                            and (current.get("oauth_access_token")
+                                 or current.get("oauth_refresh_token")
+                                 or current.get("oauth_graph_access_token")
+                                 or current.get("oauth_graph_refresh_token"))):
+                        _json_response(self, 400, {
+                            "error": "Disconnect OAuth for this account before changing its provider.",
+                        })
+                        return
+                if "smtp_user" in payload:
+                    # The SMTP sender is the authenticated smtp_user. A user
+                    # that is another mailbox's address would send as that
+                    # mailbox (the send path refuses it), so reject it on
+                    # save instead of failing at send time.
+                    smtp_ident = mail_identity.normalize_email(payload.get("smtp_user"))
+                    target_email = mail_identity.normalize_email(
+                        payload.get("email") or current.get("email"))
+                    if (smtp_ident and "@" in smtp_ident and target_email
+                            and smtp_ident != target_email):
+                        _json_response(self, 400, {
+                            "error": f"SMTP user {smtp_ident} is a different mailbox than this "
+                                     f"account ({target_email}). An account may only send as itself.",
+                        })
+                        return
             fields = []
             params: list[Any] = []
             for key in ("email", "display_name", "imap_host", "smtp_host", "smtp_user",
@@ -23010,6 +23104,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     raw = ",".join(raw)
                 fields.append("monitored_folders = %s")
                 params.append(str(raw))
+            if "email" in payload:
+                # A verified identity belongs to one address. Changing the
+                # address invalidates it, and any auth error was about the old
+                # mailbox — both must be re-established / cleared.
+                fields.extend([
+                    "oauth_identity = NULL",
+                    "oauth_graph_identity = NULL",
+                    "auth_error = NULL",
+                    "auth_error_at = NULL",
+                ])
             if not fields:
                 _json_response(self, 400, {"error": "No fields to update"})
                 return
@@ -23040,6 +23144,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             row = db.query_one("SELECT id FROM mail_accounts WHERE id = %s", (account_id,))
             if not row:
                 _json_response(self, 404, {"error": "Mail account not found"})
+                return
+            # Identity gate before a sync is queued (2026-11-10): a mailbox
+            # whose credentials belong to another account must never be
+            # scanned — refuse here instead of only inside the poll loop.
+            allowed, why = mail_identity.sync_gate_by_id(account_id, db)
+            if not allowed:
+                _json_response(self, 409, {
+                    "error": why, "reason": "credential_identity_mismatch",
+                })
                 return
             if not mail_scanner.request_manual_poll(account_id):
                 _json_response(self, 400, {"error": "Invalid account id"})
@@ -23158,6 +23271,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not _mail_account_accessible(user, account_id):
             _json_response(self, 403, {"error": "You don't have access to this account"})
             return
+        # Credential identity gate (2026-11-10): block in the dialog, not only
+        # on the send. A mailbox whose stored credentials belong to another
+        # account (or cannot be verified) may not send.
+        gate_row = mail_identity.account_row(account_id, db)
+        if gate_row:
+            _state, _detail = mail_identity.check_account(gate_row)
+            if _state != mail_identity.IDENTITY_OK:
+                _msg = mail_identity.identity_message(gate_row, _state, _detail)
+                _json_response(self, 409, {
+                    "ok": False,
+                    "accountId": account_id,
+                    "accountEmail": acct.get("email") or "",
+                    "error": _msg + " Nothing was sent.",
+                    "reason": "credential_identity_mismatch",
+                })
+                return
         guard = mail_sender_guard.evaluate(
             db, account=acct, deal_id=payload.get("deal_id"),
             reply_to_message_id=payload.get("reply_to_message_id"),
@@ -23232,11 +23361,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             ident_errors = []
             if (acct.get("oauth_provider") or "").lower() == "microsoft":
                 ex_ident = (acct.get("oauth_identity") or "").strip().lower()
-                if ex_ident and ex_ident != verified_sender:
-                    ident_errors.append(f"the Exchange token belongs to {ex_ident}")
+                if acct.get("oauth_access_token") or acct.get("oauth_refresh_token"):
+                    if not ex_ident:
+                        ident_errors.append(
+                            "the Exchange token's mailbox identity was never verified")
+                    elif ex_ident != verified_sender:
+                        ident_errors.append(f"the Exchange token belongs to {ex_ident}")
                 if acct.get("oauth_graph_access_token") or acct.get("oauth_graph_refresh_token"):
                     g_ident = (acct.get("oauth_graph_identity") or "").strip().lower()
-                    if g_ident and g_ident != verified_sender:
+                    if not g_ident:
+                        ident_errors.append(
+                            "the Graph token's mailbox identity was never verified")
+                    elif g_ident != verified_sender:
                         ident_errors.append(f"the Graph token belongs to {g_ident}")
             smtp_user_ident = (acct.get("smtp_user") or "").strip().lower()
             if smtp_user_ident and smtp_user_ident != verified_sender:

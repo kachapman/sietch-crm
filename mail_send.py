@@ -241,6 +241,27 @@ def try_send_for_account(
             f"{acct.get('email')}. Fix the account's SMTP user, or reconnect Graph for it. "
             "Nothing was sent."
         ), "smtp_password"
+    # OAuth-exchange identity gate (2026-11-10): an XOAUTH2 SMTP login is the
+    # token's mailbox, even when smtp_user is empty. The token must have been
+    # verified as THIS account's address, or we would send as another mailbox.
+    if use_oauth_smtp:
+        exch_ident = (acct.get("oauth_identity") or "").strip().lower()
+        if not exch_ident:
+            logger.warning(
+                "Refusing SMTP send for account=%s: OAuth token identity unverified", account_id)
+            return False, (
+                "Refusing to send: this mailbox's OAuth connection was never identity-verified. "
+                f"Disconnect and reconnect OAuth for {acct.get('email')}. Nothing was sent."
+            ), "smtp_oauth"
+        if acct_email and exch_ident != acct_email:
+            logger.warning(
+                "Refusing SMTP send for account=%s: OAuth token belongs to %s, mailbox is %s",
+                account_id, exch_ident, acct_email)
+            return False, (
+                f"Refusing to send: this mailbox's OAuth token belongs to {exch_ident}, not "
+                f"{acct.get('email')}. Disconnect and reconnect while signed in as "
+                f"{acct.get('email')}. Nothing was sent."
+            ), "smtp_oauth"
     smtp_host = acct.get("smtp_host") or ""
     if not smtp_host:
         return False, graph_err or "SMTP not configured for this account", "graph" if graph_token else "smtp_password"

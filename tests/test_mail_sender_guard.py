@@ -217,6 +217,101 @@ class TestHandlerIntegration(unittest.TestCase):
             db.execute("UPDATE mail_accounts SET smtp_user = NULL WHERE id = %s",
                        (self.acct["id"],))
 
+    def test_accounts_list_never_returns_credentials(self):
+        """Item 2: the list endpoint exposes identity state, never a secret."""
+        db.execute(
+            "UPDATE mail_accounts SET oauth_provider = 'microsoft', "
+            "oauth_access_token = 'SECRET-AT', oauth_refresh_token = 'SECRET-RT', "
+            "oauth_identity = %s WHERE id = %s",
+            (f"other-{S}@example.invalid", self.other_acct["id"]))
+        try:
+            resp = mcp_local_api.call_session(self.session, "GET", "/api/v2/mail/accounts")
+            self.assertEqual(resp.status, 200, resp.text)
+            rows = {a["id"]: a for a in resp.payload["accounts"]}
+            mine = rows[self.other_acct["id"]]
+            self.assertEqual(mine["identityStatus"], "ok")
+            self.assertEqual(mine["oauthIdentity"], f"other-{S}@example.invalid")
+            for key in ("password_encrypted", "smtp_password_encrypted",
+                        "oauth_access_token", "oauth_refresh_token",
+                        "oauth_graph_access_token", "oauth_graph_refresh_token"):
+                self.assertFalse(mine.get(key), f"{key} must never leave the server")
+            self.assertNotIn("SECRET-AT", resp.text)
+            self.assertNotIn("SECRET-RT", resp.text)
+        finally:
+            db.execute(
+                "UPDATE mail_accounts SET oauth_provider = NULL, "
+                "oauth_access_token = NULL, oauth_refresh_token = NULL, "
+                "oauth_identity = NULL WHERE id = %s", (self.other_acct["id"],))
+
+    def test_preflight_refuses_a_foreign_oauth_identity(self):
+        db.execute(
+            "UPDATE mail_accounts SET oauth_provider = 'microsoft', "
+            "oauth_access_token = 'AT', oauth_refresh_token = 'RT', "
+            "oauth_identity = %s WHERE id = %s",
+            (f"mapped-{S}@example.invalid", self.other_acct["id"]))
+        try:
+            resp = mcp_local_api.call_session(
+                self.session, "POST", "/api/v2/mail/send/preflight",
+                {"account_id": self.other_acct["id"], "deal_id": self.deal["id"]})
+            self.assertEqual(resp.status, 409, resp.text)
+            self.assertEqual(resp.payload["reason"], "credential_identity_mismatch")
+        finally:
+            db.execute(
+                "UPDATE mail_accounts SET oauth_provider = NULL, "
+                "oauth_access_token = NULL, oauth_refresh_token = NULL, "
+                "oauth_identity = NULL WHERE id = %s", (self.other_acct["id"],))
+
+    def test_sync_now_refuses_a_foreign_oauth_identity(self):
+        db.execute(
+            "UPDATE mail_accounts SET oauth_provider = 'microsoft', "
+            "oauth_access_token = 'AT', oauth_refresh_token = 'RT', "
+            "oauth_identity = %s WHERE id = %s",
+            (f"mapped-{S}@example.invalid", self.other_acct["id"]))
+        try:
+            resp = mcp_local_api.call_session(
+                self.session, "POST",
+                f"/api/v2/mail/accounts/{self.other_acct['id']}/sync-now", {})
+            self.assertEqual(resp.status, 409, resp.text)
+            self.assertEqual(resp.payload["reason"], "credential_identity_mismatch")
+        finally:
+            db.execute(
+                "UPDATE mail_accounts SET oauth_provider = NULL, "
+                "oauth_access_token = NULL, oauth_refresh_token = NULL, "
+                "oauth_identity = NULL WHERE id = %s", (self.other_acct["id"],))
+
+    def test_disconnect_clears_only_the_named_account(self):
+        db.execute(
+            "UPDATE mail_accounts SET oauth_provider = 'microsoft', "
+            "oauth_access_token = 'A-AT', oauth_refresh_token = 'A-RT', "
+            "oauth_identity = %s WHERE id = %s",
+            (f"mapped-{S}@example.invalid", self.acct["id"]))
+        db.execute(
+            "UPDATE mail_accounts SET oauth_provider = 'microsoft', "
+            "oauth_access_token = 'B-AT', oauth_refresh_token = 'B-RT', "
+            "oauth_identity = %s WHERE id = %s",
+            (f"other-{S}@example.invalid", self.other_acct["id"]))
+        try:
+            resp = mcp_local_api.call_session(
+                self.session, "POST",
+                f"/api/v2/mail/oauth/disconnect/{self.other_acct['id']}", {})
+            self.assertEqual(resp.status, 200, resp.text)
+            mine = db.query_one(
+                "SELECT oauth_access_token, oauth_refresh_token FROM mail_accounts "
+                "WHERE id = %s", (self.acct["id"],))
+            self.assertEqual(mine["oauth_access_token"], "A-AT")
+            self.assertEqual(mine["oauth_refresh_token"], "A-RT")
+            cleared = db.query_one(
+                "SELECT oauth_access_token, oauth_refresh_token FROM mail_accounts "
+                "WHERE id = %s", (self.other_acct["id"],))
+            self.assertIsNone(cleared["oauth_access_token"])
+            self.assertIsNone(cleared["oauth_refresh_token"])
+        finally:
+            db.execute(
+                "UPDATE mail_accounts SET oauth_provider = NULL, "
+                "oauth_access_token = NULL, oauth_refresh_token = NULL, "
+                "oauth_identity = NULL WHERE id IN (%s, %s)",
+                (self.acct["id"], self.other_acct["id"]))
+
     def test_preflight_blocks_and_allows(self):
         bad = mcp_local_api.call_session(
             self.session, "POST", "/api/v2/mail/send/preflight",
@@ -238,6 +333,7 @@ class TestNoFallback(unittest.TestCase):
     def _acct(self, **kw):
         a = {"id": 5, "email": "a@example.invalid", "oauth_provider": "microsoft",
              "oauth_access_token": "AT", "oauth_refresh_token": "RT",
+             "oauth_identity": "a@example.invalid",
              "oauth_token_expires": None,
              "oauth_graph_access_token": "GAT", "oauth_graph_refresh_token": "GRT",
              "oauth_graph_identity": "a@example.invalid",

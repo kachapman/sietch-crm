@@ -382,16 +382,20 @@ class TestResolveEmailRecipient(unittest.TestCase):
 
 class TestGetSmtpConfig(unittest.TestCase):
     def test_crm_mail(self):
+        """The CRM sender is resolved by account id via mail_identity."""
         from automation_engine import _get_smtp_config
-        with patch("automation_engine.db") as db:
-            db.query_one.return_value = {
-                "email": "crm@example.com",
-                "smtp_host": "smtp.example.com",
-                "smtp_port": 587,
-                "smtp_user": "u",
-                "smtp_password_encrypted": "p",
-            }
+        row = {
+            "id": 2,
+            "email": "crm@example.com",
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 587,
+            "smtp_user": "u",
+            "smtp_password_encrypted": "p",
+            "oauth_provider": None,
+        }
+        with patch("mail_identity.system_account", return_value=row) as resolve:
             result = _get_smtp_config("crm_mail", {})
+        resolve.assert_called_once()
         self.assertEqual(result["host"], "smtp.example.com")
         self.assertEqual(result["from_addr"], "crm@example.com")
         self.assertEqual(result["from_name"], "Sietch CRM")
@@ -631,12 +635,13 @@ class TestEmailHtmlEscaping(unittest.TestCase):
         }
         ctx = {"project": "<Project X>"}
         opp = {"id": 5, "title": "P", "responsible_user_id": 100}
-        with patch("automation_engine.db") as db:
+        crm_row = {"id": 2, "email": "crm@example.com", "smtp_host": "smtp.example.com",
+                   "smtp_port": 587, "smtp_user": "u",
+                   "smtp_password_encrypted": "p", "oauth_provider": None}
+        with patch("automation_engine.db") as db, \
+             patch("mail_identity.system_account", return_value=crm_row):
             db.query_one.side_effect = [
                 {"email": "owner@example.com"},
-                {"email": "crm@example.com", "smtp_host": "smtp.example.com",
-                 "smtp_port": 587, "smtp_user": "u",
-                 "smtp_password_encrypted": "p"},
             ]
             with patch("automation_engine.smtplib.SMTP") as smtp, \
                  patch("automation_engine.MIMEText", wraps=MIMEText) as mt:
@@ -679,12 +684,13 @@ class TestEmailHtmlEscaping(unittest.TestCase):
         }
         opp = {"id": 5, "title": "P", "responsible_user_id": 100}
         ctx = {"contact": "<script>alert(1)</script>"}
-        with patch("automation_engine.db") as db:
+        crm_row = {"id": 2, "email": "crm@example.com", "smtp_host": "smtp.example.com",
+                   "smtp_port": 587, "smtp_user": "u",
+                   "smtp_password_encrypted": "p", "oauth_provider": None}
+        with patch("automation_engine.db") as db, \
+             patch("mail_identity.system_account", return_value=crm_row):
             db.query_one.side_effect = [
                 {"email": "owner@example.com"},
-                {"email": "crm@example.com", "smtp_host": "smtp.example.com",
-                 "smtp_port": 587, "smtp_user": "u",
-                 "smtp_password_encrypted": "p"},
             ]
             with patch("automation_engine.smtplib.SMTP") as smtp, \
                  patch("automation_engine.MIMEText", wraps=MIMEText) as mt:

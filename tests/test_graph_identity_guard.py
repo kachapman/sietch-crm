@@ -126,6 +126,7 @@ class TestSendTimeGuard(unittest.TestCase):
             "oauth_provider": "microsoft",
             "oauth_access_token": "EA",
             "oauth_refresh_token": "ER",
+            "oauth_identity": "aplus.estimates@outlook.com",
             "oauth_graph_access_token": "GA",
             "oauth_graph_refresh_token": "GR",
             "oauth_graph_identity": "aplus.estimates@outlook.com",

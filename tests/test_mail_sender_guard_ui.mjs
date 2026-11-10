@@ -71,6 +71,19 @@ test('a dead token is shown in the mail tab and the compose banner', () => {
   assert.ok(app.includes('acct.authError'));
 });
 
+test('a credential identity mismatch is visible before a send or sync', () => {
+  // Server-reported per-account identity state (2026-11-10).
+  assert.ok(html.includes('id="account-settings-identity-status"'));
+  assert.ok(app.includes('acct.identityStatus'));
+  assert.ok(app.includes('acct.identityError'));
+  const settings = region('// Credential identity (2026-11-10)', 1400);
+  assert.ok(settings.includes("identityState === 'mismatch'"));
+  assert.ok(settings.includes("identityState === 'unverified'"));
+  // The persistent banner includes identity refusals, not only dead tokens.
+  const banner = region('function renderMailAuthBanner', 900);
+  assert.ok(banner.includes('a.identityError'));
+});
+
 test('the job/Contact mapping is gone from the UI', () => {
   for (const sym of ['contractor' + 'ContactId', 'contractor' + '_contact' + '_id',
                      'mappedAccountIds' + 'ForContact', 'resolveCompose' + 'AccountId',

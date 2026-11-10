@@ -728,8 +728,17 @@ def _process_email(notification_id: int, user_id: int, row: dict,
     branding = _get_branding()
     from_name = branding.get("email_from_name")
 
-    # Try CRM mail account first, fall back to env vars
+    # Try CRM mail account first, fall back to env vars ONLY when no CRM
+    # account is configured at all. A configured account that refuses on
+    # identity grounds must not be silently replaced by another mailbox
+    # (2026-11-10) — that is how a notification goes out as the wrong sender.
     smtp_acct = _get_crm_smtp_account()
+    if smtp_acct is None:
+        refused = _crm_smtp_refused()
+        if refused:
+            logger.warning("Refusing notification email %s: %s", notification_id, refused)
+            _mark_email_sent(notification_id)
+            return False
     if smtp_acct:
         from smtp_client import send_email_from_account
         use_oauth = bool(smtp_acct.get("oauth_provider") and smtp_acct.get("oauth_access_token")
@@ -763,68 +772,60 @@ def _process_email(notification_id: int, user_id: int, row: dict,
 
 
 def _get_crm_smtp_account() -> dict | None:
-    """Find the best SMTP config for notification emails.
-    Priority: 1) Alternate SMTP if enabled, 2) CRM mail account.
-    Returns dict with SMTP settings or None if nothing configured."""
-    # Check alternate SMTP first (better deliverability)
+    """The ONE CRM mail account that may send notification email, by id.
+
+    Selection + verification live in `mail_identity.system_account` (2026-11-10):
+    it resolves the account by `mail_accounts.id`, refuses a mailbox whose
+    credentials belong to another address, and refreshes the token through the
+    shared compare-and-swap helper. This function used to run its own
+    `ORDER BY id LIMIT 1` query plus an inline `provider.refresh_token()` that
+    skipped the identity check and the CAS — two ways to attach the wrong
+    mailbox's grant to this send.
+    """
     try:
-        from db import query_one
-        alt_row = query_one("SELECT value FROM system_settings WHERE key = 'alternate_smtp'")
-        if alt_row and alt_row.get("value"):
-            import json as _json
-            alt = alt_row["value"] if isinstance(alt_row["value"], dict) else _json.loads(str(alt_row["value"]))
-            if alt.get("enabled") and alt.get("host"):
-                return {
-                    "email": alt.get("from_email", ""),
-                    "smtp_host": alt["host"],
-                    "smtp_port": int(alt.get("port", 587)),
-                    "smtp_user": alt.get("user", ""),
-                    "smtp_password_encrypted": alt.get("password", ""),
-                    "oauth_provider": None,
-                    "oauth_access_token": None,
-                }
-    except Exception:
-        logger.debug("Failed to load alternate SMTP for notifications", exc_info=True)
-    # Fall back to CRM mail account
-    try:
-        from db import query_one
-        row = query_one(
-            """SELECT id, email, smtp_host, smtp_port, smtp_user, smtp_password_encrypted,
-                      oauth_provider, oauth_access_token, oauth_refresh_token, oauth_token_expires
-               FROM mail_accounts WHERE is_crm_mail = TRUE AND smtp_host IS NOT NULL
-               ORDER BY id LIMIT 1"""
-        )
-        if not row:
-            return None
-        acct = dict(row)
-        # Refresh OAuth token if expired
-        if acct.get("oauth_provider") and acct.get("oauth_refresh_token"):
-            from datetime import datetime, timezone
-            expires = acct.get("oauth_token_expires")
-            if expires and expires < datetime.now(timezone.utc):
-                import oauth_providers
-                prov = oauth_providers.get_provider(acct["oauth_provider"])
-                tok = prov.refresh_token(acct["oauth_refresh_token"])
-                if tok and tok.get("access_token"):
-                    acct["oauth_access_token"] = tok["access_token"]
-                    new_refresh = tok.get("refresh_token", acct["oauth_refresh_token"])
-                    new_expires = tok.get("expires_in", 3600)
-                    import time as _time
-                    from db import execute
-                    # Save by id, not by email (live bug 2026-11-09). Email is
-                    # unique today, but the row identity is what the token is
-                    # bound to — and this path used to bypass the
-                    # compare-and-swap in mail_oauth, so it could clobber a
-                    # token the scanner had just rotated.
-                    execute(
-                        "UPDATE mail_accounts SET oauth_access_token = %s, oauth_refresh_token = %s, "
-                        "oauth_token_expires = to_timestamp(%s) WHERE id = %s",
-                        (tok["access_token"], new_refresh, int(_time.time()) + new_expires, acct["id"]),
-                    )
-        return acct
+        import mail_identity
+        # Explicit operator-configured system sender wins (not a mailbox).
+        try:
+            from db import query_one
+            alt_row = query_one("SELECT value FROM system_settings WHERE key = 'alternate_smtp'")
+            if alt_row and alt_row.get("value"):
+                import json as _json
+                alt = alt_row["value"] if isinstance(alt_row["value"], dict) else _json.loads(str(alt_row["value"]))
+                if alt.get("enabled") and alt.get("host"):
+                    return {
+                        "email": alt.get("from_email", ""),
+                        "smtp_host": alt["host"],
+                        "smtp_port": int(alt.get("port", 587)),
+                        "smtp_user": alt.get("user", ""),
+                        "smtp_password_encrypted": alt.get("password", ""),
+                        "oauth_provider": None,
+                        "oauth_access_token": None,
+                    }
+        except Exception:
+            logger.debug("Failed to load alternate SMTP for notifications", exc_info=True)
+        return mail_identity.system_account(db)
     except Exception:
         logger.debug("Could not load CRM mail account for notifications", exc_info=True)
         return None
+
+
+def _crm_smtp_refused() -> str:
+    """Why system mail is unavailable (empty when an account is usable)."""
+    try:
+        import mail_identity
+        acct = mail_identity.system_account(db)
+        if acct:
+            return ""
+        account_id = mail_identity.system_account_id(db)
+        if account_id is None:
+            return "no CRM mail account is configured"
+        row = mail_identity.account_row(account_id, db)
+        state, detail = mail_identity.check_account(row)
+        if state != mail_identity.IDENTITY_OK:
+            return mail_identity.identity_message(row or {}, state, detail)
+        return "the CRM mail account is not usable"
+    except Exception:
+        return ""
 
 
 def _user_telegram_enabled(user_id: int, notification_type: str = "") -> bool:

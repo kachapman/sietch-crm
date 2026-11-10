@@ -47,7 +47,17 @@ def connect_db(host: str, port: int, dbname: str, user: str, password: str):
 
 
 def import_mail_accounts(source_conn, target_conn) -> int:
-    """Import mail accounts from source to target database."""
+    """Import mail accounts from source to target database.
+
+    Credentials are NEVER rewritten by email (2026-11-10). The old
+    `ON CONFLICT (email) DO UPDATE SET password_encrypted = EXCLUDED...`
+    meant importing the legacy dump could replace the password of a live
+    account row (owned by someone else) with the old CRM's copy — a
+    credential write keyed by email instead of by account id.
+
+    Existing mailboxes are skipped and reported; a row is only created when
+    that mailbox does not exist yet.
+    """
     src_cur = source_conn.cursor()
     tgt_cur = target_conn.cursor()
 
@@ -58,24 +68,34 @@ def import_mail_accounts(source_conn, target_conn) -> int:
     """)
     accounts = src_cur.fetchall()
     count = 0
+    skipped = 0
     for row in accounts:
         try:
+            tgt_cur.execute(
+                "SELECT id FROM mail_accounts WHERE lower(email) = lower(%s) LIMIT 1",
+                (row[1],),
+            )
+            existing = tgt_cur.fetchone()
+            if existing:
+                skipped += 1
+                logger.warning(
+                    "Skipping account %s: already connected as mail account %s "
+                    "(credentials are never overwritten by email)",
+                    row[1], existing[0])
+                continue
             tgt_cur.execute("""
                 INSERT INTO mail_accounts
                 (email, imap_host, imap_port, password_encrypted, sync_enabled,
                  sync_interval_seconds, last_sync, last_uid, owner_user_id)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (email) DO UPDATE SET
-                    imap_host = EXCLUDED.imap_host,
-                    imap_port = EXCLUDED.imap_port,
-                    password_encrypted = EXCLUDED.password_encrypted,
-                    sync_enabled = EXCLUDED.sync_enabled
                 RETURNING id
             """, (row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9]))
             count += 1
         except Exception as e:
             logger.warning("Failed to import account %s: %s", row[1], e)
     target_conn.commit()
+    if skipped:
+        logger.info("Skipped %d existing mail account(s); no credentials were changed", skipped)
     return count
 
 

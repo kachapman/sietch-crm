@@ -175,7 +175,9 @@ class TestSyncNowEndpoint(unittest.TestCase):
         return responses, calls
 
     def test_queues_existing_account(self):
-        responses, calls = self._call(6, row={"id": 6})
+        # The endpoint now identity-gates the account before queueing, so the
+        # row must be a real account (email + no unverified credentials).
+        responses, calls = self._call(6, row={"id": 6, "email": "a@example.com"})
         self.assertEqual(responses[0][0], 202)
         self.assertEqual(calls, [6])
         self.assertTrue(responses[0][1]["queued"])
