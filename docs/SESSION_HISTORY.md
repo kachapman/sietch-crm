@@ -3,6 +3,30 @@
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-09 (Project history: compact system events)
+
+**Status: COMMITTED LOCALLY on branch `feat/history-system-events` (worktree
+`~/Projects/new-crm-history-system-events`, off local `main` @ `b3248a2`) —
+merged to local `main` only. NOT pushed, NOT deployed.**
+
+- System events in the project timeline (status/field changes → "Action",
+  auto-logged actions, "Files are uploaded", "Task is closed") render as ONE
+  compact line: icon + short text + timestamp, **no reply button**, no body,
+  no delete. Human notes and emails are unchanged.
+- `public/history-system-events.js` (new, pure): `isSystemHistoryEvent()` and
+  `systemEventText()` (HTML stripped, entities decoded, 140-char ellipsis).
+  `renderHistoryEventItem` returns from the compact branch before the reply UI.
+- Emails are excluded first (mail payload / message id / imported body) so
+  "Mail Message" (a system category) keeps its full card.
+- CSS `.opp-preview-history-item--system`; cache-buster `app.js?v=3.7.53`.
+- Plan: `~/Projects/plans/sietch/history-system-events-compact.md` (INDEX
+  updated). CHANGELOG 2.5.2.
+
+**Tests.** `tests/test_history_system_events.mjs` (13); full JS sweep green;
+Python: same 5 pre-existing `main` failures.
+
+---
+
 **Date:** 2026-11-09 (Admin: API Tokens + MCP merged into one tab)
 
 **Status: COMMITTED LOCALLY on branch `feat/admin-api-mcp-tab` (worktree

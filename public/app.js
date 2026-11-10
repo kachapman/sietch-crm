@@ -13,6 +13,10 @@ import {
   parseMailDateInput,
   MAIL_DEFAULT_TIMEZONE,
 } from "./mail-dates.js?v=3.7.52";
+import {
+  isSystemHistoryEvent,
+  systemEventText,
+} from "./history-system-events.js?v=3.7.53";
 
 /**
  * Auto-hide scrollbars: add `is-scrolling` to the SPECIFIC element
@@ -28247,6 +28251,44 @@ function renderHistoryEventItem(ev) {
   const isImportedEmail = mailPayload?.source === "onlyoffice_import";
   const hasImportedBody = isImportedEmail && (mailPayload.body_html || mailPayload.body_text || mailPayload.introduction);
   const isDeletableNote = isDeletableHistoryCategory(ev) && !messageId && !mailPayload && !isHistoryMailEvent(ev, mailPayload) && !isImportedEmail;
+
+  // System events (status/field changes, auto-logged actions, file/task events)
+  // render as ONE compact line: icon + short text + timestamp, and no reply
+  // button. Emails and human notes keep the full card (live request 2026-11-09).
+  const systemEvent = isSystemHistoryEvent({
+    category: cat || {
+      title: historyEventCategoryLabel(ev),
+      isSystem: ev.category?.isSystem ?? ev.category?.is_system,
+    },
+    isMailEvent: isHistoryMailEvent(ev, mailPayload),
+    hasMailPayload: !!mailPayload,
+    hasMessageId: !!messageId,
+  });
+  if (systemEvent) {
+    li.classList.add("opp-preview-history-item--system");
+    const sysRow = document.createElement("div");
+    sysRow.className = "opp-preview-history-system-row";
+    const sysIcon = document.createElement("span");
+    sysIcon.className = "opp-preview-history-type-icon";
+    sysIcon.innerHTML = historyCategoryIconHtml(cat || ev);
+    sysIcon.setAttribute("aria-hidden", "true");
+    const sysText = document.createElement("span");
+    sysText.className = "opp-preview-history-system-text";
+    sysText.textContent = systemEventText(ev);
+    sysRow.appendChild(sysIcon);
+    sysRow.appendChild(sysText);
+    const sysWhen = formatHistoryEventDateTime(ev);
+    if (sysWhen) {
+      const timeEl = document.createElement("time");
+      timeEl.className = "opp-preview-history-system-time";
+      const sysIso = historyEventDateIso(ev);
+      if (sysIso) timeEl.dateTime = sysIso;
+      timeEl.textContent = sysWhen;
+      sysRow.appendChild(timeEl);
+    }
+    li.appendChild(sysRow);
+    return li;
+  }
 
   const metaRow = document.createElement("div");
   metaRow.className = "opp-preview-history-meta-row";

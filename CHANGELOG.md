@@ -70,6 +70,28 @@
 
 # Changelog
 
+## 2.5.2 — 2026-11-09
+
+### Changed
+- **Project history: system events are one compact line.** Status/field
+  changes ("Action"), auto-logged actions and other system categories
+  ("Files are uploaded", "Task is closed") now render as a single row —
+  icon + short text + timestamp — with **no reply button**, no body and no
+  delete. Human notes and emails keep their full card exactly as before.
+  - `public/history-system-events.js` (new, pure): classifier + one-line
+    summarizer (HTML stripped, entities decoded, 140-char ellipsis).
+  - `renderHistoryEventItem` returns from the compact branch before the meta,
+    body, attachments, delete and reply UI are built.
+  - Emails are excluded first (mail payload / message id / imported body), so
+    a "Mail Message" event can never be collapsed.
+  - CSS `.opp-preview-history-item--system` keeps it on one line with an
+    ellipsized text and a muted timestamp.
+  - Cache-buster `app.js?v=3.7.53`.
+
+### Notes
+- Merged to local `main` only — not pushed, not deployed.
+
+
 ## 2.5.1 — 2026-11-09
 
 ### Changed

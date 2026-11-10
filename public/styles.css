@@ -7278,6 +7278,42 @@ body {
   margin-top: 0;
 }
 
+/* System events: one compact line (icon + short text + timestamp), no reply.
+   Emails and human notes keep their full card (see history-system-events.js). */
+.opp-preview-history-item--system {
+  padding: 0.12rem 0.5rem;
+  font-size: 0.7rem;
+  background: transparent;
+  border-left: 2px solid var(--border);
+  line-height: 1.25;
+}
+.opp-preview-history-item--system .opp-preview-history-system-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.opp-preview-history-item--system .opp-preview-history-type-icon {
+  margin-top: 0;
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+.opp-preview-history-item--system .opp-preview-history-system-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.opp-preview-history-item--system .opp-preview-history-system-time {
+  flex-shrink: 0;
+  color: var(--muted);
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* Inline images in note history + editor */
 .note-editor img,
 .preview-note-editor img {
