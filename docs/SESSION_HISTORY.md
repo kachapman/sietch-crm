@@ -3,7 +3,49 @@
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-11-10 (merge + DEPLOY of the MCP document read / OCR worker queue — Ken's go at 5:25 PM ET)
+**Date:** 2026-11-10 (dedupe follow-up: no duplicate tools — DEPLOYED v2.5.5)
+
+**Status: deployed. Prod runs `105f259` / v2.5.5** (was `f3083c8` / v2.5.4).
+
+- Ken 5:44 PM ET: no duplicate tools, only add what is missing (text + OCR);
+  the API/MCP already served PDFs. Removed the two duplicate additions in
+  `105f259`:
+  - MCP tool `download_project_document`
+  - `GET /api/v2/projects/{id}/documents/{document_id}/content` (base64 JSON)
+    + `_project_document_content` handler + `document_read.document_content()`
+    + `MAX_DOCUMENT_CONTENT_BYTES`
+  Covered by the **pre-existing** `GET /api/v2/documents/{id}` (raw project
+  document), `GET /api/v2/history-attachments/{id}/download` (raw history
+  attachment) and `list_project_documents` (metadata/ids).
+- Kept (new capability): `get_project_document`, `get_mail_attachment_text`,
+  `ocr_status`, `request_ocr`, worker `/api/v2/ocr/queue*` routes.
+  Spec regenerated: **325 operations / 252 paths**; MCP now exposes **25**
+  tools (was 26). `docs/API.md` points at the raw download routes so clients
+  do not look for a download tool.
+- Tests: `test_document_text` 21, `test_ocr_queue_api` **31** (was 36), 
+  `test_ocr_worker` 17, `test_openapi` 20, `test_mcp_server` 21 — all pass.
+  Full suite **1,742 tests, 218 skipped, 24 failed, 1 error** = the identical
+  pre-existing five files (zero new failures). Node **44/44**.
+- Backup `/mnt/sietch_backup/sietch-prod-pre-deploy-105f259-20261110-175055ET`
+  (926 MB; dump 750 TOC entries; code archive of `f3083c8`; rollback image
+  `sietch-crm-dashboard:rollback-f3083c8`; `ROLLBACK.md` = code-only deploy, no
+  DB restore needed). No migration applied (052 stays; 56 rows).
+- Smokes green: health, login, assets == `105f259`, unauth 401s, removed
+  `/content` 404 even authenticated, one clean scanner cycle (22:52:39 →
+  22:52:52) with zero auth/identity errors, MCP `tools/list` 25 tools with
+  `download_project_document` **absent**, read-only `get_project_document` =
+  `ocr_pending` 20 pages, and `GET /api/v2/documents/14756` still returns the
+  31,622,339-byte PDF.
+- API/MCP spec exported for Baggins:
+  `~/Projects/plans/sietch/api-spec-2026-11-10/` (live, authenticated
+  `GET /api/v2/openapi.json`; no tokens or document contents).
+- **No email sent; no mail account/token/reconnect touched.** OCR worker still
+  not installed; no systemd unit enabled.
+- Full log: `~/Projects/plans/sietch/mcp-document-read-2026-11-10.md` §11.
+
+---
+
+## Previous session summary (2026-11-10 — merge + deploy of the MCP document read / OCR worker queue)
 
 **Status: MERGED and DEPLOYED. Prod `crm.publicadjustermidwest.com`
 (`147.182.164.19`) runs `f3083c8` / v2.5.4** (was `200c237` / v2.5.3).

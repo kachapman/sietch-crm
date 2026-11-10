@@ -1,5 +1,21 @@
 ## 2026-11-10 — v2.5.5: drop the duplicate document-download tool + route
 
+### Deployed
+- Live on `crm.publicadjustermidwest.com` as `105f259` / **v2.5.5**
+  (17:53 ET). Backup
+  `/mnt/sietch_backup/sietch-prod-pre-deploy-105f259-20261110-175055ET`
+  (926 MB, dump 750 TOC entries, code archive of `f3083c8`, rollback image
+  `sietch-crm-dashboard:rollback-f3083c8`); droplet ff-only
+  `f3083c8` → `105f259`, rebuild, `up -d`. **No migration** (052 already
+  applied, still 56 rows). Smokes: health, login, assets, unauth 401s,
+  clean scanner cycle, MCP `tools/list` = 25 tools with
+  `download_project_document` absent, read-only `get_project_document` =
+  `ocr_pending` (20 pages), and the pre-existing
+  `GET /api/v2/documents/14756` still returns the 31,622,339-byte PDF.
+  No email sent, no mail account/token touched.
+
+
+
 Ken (5:44 PM ET): no duplicate tools — only add what is missing (text + OCR).
 The API/MCP already served PDFs, so this removes the two additions that
 duplicated existing file serving:
