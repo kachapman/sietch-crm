@@ -3,7 +3,40 @@
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-11-10 (Item 5: full suites vs baseline, then merge)
+**Date:** 2026-11-10 (DEPLOY of `200c237` to production — approved by Ken 4:44 PM ET)
+
+**Status: DEPLOYED and verified. Prod `crm.publicadjustermidwest.com`
+(`147.182.164.19`) now runs `200c237` / v2.5.3** (was `3b03680` / v2.5.0).
+
+- Flow (same as the 2026-11-09 `3b03680` deploy): pre-deploy backup on
+  `/mnt/sietch_backup/sietch-prod-pre-deploy-200c237-20261110-165140ET`
+  (`sietch_crm.dump` 30,174,665 B, `pg_restore --list` OK; code archive;
+  `dashboard-data-no-attachments.tar.gz` 929,949,059 B; env/compose/Dockerfile
+  0600; `mail_accounts-pre/post.tsv`; `ROLLBACK.md`), `git push` +
+  `git fetch`/`merge --ff-only`, `docker compose build dashboard`,
+  `up -d dashboard`. Migrations **050 + 051** applied by the boot runner at
+  `2026-11-10 21:54:14Z` (before: 53 rows / latest 049; after: 55 rows /
+  latest 051). `uq_mail_messages_account_message_id` deliberately NOT created
+  (13 duplicate groups exist; dedupe script NOT run and still pending).
+- Smokes: health 200 `{"dbReachable":true}`; `/` 200 with login form;
+  served `app.js`/`styles.css` sha256 == `git show 200c237:public/…`;
+  `/api/v2/mail/accounts` unauth → 401; all 5 accounts `identityStatus=ok`
+  (8/9/10 identities match their address, no wrong-account flag);
+  compose From empty on all-inboxes / preselected on an account tab
+  (verified in deployed `app.js` + 33/33 node tests on this tree);
+  two complete scanner poll cycles with **zero** auth/`sync_gate` refusals;
+  no new `auth_error` and token fingerprints unchanged.
+- **No email sent, no token refresh/revoke, no account edits, no
+  `live_mail_acceptance.py`, no split/dedupe scripts.** No rollback needed.
+- **Open:** account **8** (`estimates.masterx@outlook.com`) has no Graph token
+  and `smtp_auth_disabled=true`, so it can receive but not send until someone
+  signs in to Microsoft **as account 8** in Settings → Mail Accounts. 9 and 10
+  are fully connected (Graph `auto-renew`).
+- Full log: `~/Projects/plans/sietch/email-fix-deploy-2026-11-10.md`.
+
+---
+
+## Previous session summary (2026-11-10 — item 5: full suites vs baseline, then merge)
 
 **Status: MERGED to local `main` by fast-forward — NOT pushed, NOT deployed.**
 

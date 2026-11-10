@@ -1,3 +1,17 @@
+## 2026-11-10 — DEPLOYED to production: `200c237` (v2.5.3)
+
+Deployed the mail sender/identity series to `crm.publicadjustermidwest.com`
+(`147.182.164.19`), fast-forward `3b03680` → `200c237`. Standard flow: pre-deploy
+backup on `/mnt/sietch_backup`, `git merge --ff-only`, `docker compose build
+dashboard`, `docker compose up -d dashboard`; migrations 050 + 051 applied by the
+boot runner at 21:54:14Z. All smokes passed (health, login, mail assets byte-identical
+to the commit, per-account identity `ok` for 2/6/8/9/10, compose From empty on
+all-inboxes, two clean scanner poll cycles, no new `auth_error`, token fingerprints
+unchanged). Rollback artifacts + notes:
+`/mnt/sietch_backup/sietch-prod-pre-deploy-200c237-20261110-165140ET/ROLLBACK.md`
+(image tag `sietch-crm-dashboard:rollback-3b03680`). Deploy log:
+`~/Projects/plans/sietch/email-fix-deploy-2026-11-10.md`.
+
 ## 2026-11-10 — Item 5: full suites vs baseline, dead-SMTP memory restored, merge
 
 ### Fixed
