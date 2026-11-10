@@ -401,6 +401,18 @@ _ENRICH: dict[tuple[str, str], dict] = {
         "parameters": [_q("folder", "Optional folder filter.")],
         "responses": {"200": _json_response("Threads", _arr({"type": "object"}))},
     },
+    ("POST", "/api/v2/mail/send/preflight"): {
+        "summary": "Check whether a mailbox may send for a job/thread (no side effects)",
+        "description": "Returns 409 when the job's Contact is mapped to another mailbox, or when a reply would leave from a different account than the original message.",
+        "tags": ["mail"],
+        "requestBody": _json_body(_obj({
+            "account_id": _INT, "deal_id": _INT, "reply_to_message_id": _INT,
+        }, ["account_id"]), "Account to test, plus the job/thread context."),
+        "responses": {"200": _json_response("Allowed", _obj({
+            "ok": _BOOL, "accountEmail": _STR, "contactName": _STR,
+            "mappedEmails": _arr(_STR),
+        }))},
+    },
     ("POST", "/api/v2/mail/drafts"): {
         "summary": "Create an email DRAFT (never sends)",
         "description": "Drafts are reviewed and sent by a human in the Sietch UI. There is no send endpoint in the MCP surface.",

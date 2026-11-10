@@ -19,6 +19,7 @@ across processes, so it does not depend on an in-process lock.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -90,7 +91,8 @@ def _save_refreshed_token(account_id: int, new_access: str, new_refresh: str,
             "UPDATE mail_accounts SET oauth_access_token = %s, oauth_refresh_token = %s, "
             "oauth_token_expires = to_timestamp(%s), "
             "oauth_identity = COALESCE(%s, oauth_identity), "
-            "oauth_last_error = NULL, oauth_last_error_at = NULL WHERE id = %s",
+            "oauth_last_error = NULL, oauth_last_error_at = NULL, "
+            "auth_error = NULL, auth_error_at = NULL WHERE id = %s",
             (new_access, new_refresh, expires_at_ts, identity or None, account_id),
         )
         return True
@@ -103,6 +105,47 @@ def _save_refreshed_token(account_id: int, new_access: str, new_refresh: str,
         (new_access, new_refresh, expires_at_ts, identity or None, account_id, expected_access),
     )
     return rowcount > 0
+
+
+def _notify_admins_auth_error(account_id: int, message: str) -> None:
+    """One notification row per account per day when auth breaks (best effort)."""
+    try:
+        row = db.query_one("SELECT email FROM mail_accounts WHERE id = %s", (account_id,))
+        label = (row or {}).get("email") or f"account {account_id}"
+        dedupe = f"mail-auth-error:{account_id}:{time.strftime('%Y-%m-%d', time.gmtime())}"
+        existing = db.query_one(
+            "SELECT id FROM notifications WHERE dedupe_key = %s LIMIT 1", (dedupe,))
+        if existing:
+            return
+        admins = db.query_dicts("SELECT id FROM users WHERE is_admin = TRUE AND is_active = TRUE")
+        for admin in admins:
+            db.execute(
+                """INSERT INTO notifications
+                     (user_id, type, message, payload, dedupe_key)
+                   VALUES (%s, 'mail_auth_error', %s, %s::jsonb, %s)
+                   ON CONFLICT DO NOTHING""",
+                (admin["id"],
+                 f"Mail account {label} needs reconnecting: {str(message)[:180]}",
+                 json.dumps({"account_id": account_id}),
+                 f"{dedupe}:{admin['id']}"),
+            )
+    except Exception:
+        logger.debug("Could not notify admins about mail auth error", exc_info=True)
+
+
+def record_auth_error(account_id: int, message: str) -> None:
+    """Persist a send/sync auth failure and notify admins on the transition."""
+    try:
+        row = db.query_one("SELECT auth_error FROM mail_accounts WHERE id = %s", (account_id,))
+        was_set = bool((row or {}).get("auth_error"))
+        db.execute(
+            "UPDATE mail_accounts SET auth_error = %s, auth_error_at = NOW() WHERE id = %s",
+            (str(message)[:300], account_id),
+        )
+        if not was_set:
+            _notify_admins_auth_error(account_id, message)
+    except Exception:
+        logger.debug("Could not persist auth_error for account %s", account_id, exc_info=True)
 
 
 def record_refresh_error(account_id: int, message: str) -> None:
@@ -120,6 +163,7 @@ def record_refresh_error(account_id: int, message: str) -> None:
         )
     except Exception:
         logger.debug("Could not persist oauth_last_error for account %s", account_id, exc_info=True)
+    record_auth_error(account_id, message)
 
 
 def refresh_access_token(account_id: int, provider_name: str, current_refresh_token: str,
@@ -316,6 +360,7 @@ __all__ = [
     "REFRESH_MARGIN_SECONDS",
     "force_refresh_access_token",
     "get_valid_access_token",
+    "record_auth_error",
     "record_refresh_error",
     "refresh_access_token",
     "token_needs_refresh",

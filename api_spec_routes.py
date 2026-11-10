@@ -214,6 +214,7 @@ ROUTES = [
     {"method": 'POST', "path": '/api/v2/mail/reprocess', "params": [], "tag": 'mail', "summary": 'Create reproces'},
     {"method": 'POST', "path": '/api/v2/mail/retrain', "params": [], "tag": 'mail', "summary": 'Create retrain'},
     {"method": 'POST', "path": '/api/v2/mail/send', "params": [], "tag": 'mail', "summary": 'Create send'},
+    {"method": 'POST', "path": '/api/v2/mail/send/preflight', "params": [], "tag": 'mail', "summary": 'Create preflight'},
     {"method": 'POST', "path": '/api/v2/mail/send/undo', "params": [], "tag": 'mail', "summary": 'Create undo'},
     {"method": 'GET', "path": '/api/v2/mail/status', "params": [], "tag": 'mail', "summary": 'Get mail/status'},
     {"method": 'GET', "path": '/api/v2/mail/tags', "params": [], "tag": 'mail', "summary": 'List tag'},

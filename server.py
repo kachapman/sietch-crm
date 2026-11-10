@@ -499,6 +499,7 @@ import oauth_state
 import mail_oauth
 import mail_oauth_binding
 import mail_dates
+import mail_sender_guard
 import mail_imap
 
 # mail_scanner imports oauth_providers (and reads its env-derived constants),
@@ -1168,6 +1169,20 @@ try:
     db.execute("CREATE INDEX IF NOT EXISTS idx_mcp_pending_token ON mcp_pending_actions (token_id, created_at DESC)")
 except Exception:
     logger.warning("Could not create the MCP tables", exc_info=True)
+# Mail sender guard schema (mirrors migrations/050_mail_sender_guard.sql).
+try:
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS contractor_contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_mail_accounts_contractor_contact ON mail_accounts (contractor_contact_id)")
+    db.execute("""CREATE TABLE IF NOT EXISTS mail_send_refusals (
+        id BIGSERIAL PRIMARY KEY, user_id INTEGER, account_id INTEGER, deal_id INTEGER,
+        reason TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_mail_send_refusals_created ON mail_send_refusals (created_at DESC)")
+    db.execute("ALTER TABLE mail_outgoing ADD COLUMN IF NOT EXISTS error TEXT")
+    db.execute("ALTER TABLE mail_outgoing ADD COLUMN IF NOT EXISTS fallback_reason TEXT")
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS auth_error TEXT")
+    db.execute("ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS auth_error_at TIMESTAMPTZ")
+except Exception:
+    logger.warning("Could not create the mail sender guard schema", exc_info=True)
 # Memory of observed SMTP AUTH disable (5.7.139). Microsoft accepts-then-drops
 # or refuses unpredictably for these mailboxes; SMTP "success" (250) is not
 # proof of delivery, so flagged accounts skip SMTP entirely and fail loudly
@@ -6076,6 +6091,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_mail_account_unshare(int(m.group(1)), int(m.group(2)))
             return
         # Send email
+        if api_path == "/api/v2/mail/send/preflight" and method == "POST":
+            self._handle_mail_send_preflight()
+            return
         if api_path == "/api/v2/mail/send" and method == "POST":
             self._handle_mail_send()
             return
@@ -22536,6 +22554,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                           auto_bcc_addr, retention_days, tab_icon, tab_color,
                           last_sync, owner_user_id, created_at,
                           oauth_identity, oauth_last_error, oauth_last_error_at,
+                          contractor_contact_id, auth_error,
+                          (SELECT COALESCE(NULLIF(c.company, ''),
+                                  NULLIF(TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')), ''))
+                             FROM contacts c WHERE c.id = mail_accounts.contractor_contact_id) AS contractor_contact_name,
                           oauth_graph_access_token IS NOT NULL AS has_graph_token,
                           oauth_graph_token_expires,
                           oauth_graph_identity,
@@ -22556,6 +22578,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 r["authType"] = r.get("oauth_provider") or "password"
                 r["isOwner"] = r["owner_user_id"] == user["id"] or bool(user.get("is_admin"))
                 r["canManage"] = _mail_account_manageable(user, r["id"])
+                r["contractorContactId"] = r.get("contractor_contact_id")
+                r["contractorContactName"] = r.get("contractor_contact_name") or ""
+                r["authError"] = (r.get("auth_error") or r.get("oauth_last_error")
+                                  or r.get("oauth_graph_last_error") or "")
                 if r.get("oauth_provider"):
                     expires = r.get("oauth_token_expires")
                     if expires and isinstance(expires, datetime):
@@ -22956,9 +22982,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     return
             fields = []
             params: list[Any] = []
+            if "contractor_contact_id" in payload:
+                cid = payload.get("contractor_contact_id")
+                if cid in (None, "", 0, "0"):
+                    payload["contractor_contact_id"] = None
+                else:
+                    try:
+                        cid = int(cid)
+                    except (TypeError, ValueError):
+                        _json_response(self, 400, {"error": "contractor_contact_id must be a contact id"})
+                        return
+                    if not db.query_one("SELECT id FROM contacts WHERE id = %s", (cid,)):
+                        _json_response(self, 404, {"error": "Contact not found"})
+                        return
+                    payload["contractor_contact_id"] = cid
             for key in ("email", "display_name", "imap_host", "smtp_host", "smtp_user",
                         "smtp_from_name", "oauth_provider", "auto_bcc_addr", "tab_icon",
-                        "tab_color"):
+                        "tab_color", "contractor_contact_id"):
                 if key in payload:
                     fields.append(f"{key} = %s")
                     params.append(payload[key])
@@ -23118,6 +23158,53 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
 
+    def _handle_mail_send_preflight(self) -> None:
+        """Check (no side effects) whether an account may send for a job/thread.
+
+        Used by the compose dialog to BLOCK a mismatch before Send. The send
+        endpoint enforces the same rules.
+        """
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+            account_id = int(payload.get("account_id"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            _json_response(self, 400, {"error": "account_id is required"})
+            return
+        acct = db.query_one(
+            "SELECT id, email, display_name, smtp_from_name, contractor_contact_id "
+            "FROM mail_accounts WHERE id = %s", (account_id,))
+        if not acct:
+            _json_response(self, 404, {"error": "Account not found"})
+            return
+        if not _mail_account_accessible(user, account_id):
+            _json_response(self, 403, {"error": "You don't have access to this account"})
+            return
+        guard = mail_sender_guard.evaluate(
+            db, account=acct, deal_id=payload.get("deal_id"),
+            reply_to_message_id=payload.get("reply_to_message_id"),
+        )
+        body = {
+            "ok": guard["allowed"],
+            "accountId": account_id,
+            "accountEmail": acct.get("email") or "",
+            "accountName": acct.get("smtp_from_name") or acct.get("display_name") or "",
+            "dealId": guard["deal_id"],
+            "contactId": guard["contact_id"],
+            "contactName": guard["contact_name"],
+            "mappedAccountIds": [m["id"] for m in guard["mapped"]],
+            "mappedEmails": [m["email"] for m in guard["mapped"]],
+            "originalAccountId": guard["original_account_id"],
+        }
+        if not guard["allowed"]:
+            body["error"] = guard["message"]
+            body["reason"] = guard["reason"]
+            _json_response(self, 409, body)
+            return
+        _json_response(self, 200, body)
+
     def _handle_mail_send(self) -> None:
         try:
             payload = json.loads(_read_body(self) or b"{}")
@@ -23149,6 +23236,28 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 403, {"error": "You don't have access to this account"})
                 return
 
+            # Send-time sender guard (2026-11-10). The job's Contact is the
+            # contractor identity; an account mapped to that Contact is the
+            # only account allowed to send for the job. Replies must also come
+            # from the account that received the original message.
+            guard = mail_sender_guard.evaluate(
+                db, account=acct, deal_id=deal_id,
+                reply_to_message_id=payload.get("reply_to_message_id"),
+            )
+            if not guard["allowed"]:
+                mail_sender_guard.log_refusal(
+                    db, user_id=user["id"] if user else None,
+                    account_id=account_id, deal_id=deal_id,
+                    reason=guard["reason"],
+                )
+                _json_response(self, 409, {
+                    "ok": False,
+                    "error": guard["message"],
+                    "reason": guard["reason"],
+                })
+                return
+            send_meta: dict = {}
+
             # Merge account-level auto-BCC addresses (comma-separated) into the outgoing BCC
             auto_bcc = (acct.get("auto_bcc_addr") or "").strip()
             if auto_bcc:
@@ -23174,6 +23283,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 html_body=body_html,
                 text_body=body_text,
                 attachments=decoded_attachments if decoded_attachments else None,
+                result_meta=send_meta,
             )
             _ = send_method  # reserved for future analytics (per-account send method)
 
@@ -23182,8 +23292,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             outgoing = db.query_one(
                 """INSERT INTO mail_outgoing
                    (account_id, from_addr, to_addr, cc_addr, bcc_addr, subject,
-                    body_text, body_html, deal_id, attachments_json, status, sent_at, created_by, send_method)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    body_text, body_html, deal_id, attachments_json, status, sent_at, created_by,
+                    send_method, error, fallback_reason)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
                     account_id, acct["email"], to_addr, cc_addr, bcc_addr,
@@ -23192,6 +23303,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     datetime.now(timezone.utc) if ok else None,
                     user["id"] if user else None,
                     send_method,
+                    None if ok else (err or "Send failed"),
+                    send_meta.get("fallback_reason"),
                 ),
             )
 
@@ -23261,6 +23374,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
             if ok:
                 _json_response(self, 200, {"ok": True, "id": outgoing["id"] if outgoing else None, "method": send_method,
+                                           "fallbackReason": send_meta.get("fallback_reason"),
                                            # The mailbox the mail ACTUALLY went out as. After the
                                            # identity guard this equals the account email, but
                                            # returning it lets the UI state it plainly instead of
@@ -23390,6 +23504,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "original_from": row["from_addr"],
                 "original_subject": row["subject"],
                 "original_date": mail_dates.iso_utc(row["date_received"]),
+                "account_id": row.get("account_id"),
+                "deal_id": (db.query_one(
+                    "SELECT opportunity_id FROM mail_deal_links WHERE message_id = %s "
+                    "ORDER BY id LIMIT 1", (message_id,)) or {}).get("opportunity_id"),
             })
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})
@@ -23414,6 +23532,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "original_from": row["from_addr"],
                 "original_subject": row["subject"],
                 "original_date": mail_dates.iso_utc(row["date_received"]),
+                "account_id": row.get("account_id"),
+                "deal_id": (db.query_one(
+                    "SELECT opportunity_id FROM mail_deal_links WHERE message_id = %s "
+                    "ORDER BY id LIMIT 1", (message_id,)) or {}).get("opportunity_id"),
             })
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})

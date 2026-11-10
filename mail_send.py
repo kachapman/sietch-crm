@@ -96,6 +96,7 @@ def try_send_for_account(
     from_name: str | None = None,
     attachments: list[dict] | None = None,
     refresh_graph_token: callable | None = None,
+    result_meta: dict | None = None,
 ) -> tuple[bool, str | None, str]:
     """Single source of truth for sending email from a mail_accounts row.
 
@@ -108,6 +109,7 @@ def try_send_for_account(
     """
     from smtp_client import send_email_from_account
 
+    meta = result_meta if result_meta is not None else {}
     oauth_provider = acct.get("oauth_provider")
     oauth_access_token = acct.get("oauth_access_token")
     smtp_password = acct.get("smtp_password_encrypted") or ""
@@ -116,17 +118,23 @@ def try_send_for_account(
     if use_oauth_smtp:
         expires = acct.get("oauth_token_expires")
         if expires and isinstance(expires, datetime) and expires.timestamp() < datetime.now(timezone.utc).timestamp():
-            try:
-                import oauth_providers as op_mod
-                prov = op_mod.get_provider(oauth_provider)
-                if prov and acct.get("oauth_refresh_token"):
-                    tok = prov.refresh_token(acct["oauth_refresh_token"])
-                    oauth_access_token = tok.get("access_token", oauth_access_token)
-                    new_expires = time.time() + tok.get("expires_in", 3600)
-                    new_refresh = tok.get("refresh_token", acct["oauth_refresh_token"])
-                    _persist_exchange_refresh(account_id, oauth_access_token, new_refresh, new_expires)
-            except Exception:
-                logger.exception("Failed to refresh OAuth token for send")
+            # Route through the shared CAS refresher (2026-11-10): the old
+            # inline refresh wrote both tokens with no compare-and-swap, so it
+            # could clobber a token the scanner had just rotated — the "tokens
+            # dropped" failure. mail_oauth also records auth_error on failure.
+            import mail_oauth
+            refreshed = mail_oauth.refresh_access_token(
+                account_id, oauth_provider, acct.get("oauth_refresh_token") or "",
+                expires, force=True,
+                expected_access=acct.get("oauth_access_token") or None,
+            )
+            if refreshed:
+                oauth_access_token = refreshed[0]
+            else:
+                return False, (
+                    "OAuth token refresh failed — reconnect this mail account. "
+                    "Nothing was sent."
+                ), "smtp_oauth"
 
     # Step 1: try Graph if this is a Microsoft OAuth account with a token.
     graph_token, graph_err = (None, None)
@@ -195,6 +203,7 @@ def try_send_for_account(
                 if ok:
                     return True, None, "graph"
                 logger.warning("Graph send failed for account=%s, falling back to SMTP: %s", account_id, err)
+                meta["fallback_reason"] = f"graph: {err}"
                 graph_err = err
             except Exception as e:
                 logger.exception("Graph send threw for account=%s", account_id)
@@ -279,23 +288,10 @@ def try_send_for_account(
                         attachments=attachments,
                     )
                     if ok2:
+                        meta["fallback_reason"] = f"smtp 5.7.139 -> graph: {err}"
                         return True, None, "graph"
                     err = err2 or err
                 except Exception as e:
                     logger.exception("Graph retry after SMTP 5.7.139 threw")
                     err = str(e) or err
     return False, err or graph_err, "graph" if graph_token else ("smtp_oauth" if use_oauth_smtp else "smtp_password")
-
-
-def _persist_exchange_refresh(account_id: int, access_token: str, refresh_token: str, expires_ts: float) -> None:
-    """Persist a refreshed Exchange-audience OAuth token to the DB.
-    Best-effort: silently logs and continues on failure (the caller will
-    still try to send, just with the old token)."""
-    try:
-        import db as db_mod
-        db_mod.execute(
-            "UPDATE mail_accounts SET oauth_access_token = %s, oauth_refresh_token = %s, oauth_token_expires = to_timestamp(%s) WHERE id = %s",
-            (access_token, refresh_token, expires_ts, account_id),
-        )
-    except Exception:
-        logger.exception("Failed to persist refreshed Exchange OAuth token for account %d", account_id)
