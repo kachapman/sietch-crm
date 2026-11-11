@@ -59,7 +59,12 @@ class TestHistoryEmitsOffset(unittest.TestCase):
             patch.object(_server, "logger"):
             _server.KanbanHandler._handle_project_history_get(Shim(), 46, {"count": ["10"], "startIndex": ["0"]})
         self.assertEqual(responses[0][0], 200)
-        created = responses[0][1][0]["created"]
+        # The history route returns {events, total, count, startIndex} since
+        # 2026-11-10 (paged); accept a bare array too so this test survives
+        # the transition.
+        body = responses[0][1]
+        events = body["events"] if isinstance(body, dict) else body
+        created = events[0]["created"]
         # Must carry an explicit offset so browsers never parse as local.
         self.assertRegex(created, r"\+00:00$")
         # And it must still denote 20:01 UTC (not shifted).

@@ -138,27 +138,71 @@ class TestMcpSingleSource(unittest.TestCase):
 
     def test_every_mapped_operation_exists_in_the_spec(self):
         for tool, (method, path) in api_spec.MCP_TOOL_OPERATIONS.items():
-            if tool == "get_carrier_estimate_lines":
-                # documented as unavailable (route removed in 2.4.2)
-                self.assertNotIn(path, DOC["paths"])
-                continue
             with self.subTest(tool=tool):
                 self.assertIn(path, DOC["paths"])
                 self.assertIn(method.lower(), DOC["paths"][path])
 
     def test_tool_descriptions_come_from_the_spec(self):
         for tool in mcp_tools.TOOLS:
-            if tool.name == "get_carrier_estimate_lines":
-                continue
             method, path = api_spec.MCP_TOOL_OPERATIONS[tool.name]
             summary = api_spec.operation_summary(method, path)
             with self.subTest(tool=tool.name):
                 self.assertTrue(summary)
                 self.assertIn(summary.lower(), tool.description.lower())
 
+    def test_carrier_estimate_stub_is_removed(self):
+        # The route was removed in 2.4.2; a "static result" tool that only
+        # reports that fact just invites models to call it.
+        self.assertNotIn("get_carrier_estimate_lines", mcp_tools.TOOL_NAMES)
+        self.assertNotIn("get_carrier_estimate_lines", api_spec.MCP_TOOL_OPERATIONS)
+        self.assertNotIn("/api/v2/projects/{id}/carrier-estimate-lines", DOC["paths"])
+
     def test_no_tool_maps_to_a_send_endpoint(self):
         for tool, (method, path) in api_spec.MCP_TOOL_OPERATIONS.items():
             self.assertNotIn("/mail/send", path, tool)
+
+
+class TestSpecHonesty(unittest.TestCase):
+    """The spec must not claim JSON where the route returns bytes."""
+
+    def test_download_routes_are_binary(self):
+        for path in ("/api/v2/documents/{id}",
+                     "/api/v2/history-attachments/{id}/download",
+                     "/api/v2/mail/messages/{id}/attachments/{attachment_id}/download"):
+            with self.subTest(path=path):
+                content = DOC["paths"][path]["get"]["responses"]["200"]["content"]
+                self.assertNotIn("application/json", content)
+                self.assertEqual(
+                    content["application/octet-stream"]["schema"]["format"], "binary")
+
+    def test_ocr_ids_are_required_per_source(self):
+        body = (DOC["paths"]["/api/v2/ocr/request"]["post"]["requestBody"]
+                ["content"]["application/json"]["schema"])
+        self.assertIn("oneOf", body)
+        required = set()
+        for branch in body["oneOf"]:
+            if "$ref" in branch:
+                name = branch["$ref"].rsplit("/", 1)[-1]
+                branch = DOC["components"]["schemas"][name]
+            required.add(frozenset(branch["required"]))
+        self.assertIn(frozenset({"source", "project_id", "document_id"}), required)
+        self.assertIn(frozenset({"source", "message_id", "attachment_id"}), required)
+
+    def test_document_schema_has_from_history_attachment(self):
+        doc = DOC["components"]["schemas"]["Document"]
+        self.assertIn("fromHistoryAttachment", doc["properties"])
+
+    def test_text_routes_document_409(self):
+        for path in ("/api/v2/projects/{id}/documents/{document_id}/text",
+                     "/api/v2/mail/messages/{id}/attachments/{attachment_id}/text"):
+            with self.subTest(path=path):
+                self.assertIn("409", DOC["paths"][path]["get"]["responses"])
+
+    def test_patch_document_is_in_the_spec(self):
+        op = DOC["paths"]["/api/v2/documents/{id}"]["patch"]
+        self.assertIn("requestBody", op)
+        props = op["requestBody"]["content"]["application/json"]["schema"]["properties"]
+        self.assertTrue({"title", "opportunity_id", "folder_id", "scope"} <= set(props))
 
 
 class TestServed(unittest.TestCase):

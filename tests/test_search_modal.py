@@ -88,12 +88,12 @@ class TestProjectsCountFlow(unittest.TestCase):
         self.server_src = Path(server.__file__).read_text(encoding="utf-8")
 
     def test_projects_list_accepts_count_and_startIndex(self):
-        # _handle_projects_list reads 'count' (default 500) and
-        # 'startIndex' (default 0). The fix relies on these flowing
-        # through to LIMIT / OFFSET.
+        # _handle_projects_list reads 'count' (default 500, 'limit' alias) and
+        # 'startIndex' (default 0). The fix relies on these flowing through to
+        # LIMIT / OFFSET.
         body = self._handler_body("_handle_projects_list")
-        self.assertIn("int(qs.get(\"count\", [\"500\"])[0])", body)
-        self.assertIn("int(qs.get(\"startIndex\", [\"0\"])[0])", body)
+        self.assertIn('qs.get("count") or qs.get("limit") or ["500"]', body)
+        self.assertIn('qs.get("startIndex", ["0"])', body)
         self.assertIn("LIMIT %s OFFSET %s", body)
 
     def test_projects_count_accepts_count_and_startIndex(self):

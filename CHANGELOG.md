@@ -1,3 +1,67 @@
+## 2026-11-10 — API/MCP gaps: tags, paging, honest spec, mail body, wrappers (UNRELEASED)
+
+Not deployed: built on `feat/mcp-api-gaps-2026-11-10`, rebased onto
+`ba8c750` / v2.5.7 (includes the Save hotfix and the notification/task-picker/
+Telegram fixes). **No VERSION bump yet** (deploy commit will be v2.5.8). Ken's 6:21 PM ET scope: fix
+everything except a residential/commercial occupancy field (there is no project
+field for it; it will be inferred from notes).
+
+**New MCP tools (10)** — all wrap existing `/api/v2` routes, no parallel
+endpoints:
+
+| tool | kind | route |
+|---|---|---|
+| `list_project_tags` | read | `GET /api/v2/projects/{id}/tags` |
+| `untag_project` | write (propose/apply) | `DELETE /api/v2/projects/{id}/tags/{tag_id}` |
+| `list_mail_attachments` | read | `GET /api/v2/mail/messages/{id}/attachments` |
+| `list_users` | read | `GET /api/v2/users` |
+| `list_stages` | read | `GET /api/v2/stages` |
+| `list_mail_accounts` | read | `GET /api/v2/mail/accounts` (no secrets) |
+| `create_contact` | write (propose/apply) | `POST /api/v2/contacts` |
+| `list_history_replies` | read | `GET /api/v2/projects/{id}/history/{history_id}/replies` |
+| `add_history_reply` | write (propose/apply) | `POST /api/v2/projects/{id}/history/{history_id}/replies` |
+| `list_company_documents` | read | `GET /api/v2/documents/company` |
+
+**Removed:** the stub MCP tool `get_carrier_estimate_lines` and its
+`MCP_TOOL_OPERATIONS` entry — it pointed at a route deleted in 2.4.2, so it only
+invited models to call something that cannot work.
+
+**Tags:** `tags` are now on `GET /api/v2/projects/{id}` (id, title, color,
+isSystem) and in the `Project` schema. `untag_project` deletes only the
+`opportunity_tags` link — never the tag definition, and never by title.
+`GET /api/v2/projects?tag_id=` filters by tag (comma-separate ids to OR-match).
+
+**Pagination:** `GET /api/v2/projects` accepts `limit` as an alias for `count`,
+has no hard per-page maximum, and returns the total in `X-Total-Count`
+(body stays a bare array so the dashboard keeps working). Project history now
+returns `{events, total, count, startIndex}` (frontend `unwrapHistoryEvents`
+reads `events`). MCP `search_projects` takes `startIndex` and returns
+`total`/`nextStartIndex`; `list_project_history` pages with `total`. Tools page
+instead of truncating.
+
+**Spec honesty:** the three raw-byte routes (`GET /api/v2/documents/{id}`,
+`GET /api/v2/history-attachments/{id}/download`,
+`GET /api/v2/mail/messages/{id}/attachments/{attachment_id}/download`) are
+documented as `application/octet-stream` binary instead of JSON. OCR
+`/status` + `/request` require the ids that match `source` (oneOf; a bare
+`{"source": …}` is a 400 in the handler, in the spec and in the MCP schema).
+`Document` gains `fromHistoryAttachment`; the text routes document `409
+not_stored`; `PATCH /api/v2/documents/{id}` (which already existed) is now in
+the spec with its real body. `scripts/extract_api_routes.py` was fixed to keep
+the regex while it consumes several method guards — it had been silently
+dropping 27 real write routes (incl. `PATCH`/`PUT /documents/{id}`,
+`DELETE /contacts/{id}`, `POST /admin/automation/rules/{id}/test`).
+
+**Mail:** `GET /api/v2/mail/messages/{id}` documents/exposes the real row:
+`body_text`/`body_html`/`raw_headers`, `tags`, `linked_deals`, and attachment
+metadata with `stored` (bytes on disk). The `MailMessage` schema is now the
+snake_case shape the route actually returns (it claimed camelCase that never
+existed). `list_mail_accounts` returns ids/addresses/display names/status only.
+
+**Tests:** new `tests/test_mcp_api_gaps.py` (41 tests). `tests/test_openapi.py`
+gains spec-honesty guards; `tests/test_search_modal.py` and
+`tests/test_timestamp_utc.py` follow the new paging shapes.
+
 ## 2026-11-10 — v2.5.7: notification icons, Tasks-tile project link, Telegram project line
 
 VERSION 2.5.6 → 2.5.7; `app.js` cache-buster 3.7.55 → 3.7.56. Approval: Ken

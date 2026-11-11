@@ -1421,10 +1421,26 @@ def _ts(dt: Any) -> str | None:
 def _json_response(handler: SimpleHTTPRequestHandler, status: int, payload: dict | list) -> None:
     body = json.dumps(payload, default=_json_default).encode("utf-8")
     handler.send_response(status)
+    # One-shot headers for this response (list totals, see _set_response_headers).
+    pending = getattr(handler, "_json_response_headers", None)
+    if pending:
+        handler._json_response_headers = None
+        for key, value in pending.items():
+            handler.send_header(str(key), str(value))
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def _set_response_headers(handler: SimpleHTTPRequestHandler, headers: dict) -> None:
+    """Attach headers to the NEXT `_json_response` (e.g. X-Total-Count).
+
+    Collection routes return a bare JSON array (the dashboard reads it
+    directly), so the total row count travels in a response header instead of
+    changing the body shape.
+    """
+    handler._json_response_headers = dict(headers or {})
 
 
 def _read_body(handler: SimpleHTTPRequestHandler) -> bytes:
@@ -6528,10 +6544,25 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             except ValueError:
                 pass
 
+        # Tag filter. One id, or a comma-separated list that OR-matches any of
+        # them (the daily "$$$ or Needs reconciliation" check). Projects are
+        # matched on the assigned tag link, never on the tag title.
         tag_id = qval(qs, "tag_id", "tagId")
         if tag_id:
-            where.append("o.id IN (SELECT opportunity_id FROM opportunity_tags WHERE tag_id = %s)")
-            params.append(int(tag_id))
+            tag_ids: list[int] = []
+            for part in str(tag_id).split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                try:
+                    tag_ids.append(int(part))
+                except ValueError:
+                    tag_ids = []
+                    break
+            if tag_ids:
+                where.append(
+                    "o.id IN (SELECT opportunity_id FROM opportunity_tags WHERE tag_id = ANY(%s))")
+                params.append(tag_ids)
 
         cf_filters_raw = qval(qs, "customFieldFilters")
         if cf_filters_raw:
@@ -6577,8 +6608,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         where, params = self._build_projects_where(qs, user)
 
-        count = int(qs.get("count", ["500"])[0])
-        start = int(qs.get("startIndex", ["0"])[0])
+        # Page size: `count` with `limit` as an alias (the dashboard already
+        # sends ?limit=…). No hard maximum — startIndex pages past any page.
+        raw_count = (qs.get("count") or qs.get("limit") or ["500"])[0]
+        try:
+            count = int(raw_count)
+        except (TypeError, ValueError):
+            count = 500
+        count = max(1, count)
+        try:
+            start = max(0, int(qs.get("startIndex", ["0"])[0]))
+        except (TypeError, ValueError):
+            start = 0
         sort_by = qs.get("sort_by", ["date_created"])[0]
         sort_order = qs.get("sort_order", ["descending"])[0]
         order = "DESC" if sort_order == "descending" else "ASC"
@@ -6615,6 +6656,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "stage": {"title": r[14], "color": r[15]} if r[14] else None,
                 "contact": {"displayName": f"{r[16] or ''} {r[17] or ''}".strip(), "company": r[18]} if r[16] or r[17] else None,
             })
+        # Total across all pages, for clients that walk the list in chunks.
+        # A short page is already the end of the result set, so the extra
+        # COUNT only runs when the page is full (kanban tiles rarely are).
+        if len(projects) < count:
+            total = start + len(projects)
+        else:
+            try:
+                total_row = db.query_one(
+                    f"SELECT COUNT(o.id) AS cnt FROM opportunities o WHERE {where_sql}",
+                    tuple(params),
+                )
+                total = int(total_row["cnt"]) if total_row else start + len(projects)
+            except Exception:
+                logger.exception("projects list total failed")
+                total = start + len(projects)
+        _set_response_headers(self, {"X-Total-Count": total})
         _json_response(self, 200, projects)
 
     def _handle_project_get(self, opp_id: int) -> None:
@@ -6648,6 +6705,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if responsible_id != user["id"] and created_by_id != user["id"]:
                 _json_response(self, 403, {"error": "Forbidden"})
                 return
+        tag_rows = db.query(
+            """SELECT t.id, t.title, t.color, t.is_system FROM tag_definitions t
+               JOIN opportunity_tags ot ON t.id = ot.tag_id
+               WHERE ot.opportunity_id = %s ORDER BY t.title""",
+            (opp_id,),
+        )
         _json_response(self, 200, {
             "id": row[0], "title": row[1], "description": row[2],
             "stageId": row[3], "stageType": row[4], "bidValue": float(row[5]) if row[5] else None,
@@ -6659,6 +6722,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "responsible": {"displayName": row[17]} if row[17] else None,
             "contact": {"displayName": (f"{row[18] or ''} {row[19] or ''}".strip() or row[20] or f"Contact {row[8]}"), "company": row[20], "email": row[21], "phone": row[22], "addressStreet": row[24], "addressCity": row[25], "addressState": row[26], "addressZip": row[27]} if row[8] else None,
             "project_number": row[23],
+            "tags": [{"id": t[0], "title": t[1], "color": t[2], "isSystem": t[3]} for t in tag_rows],
         })
 
     # ── Automation rules (admin) ──────────────────────────────────────────
@@ -7313,8 +7377,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_auth(self)
         if not user:
             return
-        count = int(qs.get("count", ["10"])[0])
-        start = int(qs.get("startIndex", ["0"])[0])
+        try:
+            count = max(0, int(qs.get("count", ["10"])[0]))
+        except (TypeError, ValueError):
+            count = 10
+        try:
+            start = max(0, int(qs.get("startIndex", ["0"])[0]))
+        except (TypeError, ValueError):
+            start = 0
         rows = db.query(
             """SELECT h.id, h.category_id, hc.title, h.title, h.content,
                       h.created_by, h.created_at, h.backdated_created_at,
@@ -7401,7 +7471,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         })
         except Exception:
             logger.exception("Email snapshot attachment resolution failed for opp %d", opp_id)
-        _json_response(self, 200, events)
+        # Paged envelope: the timeline can be long, so page metadata travels
+        # with the events (the dashboard reads `events` via unwrapHistoryEvents).
+        try:
+            total_row = db.query_one(
+                "SELECT COUNT(*) AS cnt FROM history_events WHERE opportunity_id = %s",
+                (opp_id,),
+            )
+            total = int(total_row["cnt"]) if total_row else start + len(events)
+        except Exception:
+            logger.exception("history total failed for opp %d", opp_id)
+            total = start + len(events)
+        _json_response(self, 200, {
+            "events": events,
+            "total": total,
+            "count": len(events),
+            "startIndex": start,
+        })
 
     def _handle_project_history_create(self, opp_id: int) -> None:
         user = _require_auth(self)
@@ -22447,6 +22533,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 (message_id,),
             )
             if att_rows:
+                for att in att_rows:
+                    # Metadata only: never the bytes. `stored` says whether the
+                    # text/OCR tools can read it (they never touch IMAP).
+                    try:
+                        att["stored"] = bool(str(att.get("stored_path") or "").strip())
+                    except Exception:
+                        att["stored"] = False
                 row_dict["attachments"] = att_rows
             elif row_dict.get("attachments_json"):
                 row_dict["attachments"] = row_dict["attachments_json"]
@@ -24535,6 +24628,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "SELECT * FROM mail_attachments WHERE message_id = %s ORDER BY filename",
                 (message_id,),
             )
+            for row in rows:
+                # Metadata only; `stored` = the bytes are on disk (readable by
+                # the text/OCR routes without touching IMAP).
+                row["stored"] = bool(str(row.get("stored_path") or "").strip())
             _json_response(self, 200, {"attachments": rows})
         except Exception as e:
             _json_response(self, 500, {"error": str(e)})

@@ -29,7 +29,10 @@ PREFIX = "/api/v2/"
 _EQ_RE = re.compile(r'api_path == "([^"]+)"')
 _METHOD_GUARD = re.compile(r'and\s+method\s*==\s*"([A-Z]+)"')
 _METHOD_IN = re.compile(r'and\s+method\s+in\s+\(([^)]+)\)')
-_RE_MATCH = re.compile(r'm = re\.match\(r"(\^[^"]+)"\s*,\s*api_path\)')
+# `m = re.match(...)` and `m2 = re.match(...)` (the automation /test route).
+_RE_MATCH = re.compile(r'\bm\d* = re\.match\(r"(\^[^"]+)"\s*,\s*api_path\)')
+# `if m:` / `if m and method == "X"` / `if m2 and method in (...)`.
+_IF_MATCH = re.compile(r'\bif m\d*\b')
 _STARTSWITH = re.compile(r'api_path\.startswith\("([^"]+)"\)')
 
 
@@ -129,28 +132,31 @@ def extract_routes(source: str | None = None) -> list[dict]:
     if end_marker in post_src:
         post_src = post_src[:post_src.index(end_marker)]
 
-    pending_regex: str | None = None
+    # One `m = re.match(...)` line is usually followed by SEVERAL method
+    # guards on the same regex (`if m and method == "PUT"`, then
+    # `... == "DELETE"`). Keep the regex for the whole block instead of
+    # clearing it after the first guard — otherwise every method after the
+    # first was silently missing from the spec (e.g. PATCH /documents/{id},
+    # DELETE /contacts/{id}, POST /admin/automation/rules/{id}/test).
+    current_regex: str | None = None
     for line in post_src.splitlines():
         m = _RE_MATCH.search(line)
         if m:
-            pending_regex = m.group(1)
-        if "if m and method" in line and pending_regex:
+            current_regex = m.group(1)
+            continue
+        if _IF_MATCH.search(line) and current_regex:
             guard = _METHOD_GUARD.search(line)
             if guard:
-                add(guard.group(1), _regex_to_template(pending_regex), "regex")
+                add(guard.group(1), _regex_to_template(current_regex), "regex")
             else:
                 multi = _METHOD_IN.search(line)
                 if multi:
                     for verb in re.findall(r'"([A-Z]+)"', multi.group(1)):
-                        add(verb, _regex_to_template(pending_regex), "regex")
-            pending_regex = None
-            continue
-        if "if m" in line and pending_regex and "method" not in line:
-            # GET-style `if m:` inside the post/put dispatcher → all write
-            # methods are routed through the same handler, so record the
-            # methods the dispatcher can see.
-            add("GET", _regex_to_template(pending_regex), "regex")
-            pending_regex = None
+                        add(verb, _regex_to_template(current_regex), "regex")
+                elif "method" not in line:
+                    # GET-style `if m:` inside the post/put dispatcher → all
+                    # write methods route through the same handler.
+                    add("GET", _regex_to_template(current_regex), "regex")
             continue
         eq = _EQ_RE.search(line)
         if eq:

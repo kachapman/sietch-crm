@@ -1,7 +1,55 @@
 # Session History — Sietch CRM (new-crm branch)
 
 
-## Current session summary (for next resume)
+## Current session summary (for next resume) — 2026-11-10 (API/MCP gaps pass, NOT deployed)
+
+**Branch:** `feat/mcp-api-gaps-2026-11-10` (from `7d2e55c` / deployed v2.5.5).
+Worktree `/home/chapman-server/Projects/new-crm-mcp-api-gaps`. **No VERSION
+bump, no deploy, no push** (Ken's deploy go required). Plan:
+`plans/sietch/mcp-document-read-2026-11-10.md` §13.
+
+Ken (6:21 PM ET): "Fix all except residential/commercial occupancy. We have no
+project field for that. It will have to be inferred from the notes." **No
+occupancy field was added anywhere.**
+
+- **Tags**: MCP `list_project_tags` (`GET /projects/{id}/tags`),
+  `untag_project` (write, propose/apply, `DELETE /projects/{id}/tags/{tag_id}`
+  — link only, never the tag definition, never by title), `tags` on
+  `GET /projects/{id}` + the `Project` schema, and `?tag_id=` on the list route
+  (comma-separated ids OR-match). Also exposed as `search_projects.tag_id`.
+- **Pagination**: `GET /api/v2/projects` takes `limit` as a `count` alias, has
+  no hard page max, and returns `X-Total-Count` (body stays a bare array).
+  History now returns `{events, total, count, startIndex}`
+  (`unwrapHistoryEvents` reads `events`). MCP `search_projects` =
+  `startIndex` + `total`/`nextStartIndex`; `list_project_history` pages with
+  `total`. Tools page, they do not truncate.
+- **Spec honesty**: 3 download routes = binary (`application/octet-stream`);
+  OCR `/status` + `/request` require ids per `source` (oneOf + handler 400 +
+  MCP schema/build rejection); `Document.fromHistoryAttachment`; 409
+  `not_stored` documented on both text routes and `ocr/queue/{id}/file`;
+  `PATCH /documents/{id}` documented with its real body.
+- **Removed** the `get_carrier_estimate_lines` stub tool (route died in 2.4.2).
+- **Mail**: `GET /mail/messages/{id}` now documents/exposes the real snake_case
+  row (body_text/body_html/raw_headers, tags, linked_deals) plus attachment
+  metadata with `stored`; new `list_mail_attachments`, `list_mail_accounts`
+  (no secrets).
+- **Wrappers**: `list_users`, `list_stages`, `create_contact` (write),
+  `list_history_replies`, `add_history_reply` (write), `list_company_documents`.
+- **Root-cause fix**: `scripts/extract_api_routes.py` kept clearing its regex
+  after one method guard, so 27 real write routes were missing from the spec
+  (incl. PATCH/PUT `/documents/{id}`, DELETE `/contacts/{id}`, POST
+  `/admin/automation/rules/{id}/test`). Spec now 352 ops / 253 paths.
+- MCP tools: 25 → **34** (10 added, 1 removed).
+- Export script for the future Baggins snapshot (do not run pre-deploy):
+  `~/Projects/plans/sietch/export-api-spec.sh` → `api-spec-2026-11-10-v2/`
+  (refuses to overwrite the v2.5.5 folder; token from a file; secret scan of
+  the output folder; `--dry-run` verified).
+- Tests: `tests/test_mcp_api_gaps.py` **41 OK**; `test_openapi` **26**;
+  `test_mcp_server` 21; full suite baseline `7d2e55c` vs branch — see §13 of the
+  plan for the exact counts (no new failures; the same five pre-existing
+  files).
+
+## Previous session summary (2026-11-10 — notification icons, Tasks-tile, Telegram, v2.5.7 deploy)
 
 **Date:** 2026-11-10 (notification icons, Tasks-tile project link, Telegram "Unknown Project")
 

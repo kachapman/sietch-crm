@@ -563,7 +563,15 @@ def _call_tool(user: dict, raw_token: str, name: str, args: dict) -> dict:
         return _text_result(payload, is_error=True)
 
     audit(user, name, mode, summary, f"HTTP {resp.status}", "ok")
-    return _text_result(resp.payload)
+    payload = resp.payload
+    if spec.shape is not None:
+        # Paging metadata (X-Total-Count), secret-free projections, etc.
+        try:
+            payload = spec.shape(payload, resp.headers, clean)
+        except Exception:
+            logger.exception("MCP tool %s result shaping failed", name)
+            payload = resp.payload
+    return _text_result(payload)
 
 
 def process_message(user: dict, raw_token: str, msg: Any,
