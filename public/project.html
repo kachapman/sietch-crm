@@ -599,6 +599,22 @@
       });
     }
 
+    // GET /api/v2/projects/{id}/history answers with a paged envelope
+    // {events, total, count, startIndex} (since 2026-11-10); older shapes were
+    // a bare array or {data|rows|response: [...]}. Accept all of them so the
+    // timeline never silently reads as empty.
+    function extractHistoryEvents(raw) {
+      if (Array.isArray(raw)) return raw;
+      if (!raw || typeof raw !== "object") return [];
+      var keys = ["events", "data", "rows", "response", "items"];
+      for (var k = 0; k < keys.length; k++) {
+        var v = raw[keys[k]];
+        if (Array.isArray(v)) return v;
+        if (v && typeof v === "object" && Array.isArray(v.events)) return v.events;
+      }
+      return [];
+    }
+
     function renderEvents(events) {
       var list = document.getElementById("project-events");
       if (!events || !events.length) {
@@ -1305,8 +1321,7 @@
         var histResp = await fetch("/api/v2/projects/" + projectId + "/history?startIndex=0&count=50", { credentials: "same-origin" });
         if (!histResp.ok) throw new Error("HTTP " + histResp.status);
         var histRaw = await histResp.json();
-        var events = histRaw.data || histRaw.rows || histRaw || [];
-        renderEvents(events);
+        renderEvents(extractHistoryEvents(histRaw));
       } catch(e) {
         document.getElementById("project-events").innerHTML = '<li class="project-empty">Failed to load events</li>';
       }
@@ -1742,8 +1757,7 @@
         var histResp = await fetch("/api/v2/projects/" + projectId + "/history?startIndex=0&count=50", { credentials: "same-origin" });
         if (histResp.ok) {
           var histRaw = await histResp.json();
-          var events = histRaw.data || histRaw.rows || histRaw || [];
-          renderEvents(events);
+          renderEvents(extractHistoryEvents(histRaw));
         }
       } catch(err) {
         showToast("Failed to add note: " + (err.message || err), true);

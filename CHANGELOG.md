@@ -1,3 +1,21 @@
+## 2026-11-11 — v2.5.17: project page history reads the paged envelope again
+
+Live bug (Ken, 4:39 PM ET): the standalone project page showed "No history
+events" for every project. Cause: since the API/MCP paging change (`36bc536`,
+live since the Nov 10 evening deploys) `GET /api/v2/projects/{id}/history`
+answers `{events, total, count, startIndex}` instead of a bare array.
+`public/project.html` still read `histRaw.data || histRaw.rows || histRaw`, so
+it handed the envelope object to `renderEvents()`, which has no `.length` and
+took the empty branch. The dashboard preview already unwrapped it
+(`unwrapHistoryEvents`), so only the project page (initial load and the reload
+after posting a note) and the notification drawer "Show note" (which called
+`.find` on the object) were affected. Data and API were intact.
+
+Fix: `extractHistoryEvents()` in project.html (accepts the envelope, a bare
+array, and data/rows/response shapes); the drawer uses `unwrapHistoryEvents`.
+Cache-buster `app.js?v=3.7.63`. Test: `tests/test_project_page_history_envelope.mjs`.
+No migration, no server change.
+
 ## 2026-11-11 — v2.5.16: SMTP Date/Message-ID, undated mail imports, Junk polling
 
 Live bug: acceptance SMTP sends (S01, S02, S06, S07, S11, S12) were accepted

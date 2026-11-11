@@ -47301,8 +47301,8 @@ function _renderNotificationDrawerItem(n) {
       try {
         const oppId = parseInt(expandBtn.dataset.notifOpp, 10);
         const eventId = parseInt(expandBtn.dataset.notifEvent, 10);
-        const history = await api(`/api/v2/projects/${oppId}/history`);
-        const event = (history || []).find((h) => h.id === eventId);
+        const history = unwrapHistoryEvents(await api(`/api/v2/projects/${oppId}/history`));
+        const event = history.find((h) => h.id === eventId);
         const content = event ? (event.content || event.text || event.message || "No content available.") : "Could not load note.";
         const div = document.createElement("div");
         div.className = "notification-drawer-item-expanded";
