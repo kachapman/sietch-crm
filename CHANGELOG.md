@@ -1,7 +1,30 @@
 ## 2026-11-10 — v2.5.6: an account-settings Save no longer erases mail identity
 
-Ken (6:52 PM ET): "deploy the Save fix now with a backup". Code fix only —
-this entry ships with the deploy session.
+Ken (6:52 PM ET): "deploy the Save fix now with a backup". **Deployed.**
+
+### Deployed
+- Live on `crm.publicadjustermidwest.com` as `d8ae29f` / **v2.5.6**
+  (19:36–19:37 ET).
+  `d8ae29f` = `--no-ff` merge of `hotfix/account-save-identity` (`228b879`)
+  into `main` (`7d2e55c`); code change is this fix only, `7d2e55c` is
+  docs-only. `fix/notif-tasks-telegram` and `feat/mcp-api-gaps-2026-11-10`
+  were not deployed.
+- Backup `/mnt/sietch_backup/sietch-prod-pre-deploy-d8ae29f-20261110-193357ET`
+  (928 MB; dump 739 TOC entries; code archive of `105f259`; data volume minus
+  `history-attachments`; rollback image
+  `sietch-crm-dashboard:rollback-105f259`). **No migration** (56 rows before
+  and after). Droplet `merge --ff-only`, rebuild, `up -d`.
+- Smokes: health 200, login page, served `app.js` == git, unauth mail API 401s,
+  one clean scanner cycle, MCP `tools/list` 25 tools, accounts 8/9/10 unchanged
+  (identity still NULL + `auth_error` set — one reconnect each still needed),
+  token fingerprints identical, no writes by the deploy.
+- Test user (after the deploy): id 12 `mail-acceptance-test@example.invalid`,
+  member, `mail_send_locked_recipient=crm@vanguardadj.online`, 0 mailbox
+  shares; password only in `~/.secrets/sietch-test-user-initial-password.txt`
+  (600). Created with one explicit transaction (admin API unreachable without
+  an admin session); lock set with `scripts/set_mail_send_lock.py --apply`.
+  No email sent.
+- Log: `plans/sietch/email-save-hotfix-deploy-2026-11-10.md`.
 
 **Root cause.** `_handle_mail_account_update` cleared `oauth_identity`,
 `oauth_graph_identity`, `auth_error` and `auth_error_at` whenever the PUT body

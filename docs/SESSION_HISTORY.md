@@ -3,6 +3,61 @@
 
 ## Current session summary (for next resume)
 
+**Date:** 2026-11-10 (account-save identity hotfix — MERGED and DEPLOYED as v2.5.6)
+
+**Status: deployed. Prod runs `d8ae29f` / v2.5.6** (was `105f259` / v2.5.5).
+`d8ae29f` = `--no-ff` merge of `hotfix/account-save-identity` (`228b879`) into
+`main` (`7d2e55c`); the only code change is the account-settings Save fix, and
+`7d2e55c` is docs-only. `fix/notif-tasks-telegram` (`d956906`) and
+`feat/mcp-api-gaps-2026-11-10` were **not** deployed; `origin` carries only the
+merge commit.
+
+- **Bug fixed:** a Save in Mail → account settings NULLed `oauth_identity`,
+  `oauth_graph_identity`, `auth_error*` whenever the PUT body merely contained
+  `email` (the modal sent the whole form every time) → the red "needs
+  reconnecting" banner right after a successful reconnect. Same handler also
+  wrote `''` over a stored IMAP/SMTP password on every Save. Both fixed;
+  identity/token/`auth_error` columns are now unconditionally protected from
+  client input.
+- **Flow:** standard `200c237` flow — push `main`, droplet `git fetch` +
+  `merge --ff-only` (`105f259` → `d8ae29f`), `docker compose build dashboard`,
+  `up -d`. **No migration** (56 rows before and after; latest
+  `052_ocr_queue_cache.sql`).
+- **Backup:**
+  `/mnt/sietch_backup/sietch-prod-pre-deploy-d8ae29f-20261110-193357ET`
+  (928 MB: dump 30.2 MB / 739 TOC entries, code archive of `105f259` 10.4 MB,
+  data volume minus `history-attachments` 932 MB, env/compose/Dockerfile 0600,
+  account baseline + sha256-12 token fingerprints, `ROLLBACK.md`). Rollback
+  image `sietch-crm-dashboard:rollback-105f259`; a code rollback needs no DB
+  restore.
+- **Smokes all green:** health 200 loopback+public; login page 200;
+  `/app.js` served sha256 == `git show HEAD:public/app.js`; unauth mail API
+  401s; one clean scanner cycle (00:37:09→00:37:14Z) with no new errors; MCP
+  `initialize`+`tools/list` 200 (25 tools, read-only); accounts 8/9/10
+  byte-for-byte unchanged (identity still NULL, `auth_error` still set, token
+  fingerprints identical); `mail_messages` 1901, `users` 11, migrations 56 —
+  no writes by the deploy.
+- **Accounts 8/9/10 still need one reconnect each** — this ships the *fix* for
+  future wipes, it does not restore an already-cleared stamp.
+- **Test user created (after the deploy):** id **12**
+  `mail-acceptance-test@example.invalid`, `role=member`, `is_admin=f`,
+  `must_change_password=t`, `mail_send_locked_recipient=crm@vanguardadj.online`,
+  **0 mailbox shares**. Password is only in
+  `~/.secrets/sietch-test-user-initial-password.txt` (700/600) — never printed.
+  The supported admin create path (`POST /api/v2/users`) was unreachable
+  without an admin session (the only local token is read-scope), so the user
+  row + its `notification_preferences` row were written in **one** explicit
+  transaction; the lock was set with the repo's supported
+  `scripts/set_mail_send_lock.py --apply`. Deployed guard verified offline
+  (rejects a non-`crm@` recipient); **nothing was sent**.
+- Full log: `~/Projects/plans/sietch/email-save-hotfix-deploy-2026-11-10.md`.
+- **Next:** Ken reconnects 8/9/10 once each, then a display-name Save must keep
+  `identityStatus: "ok"`; Ken logs in as the test user for the acceptance send.
+
+---
+
+## Previous session summary (2026-11-10 — dedupe follow-up: no duplicate tools, v2.5.5)
+
 **Date:** 2026-11-10 (dedupe follow-up: no duplicate tools — DEPLOYED v2.5.5)
 
 **Status: deployed. Prod runs `105f259` / v2.5.5** (was `f3083c8` / v2.5.4).
