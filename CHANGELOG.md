@@ -1,7 +1,11 @@
-## 2026-11-10 — Token sends: recipient lock on every send path (hotfix branch, NOT deployed)
+## 2026-11-10 — v2.5.11: token sends — recipient lock on every send path
 
-Branch `hotfix/token-send-lock` off `origin/main` (`b334c24`, docs commit
-after v2.5.8 `5e22501`). No VERSION bump, no push, no deploy, no sends.
+Branch `hotfix/token-send-lock`, merged with `origin/main` `59a3049`
+(v2.5.10, compact history + stricter migration runner) — no rebase.
+VERSION 2.5.10 → **2.5.11**. Migration renumbered **053 → 054** because the
+history deploy took 053; `init.sql` carries the column and stamps 054.
+
+No real email send in tests or verification (offline/unit + dry-run only).
 
 Context (Ken 8:43 PM ET): the live acceptance run will use BOTH a personal API
 key for per-account sends and the locked test user for compose checks.
@@ -43,7 +47,12 @@ session path was missing. Two real gaps found:
   positions / response-key contracts updated for the new column.
 
 Verified against a throwaway Postgres (`sietch-test-tokens-pg`, synthetic).
-Pre-existing failures on `main` (unchanged by this branch):
+Migration 054 also tested as a **migrate-from-053** on a scratch DB: column
+added and the filename recorded only after commit (57 → 58 stamped).
+Tests after the merge: `test_token_send_lock` 29/29,
+`test_mail_send_recipient_lock` 11/11, all other `test_mail_*` green,
+`test_mail_link_attachments` 91/91, web suite 461/461. Pre-existing failures
+on `main` (unchanged by this branch):
 `test_email_project_copy`, `test_invoice_coc_modern`, `test_mail_auth_gaps`
 (read-only-token era), `test_scanner_toggle_gating`,
 `test_sync_pull_deals_fields`.

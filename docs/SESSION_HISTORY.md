@@ -1,13 +1,13 @@
 # Session History — Sietch CRM (new-crm branch)
 
 
-## Current session summary (for next resume) — 2026-11-10 (token send lock, hotfix branch, NOT deployed)
+## Current session summary (for next resume) — 2026-11-10 (per-key crm@ send lock, v2.5.11, DEPLOY)
 
-**Branch:** `hotfix/token-send-lock` off `origin/main` `b334c24` (docs commit
-above v2.5.8 `5e22501`). Worktree
-`/home/chapman-server/Projects/new-crm-token-lock`. **No merge, no push, no
-deploy, no sends, no VERSION bump.** Ken's ask (8:43 PM ET): analysis first,
-then a branch with the fix if needed, plus `plans/sietch/test-setup-steps-2026-11-10.md`.
+**Branch:** `hotfix/token-send-lock`, merged with `origin/main` `59a3049`
+(v2.5.10) — no rebase. Worktree
+`/home/chapman-server/Projects/new-crm-token-lock`. VERSION **2.5.11**;
+migration renumbered **053 → 054** (history took 053). Ken's go: deploy after
+the history fix with a backup and smokes. No real email send anywhere.
 
 **Analysis (read-only) — where sends are handled:**
 - One route: `POST /api/v2/mail/send` → `server.py:6333` →
@@ -37,7 +37,7 @@ then a branch with the fix if needed, plus `plans/sietch/test-setup-steps-2026-1
   (`server.py:5687` → `_handle_api_token_create`) and are owned by that admin
   (`created_by`); there is no "create on behalf of another user" field.
 
-**Fix (branch only):** optional `api_tokens.mail_send_locked_recipient`
+**Fix (v2.5.11):** optional `api_tokens.mail_send_locked_recipient`
 (migration 054), enforced together with the user lock by
 `_mail_send_locks()` / `_enforce_mail_send_lock()` in the send handler **and**
 preflight, re-checked in `mail_send.try_send_for_account` before any network
