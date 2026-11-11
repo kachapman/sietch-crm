@@ -1,10 +1,11 @@
-## 2026-11-10 — API/MCP gaps: tags, paging, honest spec, mail body, wrappers (UNRELEASED)
+## 2026-11-10 — v2.5.8: API/MCP gaps: tags, paging, honest spec, mail body, wrappers
 
-Not deployed: built on `feat/mcp-api-gaps-2026-11-10`, rebased onto
-`ba8c750` / v2.5.7 (includes the Save hotfix and the notification/task-picker/
-Telegram fixes). **No VERSION bump yet** (deploy commit will be v2.5.8). Ken's 6:21 PM ET scope: fix
-everything except a residential/commercial occupancy field (there is no project
-field for it; it will be inferred from notes).
+VERSION 2.5.7 → 2.5.8; `app.js` cache-buster 3.7.56 → 3.7.57. Approval: Ken
+7:33 PM ET ("add the api tool batch to the deploy"). Rebased onto `ba8c750` /
+v2.5.7 (Save hotfix + notification/task-picker/Telegram fixes). Ken's 6:21 PM
+ET scope: fix everything except a residential/commercial occupancy field
+(there is no project field for it; it will be inferred from notes). **Not
+yet on production** — Deployed block to be filled after the backup and smokes.
 
 **New MCP tools (10)** — all wrap existing `/api/v2` routes, no parallel
 endpoints:

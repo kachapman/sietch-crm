@@ -128,5 +128,5 @@ test('the compact style exists and keeps it on one line', () => {
 });
 
 test('cache-buster bumped for the new module', () => {
-  assert.ok(indexHtml.includes('app.js?v=3.7.56'));
+  assert.ok(indexHtml.includes('app.js?v=3.7.57'));
 });
