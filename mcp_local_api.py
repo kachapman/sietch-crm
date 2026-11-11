@@ -46,12 +46,15 @@ class LocalApiError(RuntimeError):
 
 
 class LocalApiResponse:
-    __slots__ = ("status", "payload", "text")
+    __slots__ = ("status", "payload", "text", "headers")
 
-    def __init__(self, status: int, payload: Any, text: str):
+    def __init__(self, status: int, payload: Any, text: str,
+                 headers: dict[str, str] | None = None):
         self.status = status
         self.payload = payload
         self.text = text
+        # Lower-cased response headers (e.g. x-total-count for list paging).
+        self.headers = headers or {}
 
     @property
     def ok(self) -> bool:
@@ -169,7 +172,8 @@ def _run(method: str, path: str, body: dict | None,
             payload = json.loads(text)
         except json.JSONDecodeError:
             payload = text
-    return LocalApiResponse(status, payload, text)
+    return LocalApiResponse(status, payload, text,
+                            dict(getattr(handler, "_captured_headers", {}) or {}))
 
 
 def call(token: str, method: str, path: str, body: dict | None = None) -> LocalApiResponse:

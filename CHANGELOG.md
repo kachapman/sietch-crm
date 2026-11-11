@@ -56,12 +56,220 @@ Ken (8:28 PM ET, 2026-11-10): "Follow-up Due Date changed from 2026-11-11 to
   1,886 tests vs baseline 1,863 with the identical 25 pre-existing failures;
   Node 461 pass vs 453.
 
----
+---## 2026-11-10 — v2.5.9: a successful reconnect/refresh clears the stale mail auth_error
+
+VERSION 2.5.8 → 2.5.9. `public/app.js` unchanged, so the cache-buster stays
+3.7.57. Approval: Ken 8:43 PM ET ("Yes, deploy the reconnect-banner fix with a
+backup and smokes, and clear the stale error on accounts 8, 9 and 10"). **This
+session = code + tests + merge to local `main` only. Nothing deployed, no
+server restarted, no prod row touched** — the deploy session follows.
+
+**Live bug (after the 20:1x ET reconnects).** Accounts 8/9/10 were reconnected
+successfully (fresh tokens, `oauth_identity` / `oauth_graph_identity` = the
+account address, sync gate passing) yet the red "Mail account needs
+reconnecting" banner stayed up. The `auth_error` the scanner recorded *while*
+the mailbox was still unverified survived the reconnect, and nothing on any
+success path cleared it:
+
+* `server.py` Exchange connect callback (`_handle_oauth_callback`) wrote the
+  new tokens + identity but left `auth_error` / `auth_error_at` alone.
+* The Graph connect callback (`_handle_oauth_graph_callback`) did the same.
+* `mail_oauth._save_refreshed_token` (the routine CAS refresh) cleared
+  `oauth_last_error` but not `auth_error`.
+* Both Graph refreshers (`server.py:_refresh_graph_token_if_needed`,
+  `scanner/mail_scanner.py:_build_graph_token_refresher`) cleared
+  `oauth_graph_last_error` only.
+* The scanner only ever *wrote* `auth_error`; `_handle_mail_accounts` then
+  maps it straight to `authError`, which is the banner text.
+
+**Fix (clears only on proven success).**
+
+1. Exchange connect callback: also `auth_error = NULL, auth_error_at = NULL`
+   (only reached after the identity check passed and the token is written).
+2. Graph connect callback: same two columns.
+3. `mail_oauth._save_refreshed_token` CAS path: same two columns (the forced
+   path already did). A failed/losing refresh still clears nothing.
+4. `_refresh_graph_token_if_needed` and the scanner's Graph refresher: same.
+5. Scanner durability: new `mail_oauth.clear_auth_error(account_id)` — a
+   single `UPDATE ... WHERE id = %s AND auth_error IS NOT NULL`, so it only
+   clears one row, only when something is set. `_mailbox_cfg_from_row` calls
+   it after `sync_gate` passes **and** `mail_identity.check_account` is
+   `IDENTITY_OK` for every *connected* family (exchange/graph tokens present,
+   SMTP login when it is an address). Unverifiable/mismatched ⇒ no clear;
+   password accounts are never cleared here (their error may be an SMTP send
+   failure the IMAP gate knows nothing about).
+6. `record_auth_error` no longer re-stamps `auth_error_at = NOW()` for an
+   unchanged message. The scanner calls it every 120 s while unverified, which
+   is why the refusal always looked two minutes old. It now writes only on the
+   first set or a message change (admin notification unchanged).
+
+**Payload honesty gap closed.** `_handle_mail_accounts` never selected the
+Exchange token columns (and blanked them), and `check_account` only knew Graph
+tokens from `has_graph_*` booleans it did not read — so `identityStatus`
+reported `ok` for "tokens present, identity empty", the exact state the sync
+gate refuses. The payload now selects token **presence** only
+(`oauth_access_token IS NOT NULL AS has_exchange_token`, same for the refresh
+token) and `mail_identity.check_account` treats those flags like the values
+(scanner rows still pass the values). No token value is selected or returned;
+the flags are popped from the response.
+
+**Tests.** New `tests/test_reconnect_clears_auth_error.py` (24 tests): both
+connect callbacks clear a stale error; CAS + both Graph refreshers clear on
+success; failed refresh / refused Graph identity clear nothing; an
+unchanged-address Save still keeps a real `auth_error` + identity; the scanner
+clears only when every connected family verifies (and not on a graph mismatch,
+unverified graph, foreign SMTP login, refused gate, password account); no
+re-stamp of an unchanged message; payload `identityStatus` = `unverifiable`
+for tokens-present/identity-empty, `ok`/`mismatch` as appropriate, and no token
+value in the response. Verified the suite fails if the CAS clear is removed.
+Full run: no new failures vs the 18 known pre-existing ones (3
+`test_email_project_copy`, 9 `test_invoice_coc_modern`, 3 `test_mail_auth_gaps`,
+1 `test_mcp_api_gaps`, 1 `test_scanner_toggle_gating`, 1
+`test_sync_pull_deals_fields`); all `tests/test_*.mjs` pass.
+
+### Deployed (follow-up deploy session, Ken's 8:43 PM ET go)
+- Live on `crm.publicadjustermidwest.com` as `3e2cad0` / **v2.5.9** (21:25 ET),
+  fast-forwarded from `5e22501` (`--ff-only`), rebuilt and recreated.
+  `public/app.js` unchanged ⇒ cache-buster stays `3.7.57`.
+- Backup `/mnt/sietch_backup/sietch-prod-pre-deploy-3e2cad0-20261110-211828ET`
+  (929 MB: dump 30,182,771 B / 750 `pg_restore --list` lines, code archive of
+  `5e22501` 10,436,886 B / 502 members, data volume minus
+  `history-attachments` 932,405,417 B / 1,198 members, env/compose/Dockerfile
+  0600, account baseline + sha256-12 token fingerprints, `ROLLBACK.md`).
+  Rollback image `sietch-crm-dashboard:rollback-5e22501` (`a1a02f790f15`).
+  **No migration** (56 rows before and after; latest `052_ocr_queue_cache.sql`).
+- Smokes: health 200 loopback + public; login 200 (`app.js?v=3.7.57`,
+  `styles.css?v=3.7.22`); served app.js/styles.css byte-identical to git;
+  unauth mail/notifications/tasks APIs 401; **3 clean scanner cycles**
+  (0 `sync_gate`/refus/`invalid_grant`/`AUTHENTICATIONFAILED`/`LOGIN
+  failed`/`identity mismatch`/`Traceback`/`record_auth_error`; known
+  Spam/Trash-missing noise only); MCP `tools/list` **34 tools**,
+  `serverInfo.version` 2.5.9, `list_mail_accounts` has no secret keys; accounts
+  8/9/10 payload (deployed handler, in-container) → `authError ""`,
+  `identityStatus ok`, `oauthStatus connected`. Token fingerprints identical
+  pre/post (no token rotated by the deploy).
+- **The fix proved itself on boot:** the scanner logged
+  `Cleared stale auth_error on mail account 9 / 10 / 8 (…)` at 02:25:48Z —
+  exactly once per account, never again on the following 5 cycles.
+- **Approved data repair:** ids 8/9/10 pre-verified (identity = own address for
+  Exchange and Graph, Exchange tokens fresh, no `oauth_last_error`), then the
+  approved `UPDATE ... SET auth_error = NULL, auth_error_at = NULL WHERE id IN
+  (8,9,10)` in one transaction. **0 values changed** — the scanner had already
+  cleared them at boot, so before == after. Banner still clear after 2 further
+  scanner cycles (6 total).
+
+
+
+VERSION 2.5.7 → 2.5.8; `app.js` cache-buster 3.7.56 → 3.7.57. Approval: Ken
+7:33 PM ET ("add the api tool batch to the deploy"). Rebased onto `ba8c750` /
+v2.5.7 (Save hotfix + notification/task-picker/Telegram fixes). Ken's 6:21 PM
+ET scope: fix everything except a residential/commercial occupancy field
+(there is no project field for it; it will be inferred from notes).
+
+### Deployed
+- Live on `crm.publicadjustermidwest.com` as `5e22501` / **v2.5.8**
+  (20:43 ET). `feat/mcp-api-gaps-2026-11-10` rebased onto `ba8c750` / v2.5.7
+  and fast-forwarded to `main`.
+- Backup `/mnt/sietch_backup/sietch-prod-pre-deploy-5e22501-20261110-204145ET`
+  (929 MB: dump 30.2 MB / 750 `pg_restore --list` lines, code archive of
+  `cb25cdb` 10.4 MB, data volume minus `history-attachments` 932 MB,
+  env/compose/Dockerfile 0600, account baseline + sha256-12 token
+  fingerprints, `ROLLBACK.md`). Rollback image
+  `sietch-crm-dashboard:rollback-cb25cdb`. **No migration** (56 rows before
+  and after). Droplet `merge --ff-only`, rebuild, `up -d`.
+- Smokes: health 200; login 200 (`app.js?v=3.7.57`); served app.js/styles.css
+  byte-identical to git; unauth mail/notifications/tasks APIs 401; one clean
+  scanner cycle (known Trash-folder noise only; retention dropped 1 message
+  older than 90 days); MCP `tools/list` **34 tools** (10 new, stubs absent);
+  `list_mail_accounts` returned 5 accounts with **no secrets**; token
+  fingerprints identical pre/post.
+- Spec for Baggins: `plans/sietch/api-spec-2026-11-10-v2.5.8/`.
+
+**New MCP tools (10)** — all wrap existing `/api/v2` routes, no parallel
+endpoints:
+
+| tool | kind | route |
+|---|---|---|
+| `list_project_tags` | read | `GET /api/v2/projects/{id}/tags` |
+| `untag_project` | write (propose/apply) | `DELETE /api/v2/projects/{id}/tags/{tag_id}` |
+| `list_mail_attachments` | read | `GET /api/v2/mail/messages/{id}/attachments` |
+| `list_users` | read | `GET /api/v2/users` |
+| `list_stages` | read | `GET /api/v2/stages` |
+| `list_mail_accounts` | read | `GET /api/v2/mail/accounts` (no secrets) |
+| `create_contact` | write (propose/apply) | `POST /api/v2/contacts` |
+| `list_history_replies` | read | `GET /api/v2/projects/{id}/history/{history_id}/replies` |
+| `add_history_reply` | write (propose/apply) | `POST /api/v2/projects/{id}/history/{history_id}/replies` |
+| `list_company_documents` | read | `GET /api/v2/documents/company` |
+
+**Removed:** the stub MCP tool `get_carrier_estimate_lines` and its
+`MCP_TOOL_OPERATIONS` entry — it pointed at a route deleted in 2.4.2, so it only
+invited models to call something that cannot work.
+
+**Tags:** `tags` are now on `GET /api/v2/projects/{id}` (id, title, color,
+isSystem) and in the `Project` schema. `untag_project` deletes only the
+`opportunity_tags` link — never the tag definition, and never by title.
+`GET /api/v2/projects?tag_id=` filters by tag (comma-separate ids to OR-match).
+
+**Pagination:** `GET /api/v2/projects` accepts `limit` as an alias for `count`,
+has no hard per-page maximum, and returns the total in `X-Total-Count`
+(body stays a bare array so the dashboard keeps working). Project history now
+returns `{events, total, count, startIndex}` (frontend `unwrapHistoryEvents`
+reads `events`). MCP `search_projects` takes `startIndex` and returns
+`total`/`nextStartIndex`; `list_project_history` pages with `total`. Tools page
+instead of truncating.
+
+**Spec honesty:** the three raw-byte routes (`GET /api/v2/documents/{id}`,
+`GET /api/v2/history-attachments/{id}/download`,
+`GET /api/v2/mail/messages/{id}/attachments/{attachment_id}/download`) are
+documented as `application/octet-stream` binary instead of JSON. OCR
+`/status` + `/request` require the ids that match `source` (oneOf; a bare
+`{"source": …}` is a 400 in the handler, in the spec and in the MCP schema).
+`Document` gains `fromHistoryAttachment`; the text routes document `409
+not_stored`; `PATCH /api/v2/documents/{id}` (which already existed) is now in
+the spec with its real body. `scripts/extract_api_routes.py` was fixed to keep
+the regex while it consumes several method guards — it had been silently
+dropping 27 real write routes (incl. `PATCH`/`PUT /documents/{id}`,
+`DELETE /contacts/{id}`, `POST /admin/automation/rules/{id}/test`).
+
+**Mail:** `GET /api/v2/mail/messages/{id}` documents/exposes the real row:
+`body_text`/`body_html`/`raw_headers`, `tags`, `linked_deals`, and attachment
+metadata with `stored` (bytes on disk). The `MailMessage` schema is now the
+snake_case shape the route actually returns (it claimed camelCase that never
+existed). `list_mail_accounts` returns ids/addresses/display names/status only.
+
+**Tests:** new `tests/test_mcp_api_gaps.py` (41 tests). `tests/test_openapi.py`
+gains spec-honesty guards; `tests/test_search_modal.py` and
+`tests/test_timestamp_utc.py` follow the new paging shapes.
 
 ## 2026-11-10 — v2.5.7: notification icons, Tasks-tile project link, Telegram project line
 
 VERSION 2.5.6 → 2.5.7; `app.js` cache-buster 3.7.55 → 3.7.56. Approval: Ken
-7:25 PM ET.
+7:25 PM ET. **Deployed.**
+
+### Deployed
+- Live on `crm.publicadjustermidwest.com` as `cb25cdb` / **v2.5.7**
+  (20:19–20:20 ET). Branch `fix/notif-tasks-telegram` (`d956906`) merged into
+  `main` (`9266bb0`, `cb25cdb` = `--ff` after merging `main` into the branch;
+  conflicts only in CHANGELOG/SESSION_HISTORY, both sides kept).
+- Backup `/mnt/sietch_backup/sietch-prod-pre-deploy-cb25cdb-20261110-201421ET`
+  (~950 MB: dump 30.2 MB / 739 TOC entries, code archive of `d8ae29f`
+  10.4 MB, data volume minus `history-attachments` 932 MB, env/compose/Dockerfile
+  0600, account baseline + sha256-12 token fingerprints, `ROLLBACK.md`).
+  Rollback image `sietch-crm-dashboard:rollback-d8ae29f`. **No migration**
+  (56 rows before and after). Droplet `merge --ff-only`, rebuild, `up -d`.
+- Tests: full Python suite vs `main` baseline — 90 files / 1,772 tests vs
+  89 / 1,763, **identical 25 failure/error ids in the same 5 known files**
+  (zero new); `test_mail_link_attachments` 91 OK; Node 453/453; Playwright
+  Tasks-picker e2e OK.
+- Smokes: health 200 loopback+public; login page 200; served `app.js` == git;
+  unauth API 401s; two clean scanner cycles; MCP `tools/list` 25 tools; icon
+  branches present in the served JS and the notifications API renders them;
+  task-picker save verified offline against the deployed commit; deployed
+  `_project_link` omits the line with no project and resolves the two legacy
+  `task_reminder` rows to their real projects (read-only); accounts 8/9/10
+  flags + `auth_error_at` + 9/10 token fingerprints unchanged, test user 12
+  lock unchanged.
+- Log: `plans/sietch/notif-tasks-telegram-deploy-2026-11-10.md`.
 
 ### Fixed
 - **Notification drawer icons** (`public/app.js:_notifTypeIcon`). Mail-account

@@ -155,12 +155,21 @@ def check_account(row: dict | None,
         return IDENTITY_UNVERIFIABLE, "this mail account has no usable email address"
 
     provider = (row.get("oauth_provider") or "").strip().lower()
+    # Token PRESENCE can arrive either as the token value itself (scanner
+    # rows) or as a boolean flag (API payloads must never select the token
+    # value — 2026-11-10). Either way "connected without a verified
+    # identity" must classify as UNVERIFIABLE, otherwise the payload says
+    # `ok` for the exact state the sync gate refuses.
     exchange_tokens = bool(row.get("oauth_access_token")
-                           or row.get("oauth_refresh_token"))
+                           or row.get("oauth_refresh_token")
+                           or row.get("has_exchange_token")
+                           or row.get("has_exchange_refresh"))
     exchange_ident = normalize_email(row.get("oauth_identity"))
     graph_ident = normalize_email(row.get("oauth_graph_identity"))
     graph_tokens = bool(row.get("oauth_graph_access_token")
-                        or row.get("oauth_graph_refresh_token"))
+                        or row.get("oauth_graph_refresh_token")
+                        or row.get("has_graph_token")
+                        or row.get("has_graph_refresh"))
     smtp_user = normalize_email(row.get("smtp_user"))
 
     # A provable mismatch outranks everything else.

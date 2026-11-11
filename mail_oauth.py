@@ -96,11 +96,16 @@ def _save_refreshed_token(account_id: int, new_access: str, new_refresh: str,
             (new_access, new_refresh, expires_at_ts, identity or None, account_id),
         )
         return True
+    # NOTE (2026-11-10): the CAS write also clears auth_error/auth_error_at.
+    # A refresh that just proved this mailbox's own grant works means any
+    # persisted auth refusal is stale; leaving it behind kept the red
+    # "needs reconnecting" banner after a successful reconnect.
     rowcount = db.execute(
         "UPDATE mail_accounts SET oauth_access_token = %s, oauth_refresh_token = %s, "
         "oauth_token_expires = to_timestamp(%s), "
         "oauth_identity = COALESCE(%s, oauth_identity), "
-        "oauth_last_error = NULL, oauth_last_error_at = NULL "
+        "oauth_last_error = NULL, oauth_last_error_at = NULL, "
+        "auth_error = NULL, auth_error_at = NULL "
         "WHERE id = %s AND oauth_access_token = %s",
         (new_access, new_refresh, expires_at_ts, identity or None, account_id, expected_access),
     )
@@ -134,18 +139,47 @@ def _notify_admins_auth_error(account_id: int, message: str) -> None:
 
 
 def record_auth_error(account_id: int, message: str) -> None:
-    """Persist a send/sync auth failure and notify admins on the transition."""
+    """Persist a send/sync auth failure and notify admins on the transition.
+
+    The timestamp is stamped ONCE per distinct message. The old code wrote
+    `auth_error_at = NOW()` on every call, and the scanner calls this every
+    poll cycle while an account is unverified — so a two-minute-old refusal
+    always looked brand new (live bug 2026-11-10).
+    """
     try:
         row = db.query_one("SELECT auth_error FROM mail_accounts WHERE id = %s", (account_id,))
-        was_set = bool((row or {}).get("auth_error"))
-        db.execute(
-            "UPDATE mail_accounts SET auth_error = %s, auth_error_at = NOW() WHERE id = %s",
-            (str(message)[:300], account_id),
-        )
+        current = (row or {}).get("auth_error")
+        was_set = bool(current)
+        text = str(message)[:300]
+        if current != text:
+            db.execute(
+                "UPDATE mail_accounts SET auth_error = %s, auth_error_at = NOW() WHERE id = %s",
+                (text, account_id),
+            )
         if not was_set:
             _notify_admins_auth_error(account_id, message)
     except Exception:
         logger.debug("Could not persist auth_error for account %s", account_id, exc_info=True)
+
+
+def clear_auth_error(account_id: int) -> bool:
+    """Clear a persisted auth refusal once the account is provably healthy.
+
+    Only touches the column when it is currently set, and only the caller that
+    can prove every credential family belongs to this mailbox may call it
+    (the scanner does, after `mail_identity.check_account` returns OK and the
+    sync gate passes). Returns True when a stale value was cleared.
+    """
+    try:
+        rowcount = db.execute(
+            "UPDATE mail_accounts SET auth_error = NULL, auth_error_at = NULL "
+            "WHERE id = %s AND auth_error IS NOT NULL",
+            (account_id,),
+        )
+        return bool(rowcount)
+    except Exception:
+        logger.debug("Could not clear auth_error for account %s", account_id, exc_info=True)
+        return False
 
 
 def record_refresh_error(account_id: int, message: str) -> None:

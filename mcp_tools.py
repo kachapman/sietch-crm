@@ -38,6 +38,10 @@ class ToolSpec:
     kind: str
     build: Callable[[ToolContext, dict], tuple[str, str, dict | None]] | None = None
     summarize: Callable[[dict], str] = lambda args: ""
+    # Optional result shaping: (payload, response headers, args) -> payload.
+    # Used to add paging metadata from X-Total-Count, to strip non-public
+    # fields, and to keep the tool result small.
+    shape: Callable[[Any, dict, dict], Any] | None = None
     # For tools whose underlying route no longer exists: return this instead
     # of calling the API (never a fake success).
     static_result: Callable[[ToolContext, dict], dict] | None = None
@@ -105,16 +109,26 @@ WRITE_SCHEMA_EXTRA = {"mode": _mode_prop()}
 
 def _search_projects(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
     count = max(1, min(int(args.get("count") or 25), 100))
+    start = max(0, int(args.get("startIndex") or 0))
+    # MCP `query` maps to the REST `search` parameter (do not rename).
     path = f"/api/v2/projects?search={_q(args.get('query') or '')}&count={count}"
+    if start:
+        path += f"&startIndex={start}"
     if args.get("include_closed"):
         path += "&include_closed=true"
     if args.get("stage_type") is not None:
         path += f"&stage_type={int(args['stage_type'])}"
+    if args.get("tag_id") not in (None, ""):
+        path += f"&tag_id={_q(args['tag_id'])}"
     return "GET", path, None
 
 
 def _get_project(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
     return "GET", f"/api/v2/projects/{int(args['project_id'])}", None
+
+
+def _list_project_tags(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
+    return "GET", f"/api/v2/projects/{int(args['project_id'])}/tags", None
 
 
 def _search_contacts(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
@@ -124,7 +138,16 @@ def _search_contacts(ctx: ToolContext, args: dict) -> tuple[str, str, dict | Non
 
 def _list_project_history(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
     count = max(1, min(int(args.get("count") or 50), 200))
-    return "GET", f"/api/v2/projects/{int(args['project_id'])}/history?count={count}", None
+    start = max(0, int(args.get("startIndex") or 0))
+    path = f"/api/v2/projects/{int(args['project_id'])}/history?count={count}"
+    if start:
+        path += f"&startIndex={start}"
+    return "GET", path, None
+
+
+def _list_history_replies(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
+    return ("GET", f"/api/v2/projects/{int(args['project_id'])}/history/"
+            f"{int(args['history_id'])}/replies", None)
 
 
 def _search_mail(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
@@ -140,6 +163,36 @@ def _search_mail(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
 
 def _get_mail_message(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
     return "GET", f"/api/v2/mail/messages/{int(args['message_id'])}", None
+
+
+def _list_mail_attachments(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
+    return "GET", f"/api/v2/mail/messages/{int(args['message_id'])}/attachments", None
+
+
+def _list_mail_accounts(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
+    return "GET", "/api/v2/mail/accounts", None
+
+
+def _list_users(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
+    return "GET", "/api/v2/users", None
+
+
+def _list_stages(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
+    return "GET", "/api/v2/stages", None
+
+
+def _list_company_documents(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
+    path = "/api/v2/documents/company"
+    params = {}
+    if args.get("folder_id") is not None:
+        params["folder_id"] = int(args["folder_id"])
+    for key in ("limit", "offset"):
+        if args.get(key) is not None:
+            params[key] = int(args[key])
+    if params:
+        from urllib.parse import urlencode
+        path += "?" + urlencode(params)
+    return "GET", path, None
 
 
 def _list_mail_threads(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
@@ -182,13 +235,55 @@ def _get_mail_attachment_text(ctx: ToolContext, args: dict) -> tuple[str, str, d
 
 _OCR_TARGET_KEYS = ("project_id", "document_id", "message_id", "attachment_id")
 
+# The ids each source requires: a bare {"source": …} is invalid.
+_OCR_REQUIRED_IDS = {
+    "project_document": ("project_id", "document_id"),
+    "mail_attachment": ("message_id", "attachment_id"),
+}
+
 
 def _ocr_target_args(args: dict) -> dict:
     out: dict[str, Any] = {"source": str(args.get("source") or "").strip()}
     for key in _OCR_TARGET_KEYS:
         if args.get(key) not in (None, ""):
             out[key] = int(args[key])
+    source = out["source"]
+    if source not in _OCR_REQUIRED_IDS:
+        raise ValueError("source must be 'project_document' or 'mail_attachment'")
+    missing = [k for k in _OCR_REQUIRED_IDS[source] if k not in out]
+    if missing:
+        raise ValueError(f"source={source} requires {', '.join(missing)}")
     return out
+
+
+def _ocr_schema() -> dict:
+    """oneOf by source: the matching ids are required, not just `source`."""
+    def branch(source: str, ids: tuple[tuple[str, str], ...]) -> dict:
+        props: dict[str, Any] = {"source": {"const": source,
+                                           "description": "Which kind of file the ids refer to."}}
+        for key, desc in ids:
+            props[key] = _i(desc)
+        return {
+            "type": "object",
+            "properties": props,
+            "required": ["source", *[k for k, _ in ids]],
+            "additionalProperties": False,
+        }
+
+    return {
+        "type": "object",
+        "description": (
+            "source=project_document requires project_id + document_id; "
+            "source=mail_attachment requires message_id + attachment_id."
+        ),
+        "oneOf": [
+            branch("project_document", (("project_id", "Project id."),
+                                        ("document_id", "Document id."))),
+            branch("mail_attachment", (("message_id", "mail_messages.id."),
+                                       ("attachment_id", "mail_attachments.id "
+                                                         "belonging to that message."))),
+        ],
+    }
 
 
 def _ocr_status(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
@@ -345,6 +440,31 @@ def _tag_project(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
     return "POST", f"/api/v2/projects/{int(args['project_id'])}/tags", body
 
 
+def _untag_project(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
+    """Unlink one tag from a project. Only the project link; the tag stays."""
+    return ("DELETE", f"/api/v2/projects/{int(args['project_id'])}/tags/"
+            f"{int(args['tag_id'])}", None)
+
+
+def _create_contact(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
+    body: dict[str, Any] = {}
+    for key in ("firstName", "lastName", "company", "email", "phone",
+                "mobilePhone", "jobTitle", "isCompany"):
+        if args.get(key) is not None:
+            body[key] = args[key]
+    return "POST", "/api/v2/contacts", body
+
+
+def _add_history_reply(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
+    body: dict[str, Any] = {"content": str(args.get("content") or "").strip()}
+    if args.get("parent_reply_id") is not None:
+        body["parentReplyId"] = int(args["parent_reply_id"])
+    if args.get("mentions"):
+        body["notifyUserList"] = [int(x) for x in args["mentions"]]
+    return ("POST", f"/api/v2/projects/{int(args['project_id'])}/history/"
+            f"{int(args['history_id'])}/replies", body)
+
+
 def _update_project_fields(ctx: ToolContext, args: dict) -> tuple[str, str, dict | None]:
     fields = args.get("fields") or {}
     if not isinstance(fields, dict) or not fields:
@@ -366,40 +486,121 @@ def _create_email_draft(ctx: ToolContext, args: dict) -> tuple[str, str, dict | 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Registry
+# Result shapes (keep MCP payloads small and secret-free)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _static_carrier_lines(ctx: ToolContext, args: dict) -> dict:
+def _header_int(headers: dict | None, name: str) -> int | None:
+    raw = (headers or {}).get((name or "").lower())
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _shape_project_page(payload: Any, headers: dict, args: dict) -> dict:
+    """Array + X-Total-Count -> a paged envelope the caller can walk."""
+    rows = payload if isinstance(payload, list) else []
+    start = max(0, int(args.get("startIndex") or 0))
+    total = _header_int(headers, "x-total-count")
+    if total is None:
+        total = start + len(rows)
     return {
-        "available": False,
-        "reason": (
-            "The /api/v2/projects/{id}/carrier-estimate-lines route was removed in "
-            "Sietch 2.4.2: it guessed the carrier PDF by filename and could return lines "
-            "from the wrong file. The carrier estimate imported into the Ook project is the "
-            "source of truth; read it there."
-        ),
+        "projects": rows,
+        "count": len(rows),
+        "startIndex": start,
+        "total": total,
+        "hasMore": (start + len(rows)) < total,
+        "nextStartIndex": (start + len(rows)) if (start + len(rows)) < total else None,
     }
 
 
+def _shape_mail_attachments(payload: Any, headers: dict, args: dict) -> dict:
+    rows: Any = payload
+    if isinstance(payload, dict):
+        rows = payload.get("attachments")
+    out = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        out.append({
+            "id": row.get("id"),
+            "filename": row.get("filename"),
+            "mime_type": row.get("mime_type"),
+            "size_bytes": row.get("size_bytes"),
+            # Bytes on disk -> the text/OCR tools can read it (never IMAP).
+            "stored": bool(str(row.get("stored_path") or "").strip()),
+        })
+    return {"attachments": out}
+
+
+# Only these leave the server in a tool result. Passwords, OAuth tokens and
+# encrypted blobs are never selected, and are also dropped defensively below.
+_MAIL_ACCOUNT_PUBLIC_KEYS = (
+    "id", "email", "display_name",
+    "imap_host", "imap_port", "smtp_host", "smtp_port", "smtp_user",
+    "smtp_from_name", "smtp_auth_disabled",
+    "sync_enabled", "monitored_folders", "is_crm_mail", "owner_user_id",
+    "isOwner", "canManage", "retention_days", "last_sync",
+    "oauth_provider", "oauthStatus", "authType",
+    "authError", "identityStatus", "identityError",
+)
+
+_SECRET_KEY_RE = re.compile(r"password|token|secret|encrypted|refresh|credential", re.I)
+
+
+def _shape_mail_accounts(payload: Any, headers: dict, args: dict) -> list:
+    rows: Any = payload
+    if isinstance(payload, dict):
+        rows = payload.get("accounts")
+    out = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        out.append({
+            k: row.get(k) for k in _MAIL_ACCOUNT_PUBLIC_KEYS
+            if k in row and not _SECRET_KEY_RE.search(k)
+        })
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Registry
+# ─────────────────────────────────────────────────────────────────────────────
 
 TOOLS: tuple[ToolSpec, ...] = (
     # ── reads ──────────────────────────────────────────────────────────────
     ToolSpec(
         "search_projects",
         "Search Sietch projects/jobs by title, description or contact. Returns id, title, "
-        "stage, value, responsible, contact.",
+        "stage, value, responsible, contact. `query` is the REST `search` parameter. "
+        "Paged: pass startIndex to walk past the first page; the result carries `total` "
+        "and `nextStartIndex` (the REST array itself is unchanged, the total comes from "
+        "its X-Total-Count header). `tag_id` filters to projects with that tag "
+        "(comma-separate ids to OR-match).",
         _schema({
             "query": _s("Free-text search. Omit to list recent projects."),
-            "count": _i("Max results (1-100, default 25)."),
+            "count": _i("Page size (1-100, default 25)."),
+            "startIndex": _i("Offset (default 0) — page past the first result set."),
             "include_closed": _b("Include won/lost projects."),
             "stage_type": _i("0=open, 1=won, 2=lost."),
+            "tag_id": _s("Only projects with this tag id. Comma-separate ids "
+                         "(e.g. \"3,9\") to OR-match tags."),
         }),
-        "read", _search_projects),
+        "read", _search_projects, shape=_shape_project_page),
     ToolSpec(
         "get_project",
-        "Get one project/job by id (title, description, stage, value, contact, responsible, dates).",
+        "Get one project/job by id (title, description, stage, value, contact, "
+        "responsible, dates, and its tags).",
         _schema({"project_id": _i("Project id (opportunities.id).")}, ["project_id"]),
         "read", _get_project),
+    ToolSpec(
+        "list_project_tags",
+        "List the tags assigned to one project (id, title, color, isSystem). "
+        "Pass an id to untag_project to remove it from this project only.",
+        _schema({"project_id": _i("Project id.")}, ["project_id"]),
+        "read", _list_project_tags),
     ToolSpec(
         "search_contacts",
         "Search contacts by name, company, email or phone.",
@@ -409,13 +610,38 @@ TOOLS: tuple[ToolSpec, ...] = (
         }),
         "read", _search_contacts),
     ToolSpec(
+        "list_users",
+        "List Sietch users (id, email, display name, role, admin flag) for "
+        "@-mentions (add_note.mentions / mention_users.user_ids) and task "
+        "assignment.",
+        _schema({}),
+        "read", _list_users),
+    ToolSpec(
+        "list_stages",
+        "List pipeline stages (id, title, stageType, probability) so "
+        "create_project can pass a valid stageId.",
+        _schema({}),
+        "read", _list_stages),
+    ToolSpec(
         "list_project_history",
-        "List a project's notes/history events (newest first), including embedded emails.",
+        "List a project's notes/history events (newest first), including "
+        "embedded emails. Paged: `count` is the page size and `startIndex` the "
+        "offset; the result carries `total` so a long timeline can be walked "
+        "page by page instead of being truncated.",
         _schema({
             "project_id": _i("Project id."),
-            "count": _i("Max events (1-200, default 50)."),
+            "count": _i("Page size (1-200, default 50)."),
+            "startIndex": _i("Offset (default 0)."),
         }, ["project_id"]),
         "read", _list_project_history),
+    ToolSpec(
+        "list_history_replies",
+        "List the replies on one project timeline event (oldest first).",
+        _schema({
+            "project_id": _i("Project id."),
+            "history_id": _i("history_events.id (a timeline event id)."),
+        }, ["project_id", "history_id"]),
+        "read", _list_history_replies),
     ToolSpec(
         "search_mail",
         "Search the synced mailbox (subject/from) and list messages in a folder.",
@@ -428,9 +654,24 @@ TOOLS: tuple[ToolSpec, ...] = (
         "read", _search_mail),
     ToolSpec(
         "get_mail_message",
-        "Get one email message (headers, body, attachments metadata, linked deals).",
+        "Get one email message (headers, body_text/body_html, attachments "
+        "metadata, tags, linked deals). Attachment bytes are not returned here; "
+        "use list_mail_attachments + get_mail_attachment_text.",
         _schema({"message_id": _i("mail_messages.id.")}, ["message_id"]),
         "read", _get_mail_message),
+    ToolSpec(
+        "list_mail_attachments",
+        "List one email's attachments metadata: id, filename, MIME type, size "
+        "and whether the bytes are stored on the server (only stored files can "
+        "be read as text). No bytes, no IMAP credentials.",
+        _schema({"message_id": _i("mail_messages.id.")}, ["message_id"]),
+        "read", _list_mail_attachments, shape=_shape_mail_attachments),
+    ToolSpec(
+        "list_mail_accounts",
+        "List mail accounts: ids, addresses, display names, host settings and "
+        "connection status. Passwords and OAuth tokens are never returned.",
+        _schema({}),
+        "read", _list_mail_accounts, shape=_shape_mail_accounts),
     ToolSpec(
         "list_mail_threads",
         "List mail conversation threads.",
@@ -446,6 +687,18 @@ TOOLS: tuple[ToolSpec, ...] = (
         "List a project's documents/attachments metadata (name, size, type, folder).",
         _schema({"project_id": _i("Project id.")}, ["project_id"]),
         "read", _list_project_documents),
+    ToolSpec(
+        "list_company_documents",
+        "List company-scoped documents in a folder (or the root): documents, "
+        "subfolders and total. Document ids are project_documents ids — the "
+        "same id space as GET /api/v2/documents/{id}; a file with an owning "
+        "project can also be read as text with get_project_document.",
+        _schema({
+            "folder_id": _i("Folder id (omit for the root)."),
+            "limit": _i("Page size (default 200, max 500)."),
+            "offset": _i("Offset (default 0)."),
+        }),
+        "read", _list_company_documents),
     ToolSpec(
         "get_project_document",
         "Read one project document as text. PDFs are extracted per page with "
@@ -481,17 +734,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         "Report OCR coverage for one document or mail attachment: per-page "
         "cache coverage, the active/queued job, file sha256 and the engine "
         "version. Never returns OCR text.",
-        _schema({
-            "source": {
-                "type": "string",
-                "enum": ["project_document", "mail_attachment"],
-                "description": "Which kind of file the ids refer to.",
-            },
-            "project_id": _i("Project id (source=project_document)."),
-            "document_id": _i("Document id (source=project_document)."),
-            "message_id": _i("Message id (source=mail_attachment)."),
-            "attachment_id": _i("Attachment id (source=mail_attachment)."),
-        }, ["source"]),
+        _ocr_schema(),
         "read", _ocr_status),
     ToolSpec(
         "request_ocr",
@@ -499,17 +742,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         "(not a proposal): the only write is one ocr_queue row, audited with "
         "ids and sha256. OCR runs on a host-agnostic worker, never on this "
         "server. Deduped by file hash; already-cached files are not re-queued.",
-        _schema({
-            "source": {
-                "type": "string",
-                "enum": ["project_document", "mail_attachment"],
-                "description": "Which kind of file the ids refer to.",
-            },
-            "project_id": _i("Project id (source=project_document)."),
-            "document_id": _i("Document id (source=project_document)."),
-            "message_id": _i("Message id (source=mail_attachment)."),
-            "attachment_id": _i("Attachment id (source=mail_attachment)."),
-        }, ["source"]),
+        _ocr_schema(),
         "queue", _request_ocr),
     ToolSpec(
         "list_notes",
@@ -521,12 +754,6 @@ TOOLS: tuple[ToolSpec, ...] = (
         "List the available note/history categories (id + title).",
         _schema({}),
         "read", _list_history_categories),
-    ToolSpec(
-        "get_carrier_estimate_lines",
-        "Carrier estimate line items for a project. NOTE: the underlying route was removed "
-        "in 2.4.2 — the tool reports where the data lives instead of guessing.",
-        _schema({"project_id": _i("Project id.")}, ["project_id"]),
-        "read", None, static_result=_static_carrier_lines),
     # ── writes (propose/apply) ─────────────────────────────────────────────
     ToolSpec(
         "add_note",
@@ -613,6 +840,46 @@ TOOLS: tuple[ToolSpec, ...] = (
         }, ["project_id"]),
         "write", _tag_project),
     ToolSpec(
+        "untag_project",
+        "Remove a tag from a project. Removes only this project's link — the "
+        "tag definition and its use on other projects are untouched. Requires "
+        "the tag id (list_project_tags), never a title alone.",
+        _schema({
+            "project_id": _i("Project id."),
+            "tag_id": _i("Tag id to remove from this project (tag_definitions.id)."),
+            **WRITE_SCHEMA_EXTRA,
+        }, ["project_id", "tag_id"]),
+        "write", _untag_project),
+    ToolSpec(
+        "create_contact",
+        "Create a contact (or a company when isCompany is true).",
+        _schema({
+            "firstName": _s("First name."),
+            "lastName": _s("Last name."),
+            "company": _s("Company name."),
+            "email": _s("Email address."),
+            "phone": _s("Phone."),
+            "mobilePhone": _s("Mobile phone."),
+            "jobTitle": _s("Job title."),
+            "isCompany": _b("Create a company record instead of a person."),
+            **WRITE_SCHEMA_EXTRA,
+        }, []),
+        "write", _create_contact),
+    ToolSpec(
+        "add_history_reply",
+        "Reply to an existing project timeline event (a comment under the "
+        "note, not a new timeline event).",
+        _schema({
+            "project_id": _i("Project id."),
+            "history_id": _i("history_events.id of the note being replied to."),
+            "content": _s("Reply text (plain text or simple HTML)."),
+            "parent_reply_id": _i("Optional parent reply id (nested reply)."),
+            "mentions": {"type": "array", "items": {"type": "integer"},
+                         "description": "User ids to notify (they get a reply_tagged notification)."},
+            **WRITE_SCHEMA_EXTRA,
+        }, ["project_id", "history_id", "content"]),
+        "write", _add_history_reply),
+    ToolSpec(
         "update_project_fields",
         "Update project fields (title, description, stageId, bidValue, contactId, "
         "responsibleUserId, expectedCloseDate, probability, isPrivate).",
@@ -643,9 +910,7 @@ def _spec_description(spec: ToolSpec) -> str:
     """Prefix the tool description with the OpenAPI operation summary.
 
     The REST spec is the single source of truth: a tool may not describe an
-    endpoint differently from the documentation. `get_carrier_estimate_lines`
-    maps to a route that was removed in 2.4.2 and is documented as
-    unavailable, so it keeps its own wording.
+    endpoint differently from the documentation.
     """
     op = _api_spec.MCP_TOOL_OPERATIONS.get(spec.name)
     if not op:
@@ -668,6 +933,7 @@ TOOLS = tuple(
         kind=t.kind,
         build=t.build,
         summarize=t.summarize,
+        shape=t.shape,
         static_result=t.static_result,
     )
     for t in TOOLS

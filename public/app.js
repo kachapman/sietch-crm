@@ -13380,8 +13380,12 @@ function normalizeCrmEntityType(raw) {
 function unwrapHistoryEvents(data) {
   const direct = unwrap(data);
   if (direct.length) return direct;
+  // GET /api/v2/projects/{id}/history pages its response:
+  // {events, total, count, startIndex} (2026-11-10).
+  if (data && Array.isArray(data.events)) return data.events;
   const r = data?.response;
   if (!r || typeof r !== "object") return [];
+  if (Array.isArray(r.events)) return r.events;
   for (const key of ["items", "Items", "events", "Events", "history", "History"]) {
     if (Array.isArray(r[key])) return r[key];
   }

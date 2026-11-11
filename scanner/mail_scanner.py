@@ -398,7 +398,8 @@ def _build_graph_token_refresher():
                 tok.get("refresh_token"), row["oauth_graph_refresh_token"])
             db.execute(
                 "UPDATE mail_accounts SET oauth_graph_access_token = %s, oauth_graph_refresh_token = %s, "
-                "oauth_graph_token_expires = to_timestamp(%s), oauth_graph_identity = %s "
+                "oauth_graph_token_expires = to_timestamp(%s), oauth_graph_identity = %s, "
+                "auth_error = NULL, auth_error_at = NULL "
                 "WHERE id = %s",
                 (new_token, new_refresh, new_expires_ts, ms_email, account_id),
             )
@@ -1211,6 +1212,43 @@ def _env_mailbox_config() -> dict[str, Any] | None:
             "email": user, "auth_type": "password", "identity_state": "env"}
 
 
+def _clear_stale_auth_error_if_healthy(row: dict[str, Any]) -> None:
+    """Drop a persisted auth refusal once every connected family is verified.
+
+    The refusal recorded while a mailbox was unverified survived the
+    reconnect that fixed it (live bug 2026-11-10), so the red banner never
+    cleared. `sync_gate` has already passed for the exchange family; this is
+    the extra proof the gate does not require — every OTHER family that has
+    credentials (graph tokens, SMTP login when it is an address) must also
+    classify as IDENTITY_OK. An unverifiable or mismatched family keeps the
+    error: that error is still true.
+
+    Only OAuth accounts are cleared. A password account's `auth_error` can be
+    an SMTP send failure that the IMAP gate knows nothing about.
+    """
+    families = []
+    if (row.get("has_exchange_token") or row.get("has_exchange_refresh")
+            or row.get("oauth_access_token") or row.get("oauth_refresh_token")):
+        families.append("exchange")
+    if (row.get("has_graph_token") or row.get("has_graph_refresh")
+            or row.get("oauth_graph_access_token") or row.get("oauth_graph_refresh_token")):
+        families.append("graph")
+    if not families:
+        return
+    # `check_account` only consults the SMTP family when `smtp_user` really is
+    # an address, so adding it unconditionally is safe and keeps a foreign
+    # SMTP login from being masked.
+    families.append("smtp")
+    state, _detail = mail_identity.check_account(row, families=tuple(families))
+    if state != mail_identity.IDENTITY_OK:
+        return
+    if mail_oauth.clear_auth_error(row.get("id")):
+        logger.info(
+            "Cleared stale auth_error on mail account %s (%s): every connected "
+            "credential family is verified",
+            row.get("id"), row.get("email") or "?")
+
+
 def _mailbox_cfg_from_row(row: dict[str, Any]) -> dict[str, Any] | None:
     """Build one scanner config from a mail_accounts row, or None to skip it.
 
@@ -1229,6 +1267,7 @@ def _mailbox_cfg_from_row(row: dict[str, Any]) -> dict[str, Any] | None:
                        row.get("id"), row.get("email") or "?", why)
         mail_identity.record_identity_refusal(row.get("id"), why)
         return None
+    _clear_stale_auth_error_if_healthy(row)
     raw = (row.get("monitored_folders") or "").strip()
     folders = [f.strip() for f in raw.split(",") if f.strip()] if raw else ["INBOX"]
     oauth_provider = row.get("oauth_provider")
@@ -1297,7 +1336,10 @@ def _get_mailboxes() -> list[dict[str, Any]]:
             """SELECT id, email, imap_host, imap_port, password_encrypted,
                       oauth_provider, oauth_access_token, oauth_refresh_token,
                       oauth_token_expires, oauth_identity, sync_enabled,
-                      monitored_folders, retention_days
+                      monitored_folders, retention_days, smtp_user,
+                      oauth_graph_identity,
+                      (oauth_graph_access_token IS NOT NULL
+                       OR oauth_graph_refresh_token IS NOT NULL) AS has_graph_token
                FROM mail_accounts WHERE sync_enabled = TRUE"""
         )
     except Exception as e:
