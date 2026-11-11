@@ -196,7 +196,7 @@ test('the compact style exists and keeps it on one line', () => {
 });
 
 test('cache-buster bumped for the classifier change', () => {
-  assert.ok(indexHtml.includes('app.js?v=3.7.57'));
-  assert.ok(appSrc.includes('history-system-events.js?v=3.7.57'),
+  assert.ok(indexHtml.includes('app.js?v=3.7.58'));
+  assert.ok(appSrc.includes('history-system-events.js?v=3.7.58'),
     'the classifier module query must be bumped too');
 });

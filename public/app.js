@@ -16,7 +16,7 @@ import {
 import {
   isSystemHistoryEvent,
   systemEventText,
-} from "./history-system-events.js?v=3.7.57";
+} from "./history-system-events.js?v=3.7.58";
 
 /**
  * Auto-hide scrollbars: add `is-scrolling` to the SPECIFIC element

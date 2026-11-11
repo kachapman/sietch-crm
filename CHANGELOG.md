@@ -1,4 +1,4 @@
-## Unreleased — field-change history stays compact when its category is missing
+## Unreleased — v2.5.10: compact field-change history + honest migration runner
 
 ### Fixed (migration runner)
 - **Failed migrations are no longer marked as applied.** `db.py` used to
@@ -38,7 +38,7 @@ Ken (8:28 PM ET, 2026-11-10): "Follow-up Due Date changed from 2026-11-11 to
   `migrate_from_onlyoffice.py`) classify restored rows with the shared
   `history_event_marker.is_auto_history_event()` predicate. Emails (mail
   scanner, OnlyOffice email import) stay full cards and are never marked.
-- Cache-busters → `app.js?v=3.7.57`, `history-system-events.js?v=3.7.57`.
+- Cache-busters → `app.js?v=3.7.58`, `history-system-events.js?v=3.7.58`.
 
 ### Data
 - `migrations/053_history_events_system_marker.sql` adds the marker and
