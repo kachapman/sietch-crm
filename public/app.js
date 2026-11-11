@@ -43480,6 +43480,11 @@ function openTaskPreviewModal(task, { isNew = false } = {}) {
         const id = res?.id ?? res?.ID;
         if (id != null) {
           task.id = id;
+          // Keep the task object in sync with what was actually persisted.
+          // Otherwise a follow-up rerender (e.g. checklist item add) rebuilt
+          // the modal with blank title/project and the next save overwrote
+          // the row with those stale values.
+          Object.assign(task, body);
           if (!state.tasks.some((t) => t.id === id)) {
             task.sortOrder = state.tasks.length;
             state.tasks.push(task);
@@ -43531,6 +43536,21 @@ function openTaskPreviewModal(task, { isNew = false } = {}) {
 
   let _taskEditProjectId = projectId;
 
+  // Single source of truth for a picked project. The closure and the task
+  // object must move together: any rerender (adding/ticking a checklist item
+  // calls persist -> openTaskPreviewModal) rebuilds this modal from `task`,
+  // so updating only the closure silently reverted the just-chosen project to
+  // the previously linked one and the next save wrote that stale id
+  // (live 2026-11-10: a task created with a chosen project showed/kept a
+  // different one).
+  function _applyTaskProjectSelection(item) {
+    const id = Number(item.dataset.oppId);
+    if (!Number.isFinite(id) || id <= 0) return;
+    _taskEditProjectId = id;
+    task.opportunityId = id;
+    task.opportunity = { title: item.dataset.oppTitle || "" };
+  }
+
   const projectSearch = $("#task-edit-project-search");
   if (projectSearch) {
     let timer = null;
@@ -43565,7 +43585,7 @@ function openTaskPreviewModal(task, { isNew = false } = {}) {
       results.addEventListener("click", (e) => {
         const item = e.target.closest("[data-opp-id]");
         if (!item) return;
-        _taskEditProjectId = Number(item.dataset.oppId);
+        _applyTaskProjectSelection(item);
         $("#task-edit-project-search").value = "";
         results.classList.add("hidden");
         const projectWrap = $("#task-edit-project");
@@ -43607,7 +43627,7 @@ function openTaskPreviewModal(task, { isNew = false } = {}) {
     $("#task-edit-project-results")?.addEventListener("click", (e) => {
       const item = e.target.closest("[data-opp-id]");
       if (!item) return;
-      _taskEditProjectId = Number(item.dataset.oppId);
+      _applyTaskProjectSelection(item);
       search.value = "";
       $("#task-edit-project-results")?.classList.add("hidden");
       const projectWrap = $("#task-edit-project");
@@ -46802,7 +46822,24 @@ function _notifTypeIcon(type) {
     // so the visual identity is consistent across the dashboard.
     return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-alarm" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M5 13a7 7 0 1 0 14 0a7 7 0 1 0 -14 0"/><path d="M12 10l0 3l2 0"/><path d="M7 4l-2.75 2"/><path d="M17 4l2.75 2"/></svg>`;
   }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M8 9l3 3l-2 1"/><path d="M10.5 17.5l-3.5 -2l-2 1"/><path d="M17 3l4 4"/><path d="M21 7l-6 6"/><path d="M16 3l0 5l5 0"/></svg>`;
+  // Mail-account problems (auth/refresh failures) — Tabler `mail-exclamation`.
+  // These rows used to fall through to the generic icon below, whose path data
+  // was malformed (disconnected strokes = "broken glyph" in the drawer).
+  if (type === "mail_auth_error") {
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 19h-7a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v5.5"/><path d="M3 7l9 6l9 -6"/><path d="M19 16v3"/><path d="M19 22v.01"/></svg>`;
+  }
+  // Task reminders — Tabler `bell`.
+  if (type === "task_reminder") {
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M10 5a2 2 0 1 1 4 0a7 7 0 0 1 4 6v3a4 4 0 0 0 2 3h-16a4 4 0 0 0 2 -3v-3a7 7 0 0 1 4 -6"/><path d="M9 17v1a3 3 0 0 0 6 0v-1"/></svg>`;
+  }
+  // Calendar reminders — Tabler `calendar-event`.
+  if (type === "calendar_reminder") {
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 5m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z"/><path d="M16 3l0 4"/><path d="M8 3l0 4"/><path d="M4 11l16 0"/><path d="M8 15h2v2h-2z"/></svg>`;
+  }
+  // Unknown/legacy type: use a valid Tabler bell rather than the old
+  // malformed fallback (which rendered a broken glyph for every unmapped
+  // type — the mail-account + reminder notifications in the live report).
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M10 5a2 2 0 1 1 4 0a7 7 0 0 1 4 6v3a4 4 0 0 0 2 3h-16a4 4 0 0 0 2 -3v-3a7 7 0 0 1 4 -6"/><path d="M9 17v1a3 3 0 0 0 6 0v-1"/></svg>`;
 }
 
 function _renderNotificationDrawerItem(n) {
