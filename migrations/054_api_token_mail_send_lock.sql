@@ -1,4 +1,4 @@
--- 053_api_token_mail_send_lock.sql
+-- 054_api_token_mail_send_lock.sql
 -- Optional per-token mail-send recipient lock (2026-11-10, Ken 8:43 PM ET).
 --
 -- The per-user lock (migration 051, users.mail_send_locked_recipient) already

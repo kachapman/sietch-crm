@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_used_at  TIMESTAMPTZ,
-    revoked_at    TIMESTAMPTZ
+    revoked_at    TIMESTAMPTZ,
+    mail_send_locked_recipient TEXT
 );
 
 CREATE TABLE user_roles (
@@ -326,7 +327,12 @@ CREATE TABLE history_events (
     created_at TIMESTAMP DEFAULT NOW(),
     backdated_created_at TIMESTAMP,
     crm_event_id BIGINT,
-    crm_entity_id BIGINT
+    crm_entity_id BIGINT,
+    -- Set by every auto-log writer (field changes, generated documents) and by
+    -- the importers for rows they restore from a system/auto-log category.
+    -- The client renders these as one compact line regardless of category, so
+    -- a field change filed under a human category (or NULL) is still compact.
+    is_system_event BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE INDEX idx_history_opp ON history_events(opportunity_id);
@@ -1166,6 +1172,10 @@ ON CONFLICT (id) DO NOTHING;
 
 -- Advance the sequence past the explicit ids above so a later insert without
 -- an id doesn't collide with 17.
+INSERT INTO history_categories (title, display_color, is_system, sort_order, icon_key, icon_style)
+VALUES ('Action', '#6c757d', TRUE, 15, 'pencil', 'accent')
+ON CONFLICT (title) DO NOTHING;
+
 SELECT setval(pg_get_serial_sequence('history_categories', 'id'),
               (SELECT COALESCE(MAX(id), 1) FROM history_categories));
 
@@ -1241,5 +1251,82 @@ ALTER TABLE history_events
   ADD COLUMN IF NOT EXISTS contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE;
 
 CREATE INDEX IF NOT EXISTS idx_history_contact ON history_events(contact_id);
+
+
+-- ============================================================================
+-- 7.22 Stamp migrations already reflected in this full schema
+-- ============================================================================
+-- init.sql is the current full schema, not a base dump. Fresh installs must
+-- not re-run migrations/*.sql (several files are not idempotent, e.g. 031's
+-- CREATE TABLE). The runner records a file as applied only after a successful
+-- commit, so an unstamped fresh DB would abort on the first already-exists error.
+-- This bookkeeping table matches db._run_pending_migrations.
+
+CREATE TABLE IF NOT EXISTS _applied_migrations (
+    filename  TEXT PRIMARY KEY,
+    applied_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO _applied_migrations (filename) VALUES
+    ('001_add_mail_tables.sql'),
+    ('002_add_mail_folders_and_indexes.sql'),
+    ('003_add_mail_accounts_display_name.sql'),
+    ('003_mail_outgoing_cascade.sql'),
+    ('004_add_is_crm_mail.sql'),
+    ('005_add_mail_account_settings.sql'),
+    ('006_add_task_owner_columns.sql'),
+    ('007_add_personal_notes.sql'),
+    ('008_add_email_notification_channel.sql'),
+    ('009_add_timesheets.sql'),
+    ('010_add_calendar.sql'),
+    ('011_add_user_roles_and_2fa.sql'),
+    ('012_add_bot_config_and_activity.sql'),
+    ('013_add_automation_rules.sql'),
+    ('014_add_tag_assigned_at.sql'),
+    ('015_add_task_labels_and_category_icons.sql'),
+    ('016_add_task_categories.sql'),
+    ('017_add_custom_field_groups.sql'),
+    ('018_add_photo_report_templates.sql'),
+    ('019_add_mail_graph_token_columns.sql'),
+    ('020_add_document_activity.sql'),
+    ('021_add_document_templates.sql'),
+    ('022_add_service_feeds.sql'),
+    ('023_service_feeds_timestamptz.sql'),
+    ('024_onlyoffice_ids_and_actual_close.sql'),
+    ('025_contact_multi_values.sql'),
+    ('026_user_avatar_icon.sql'),
+    ('027_unique_contact_onlyoffice_id.sql'),
+    ('028_contact_multi_value_unique.sql'),
+    ('029_unique_history_attachment_crm_file_id.sql'),
+    ('030_fix_history_attachment_uniqueness.sql'),
+    ('031_history_reply_notify_users.sql'),
+    ('032_timesheet_overdue_unique_index.sql'),
+    ('033_add_mail_accounts_created_at.sql'),
+    ('033_reports_unique_default_template.sql'),
+    ('034_calendar_occurrences.sql'),
+    ('034_history_events_unique_crm_event.sql'),
+    ('035_calendar_editor_fields.sql'),
+    ('036_calendar_snooze.sql'),
+    ('036_mail_attachments_onlyoffice_source.sql'),
+    ('037_email_snapshot_category.sql'),
+    ('038_mail_folder_uid_watermark.sql'),
+    ('039_photo_report_logo_placeholder.sql'),
+    ('040_service_feed_delivery_fixes.sql'),
+    ('041_api_tokens.sql'),
+    ('042_telegram_notify_idempotency.sql'),
+    ('043_mail_attachment_storage.sql'),
+    ('044_project_documents_unique_file_path.sql'),
+    ('045_document_templates_branding_extras.sql'),
+    ('046_api_tokens_full_access.sql'),
+    ('047_mail_oauth_identity.sql'),
+    ('048_mail_dates_utc.sql'),
+    ('049_mcp_server.sql'),
+    ('050_mail_sender_guard.sql'),
+    ('051_mail_send_recipient_lock.sql'),
+    ('052_ocr_queue_cache.sql'),
+    ('053_history_events_system_marker.sql'),
+    ('054_api_token_mail_send_lock.sql')
+ON CONFLICT (filename) DO NOTHING;
+
 
 COMMIT;

@@ -48,7 +48,7 @@ def check_locks(locks, recipients: list[str]) -> tuple[bool, str]:
 
     A send can be bound by two independent locks: the user's
     (`users.mail_send_locked_recipient`, migration 051) and the API token's
-    (`api_tokens.mail_send_locked_recipient`, migration 053). Neither may be
+    (`api_tokens.mail_send_locked_recipient`, migration 054). Neither may be
     weakened by the other: two different non-empty locks can never both pass,
     so the send is refused rather than resolved by precedence.
     """

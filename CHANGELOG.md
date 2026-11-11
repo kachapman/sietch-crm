@@ -19,7 +19,7 @@ session path was missing. Two real gaps found:
    lock check, and the compose preflight could not block a locked recipient.
 
 ### Changed
-- `migrations/053_api_token_mail_send_lock.sql`: optional
+- `migrations/054_api_token_mail_send_lock.sql`: optional
   `api_tokens.mail_send_locked_recipient` (+ mirrored inline DDL in
   `server.py`).
 - `mail_recipient_lock.check_locks()`: every non-empty lock must pass; two
@@ -49,8 +49,170 @@ Pre-existing failures on `main` (unchanged by this branch):
 `test_sync_pull_deals_fields`.
 
 
-## 2026-11-10 — v2.5.8: API/MCP gaps: tags, paging, honest spec, mail body, wrappers
+## Unreleased — v2.5.10: compact field-change history + honest migration runner
+- init.sql now stamps every bundled migration as applied and seeds the Action history category, so a fresh database boot does not re-run non-idempotent files (the new runner correctly aborts on already-exists).
 
+### Fixed (migration runner)
+- **Failed migrations are no longer marked as applied.** `db.py` used to
+  rollback a failing `migrations/*.sql` file and then insert its filename
+  into `_applied_migrations` so boot would not retry it. That is why
+  production recorded `017_add_custom_field_groups.sql` as applied while the
+  Action category seed never landed. The runner now commits the file and the
+  applied-row together; on error it rolls back, does **not** record the
+  filename, and `init_db()` raises `SystemExit` so a deploy stops. Filenames
+  already in `_applied_migrations` are still skipped (017 will not be
+  re-run). Missing effects of already-recorded migrations are listed in
+  `plans/sietch/history-system-events-deploy-2026-11-10.md` with proposed
+  new idempotent repairs; those repairs are not applied in this change.
+
+
+Ken (8:28 PM ET, 2026-11-10): "Follow-up Due Date changed from 2026-11-11 to
+2026-11-12" still rendered as a full card with a Reply button, under a
+"Quick Context" chip. Not a missing compact renderer — a classifier miss.
+
+### Fixed
+- **Auto-logged history rows are marked server-side**
+  (`history_events.is_system_event`, `server.py:_handle_project_update`,
+  invoice/COC/photo-report writers, both history GET endpoints). The row's own
+  marker is now the source of truth; the client still keeps the old
+  `is_system` / "Action" title fallback for unmarked legacy rows.
+- **Root cause:** the field-change writer resolves the synthetic `Action`
+  category by title, but production has no such row (`_applied_migrations`
+  records `017_add_custom_field_groups.sql` as applied even though its seed
+  rolled back — `db.py` records failed migrations as applied). The writer
+  therefore stored `category_id = NULL` (405 rows on prod), and
+  `isSystemHistoryEvent()` saw no category → full card + Reply.
+- **Generated-document notes:** `_resolve_action_category_id()` now returns
+  `None` instead of `-1`, so a missing Action row no longer turns the
+  invoice/COC/photo-report history insert into a swallowed FK violation.
+- **Imports** (`server.py` history imports, `sync_opp_details.py`,
+  `import_csv_export.py`, `import_json_export.py`,
+  `migrate_from_onlyoffice.py`) classify restored rows with the shared
+  `history_event_marker.is_auto_history_event()` predicate. Emails (mail
+  scanner, OnlyOffice email import) stay full cards and are never marked.
+- Cache-busters → `app.js?v=3.7.58`, `history-system-events.js?v=3.7.58`.
+
+### Data
+- `migrations/053_history_events_system_marker.sql` adds the marker and
+  backfills existing rows from durable signals only (NULL category + exact
+  tracked-field shape; the `Action` category; the three generator-only
+  titles). Production candidate set: **405 rows** (all NULL-category field
+  changes; 0 Action rows, 0 generated-document rows). **Not applied to
+  production in this session.**
+
+### Tests
+- `tests/test_history_system_events.mjs` 21 pass (+8 marker/precedence tests);
+  new `tests/test_history_event_marker.py` 23 pass; local-build Playwright
+  `tests/playwright/history_system_marker.py` (compact field change, full card
+  human Quick Context note, NULL-category prod repro). Full Python suite
+  1,886 tests vs baseline 1,863 with the identical 25 pre-existing failures;
+  Node 461 pass vs 453.
+
+---## 2026-11-10 — v2.5.9: a successful reconnect/refresh clears the stale mail auth_error
+
+VERSION 2.5.8 → 2.5.9. `public/app.js` unchanged, so the cache-buster stays
+3.7.57. Approval: Ken 8:43 PM ET ("Yes, deploy the reconnect-banner fix with a
+backup and smokes, and clear the stale error on accounts 8, 9 and 10"). **This
+session = code + tests + merge to local `main` only. Nothing deployed, no
+server restarted, no prod row touched** — the deploy session follows.
+
+**Live bug (after the 20:1x ET reconnects).** Accounts 8/9/10 were reconnected
+successfully (fresh tokens, `oauth_identity` / `oauth_graph_identity` = the
+account address, sync gate passing) yet the red "Mail account needs
+reconnecting" banner stayed up. The `auth_error` the scanner recorded *while*
+the mailbox was still unverified survived the reconnect, and nothing on any
+success path cleared it:
+
+* `server.py` Exchange connect callback (`_handle_oauth_callback`) wrote the
+  new tokens + identity but left `auth_error` / `auth_error_at` alone.
+* The Graph connect callback (`_handle_oauth_graph_callback`) did the same.
+* `mail_oauth._save_refreshed_token` (the routine CAS refresh) cleared
+  `oauth_last_error` but not `auth_error`.
+* Both Graph refreshers (`server.py:_refresh_graph_token_if_needed`,
+  `scanner/mail_scanner.py:_build_graph_token_refresher`) cleared
+  `oauth_graph_last_error` only.
+* The scanner only ever *wrote* `auth_error`; `_handle_mail_accounts` then
+  maps it straight to `authError`, which is the banner text.
+
+**Fix (clears only on proven success).**
+
+1. Exchange connect callback: also `auth_error = NULL, auth_error_at = NULL`
+   (only reached after the identity check passed and the token is written).
+2. Graph connect callback: same two columns.
+3. `mail_oauth._save_refreshed_token` CAS path: same two columns (the forced
+   path already did). A failed/losing refresh still clears nothing.
+4. `_refresh_graph_token_if_needed` and the scanner's Graph refresher: same.
+5. Scanner durability: new `mail_oauth.clear_auth_error(account_id)` — a
+   single `UPDATE ... WHERE id = %s AND auth_error IS NOT NULL`, so it only
+   clears one row, only when something is set. `_mailbox_cfg_from_row` calls
+   it after `sync_gate` passes **and** `mail_identity.check_account` is
+   `IDENTITY_OK` for every *connected* family (exchange/graph tokens present,
+   SMTP login when it is an address). Unverifiable/mismatched ⇒ no clear;
+   password accounts are never cleared here (their error may be an SMTP send
+   failure the IMAP gate knows nothing about).
+6. `record_auth_error` no longer re-stamps `auth_error_at = NOW()` for an
+   unchanged message. The scanner calls it every 120 s while unverified, which
+   is why the refusal always looked two minutes old. It now writes only on the
+   first set or a message change (admin notification unchanged).
+
+**Payload honesty gap closed.** `_handle_mail_accounts` never selected the
+Exchange token columns (and blanked them), and `check_account` only knew Graph
+tokens from `has_graph_*` booleans it did not read — so `identityStatus`
+reported `ok` for "tokens present, identity empty", the exact state the sync
+gate refuses. The payload now selects token **presence** only
+(`oauth_access_token IS NOT NULL AS has_exchange_token`, same for the refresh
+token) and `mail_identity.check_account` treats those flags like the values
+(scanner rows still pass the values). No token value is selected or returned;
+the flags are popped from the response.
+
+**Tests.** New `tests/test_reconnect_clears_auth_error.py` (24 tests): both
+connect callbacks clear a stale error; CAS + both Graph refreshers clear on
+success; failed refresh / refused Graph identity clear nothing; an
+unchanged-address Save still keeps a real `auth_error` + identity; the scanner
+clears only when every connected family verifies (and not on a graph mismatch,
+unverified graph, foreign SMTP login, refused gate, password account); no
+re-stamp of an unchanged message; payload `identityStatus` = `unverifiable`
+for tokens-present/identity-empty, `ok`/`mismatch` as appropriate, and no token
+value in the response. Verified the suite fails if the CAS clear is removed.
+Full run: no new failures vs the 18 known pre-existing ones (3
+`test_email_project_copy`, 9 `test_invoice_coc_modern`, 3 `test_mail_auth_gaps`,
+1 `test_mcp_api_gaps`, 1 `test_scanner_toggle_gating`, 1
+`test_sync_pull_deals_fields`); all `tests/test_*.mjs` pass.
+
+### Deployed (follow-up deploy session, Ken's 8:43 PM ET go)
+- Live on `crm.publicadjustermidwest.com` as `3e2cad0` / **v2.5.9** (21:25 ET),
+  fast-forwarded from `5e22501` (`--ff-only`), rebuilt and recreated.
+  `public/app.js` unchanged ⇒ cache-buster stays `3.7.57`.
+- Backup `/mnt/sietch_backup/sietch-prod-pre-deploy-3e2cad0-20261110-211828ET`
+  (929 MB: dump 30,182,771 B / 750 `pg_restore --list` lines, code archive of
+  `5e22501` 10,436,886 B / 502 members, data volume minus
+  `history-attachments` 932,405,417 B / 1,198 members, env/compose/Dockerfile
+  0600, account baseline + sha256-12 token fingerprints, `ROLLBACK.md`).
+  Rollback image `sietch-crm-dashboard:rollback-5e22501` (`a1a02f790f15`).
+  **No migration** (56 rows before and after; latest `052_ocr_queue_cache.sql`).
+- Smokes: health 200 loopback + public; login 200 (`app.js?v=3.7.57`,
+  `styles.css?v=3.7.22`); served app.js/styles.css byte-identical to git;
+  unauth mail/notifications/tasks APIs 401; **3 clean scanner cycles**
+  (0 `sync_gate`/refus/`invalid_grant`/`AUTHENTICATIONFAILED`/`LOGIN
+  failed`/`identity mismatch`/`Traceback`/`record_auth_error`; known
+  Spam/Trash-missing noise only); MCP `tools/list` **34 tools**,
+  `serverInfo.version` 2.5.9, `list_mail_accounts` has no secret keys; accounts
+  8/9/10 payload (deployed handler, in-container) → `authError ""`,
+  `identityStatus ok`, `oauthStatus connected`. Token fingerprints identical
+  pre/post (no token rotated by the deploy).
+- **The fix proved itself on boot:** the scanner logged
+  `Cleared stale auth_error on mail account 9 / 10 / 8 (…)` at 02:25:48Z —
+  exactly once per account, never again on the following 5 cycles.
+- **Approved data repair:** ids 8/9/10 pre-verified (identity = own address for
+  Exchange and Graph, Exchange tokens fresh, no `oauth_last_error`), then the
+  approved `UPDATE ... SET auth_error = NULL, auth_error_at = NULL WHERE id IN
+  (8,9,10)` in one transaction. **0 values changed** — the scanner had already
+  cleared them at boot, so before == after. Banner still clear after 2 further
+  scanner cycles (6 total).
+
+
+
+## 2026-11-10 — v2.5.8: API/MCP gaps: tags, paging, honest spec, mail body, wrappers
 VERSION 2.5.7 → 2.5.8; `app.js` cache-buster 3.7.56 → 3.7.57. Approval: Ken
 7:33 PM ET ("add the api tool batch to the deploy"). Rebased onto `ba8c750` /
 v2.5.7 (Save hotfix + notification/task-picker/Telegram fixes). Ken's 6:21 PM

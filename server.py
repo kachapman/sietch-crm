@@ -66,6 +66,7 @@ from infra_log import (  # noqa: E402
     infra_uptime,
     infra_start_time,
 )
+from history_event_marker import is_auto_history_event  # noqa: E402
 
 log_infra_event("info", "Server started", source="app")
 
@@ -969,8 +970,8 @@ try:
     db.execute("ALTER TABLE api_tokens ALTER COLUMN scope SET DEFAULT 'full'")
 except Exception:
     pass
-# Migration 053: optional per-token mail-send recipient lock.
-# Mirrors migrations/053_api_token_mail_send_lock.sql; idempotent.
+# Migration 054: optional per-token mail-send recipient lock.
+# Mirrors migrations/054_api_token_mail_send_lock.sql; idempotent.
 try:
     db.execute("ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS mail_send_locked_recipient TEXT")
 except Exception:
@@ -1969,8 +1970,15 @@ def _humanize_file_size(size_bytes) -> str:
 _ACTION_CATEGORY_ID: int = -1
 
 
-def _resolve_action_category_id() -> int:
-    """Return the id of the system 'Action' history category, or -1 if absent."""
+def _resolve_action_category_id() -> int | None:
+    """Return the id of the system 'Action' history category, or None if absent.
+
+    Returning None (not -1) matters: the generated-document history writers
+    pass this straight into `history_events.category_id`. A -1 was a hard FK
+    violation that the surrounding `except: pass` swallowed, so invoice/COC/
+    photo-report events silently never reached the timeline on DBs where the
+    Action seed row was missing (production, 2026-11-10).
+    """
     global _ACTION_CATEGORY_ID
     if _ACTION_CATEGORY_ID > 0:
         return _ACTION_CATEGORY_ID
@@ -1983,7 +1991,7 @@ def _resolve_action_category_id() -> int:
             return _ACTION_CATEGORY_ID
     except Exception:
         pass
-    return -1
+    return None
 
 
 def _doc_pdf_safe(text) -> str:
@@ -2572,7 +2580,7 @@ def _mail_send_locks(user: dict) -> list[str]:
     Two independent locks can bind a send (2026-11-10):
 
       * `users.mail_send_locked_recipient` (migration 051) — the human's lock.
-      * `api_tokens.mail_send_locked_recipient` (migration 053) — the token's
+      * `api_tokens.mail_send_locked_recipient` (migration 054) — the token's
         own lock, independent of its owner.
 
     A Bearer request authenticates AS the token's owner (api_tokens.verify_api_token
@@ -7050,15 +7058,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         content = f"{label} set to {new_display}"
                     else:
                         content = f"{label} changed from {old_display} to {new_display}"
-                    # Look up Action category ID (cached at module level)
+                    # Look up Action category ID (cached at module level). On
+                    # DBs where the seed row is missing this stays NULL — the
+                    # row is still identified as a system event by the
+                    # is_system_event marker below, never by its category.
                     global _action_cat_id_cache
                     if _action_cat_id_cache is None:
                         row = db.query_one("SELECT id FROM history_categories WHERE title = 'Action'")
                         _action_cat_id_cache = row["id"] if row else None
                     cat_id = _action_cat_id_cache
                     db.insert_returning(
-                        """INSERT INTO history_events (opportunity_id, category_id, content, created_by, created_at)
-                           VALUES (%s, %s, %s, %s, NOW()) RETURNING id""",
+                        """INSERT INTO history_events
+                               (opportunity_id, category_id, content, created_by, created_at, is_system_event)
+                           VALUES (%s, %s, %s, %s, NOW(), TRUE) RETURNING id""",
                         (opp_id, cat_id, content, user["id"]),
                     )
                     logger.info("Created action event for project %s: %s", opp_id, content)
@@ -7443,7 +7455,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         rows = db.query(
             """SELECT h.id, h.category_id, hc.title, h.title, h.content,
                       h.created_by, h.created_at, h.backdated_created_at,
-                      u.display_name
+                      u.display_name, h.is_system_event
                FROM history_events h
                LEFT JOIN history_categories hc ON h.category_id = hc.id
                LEFT JOIN users u ON h.created_by = u.id
@@ -7481,6 +7493,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "created": _ts(r[6]),
                 "backdatedCreated": _ts(r[7]),
                 "author": r[8] or "",
+                # Auto-logged rows (field changes, generated documents) set
+                # this server-side. The client treats it as authoritative so a
+                # field change stays compact even under a human category.
+                "isSystemEvent": bool(r[9]),
                 "attachments": attachments_by_event.get(r[0], []),
             })
         # Linked-email attachments: an email linked to a project now carries a COPY
@@ -8608,7 +8624,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         offset = int(qs.get("startIndex", ["0"])[0])
         rows = db.query(
             """SELECT he.id, he.category_id, hc.title, hc.display_color, he.title, he.content,
-                      he.created_by, he.created_at, he.backdated_created_at, u.display_name
+                      he.created_by, he.created_at, he.backdated_created_at, u.display_name,
+                      he.is_system_event
                FROM history_events he
                LEFT JOIN history_categories hc ON he.category_id = hc.id
                LEFT JOIN users u ON he.created_by = u.id
@@ -8627,6 +8644,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "created": _ts(r[7]),
                 "backdatedCreated": _ts(r[8]),
                 "author": r[9],
+                "isSystemEvent": bool(r[10]),
             })
         _json_response(self, 200, events)
 
@@ -9193,14 +9211,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                 cat_title = str(cat_data.get("title") or cat_data.get("Title") or "Note").strip() or "Note"
                             else:
                                 cat_title = "Note"
-                            cat_row = db.query_one("SELECT id FROM history_categories WHERE title = %s", (cat_title,))
+                            cat_row = db.query_one("SELECT id, is_system FROM history_categories WHERE title = %s", (cat_title,))
                             if not cat_row:
                                 db.execute(
                                     "INSERT INTO history_categories (title, is_system) VALUES (%s, FALSE) RETURNING id",
                                     (cat_title,),
                                 )
-                                cat_row = db.query_one("SELECT id FROM history_categories WHERE title = %s", (cat_title,))
+                                cat_row = db.query_one("SELECT id, is_system FROM history_categories WHERE title = %s", (cat_title,))
                             cat_id = cat_row["id"]
+                            cat_is_system = bool(cat_row.get("is_system"))
 
                             event_content = str(h.get("content") or h.get("Content") or "").strip() or None
                             event_created = h.get("created") or h.get("Created") or h.get("date") or None
@@ -9221,10 +9240,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             db.execute(
                                 """INSERT INTO history_events
                                        (contact_id, category_id, content, created_by, created_at,
-                                        backdated_created_at, crm_event_id, crm_entity_id)
-                                   VALUES (%s,%s,%s,%s,COALESCE(%s,NOW()),%s,%s,%s)""",
+                                        backdated_created_at, crm_event_id, crm_entity_id,
+                                        is_system_event)
+                                   VALUES (%s,%s,%s,%s,COALESCE(%s,NOW()),%s,%s,%s,%s)""",
                                 (local_id, cat_id, event_content, v3_author_id, event_created, event_created,
-                                 crm_event_id, int(h.get("entityId") or 0) or None),
+                                 crm_event_id, int(h.get("entityId") or 0) or None,
+                                 is_auto_history_event(category_title=cat_title,
+                                                       category_is_system=cat_is_system,
+                                                       content=event_content)),
                             )
                             history_count += 1
                             if crm_event_id:
@@ -11656,8 +11679,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         try:
             db.execute(
                 """INSERT INTO history_events
-                   (opportunity_id, category_id, title, content, created_by)
-                   VALUES (%s, %s, %s, %s, %s)""",
+                   (opportunity_id, category_id, title, content, created_by, is_system_event)
+                   VALUES (%s, %s, %s, %s, %s, TRUE)""",
                 (opp_id, _resolve_action_category_id(), "Photo Report generated", _action_content, user["id"]),
             )
         except Exception:
@@ -12054,8 +12077,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         try:
             db.execute(
                 """INSERT INTO history_events
-                   (opportunity_id, category_id, title, content, created_by)
-                   VALUES (%s, %s, %s, %s, %s)""",
+                   (opportunity_id, category_id, title, content, created_by, is_system_event)
+                   VALUES (%s, %s, %s, %s, %s, TRUE)""",
                 (opp_id, _resolve_action_category_id(), "Invoice generated", _action_content, user["id"]),
             )
         except Exception:
@@ -12171,8 +12194,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         try:
             db.execute(
                 """INSERT INTO history_events
-                   (opportunity_id, category_id, title, content, created_by)
-                   VALUES (%s, %s, %s, %s, %s)""",
+                   (opportunity_id, category_id, title, content, created_by, is_system_event)
+                   VALUES (%s, %s, %s, %s, %s, TRUE)""",
                 (opp_id, _resolve_action_category_id(), "Certificate of Completion generated", _action_content, user["id"]),
             )
         except Exception:
@@ -15258,12 +15281,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             continue
                         cat_data = h.get("category") or h.get("Category") or {}
                         cat_title = str(cat_data.get("title") or cat_data.get("Title") or "Note").strip() if isinstance(cat_data, dict) else "Note"
-                        cat_row = db.query_one("SELECT id FROM history_categories WHERE title = %s", (cat_title,))
+                        cat_row = db.query_one("SELECT id, is_system FROM history_categories WHERE title = %s", (cat_title,))
                         if not cat_row:
                             db.execute("INSERT INTO history_categories (title, is_system) VALUES (%s, FALSE) RETURNING id", (cat_title,))
-                            cat_id = db.query_one("SELECT id FROM history_categories WHERE title = %s", (cat_title,))["id"]
-                        else:
-                            cat_id = cat_row["id"]
+                            cat_row = db.query_one("SELECT id, is_system FROM history_categories WHERE title = %s", (cat_title,))
+                        cat_id = cat_row["id"]
+                        cat_is_system = bool(cat_row.get("is_system"))
                         event_content = str(h.get("content") or h.get("Content") or "").strip() or None
                         event_created = h.get("created") or h.get("Created") or h.get("date") or None
                         create_by = h.get("createBy") or h.get("CreateBy") or h.get("createdBy") or {}
@@ -15289,10 +15312,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         db.execute(
                             """INSERT INTO history_events
                                    (opportunity_id, category_id, content, created_by, created_at, backdated_created_at,
-                                    crm_event_id, crm_entity_id)
-                               VALUES (%s,%s,%s,%s,COALESCE(%s,NOW()),%s,%s,%s)""",
+                                    crm_event_id, crm_entity_id, is_system_event)
+                               VALUES (%s,%s,%s,%s,COALESCE(%s,NOW()),%s,%s,%s,%s)""",
                             (v3_opp_id, cat_id, event_content, v3_author_id, event_created, event_created,
-                             crm_event_id, crm_entity_id),
+                             crm_event_id, crm_entity_id,
+                             is_auto_history_event(category_title=cat_title,
+                                                   category_is_system=cat_is_system,
+                                                   content=event_content)),
                         )
                         history_count += 1
                         if crm_event_id:
@@ -21966,6 +21992,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                    oauth_provider = %s, oauth_access_token = %s, oauth_refresh_token = %s,
                    oauth_token_expires = to_timestamp(%s), oauth_identity = %s,
                    oauth_last_error = NULL, oauth_last_error_at = NULL,
+                   auth_error = NULL, auth_error_at = NULL,
                    imap_host = COALESCE(NULLIF(imap_host, ''), %s),
                    imap_port = COALESCE(NULLIF(imap_port, 0), %s),
                    smtp_host = COALESCE(NULLIF(smtp_host, ''), %s),
@@ -22222,7 +22249,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                oauth_graph_scope = %s,
                oauth_graph_identity = %s,
                oauth_graph_last_error = NULL,
-               oauth_graph_last_error_at = NULL
+               oauth_graph_last_error_at = NULL,
+               auth_error = NULL, auth_error_at = NULL
                WHERE id = %s""",
             (access_token, stored_refresh, expires_ts,
              oauth_providers.MicrosoftProvider._GRAPH_SCOPE, ms_email, account_id),
@@ -22344,7 +22372,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 self._record_graph_error(account_id, err)
                 return None, err
             db.execute(
-                "UPDATE mail_accounts SET oauth_graph_access_token = %s, oauth_graph_refresh_token = %s, oauth_graph_token_expires = to_timestamp(%s), oauth_graph_identity = %s, oauth_graph_last_error = NULL, oauth_graph_last_error_at = NULL WHERE id = %s",
+                "UPDATE mail_accounts SET oauth_graph_access_token = %s, oauth_graph_refresh_token = %s, oauth_graph_token_expires = to_timestamp(%s), oauth_graph_identity = %s, oauth_graph_last_error = NULL, oauth_graph_last_error_at = NULL, auth_error = NULL, auth_error_at = NULL WHERE id = %s",
                 (new_token, new_refresh, new_expires_ts, ms_email, account_id),
             )
             return new_token, None
@@ -23235,6 +23263,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                           last_sync, owner_user_id, created_at,
                           oauth_identity, oauth_last_error, oauth_last_error_at,
                           auth_error,
+                          oauth_access_token IS NOT NULL AS has_exchange_token,
+                          oauth_refresh_token IS NOT NULL AS has_exchange_refresh,
                           oauth_graph_access_token IS NOT NULL AS has_graph_token,
                           oauth_graph_token_expires,
                           oauth_graph_identity,
@@ -23340,6 +23370,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     r["sendVerification"] = "n/a"
                 r.pop("has_graph_token", None)
                 r.pop("has_graph_refresh", None)
+                r.pop("has_exchange_token", None)
+                r.pop("has_exchange_refresh", None)
             # Attach shared-with users for each visible account
             acct_ids = [r["id"] for r in rows]
             shares: dict[int, list[dict]] = {}

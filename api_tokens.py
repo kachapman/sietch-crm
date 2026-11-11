@@ -284,7 +284,7 @@ def verify_api_token(plaintext: str) -> dict | None:
         "api_token_name": row["token_name"],
         "api_token_scope": row["scope"] or SCOPE_FULL,
         "api_token_restrictions": restrictions,
-        # Optional per-token send lock (migration 053). Enforced together with
+        # Optional per-token send lock (migration 054). Enforced together with
         # the owner's users.mail_send_locked_recipient on every send path.
         "api_token_mail_send_locked_recipient": row.get("mail_send_locked_recipient"),
     }

@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from history_event_marker import is_auto_history_event
+
 # psycopg2 is only required for non-export runs.
 psycopg2 = None
 
@@ -782,16 +784,18 @@ def _migrate_opportunities(
                     # Category
                     cat_data = h.get("category") or h.get("Category") or {}
                     cat_title = str(cat_data.get("title") or cat_data.get("Title") or "Note").strip() if isinstance(cat_data, dict) else "Note"
-                    cur.execute("SELECT id FROM history_categories WHERE title = %s", (cat_title,))
+                    cur.execute("SELECT id, is_system FROM history_categories WHERE title = %s", (cat_title,))
                     cat_row = cur.fetchone()
                     if cat_row:
                         cat_id = cat_row[0]
+                        cat_is_system = bool(cat_row[1])
                     else:
                         cur.execute(
                             "INSERT INTO history_categories (title, is_system) VALUES (%s, TRUE) RETURNING id",
                             (cat_title,),
                         )
                         cat_id = cur.fetchone()[0]
+                        cat_is_system = True
 
                     raw_content = h.get("content") or h.get("Content") or ""
                     event_content = str(raw_content).strip() or None if isinstance(raw_content, str) else None
@@ -808,12 +812,15 @@ def _migrate_opportunities(
                     cur.execute(
                         """INSERT INTO history_events
                                (opportunity_id, category_id, content, created_by, created_at, backdated_created_at,
-                                crm_event_id, crm_entity_id)
-                           VALUES (%s,%s,%s,%s,COALESCE(%s,NOW()),%s,%s,%s)
+                                crm_event_id, crm_entity_id, is_system_event)
+                           VALUES (%s,%s,%s,%s,COALESCE(%s,NOW()),%s,%s,%s,%s)
                            ON CONFLICT DO NOTHING
                            RETURNING id""",
                         (v3_opp_id, cat_id, event_content, v3_author_id, event_created, event_created,
-                         crm_event_id, int(crm_id) if crm_id.isdigit() else None),
+                         crm_event_id, int(crm_id) if crm_id.isdigit() else None,
+                         is_auto_history_event(category_title=cat_title,
+                                               category_is_system=cat_is_system,
+                                               content=event_content)),
                     )
                     row = cur.fetchone()
                     if not row:

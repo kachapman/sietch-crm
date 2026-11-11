@@ -124,7 +124,7 @@ class TestSourceGuards(unittest.TestCase):
         self.assertIn(
             "ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS mail_send_locked_recipient TEXT",
             self.server)
-        mig = ROOT / "migrations" / "053_api_token_mail_send_lock.sql"
+        mig = ROOT / "migrations" / "054_api_token_mail_send_lock.sql"
         self.assertTrue(mig.exists())
         self.assertIn("mail_send_locked_recipient", _read(mig))
 
@@ -240,7 +240,7 @@ class TestTokenSends(unittest.TestCase):
             "SELECT 1 AS ok FROM information_schema.columns "
             "WHERE table_name='api_tokens' AND column_name='mail_send_locked_recipient'"
         ) is None:
-            raise unittest.SkipTest("migration 053 not applied")
+            raise unittest.SkipTest("migration 054 not applied")
         tag = uuid.uuid4().hex[:8]
         cls.tag = tag
         cls.user = db.query_one(

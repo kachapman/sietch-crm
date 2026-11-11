@@ -38,12 +38,62 @@ then a branch with the fix if needed, plus `plans/sietch/test-setup-steps-2026-1
   (`created_by`); there is no "create on behalf of another user" field.
 
 **Fix (branch only):** optional `api_tokens.mail_send_locked_recipient`
-(migration 053), enforced together with the user lock by
+(migration 054), enforced together with the user lock by
 `_mail_send_locks()` / `_enforce_mail_send_lock()` in the send handler **and**
 preflight, re-checked in `mail_send.try_send_for_account` before any network
 call; `scripts/set_token_mail_send_lock.py` (dry-run default); 29 tests in
 `tests/test_token_send_lock.py`. Admin script + Ken's step list:
 `plans/sietch/test-setup-steps-2026-11-10.md`.
+
+## Current session summary (for next resume) — 2026-11-10 (reconnect clears the stale auth_error, v2.5.9, DEPLOYED)
+
+**Branch:** `hotfix/reconnect-clears-auth-error` (from `5e22501` = v2.5.8 = `origin/main`).
+Worktree `/home/chapman-server/Projects/new-crm-hotfix-banner`. Merged into local
+`main` (fast-forward) and pushed `origin main`; **no deploy, no restart, no prod
+DB write** — Ken's 8:43 PM ET go covers the deploy session that follows.
+Plan/root cause: `plans/sietch/email-banner-after-v256-2026-11-10.md` §5; this
+session's log: `plans/sietch/reconnect-banner-hotfix-2026-11-10.md`.
+
+- **Bug:** accounts 8/9/10 were reconnected at ~20:1x ET (tokens + identity
+  written, sync gate passing) but the red banner stayed. The pre-reconnect
+  `auth_error` was never cleared: neither connect callback, nor the CAS refresh,
+  nor either Graph refresher touched `auth_error`/`auth_error_at`, and the
+  scanner only ever wrote it. `record_auth_error` also re-stamped
+  `auth_error_at = NOW()` every 120 s cycle, so the refusal always looked fresh.
+- **Fix:** clear `auth_error`/`auth_error_at` on (a) the Exchange connect
+  callback, (b) the Graph connect callback, (c) `mail_oauth._save_refreshed_token`
+  CAS, (d) `_refresh_graph_token_if_needed`, (e) the scanner's Graph refresher.
+  New `mail_oauth.clear_auth_error(id)` (by id, `AND auth_error IS NOT NULL`)
+  called from `_mailbox_cfg_from_row` once `sync_gate` passes **and**
+  `check_account` is OK for every connected family (exchange/graph tokens,
+  SMTP login when it is an address); unverifiable/mismatched/password accounts
+  are never cleared. `record_auth_error` writes only on first set or message
+  change. Failed refresh paths still clear nothing.
+- **Payload:** `_handle_mail_accounts` now selects token **presence** booleans
+  (`has_exchange_token`/`has_exchange_refresh`, plus the existing graph flags)
+  and `mail_identity.check_account` reads them, so `identityStatus` is
+  `unverifiable` for tokens-present/identity-empty instead of `ok`. No token
+  value is selected or returned; flags are popped from the response. v2.5.6
+  Save behaviour kept (an unchanged-address Save keeps a real `auth_error`).
+- **Tests:** new `tests/test_reconnect_clears_auth_error.py` (24 tests, all
+  pass; proven to fail if the CAS clear is removed). No new failures vs the 18
+  known pre-existing (3 `test_email_project_copy`, 9 `test_invoice_coc_modern`,
+  3 `test_mail_auth_gaps`, 1 `test_mcp_api_gaps`, 1
+  `test_scanner_toggle_gating`, 1 `test_sync_pull_deals_fields`); all
+  `tests/test_*.mjs` pass.
+- **Deploy session DONE (21:25 ET).** `3e2cad0` / **v2.5.9** live on
+  `crm.publicadjustermidwest.com` (`merge --ff-only`, rebuild, `up -d`).
+  Backup `/mnt/sietch_backup/sietch-prod-pre-deploy-3e2cad0-20261110-211828ET`
+  (929 MB), rollback image `sietch-crm-dashboard:rollback-5e22501`, **no
+  migration** (56 → 56). All smokes pass (health, login, assets == git, auth
+  401s, 3 clean scanner cycles, 34 MCP tools, accounts 8/9/10
+  `authError ""` / `identityStatus ok`, token fingerprints identical).
+  **The scanner cleared the stale error itself at boot** (one
+  `Cleared stale auth_error` line per account, never repeated), so the approved
+  `UPDATE mail_accounts SET auth_error = NULL, auth_error_at = NULL WHERE id IN
+  (8,9,10)` changed **0 values**; banner still clear after 2 more cycles.
+  Log: `plans/sietch/reconnect-banner-deploy-2026-11-10.md`.
+
 
 ## Current session summary (for next resume) — 2026-11-10 (API/MCP gaps pass, DEPLOYED v2.5.8)
 
@@ -95,13 +145,47 @@ occupancy field was added anywhere.**
 
 ## Previous session summary (2026-11-10 — notification icons, Tasks-tile, Telegram, v2.5.7 deploy)
 
-**Date:** 2026-11-10 (notification icons, Tasks-tile project link, Telegram "Unknown Project")
+**Date:** 2026-11-10 (field-change history: server-side system-event marker)
 
-**Branch:** `fix/notif-tasks-telegram` (worktree
-`~/Projects/new-crm-notif-tasks-telegram`, based on `7d2e55c`). **Merged into
-`main` as v2.5.7 and deployed** (Ken 7:25 PM ET). Plan:
-`~/Projects/plans/sietch/notif-tasks-telegram-2026-11-10.md`; deploy log
-`~/Projects/plans/sietch/notif-tasks-telegram-deploy-2026-11-10.md`.
+**Branch:** `fix/history-system-events-marker` (worktree
+`~/Projects/new-crm-history-system-events-marker`, based on `cb25cdb` =
+v2.5.7). **Not deployed; local-main merge status in the plan.** Plan:
+`~/Projects/plans/sietch/history-system-events-classifier-miss-2026-11-10.md`.
+
+Ken (8:28 PM ET): the compact system-events work (`e705ad9`) is live, but
+"Ken Chapman, Nov 10 2026 8:27 PM EST, Follow-up Due Date changed from
+2026-11-11 to 2026-11-12" still rendered as a full card with a Reply button.
+
+- **Root cause (prod read-only audit):** event **50504**, opportunity 1245,
+  `category_id = NULL`. The field-change writer resolves
+  `history_categories.title = 'Action'` (`server.py:6934`); production has no
+  Action row (categories 8–19, none is Action), even though
+  `_applied_migrations` lists `017_add_custom_field_groups.sql` — the runner
+  records a **failed** migration as applied (`db.py:102-118`), so the seed
+  rolled back. `cat_id = None` → NULL category → the client classifier saw no
+  category and fell through to "human note". 405 prod rows share this shape.
+  (Same missing-Action bug silently discarded invoice/COC/photo-report
+  history: `-1` FK violation swallowed by `except: pass`.)
+- **Fix:** `history_events.is_system_event` marker, set by every auto-log
+  writer and returned as `isSystemEvent` by both history GETs. The classifier
+  trusts the marker after the mail exclusion; the old `is_system`/Action
+  fallback remains for unmarked legacy rows. Import writers use the shared
+  `history_event_marker.is_auto_history_event()` predicate. Emails stay full
+  cards (not marked).
+- **Backfill:** `migrations/053_history_events_system_marker.sql` (on the
+  branch, **not applied to prod**). Candidate count 405 (all NULL-category
+  field changes); predicate also covers an `Action` category and the three
+  generated-document titles. No human note is matched (anchored shape, no
+  HTML/newlines).
+- **Tests:** `tests/test_history_system_events.mjs` 21, new
+  `tests/test_history_event_marker.py` 23, new local-build Playwright
+  `tests/playwright/history_system_marker.py` (passes; negative control
+  fails without the fix). Full Python suite branch 1,886 tests vs baseline
+  1,863, identical 25 pre-existing failing ids; Node 461 vs 453 pass.
+
+---
+
+## Previous session summary (2026-11-10 — v2.5.7 notification icons, Tasks-tile project link, Telegram project line)
 
 Ken (6:43 PM ET): three live bugs.
 

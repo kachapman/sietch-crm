@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Admin-safe: set/clear an API token's mail-send recipient lock (migration 053).
+"""Admin-safe: set/clear an API token's mail-send recipient lock (migration 054).
 
 DRY RUN BY DEFAULT. Not applied to prod.
 

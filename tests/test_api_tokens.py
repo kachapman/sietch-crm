@@ -157,7 +157,7 @@ class TestCreateStoresHashOnly(unittest.TestCase):
                 "id": 1, "name": "ro", "token_prefix": "sietch_xxxx",
                 "scope": "read", "created_by": 1, "created_at": None,
                 "expires_at": None, "restrictions": json.loads(params[6]),
-                # migration 053: per-token send lock (NULL for this token)
+                # migration 054: per-token send lock (NULL for this token)
                 "mail_send_locked_recipient": params[7],
             }
 

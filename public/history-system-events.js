@@ -5,13 +5,18 @@
  * should render as a compact single-line entry (icon + short text + timestamp)
  * with NO reply button. Human notes and emails stay as they are now."
  *
- * The history API returns `category: {id, title}` and the UI resolves the
- * category's `isSystem` flag from `GET /api/v2/history-categories`. Some
- * auto-logged rows (field changes) use the synthetic "Action" category, which
- * is not in the seed list, so its title is matched explicitly.
+ * Source of truth (2026-11-10): the server marks every auto-logged row with
+ * `isSystemEvent` on the history row. The marker is authoritative because a
+ * field change can be filed under ANY category (or none at all): on prod the
+ * synthetic "Action" category was missing, so field changes landed with a NULL
+ * category and rendered as full cards with a Reply button.
+ *
+ * The category checks (`isSystem` / `is_system`, then the known system titles)
+ * remain as a fallback for unmarked legacy rows until the backfill runs.
  *
  * Emails are excluded FIRST: "Mail Message" is a system category, but an email
- * event must keep its full rendering (body, attachments, reply thread).
+ * event must keep its full rendering (body, attachments, reply thread) even if
+ * the row carries the marker.
  *
  * Pure module (no DOM) so `tests/test_history_system_events.mjs` can import the
  * shipped functions instead of copying them.
@@ -29,6 +34,8 @@ const KNOWN_SYSTEM_TITLES = new Set([
 
 /**
  * @param {object} input
+ * @param {boolean} [input.isSystemEvent] authoritative server marker
+ * @param {boolean} [input.is_system_event] snake_case alias of the marker
  * @param {{title?:string,isSystem?:boolean,is_system?:boolean}|null} input.category
  * @param {boolean} [input.isMailEvent]   true for any email event / payload
  * @param {boolean} [input.hasMailPayload]
@@ -38,8 +45,11 @@ const KNOWN_SYSTEM_TITLES = new Set([
 export function isSystemHistoryEvent(input) {
   const o = input || {};
   // Emails never become compact, even though "Mail Message" is a system
-  // category — the full email card is the point.
+  // category and even if the row is marked — the full email card is the point.
   if (o.isMailEvent || o.hasMailPayload || o.hasMessageId) return false;
+  // Server-side marker: an auto-logged row is a system event regardless of
+  // the category it was filed under (or a missing category).
+  if (o.isSystemEvent === true || o.is_system_event === true) return true;
   const cat = o.category;
   if (!cat) return false;
   const title = String(cat.title || "").trim().toLowerCase();
