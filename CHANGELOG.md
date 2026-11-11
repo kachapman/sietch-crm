@@ -1,3 +1,38 @@
+## 2026-11-10 — v2.5.6: an account-settings Save no longer erases mail identity
+
+Ken (6:52 PM ET): "deploy the Save fix now with a backup". Code fix only —
+this entry ships with the deploy session.
+
+**Root cause.** `_handle_mail_account_update` cleared `oauth_identity`,
+`oauth_graph_identity`, `auth_error` and `auth_error_at` whenever the PUT body
+merely CONTAINED an `email` key, and the settings modal sent the whole form on
+every Save. Any display-name / sharing / tab-colour Save therefore wiped the
+identity stamps the reconnect callback had just written → `identityStatus`
+`unverifiable` → the red "Mail account needs reconnecting" banner and a refused
+`sync_gate` (accounts 8/9/10, three times on 2026-11-10).
+
+**Fix (server).** Identity + `auth_error` are cleared only when the submitted
+address really differs from the stored one (trimmed, case-insensitive), so a
+case/whitespace round-trip and every same-address Save keep them. A new
+invariant (`MAIL_ACCOUNT_PROTECTED_COLUMNS` +
+`_mail_account_protected_writes`) refuses any client-derived `SET` that would
+write an identity, OAuth token/expiry/scope or auth-error column; the explicit
+address-change clear is code appended after that check, never payload.
+
+**Fix (client).** Save sends only what changed: `email` is omitted when
+unchanged, and blank `password` / `smtp_password` fields are no longer sent
+(server: blank password now means "keep the stored one" — it used to write
+`''` and destroy a working IMAP/SMTP secret on every Save).
+
+**Audit.** Every other path that can touch identity/tokens/`auth_error`
+(share/unshare, sharing UI, folder settings, account toggles, sync-now,
+signature, create/test, `mail_oauth` record/refresh helpers, scanner refresh,
+OAuth callbacks/disconnects, OAuth-reconcile PUT) checked — table with
+file:line and verdicts in `plans/sietch/email-save-hotfix-2026-11-10.md`.
+New `tests/test_mail_account_save_identity.py` (21 tests, offline, stubbed DB)
+fails 9 assertions on the unfixed commit. VERSION 2.5.5 → 2.5.6; app.js
+cache-buster 3.7.54 → 3.7.55.
+
 ## 2026-11-10 — v2.5.5: drop the duplicate document-download tool + route
 
 Ken (5:44 PM ET): no duplicate tools — only add what is missing (text + OCR).
