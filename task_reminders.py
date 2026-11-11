@@ -107,18 +107,25 @@ def _sweep_once() -> int:
             db.execute("UPDATE tasks SET reminder_fired_at = NOW() WHERE id = %s", (task_id,))
             continue
         try:
+            # opportunity_id is load-bearing: the notification dispatcher joins
+            # opportunities for the Telegram "Project:" line. Leaving it NULL
+            # printed a bogus placeholder project on every reminder even though
+            # the task was linked (live 2026-11-10).
+            opportunity_id = task.get("opportunity_id")
             db.execute(
-                """INSERT INTO notifications (user_id, type, message, payload, created_at)
-                   VALUES (%s, %s, %s, %s, NOW())""",
+                """INSERT INTO notifications (user_id, type, opportunity_id, message, payload, created_at)
+                   VALUES (%s, %s, %s, %s, %s, NOW())""",
                 (
                     owner_id,
                     _notification_type,
+                    opportunity_id,
                     f"Reminder: {title}",
                     json.dumps({"taskId": task_id, "taskTitle": title}),
                 ),
             )
             event_bus.publish("notification:new", {
                 "type": "task_reminder", "message": f"Reminder: {title}",
+                "opportunityId": opportunity_id,
                 "payload": {"task_id": task_id, "taskTitle": title},
             }, user_ids=[str(owner_id)])
             event_bus.publish("task:reminder", {

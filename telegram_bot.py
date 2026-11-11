@@ -1938,7 +1938,9 @@ def main() -> None:
 
         notification_id = data.get("notificationId")
         opp_id = data.get("opportunityId")
-        project_title = data.get("projectTitle", "Unknown Project")
+        # Blank means "no project on this notification" (server returns "" now);
+        # never print a placeholder name.
+        project_title = data.get("projectTitle") or ""
         actor_user_id = data.get("actorUserId")
         event_id = data.get("eventId")
         if not notification_id or not opp_id:
@@ -1974,10 +1976,10 @@ def main() -> None:
                     )
                 if resp.status_code in (200, 201):
                     label = "Reply added" if event_id else "Note added"
-                    await _reply_html(
-                        update,
-                        f"\u2705 <b>{label}</b>\nProject: {_esc(project_title)}",
-                    )
+                    confirmation = f"\u2705 <b>{label}</b>"
+                    if project_title:
+                        confirmation += f"\nProject: {_esc(project_title)}"
+                    await _reply_html(update, confirmation)
                     # The replier has now seen this notification's content —
                     # mark it read so the drawer badge clears without a manual
                     # visit. Best-effort: a failure here must not fail the reply.

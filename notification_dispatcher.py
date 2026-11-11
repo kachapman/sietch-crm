@@ -617,14 +617,23 @@ def _process_pending_notifications() -> int:
         # is the final guard; this filter just avoids waking for them.
         rows = db.query_dicts(
             """SELECT n.id, n.user_id, n.type, n.message, n.payload,
-                      n.opportunity_id, n.actor_user_id,
+                      COALESCE(n.opportunity_id, tk.opportunity_id) AS opportunity_id,
+                      n.actor_user_id,
                       n.telegram_sent, n.email_sent,
                       u.display_name AS actor_name,
                       o.title AS project_title,
                       o.project_number
                FROM notifications n
                LEFT JOIN users u ON u.id = n.actor_user_id
-               LEFT JOIN opportunities o ON o.id = n.opportunity_id
+               -- Legacy task_reminder rows were inserted without
+               -- opportunity_id (fixed in task_reminders.py 2026-11-10), so
+               -- resolve the task's project from the payload as a fallback.
+               -- The regex guard keeps a non-numeric payload value from
+               -- breaking the cast for every other notification type.
+               LEFT JOIN tasks tk ON tk.id = CASE
+                   WHEN (n.payload->>'taskId') ~ '^[0-9]+$'
+                   THEN (n.payload->>'taskId')::int END
+               LEFT JOIN opportunities o ON o.id = COALESCE(n.opportunity_id, tk.opportunity_id)
                WHERE n.user_id IS NOT NULL
                  AND ((n.telegram_sent IS NOT TRUE
                        AND (n.telegram_next_retry_at IS NULL OR n.telegram_next_retry_at <= NOW()))
@@ -643,7 +652,9 @@ def _process_pending_notifications() -> int:
         user_id = row["user_id"]
         project_id = row.get("opportunity_id")
         project_number = row.get("project_number")
-        project_title = row.get("project_title") or "Unknown Project"
+        # Never invent a placeholder: when the task/shift genuinely has no
+        # project, _project_link() omits the whole "Project:" line.
+        project_title = row.get("project_title") or ""
         actor_name = row.get("actor_name") or "Someone"
 
         # ── Telegram channel ──

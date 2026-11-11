@@ -19468,7 +19468,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         "notificationId": row["notification_id"],
                         "opportunityId": row["opportunity_id"],
                         "actorUserId": row["actor_user_id"],
-                        "projectTitle": row.get("project_title") or "Unknown Project",
+                        "projectTitle": row.get("project_title") or "",
                         "eventId": payload_data.get("event_id"),
                     })
                 else:
