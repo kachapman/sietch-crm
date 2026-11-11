@@ -17,6 +17,14 @@ import {
   isSystemHistoryEvent,
   systemEventText,
 } from "./history-system-events.js?v=3.7.58";
+import {
+  mailListSignature,
+  shouldSkipMailListRender,
+  mailTabsSignature,
+  accountSettingsSaveIsAllowed,
+  createCoalescedRunner,
+  MAIL_NEW_RELOAD_DEBOUNCE_MS,
+} from "./mail-modal-stability.js?v=3.7.59";
 
 /**
  * Auto-hide scrollbars: add `is-scrolling` to the SPECIFIC element
@@ -320,8 +328,9 @@ case "notification:new":
       }
       break;
     case "mail:new":
-      if (state.mailModalOpen) loadMailMessagesForModal(true);
-      renderMailUnreadBadge();
+      // Coalesce: a scanner poll publishes one event per new message.
+      // A full list rebuild per event is what made the inbox flicker.
+      _scheduleMailSyncReload();
       break;
   }
 }
@@ -879,6 +888,7 @@ const state = {
   presenceSelectedUserId: null,
   hasPresenceTile: false,   // persisted via tileLayout or a small flag; controls whether the tile is in the top panel
 
+  mailModalOpen: false,
   bookmarkedDeals: [],      // [{ oppId, title, addedAt }]
   activeBookmarkTab: null,  // oppId of the expanded preview
   eventLog: [],             // persistent event log (loaded from localStorage)
@@ -21341,6 +21351,8 @@ let mailState = {
   selected: new Set(),
   expandedIds: new Set(),    // IDs of inline-expanded emails (survives background refresh)
   expandedContent: {},       // id → fullMail object cache for expanded emails
+  listSignature: null,
+  listRenderCount: 0,
 };
 let composeAutoSaveTimer = null;
 let composeAttachments = [];
@@ -21411,6 +21423,27 @@ function getMailMessageIsRead(m) {
   return false;
 }
 
+
+// --- Mail modal stability (2026-11-10) ---
+// Coalesce scanner mail:new bursts, ignore stale list fetches, and keep the
+// reused Edit Mail Account form from saving the previous account's name.
+let _mailLoadGen = 0;
+let _accountSettingsLoadGen = 0;
+let _accountSettingsLoadedId = null;
+
+const _scheduleMailSyncReload = createCoalescedRunner(() => {
+  const modal = $("#mail-inbox-modal");
+  const open = !!(state.mailModalOpen || (modal && !modal.classList.contains("hidden")));
+  if (!open) return;
+  loadMailMessagesForModal(true);
+  renderMailUnreadBadge();
+}, MAIL_NEW_RELOAD_DEBOUNCE_MS);
+
+function setAccountSettingsSaveEnabled(enabled) {
+  const btn = $("#account-settings-save");
+  if (btn) btn.disabled = !enabled;
+}
+
 function bindMailInboxButton() {
   // Header btn attached early in init() for robustness; this function now only ensures other setup if needed.
   const btn = $("#mail-inbox-btn");
@@ -21432,6 +21465,7 @@ async function openMailInboxModal() {
   const modal = $("#mail-inbox-modal");
   if (!modal) return;
   modal.classList.remove("hidden");
+  state.mailModalOpen = true;
   // Reset layout state
   const mailMainArea = $('.mail-main-area');
   if (mailMainArea) {
@@ -21470,7 +21504,7 @@ async function openMailInboxModal() {
   if (inboxContainer) { inboxContainer.classList.remove('hidden'); inboxContainer.style.flex = ''; }
   loadMailDashboardReadIds();
   resetLinkDealDropdown();
-  mailState = { accounts: [], messages: [], pageSize: 50, page: 1, pages: 1, search: '', selected: new Set(), activeAccount: null, activeFolder: 'INBOX', activeTag: null, threaded: false, expandedIds: new Set(), expandedContent: {} };
+  mailState = { accounts: [], messages: [], pageSize: 50, page: 1, pages: 1, search: '', selected: new Set(), activeAccount: null, activeFolder: 'INBOX', activeTag: null, threaded: false, expandedIds: new Set(), expandedContent: {}, listSignature: null, listRenderCount: 0 };
   $("#mail-search-input").value = "";
   await loadMailAccountsForModal();
   await renderMailTabs();
@@ -21483,8 +21517,8 @@ async function openMailInboxModal() {
   await updateTrashCount();
   attachMailModalListeners();
 
-  // SSE handles real-time mail updates (mail:new events)
-  // No periodic auto-refresh needed
+  // SSE mail:new events are coalesced by _scheduleMailSyncReload
+  // (no per-message full redraw, no periodic auto-refresh interval).
 }
 
  async function renderMailTabs() {
@@ -21530,13 +21564,22 @@ async function openMailInboxModal() {
     if (state.currentUserIsAdmin) {
       html += `<button type="button" class="mail-inbox-tab" data-mailtab="scanner-admin"><i class="ti ti-settings" style="margin-right:0.3rem;"></i>Admin</button>`;
     }
-    tabsEl.innerHTML = html;
+    const tabsSig = mailTabsSignature(accounts, mailState.activeAccount, state.currentUserIsAdmin);
+    if (tabsEl.dataset.tabsSig !== tabsSig) {
+      tabsEl.innerHTML = html;
+      tabsEl.dataset.tabsSig = tabsSig;
+    }
 
-    // Bind tab clicks (delegated)
-    tabsEl.addEventListener('click', (e) => {
-      const btn = e.target.closest('.mail-inbox-tab');
-      if (btn) switchMailTab(btn);
-    });
+    // Bind tab clicks ONCE. innerHTML does not remove listeners on tabsEl,
+    // so a bind on every render stacked switchMailTab (live bug 2026-11-10:
+    // switching mailboxes flashed "Loading emails…" once per prior render).
+    if (!tabsEl.dataset.clickBound) {
+      tabsEl.dataset.clickBound = '1';
+      tabsEl.addEventListener('click', (e) => {
+        const btn = e.target.closest('.mail-inbox-tab');
+        if (btn) switchMailTab(btn);
+      });
+    }
 
     // Update unread badges
     for (const acct of accounts) {
@@ -21572,10 +21615,14 @@ async function openMailInboxModal() {
       ? `<button type="button" class="mail-inbox-tab" data-mailtab="scanner-admin"><i class="ti ti-settings" style="margin-right:0.3rem;"></i>Admin</button>`
       : '';
     tabsEl.innerHTML = `<button type="button" class="mail-inbox-tab active" data-mailtab="inbox" data-account-id="crm"><i class="ti ti-building" style="margin-right:0.3rem;"></i>CRM Mail</button>${adminTab}`;
-    tabsEl.addEventListener('click', (e) => {
-      const btn = e.target.closest('.mail-inbox-tab');
-      if (btn) switchMailTab(btn);
-    });
+    delete tabsEl.dataset.tabsSig;
+    if (!tabsEl.dataset.clickBound) {
+      tabsEl.dataset.clickBound = '1';
+      tabsEl.addEventListener('click', (e) => {
+        const btn = e.target.closest('.mail-inbox-tab');
+        if (btn) switchMailTab(btn);
+      });
+    }
     mailState.activeAccount = 'crm';
   }
 }
@@ -23407,7 +23454,22 @@ function openAccountSettingsModal(editAccountId, opts) {
     if (titleEl) titleEl.textContent = 'Edit Mail Account';
     if (deleteBtn) deleteBtn.style.display = '';
     if (idField) idField.value = editAccountId;
+    // Reset immediately: the modal is reused, so the previous account's
+    // name/email/originalEmail would otherwise stay in the form until the
+    // fetch returns. A Save in that gap wrote the previous display_name
+    // onto the newly selected account (live bug 2026-11-10, MDM labeled
+    // "Estimates Masterx").
+    const gen = ++_accountSettingsLoadGen;
+    _accountSettingsLoadedId = null;
+    delete modal.dataset.originalEmail;
+    const nameField = $('#account-settings-name');
+    const emailField = $('#account-settings-email');
+    if (nameField) nameField.value = '';
+    if (emailField) emailField.value = '';
+    setAccountSettingsSaveEnabled(false);
     api(`/api/v2/mail/accounts`).then(data => {
+      if (gen !== _accountSettingsLoadGen) return;
+      if (accountSettingsAccountId() !== editAccountId) return;
       const acct = (data.accounts || []).find(a => a.id == editAccountId);
       if (acct) {
         // Remember the stored address so Save only submits `email` when the
@@ -23538,6 +23600,8 @@ function openAccountSettingsModal(editAccountId, opts) {
         // Graph sendMail status (Microsoft only). Drives the connect/disconnect UI
         // and the compose-window banner.
         updateGraphStatusBlock(acct, editAccountId);
+        _accountSettingsLoadedId = editAccountId;
+        setAccountSettingsSaveEnabled(true);
         // Sharing section
         if (sharingSection) {
           if (acct.is_crm_mail === true) {
@@ -23612,6 +23676,8 @@ function openAccountSettingsModal(editAccountId, opts) {
     if (smtpPwSt) smtpPwSt.textContent = '';
     // Hide sharing section for new accounts
     if (sharingSection) sharingSection.classList.add('hidden');
+    _accountSettingsLoadedId = null;
+    setAccountSettingsSaveEnabled(true);
   }
 
   // Bind dismiss
@@ -23693,6 +23759,10 @@ function openAccountSettingsModal(editAccountId, opts) {
     saveBtn.dataset.bound = '1';
     saveBtn.addEventListener('click', async () => {
       const id = $('#account-settings-id').value;
+      if (!accountSettingsSaveIsAllowed(id, _accountSettingsLoadedId)) {
+        showToast('Account details are still loading — wait a moment and try Save again', true);
+        return;
+      }
       const selectedRadio = modal.querySelector('input[name="account-auth-method"]:checked');
       const authMethod = selectedRadio?.value || 'password';
 
@@ -24246,6 +24316,8 @@ function attachMailModalListeners() {
 
   // Close (X button and footer Close button)
   function closeMailModal() {
+    state.mailModalOpen = false;
+    _scheduleMailSyncReload.cancel();
     modal.classList.add("hidden");
     minimizedEmailState = null;
     if (_mailInboxAutoRefreshTimer) { clearInterval(_mailInboxAutoRefreshTimer); _mailInboxAutoRefreshTimer = null; }
@@ -24898,7 +24970,16 @@ async function loadMailMessagesForModal(background) {
   if (mailState.threaded) return loadMailThreads();
   const list = $("#mail-list");
   if (!list) return;
-  if (!background) list.innerHTML = '<div class="mail-empty">Loading emails…</div>';
+  const gen = ++_mailLoadGen;
+  const loadAccount = mailState.activeAccount;
+  const loadFolder = mailState.activeFolder;
+  const loadSearch = mailState.search;
+  // Do not wipe an already-rendered list to "Loading emails…" — that flash
+  // is the flicker on a mailbox-tab switch, especially when stacked clicks
+  // re-entered this function. Only show the placeholder when the list is empty.
+  if (!background && !list.querySelector('.mail-item')) {
+    list.innerHTML = '<div class="mail-empty">Loading emails…</div>';
+  }
 
   // Save scroll position + expanded state for background refresh
   const scrollContainer = list.parentElement;
@@ -24973,6 +25054,15 @@ async function loadMailMessagesForModal(background) {
     params.push(`page_size=${mailState.pageSize || 50}`);
     if (params.length) url += '?' + params.join('&');
     const data = await api(url);
+    if (gen !== _mailLoadGen) return;
+    if (mailState.activeAccount !== loadAccount || mailState.activeFolder !== loadFolder
+        || mailState.search !== loadSearch) return;
+    const nextSig = mailListSignature(data.messages || [], data.page || 1,
+      data.total || (data.messages || []).length);
+    if (background && shouldSkipMailListRender(mailState.listSignature, nextSig)) {
+      return;
+    }
+    mailState.listSignature = nextSig;
     mailState.messages = data.messages || [];
     mailState.page = data.page || 1;
     mailState.total = data.total || mailState.messages.length;
@@ -25627,6 +25717,7 @@ function mailSnippetText(m) {
 function renderMailList(msgs) {
   const list = $("#mail-list");
   if (!list) return;
+  mailState.listRenderCount = (mailState.listRenderCount || 0) + 1;
   list.innerHTML = "";
   if (!msgs || !msgs.length) {
     list.innerHTML = '<div class="mail-empty">No emails in this inbox/page.</div>';
@@ -30120,6 +30211,8 @@ function minimizeEmailModal() {
     method: 'PUT',
     body: JSON.stringify({ email: minimizedEmailState }),
   }).catch(() => {});
+  state.mailModalOpen = false;
+  _scheduleMailSyncReload.cancel();
   modal.classList.add("hidden");
   const trigger = $("#email-trigger");
   if (trigger) {

@@ -1,3 +1,30 @@
+## 2026-11-10 — v2.5.13: mail modal stability (merge only, not deployed)
+
+Ken (11:03 PM ET, own go): restore the MDM account name, share it with the
+test user, and fix the reused Edit Mail Account window — merge only, deploy
+needs his go. Also fix the Mail inbox flickering during sync and tab switches.
+
+- Edit Mail Account: on account switch, immediately clear name/email and
+  `originalEmail`, disable Save until the loaded account id matches the form
+  id, and ignore stale fetches (generation token). A Save in the gap after
+  switching from Estimates Masterx (id 8) had written that label onto
+  MDM (id 10).
+- Mail inbox flicker: `renderMailTabs` bound a new delegated click listener
+  on every call (innerHTML does not remove listeners on the container), so
+  switching mailboxes ran `switchMailTab` N times and each load wiped the
+  list to "Loading emails…". Listener is bound once; unchanged tab sets skip
+  a full rebuild.
+- `mail:new` (one SSE event per newly stored message during a scanner poll)
+  is coalesced (400ms trailing) instead of a full list redraw per message.
+  `state.mailModalOpen` is now set on open/close so those events actually
+  apply while the modal is open, without the flicker.
+- List loads use a generation gate so a stale response after a rapid tab
+  switch is ignored; background reloads skip `renderMailList` when the
+  list signature is unchanged; a non-empty list is not replaced with the
+  loading placeholder.
+
+Not deployed. Cache-buster `app.js?v=3.7.59`.
+
 ## 2026-11-10 — v2.5.12: seed the missing 016/017 history categories
 
 Ken (10:10 PM ET): add the Action history category and the four task
