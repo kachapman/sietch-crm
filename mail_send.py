@@ -323,6 +323,9 @@ def try_send_for_account(
             attachments=attachments,
             oauth_provider=oauth_provider if use_oauth_smtp else None,
             oauth_access_token=oauth_access_token if use_oauth_smtp else None,
+            # The generated Message-ID is written here so the HTTP handler can
+            # persist it on the mail_outgoing row (2026-11-11).
+            result_meta=result_meta,
         )
     except Exception as e:
         logger.exception("SMTP send threw for account=%s", account_id)

@@ -6,7 +6,13 @@ Covers, with stubs/mocks (no live IMAP, no Postgres):
     returns that UID — it must be dropped client-side (regression).
   - The incremental range starts at `last_seen + 1`, not `last_seen`.
   - A message older than the account's retention window is NOT imported
-    (no message row, no attachments stored) and the watermark advances past it.
+    (no message row, no attachments stored) and, since 2026-11-11, the
+    watermark does NOT advance past it in that poll (only a contiguous prefix
+    of resolved UIDs moves the watermark).
+  - Undated / 1900-sentinel messages ARE imported (Date → INTERNALDATE →
+    Received → import time) and are never marked skipped_older_than_retention.
+  - A failed FETCH, a failed STORE or a remaining retention skip holds the
+    watermark immediately before the first unresolved UID.
   - The retention purge KEEPS the processed key, so the next poll does not
     re-import the purged message.
   - The processed key includes the FOLDER (a Sent UID must not collide with
@@ -363,6 +369,154 @@ class TestRetentionSkipOnImport(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
+# Undated / 1900-sentinel messages are IMPORTED (2026-11-11)
+# --------------------------------------------------------------------------
+class _FakeImapMessage:
+    """Minimal imap_tools MailMessage stand-in for _fetch_single_message."""
+
+    def __init__(self, uid, date=None, headers=None, internal_date=None):
+        self.uid = str(uid)
+        self.date = date
+        self.headers = headers or {}
+        self.internal_date = internal_date
+        self.attachments = []
+        self.from_values = None
+        self.to_values = []
+        self.subject = "s"
+        self.text = "body"
+        self.html = ""
+        self.flags = []
+        self.obj = None
+
+
+def _single_message_mailbox(message):
+    """A fake MailBox class that returns exactly `message` for any fetch."""
+
+    class _Box:
+        client = None
+
+        def __init__(self, host, port=None):
+            self.folder = self
+            self._message = message
+
+        def set(self, folder):
+            pass
+
+        def login(self, user, password):
+            pass
+
+        def xoauth2(self, user, token):
+            pass
+
+        def fetch(self, criteria=None, mark_seen=False, bulk=False):
+            return [self._message]
+
+        def logout(self):
+            pass
+
+    return _Box
+
+
+def _internaldate_now(days=0):
+    return datetime.now(timezone.utc) - timedelta(days=days)
+
+
+class TestUndatedMessagesImport(unittest.TestCase):
+    """Live bug 2026-11-11: SMTP sends had no Date header, imap_tools reported
+    1900-01-01, and the 90-day retention guard skipped them as ancient."""
+
+    def _fetch(self, date=None, headers=None, internal_date=None, uid=12397):
+        message = _FakeImapMessage(uid, date=date, headers=headers,
+                                   internal_date=internal_date)
+        with _TempStaging(), \
+            patch.object(ms, "MailBox", _single_message_mailbox(message)):
+            return ms._fetch_single_message(_cfg(), "INBOX", uid)
+
+    def test_1900_sentinel_does_not_produce_a_1900_date(self):
+        msg = self._fetch(date=datetime(1900, 1, 1))
+        self.assertIsNotNone(msg)
+        self.assertNotIn("1900", msg["date"])
+        self.assertNotEqual(msg["date_source"], "header")
+
+    def test_1900_sentinel_prefers_internaldate(self):
+        internal = datetime(2026, 7, 17, 9, 20, 0, tzinfo=timezone.utc).strftime(
+            "%d-%b-%Y %H:%M:%S +0000")
+        msg = self._fetch(date=datetime(1900, 1, 1), internal_date=internal)
+        self.assertEqual(msg["date_source"], "internaldate")
+        self.assertEqual(msg["date"], "2026-07-17T09:20:00Z")
+
+    def test_1900_aware_sentinel_is_also_undated(self):
+        msg = self._fetch(date=datetime(1900, 1, 1, tzinfo=timezone.utc))
+        self.assertNotIn("1900", msg["date"])
+
+    def test_missing_date_uses_received_header(self):
+        headers = {"received": ("from a by b with ESMTPS id x;\n"
+                                " Mon, 9 Nov 2026 13:20:03 -0500",)}
+        msg = self._fetch(date=None, headers=headers)
+        self.assertEqual(msg["date_source"], "received")
+        self.assertEqual(msg["date"], "2026-11-09T18:20:03Z")
+
+    def test_missing_date_and_no_fallbacks_uses_import_time(self):
+        msg = self._fetch(date=None)
+        self.assertEqual(msg["date_source"], "import")
+        self.assertTrue(msg["date"].endswith("Z"))
+        self.assertNotIn("1900", msg["date"])
+
+    def test_a_real_date_is_kept_verbatim(self):
+        msg = self._fetch(date=datetime(2026, 11, 9, 18, 20, 3, tzinfo=timezone.utc))
+        self.assertEqual(msg["date_source"], "header")
+        self.assertEqual(msg["date"], "2026-11-09T18:20:03Z")
+
+    def test_sentinel_message_imports_and_is_never_retention_skipped(self):
+        internal = _internaldate_now(days=1).strftime("%d-%b-%Y %H:%M:%S +0000")
+        msg = self._fetch(date=datetime(1900, 1, 1), internal_date=internal)
+        stored = []
+        with _TempProcessedIds(), \
+            patch.object(ms, "_store_message",
+                         side_effect=lambda m, c: stored.append(m) or 1), \
+            patch.object(ms, "_append_log"), \
+            patch.object(ms, "logger"):
+            out = ms._process_message(msg, _cfg(retention_days=90))
+        self.assertNotEqual(out.get("status"), "skipped_older_than_retention")
+        self.assertEqual(len(stored), 1, "an undated message must be imported")
+        self.assertEqual(stored[0]["date_source"], "internaldate")
+
+    def test_a_really_old_date_is_still_skipped(self):
+        msg = self._fetch(date=datetime.now(timezone.utc) - timedelta(days=150))
+        with _TempProcessedIds(), \
+            patch.object(ms, "_store_message", return_value=1), \
+            patch.object(ms, "_append_log"), \
+            patch.object(ms, "logger"):
+            out = ms._process_message(msg, _cfg(retention_days=90))
+        self.assertEqual(out.get("status"), "skipped_older_than_retention")
+
+    def test_store_message_persists_the_date_source(self):
+        writes = []
+
+        def fake_query_one(sql, params=None, *a, **k):
+            if "INSERT INTO mail_messages" in sql:
+                writes.append((sql, params))
+                return {"id": 9}
+            return None
+
+        mock_db = MagicMock()
+        mock_db.query_one.side_effect = fake_query_one
+        msg = {
+            "uid": "12397", "message_id": "", "from": "a@b.c", "to": "d@e.f",
+            "subject": "no date", "body_text": "b", "body_html": "",
+            "date": "2026-11-11T12:00:00Z", "date_source": "import",
+            "folder": "INBOX", "attachments": [], "raw_headers": "",
+        }
+        with _TempProcessedIds(), patch.object(ms, "db", mock_db), \
+            patch.object(ms, "logger"):
+            msg_id = ms._store_message(msg, _cfg())
+        self.assertEqual(msg_id, 9)
+        sql, params = writes[0]
+        self.assertIn("date_source", sql)
+        self.assertIn("import", params)
+
+
+# --------------------------------------------------------------------------
 # The full loop: poll twice, nothing is imported twice
 # --------------------------------------------------------------------------
 class TestNoReimportLoop(unittest.TestCase):
@@ -421,8 +575,14 @@ class TestNoReimportLoop(unittest.TestCase):
                       ("already_processed", "skipped_older_than_retention"))
         self.assertNotEqual(second[0].get("status"), "processed")
 
-    def test_watermark_advances_past_a_skipped_message(self):
-        """The watermark must still advance past a skipped message."""
+    def test_watermark_does_not_advance_past_a_skipped_message(self):
+        """BEHAVIOUR CHANGE 2026-11-11: a retention skip holds the watermark.
+
+        The old rule advanced to the max fetched UID even when the message was
+        skipped, which is how the six stranded SMTP messages were marked done
+        without ever being imported. The watermark now stays immediately
+        before the first unresolved UID so a later poll retries it.
+        """
         saved = {}
 
         def fake_fetch(cfg, folder, since=None, uid_min=None):
@@ -439,7 +599,149 @@ class TestNoReimportLoop(unittest.TestCase):
                          side_effect=lambda a, f, v, l: saved.update(validity=v, last=l)), \
             patch.object(ms, "logger"):
             ms._poll_mailbox_cfg(_cfg(retention_days=90, folders=["Sent"]))
+        self.assertEqual(saved.get("last"), 4000,
+                         "the watermark must stay before the skipped UID")
+
+    def test_next_poll_advances_once_the_skip_is_already_processed(self):
+        """The skip is marked processed, so the NEXT poll resolves it and the
+        watermark can move on. Retrying is not a permanent stall."""
+        saved = {}
+
+        def fake_fetch(cfg, folder, since=None, uid_min=None):
+            return [{"uid": "4114", "subject": "s", "from": "f", "folder": folder,
+                     "date": _old_date(150), "attachments": []}]
+
+        with _TempProcessedIds(), \
+            patch.object(ms, "_get_folder_watermark", return_value=(7, 4000)), \
+            patch.object(ms, "_read_folder_status", return_value=(7, 4115)), \
+            patch.object(ms, "_fetch_messages", side_effect=fake_fetch), \
+            patch.object(ms, "_process_message", return_value={"status": "skipped_older_than_retention"}), \
+            patch.object(ms, "_save_folder_watermark",
+                         side_effect=lambda a, f, v, l: saved.update(last=l)), \
+            patch.object(ms, "logger"):
+            ms._poll_mailbox_cfg(_cfg(retention_days=90, folders=["Sent"]))
+        self.assertEqual(saved.get("last"), 4000)
+
+        with _TempProcessedIds(), \
+            patch.object(ms, "_get_folder_watermark", return_value=(7, 4000)), \
+            patch.object(ms, "_read_folder_status", return_value=(7, 4115)), \
+            patch.object(ms, "_fetch_messages", side_effect=fake_fetch), \
+            patch.object(ms, "_process_message", return_value={"status": "already_processed"}), \
+            patch.object(ms, "_save_folder_watermark",
+                         side_effect=lambda a, f, v, l: saved.update(last=l)), \
+            patch.object(ms, "logger"):
+            ms._poll_mailbox_cfg(_cfg(retention_days=90, folders=["Sent"]))
         self.assertEqual(saved.get("last"), 4114)
+
+
+class TestWatermarkHoldsOnFailures(unittest.TestCase):
+    """2026-11-11: the watermark only moves through resolved UIDs."""
+
+    def _poll(self, results):
+        saved = {}
+        with _TempProcessedIds(), \
+            patch.object(ms, "_list_imap_folders", return_value=[]), \
+            patch.object(ms, "_get_folder_watermark", return_value=(7, 1000)), \
+            patch.object(ms, "_read_folder_status", return_value=(7, 1010)), \
+            patch.object(ms, "_fetch_messages", side_effect=lambda *a, **k: iter(results)), \
+            patch.object(ms, "_process_message",
+                         side_effect=lambda msg, cfg: {"status": msg.get("_status", "processed"),
+                                                       "uid": msg.get("uid")}), \
+            patch.object(ms, "_save_folder_watermark",
+                         side_effect=lambda a, f, v, l: saved.update(last=l)), \
+            patch.object(ms, "logger"):
+            ms._poll_mailbox_cfg(_cfg(folders=["INBOX"]))
+        return saved
+
+    def test_all_resolved_advances_to_the_max_uid(self):
+        saved = self._poll([
+            {"uid": "1003", "folder": "INBOX"},
+            {"uid": "1002", "folder": "INBOX"},
+            {"uid": "1001", "folder": "INBOX"},
+        ])
+        self.assertEqual(saved.get("last"), 1003)
+
+    def test_fetch_failure_holds_the_watermark_below_that_uid(self):
+        saved = self._poll([
+            {"uid": "1003", "folder": "INBOX"},
+            {"uid": "1002", "folder": "INBOX", "fetch_failed": True},
+            {"uid": "1001", "folder": "INBOX"},
+        ])
+        self.assertEqual(saved.get("last"), 1001,
+                         "must stop immediately before the failed UID 1002")
+
+    def test_store_failure_holds_the_watermark_below_that_uid(self):
+        saved = self._poll([
+            {"uid": "1003", "folder": "INBOX"},
+            {"uid": "1002", "folder": "INBOX", "_status": "store_failed"},
+            {"uid": "1001", "folder": "INBOX"},
+        ])
+        self.assertEqual(saved.get("last"), 1001)
+
+    def test_newer_resolved_messages_are_not_passed_over_a_blocked_uid(self):
+        saved = self._poll([
+            {"uid": "1010", "folder": "INBOX"},
+            {"uid": "1005", "folder": "INBOX", "_status": "skipped_older_than_retention"},
+            {"uid": "1003", "folder": "INBOX"},
+        ])
+        self.assertEqual(saved.get("last"), 1003,
+                         "1003 and 1010 resolved, but 1005 never did")
+
+    def test_failed_fetch_is_not_processed(self):
+        """A fetch-failure marker must never reach _process_message (nothing to
+        store, and the message is retried on a later poll)."""
+        processed = []
+        with _TempProcessedIds(), \
+            patch.object(ms, "_list_imap_folders", return_value=[]), \
+            patch.object(ms, "_get_folder_watermark", return_value=(7, 1000)), \
+            patch.object(ms, "_read_folder_status", return_value=(7, 1010)), \
+            patch.object(ms, "_fetch_messages",
+                         side_effect=lambda *a, **k: iter([
+                             {"uid": "1002", "folder": "INBOX", "fetch_failed": True}])), \
+            patch.object(ms, "_process_message",
+                         side_effect=lambda msg, cfg: processed.append(msg) or {"status": "processed"}), \
+            patch.object(ms, "_save_folder_watermark"), \
+            patch.object(ms, "logger"):
+            out = ms._poll_mailbox_cfg(_cfg(folders=["INBOX"]))
+        self.assertEqual(processed, [])
+        self.assertEqual(out[0].get("status"), "fetch_failed")
+
+    def test_real_fetch_generator_reports_a_fetch_error_as_a_marker(self):
+        """`_fetch_messages` must not silently drop a UID whose FETCH threw —
+        otherwise the poll loop can never know to hold the watermark."""
+        import scanner.mail_scanner as _ms
+
+        class _MiniMsg:
+            def __init__(self, uid):
+                self.uid = str(uid)
+
+        class _BoomBox:
+            def __init__(self, host, port=None):
+                self.folder = self
+
+            def set(self, folder):
+                pass
+
+            def login(self, user, password):
+                pass
+
+            def xoauth2(self, user, token):
+                pass
+
+            def fetch(self, criteria=None, mark_seen=False, bulk=False):
+                crit = str(criteria or "")
+                if ":" in crit:          # the UID-listing pass
+                    return [_MiniMsg(1001), _MiniMsg(1002)]
+                raise RuntimeError("IMAP connection dropped")
+
+            def logout(self):
+                pass
+
+        with _TempStaging(), patch.object(_ms, "MailBox", _BoomBox):
+            out = list(_ms._fetch_messages(_cfg(), "INBOX", uid_min=1000))
+        self.assertEqual([m.get("uid") for m in out], ["1002", "1001"])
+        self.assertTrue(all(m.get("fetch_failed") for m in out),
+                        "a failed FETCH must be reported, not dropped")
 
 
 # --------------------------------------------------------------------------

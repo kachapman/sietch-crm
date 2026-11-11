@@ -827,6 +827,9 @@ CREATE TABLE mail_messages (
     -- tz-aware UTC (migration 048, live bug 2026-11-09). A plain TIMESTAMP
     -- made the stored instant depend on the DB session timezone.
     date_received TIMESTAMPTZ,
+    -- Which fallback supplied date_received (migration 056, 2026-11-11):
+    -- 'header' / 'internaldate' / 'received' / 'import'. NULL on older rows.
+    date_source TEXT,
     is_read BOOLEAN DEFAULT FALSE,
     is_flagged BOOLEAN DEFAULT FALSE,
     is_archived BOOLEAN DEFAULT FALSE,
@@ -933,7 +936,9 @@ CREATE TABLE mail_outgoing (
     created_by INTEGER REFERENCES users(id),
     created_at TIMESTAMP DEFAULT NOW(),
     attachments_json JSONB,
-    send_method TEXT
+    send_method TEXT,
+    -- The Message-ID actually placed on the wire (migration 056, 2026-11-11).
+    message_id TEXT
 );
 
 CREATE INDEX idx_mail_outgoing_deal ON mail_outgoing(deal_id);
@@ -1335,7 +1340,8 @@ INSERT INTO _applied_migrations (filename) VALUES
     ('052_ocr_queue_cache.sql'),
     ('053_history_events_system_marker.sql'),
     ('054_api_token_mail_send_lock.sql'),
-    ('055_seed_missing_history_categories.sql')
+    ('055_seed_missing_history_categories.sql'),
+    ('056_mail_date_source_and_outgoing_message_id.sql')
 ON CONFLICT (filename) DO NOTHING;
 
 

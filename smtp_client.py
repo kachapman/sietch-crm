@@ -9,7 +9,7 @@ from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email import encoders
-from email.utils import formataddr
+from email.utils import formataddr, formatdate, make_msgid
 
 logger = logging.getLogger("sietch.smtp")
 
@@ -19,6 +19,56 @@ SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Sietch CRM")
 SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
+
+# Headers that MUST survive a switch to multipart/mixed. Only From/To/Subject/Cc
+# used to be copied onto the wrapper, so Date and Message-ID (when present)
+# were silently dropped from the message that actually went on the wire.
+_WRAPPER_HEADERS = ("From", "To", "Subject", "Cc", "Date", "Message-ID")
+
+
+def message_domain(sender: str) -> str | None:
+    """The domain of the address that is actually sending, or None.
+
+    Used for `Message-ID`. There is deliberately NO default account: the
+    domain comes from the From/SMTP login the caller passes, and a value with
+    no "@" yields None (the caller then uses the local hostname, which is a
+    Message-ID domain fallback, never a different mailbox).
+    """
+    addr = (sender or "").strip()
+    if "@" not in addr:
+        return None
+    # A display-name form ("Name <user@example.com>") still resolves.
+    addr = addr.rsplit("<", 1)[-1] if "<" in addr else addr
+    domain = addr.rsplit("@", 1)[-1].strip().strip(">").strip()
+    return domain or None
+
+
+def ensure_message_headers(msg, sender: str) -> str:
+    """Add `Date` and `Message-ID` to `msg` unless already present.
+
+    Why (live bug 2026-11-11): SMTP sends from Sietch had NO Date and NO
+    Message-ID. Bluehost stored them that way, imap_tools reported
+    `date=1900-01-01`, and the scanner's 90-day retention guard then treated
+    brand-new mail as ancient and skipped the import. A missing Message-ID
+    also breaks threading and de-duplication for the receiving side.
+
+    Existing headers are never overwritten. Returns the Message-ID on the
+    message (callers persist it on the sent row).
+    """
+    if not msg.get("Date"):
+        msg["Date"] = formatdate(localtime=True)
+    existing = msg.get("Message-ID")
+    if existing:
+        return str(existing).strip()
+    domain = message_domain(sender)
+    msgid = make_msgid(domain=domain) if domain else make_msgid()
+    msg["Message-ID"] = msgid
+    return msgid
+
+
+def _headers_for_wrapper(msg) -> dict[str, str]:
+    """The headers copied onto a multipart/mixed wrapper (only those set)."""
+    return {name: str(msg[name]) for name in _WRAPPER_HEADERS if msg.get(name)}
 
 
 def send_email(to_addr: str, subject: str, html_body: str, text_body: str | None = None,
@@ -32,6 +82,9 @@ def send_email(to_addr: str, subject: str, html_body: str, text_body: str | None
     msg["From"] = f"{from_name} <{SMTP_USER}>"
     msg["To"] = to_addr
     msg["Subject"] = subject
+    # Date + Message-ID are built from the address that actually sends
+    # (SMTP_USER), never from a default/fallback account.
+    ensure_message_headers(msg, SMTP_USER)
 
     if text_body:
         msg.attach(MIMEText(text_body, "plain"))
@@ -66,6 +119,7 @@ def send_email_from_account(
     attachments: list[dict] | None = None,
     oauth_provider: str | None = None,
     oauth_access_token: str | None = None,
+    result_meta: dict | None = None,
 ) -> tuple[bool, str | None]:
     """Send email via per-account SMTP settings. Returns (success, error_message).
 
@@ -79,6 +133,12 @@ def send_email_from_account(
       * the envelope sender equals the SMTP login, and the header From must
         equal that same mailbox: an account authenticating as a different
         address would be sending as the wrong mailbox, so it is refused.
+
+    Every message leaves with a `Date` and a `Message-ID` (2026-11-11). The
+    generated Message-ID uses the sending address's own domain and is written
+    to `result_meta["message_id"]` on success (when a dict is passed) so the
+    caller can persist it on the mail_outgoing row. The return shape stays
+    (success, error) — existing callers are unaffected.
     """
     if not smtp_host or not smtp_user:
         return False, "SMTP not configured for this account"
@@ -103,6 +163,9 @@ def send_email_from_account(
     msg["Subject"] = subject
     if cc_addr:
         msg["Cc"] = cc_addr
+    # Date + Message-ID (2026-11-11): the missing headers were the cause of
+    # the 1900-01-01 imports. Domain is the sending address's own.
+    msgid = ensure_message_headers(msg, sender)
 
     if text_body:
         msg.attach(MIMEText(text_body, "plain"))
@@ -110,13 +173,13 @@ def send_email_from_account(
         msg.attach(MIMEText(html_body, "html"))
 
     if attachments:
-        # Switch to multipart/mixed so we can attach binary files alongside the alternative part
+        # Switch to multipart/mixed so we can attach binary files alongside the alternative part.
+        # Date and Message-ID must be copied too — only From/To/Subject/Cc were
+        # copied before, so they were lost from the wire message whenever an
+        # attachment was present.
         mixed = MIMEMultipart("mixed")
-        mixed["From"] = msg["From"]
-        mixed["To"] = msg["To"]
-        mixed["Subject"] = msg["Subject"]
-        if cc_addr:
-            mixed["Cc"] = msg["Cc"]
+        for header_name, header_value in _headers_for_wrapper(msg).items():
+            mixed[header_name] = header_value
         mixed.attach(msg)
         for att in attachments:
             part = MIMEBase("application", "octet-stream")
@@ -143,6 +206,8 @@ def send_email_from_account(
             else:
                 server.login(smtp_user, smtp_password)
             server.sendmail(sender, all_recipients, msg.as_string())
+        if result_meta is not None:
+            result_meta["message_id"] = msgid
         return True, None
     except smtplib.SMTPAuthenticationError as e:
         logger.error("SMTP auth failed for %s: %s", from_addr, e)

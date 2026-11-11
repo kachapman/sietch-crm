@@ -228,6 +228,28 @@ jobs:
         # cross-account/global bleed, and the observed-name drift helpers.
         run: python3 tests/test_mail_from_identity.py -v
 
+      - name: Run SMTP Date/Message-ID tests
+        # Every SMTP send path must carry a Date and a Message-ID (domain from
+        # the SENDING address, never a default account), and the
+        # multipart/mixed attachment wrapper must keep both. No sockets:
+        # smtplib is patched and network_guard is installed.
+        run: python3 tests/test_smtp_date_msgid.py -v
+
+      - name: Run mail date fallback tests
+        # A 1900 sentinel is not a date: Date -> INTERNALDATE -> Received ->
+        # import time, with the chosen source recorded on the row.
+        run: python3 tests/test_mail_dates.py
+
+      - name: Run mail retention/watermark tests
+        # Undated messages import; a failed FETCH/STORE or a remaining
+        # retention skip holds the folder watermark before that UID.
+        run: python3 tests/test_mail_retention_loop.py
+
+      - name: Run junk-folder polling tests
+        # Each account polls monitored_folders UNION its own Junk family, per
+        # account (Junk is distinct from Spam on Bluehost).
+        run: python3 tests/test_mail_junk_folders.py -v
+
       - name: Run mail forward header tests
         run: node --test tests/test_mail_forward_header.mjs
 

@@ -1,3 +1,62 @@
+## 2026-11-11 — v2.5.16: SMTP Date/Message-ID, undated mail imports, Junk polling
+
+Live bug: acceptance SMTP sends (S01, S02, S06, S07, S11, S12) were accepted
+by Bluehost (`mail_outgoing` status=`sent`, HTTP 200) and present on crm@
+IMAP, but never imported. Three independent causes, all fixed here.
+
+**1. SMTP messages had no `Date` and no `Message-ID`.** `smtp_client` built
+only From/To/Subject/Cc (and the multipart/mixed wrapper copied just those
+four, so attachments dropped both). Bluehost stored them exactly as sent;
+imap_tools then reported `date=1900-01-01`. Now `smtp_client` always sets
+`Date` (`email.utils.formatdate(localtime=True)`) and `Message-ID`
+(`email.utils.make_msgid` with the SENDING address's own domain) unless the
+header already exists, and both headers survive the multipart/mixed switch.
+`send_email`, the password-reset paths and `automation_engine._action_send_email`
+use the same helper. No default/fallback account: the domain comes from the
+address that actually sends. The generated Message-ID is written to
+`result_meta["message_id"]` and persisted on the new
+`mail_outgoing.message_id` column (migration 056). Graph is unchanged — it
+mints its own Message-ID server-side and returns none, so that column stays
+NULL for Graph sends.
+
+**2. A 1900 sentinel was treated as "older than retention".** The scanner
+stored `mail_dates.iso_utc_z(msg.date) if msg.date else ""`; `msg.date` is
+truthy for the 1900 sentinel, so brand-new mail was skipped as ancient. New
+helpers in `mail_dates.py` (`is_undated_date`, `parse_internaldate`,
+`parse_received_header_date`, `resolve_message_date`) resolve the stored
+timestamp through a documented chain — real `Date` header → IMAP
+`INTERNALDATE` → `Received` header date → import time — and the scanner
+records which one won in the new `mail_messages.date_source` column
+(`header` / `internaldate` / `received` / `import`). A *real* old Date still
+skips under the retention guard; an undated message no longer does.
+
+**3. The folder watermark advanced past skipped mail.** That is how the six
+messages were marked done without ever being imported. The watermark now
+advances only through a contiguous prefix of resolved UIDs: a failed FETCH, a
+failed STORE or a remaining retention skip leaves `last_seen_uid` immediately
+before the first unresolved UID so a later poll retries. A retention skip is
+still marked processed, so the next poll reports `already_processed` (which is
+resolved) and the watermark moves on then.
+
+**4. Junk was never polled.** crm@ monitored `INBOX,Sent,Drafts,Spam,Trash`;
+Bluehost had filed the CRM's own self-sends in **Junk** (a different folder
+from the empty Spam). Each account's polled folders are now
+`monitored_folders` ∪ that mailbox's own Junk-family folders (`Junk`,
+`Junk E-mail`, `Junk Email`, `Bulk`, … by name or `\Junk` flag), discovered
+from that account's own gated LIST. `monitored_folders` is not rewritten, Spam
+stays polled when configured, and account identity/credentials are unchanged.
+
+Migration 056 adds the two nullable columns (`mail_messages.date_source`,
+`mail_outgoing.message_id`); `init.sql` declares them and stamps the file.
+Backend-only: no public asset changed, so no cache-buster bump.
+
+Tests: new `tests/test_smtp_date_msgid.py` (16) and
+`tests/test_mail_junk_folders.py` (18); `tests/test_mail_dates.py` +11
+(52), `tests/test_mail_retention_loop.py` +10 and the old "watermark advances
+past a skip" assertion inverted (46). All offline — `smtplib.SMTP` patched,
+fake mailboxes, network guard installed. All four are registered in
+`.github/workflows/smoke.yml`. Not deployed (branch only).
+
 ## 2026-11-11 — v2.5.15: mail Reply/Forward buttons survive a list refresh
 
 Live acceptance run `20261111-062445Z` aborted on S12: Playwright had resolved

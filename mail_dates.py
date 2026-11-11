@@ -167,12 +167,162 @@ def has_explicit_offset(value: Any) -> bool:
     return bool(_TZ_SUFFIX.search(value.strip()))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Undated messages + the date fallback chain (bug fix 2026-11-11)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# SMTP sends from Sietch used to carry no `Date` header. imap_tools reports a
+# missing/unparseable Date as the 1900-01-01 sentinel (`parse_email_date` in
+# imap_tools returns datetime(1900, 1, 1)), and the scanner's 90-day retention
+# guard then treated those messages as "older than the window": it skipped the
+# import, marked the UID processed, and advanced the folder watermark past it.
+# The messages were therefore never imported, even though they were brand new.
+#
+# A 1900 value is NOT a message date. The rules below are the single source of
+# truth for that judgement and for the replacement chain the scanner uses:
+#
+#   1. a real Date header / imap_tools date   → "header"
+#   2. IMAP INTERNALDATE (when the header is unusable) → "internaldate"
+#   3. the date inside a `Received:` header   → "received"
+#   4. import time (now, UTC)                 → "import"
+#
+# `date_source` is stored on the row (mail_messages.date_source) so the chosen
+# fallback is auditable instead of being a silent guess.
+
+UNDATED_SENTINEL_YEAR = 1900
+
+DATE_SOURCE_HEADER = "header"
+DATE_SOURCE_INTERNALDATE = "internaldate"
+DATE_SOURCE_RECEIVED = "received"
+DATE_SOURCE_IMPORT = "import"
+
+DATE_SOURCES = (
+    DATE_SOURCE_HEADER,
+    DATE_SOURCE_INTERNALDATE,
+    DATE_SOURCE_RECEIVED,
+    DATE_SOURCE_IMPORT,
+)
+
+# RFC 3501 INTERNALDATE: `17-Jul-2026 09:20:00 -0400` (the day may be
+# space-padded, and the value normally sits inside a quoted FETCH response).
+_INTERNALDATE_RE = re.compile(
+    r"(\d{1,2}-[A-Za-z]{3}-\d{4}\s+\d{2}:\d{2}:\d{2}\s+[+-]\d{4})")
+
+
+def is_undated_date(value: Any) -> bool:
+    """True when `value` is not a usable message date.
+
+    That is: None/blank, an unparseable value, or the 1900-01-01 sentinel that
+    IMAP libraries use for "this message has no Date header" (naive or aware,
+    string or datetime — all are recognised). Callers must not compare such a
+    value against a retention cutoff.
+    """
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, (bytes, bytearray)):
+        dt = parse_email_date(bytes(value).decode("utf-8", "replace").strip())
+    else:
+        dt = parse_email_date(value)
+    if dt is None:
+        return True
+    return dt.year <= UNDATED_SENTINEL_YEAR
+
+
+def parse_internaldate(value: Any) -> datetime | None:
+    """Parse an IMAP INTERNALDATE into an AWARE UTC datetime, or None.
+
+    Accepts the bare RFC 3501 value ("17-Jul-2026 09:20:00 -0400") or a whole
+    FETCH response line containing it. Never raises.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return to_utc(value)
+    text = value.decode("utf-8", "replace") if isinstance(value, (bytes, bytearray)) else str(value)
+    match = _INTERNALDATE_RE.search(text)
+    if not match:
+        return None
+    try:
+        parsed = parsedate_to_datetime(match.group(1))
+    except (TypeError, ValueError):
+        return None
+    return to_utc(parsed) if parsed is not None else None
+
+
+def parse_received_header_date(value: Any) -> datetime | None:
+    """The date at the end of a `Received:` header, as AWARE UTC, or None.
+
+    A Received header looks like
+        from mail.example by mx.example with ESMTPS id x;
+        Mon, 9 Nov 2026 13:20:03 -0500
+    The date is everything after the final semicolon (RFC 5321 allows other
+    semicolons earlier in the clause, so the LAST one wins). Accepts a single
+    header, a list/tuple of headers, or a whole raw header block. Never raises.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            dt = parse_received_header_date(item)
+            if dt is not None:
+                return dt
+        return None
+    text = value.decode("utf-8", "replace") if isinstance(value, (bytes, bytearray)) else str(value)
+    if ";" not in text:
+        return None
+    tail = text.rsplit(";", 1)[1].strip()
+    return parse_email_date(tail)
+
+
+def resolve_message_date(
+    header_date: Any = None,
+    internal_date: Any = None,
+    received_headers: Any = None,
+    now: datetime | None = None,
+) -> tuple[datetime, str]:
+    """Resolve the timestamp to store for a message, with its provenance.
+
+    Returns `(aware UTC datetime, source)` where source is one of
+    "header", "internaldate", "received", "import". Never returns None: when
+    nothing usable exists the import time is used, because dropping a brand
+    new message as "undated" is exactly the bug this chain fixes.
+
+    A 1900 sentinel is treated as "no date" at every step, never as an old
+    message. A REAL old date is returned unchanged, so the retention guard can
+    still skip it.
+    """
+    if not is_undated_date(header_date):
+        parsed = parse_email_date(header_date)
+        if parsed is not None:
+            return parsed, DATE_SOURCE_HEADER
+    if not is_undated_date(internal_date):
+        parsed = parse_internaldate(internal_date)
+        if parsed is not None:
+            return parsed, DATE_SOURCE_INTERNALDATE
+    if received_headers:
+        parsed = parse_received_header_date(received_headers)
+        if parsed is not None:
+            return parsed, DATE_SOURCE_RECEIVED
+    fallback = to_utc(now) if isinstance(now, datetime) else None
+    return (fallback or datetime.now(timezone.utc)), DATE_SOURCE_IMPORT
+
+
 __all__ = [
     "ASSUME_NAIVE_IS_UTC",
+    "DATE_SOURCES",
+    "DATE_SOURCE_HEADER",
+    "DATE_SOURCE_IMPORT",
+    "DATE_SOURCE_INTERNALDATE",
+    "DATE_SOURCE_RECEIVED",
+    "UNDATED_SENTINEL_YEAR",
     "has_explicit_offset",
+    "is_undated_date",
     "iso_utc",
     "iso_utc_z",
     "parse_email_date",
     "parse_graph_received_datetime",
+    "parse_internaldate",
+    "parse_received_header_date",
+    "resolve_message_date",
     "to_utc",
 ]

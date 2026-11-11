@@ -171,6 +171,102 @@ class TestGraphReceivedDateTime(unittest.TestCase):
         self.assertIsNone(mail_dates.parse_graph_received_datetime(""))
 
 
+class TestUndatedAndFallbacks(unittest.TestCase):
+    """Bug fix 2026-11-11: a 1900 sentinel is not a date.
+
+    SMTP sends without a `Date` header made imap_tools report 1900-01-01, and
+    the scanner's retention guard skipped the messages as ancient. The shared
+    helpers below are the single source of truth for "undated" and for the
+    Date → INTERNALDATE → Received → import-time fallback chain.
+    """
+
+    def test_none_and_blank_are_undated(self):
+        for value in (None, "", "   "):
+            self.assertTrue(mail_dates.is_undated_date(value))
+
+    def test_1900_sentinel_is_undated_naive_and_aware(self):
+        self.assertTrue(mail_dates.is_undated_date(datetime(1900, 1, 1)))
+        self.assertTrue(mail_dates.is_undated_date(
+            datetime(1900, 1, 1, tzinfo=timezone.utc)))
+        self.assertTrue(mail_dates.is_undated_date("Thu, 01 Jan 1900 00:00:00 +0000"))
+
+    def test_a_real_date_is_not_undated(self):
+        self.assertFalse(mail_dates.is_undated_date(
+            datetime(2026, 11, 9, 18, 20, 3, tzinfo=timezone.utc)))
+        self.assertFalse(mail_dates.is_undated_date("Mon, 9 Nov 2026 13:20:03 -0500"))
+
+    def test_internaldate(self):
+        self.assertEqual(
+            mail_dates.parse_internaldate("17-Jul-2026 09:20:00 -0400"),
+            _utc("2026-07-17T13:20:00Z"))
+        # Whole FETCH response line, space-padded day, bytes.
+        self.assertEqual(
+            mail_dates.parse_internaldate(
+                b'1 (UID 5 INTERNALDATE " 7-Jul-2026 09:20:00 +0000")'),
+            _utc("2026-07-07T09:20:00Z"))
+        self.assertIsNone(mail_dates.parse_internaldate("not an internal date"))
+        self.assertIsNone(mail_dates.parse_internaldate(None))
+
+    def test_received_header_date(self):
+        self.assertEqual(
+            mail_dates.parse_received_header_date(
+                "from mail.a by mail.b with ESMTPS id x; Mon, 9 Nov 2026 13:20:03 -0500"),
+            _utc("2026-11-09T18:20:03Z"))
+        # The LAST semicolon wins.
+        self.assertEqual(
+            mail_dates.parse_received_header_date(
+                "from x; by y; Tue, 10 Nov 2026 01:02:03 +0000"),
+            _utc("2026-11-10T01:02:03Z"))
+        # Lists are tried in order; garbage is skipped.
+        self.assertEqual(
+            mail_dates.parse_received_header_date(
+                ["garbage", "from a by b; Wed, 11 Nov 2026 12:00:00 +0000"]),
+            _utc("2026-11-11T12:00:00Z"))
+        self.assertIsNone(mail_dates.parse_received_header_date("no semicolon here"))
+
+    def test_resolve_prefers_a_real_header(self):
+        dt, source = mail_dates.resolve_message_date(
+            header_date="Mon, 9 Nov 2026 13:20:03 -0500",
+            internal_date="17-Jul-2026 09:20:00 -0400",
+            received_headers="from a by b; Tue, 10 Nov 2026 01:02:03 +0000")
+        self.assertEqual(source, mail_dates.DATE_SOURCE_HEADER)
+        self.assertEqual(dt, _utc("2026-11-09T18:20:03Z"))
+
+    def test_resolve_skips_the_1900_sentinel(self):
+        dt, source = mail_dates.resolve_message_date(
+            header_date=datetime(1900, 1, 1),
+            internal_date="17-Jul-2026 09:20:00 -0400")
+        self.assertEqual(source, mail_dates.DATE_SOURCE_INTERNALDATE)
+        self.assertEqual(dt, _utc("2026-07-17T13:20:00Z"))
+
+    def test_resolve_uses_received_when_nothing_else(self):
+        dt, source = mail_dates.resolve_message_date(
+            header_date=datetime(1900, 1, 1),
+            received_headers=("from a by b; Mon, 9 Nov 2026 13:20:03 -0500",))
+        self.assertEqual(source, mail_dates.DATE_SOURCE_RECEIVED)
+        self.assertEqual(dt, _utc("2026-11-09T18:20:03Z"))
+
+    def test_resolve_falls_back_to_import_time(self):
+        fixed = datetime(2026, 11, 11, 12, 0, 0, tzinfo=timezone.utc)
+        dt, source = mail_dates.resolve_message_date(
+            header_date=datetime(1900, 1, 1), now=fixed)
+        self.assertEqual(source, mail_dates.DATE_SOURCE_IMPORT)
+        self.assertEqual(dt, fixed)
+
+    def test_resolve_never_returns_a_1900_value(self):
+        dt, source = mail_dates.resolve_message_date(header_date=datetime(1900, 1, 1))
+        self.assertNotEqual(source, mail_dates.DATE_SOURCE_HEADER)
+        self.assertGreater(dt.year, 1900)
+        self.assertEqual(dt.tzinfo, timezone.utc)
+
+    def test_a_real_old_date_survives_for_the_retention_guard(self):
+        old = "Mon, 1 Jan 2024 00:00:00 +0000"
+        dt, source = mail_dates.resolve_message_date(
+            header_date=old, internal_date="17-Jul-2026 09:20:00 -0400")
+        self.assertEqual(source, mail_dates.DATE_SOURCE_HEADER)
+        self.assertEqual(dt, _utc("2024-01-01T00:00:00Z"))
+
+
 class TestSerialization(unittest.TestCase):
     def test_iso_utc_has_an_explicit_offset(self):
         """A browser must never be able to parse it as local time."""
@@ -340,7 +436,10 @@ class TestSourceGuards(unittest.TestCase):
         self.assertNotIn('msg.get("date") or None', region)
 
     def test_scanner_emits_iso_z(self):
-        self.assertIn('mail_dates.iso_utc_z(msg.date)', self.scanner_src)
+        # The date (and its provenance) come from the shared fallback chain
+        # (2026-11-11): a 1900 sentinel is NOT a message date.
+        self.assertIn("mail_dates.iso_utc_z(resolved_date)", self.scanner_src)
+        self.assertNotIn("mail_dates.iso_utc_z(msg.date) if msg.date else", self.scanner_src)
 
     def test_no_raw_str_of_a_mail_timestamp_reaches_the_api(self):
         self.assertNotIn('str(r.get("date_received")', self.server_src)

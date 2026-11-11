@@ -1578,6 +1578,10 @@ def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None,
     Newest-first ordering is preserved: IMAP returns UID-ascending, so the
     generator yields in DESCENDING UID order, matching the old
     `messages.sort(key=_uid_key, reverse=True)`.
+
+    A UID whose FETCH throws is yielded as a `{"fetch_failed": True, ...}`
+    marker instead of being dropped (2026-11-11): the poll loop must see it to
+    hold the folder watermark below that UID and retry on a later poll.
     """
     # Staging area for attachment bytes that are on their way to disk.
     # OWN subfolder for this run — never shared with a concurrent run.
@@ -1640,8 +1644,10 @@ def _fetch_messages(mailbox_cfg: dict[str, Any], folder: str | None = None,
                 msg = _fetch_single_message(mailbox_cfg, folder, uid, staging_dir)
             except Exception:
                 logger.exception("Failed to fetch message UID %s", uid)
-                continue
+                msg = _fetch_failed_message(uid, folder)
             if not msg:
+                # The UID vanished between SEARCH and FETCH (deleted or moved).
+                # Nothing to store and nothing to block the watermark on.
                 continue
             yield msg
             # Drop the reference so the payload is released before the next
@@ -1664,7 +1670,10 @@ def _fetch_single_message(mailbox_cfg: dict[str, Any], folder: str, uid: int,
     created for the call.
 
     Returns the message dict (attachment entries carry a `staged_path`, not
-    the bytes) or None when the message cannot be fetched.
+    the bytes). Returns None when the message is no longer in the folder
+    (deleted/moved between SEARCH and FETCH), and a dict carrying
+    `fetch_failed: True` when the FETCH itself failed (a transient error that
+    must not advance the watermark — see `_poll_mailbox_cfg`).
     """
     mailbox = None
     try:
@@ -1730,6 +1739,29 @@ def _fetch_single_message(mailbox_cfg: dict[str, Any], folder: str, uid: int,
                     header_lines.append(f"{key}: {val}")
             raw_headers = "\n".join(header_lines)
 
+        # ── Timestamp resolution (bug fix 2026-11-11) ───────────────────────
+        # `msg.date` is TRUTHY for the 1900-01-01 sentinel imap_tools returns
+        # when a message has no Date header, so the old
+        # `iso_utc_z(msg.date) if msg.date else ""` stored 1900 and the
+        # 90-day retention guard skipped brand-new mail (our own SMTP sends).
+        # A 1900 value is not a date: fall through to INTERNALDATE, then the
+        # Received header, then import time.
+        header_date = getattr(msg, "date", None)
+        internal_date = None
+        received_headers: list[Any] = []
+        if mail_dates.is_undated_date(header_date):
+            internal_date = _message_internaldate(mailbox, msg, uid)
+            received_headers = _message_received_headers(msg)
+        resolved_date, date_source = mail_dates.resolve_message_date(
+            header_date=header_date,
+            internal_date=internal_date,
+            received_headers=received_headers,
+        )
+        if date_source != mail_dates.DATE_SOURCE_HEADER:
+            logger.info("Message UID %s (folder %s) has no usable Date header; "
+                        "using %s (%s)", uid, folder, date_source,
+                        mail_dates.iso_utc_z(resolved_date))
+
         return {
             "uid": msg.uid,
             "message_id": message_id,
@@ -1741,7 +1773,8 @@ def _fetch_single_message(mailbox_cfg: dict[str, Any], folder: str, uid: int,
             # `msg.date.isoformat()` — an offset-carrying string handed to a
             # timezone-less DB column, which made the stored instant depend on
             # the database session timezone (live bug 2026-11-09).
-            "date": mail_dates.iso_utc_z(msg.date) if msg.date else "",
+            "date": mail_dates.iso_utc_z(resolved_date),
+            "date_source": date_source,
             "body_text": msg.text or "",
             "body_html": msg.html or "",
             "flags": list(msg.flags) if msg.flags else [],
@@ -1751,13 +1784,81 @@ def _fetch_single_message(mailbox_cfg: dict[str, Any], folder: str, uid: int,
         }
     except Exception as e:
         logger.error("IMAP fetch error for UID %s: %s", uid, e)
-        return None
+        # A FAILED fetch is not an absent message: report it so the caller can
+        # hold the folder watermark below this UID and retry on a later poll.
+        return _fetch_failed_message(uid, folder)
     finally:
         if mailbox is not None:
             try:
                 mailbox.logout()
             except Exception:
                 pass
+
+
+def _fetch_failed_message(uid: Any, folder: str) -> dict[str, Any]:
+    """Marker yielded for a UID whose FETCH failed (never processed/stored)."""
+    return {
+        "uid": str(uid),
+        "folder": folder,
+        "fetch_failed": True,
+        "subject": "",
+        "from": "",
+        "date": "",
+        "attachments": [],
+    }
+
+
+def _message_internaldate(mailbox: Any, msg: Any, uid: Any) -> Any:
+    """IMAP INTERNALDATE for `uid`, or None.
+
+    imap_tools 1.14 exposes no internal date on MailMessage, so when the Date
+    header is unusable one extra `UID FETCH (INTERNALDATE)` is issued directly
+    on the imaplib client. Best effort: a fake mailbox (tests) or a server
+    that refuses the command simply yields None and the next fallback is used.
+    """
+    for attr in ("internal_date", "internaldate", "internalDate"):
+        try:
+            value = getattr(msg, attr, None)
+        except Exception:
+            value = None
+        if value:
+            return value
+    client = getattr(mailbox, "client", None)
+    if client is None:
+        return None
+    try:
+        typ, data = client.uid("FETCH", str(uid), "(INTERNALDATE)")
+    except Exception:
+        logger.debug("INTERNALDATE fetch failed for UID %s", uid, exc_info=True)
+        return None
+    if str(typ).upper() != "OK":
+        return None
+    for item in data or []:
+        parsed = mail_dates.parse_internaldate(item)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _message_received_headers(msg: Any) -> list[Any]:
+    """The message's `Received:` header value(s), in order (may be empty)."""
+    values: list[Any] = []
+    obj = getattr(msg, "obj", None)
+    get_all = getattr(obj, "get_all", None)
+    if callable(get_all):
+        try:
+            values.extend(get_all("received") or [])
+        except Exception:
+            logger.debug("Could not read Received headers from the message", exc_info=True)
+    if not values:
+        headers = getattr(msg, "headers", None)
+        try:
+            received = headers.get("received") if headers is not None else None
+        except Exception:
+            received = None
+        if received:
+            values.extend(received if isinstance(received, (list, tuple)) else [received])
+    return [v for v in values if v]
 
 
 def _list_imap_folders(mailbox_cfg: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1826,6 +1927,72 @@ def _is_sent_folder(name: str | None) -> bool:
     return (name or "").strip().lower() in _SENT_FOLDER_NAMES
 
 
+# ── Junk-family folders (2026-11-11) ────────────────────────────────────────
+# Live bug: crm@ monitored INBOX,Sent,Drafts,Spam,Trash, so the account's
+# `Junk` folder — where Bluehost had filed the CRM's own self-sends — was never
+# polled and those messages never imported. "Spam" is deliberately NOT in this
+# set: on Bluehost Junk and Spam are different folders (Junk held the stranded
+# mail, Spam was empty), and an account that already lists Spam keeps polling
+# it. This set only ADDS the provider's junk/bulk folder when it is missing.
+_JUNK_FOLDER_NAMES = frozenset({
+    "junk",
+    "junk e-mail",
+    "junk email",
+    "junk mail",
+    "bulk",
+    "bulk mail",
+    "junk items",
+})
+
+
+def _is_junk_folder(name: str | None, flags: Any = None) -> bool:
+    """True for a provider's junk/bulk folder, by IMAP flag or common name.
+
+    `flags` is the LIST flags list (e.g. `["\\Junk", "\\HasNoChildren"]`).
+    Nested names ("INBOX/Junk", "INBOX.Junk") are matched on their leaf.
+    """
+    if flags is not None and "\\junk" in str(flags).lower():
+        return True
+    raw = (name or "").strip().lower()
+    if not raw:
+        return False
+    leaf = re.split(r"[/.\\]", raw)[-1].strip()
+    return raw in _JUNK_FOLDER_NAMES or leaf in _JUNK_FOLDER_NAMES
+
+
+def _folder_poll_key(name: str | None) -> str:
+    """Comparison key for "is this folder already polled?"."""
+    return _normalize_folder_name((name or "").strip()).strip().lower()
+
+
+def _poll_folder_names(cfg: dict[str, Any],
+                       imap_folders: list[dict[str, Any]] | None) -> list[str]:
+    """The folders to poll for ONE account: configured ∪ its own Junk family.
+
+    `imap_folders` comes from THIS account's own LIST (the same gated login
+    used for every credential use in this module), so an account can only ever
+    gain folders that exist on its own mailbox — never another account's.
+    A Junk-family folder is added when it exists on this mailbox even if
+    `mail_accounts.monitored_folders` omits it (the row is left untouched).
+    """
+    folders = [f for f in (cfg.get("folders") or [cfg.get("inbox") or "INBOX"]) if f]
+    seen = {_folder_poll_key(f) for f in folders}
+    for info in (imap_folders or []):
+        if not isinstance(info, dict):
+            continue
+        name = info.get("name")
+        if not name or not _is_junk_folder(name, info.get("flags")):
+            continue
+        key = _folder_poll_key(name)
+        if key in seen:
+            continue
+        seen.add(key)
+        folders.append(name)
+        logger.info("Polling Junk-family folder %s for %s",
+                    name, cfg.get("email") or cfg.get("user") or "?")
+    return folders
+
+
 _EXCHANGE_DIAGNOSTIC_PREFIXES = ("sync issues", "conversation history", "outbox")
 
 
@@ -1838,8 +2005,15 @@ def _is_exchange_diagnostic_folder(name: str) -> bool:
     return False
 
 
-def _sync_imap_folders(mailbox_cfg: dict[str, Any]) -> int:
-    imap_folders = _list_imap_folders(mailbox_cfg)
+def _sync_imap_folders(mailbox_cfg: dict[str, Any],
+                       imap_folders: list[dict[str, Any]] | None = None) -> int:
+    """Mirror this account's IMAP folder list into `mail_folders`.
+
+    `imap_folders` lets the caller pass the listing it already made (the poll
+    loop needs it for Junk discovery too), so one LIST call serves both.
+    """
+    if imap_folders is None:
+        imap_folders = _list_imap_folders(mailbox_cfg)
     account_id = mailbox_cfg.get("account_id")
     if not imap_folders or not account_id:
         return 0
@@ -2950,9 +3124,9 @@ def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | No
         result = db.query_one(
             """INSERT INTO mail_messages
                (account_id, imap_uid, message_id, from_addr, to_addr, subject,
-                body_text, body_html, date_received, folder, is_read, is_archived,
+                body_text, body_html, date_received, date_source, folder, is_read, is_archived,
                 attachments_json, raw_headers)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING id""",
             (
                 account_id,
@@ -2967,6 +3141,10 @@ def _store_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> int | No
                 # date_received is `timestamptz` since migration 048, so a
                 # naive value would be re-interpreted in the session timezone.
                 mail_dates.parse_email_date(msg.get("date")),
+                # Which fallback supplied the date (migration 056, 2026-11-11):
+                # 'header' / 'internaldate' / 'received' / 'import'. NULL when
+                # the caller did not resolve one (older callers, Graph).
+                (msg.get("date_source") or None),
                 folder,
                 is_read,
                 False,
@@ -3322,6 +3500,30 @@ def _message_older_than_cutoff(msg: dict[str, Any], cutoff: datetime | None) -> 
     return dt < cutoff
 
 
+# Process statuses that mean "this UID is still unresolved": the message was
+# NOT stored and a later poll should retry it, so the folder watermark must not
+# move past it (2026-11-11). Everything else — processed, already_processed,
+# dry_run, linked_no_deal, skipped_no_id — is resolved.
+_UNRESOLVED_PROCESS_STATUSES = frozenset({
+    "skipped_older_than_retention",
+    "store_failed",
+})
+
+
+def _is_unresolved_status(status: Any) -> bool:
+    """True when a `_process_message` status must hold the watermark back."""
+    return str(status or "") in _UNRESOLVED_PROCESS_STATUSES
+
+
+def _uid_as_int(value: Any) -> int | None:
+    """Parse a message UID to int, or None when it is not numeric."""
+    try:
+        uid = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return uid if uid > 0 else None
+
+
 def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[str, Any]:
     uid = msg.get("uid") or ""
     account_id = mailbox_cfg.get("account_id")
@@ -3358,8 +3560,13 @@ def _process_message(msg: dict[str, Any], mailbox_cfg: dict[str, Any]) -> dict[s
     if _message_older_than_cutoff(msg, cutoff):
         log_entry["status"] = "skipped_older_than_retention"
         _append_log(log_entry)
-        # Mark it processed so the next poll does not reconsider it. The
-        # watermark advances past it either way (see _poll_mailbox_cfg).
+        # Mark it processed so a retry does not reconsider a message that can
+        # never become young enough to import. The WATERMARK does not advance
+        # past it in this poll (2026-11-11): only a contiguous prefix of
+        # resolved UIDs moves the watermark, so a fetch/store failure or a
+        # skip leaves the retry point intact. On the next poll this message
+        # reports already_processed, which IS resolved, and the watermark can
+        # then move on.
         _mark_processed(account_id, uid or msg.get("message_id") or "", msg.get("folder", ""))
         logger.info("Skipped message UID %s (folder %s): older than the %d-day retention window",
                     uid, msg.get("folder", ""), _account_retention_days(mailbox_cfg))
@@ -3517,12 +3724,19 @@ def _poll_mailbox_cfg(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     logger.info("Polling mailbox %s@%s", cfg["user"], cfg["host"])
     try:
+        # ONE LIST per poll: it feeds the folder mirror AND Junk discovery.
+        # The listing comes from THIS account's own gated login, so it can
+        # never describe (or poll) another mailbox's folders.
+        imap_folders = _list_imap_folders(cfg)
         # Sync folder list first
-        folder_count = _sync_imap_folders(cfg)
+        folder_count = _sync_imap_folders(cfg, imap_folders)
         if folder_count:
             logger.info("Synced %d IMAP folders", folder_count)
 
-        folders = cfg.get("folders", [cfg.get("inbox", "INBOX")])
+        # Configured folders UNION this mailbox's own Junk-family folders
+        # (2026-11-11: Junk was not in monitored_folders, so messages Bluehost
+        # filed there were never imported even with a valid Date).
+        folders = _poll_folder_names(cfg, imap_folders)
         # Per-account sync window (retention_days), fallback to global SCANNER_SYNC_DAYS
         acct_retention = cfg.get("retention_days", 0)
         if acct_retention and acct_retention > 0:
@@ -3566,23 +3780,59 @@ def _poll_mailbox_cfg(cfg: dict[str, Any]) -> list[dict[str, Any]]:
             msgs = _fetch_messages(cfg, folder, since=since, uid_min=uid_min)
             max_uid = 0
             count = 0
+            resolved_uids: list[int] = []
+            blocked_uids: list[int] = []
             for msg in msgs:
-                try:
-                    max_uid = max(max_uid, int(msg.get("uid") or 0))
-                except (TypeError, ValueError):
-                    pass
+                uid_int = _uid_as_int(msg.get("uid"))
+                if uid_int is not None:
+                    max_uid = max(max_uid, uid_int)
                 count += 1
+                if msg.get("fetch_failed"):
+                    # The FETCH failed (transient). There is nothing to store,
+                    # and the watermark must not move past this UID: a later
+                    # poll retries it.
+                    results.append({"uid": msg.get("uid"), "folder": folder,
+                                    "status": "fetch_failed"})
+                    if uid_int is not None:
+                        blocked_uids.append(uid_int)
+                    del msg
+                    continue
                 # Process (and store) immediately, so the message's bytes
                 # are released before the next one is fetched.
                 result = _process_message(msg, cfg)
                 results.append(result)
+                if uid_int is not None:
+                    if _is_unresolved_status(result.get("status")):
+                        blocked_uids.append(uid_int)
+                    else:
+                        resolved_uids.append(uid_int)
                 del msg
-            # Advance the watermark: max fetched UID, or UIDNEXT-1 when nothing
-            # new (empty folder converges to incremental on the next cycle).
-            # Never move it backwards.
-            floor = max(int(last_seen or 0),
-                        int(cur_uidnext or 1) - 1 if not count and cur_uidnext else 0)
-            new_last = max(max_uid, floor)
+            # ── Watermark rule (behaviour change 2026-11-11) ────────────────
+            # Advance ONLY through a contiguous prefix of resolved UIDs. A
+            # message whose FETCH failed, whose STORE failed, or that is still
+            # skipped by retention leaves last_seen_uid immediately before the
+            # first unresolved UID, so a later poll can retry it. The old rule
+            # advanced to the max fetched UID regardless, which is how the six
+            # stranded SMTP messages were marked done without ever being
+            # imported.
+            #
+            # A retention skip is marked processed (see `_process_message`), so
+            # the next poll reports already_processed — which IS resolved — and
+            # the watermark moves on then.
+            if blocked_uids:
+                first_blocked = min(blocked_uids)
+                safe = [u for u in resolved_uids if u < first_blocked]
+                new_last = max(int(last_seen or 0), max(safe) if safe else 0)
+                logger.info(
+                    "Holding watermark for %s folder %s at %d: UID %d unresolved",
+                    cfg["user"], folder, new_last, first_blocked)
+            else:
+                # Advance the watermark: max fetched UID, or UIDNEXT-1 when
+                # nothing new (empty folder converges to incremental next
+                # cycle). Never move it backwards.
+                floor = max(int(last_seen or 0),
+                            int(cur_uidnext or 1) - 1 if not count and cur_uidnext else 0)
+                new_last = max(max_uid, floor)
             _save_folder_watermark(cfg.get("account_id"), imap_folder,
                                    cur_validity if cur_validity is not None else stored_validity,
                                    new_last)

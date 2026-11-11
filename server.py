@@ -1244,6 +1244,15 @@ try:
     db.execute("ALTER TABLE mail_outgoing ADD COLUMN IF NOT EXISTS send_method TEXT")
 except Exception:
     pass
+# Mail date provenance + the Message-ID that actually went on the wire
+# (mirrors migrations/056_mail_date_source_and_outgoing_message_id.sql).
+# `mail_messages.date_source` records which fallback supplied date_received
+# ("header" / "internaldate" / "received" / "import"); NULL on old rows.
+try:
+    db.execute("ALTER TABLE mail_messages ADD COLUMN IF NOT EXISTS date_source TEXT")
+    db.execute("ALTER TABLE mail_outgoing ADD COLUMN IF NOT EXISTS message_id TEXT")
+except Exception:
+    logger.warning("Could not add the mail date/message-id columns", exc_info=True)
 try:
     db.execute("ALTER TABLE history_events ADD COLUMN IF NOT EXISTS contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE")
 except Exception:
@@ -24235,8 +24244,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 """INSERT INTO mail_outgoing
                    (account_id, from_addr, to_addr, cc_addr, bcc_addr, subject,
                     body_text, body_html, deal_id, attachments_json, status, sent_at, created_by,
-                    send_method, error, fallback_reason)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    send_method, error, fallback_reason, message_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
                     account_id, acct["email"], to_addr, cc_addr, bcc_addr,
@@ -24247,6 +24256,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     send_method,
                     None if ok else (err or "Send failed"),
                     send_meta.get("fallback_reason"),
+                    # The Message-ID actually placed on the wire (smtp paths).
+                    # Graph mints its own and exposes none, so it stays NULL.
+                    send_meta.get("message_id"),
                 ),
             )
 

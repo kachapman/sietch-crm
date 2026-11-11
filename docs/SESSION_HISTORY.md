@@ -1,6 +1,66 @@
 # Session History — Sietch CRM (new-crm branch)
 
 
+## Current session summary (for next resume) — 2026-11-11 (SMTP Date/Message-ID, undated imports, Junk polling, v2.5.16, branch only)
+
+**Branch:** `fix/smtp-date-msgid-junk`, based on `1d6f8d5` (v2.5.15). Not
+merged, not pushed, not deployed.
+
+**Live bug:** six acceptance SMTP sends were `status=sent` in
+`mail_outgoing` and present on crm@ IMAP but never imported. Live HEADER peek
+showed they had **no Date and no Message-ID**. imap_tools reported
+`date=1900-01-01`, the 90-day retention guard skipped them as older than the
+window (`Skipped message UID 12405 (folder INBOX): older than the 90-day
+retention window`), marked the UID processed, and still advanced the folder
+watermark. S01/S06/S11 (self-sends) were also in **Junk**, which crm@ never
+polled (`INBOX,Sent,Drafts,Spam,Trash`).
+
+**Fixes:**
+1. `smtp_client.send_email_from_account` / `send_email` /
+   `automation_engine._action_send_email` now set `Date` + `Message-ID` when
+   missing (domain from the sending address, no default account), and the
+   multipart/mixed wrapper copies both. Message-ID is returned via
+   `result_meta["message_id"]` and persisted on `mail_outgoing.message_id`.
+2. `mail_dates.py` gained `is_undated_date`, `parse_internaldate`,
+   `parse_received_header_date`, `resolve_message_date`; the scanner resolves
+   Date → INTERNALDATE → Received → import time and stores the choice in
+   `mail_messages.date_source`. 1900 is never a date; a real old date still
+   skips.
+3. The poll watermark advances only through a contiguous prefix of resolved
+   UIDs; fetch/store failures and remaining retention skips hold it before the
+   first unresolved UID (behaviour change — the old test asserting the
+   watermark advanced past a skip was inverted).
+4. Each account now polls `monitored_folders` ∪ its own Junk-family folders
+   (`Junk`, `Junk E-mail`, `Bulk`, … by name or `\Junk` flag), discovered from
+   that account's own LIST. Spam stays polled; `monitored_folders` is not
+   rewritten; no credential/account change.
+
+**Migration:** `056_mail_date_source_and_outgoing_message_id.sql` (two nullable
+columns), mirrored in `server.py`'s inline schema block, declared + stamped in
+`init.sql`.
+
+**Files:** `smtp_client.py`, `mail_send.py`, `server.py`, `mail_dates.py`,
+`scanner/mail_scanner.py`, `automation_engine.py`, `init.sql`,
+`migrations/056_…sql`, `VERSION` (2.5.16), `CHANGELOG.md`, and tests
+(`tests/test_smtp_date_msgid.py` new, `tests/test_mail_junk_folders.py` new,
+`tests/test_mail_dates.py`, `tests/test_mail_retention_loop.py`, `.github/workflows/smoke.yml`). No public
+asset changed → no cache-buster bump.
+
+**Tests:** new 16 + 18; `test_mail_dates.py` 52 OK; `test_mail_retention_loop.py`
+46 OK (6 skipped, need a live DB); plus `test_mail_incremental.py`,
+`test_mail_from_identity.py`, `test_mail_send_recipient_lock.py`,
+`test_mail_receive_attribution.py`, `test_mail_behaviors.py`,
+`test_mail_scanner_locking.py`, `test_mail_scanner_regex.py`,
+`test_mail_account_save_identity.py`, `test_mail_link_history.py`,
+`test_email_matrix.py`, `test_automation_engine.py` all OK. Suites that import
+`server` (test_mail_polling, test_mail_sender_guard, test_mail_send_result_meta,
+test_mail_auth_gaps, test_mail_imap_flag_sync) cannot run here because
+`DB_HOST=db` is unreachable in this environment — pre-existing, unchanged.
+
+**Not done (by design):** no deploy, no push, no merge, no live sends, and the
+post-deploy recovery of the six stranded UIDs is still for the executor (plan
+section 4).
+
 ## Current session summary (for next resume) — 2026-11-11 (mail Reply/Forward across refresh, v2.5.15, branch only)
 
 **Branch:** `fix/mail-reader-refresh-actions`, based on `70935b9` (v2.5.14).

@@ -36,6 +36,7 @@ from email.mime.text import MIMEText
 
 import db
 from event_bus import event_bus
+from smtp_client import ensure_message_headers
 
 logger = logging.getLogger("automation-engine")
 
@@ -241,6 +242,11 @@ def _action_send_email(config: dict, opp: dict, ctx: TemplateVars, dry_run: bool
         msg["From"] = display_from
         msg["To"] = to_email
         msg["Subject"] = subject
+        # Date + Message-ID (2026-11-11): a message without them is stored by
+        # the provider without them, and the IMAP scanner then reports
+        # date=1900-01-01 and drops it under the retention guard. The domain
+        # belongs to the address this action actually sends from.
+        ensure_message_headers(msg, smtp_config["from_addr"])
         msg.attach(MIMEText(body_text, "plain"))
         msg.attach(MIMEText(body_html, "html"))
 
