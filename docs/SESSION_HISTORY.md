@@ -1,7 +1,7 @@
 # Session History — Sietch CRM (new-crm branch)
 
 
-## Current session summary (for next resume) — 2026-11-10 (API/MCP gaps pass, NOT deployed)
+## Current session summary (for next resume) — 2026-11-10 (API/MCP gaps pass, DEPLOYED v2.5.8)
 
 **Branch:** `feat/mcp-api-gaps-2026-11-10` (from `7d2e55c` / deployed v2.5.5).
 Worktree `/home/chapman-server/Projects/new-crm-mcp-api-gaps`. **No VERSION
