@@ -969,6 +969,12 @@ try:
     db.execute("ALTER TABLE api_tokens ALTER COLUMN scope SET DEFAULT 'full'")
 except Exception:
     pass
+# Migration 053: optional per-token mail-send recipient lock.
+# Mirrors migrations/053_api_token_mail_send_lock.sql; idempotent.
+try:
+    db.execute("ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS mail_send_locked_recipient TEXT")
+except Exception:
+    pass
 try:
     db.execute("""
         CREATE TABLE IF NOT EXISTS api_token_audit_log (
@@ -2558,6 +2564,55 @@ def _mail_account_accessible(user: dict, account_id: int) -> bool:
         (account_id, user["id"]),
     )
     return granted is not None
+
+
+def _mail_send_locks(user: dict) -> list[str]:
+    """Every non-empty recipient lock that applies to this caller's sends.
+
+    Two independent locks can bind a send (2026-11-10):
+
+      * `users.mail_send_locked_recipient` (migration 051) — the human's lock.
+      * `api_tokens.mail_send_locked_recipient` (migration 053) — the token's
+        own lock, independent of its owner.
+
+    A Bearer request authenticates AS the token's owner (api_tokens.verify_api_token
+    returns the `users` row), so the owner's lock applies to token requests too.
+    The token lock is carried on the session-shaped user dict by
+    verify_api_token as `api_token_mail_send_locked_recipient`.
+    """
+    locks: list[str] = []
+    row = db.query_one(
+        "SELECT mail_send_locked_recipient FROM users WHERE id = %s", (user["id"],))
+    own = ((row or {}).get("mail_send_locked_recipient") or "").strip()
+    if own:
+        locks.append(own)
+    token_lock = (user.get("api_token_mail_send_locked_recipient") or "").strip()
+    if token_lock:
+        locks.append(token_lock)
+    return locks
+
+
+def _enforce_mail_send_lock(user: dict, to_addr, cc_addr=None, bcc_addr=None,
+                            locks: list[str] | None = None) -> tuple[bool, str]:
+    """Apply every recipient lock to one outgoing message.
+
+    Called from the send handler AND the compose preflight, so a locked caller
+    (including an API token) cannot reach `_try_send_for_account` with a
+    recipient the lock forbids. `locks` lets a caller that already fetched them
+    reuse the list. Returns (allowed, why).
+    """
+    import mail_recipient_lock
+
+    locks = _mail_send_locks(user) if locks is None else locks
+    if not locks:
+        return True, ""
+    recipients = mail_recipient_lock.parse_recipients(to_addr, cc_addr, bcc_addr)
+    allowed, why = mail_recipient_lock.check_locks(locks, recipients)
+    if not allowed:
+        logger.warning(
+            "Recipient lock refused send for user %s (api_token=%s): %s",
+            user.get("id"), user.get("api_token_id"), why)
+    return allowed, why
 
 
 def _mail_account_manageable(user: dict, account_id: int) -> bool:
@@ -18418,6 +18473,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
           scope: "full" | "read"
           restrictions: {methods?: [...], resources?: [...]}
           expires_at: ISO-8601 timestamp
+          mail_send_locked_recipient: optional send lock for THIS token
         """
         user = _require_admin(self)
         if not user:
@@ -18440,6 +18496,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 scope,
                 restrictions=payload.get("restrictions"),
                 expires_at=payload.get("expires_at"),
+                mail_send_locked_recipient=payload.get("mail_send_locked_recipient"),
             )
         except ValueError as exc:
             _json_response(self, 400, {"error": str(exc)})
@@ -22317,11 +22374,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         html_body: str,
         text_body: str | None,
         attachments: list[dict] | None = None,
+        recipient_locks: list[str] | None = None,
     ) -> tuple[bool, str | None, str]:
         """Server-side wrapper that injects the DB-aware Graph token refresher
         into the shared `mail_send.try_send_for_account` helper. All send
         routing decisions (Graph-first / SMTP fallback / 5.7.139 retry) live
-        in the shared helper."""
+        in the shared helper.
+
+        `recipient_locks` is re-checked inside the shared helper (defence in
+        depth) so no routing branch can put mail on the wire for a locked
+        sender, even if a future caller forgets the handler-level check.
+        """
         from mail_send import try_send_for_account
         return try_send_for_account(
             acct,
@@ -22333,6 +22396,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             bcc_addr=bcc_addr,
             attachments=attachments,
             refresh_graph_token=self._refresh_graph_token_if_needed,
+            recipient_locks=recipient_locks,
         )
 
     # ── Mail Scanner Handlers ──────────────────────────────────────
@@ -23930,7 +23994,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "account_id is required"})
             return
         acct = db.query_one(
-            "SELECT id, email, display_name, smtp_from_name "
+            "SELECT id, email, display_name, smtp_from_name, auto_bcc_addr "
             "FROM mail_accounts WHERE id = %s", (account_id,))
         if not acct:
             _json_response(self, 404, {"error": "Account not found"})
@@ -23938,6 +24002,26 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not _mail_account_accessible(user, account_id):
             _json_response(self, 403, {"error": "You don't have access to this account"})
             return
+        # Recipient lock, dialog side (2026-11-10). The recipient list is only
+        # present when the caller sends it (the compose preflight may omit it);
+        # the send endpoint always enforces the lock, this just blocks the
+        # mismatch before Send. The account's auto-BCC is included because the
+        # send handler merges it into BCC.
+        if any((payload.get("to"), payload.get("cc"), payload.get("bcc"))):
+            _pre_bcc = ", ".join(
+                part for part in (payload.get("bcc") or "", acct.get("auto_bcc_addr") or "")
+                if part)
+            _lock_ok, _lock_why = _enforce_mail_send_lock(
+                user, payload.get("to"), payload.get("cc"), _pre_bcc or None)
+            if not _lock_ok:
+                _json_response(self, 403, {
+                    "ok": False,
+                    "accountId": account_id,
+                    "accountEmail": acct.get("email") or "",
+                    "error": f"Recipient lock: {_lock_why}. Nothing was sent.",
+                    "reason": "recipient_lock",
+                })
+                return
         # Credential identity gate (2026-11-10): block in the dialog, not only
         # on the send. A mailbox whose stored credentials belong to another
         # account (or cannot be verified) may not send.
@@ -24066,28 +24150,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 if merged:
                     bcc_addr = ", ".join(merged)
 
-            # Per-user recipient lock (2026-11-10, Ken 1:41 PM). A user flagged
-            # with users.mail_send_locked_recipient may only send to exactly that
-            # address (every To/Cc/Bcc, including auto-BCC). Normal users have
-            # NULL and are unaffected. Every compose/reply/forward path uses
-            # this handler, so there is no bypass.
-            if user:
-                lock_row = db.query_one(
-                    "SELECT mail_send_locked_recipient FROM users WHERE id = %s",
-                    (user["id"],))
-                lock_addr = ((lock_row or {}).get("mail_send_locked_recipient") or "").strip()
-                if lock_addr:
-                    import mail_recipient_lock
-                    recipients = mail_recipient_lock.parse_recipients(to_addr, cc_addr, bcc_addr)
-                    allowed, why = mail_recipient_lock.check_lock(lock_addr, recipients)
-                    if not allowed:
-                        logger.warning("Recipient lock refused send for user %s: %s",
-                                       user.get("id"), why)
-                        _json_response(self, 403, {
-                            "ok": False,
-                            "error": f"Recipient lock: {why}. Nothing was sent.",
-                        })
-                        return
+            # Per-user / per-token recipient lock (2026-11-10). Enforced by the
+            # shared helper so the same rule covers the compose preflight and
+            # Bearer-token requests: a user flagged with
+            # users.mail_send_locked_recipient, or a token flagged with
+            # api_tokens.mail_send_locked_recipient, may only send to exactly
+            # that address (every To/Cc/Bcc, including auto-BCC). Every
+            # compose/reply/forward/draft send uses this handler, so there is
+            # no bypass.
+            locks = _mail_send_locks(user)
+            lock_ok, lock_why = _enforce_mail_send_lock(user, to_addr, cc_addr, bcc_addr, locks=locks)
+            if not lock_ok:
+                _json_response(self, 403, {
+                    "ok": False,
+                    "error": f"Recipient lock: {lock_why}. Nothing was sent.",
+                })
+                return
 
             # All send routing — Graph-first / SMTP fallback / 5.7.139 retry — lives in
             # _try_send_for_account. _handle_mail_send only needs to call it
@@ -24102,6 +24180,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 text_body=body_text,
                 attachments=decoded_attachments if decoded_attachments else None,
                 result_meta=send_meta,
+                recipient_locks=locks,
             )
             _ = send_method  # reserved for future analytics (per-account send method)
 

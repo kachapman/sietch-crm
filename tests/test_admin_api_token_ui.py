@@ -34,6 +34,8 @@ HELPER_SRC = (ROOT / "public" / "api-token-ui.js").read_text(encoding="utf-8")
 SAFE_LIST_KEYS = {
     "id", "name", "token_prefix", "scope", "created_by", "created_by_email",
     "created_at", "last_used_at", "revoked_at", "revoked", "expires_at", "restrictions",
+    # migration 053: the token's own send lock (an address, never a secret).
+    "mail_send_locked_recipient",
 }
 
 
@@ -104,6 +106,8 @@ class TestCreateContract(unittest.TestCase):
         self.assertEqual(set(rec), {
             "id", "name", "token", "token_prefix", "scope", "created_by",
             "created_at", "expires_at", "restrictions",
+            # migration 053: echoed back so the admin sees the token's lock
+            "mail_send_locked_recipient",
         })
 
     def test_only_the_hash_is_stored(self):

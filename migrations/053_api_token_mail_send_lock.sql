@@ -1,0 +1,12 @@
+-- 053_api_token_mail_send_lock.sql
+-- Optional per-token mail-send recipient lock (2026-11-10, Ken 8:43 PM ET).
+--
+-- The per-user lock (migration 051, users.mail_send_locked_recipient) already
+-- covers every compose/reply/forward send, including Bearer-token requests,
+-- because a token acts as its owner. This column lets ONE token carry its own
+-- lock, independent of its owner, so a long-lived acceptance key can be
+-- confined to a single address without locking the humans who own it.
+--
+-- NULL = no token lock (normal tokens). Every non-empty lock on a request must
+-- be satisfied; two different non-empty locks on one request refuse the send.
+ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS mail_send_locked_recipient TEXT;

@@ -96,6 +96,7 @@ def try_send_for_account(
     attachments: list[dict] | None = None,
     refresh_graph_token: callable | None = None,
     result_meta: dict | None = None,
+    recipient_locks: list[str] | None = None,
 ) -> tuple[bool, str | None, str]:
     """Single source of truth for sending email from a mail_accounts row.
 
@@ -105,6 +106,11 @@ def try_send_for_account(
             Used to obtain a fresh Graph access token; the caller can persist
             updates via the helper returned value. If None, the Graph path
             is skipped (callers without DB write access pass None).
+        recipient_locks: optional list of locked recipient addresses
+            (`users.mail_send_locked_recipient` and/or
+            `api_tokens.mail_send_locked_recipient`). Re-checked here, before
+            any network call, so the lock also covers callers that reach this
+            helper directly (the mail scanner's "Reply to Email" behaviour).
 
     The From name/address is taken ONLY from this account row: `email` for the
     address and `smtp_from_name` for the display name. There is deliberately
@@ -113,6 +119,22 @@ def try_send_for_account(
     "address only", not "borrow display_name or a brand name".
     """
     from smtp_client import send_email_from_account
+
+    # RECIPIENT LOCK (2026-11-10): every non-empty lock must be satisfied before
+    # a single byte goes to Graph or SMTP. This is the last checkpoint in the
+    # send pipeline, so a locked sender (user or API token) cannot use any
+    # routing branch — including callers like the scanner that bypass
+    # `_handle_mail_send` — to reach another recipient.
+    if recipient_locks:
+        import mail_recipient_lock
+        _lock_ok, _lock_why = mail_recipient_lock.check_locks(
+            recipient_locks,
+            mail_recipient_lock.parse_recipients(to_addr, cc_addr, bcc_addr),
+        )
+        if not _lock_ok:
+            logger.warning(
+                "Recipient lock refused send from account=%s: %s", acct.get("id"), _lock_why)
+            return False, f"Recipient lock: {_lock_why}. Nothing was sent.", "blocked"
 
     meta = result_meta if result_meta is not None else {}
     account_from_addr = (acct.get("email") or "").strip()

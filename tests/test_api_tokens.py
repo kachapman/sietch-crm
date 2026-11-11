@@ -156,7 +156,9 @@ class TestCreateStoresHashOnly(unittest.TestCase):
             return {
                 "id": 1, "name": "ro", "token_prefix": "sietch_xxxx",
                 "scope": "read", "created_by": 1, "created_at": None,
-                "expires_at": None, "restrictions": json.loads(params[-1]),
+                "expires_at": None, "restrictions": json.loads(params[6]),
+                # migration 053: per-token send lock (NULL for this token)
+                "mail_send_locked_recipient": params[7],
             }
 
         mock_db.query_one.side_effect = fake_query_one

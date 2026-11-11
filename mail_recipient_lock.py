@@ -29,6 +29,7 @@ def parse_recipients(to_addr, cc_addr=None, bcc_addr=None) -> list[str]:
 
 
 def check_lock(locked: str, recipients: list[str]) -> tuple[bool, str]:
+    """One lock: every recipient must be exactly the locked address."""
     target = normalize(locked)
     if not target:
         return True, ""
@@ -40,3 +41,20 @@ def check_lock(locked: str, recipients: list[str]) -> tuple[bool, str]:
     if got[0] != target:
         return False, f"recipient {got[0]} is not the locked address {target}"
     return True, ""
+
+
+def check_locks(locks, recipients: list[str]) -> tuple[bool, str]:
+    """Every non-empty lock must be satisfied (2026-11-10, token locks).
+
+    A send can be bound by two independent locks: the user's
+    (`users.mail_send_locked_recipient`, migration 051) and the API token's
+    (`api_tokens.mail_send_locked_recipient`, migration 053). Neither may be
+    weakened by the other: two different non-empty locks can never both pass,
+    so the send is refused rather than resolved by precedence.
+    """
+    targets = {normalize(lock) for lock in (locks or []) if normalize(lock)}
+    if not targets:
+        return True, ""
+    if len(targets) > 1:
+        return False, "conflicting locks: " + " / ".join(sorted(targets))
+    return check_lock(next(iter(targets)), recipients)

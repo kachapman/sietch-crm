@@ -1,6 +1,50 @@
 # Session History — Sietch CRM (new-crm branch)
 
 
+## Current session summary (for next resume) — 2026-11-10 (token send lock, hotfix branch, NOT deployed)
+
+**Branch:** `hotfix/token-send-lock` off `origin/main` `b334c24` (docs commit
+above v2.5.8 `5e22501`). Worktree
+`/home/chapman-server/Projects/new-crm-token-lock`. **No merge, no push, no
+deploy, no sends, no VERSION bump.** Ken's ask (8:43 PM ET): analysis first,
+then a branch with the fix if needed, plus `plans/sietch/test-setup-steps-2026-11-10.md`.
+
+**Analysis (read-only) — where sends are handled:**
+- One route: `POST /api/v2/mail/send` → `server.py:6333` →
+  `_handle_mail_send` (`server.py:24058`). Compose tab (`app.js:22505`), inline
+  reply (`app.js:28127`), and the deal modal (`app.js:22108`) all post here;
+  drafts are sent through it too, and `/mail/send/undo` only deletes a queued
+  row. No scheduled/"send later" endpoint exists.
+- Lock check: `server.py:24159-24172` (branch) read
+  `users.mail_send_locked_recipient` for `user["id"]` — and a Bearer request
+  authenticates AS its creator, because `api_tokens.verify_api_token`
+  (`api_tokens.py:231`) returns the owner's `users` row. So **token sends did
+  enforce the owner's lock**; the gaps were (a) no way to lock a token without
+  locking its owner, (b) no lock check in `mail_send.try_send_for_account`
+  (the scanner's "Reply to Email" reaches it directly —
+  `scanner/mail_scanner.py:600`), (c) preflight (`server.py:23981`) could not
+  block a locked recipient.
+- Mailbox access: `_mail_account_accessible` (`server.py:2549`) — company
+  inbox, owner, **admin**, or a share; admin-owned tokens therefore reach every
+  mailbox. Token restrictions (`api_tokens.request_allowed`, `api_tokens.py:293`)
+  are methods/resources/expiry only — **no per-mailbox allowlist**.
+- MCP: no send tool; `mcp_tools.py:19` refuses any path containing
+  `/mail/send`; drafts only (`create_email_draft`).
+- Other senders: notification email (`notification_dispatcher.py:757`, to the
+  user's own address), temp-password email (`server.py:10314`), alternate-SMTP
+  test (`server.py:16728`) — system/admin sends to self, not user-composed.
+- Tokens can only be minted by an **admin session**
+  (`server.py:5687` → `_handle_api_token_create`) and are owned by that admin
+  (`created_by`); there is no "create on behalf of another user" field.
+
+**Fix (branch only):** optional `api_tokens.mail_send_locked_recipient`
+(migration 053), enforced together with the user lock by
+`_mail_send_locks()` / `_enforce_mail_send_lock()` in the send handler **and**
+preflight, re-checked in `mail_send.try_send_for_account` before any network
+call; `scripts/set_token_mail_send_lock.py` (dry-run default); 29 tests in
+`tests/test_token_send_lock.py`. Admin script + Ken's step list:
+`plans/sietch/test-setup-steps-2026-11-10.md`.
+
 ## Current session summary (for next resume) — 2026-11-10 (API/MCP gaps pass, DEPLOYED v2.5.8)
 
 **Branch:** `feat/mcp-api-gaps-2026-11-10` (from `7d2e55c` / deployed v2.5.5).

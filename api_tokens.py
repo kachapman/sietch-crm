@@ -124,8 +124,14 @@ def create_api_token(
     *,
     restrictions: Any = None,
     expires_at: Any = None,
+    mail_send_locked_recipient: str | None = None,
 ) -> dict:
-    """Mint a token. Returns the record INCLUDING the plaintext (show once)."""
+    """Mint a token. Returns the record INCLUDING the plaintext (show once).
+
+    `mail_send_locked_recipient` is an OPTIONAL per-token send lock (migration
+    053): when set, every mail send made with this token may only go to that
+    one address, independent of the owner's own lock. NULL = no token lock.
+    """
     name = (name or "").strip()
     if not name:
         raise ValueError("name is required")
@@ -139,14 +145,16 @@ def create_api_token(
     expires = _parse_expires_at(expires_at)
     if expires is not None and expires <= datetime.now(timezone.utc):
         raise ValueError("expires_at must be in the future")
+    token_lock = (mail_send_locked_recipient or "").strip() or None
 
     plaintext = TOKEN_PREFIX + secrets.token_urlsafe(32)
     row = db.query_one(
         """INSERT INTO api_tokens
-             (name, token_hash, token_prefix, scope, created_by, expires_at, restrictions)
-           VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+             (name, token_hash, token_prefix, scope, created_by, expires_at, restrictions,
+              mail_send_locked_recipient)
+           VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s)
            RETURNING id, name, token_prefix, scope, created_by, created_at,
-                     expires_at, restrictions""",
+                     expires_at, restrictions, mail_send_locked_recipient""",
         (
             name,
             _hash_token(plaintext),
@@ -155,6 +163,7 @@ def create_api_token(
             created_by,
             expires,
             json.dumps(restrictions_obj),
+            token_lock,
         ),
     )
     return {
@@ -167,6 +176,7 @@ def create_api_token(
         "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
         "expires_at": row["expires_at"].isoformat() if row.get("expires_at") else None,
         "restrictions": row.get("restrictions") or {},
+        "mail_send_locked_recipient": row.get("mail_send_locked_recipient"),
     }
 
 
@@ -175,7 +185,7 @@ def list_api_tokens(include_revoked: bool = True) -> list[dict]:
     sql = """SELECT t.id, t.name, t.token_prefix, t.scope, t.created_by,
                     u.email AS created_by_email,
                     t.created_at, t.last_used_at, t.revoked_at,
-                    t.expires_at, t.restrictions
+                    t.expires_at, t.restrictions, t.mail_send_locked_recipient
              FROM api_tokens t
              LEFT JOIN users u ON u.id = t.created_by"""
     if not include_revoked:
@@ -202,6 +212,7 @@ def list_api_tokens(include_revoked: bool = True) -> list[dict]:
             "revoked": r.get("revoked_at") is not None,
             "expires_at": r["expires_at"].isoformat() if r.get("expires_at") else None,
             "restrictions": restrictions,
+            "mail_send_locked_recipient": r.get("mail_send_locked_recipient"),
         })
     return out
 
@@ -228,6 +239,7 @@ def verify_api_token(plaintext: str) -> dict | None:
     row = db.query_one(
         """SELECT t.id AS token_id, t.name AS token_name, t.scope,
                   t.last_used_at, t.expires_at, t.restrictions,
+                  t.mail_send_locked_recipient,
                   u.id, u.email, u.display_name, u.first_name, u.last_name,
                   u.is_admin, u.must_change_password, u.role, u.twofa_method
            FROM api_tokens t
@@ -272,6 +284,9 @@ def verify_api_token(plaintext: str) -> dict | None:
         "api_token_name": row["token_name"],
         "api_token_scope": row["scope"] or SCOPE_FULL,
         "api_token_restrictions": restrictions,
+        # Optional per-token send lock (migration 053). Enforced together with
+        # the owner's users.mail_send_locked_recipient on every send path.
+        "api_token_mail_send_locked_recipient": row.get("mail_send_locked_recipient"),
     }
 
 

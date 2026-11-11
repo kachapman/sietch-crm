@@ -1,3 +1,54 @@
+## 2026-11-10 — Token sends: recipient lock on every send path (hotfix branch, NOT deployed)
+
+Branch `hotfix/token-send-lock` off `origin/main` (`b334c24`, docs commit
+after v2.5.8 `5e22501`). No VERSION bump, no push, no deploy, no sends.
+
+Context (Ken 8:43 PM ET): the live acceptance run will use BOTH a personal API
+key for per-account sends and the locked test user for compose checks.
+Analysis (read-only, first): Bearer sends already pass through
+`_handle_mail_send` → the owner's `users.mail_send_locked_recipient` is looked
+up for `user["id"]`, and a token authenticates AS its creator
+(`api_tokens.verify_api_token` returns the `users` row), so nothing about the
+session path was missing. Two real gaps found:
+
+1. **No way to bind a lock to a token.** Locks were per human only, so the only
+   way to lock a key was to lock the admin who minted it (and admin-owned
+   tokens also bypass `_mail_account_accessible` via `is_admin`).
+2. **The lock was enforced in one handler only.** `mail_send.try_send_for_account`
+   — reached directly by the scanner's "Reply to Email" behaviour — had no
+   lock check, and the compose preflight could not block a locked recipient.
+
+### Changed
+- `migrations/053_api_token_mail_send_lock.sql`: optional
+  `api_tokens.mail_send_locked_recipient` (+ mirrored inline DDL in
+  `server.py`).
+- `mail_recipient_lock.check_locks()`: every non-empty lock must pass; two
+  different locks on one request refuse (no precedence, no weakening).
+- `server.py`: `_mail_send_locks()` / `_enforce_mail_send_lock()` shared by
+  `_handle_mail_send` and `_handle_mail_send_preflight`; the send wrapper
+  passes the locks down to `mail_send.try_send_for_account`, which re-checks
+  them before any Graph/SMTP call (defence in depth).
+- `api_tokens.py`: create/verify/list carry the token lock
+  (`api_token_mail_send_locked_recipient` on the session-shaped user dict).
+- `scripts/set_token_mail_send_lock.py`: new admin script, **dry run by
+  default**, `--set/--clear --apply`, selects by id / prefix / name, never
+  prints a secret.
+- Tests: `tests/test_token_send_lock.py` (29 tests; pure + source guards +
+  DB-gated: token refused for a non-locked recipient, allowed for
+  `crm@vanguardadj.online`, unlocked token unaffected, owner lock covers token
+  requests, reply/forward/draft cannot bypass, preflight refuses). Negative
+  control run: neutering `_mail_send_locks` turns the 403 into a 200, so the
+  test really exercises the lock.
+- `tests/test_api_tokens.py` + `tests/test_admin_api_token_ui.py`: column
+  positions / response-key contracts updated for the new column.
+
+Verified against a throwaway Postgres (`sietch-test-tokens-pg`, synthetic).
+Pre-existing failures on `main` (unchanged by this branch):
+`test_email_project_copy`, `test_invoice_coc_modern`, `test_mail_auth_gaps`
+(read-only-token era), `test_scanner_toggle_gating`,
+`test_sync_pull_deals_fields`.
+
+
 ## 2026-11-10 — v2.5.8: API/MCP gaps: tags, paging, honest spec, mail body, wrappers
 
 VERSION 2.5.7 → 2.5.8; `app.js` cache-buster 3.7.56 → 3.7.57. Approval: Ken
