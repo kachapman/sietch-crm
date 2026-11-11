@@ -1,3 +1,36 @@
+## 2026-11-11 — v2.5.15: mail Reply/Forward buttons survive a list refresh
+
+Live acceptance run `20261111-062445Z` aborted on S12: Playwright had resolved
+`#mail-list .mail-item button[title="Forward"]`, started the click, and the
+node was detached. Account 6, Forward, inbox and reader open, while the inbox
+was still syncing after S01–S11 sent mail.
+
+- Root cause: `renderMailList` always did `list.innerHTML = ""` and rebuilt
+  every `.mail-item`. The expanded reader (`.mail-detail` →
+  `renderMailEmbedPanel`) and its Reply/Reply-all/Forward buttons live inside
+  those items, so any background reload that changed the list signature
+  replaced the button nodes. v2.5.13's `shouldSkipMailListRender` only skips an
+  unchanged signature — not enough — and `restoreExpandedState()` recreated
+  the buttons *after* the wipe, too late for an in-flight click.
+- Fix: the list is reconciled in place. Existing `.mail-item[data-id]` nodes
+  are kept, inserted/reordered by key, and removed only when they leave the
+  page (never while their reader is open). An item's collapsed `.mail-row` is
+  rebuilt only when its own display signature changes (read/star/selection,
+  text, tags, link/attachment icons); `.mail-detail` is never replaced or
+  `innerHTML`-cleared by a sync.
+- `restoreExpandedState()` is now a repair path only: it never clears a
+  detail panel that still holds its reader.
+- User-initiated reloads (mailbox tab, folder, search, pagination, explicit
+  Refresh) still rebuild the list via `renderMailList(..., { rebuild: true })`.
+  The threaded view has no inline reader, so it keeps its existing reload.
+- Regression test `tests/test_mail_reader_refresh.mjs` runs the real shipped
+  `renderMailList` / `restoreExpandedState` / `renderMailEmbedPanel` against a
+  dependency-free DOM: it holds the Forward/Reply nodes across a
+  signature-changing sync and clicks them afterwards. It fails on the old
+  `innerHTML = ""` path (item/node replaced) and passes on the reconcile.
+
+Cache-buster `app.js?v=3.7.62`. Not deployed (branch only).
+
 ## 2026-11-11 — v2.5.14: restore UI/API mail send (merge only, not deployed)
 
 Prod UI mail send was broken after the 2026-11-10 4:54 PM ET deploy of

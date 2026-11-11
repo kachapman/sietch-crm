@@ -56,6 +56,6 @@ test("compose-tab Send is bound to the tab From select", () => {
 });
 
 test("app.js cache-buster was bumped with this UI change", () => {
-  assert.ok(indexHtml.includes("app.js?v=3.7.61"));
+  assert.ok(indexHtml.includes("app.js?v=3.7.62"));
   assert.ok(!indexHtml.includes("app.js?v=3.7.60"));
 });

@@ -1,6 +1,53 @@
 # Session History — Sietch CRM (new-crm branch)
 
 
+## Current session summary (for next resume) — 2026-11-11 (mail Reply/Forward across refresh, v2.5.15, branch only)
+
+**Branch:** `fix/mail-reader-refresh-actions`, based on `70935b9` (v2.5.14).
+Not merged, not pushed, not deployed.
+
+**Live bug:** acceptance run `20261111-062445Z` aborted on S12. Playwright had
+resolved `#mail-list .mail-item button[title="Forward"]` and started clicking;
+a background inbox sync changed the list signature, `renderMailList` did
+`list.innerHTML = ""`, and the node was detached (20s click timeout). Account
+6, Forward, inbox + reader open, sync still running after S01–S11 sent mail.
+
+**Root cause (confirmed):** `renderMailList` always wiped and rebuilt every
+`.mail-item`; the expanded reader (`.mail-detail` → `renderMailEmbedPanel`,
+`fwdBtn.title = "Forward"`) lives inside those items. v2.5.13's
+`shouldSkipMailListRender` only avoided the wipe while the signature was
+unchanged; a new message / read / star / total change re-rendered, and
+`restoreExpandedState()` created *new* buttons after the wipe — too late for an
+in-flight click and never the same nodes. Background caller:
+`_scheduleMailSyncReload` → `loadMailMessagesForModal(true)` → `renderMailList`
+→ `restoreExpandedState` (also reachable from star/archive/tag/mark-read local
+re-renders, all of which now reconcile).
+
+**Fix:** keyed in-place reconcile in `public/app.js` (`reconcileMailList`,
+`buildMailItem`, `updateMailItem`, `mailRowSignature`, `fillMailRow`,
+`ensureMailListHeader`). Existing `.mail-item[data-id]` nodes are kept,
+moved/inserted/removed by key (an open reader is never removed), and only the
+collapsed `.mail-row` is rebuilt when its own display signature changes.
+`.mail-detail` is never `innerHTML`-cleared by a sync. `restoreExpandedState()`
+is now repair-only (never clears a detail that still holds its reader).
+User-initiated reloads (tab/folder/search/pagination/Refresh) still call
+`renderMailList(..., { rebuild: true })`. Threaded rows have no inline reader,
+so `loadMailThreads` keeps its simple render.
+
+**Tests:** new `tests/test_mail_reader_refresh.mjs` executes the real shipped
+`renderMailList` / `restoreExpandedState` / `renderMailEmbedPanel` from
+`app.js` against a dependency-free DOM (no jsdom in this repo). It holds
+Forward/Reply node references across a signature-changing sync + row update and
+clicks them after. Fails on HEAD's `innerHTML = ""` path (item/node replaced);
+passes on the reconcile. Full web suite `node --test tests/test_*.mjs`:
+**502/502 pass**. Python mail suites that don't need a DB pass; suites needing
+Postgres fail at `init_db` (host `db` unresolved in this worktree shell) and
+`test_email_project_copy.py` has 3 pre-existing server.py source-assertion
+failures (verified identical on a pristine HEAD tree).
+
+**Version:** 2.5.15; cache-buster `app.js?v=3.7.62` (tests updated).
+
+
 ## Current session summary (for next resume) — 2026-11-10 (per-key crm@ send lock, v2.5.11, DEPLOYED)
 
 **Deployed 22:23 ET:** prod `30d48ba` / **v2.5.11**, migration **054** applied

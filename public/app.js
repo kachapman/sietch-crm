@@ -25034,7 +25034,9 @@ async function loadMailMessagesForModal(background) {
         body: d.body_text || d.body_html || '',
         snippet: (d.body_text || '').slice(0, 80),
       }));
-      renderMailList(mailState.messages);
+      // Drafts re-load is a view load: a manual switch rebuilds, a background
+      // sync reconciles (an open reader keeps its action bar).
+      renderMailList(mailState.messages, { rebuild: !background });
       // The footer belongs to this view: INBOX totals must not linger here.
       mailState.total = mailState.messages.length;
       mailState.pages = 1;
@@ -25092,7 +25094,9 @@ async function loadMailMessagesForModal(background) {
     mailState.page = data.page || 1;
     mailState.total = data.total || mailState.messages.length;
     mailState.pages = Math.ceil(mailState.total / (mailState.pageSize || 50));
-    renderMailList(mailState.messages);
+    // Background syncs reconcile in place (never wipe an open reader);
+    // user-initiated reloads (tab/folder/search/page/Refresh) rebuild.
+    renderMailList(mailState.messages, { rebuild: !background });
     renderMailPagination();
     if (background) { restoreExpandedState(); if (scrollContainer) scrollContainer.scrollTop = savedScrollTop; }
   } catch (e) {
@@ -25103,6 +25107,9 @@ async function loadMailMessagesForModal(background) {
 async function loadMailThreads() {
   const list = $("#mail-list");
   if (!list) return;
+  // Threaded rows are summary-only: they have no inline reader / Reply/Forward
+  // action bar (the list path does), so rebuilding threads cannot detach a
+  // button the user is clicking. Keep the simple full render here.
   list.innerHTML = '<div class="mail-empty">Loading threads…</div>';
   try {
     let url = "/api/v2/mail/threads";
@@ -25739,366 +25746,499 @@ function mailSnippetText(m) {
   return text.replace(/\u00A0/g, " ").replace(/\s+/g, " ").replace(/\s+([,.;:!?])/g, "$1").trim();
 }
 
-function renderMailList(msgs) {
-  const list = $("#mail-list");
-  if (!list) return;
-  mailState.listRenderCount = (mailState.listRenderCount || 0) + 1;
-  list.innerHTML = "";
-  if (!msgs || !msgs.length) {
-    list.innerHTML = '<div class="mail-empty">No emails in this inbox/page.</div>';
-    return;
-  }
+// ── Mail list rendering (v2.5.15) ─────────────────────────────────────────
+// Live bug 2026-11-11 (acceptance S12): a background inbox sync changed the
+// list signature, renderMailList wiped #mail-list with innerHTML = "", and the
+// open reader's Reply/Forward nodes were detached while Playwright was
+// clicking Forward. restoreExpandedState() only recreated them afterwards,
+// which is too late for the in-flight click and never the same nodes.
+//
+// The list is now reconciled in place: `.mail-item[data-id]` nodes are kept,
+// reordered (never replaced), and only an item's collapsed `.mail-row` is
+// rebuilt when its own display state changes. `.mail-detail` — the open reader
+// and its action bar — is never cleared by a sync.
 
-  // header
-  const header = document.createElement("div");
-  header.className = "mail-row mail-header";
-  header.innerHTML = `
-    <input type="checkbox" id="mail-cb-all" />
-    <div class="mail-star"></div>
-    <div class="mail-from"><strong>From</strong></div>
-    <div class="mail-subject"><strong>Subject</strong></div>
-    <div class="mail-date"><strong>Date</strong></div>
+// Everything the collapsed row shows. Unchanged → leave the row untouched.
+function mailRowSignature(m, id) {
+  const attCount = m.attachment_count || (Array.isArray(m.attachments) ? m.attachments.length : 0);
+  const tags = Array.isArray(m.tags) ? m.tags.map(t => `${t.title}|${t.color || ""}`).join(",") : "";
+  const linked = Array.isArray(m.linked_deals) ? m.linked_deals.map(d => d.deal_id).join(",") : "";
+  return [
+    getMailMessageIsRead(m) ? 1 : 0,
+    mailDashboardReadIds.has(id) ? 1 : 0,
+    mailState.selected.has(id) ? 1 : 0,
+    m.starred ? 1 : 0,
+    m.isDraft ? 1 : 0,
+    m.from_addr || m.from || m.fromEmail || "",
+    m.subject || m.Subject || "",
+    m.date || m.date_received || m.receivedDate || m.Date || "",
+    m.sync_failure ? (m.sync_failure.error || "1") : "",
+    mailSnippetText(m),
+    tags,
+    linked,
+    m.unlinked_reason || "",
+    attCount,
+  ].join("\u0001");
+}
+
+function mailItemIsOpen(item) {
+  const detail = item.querySelector(".mail-detail");
+  return !!(detail && !detail.classList.contains("hidden"));
+}
+
+// Rebuild ONLY the collapsed summary row for one message. The item's
+// `.mail-detail` (an open reader + Reply/Reply-all/Forward) is not touched,
+// so its button nodes stay connected across a sync.
+function fillMailRow(row, m, id, item) {
+  const from = (m.from_addr || m.from || m.fromEmail || "").toString();
+  const subj = (m.subject || m.Subject || "(no subject)").toString();
+  const date = m.date || m.date_received || m.receivedDate || m.Date || "";
+  // Shared formatter (live bug 2026-11-09): a naive value is UTC, and the
+  // wall clock is the viewer's timezone — not the browser's.
+  const dateStr = date ? formatMailDate(date, { mode: "list", userTimezone: mailDisplayTimezone() }) : "";
+
+  row.className = "mail-row";
+  if (mailState.selected.has(id)) row.classList.add("selected");
+  // Use tolerant server read detection (list summary may use read/isRead/seen/IsNew etc or nestings)
+  // OR our local dashboard overrides (for marks we performed here + any server-read we promoted).
+  // This makes the darker .mail-row-read rows reflect native CRM mail status when the API provides it,
+  // while our local Set ensures persistence across modal close/reopen even if a list response drops the flag.
+  const isRead = getMailMessageIsRead(m) || mailDashboardReadIds.has(id);
+  if (isRead) row.classList.add('mail-row-read');
+
+  row.innerHTML = `
+    <input type="checkbox" class="mail-cb" data-id="${escapeHtml(id)}" ${mailState.selected.has(id) ? "checked" : ""} />
   `;
-  list.appendChild(header);
 
-  const cbAll = header.querySelector("#mail-cb-all");
-  if (cbAll) {
-    cbAll.checked = msgs.length > 0 && msgs.every(m => mailState.selected.has(String(m.id || m.ID)));
-    cbAll.addEventListener("change", () => {
-      msgs.forEach(m => {
-        const id = String(m.id || m.ID);
-        if (cbAll.checked) mailState.selected.add(id);
-        else mailState.selected.delete(id);
-      });
-      renderMailList(msgs); // re-render to sync cbs
-      updateMailSelectedInfo();
-    });
+  // Star indicator
+  const starEl = document.createElement("div");
+  starEl.className = "mail-star";
+  starEl.innerHTML = '<i class="ti ti-star"></i>';
+  if (m.starred) starEl.classList.add('starred');
+  starEl.style.cursor = "pointer";
+  starEl.style.flexShrink = "0";
+  starEl.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    try {
+      const res = await api(`/api/v2/mail/messages/${id}/star`, { method: 'PUT' });
+      starEl.innerHTML = '<i class="ti ti-star"></i>';
+      if (res.starred) starEl.classList.add('starred'); else starEl.classList.remove('starred');
+    } catch {}
+  });
+  row.appendChild(starEl);
+
+  const fromDiv = document.createElement("div");
+  fromDiv.className = "mail-from";
+  const fromSnippet = from.slice(0, 28);
+  fromDiv.title = from;
+  fromDiv.textContent = fromSnippet;
+  row.appendChild(fromDiv);
+
+  const subjDiv = document.createElement("div");
+  subjDiv.className = "mail-subject";
+  const draftBadge = m.isDraft ? '<span style="background:var(--warning-subtle,#fef3c7); color:var(--warning,#d97706); padding:0.1rem 0.3rem; border-radius:3px; font-size:0.7rem; margin-right:0.3rem;">Draft</span>' : '';
+  const bodySnippet = mailSnippetText(m).slice(0, 100);
+  subjDiv.title = `${from}\n${subj}\n${bodySnippet}`;
+  // Subject text (wrapped for ellipsis)
+  const subjText = document.createElement('span');
+  subjText.className = 'mail-subject-text';
+  subjText.innerHTML = draftBadge + escapeHtml(subj.slice(0, 80));
+  subjDiv.appendChild(subjText);
+  // IMAP sync failure marker (e.g. read status did not reach the server).
+  if (m.sync_failure) {
+    const warn = document.createElement("span");
+    warn.className = "mail-sync-warning";
+    warn.title = "Couldn't sync to your mailbox: " + (m.sync_failure.error || "unknown error");
+    warn.innerHTML = '<i class="ti ti-alert-triangle"></i>';
+    subjText.appendChild(warn);
+  }
+  row.appendChild(subjDiv);
+
+  // Body snippet
+  const snippet = mailSnippetText(m).slice(0, 60);
+  if (snippet) {
+    const snippetDiv = document.createElement("div");
+    snippetDiv.className = "mail-snippet";
+    snippetDiv.textContent = snippet;
+    row.appendChild(snippetDiv);
   }
 
-  msgs.forEach(m => {
-    const id = String(m.id || m.ID);
-    const from = (m.from_addr || m.from || m.fromEmail || "").toString();
-    const subj = (m.subject || m.Subject || "(no subject)").toString();
-    const date = m.date || m.date_received || m.receivedDate || m.Date || "";
-    // Shared formatter (live bug 2026-11-09): a naive value is UTC, and the
-    // wall clock is the viewer's timezone — not the browser's.
-    const dateStr = date ? formatMailDate(date, { mode: "list", userTimezone: mailDisplayTimezone() }) : "";
-
-    const item = document.createElement("div");
-    item.className = "mail-item";
-    item.dataset.id = id;
-
-    const row = document.createElement("div");
-    row.className = "mail-row";
-    if (mailState.selected.has(id)) row.classList.add("selected");
-    // Use tolerant server read detection (list summary may use read/isRead/seen/IsNew etc or nestings)
-    // OR our local dashboard overrides (for marks we performed here + any server-read we promoted).
-    // This makes the darker .mail-row-read rows reflect native CRM mail status when the API provides it,
-    // while our local Set ensures persistence across modal close/reopen even if a list response drops the flag.
-    const isRead = getMailMessageIsRead(m) || mailDashboardReadIds.has(id);
-    if (isRead) row.classList.add('mail-row-read');
-
-    row.innerHTML = `
-      <input type="checkbox" class="mail-cb" data-id="${escapeHtml(id)}" ${mailState.selected.has(id) ? "checked" : ""} />
-    `;
-
-    // Star indicator
-    const starEl = document.createElement("div");
-    starEl.className = "mail-star";
-    starEl.innerHTML = '<i class="ti ti-star"></i>';
-    if (m.starred) starEl.classList.add('starred');
-    starEl.style.cursor = "pointer";
-    starEl.style.flexShrink = "0";
-    starEl.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      try {
-        const res = await api(`/api/v2/mail/messages/${id}/star`, { method: 'PUT' });
-        starEl.innerHTML = '<i class="ti ti-star"></i>';
-        if (res.starred) starEl.classList.add('starred'); else starEl.classList.remove('starred');
-      } catch {}
+  // Tag badges (to the right of the body snippet)
+  if (m.tags && m.tags.length) {
+    const tagsWrap = document.createElement('span');
+    tagsWrap.className = 'mail-row-tags';
+    m.tags.slice(0, 3).forEach(t => {
+      const badge = document.createElement('span');
+      badge.className = 'mail-tag-badge-inline';
+      badge.style.cssText = `background:${escapeHtml(t.color || '#6c757d')};`;
+      badge.textContent = t.title;
+      tagsWrap.appendChild(badge);
     });
-    row.appendChild(starEl);
+    row.appendChild(tagsWrap);
+  }
 
-    const fromDiv = document.createElement("div");
-    fromDiv.className = "mail-from";
-    const fromSnippet = from.slice(0, 28);
-    fromDiv.title = from;
-    fromDiv.textContent = fromSnippet;
-    row.appendChild(fromDiv);
+  // Auto-link status icon (after subject, before expand button)
+  if (m.linked_deals && m.linked_deals.length > 0) {
+    const linkIcon = document.createElement("span");
+    linkIcon.className = "mail-link-icon linked";
+    linkIcon.title = "Linked: " + m.linked_deals.map(d => `${d.title} (#${d.deal_id})`).join(", ");
+    linkIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 15l6 -6"/><path d="M11 6l.463 -.536a5 5 0 0 1 7.071 7.072l-.534 .464"/><path d="M13 18l-.397 .534a5.068 5.068 0 0 1 -7.127 0a4.972 4.972 0 0 1 0 -7.071l.524 -.463"/></svg>';
+    row.appendChild(linkIcon);
+  } else if (m.unlinked_reason) {
+    const robotIcon = document.createElement("span");
+    robotIcon.className = "mail-link-icon unlinked";
+    robotIcon.title = "Unable to link: " + m.unlinked_reason;
+    robotIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 16a4 4 0 0 1 -2.5 -7.5"/><path d="M10 16a4 4 0 0 1 -2.5 -7.5"/><path d="M13 16a4 4 0 0 1 -2.5 -7.5"/><path d="M16 16a4 4 0 0 1 -2.5 -7.5"/><path d="M4 8h16"/><path d="M8 12h8"/></svg>';
+    row.appendChild(robotIcon);
+  }
 
-    const subjDiv = document.createElement("div");
-    subjDiv.className = "mail-subject";
-    const draftBadge = m.isDraft ? '<span style="background:var(--warning-subtle,#fef3c7); color:var(--warning,#d97706); padding:0.1rem 0.3rem; border-radius:3px; font-size:0.7rem; margin-right:0.3rem;">Draft</span>' : '';
-    const bodySnippet = mailSnippetText(m).slice(0, 100);
-    subjDiv.title = `${from}\n${subj}\n${bodySnippet}`;
-    // Subject text (wrapped for ellipsis)
-    const subjText = document.createElement('span');
-    subjText.className = 'mail-subject-text';
-    subjText.innerHTML = draftBadge + escapeHtml(subj.slice(0, 80));
-    subjDiv.appendChild(subjText);
-    // IMAP sync failure marker (e.g. read status did not reach the server).
-    if (m.sync_failure) {
-      const warn = document.createElement("span");
-      warn.className = "mail-sync-warning";
-      warn.title = "Couldn't sync to your mailbox: " + (m.sync_failure.error || "unknown error");
-      warn.innerHTML = '<i class="ti ti-alert-triangle"></i>';
-      subjText.appendChild(warn);
+  // Attachment icon
+  if (m.attachment_count > 0 || (m.attachments && m.attachments.length > 0)) {
+    const attIcon = document.createElement("span");
+    attIcon.className = "mail-link-icon has-attachments";
+    attIcon.title = `${m.attachment_count || m.attachments.length} attachment(s)`;
+    attIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 7l-6.5 6.5a1.5 1.5 0 0 0 3 3l6.5 -6.5a3 3 0 0 0 -6 -6l-6.5 6.5a4.5 4.5 0 0 0 9 9l6.5 -6.5"/></svg>';
+    row.appendChild(attIcon);
+  }
+
+  const dateDiv = document.createElement("div");
+  dateDiv.className = "mail-date";
+  dateDiv.textContent = dateStr;
+  row.appendChild(dateDiv);
+
+  // Expand button for viewing full email (lazy load, copy from deal preview modal)
+  const expBtn = document.createElement("button");
+  expBtn.type = "button";
+  expBtn.className = "mail-expand-btn";
+  expBtn.title = "View email";
+  expBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M16 4l4 0l0 4"/><path d="M14 10l6 -6"/><path d="M8 20l-4 0l0 -4"/><path d="M4 20l6 -6"/><path d="M16 20l4 0l0 -4"/><path d="M14 14l6 6"/><path d="M8 4l-4 0l0 4"/><path d="M4 4l6 6"/></svg>';
+  row.appendChild(expBtn);
+
+  const cb = row.querySelector(".mail-cb");
+  cb.addEventListener("click", (e) => {
+    e.stopImmediatePropagation();
+    if (cb.checked) mailState.selected.add(id);
+    else mailState.selected.delete(id);
+    if (cb.checked) row.classList.add("selected");
+    else row.classList.remove("selected");
+    updateMailSelectedInfo();
+  });
+
+  row.addEventListener("click", (e) => {
+    // The item (and its open .mail-detail) survives list syncs, so look the
+    // detail up on every click instead of closing over a stale node.
+    const detail = item.querySelector(".mail-detail");
+    if (e.target.tagName === "INPUT" || e.target.closest('.mail-expand-btn')) return;
+    // Clicking row expands the email inline. Drafts live in mail_outgoing,
+    // not mail_messages — fetching them as messages 404s (or worse, renders
+    // a colliding old email). Route drafts to compose like the expand
+    // button does.
+    if (m.isDraft) {
+      openDraftInComposeById(id);
+      return;
     }
-    row.appendChild(subjDiv);
-
-    // Body snippet
-    const snippet = mailSnippetText(m).slice(0, 60);
-    if (snippet) {
-      const snippetDiv = document.createElement("div");
-      snippetDiv.className = "mail-snippet";
-      snippetDiv.textContent = snippet;
-      row.appendChild(snippetDiv);
+    const isHidden = detail.classList.contains("hidden");
+    detail.classList.toggle("hidden");
+    if (!isHidden) {
+      // Collapsing — remove from tracking
+      mailState.expandedIds.delete(id);
+      delete mailState.expandedContent[id];
+      return;
     }
-
-    // Tag badges (to the right of the body snippet)
-    if (m.tags && m.tags.length) {
-      const tagsWrap = document.createElement('span');
-      tagsWrap.className = 'mail-row-tags';
-      m.tags.slice(0, 3).forEach(t => {
-        const badge = document.createElement('span');
-        badge.className = 'mail-tag-badge-inline';
-        badge.style.cssText = `background:${escapeHtml(t.color || '#6c757d')};`;
-        badge.textContent = t.title;
-        tagsWrap.appendChild(badge);
-      });
-      row.appendChild(tagsWrap);
-    }
-
-    // Auto-link status icon (after subject, before expand button)
-    if (m.linked_deals && m.linked_deals.length > 0) {
-      const linkIcon = document.createElement("span");
-      linkIcon.className = "mail-link-icon linked";
-      linkIcon.title = "Linked: " + m.linked_deals.map(d => `${d.title} (#${d.deal_id})`).join(", ");
-      linkIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 15l6 -6"/><path d="M11 6l.463 -.536a5 5 0 0 1 7.071 7.072l-.534 .464"/><path d="M13 18l-.397 .534a5.068 5.068 0 0 1 -7.127 0a4.972 4.972 0 0 1 0 -7.071l.524 -.463"/></svg>';
-      row.appendChild(linkIcon);
-    } else if (m.unlinked_reason) {
-      const robotIcon = document.createElement("span");
-      robotIcon.className = "mail-link-icon unlinked";
-      robotIcon.title = "Unable to link: " + m.unlinked_reason;
-      robotIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 16a4 4 0 0 1 -2.5 -7.5"/><path d="M10 16a4 4 0 0 1 -2.5 -7.5"/><path d="M13 16a4 4 0 0 1 -2.5 -7.5"/><path d="M16 16a4 4 0 0 1 -2.5 -7.5"/><path d="M4 8h16"/><path d="M8 12h8"/></svg>';
-      row.appendChild(robotIcon);
-    }
-
-    // Attachment icon
-    if (m.attachment_count > 0 || (m.attachments && m.attachments.length > 0)) {
-      const attIcon = document.createElement("span");
-      attIcon.className = "mail-link-icon has-attachments";
-      attIcon.title = `${m.attachment_count || m.attachments.length} attachment(s)`;
-      attIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 7l-6.5 6.5a1.5 1.5 0 0 0 3 3l6.5 -6.5a3 3 0 0 0 -6 -6l-6.5 6.5a4.5 4.5 0 0 0 9 9l6.5 -6.5"/></svg>';
-      row.appendChild(attIcon);
-    }
-
-    const dateDiv = document.createElement("div");
-    dateDiv.className = "mail-date";
-    dateDiv.textContent = dateStr;
-    row.appendChild(dateDiv);
-
-    // Expand button for viewing full email (lazy load, copy from deal preview modal)
-    const expBtn = document.createElement("button");
-    expBtn.type = "button";
-    expBtn.className = "mail-expand-btn";
-    expBtn.title = "View email";
-    expBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M16 4l4 0l0 4"/><path d="M14 10l6 -6"/><path d="M8 20l-4 0l0 -4"/><path d="M4 20l6 -6"/><path d="M16 20l4 0l0 -4"/><path d="M14 14l6 6"/><path d="M8 4l-4 0l0 4"/><path d="M4 4l6 6"/></svg>';
-    row.appendChild(expBtn);
-
-    const cb = row.querySelector(".mail-cb");
-    cb.addEventListener("click", (e) => {
-      e.stopImmediatePropagation();
-      if (cb.checked) mailState.selected.add(id);
-      else mailState.selected.delete(id);
-      if (cb.checked) row.classList.add("selected");
-      else row.classList.remove("selected");
-      updateMailSelectedInfo();
-    });
-
-    row.addEventListener("click", (e) => {
-      if (e.target.tagName === "INPUT" || e.target.closest('.mail-expand-btn')) return;
-      // Clicking row expands the email inline. Drafts live in mail_outgoing,
-      // not mail_messages — fetching them as messages 404s (or worse, renders
-      // a colliding old email). Route drafts to compose like the expand
-      // button does.
-      if (m.isDraft) {
-        openDraftInComposeById(id);
-        return;
-      }
-      const isHidden = detail.classList.contains("hidden");
-      detail.classList.toggle("hidden");
-      if (!isHidden) {
-        // Collapsing — remove from tracking
-        mailState.expandedIds.delete(id);
-        delete mailState.expandedContent[id];
-        return;
-      }
-      // Expanding — track it
-      mailState.expandedIds.add(id);
-      if (item._mailLoaded) return;
-      item._mailLoaded = true;
-      fetchMailMessage(id).then(fullMail => {
-        if (getMailMessageIsRead(fullMail)) {
-          mailDashboardReadIds.add(id);
-          saveMailDashboardReadIds();
-        }
-        markMailMessageRead(id).catch(() => {});
-        row.classList.add('mail-row-read');
-        detail.innerHTML = "";
-        const embed = document.createElement("div");
-        embed.className = "opp-preview-mail-embed";
-        detail.appendChild(embed);
-        renderMailEmbedPanel(embed, fullMail, id, { openUrl: portalMailMessageUrl(id) });
-        // Cache for background refresh restoration
-        mailState.expandedContent[id] = fullMail;
-      }).catch(err => {
-        detail.innerHTML = `<div class="mail-empty">Failed to load: ${escapeHtml(err.message || err)}</div>`;
-      });
-    });
-
-    // Right-click context menu for email actions
-    item.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      // Remove any existing context menu
-      document.querySelectorAll('.mail-context-menu').forEach(m => m.remove());
-
-      // Select this message for link/tag operations
-      mailState.selected.add(id);
-      updateMailSelectedInfo();
-
-      const menu = document.createElement('div');
-      menu.className = 'mail-context-menu';
-
-      const menuItems = [
-        { icon: 'ti ti-arrow-back-up', label: 'Reply', click: () => { openEmailPreviewModal(id); setTimeout(() => { const btn = document.querySelector('.email-preview-action[data-action="reply"]'); if (btn) btn.click(); }, 200); } },
-        { icon: 'ti ti-arrow-forward-up', label: 'Forward', click: () => { openEmailPreviewModal(id); setTimeout(() => { const btn = document.querySelector('.email-preview-action[data-action="forward"]'); if (btn) btn.click(); }, 200); } },
-        'separator',
-        { icon: getMailMessageIsRead(m) ? 'ti ti-mail' : 'ti ti-mail-opened', label: getMailMessageIsRead(m) ? 'Mark unread' : 'Mark read', click: async () => { if (getMailMessageIsRead(m)) { try { await api(`/api/v2/mail/messages/${id}/unread`, { method: 'PUT' }); } catch {} } else { await markMailMessageRead(id); } loadMailMessagesForModal(); } },
-        { icon: 'ti ti-star', label: 'Star', click: async () => { try { await api(`/api/v2/mail/messages/${id}/star`, { method: 'PUT' }); loadMailMessagesForModal(); } catch {} } },
-        { icon: 'ti ti-archive', label: 'Archive', click: async () => { try { await api(`/api/v2/mail/messages/${id}/move`, { method: 'POST', body: JSON.stringify({ folder: 'Archive' }) }); loadMailMessagesForModal(); } catch {} } },
-        { icon: 'ti ti-trash', label: 'Delete', click: async () => { if (!confirm('Delete this email?')) return; try { await api(`/api/v2/mail/messages/${id}`, { method: 'DELETE' }); loadMailMessagesForModal(); } catch {} } },
-        'separator',
-        { icon: 'ti ti-link', label: 'Link to deal', click: () => {
-          setTimeout(() => {
-            const linkDropdown = document.querySelector('#mail-link-deal-dropdown');
-            if (linkDropdown) {
-              linkDropdown.classList.remove('hidden');
-              const search = document.querySelector('#mail-link-deal-search');
-              if (search) { search.value = ''; search.focus(); }
-            }
-          }, 50);
-        }},
-        { icon: 'ti ti-tag', label: 'Tag', hasSubmenu: true, loadSubmenu: async (parentEl) => {
-          try {
-            const data = await api('/api/v2/mail/tags');
-            const tags = data.tags || [];
-            if (!tags.length) {
-              const empty = document.createElement('div');
-              empty.style.cssText = 'padding:0.4rem 0.75rem; color:var(--muted); font-size:0.8rem;';
-              empty.textContent = 'No tags yet';
-              parentEl.appendChild(empty);
-              return;
-            }
-            tags.forEach(tag => {
-              const btn = document.createElement('button');
-              btn.type = 'button';
-              btn.className = 'mail-context-subitem';
-              btn.innerHTML = `<span class="mail-tag-dot" style="background:${escapeHtml(tag.color || '#6c757d')}; width:8px; height:8px; border-radius:50%; flex-shrink:0;"></span>${escapeHtml(tag.title)}`;
-              btn.addEventListener('click', async (ev) => {
-                ev.stopPropagation();
-                try {
-                  await api(`/api/v2/mail/messages/${id}/tags`, {
-                    method: 'POST',
-                    body: JSON.stringify({ title: tag.title }),
-                  });
-                  showToast(`Tagged "${tag.title}"`);
-                  menu.remove();
-                } catch (err) { showToast('Failed to tag: ' + err.message, true); return; }
-                try { await loadMailMessagesForModal(); } catch (err) { console.error('Failed to refresh mail list', err); }
-              });
-              parentEl.appendChild(btn);
-            });
-          } catch { /* ignore */ }
-        }},
-      ];
-
-      menuItems.forEach(item => {
-        if (item === 'separator') {
-          const sep = document.createElement('div');
-          sep.className = 'mail-context-separator';
-          menu.appendChild(sep);
-          return;
-        }
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'mail-context-item';
-        btn.innerHTML = `<i class="${item.icon}"></i><span>${item.label}</span>`;
-        if (item.hasSubmenu) {
-          const arrow = document.createElement('i');
-          arrow.className = 'ti ti-chevron-right';
-          arrow.style.cssText = 'margin-left:auto; font-size:0.7rem; opacity:0.5;';
-          btn.appendChild(arrow);
-          const submenu = document.createElement('div');
-          submenu.className = 'mail-context-submenu';
-          btn.addEventListener('mouseenter', () => {
-            submenu.innerHTML = '';
-            submenu.classList.add('visible');
-            item.loadSubmenu(submenu);
-          });
-          btn.addEventListener('mouseleave', () => {
-            setTimeout(() => { if (!submenu.matches(':hover')) submenu.classList.remove('visible'); }, 100);
-          });
-          submenu.addEventListener('mouseleave', () => {
-            setTimeout(() => { if (!btn.matches(':hover')) submenu.classList.remove('visible'); }, 100);
-          });
-          submenu.addEventListener('mouseenter', () => submenu.classList.add('visible'));
-          btn.appendChild(submenu);
-        } else {
-          btn.addEventListener('click', () => { menu.remove(); item.click(); });
-        }
-        menu.appendChild(btn);
-      });
-
-      menu.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px';
-      menu.style.top = Math.min(e.clientY, window.innerHeight - 300) + 'px';
-      document.body.appendChild(menu);
-      const closeMenu = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', closeMenu); } };
-      setTimeout(() => document.addEventListener('click', closeMenu), 0);
-    });
-
-    // Note: attachments display handled inside renderMailEmbedPanel (expanded view)
-
-    const detail = document.createElement("div");
-    detail.className = "mail-detail hidden";
-    item.appendChild(row);
-    item.appendChild(detail);
-
-    expBtn.addEventListener("click", async (e) => {
-      e.stopImmediatePropagation();
-      // Drafts: open compose pre-filled (shared with row-click routing).
-      if (m.isDraft) {
-        openDraftInComposeById(id);
-        return;
-      }
-      // Open the full email preview modal
-      if (getMailMessageIsRead(m)) {
+    // Expanding — track it
+    mailState.expandedIds.add(id);
+    if (item._mailLoaded) return;
+    item._mailLoaded = true;
+    fetchMailMessage(id).then(fullMail => {
+      if (getMailMessageIsRead(fullMail)) {
         mailDashboardReadIds.add(id);
         saveMailDashboardReadIds();
       }
       markMailMessageRead(id).catch(() => {});
       row.classList.add('mail-row-read');
-      openEmailPreviewModal(id);
+      detail.innerHTML = "";
+      const embed = document.createElement("div");
+      embed.className = "opp-preview-mail-embed";
+      detail.appendChild(embed);
+      renderMailEmbedPanel(embed, fullMail, id, { openUrl: portalMailMessageUrl(id) });
+      // Cache for background refresh restoration
+      mailState.expandedContent[id] = fullMail;
+    }).catch(err => {
+      detail.innerHTML = `<div class="mail-empty">Failed to load: ${escapeHtml(err.message || err)}</div>`;
+    });
+  });
+
+  expBtn.addEventListener("click", async (e) => {
+    e.stopImmediatePropagation();
+    // Drafts: open compose pre-filled (shared with row-click routing).
+    if (m.isDraft) {
+      openDraftInComposeById(id);
+      return;
+    }
+    // Open the full email preview modal
+    if (getMailMessageIsRead(m)) {
+      mailDashboardReadIds.add(id);
+      saveMailDashboardReadIds();
+    }
+    markMailMessageRead(id).catch(() => {});
+    row.classList.add('mail-row-read');
+    openEmailPreviewModal(id);
+  });
+
+}
+
+function buildMailItem(m) {
+  const id = String(m.id || m.ID);
+  const item = document.createElement("div");
+  item.className = "mail-item";
+  item.dataset.id = id;
+  item._mailMsg = m;
+  const detail = document.createElement("div");
+  detail.className = "mail-detail hidden";
+  const row = document.createElement("div");
+  row.className = "mail-row";
+  item.appendChild(row);
+  item.appendChild(detail);
+  fillMailRow(row, m, id, item);
+  item._rowSig = mailRowSignature(m, id);
+  bindMailItemContextMenu(item);
+  return item;
+}
+
+// Update an existing item: fresh message data, same nodes unless the row's
+// own visible state actually changed.
+function updateMailItem(item, m) {
+  const id = String(m.id || m.ID);
+  item._mailMsg = m;
+  const sig = mailRowSignature(m, id);
+  if (item._rowSig === sig) return;
+  item._rowSig = sig;
+  const row = item.querySelector(".mail-row");
+  if (!row) return;
+  fillMailRow(row, m, id, item);
+}
+
+function bindMailItemContextMenu(item) {
+  // Right-click context menu for email actions
+  item.addEventListener('contextmenu', (e) => {
+    const m = item._mailMsg || {};
+    const id = item.dataset.id;
+    e.preventDefault();
+    e.stopPropagation();
+    // Remove any existing context menu
+    document.querySelectorAll('.mail-context-menu').forEach(m => m.remove());
+
+    // Select this message for link/tag operations
+    mailState.selected.add(id);
+    updateMailSelectedInfo();
+
+    const menu = document.createElement('div');
+    menu.className = 'mail-context-menu';
+
+    const menuItems = [
+      { icon: 'ti ti-arrow-back-up', label: 'Reply', click: () => { openEmailPreviewModal(id); setTimeout(() => { const btn = document.querySelector('.email-preview-action[data-action="reply"]'); if (btn) btn.click(); }, 200); } },
+      { icon: 'ti ti-arrow-forward-up', label: 'Forward', click: () => { openEmailPreviewModal(id); setTimeout(() => { const btn = document.querySelector('.email-preview-action[data-action="forward"]'); if (btn) btn.click(); }, 200); } },
+      'separator',
+      { icon: getMailMessageIsRead(m) ? 'ti ti-mail' : 'ti ti-mail-opened', label: getMailMessageIsRead(m) ? 'Mark unread' : 'Mark read', click: async () => { if (getMailMessageIsRead(m)) { try { await api(`/api/v2/mail/messages/${id}/unread`, { method: 'PUT' }); } catch {} } else { await markMailMessageRead(id); } loadMailMessagesForModal(); } },
+      { icon: 'ti ti-star', label: 'Star', click: async () => { try { await api(`/api/v2/mail/messages/${id}/star`, { method: 'PUT' }); loadMailMessagesForModal(); } catch {} } },
+      { icon: 'ti ti-archive', label: 'Archive', click: async () => { try { await api(`/api/v2/mail/messages/${id}/move`, { method: 'POST', body: JSON.stringify({ folder: 'Archive' }) }); loadMailMessagesForModal(); } catch {} } },
+      { icon: 'ti ti-trash', label: 'Delete', click: async () => { if (!confirm('Delete this email?')) return; try { await api(`/api/v2/mail/messages/${id}`, { method: 'DELETE' }); loadMailMessagesForModal(); } catch {} } },
+      'separator',
+      { icon: 'ti ti-link', label: 'Link to deal', click: () => {
+        setTimeout(() => {
+          const linkDropdown = document.querySelector('#mail-link-deal-dropdown');
+          if (linkDropdown) {
+            linkDropdown.classList.remove('hidden');
+            const search = document.querySelector('#mail-link-deal-search');
+            if (search) { search.value = ''; search.focus(); }
+          }
+        }, 50);
+      }},
+      { icon: 'ti ti-tag', label: 'Tag', hasSubmenu: true, loadSubmenu: async (parentEl) => {
+        try {
+          const data = await api('/api/v2/mail/tags');
+          const tags = data.tags || [];
+          if (!tags.length) {
+            const empty = document.createElement('div');
+            empty.style.cssText = 'padding:0.4rem 0.75rem; color:var(--muted); font-size:0.8rem;';
+            empty.textContent = 'No tags yet';
+            parentEl.appendChild(empty);
+            return;
+          }
+          tags.forEach(tag => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'mail-context-subitem';
+            btn.innerHTML = `<span class="mail-tag-dot" style="background:${escapeHtml(tag.color || '#6c757d')}; width:8px; height:8px; border-radius:50%; flex-shrink:0;"></span>${escapeHtml(tag.title)}`;
+            btn.addEventListener('click', async (ev) => {
+              ev.stopPropagation();
+              try {
+                await api(`/api/v2/mail/messages/${id}/tags`, {
+                  method: 'POST',
+                  body: JSON.stringify({ title: tag.title }),
+                });
+                showToast(`Tagged "${tag.title}"`);
+                menu.remove();
+              } catch (err) { showToast('Failed to tag: ' + err.message, true); return; }
+              try { await loadMailMessagesForModal(); } catch (err) { console.error('Failed to refresh mail list', err); }
+            });
+            parentEl.appendChild(btn);
+          });
+        } catch { /* ignore */ }
+      }},
+    ];
+
+    menuItems.forEach(item => {
+      if (item === 'separator') {
+        const sep = document.createElement('div');
+        sep.className = 'mail-context-separator';
+        menu.appendChild(sep);
+        return;
+      }
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'mail-context-item';
+      btn.innerHTML = `<i class="${item.icon}"></i><span>${item.label}</span>`;
+      if (item.hasSubmenu) {
+        const arrow = document.createElement('i');
+        arrow.className = 'ti ti-chevron-right';
+        arrow.style.cssText = 'margin-left:auto; font-size:0.7rem; opacity:0.5;';
+        btn.appendChild(arrow);
+        const submenu = document.createElement('div');
+        submenu.className = 'mail-context-submenu';
+        btn.addEventListener('mouseenter', () => {
+          submenu.innerHTML = '';
+          submenu.classList.add('visible');
+          item.loadSubmenu(submenu);
+        });
+        btn.addEventListener('mouseleave', () => {
+          setTimeout(() => { if (!submenu.matches(':hover')) submenu.classList.remove('visible'); }, 100);
+        });
+        submenu.addEventListener('mouseleave', () => {
+          setTimeout(() => { if (!btn.matches(':hover')) submenu.classList.remove('visible'); }, 100);
+        });
+        submenu.addEventListener('mouseenter', () => submenu.classList.add('visible'));
+        btn.appendChild(submenu);
+      } else {
+        btn.addEventListener('click', () => { menu.remove(); item.click(); });
+      }
+      menu.appendChild(btn);
     });
 
-    list.appendChild(item);
+    menu.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px';
+    menu.style.top = Math.min(e.clientY, window.innerHeight - 300) + 'px';
+    document.body.appendChild(menu);
+    const closeMenu = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', closeMenu); } };
+    setTimeout(() => document.addEventListener('click', closeMenu), 0);
   });
+
+}
+
+// Keyed reconcile: keep existing `.mail-item` nodes, create only the ones that
+// are new, move them into the server's order, and drop rows that left the
+// page — except a row whose reader is open (that must survive a sync).
+function reconcileMailList(list, msgs) {
+  const existing = new Map();
+  for (const el of Array.from(list.children || [])) {
+    if (el.classList && el.classList.contains("mail-item") && el.dataset.id != null) {
+      existing.set(String(el.dataset.id), el);
+    }
+  }
+  const desiredIds = new Set(msgs.map(m => String(m.id || m.ID)));
+  const isItem = (n) => !!(n && n.classList && n.classList.contains("mail-item"));
+
+  let ref = list.firstChild;
+  while (ref && !isItem(ref)) ref = ref.nextSibling;
+
+  for (const m of msgs) {
+    const id = String(m.id || m.ID);
+    // Never reorder past an open reader whose message left this page: leave
+    // it exactly where it is and put everything else around it.
+    while (isItem(ref) && !desiredIds.has(String(ref.dataset.id)) && mailItemIsOpen(ref)) {
+      ref = ref.nextSibling;
+    }
+    let item = existing.get(id);
+    if (item) updateMailItem(item, m);
+    else item = buildMailItem(m);
+    if (item === ref) ref = ref.nextSibling;
+    else list.insertBefore(item, ref);
+  }
+
+  for (const [id, el] of existing) {
+    if (desiredIds.has(id)) continue;
+    if (mailItemIsOpen(el)) continue; // keep an open reader alive
+    el.remove();
+  }
+}
+
+// The "From / Subject / Date" header is created once per list render and
+// reused, so its checkbox/listener are not recreated on every sync.
+function ensureMailListHeader(list) {
+  let header = null;
+  for (const el of Array.from(list.children || [])) {
+    if (el.classList && el.classList.contains("mail-header")) { header = el; break; }
+  }
+  if (!header) {
+    header = document.createElement("div");
+    header.className = "mail-row mail-header";
+    header.innerHTML = `
+      <input type="checkbox" id="mail-cb-all" />
+      <div class="mail-star"></div>
+      <div class="mail-from"><strong>From</strong></div>
+      <div class="mail-subject"><strong>Subject</strong></div>
+      <div class="mail-date"><strong>Date</strong></div>
+    `;
+    list.prepend(header);
+  }
+  const cbAll = header.querySelector("#mail-cb-all");
+  if (cbAll && !header.dataset.cbBound) {
+    header.dataset.cbBound = "1";
+    cbAll.addEventListener("change", () => {
+      (mailState.messages || []).forEach(m => {
+        const id = String(m.id || m.ID);
+        if (cbAll.checked) mailState.selected.add(id);
+        else mailState.selected.delete(id);
+      });
+      renderMailList(mailState.messages); // re-render to sync cbs
+      updateMailSelectedInfo();
+    });
+  }
+  return header;
+}
+
+function renderMailList(msgs, opts = {}) {
+  const list = $("#mail-list");
+  if (!list) return;
+  mailState.listRenderCount = (mailState.listRenderCount || 0) + 1;
+
+  if (opts.rebuild) {
+    // Only a user-initiated reload (mailbox tab, folder, search, pagination,
+    // explicit Refresh) gets a clean list. Background syncs reconcile.
+    list.innerHTML = "";
+  } else {
+    list.querySelectorAll(".mail-empty, .mail-drafts-hint").forEach(el => el.remove());
+  }
+
+  if (!msgs || !msgs.length) {
+    list.innerHTML = '<div class="mail-empty">No emails in this inbox/page.</div>';
+    return;
+  }
+
+  const header = ensureMailListHeader(list);
+  reconcileMailList(list, msgs);
+  // Header stays first, above the rows and any drafts hint.
+  if (header !== list.firstChild) list.insertBefore(header, list.firstChild);
+
+  const cbAll = header.querySelector("#mail-cb-all");
+  if (cbAll) {
+    cbAll.checked = msgs.every(m => mailState.selected.has(String(m.id || m.ID)));
+  }
 }
 
 // Restore inline-expanded emails after a background re-render.
-// For each ID that was expanded before the refresh, find the new DOM row,
-// show its detail panel, and inject the cached content.
+// v2.5.15: a reconcile keeps the item + reader alive, so this is a repair
+// path only. It must never clear a detail panel that still holds content —
+// recreating the embed (and its Reply/Forward nodes) is exactly the bug.
 function restoreExpandedState() {
   if (!mailState.expandedIds.size) return;
   const list = $("#mail-list");
@@ -26111,7 +26251,7 @@ function restoreExpandedState() {
     const detail = item.querySelector(".mail-detail");
     if (!detail) continue;
     detail.classList.remove("hidden");
-    detail.innerHTML = "";
+    if (detail.firstChild) continue; // reader survived the sync — leave it alone
     const embed = document.createElement("div");
     embed.className = "opp-preview-mail-embed";
     detail.appendChild(embed);
