@@ -326,7 +326,12 @@ CREATE TABLE history_events (
     created_at TIMESTAMP DEFAULT NOW(),
     backdated_created_at TIMESTAMP,
     crm_event_id BIGINT,
-    crm_entity_id BIGINT
+    crm_entity_id BIGINT,
+    -- Set by every auto-log writer (field changes, generated documents) and by
+    -- the importers for rows they restore from a system/auto-log category.
+    -- The client renders these as one compact line regardless of category, so
+    -- a field change filed under a human category (or NULL) is still compact.
+    is_system_event BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE INDEX idx_history_opp ON history_events(opportunity_id);

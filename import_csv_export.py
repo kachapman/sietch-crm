@@ -31,6 +31,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from history_event_marker import is_auto_history_event
+
 try:
     import psycopg2
 except ImportError:
@@ -312,20 +314,21 @@ def _import_tasks(conn: Any, source: Path, opp_title_to_id: dict[str, int], by_n
     return count
 
 
-def _get_or_create_category(conn: Any, title: str) -> int:
+def _get_or_create_category(conn: Any, title: str) -> tuple[int, bool]:
+    """Return (category id, is_system) for the source title."""
     cur = conn.cursor()
-    cur.execute("SELECT id FROM history_categories WHERE title = %s", (title,))
+    cur.execute("SELECT id, is_system FROM history_categories WHERE title = %s", (title,))
     row = cur.fetchone()
     if row:
         cur.close()
-        return row[0]
+        return row[0], bool(row[1])
     cur.execute(
         "INSERT INTO history_categories (title, is_system) VALUES (%s, TRUE) RETURNING id",
         (title,),
     )
     cat_id = cur.fetchone()[0]
     cur.close()
-    return cat_id
+    return cat_id, True
 
 
 def _import_history(conn: Any, source: Path, opp_title_to_id: dict[str, int], by_name: dict[str, dict[str, Any]]) -> int:
@@ -343,7 +346,7 @@ def _import_history(conn: Any, source: Path, opp_title_to_id: dict[str, int], by
                 if not content:
                     continue
                 category_title = str(row.get("Category") or "Note").strip()
-                cat_id = _get_or_create_category(conn, category_title)
+                cat_id, cat_is_system = _get_or_create_category(conn, category_title)
                 author_name = str(row.get("Author") or "").strip()
                 author_id = _get_or_create_user(conn, author_name, by_name) if author_name else None
                 opp_title = _extract_opportunity_title(str(row.get("Associated identity") or ""))
@@ -352,10 +355,14 @@ def _import_history(conn: Any, source: Path, opp_title_to_id: dict[str, int], by
                 if not opp_id:
                     continue
                 cur.execute(
-                    """INSERT INTO history_events (opportunity_id, category_id, content, created_by, created_at)
-                       VALUES (%s, %s, %s, %s, %s)
+                    """INSERT INTO history_events (opportunity_id, category_id, content, created_by, created_at,
+                                                   is_system_event)
+                       VALUES (%s, %s, %s, %s, %s, %s)
                        RETURNING id""",
-                    (opp_id, cat_id, content, author_id, created or datetime.now()),
+                    (opp_id, cat_id, content, author_id, created or datetime.now(),
+                     is_auto_history_event(category_title=category_title,
+                                           category_is_system=cat_is_system,
+                                           content=content)),
                 )
                 cur.fetchone()
                 count += 1

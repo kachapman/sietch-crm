@@ -28,6 +28,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from history_event_marker import is_auto_history_event
+
 try:
     import psycopg2
 except ImportError:
@@ -884,6 +886,9 @@ def _insert_history(
         cat_data = h.get("category") or {}
         cat_title = str(cat_data.get("title") or "Note").strip() if isinstance(cat_data, dict) else "Note"
         cat_id = _resolve_category(cur, cat_title, cat_data if isinstance(cat_data, dict) else {})
+        cur.execute("SELECT is_system FROM history_categories WHERE id = %s", (cat_id,))
+        _cat_row = cur.fetchone()
+        cat_is_system = bool(_cat_row[0]) if _cat_row else False
 
         # Content
         raw_content = h.get("content") or h.get("Content") or ""
@@ -907,12 +912,16 @@ def _insert_history(
         cur.execute(
             """INSERT INTO history_events
                    (opportunity_id, category_id, content, created_by, created_at, backdated_created_at,
-                    crm_event_id, crm_entity_id)
-               VALUES (%s,%s,%s,%s,COALESCE(%s,NOW()),%s,%s,%s)
+                    crm_event_id, crm_entity_id, is_system_event)
+               VALUES (%s,%s,%s,%s,COALESCE(%s,NOW()),%s,%s,%s,%s)
                ON CONFLICT DO NOTHING
                RETURNING id""",
             (opp_id, cat_id, content, author_id, created_raw, created_raw,
-             crm_event_id, crm_entity_id),
+             crm_event_id, crm_entity_id,
+             is_auto_history_event(category_title=cat_title,
+                                   category_is_system=cat_is_system,
+                                   content=content,
+                                   title=h.get("title") or h.get("Title"))),
         )
         row = cur.fetchone()
         if not row:

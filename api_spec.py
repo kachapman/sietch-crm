@@ -126,6 +126,7 @@ HISTORY_EVENT = _obj({
     "category": _obj({"id": _INT, "title": _STR}),
     "content": _STR, "author": _STR,
     "created": {"type": "string", "format": "date-time"},
+    "isSystemEvent": _BOOL,
     "attachments": _arr(_ref("Document")),
 }, ["id"])
 

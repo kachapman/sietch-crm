@@ -16,7 +16,7 @@ import {
 import {
   isSystemHistoryEvent,
   systemEventText,
-} from "./history-system-events.js?v=3.7.53";
+} from "./history-system-events.js?v=3.7.57";
 
 /**
  * Auto-hide scrollbars: add `is-scrolling` to the SPECIFIC element
@@ -28431,6 +28431,9 @@ function renderHistoryEventItem(ev) {
   // render as ONE compact line: icon + short text + timestamp, and no reply
   // button. Emails and human notes keep the full card (live request 2026-11-09).
   const systemEvent = isSystemHistoryEvent({
+    // Server marker wins: auto-logged rows are system events even when the
+    // row is filed under a human category (or has no category at all).
+    isSystemEvent: ev.isSystemEvent ?? ev.is_system_event,
     category: cat || {
       title: historyEventCategoryLabel(ev),
       isSystem: ev.category?.isSystem ?? ev.category?.is_system,

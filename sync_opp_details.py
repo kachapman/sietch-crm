@@ -28,6 +28,8 @@ from pathlib import Path
 
 import psycopg2
 
+from history_event_marker import is_auto_history_event
+
 
 RATE = 0.05
 TIMEOUT = 30
@@ -216,13 +218,15 @@ def main():
                     continue
                 cat_data = h.get("category") or {}
                 cat_title = (cat_data.get("title") or "Note").strip() if isinstance(cat_data, dict) else "Note"
-                cur.execute("SELECT id FROM history_categories WHERE title = %s", (cat_title,))
+                cur.execute("SELECT id, is_system FROM history_categories WHERE title = %s", (cat_title,))
                 row = cur.fetchone()
                 if row:
                     cat_id = row[0]
+                    cat_is_system = bool(row[1])
                 else:
                     cur.execute("INSERT INTO history_categories (title, is_system) VALUES (%s, TRUE) RETURNING id", (cat_title,))
                     cat_id = cur.fetchone()[0]
+                    cat_is_system = True
                 raw_content = h.get("content") or h.get("Content") or ""
                 event_content = str(raw_content).strip() or None if isinstance(raw_content, str) else None
                 event_created = h.get("created") or h.get("Created") or None
@@ -234,11 +238,14 @@ def main():
                 cur.execute(
                     """INSERT INTO history_events
                            (opportunity_id, category_id, content, created_by, created_at, backdated_created_at,
-                            crm_event_id, crm_entity_id)
-                       VALUES (%s,%s,%s,%s,COALESCE(%s,NOW()),%s,%s,%s)
+                            crm_event_id, crm_entity_id, is_system_event)
+                       VALUES (%s,%s,%s,%s,COALESCE(%s,NOW()),%s,%s,%s,%s)
                        ON CONFLICT DO NOTHING""",
                     (local_id, cat_id, event_content, author_id, event_created, event_created,
-                     crm_eid or None, int(oo) if oo.isdigit() else None),
+                     crm_eid or None, int(oo) if oo.isdigit() else None,
+                     is_auto_history_event(category_title=cat_title,
+                                           category_is_system=cat_is_system,
+                                           content=event_content)),
                 )
                 if crm_eid:
                     existing_hist_keys.add((local_id, crm_eid))

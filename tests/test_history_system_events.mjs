@@ -32,6 +32,54 @@ test('status/field changes ("Action") are system events', () => {
   assert.equal(isSystemHistoryEvent({ category: { title: 'Action', isSystem: true } }), true);
 });
 
+// ── server-side marker (2026-11-10) ────────────────────────────────────────
+// Ken's "Follow-up Due Date changed from … to …" row had category_id = NULL
+// (the "Action" seed row was missing on prod), so category-title matching
+// missed it. The row now carries a server marker; it is authoritative.
+
+test('marker true + Quick Context category is compact', () => {
+  assert.equal(isSystemHistoryEvent({
+    isSystemEvent: true,
+    category: { title: 'Quick Context', isSystem: false },
+  }), true);
+});
+
+test('marker true with no category at all is compact', () => {
+  assert.equal(isSystemHistoryEvent({ isSystemEvent: true, category: null }), true);
+});
+
+test('snake_case marker alias is honoured too', () => {
+  assert.equal(isSystemHistoryEvent({
+    is_system_event: true,
+    category: { title: 'Note', isSystem: false },
+  }), true);
+});
+
+test('marker false + Quick Context / Note / Comment stay full cards', () => {
+  for (const title of ['Quick Context', 'Note', 'Comment', 'Customer Update']) {
+    assert.equal(isSystemHistoryEvent({
+      isSystemEvent: false,
+      category: { title, isSystem: false },
+    }), false, title);
+    // absent marker (legacy row) behaves the same way
+    assert.equal(isSystemHistoryEvent({ category: { title, isSystem: false } }), false, title);
+  }
+});
+
+test('a marked email is still a full card', () => {
+  const markedMail = { isSystemEvent: true, category: { title: 'Mail Message', isSystem: true } };
+  assert.equal(isSystemHistoryEvent(markedMail), true);
+  assert.equal(isSystemHistoryEvent({ ...markedMail, isMailEvent: true }), false);
+  assert.equal(isSystemHistoryEvent({ ...markedMail, hasMailPayload: true }), false);
+  assert.equal(isSystemHistoryEvent({ ...markedMail, hasMessageId: true }), false);
+});
+
+test('Action / isSystem fallback still works for unmarked rows', () => {
+  assert.equal(isSystemHistoryEvent({ category: { title: 'Action' } }), true);
+  assert.equal(isSystemHistoryEvent({ category: { title: 'Task is closed', isSystem: true } }), true);
+  assert.equal(isSystemHistoryEvent({ category: { title: 'Files are uploaded', isSystem: true } }), true);
+});
+
 test('seeded system categories are system events', () => {
   for (const title of ['Files are uploaded', 'Task is closed']) {
     assert.equal(isSystemHistoryEvent({ category: { title, isSystem: true } }), true, title);
@@ -92,6 +140,26 @@ test('app.js imports the shared classifier', () => {
   assert.ok(appSrc.includes('systemEventText(ev)'));
 });
 
+test('app.js passes the server marker into the classifier', () => {
+  const at = appSrc.indexOf('const systemEvent = isSystemHistoryEvent({');
+  const end = appSrc.indexOf('});', at);
+  const call = appSrc.slice(at, end);
+  assert.ok(call.includes('isSystemEvent: ev.isSystemEvent ?? ev.is_system_event'),
+    'the history row marker must reach the classifier');
+});
+
+test('the classifier excludes mail BEFORE trusting the marker', () => {
+  const modSrc = fs.readFileSync(
+    path.join(ROOT, 'public', 'history-system-events.js'), 'utf8');
+  const at = modSrc.indexOf('export function isSystemHistoryEvent');
+  const end = modSrc.indexOf('\n}', at);
+  const body = modSrc.slice(at, end);
+  const mail = body.indexOf('isMailEvent ||');
+  const marker = body.indexOf('isSystemEvent === true');
+  assert.ok(mail > -1 && marker > -1);
+  assert.ok(mail < marker, 'emails must be excluded before the marker is consulted');
+});
+
 test('the compact branch returns before the reply button is created', () => {
   const at = appSrc.indexOf('function renderHistoryEventItem(ev) {');
   const end = appSrc.indexOf('\nfunction ', at + 10);
@@ -127,6 +195,8 @@ test('the compact style exists and keeps it on one line', () => {
   assert.ok(cssSrc.includes('text-overflow: ellipsis'));
 });
 
-test('cache-buster bumped for the new module', () => {
-  assert.ok(indexHtml.includes('app.js?v=3.7.56'));
+test('cache-buster bumped for the classifier change', () => {
+  assert.ok(indexHtml.includes('app.js?v=3.7.57'));
+  assert.ok(appSrc.includes('history-system-events.js?v=3.7.57'),
+    'the classifier module query must be bumped too');
 });

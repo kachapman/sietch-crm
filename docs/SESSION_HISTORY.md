@@ -3,13 +3,47 @@
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-11-10 (notification icons, Tasks-tile project link, Telegram "Unknown Project")
+**Date:** 2026-11-10 (field-change history: server-side system-event marker)
 
-**Branch:** `fix/notif-tasks-telegram` (worktree
-`~/Projects/new-crm-notif-tasks-telegram`, based on `7d2e55c`). **Merged into
-`main` as v2.5.7 and deployed** (Ken 7:25 PM ET). Plan:
-`~/Projects/plans/sietch/notif-tasks-telegram-2026-11-10.md`; deploy log
-`~/Projects/plans/sietch/notif-tasks-telegram-deploy-2026-11-10.md`.
+**Branch:** `fix/history-system-events-marker` (worktree
+`~/Projects/new-crm-history-system-events-marker`, based on `cb25cdb` =
+v2.5.7). **Not deployed; local-main merge status in the plan.** Plan:
+`~/Projects/plans/sietch/history-system-events-classifier-miss-2026-11-10.md`.
+
+Ken (8:28 PM ET): the compact system-events work (`e705ad9`) is live, but
+"Ken Chapman, Nov 10 2026 8:27 PM EST, Follow-up Due Date changed from
+2026-11-11 to 2026-11-12" still rendered as a full card with a Reply button.
+
+- **Root cause (prod read-only audit):** event **50504**, opportunity 1245,
+  `category_id = NULL`. The field-change writer resolves
+  `history_categories.title = 'Action'` (`server.py:6934`); production has no
+  Action row (categories 8–19, none is Action), even though
+  `_applied_migrations` lists `017_add_custom_field_groups.sql` — the runner
+  records a **failed** migration as applied (`db.py:102-118`), so the seed
+  rolled back. `cat_id = None` → NULL category → the client classifier saw no
+  category and fell through to "human note". 405 prod rows share this shape.
+  (Same missing-Action bug silently discarded invoice/COC/photo-report
+  history: `-1` FK violation swallowed by `except: pass`.)
+- **Fix:** `history_events.is_system_event` marker, set by every auto-log
+  writer and returned as `isSystemEvent` by both history GETs. The classifier
+  trusts the marker after the mail exclusion; the old `is_system`/Action
+  fallback remains for unmarked legacy rows. Import writers use the shared
+  `history_event_marker.is_auto_history_event()` predicate. Emails stay full
+  cards (not marked).
+- **Backfill:** `migrations/053_history_events_system_marker.sql` (on the
+  branch, **not applied to prod**). Candidate count 405 (all NULL-category
+  field changes); predicate also covers an `Action` category and the three
+  generated-document titles. No human note is matched (anchored shape, no
+  HTML/newlines).
+- **Tests:** `tests/test_history_system_events.mjs` 21, new
+  `tests/test_history_event_marker.py` 23, new local-build Playwright
+  `tests/playwright/history_system_marker.py` (passes; negative control
+  fails without the fix). Full Python suite branch 1,886 tests vs baseline
+  1,863, identical 25 pre-existing failing ids; Node 461 vs 453 pass.
+
+---
+
+## Previous session summary (2026-11-10 — v2.5.7 notification icons, Tasks-tile project link, Telegram project line)
 
 Ken (6:43 PM ET): three live bugs.
 

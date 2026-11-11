@@ -1,3 +1,49 @@
+## Unreleased — field-change history stays compact when its category is missing
+
+Ken (8:28 PM ET, 2026-11-10): "Follow-up Due Date changed from 2026-11-11 to
+2026-11-12" still rendered as a full card with a Reply button, under a
+"Quick Context" chip. Not a missing compact renderer — a classifier miss.
+
+### Fixed
+- **Auto-logged history rows are marked server-side**
+  (`history_events.is_system_event`, `server.py:_handle_project_update`,
+  invoice/COC/photo-report writers, both history GET endpoints). The row's own
+  marker is now the source of truth; the client still keeps the old
+  `is_system` / "Action" title fallback for unmarked legacy rows.
+- **Root cause:** the field-change writer resolves the synthetic `Action`
+  category by title, but production has no such row (`_applied_migrations`
+  records `017_add_custom_field_groups.sql` as applied even though its seed
+  rolled back — `db.py` records failed migrations as applied). The writer
+  therefore stored `category_id = NULL` (405 rows on prod), and
+  `isSystemHistoryEvent()` saw no category → full card + Reply.
+- **Generated-document notes:** `_resolve_action_category_id()` now returns
+  `None` instead of `-1`, so a missing Action row no longer turns the
+  invoice/COC/photo-report history insert into a swallowed FK violation.
+- **Imports** (`server.py` history imports, `sync_opp_details.py`,
+  `import_csv_export.py`, `import_json_export.py`,
+  `migrate_from_onlyoffice.py`) classify restored rows with the shared
+  `history_event_marker.is_auto_history_event()` predicate. Emails (mail
+  scanner, OnlyOffice email import) stay full cards and are never marked.
+- Cache-busters → `app.js?v=3.7.57`, `history-system-events.js?v=3.7.57`.
+
+### Data
+- `migrations/053_history_events_system_marker.sql` adds the marker and
+  backfills existing rows from durable signals only (NULL category + exact
+  tracked-field shape; the `Action` category; the three generator-only
+  titles). Production candidate set: **405 rows** (all NULL-category field
+  changes; 0 Action rows, 0 generated-document rows). **Not applied to
+  production in this session.**
+
+### Tests
+- `tests/test_history_system_events.mjs` 21 pass (+8 marker/precedence tests);
+  new `tests/test_history_event_marker.py` 23 pass; local-build Playwright
+  `tests/playwright/history_system_marker.py` (compact field change, full card
+  human Quick Context note, NULL-category prod repro). Full Python suite
+  1,886 tests vs baseline 1,863 with the identical 25 pre-existing failures;
+  Node 461 pass vs 453.
+
+---
+
 ## 2026-11-10 — v2.5.7: notification icons, Tasks-tile project link, Telegram project line
 
 VERSION 2.5.6 → 2.5.7; `app.js` cache-buster 3.7.55 → 3.7.56. Approval: Ken
