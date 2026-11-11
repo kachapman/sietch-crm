@@ -7,6 +7,31 @@ history deploy took 053; `init.sql` carries the column and stamps 054.
 
 No real email send in tests or verification (offline/unit + dry-run only).
 
+### Deployed — 2026-11-10 22:23 ET
+- Live on `crm.publicadjustermidwest.com` as **`30d48ba` / v2.5.11**
+  (`docker compose build` + `up -d`, container healthy).
+- Migration **054 applied on boot** by the stricter runner:
+  `_applied_migrations` **57 → 58**, latest `054_api_token_mail_send_lock.sql`;
+  `api_tokens.mail_send_locked_recipient` present afterwards.
+- Pre-deploy backup:
+  `/mnt/sietch_backup/sietch-prod-pre-deploy-59a3049-20261110-221857ET`
+  (929 MB) — `pg_dump -Fc` 30,187,705 B verified with `pg_restore --list`
+  (750 TOC lines), code archive 508 members, data volume minus
+  `history-attachments` 932,397,611 B (0 attachment paths), env/compose,
+  account baselines + token fingerprints, `counts-pre.txt`, `ROLLBACK.md`.
+  Rollback image `sietch-crm-dashboard:rollback-59a3049` = `e7ef151fb52c`.
+- Smokes PASS: health `{"dbReachable":true}`; login page 200 + cache-busters
+  3.7.58/3.7.22; served `app.js`/`styles.css` sha256 identical to
+  `git show HEAD`; six protected endpoints 401; 2 scanner cycles with 0
+  auth/traceback lines (only the known Outlook `Spam/Trash doesn't exist`
+  noise); MCP `server_version 2.5.11`, 34 tools; accounts 8/9/10
+  `auth_error` NULL and identity == own address; 21 pure/source/script token
+  tests pass **against the deployed checkout**, DB-gated lock suite 29/29 on
+  the scratch DB; admin script dry-run (nonexistent + existing token) prints
+  id/name/prefix/lock only and writes nothing.
+- No email sent. No token created, rotated or revoked. Account token
+  fingerprints identical pre/post. Rollback not needed.
+
 Context (Ken 8:43 PM ET): the live acceptance run will use BOTH a personal API
 key for per-account sends and the locked test user for compose checks.
 Analysis (read-only, first): Bearer sends already pass through

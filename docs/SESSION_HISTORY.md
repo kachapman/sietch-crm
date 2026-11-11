@@ -1,13 +1,13 @@
 # Session History — Sietch CRM (new-crm branch)
 
 
-## Current session summary (for next resume) — 2026-11-10 (per-key crm@ send lock, v2.5.11, DEPLOY)
+## Current session summary (for next resume) — 2026-11-10 (per-key crm@ send lock, v2.5.11, DEPLOYED)
 
-**Branch:** `hotfix/token-send-lock`, merged with `origin/main` `59a3049`
-(v2.5.10) — no rebase. Worktree
-`/home/chapman-server/Projects/new-crm-token-lock`. VERSION **2.5.11**;
-migration renumbered **053 → 054** (history took 053). Ken's go: deploy after
-the history fix with a backup and smokes. No real email send anywhere.
+**Deployed 22:23 ET:** prod `30d48ba` / **v2.5.11**, migration **054** applied
+(57 → 58), column present, healthy. Backup
+`/mnt/sietch_backup/sietch-prod-pre-deploy-59a3049-20261110-221857ET` (929 MB),
+rollback image `rollback-59a3049`. Smokes pass; no email sent, no token
+created. Full log: `plans/sietch/token-send-lock-deploy-2026-11-10.md`.
 
 **Analysis (read-only) — where sends are handled:**
 - One route: `POST /api/v2/mail/send` → `server.py:6333` →
