@@ -23406,6 +23406,11 @@ function openAccountSettingsModal(editAccountId, opts) {
     api(`/api/v2/mail/accounts`).then(data => {
       const acct = (data.accounts || []).find(a => a.id == editAccountId);
       if (acct) {
+        // Remember the stored address so Save only submits `email` when the
+        // user really changed it (hotfix 2026-11-10: the server treats a
+        // submitted address as an address change, which used to clear the
+        // OAuth identity stamps on every display-name/sharing Save).
+        modal.dataset.originalEmail = String(acct.email || '').trim();
         $('#account-settings-name').value = acct.display_name || '';
         $('#account-settings-email').value = acct.email || '';
         $('#account-settings-imap-host').value = acct.imap_host || '';
@@ -23555,6 +23560,7 @@ function openAccountSettingsModal(editAccountId, opts) {
     if (titleEl) titleEl.textContent = 'Add Mail Account';
     if (deleteBtn) deleteBtn.style.display = 'none';
     if (idField) idField.value = '';
+    delete modal.dataset.originalEmail;
     ['account-settings-name','account-settings-email','account-settings-imap-host','account-settings-imap-password','account-settings-smtp-host','account-settings-smtp-password','account-settings-from-name','account-settings-auto-bcc','account-settings-signature'].forEach(id => {
       const el = $(`#${id}`);
       if (el) el.value = '';
@@ -23693,9 +23699,10 @@ function openAccountSettingsModal(editAccountId, opts) {
 
         const folderCbs = $('#account-settings-folders')?.querySelectorAll('input[type="checkbox"]:checked');
         const folders = folderCbs ? Array.from(folderCbs).map(cb => cb.value) : ["INBOX"];
+        const submittedEmail = $('#account-settings-email').value.trim();
         const payload = {
           display_name: $('#account-settings-name').value.trim(),
-          email: $('#account-settings-email').value.trim(),
+          email: submittedEmail,
           imap_host: $('#account-settings-imap-host').value.trim(),
           imap_port: parseInt($('#account-settings-imap-port').value) || 993,
           password: $('#account-settings-imap-password').value,
@@ -23711,7 +23718,20 @@ function openAccountSettingsModal(editAccountId, opts) {
           tab_color: $('#account-settings-tab-colors')?.dataset.value || 'var(--accent)',
         };
         if (modal.dataset.crmMail === '1') payload.is_crm_mail = true;
-      if (!payload.email || !payload.imap_host) { showToast('Email and IMAP host required', true); return; }
+        if (id) {
+          // Send only what the user actually changed (hotfix 2026-11-10).
+          // `email` in the PUT body means "the address changed" to the server,
+          // and a blank password field means "no new password" — echoing the
+          // form back on every Save cleared verified identities/auth state and
+          // overwrote stored secrets with "".
+          const originalEmail = String(modal.dataset.originalEmail || '').trim();
+          if (originalEmail && originalEmail.toLowerCase() === submittedEmail.toLowerCase()) {
+            delete payload.email;
+          }
+          if (!payload.password) delete payload.password;
+          if (!payload.smtp_password) delete payload.smtp_password;
+        }
+      if (!submittedEmail || !payload.imap_host) { showToast('Email and IMAP host required', true); return; }
       try {
         if (id) {
           await api(`/api/v2/mail/accounts/${id}`, { method: 'PUT', body: JSON.stringify(payload) });

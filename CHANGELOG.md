@@ -1,6 +1,7 @@
-## Unreleased — notification icons, Tasks-tile project link, Telegram project line
+## 2026-11-10 — v2.5.7: notification icons, Tasks-tile project link, Telegram project line
 
-Nothing deployed. VERSION stays 2.5.5.
+VERSION 2.5.6 → 2.5.7; `app.js` cache-buster 3.7.55 → 3.7.56. Approval: Ken
+7:25 PM ET.
 
 ### Fixed
 - **Notification drawer icons** (`public/app.js:_notifTypeIcon`). Mail-account
@@ -39,6 +40,64 @@ Nothing deployed. VERSION stays 2.5.5.
   both show the chosen project. All non-localhost requests aborted.
 - Suites vs baseline `7d2e55c`: Python 89 files / zero new failures; Node
   453 pass (baseline 442 + 11 new).
+
+## 2026-11-10 — v2.5.6: an account-settings Save no longer erases mail identity
+
+Ken (6:52 PM ET): "deploy the Save fix now with a backup". **Deployed.**
+
+### Deployed
+- Live on `crm.publicadjustermidwest.com` as `d8ae29f` / **v2.5.6**
+  (19:36–19:37 ET).
+  `d8ae29f` = `--no-ff` merge of `hotfix/account-save-identity` (`228b879`)
+  into `main` (`7d2e55c`); code change is this fix only, `7d2e55c` is
+  docs-only. `fix/notif-tasks-telegram` and `feat/mcp-api-gaps-2026-11-10`
+  were not deployed.
+- Backup `/mnt/sietch_backup/sietch-prod-pre-deploy-d8ae29f-20261110-193357ET`
+  (928 MB; dump 739 TOC entries; code archive of `105f259`; data volume minus
+  `history-attachments`; rollback image
+  `sietch-crm-dashboard:rollback-105f259`). **No migration** (56 rows before
+  and after). Droplet `merge --ff-only`, rebuild, `up -d`.
+- Smokes: health 200, login page, served `app.js` == git, unauth mail API 401s,
+  one clean scanner cycle, MCP `tools/list` 25 tools, accounts 8/9/10 unchanged
+  (identity still NULL + `auth_error` set — one reconnect each still needed),
+  token fingerprints identical, no writes by the deploy.
+- Test user (after the deploy): id 12 `mail-acceptance-test@example.invalid`,
+  member, `mail_send_locked_recipient=crm@vanguardadj.online`, 0 mailbox
+  shares; password only in `~/.secrets/sietch-test-user-initial-password.txt`
+  (600). Created with one explicit transaction (admin API unreachable without
+  an admin session); lock set with `scripts/set_mail_send_lock.py --apply`.
+  No email sent.
+- Log: `plans/sietch/email-save-hotfix-deploy-2026-11-10.md`.
+
+**Root cause.** `_handle_mail_account_update` cleared `oauth_identity`,
+`oauth_graph_identity`, `auth_error` and `auth_error_at` whenever the PUT body
+merely CONTAINED an `email` key, and the settings modal sent the whole form on
+every Save. Any display-name / sharing / tab-colour Save therefore wiped the
+identity stamps the reconnect callback had just written → `identityStatus`
+`unverifiable` → the red "Mail account needs reconnecting" banner and a refused
+`sync_gate` (accounts 8/9/10, three times on 2026-11-10).
+
+**Fix (server).** Identity + `auth_error` are cleared only when the submitted
+address really differs from the stored one (trimmed, case-insensitive), so a
+case/whitespace round-trip and every same-address Save keep them. A new
+invariant (`MAIL_ACCOUNT_PROTECTED_COLUMNS` +
+`_mail_account_protected_writes`) refuses any client-derived `SET` that would
+write an identity, OAuth token/expiry/scope or auth-error column; the explicit
+address-change clear is code appended after that check, never payload.
+
+**Fix (client).** Save sends only what changed: `email` is omitted when
+unchanged, and blank `password` / `smtp_password` fields are no longer sent
+(server: blank password now means "keep the stored one" — it used to write
+`''` and destroy a working IMAP/SMTP secret on every Save).
+
+**Audit.** Every other path that can touch identity/tokens/`auth_error`
+(share/unshare, sharing UI, folder settings, account toggles, sync-now,
+signature, create/test, `mail_oauth` record/refresh helpers, scanner refresh,
+OAuth callbacks/disconnects, OAuth-reconcile PUT) checked — table with
+file:line and verdicts in `plans/sietch/email-save-hotfix-2026-11-10.md`.
+New `tests/test_mail_account_save_identity.py` (21 tests, offline, stubbed DB)
+fails 9 assertions on the unfixed commit. VERSION 2.5.5 → 2.5.6; app.js
+cache-buster 3.7.54 → 3.7.55.
 
 ## 2026-11-10 — v2.5.5: drop the duplicate document-download tool + route
 

@@ -6,9 +6,10 @@
 **Date:** 2026-11-10 (notification icons, Tasks-tile project link, Telegram "Unknown Project")
 
 **Branch:** `fix/notif-tasks-telegram` (worktree
-`~/Projects/new-crm-notif-tasks-telegram`, based on `7d2e55c`). **Not pushed,
-not deployed, VERSION still 2.5.5.** Plan:
-`~/Projects/plans/sietch/notif-tasks-telegram-2026-11-10.md`.
+`~/Projects/new-crm-notif-tasks-telegram`, based on `7d2e55c`). **Merged into
+`main` as v2.5.7 and deployed** (Ken 7:25 PM ET). Plan:
+`~/Projects/plans/sietch/notif-tasks-telegram-2026-11-10.md`; deploy log
+`~/Projects/plans/sietch/notif-tasks-telegram-deploy-2026-11-10.md`.
 
 Ken (6:43 PM ET): three live bugs.
 
@@ -51,10 +52,70 @@ correctly linked to 1245 "Tony Gosz (Bonnie Gosz)" — bug 3 is display-only.
 Full details/tables in the plan.
 
 Tests: Python suite (89 files) vs baseline `7d2e55c` — result recorded in the
-plan; Node 453 pass (baseline 442 + 11 new). Merge status recorded in the
-plan. No push, no deploy, no mail/token/prod writes.
+plan; Node 453 pass (baseline 442 + 11 new). Merged into local `main` and
+deployed as **v2.5.7** (deploy log linked above). No mail/token/account
+writes.
 
-## Previous session summary (2026-11-10 — dedupe follow-up: no duplicate tools — DEPLOYED v2.5.5)
+---
+
+## Previous session summary (2026-11-10 — account-save identity hotfix v2.5.6 — DEPLOYED)
+
+**Date:** 2026-11-10 (account-save identity hotfix — MERGED and DEPLOYED as v2.5.6)
+
+**Status: deployed. Prod runs `d8ae29f` / v2.5.6** (was `105f259` / v2.5.5).
+`d8ae29f` = `--no-ff` merge of `hotfix/account-save-identity` (`228b879`) into
+`main` (`7d2e55c`); the only code change is the account-settings Save fix, and
+`7d2e55c` is docs-only. `fix/notif-tasks-telegram` (`d956906`) and
+`feat/mcp-api-gaps-2026-11-10` were **not** deployed; `origin` carries only the
+merge commit.
+
+- **Bug fixed:** a Save in Mail → account settings NULLed `oauth_identity`,
+  `oauth_graph_identity`, `auth_error*` whenever the PUT body merely contained
+  `email` (the modal sent the whole form every time) → the red "needs
+  reconnecting" banner right after a successful reconnect. Same handler also
+  wrote `''` over a stored IMAP/SMTP password on every Save. Both fixed;
+  identity/token/`auth_error` columns are now unconditionally protected from
+  client input.
+- **Flow:** standard `200c237` flow — push `main`, droplet `git fetch` +
+  `merge --ff-only` (`105f259` → `d8ae29f`), `docker compose build dashboard`,
+  `up -d`. **No migration** (56 rows before and after; latest
+  `052_ocr_queue_cache.sql`).
+- **Backup:**
+  `/mnt/sietch_backup/sietch-prod-pre-deploy-d8ae29f-20261110-193357ET`
+  (928 MB: dump 30.2 MB / 739 TOC entries, code archive of `105f259` 10.4 MB,
+  data volume minus `history-attachments` 932 MB, env/compose/Dockerfile 0600,
+  account baseline + sha256-12 token fingerprints, `ROLLBACK.md`). Rollback
+  image `sietch-crm-dashboard:rollback-105f259`; a code rollback needs no DB
+  restore.
+- **Smokes all green:** health 200 loopback+public; login page 200;
+  `/app.js` served sha256 == `git show HEAD:public/app.js`; unauth mail API
+  401s; one clean scanner cycle (00:37:09→00:37:14Z) with no new errors; MCP
+  `initialize`+`tools/list` 200 (25 tools, read-only); accounts 8/9/10
+  byte-for-byte unchanged (identity still NULL, `auth_error` still set, token
+  fingerprints identical); `mail_messages` 1901, `users` 11, migrations 56 —
+  no writes by the deploy.
+- **Accounts 8/9/10 still need one reconnect each** — this ships the *fix* for
+  future wipes, it does not restore an already-cleared stamp.
+- **Test user created (after the deploy):** id **12**
+  `mail-acceptance-test@example.invalid`, `role=member`, `is_admin=f`,
+  `must_change_password=t`, `mail_send_locked_recipient=crm@vanguardadj.online`,
+  **0 mailbox shares**. Password is only in
+  `~/.secrets/sietch-test-user-initial-password.txt` (700/600) — never printed.
+  The supported admin create path (`POST /api/v2/users`) was unreachable
+  without an admin session (the only local token is read-scope), so the user
+  row + its `notification_preferences` row were written in **one** explicit
+  transaction; the lock was set with the repo's supported
+  `scripts/set_mail_send_lock.py --apply`. Deployed guard verified offline
+  (rejects a non-`crm@` recipient); **nothing was sent**.
+- Full log: `~/Projects/plans/sietch/email-save-hotfix-deploy-2026-11-10.md`.
+- **Next:** Ken reconnects 8/9/10 once each, then a display-name Save must keep
+  `identityStatus: "ok"`; Ken logs in as the test user for the acceptance send.
+
+---
+
+## Previous session summary (2026-11-10 — dedupe follow-up: no duplicate tools, v2.5.5)
+
+**Date:** 2026-11-10 (dedupe follow-up: no duplicate tools — DEPLOYED v2.5.5)
 
 **Status: deployed. Prod runs `105f259` / v2.5.5** (was `f3083c8` / v2.5.4).
 
@@ -96,7 +157,39 @@ plan. No push, no deploy, no mail/token/prod writes.
 
 ---
 
+## Previous session summary (2026-11-10 — account-save identity hotfix v2.5.6, branch only)
+
+**Date:** 2026-11-10 (hotfix branch `hotfix/account-save-identity` — CODE FIX
+ONLY, not deployed, not merged; Ken approved the deploy at 6:52 PM ET)
+
+**Status: committed on `hotfix/account-save-identity` off `105f259`** (what
+prod runs); worktree `~/Projects/new-crm-hotfix-save`. Deploy is a separate
+session (backup → `git push` → droplet pull/build/up), then Ken reconnects
+accounts 8/9/10 once — the fix stops future wipes, it does not restore an
+already-NULLed stamp.
+
+- Bug: an account-settings Save cleared `oauth_identity` /
+  `oauth_graph_identity` / `auth_error` whenever the PUT body contained
+  `email`, and `app.js` sent `email` on every Save → "needs reconnecting" banner
+  right after a successful reconnect.
+- Fix: clear only on a real (trimmed, case-insensitive) address change; add a
+  server-side invariant so no client field can ever write an identity, OAuth
+  token/expiry/scope or auth-error column; client sends only changed fields
+  (`email`, blank passwords). Blank password no longer overwrites the stored
+  secret — a second silent wipe found in the same handler.
+- Audit of every other path (sharing, folders, toggles, sync-now, signature,
+  `mail_oauth` helpers, scanner refresh, OAuth callbacks/disconnects) in
+  `plans/sietch/email-save-hotfix-2026-11-10.md` — no other wipe.
+- Tests: new `tests/test_mail_account_save_identity.py` (21, offline); mail +
+  oauth + graph + email-matrix suites green; full Python + JS suites identical
+  to the `105f259` baseline (no new failures). VERSION 2.5.6, cache-buster
+  3.7.55.
+
+---
+
 ## Previous session summary (2026-11-10 — merge + deploy of the MCP document read / OCR worker queue)
+
+**Date:** 2026-11-10 (merge + DEPLOY of the MCP document read / OCR worker queue — Ken's go at 5:25 PM ET)
 
 **Status: MERGED and DEPLOYED. Prod `crm.publicadjustermidwest.com`
 (`147.182.164.19`) runs `f3083c8` / v2.5.4** (was `200c237` / v2.5.3).
