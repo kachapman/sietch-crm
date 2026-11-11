@@ -1,4 +1,5 @@
 ## Unreleased — v2.5.10: compact field-change history + honest migration runner
+- init.sql now stamps every bundled migration as applied and seeds the Action history category, so a fresh database boot does not re-run non-idempotent files (the new runner correctly aborts on already-exists).
 
 ### Fixed (migration runner)
 - **Failed migrations are no longer marked as applied.** `db.py` used to

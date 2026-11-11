@@ -138,6 +138,18 @@ class TestSchemaAndMigration(unittest.TestCase):
                        "CREATE TABLE history_replies")
         self.assertIn("is_system_event BOOLEAN NOT NULL DEFAULT FALSE", block)
 
+    def test_init_sql_seeds_the_action_category(self):
+        self.assertIn(
+            "VALUES ('Action', '#6c757d', TRUE, 15, 'pencil', 'accent')", INIT)
+
+    def test_init_sql_stamps_bundled_migrations(self):
+        self.assertIn("CREATE TABLE IF NOT EXISTS _applied_migrations", INIT)
+        files = sorted(p.name for p in (ROOT / "migrations").glob("0*.sql"))
+        self.assertTrue(files, "expected bundled migrations")
+        for name in files:
+            with self.subTest(name=name):
+                self.assertIn(f"('{name}')", INIT)
+
     def test_migration_is_additive_and_idempotent(self):
         self.assertIn("ADD COLUMN IF NOT EXISTS is_system_event BOOLEAN NOT NULL DEFAULT FALSE",
                       MIGRATION)
