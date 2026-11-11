@@ -7290,6 +7290,7 @@ body {
 .opp-preview-history-item--system .opp-preview-history-system-row {
   display: flex;
   align-items: baseline;
+  flex-wrap: nowrap;
   gap: 0.35rem;
   min-width: 0;
 }
@@ -7306,12 +7307,20 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.opp-preview-history-item--system .opp-preview-history-system-time {
-  flex-shrink: 0;
+.opp-preview-history-item--system .opp-preview-history-system-meta {
+  flex: 0 0 auto;
+  margin-left: auto;
   color: var(--muted);
   opacity: 0.8;
-  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+.opp-preview-history-item--system .opp-preview-history-system-actor,
+.opp-preview-history-item--system .opp-preview-history-system-sep,
+.opp-preview-history-item--system .opp-preview-history-system-time {
+  white-space: nowrap;
+}
+.opp-preview-history-item--system .opp-preview-history-system-time {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Inline images in note history + editor */

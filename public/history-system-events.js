@@ -86,3 +86,64 @@ export function systemEventText(ev, max = SYSTEM_EVENT_MAX_CHARS) {
   if (text.length > limit) text = text.slice(0, limit - 1).trimEnd() + "\u2026";
   return text;
 }
+
+/**
+ * Who triggered a system history event, for the compact line's right side.
+ * Prefer the history row's author / created_by display name; if the change
+ * was made with an API token and no user is present, use the token name;
+ * otherwise "System".
+ */
+export function systemEventActor(ev) {
+  const e = ev || {};
+  const direct = String(e.author || e.Author || "").trim();
+  if (direct) return direct;
+  const createBy = e.createBy || e.CreateBy || e.createdBy || e.CreatedBy;
+  if (createBy && typeof createBy === "object") {
+    const name = String(
+      createBy.displayName ||
+        createBy.DisplayName ||
+        createBy.display_name ||
+        createBy.userName ||
+        createBy.UserName ||
+        createBy.name ||
+        ""
+    ).trim();
+    if (name) return name;
+  }
+  const token = String(
+    e.tokenName ||
+      e.token_name ||
+      e.apiTokenName ||
+      e.api_token_name ||
+      e.token?.name ||
+      e.apiToken?.name ||
+      ""
+  ).trim();
+  if (token) return token;
+  return "System";
+}
+
+/**
+ * Compact timestamp for the right side of a system-event line.
+ * Current year: "Nov 9, 1:53 PM". Other years: "Nov 9, 2025, 1:53 PM EST".
+ * `now` and `locale` are injectable so tests can pin them.
+ */
+export function formatSystemEventWhen(d, now = new Date(), locale) {
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return "";
+  const sameYear = d.getFullYear() === now.getFullYear();
+  const opts = {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  };
+  if (!sameYear) {
+    opts.year = "numeric";
+    opts.timeZoneName = "short";
+  }
+  try {
+    return d.toLocaleString(locale, opts);
+  } catch {
+    return d.toLocaleString();
+  }
+}

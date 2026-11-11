@@ -15,6 +15,8 @@ import { fileURLToPath } from 'node:url';
 import {
   isSystemHistoryEvent,
   systemEventText,
+  systemEventActor,
+  formatSystemEventWhen,
   SYSTEM_EVENT_MAX_CHARS,
 } from '../public/history-system-events.js';
 
@@ -132,6 +134,69 @@ test('empty content falls back to the category label', () => {
   assert.equal(systemEventText({}), 'System activity');
 });
 
+// ── actor (who made the change) ───────────────────────────────────────────
+
+test('systemEventActor prefers the history row author', () => {
+  assert.equal(systemEventActor({ author: 'Ken Chapman' }), 'Ken Chapman');
+  assert.equal(systemEventActor({ Author: 'Ken Chapman' }), 'Ken Chapman');
+});
+
+test('systemEventActor reads createdBy.displayName when author is empty', () => {
+  assert.equal(systemEventActor({
+    author: '',
+    createdBy: { displayName: 'Ken Chapman' },
+  }), 'Ken Chapman');
+  assert.equal(systemEventActor({
+    createBy: { display_name: 'Claudiu' },
+  }), 'Claudiu');
+});
+
+test('systemEventActor falls back to the API token name', () => {
+  assert.equal(systemEventActor({ tokenName: 'mail acceptance test' }),
+    'mail acceptance test');
+  assert.equal(systemEventActor({ author: '', token_name: 'CI token' }),
+    'CI token');
+  // a named author wins over a token
+  assert.equal(systemEventActor({
+    author: 'Ken Chapman',
+    tokenName: 'mail acceptance test',
+  }), 'Ken Chapman');
+});
+
+test('systemEventActor is System when no user or token is present', () => {
+  assert.equal(systemEventActor({}), 'System');
+  assert.equal(systemEventActor({ author: '' }), 'System');
+  assert.equal(systemEventActor({ author: '   ' }), 'System');
+  // a bare numeric createdBy id is not a name
+  assert.equal(systemEventActor({ createdBy: 12, author: '' }), 'System');
+});
+
+// ── compact timestamp ─────────────────────────────────────────────────────
+
+test('formatSystemEventWhen omits the year in the current year', () => {
+  const now = new Date(2026, 10, 10, 18, 0, 0); // Nov 10, 2026
+  const d = new Date(2026, 10, 9, 13, 53, 0);   // Nov 9, 1:53 PM
+  const out = formatSystemEventWhen(d, now, 'en-US');
+  assert.match(out, /Nov 9/);
+  assert.match(out, /1:53/);
+  assert.doesNotMatch(out, /2026/);
+  assert.doesNotMatch(out, /EST|EDT|GMT/);
+});
+
+test('formatSystemEventWhen includes the year (and zone) for other years', () => {
+  const now = new Date(2026, 10, 10, 18, 0, 0);
+  const d = new Date(2025, 10, 9, 13, 53, 0);
+  const out = formatSystemEventWhen(d, now, 'en-US');
+  assert.match(out, /Nov 9/);
+  assert.match(out, /2025/);
+  assert.match(out, /1:53/);
+});
+
+test('formatSystemEventWhen is empty for invalid dates', () => {
+  assert.equal(formatSystemEventWhen(null), '');
+  assert.equal(formatSystemEventWhen(new Date(NaN)), '');
+});
+
 // ── wiring in app.js ──────────────────────────────────────────────────────
 
 test('app.js imports the shared classifier', () => {
@@ -173,14 +238,19 @@ test('the compact branch returns before the reply button is created', () => {
     'the compact branch must return the <li> immediately');
 });
 
-test('the compact row carries icon + text + timestamp and no reply/delete', () => {
+test('the compact row carries icon + text + actor + timestamp and no reply/delete', () => {
   const at = appSrc.indexOf('if (systemEvent) {');
   const end = appSrc.indexOf('const metaRow = document.createElement("div");', at);
   const branch = appSrc.slice(at, end);
   assert.ok(branch.includes('opp-preview-history-system-row'));
   assert.ok(branch.includes('opp-preview-history-system-text'));
+  assert.ok(branch.includes('opp-preview-history-system-meta'));
+  assert.ok(branch.includes('opp-preview-history-system-actor'));
   assert.ok(branch.includes('opp-preview-history-system-time'));
   assert.ok(branch.includes('historyCategoryIconHtml'));
+  assert.ok(branch.includes('systemEventActor(ev)'));
+  assert.ok(branch.includes('formatSystemEventWhen'));
+  assert.ok(branch.includes('sysText.title'), 'full change text must be in a title tooltip');
   assert.ok(!branch.includes('reply'), 'no reply button in the compact branch');
   assert.ok(!branch.includes('opp-preview-history-delete'), 'no delete button on system events');
   assert.ok(!branch.includes('renderHistoryNoteBody'), 'no full body for system events');
@@ -193,10 +263,40 @@ test('the compact style exists and keeps it on one line', () => {
   assert.ok(block.includes('border-left'));
   assert.ok(cssSrc.includes('.opp-preview-history-item--system .opp-preview-history-system-text'));
   assert.ok(cssSrc.includes('text-overflow: ellipsis'));
+
+  const rowAt = cssSrc.indexOf('.opp-preview-history-item--system .opp-preview-history-system-row {');
+  assert.ok(rowAt > -1, 'system-row rule must exist');
+  const rowBlock = cssSrc.slice(rowAt, cssSrc.indexOf('}', rowAt) + 1);
+  assert.ok(rowBlock.includes('flex-wrap: nowrap'), 'the row must not wrap at normal widths');
+
+  const textAt = cssSrc.indexOf('.opp-preview-history-item--system .opp-preview-history-system-text {');
+  const textBlock = cssSrc.slice(textAt, cssSrc.indexOf('}', textAt) + 1);
+  assert.ok(textBlock.includes('text-overflow: ellipsis'));
+  assert.ok(textBlock.includes('white-space: nowrap'));
+  assert.ok(textBlock.includes('overflow: hidden'));
+  assert.ok(textBlock.includes('min-width: 0'));
+
+  const metaAt = cssSrc.indexOf('.opp-preview-history-item--system .opp-preview-history-system-meta {');
+  assert.ok(metaAt > -1, 'system-meta rule must exist');
+  const metaBlock = cssSrc.slice(metaAt, cssSrc.indexOf('}', metaAt) + 1);
+  assert.ok(metaBlock.includes('white-space: nowrap'));
+  assert.ok(metaBlock.includes('margin-left: auto'), 'actor + time stay right-aligned');
+  assert.ok(metaBlock.includes('flex: 0 0 auto'));
 });
 
-test('cache-buster bumped for the classifier change', () => {
-  assert.ok(indexHtml.includes('app.js?v=3.7.59'));
-  assert.ok(appSrc.includes('history-system-events.js?v=3.7.58'),
-    'the classifier module query must stay pinned until that module changes');
+test('cache-buster bumped for the actor and linkify change', () => {
+  assert.ok(indexHtml.includes('app.js?v=3.7.60'));
+  assert.ok(indexHtml.includes('styles.css?v=3.7.23'));
+  assert.ok(appSrc.includes('history-system-events.js?v=3.7.59'),
+    'the classifier module query must bump when the module changes');
+  assert.ok(appSrc.includes('linkify-phones-emails.js?v=3.7.60'));
+  assert.ok(indexHtml.includes('name="format-detection"'),
+    'Safari/iOS must not auto-link dates as phone numbers');
+  assert.ok(indexHtml.includes('content="telephone=no"'));
+});
+
+test('app.js uses the shared phone/email linkifier', () => {
+  assert.ok(appSrc.includes('linkifyPhonesAndEmailsText(txt, { skipPhone })'));
+  assert.ok(!/txt\.replace\(\/\(\\\+\?\[\\d\\s\(\)\.-\]\{7,\}\\d\)/.test(appSrc),
+    'the old greedy phone regex must not still be applied in app.js');
 });

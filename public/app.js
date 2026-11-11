@@ -16,7 +16,12 @@ import {
 import {
   isSystemHistoryEvent,
   systemEventText,
-} from "./history-system-events.js?v=3.7.58";
+  systemEventActor,
+  formatSystemEventWhen,
+} from "./history-system-events.js?v=3.7.59";
+import {
+  linkifyPhonesAndEmailsText,
+} from "./linkify-phones-emails.js?v=3.7.60";
 import {
   mailListSignature,
   shouldSkipMailListRender,
@@ -28545,19 +28550,46 @@ function renderHistoryEventItem(ev) {
     sysIcon.className = "opp-preview-history-type-icon";
     sysIcon.innerHTML = historyCategoryIconHtml(cat || ev);
     sysIcon.setAttribute("aria-hidden", "true");
+    const sysTextValue = systemEventText(ev);
     const sysText = document.createElement("span");
     sysText.className = "opp-preview-history-system-text";
-    sysText.textContent = systemEventText(ev);
+    sysText.textContent = sysTextValue;
+    sysText.title = sysTextValue;
     sysRow.appendChild(sysIcon);
     sysRow.appendChild(sysText);
-    const sysWhen = formatHistoryEventDateTime(ev);
-    if (sysWhen) {
-      const timeEl = document.createElement("time");
-      timeEl.className = "opp-preview-history-system-time";
-      const sysIso = historyEventDateIso(ev);
-      if (sysIso) timeEl.dateTime = sysIso;
-      timeEl.textContent = sysWhen;
-      sysRow.appendChild(timeEl);
+    const actor = systemEventActor(ev);
+    const sysIso = historyEventDateIso(ev);
+    let sysWhen = "";
+    if (sysIso) {
+      const d = new Date(sysIso);
+      sysWhen = formatSystemEventWhen(d);
+    } else {
+      sysWhen = formatHistoryEventDateTime(ev);
+    }
+    if (actor || sysWhen) {
+      const sysMeta = document.createElement("span");
+      sysMeta.className = "opp-preview-history-system-meta";
+      if (actor) {
+        const actorEl = document.createElement("span");
+        actorEl.className = "opp-preview-history-system-actor";
+        actorEl.textContent = actor;
+        sysMeta.appendChild(actorEl);
+      }
+      if (actor && sysWhen) {
+        const sep = document.createElement("span");
+        sep.className = "opp-preview-history-system-sep";
+        sep.setAttribute("aria-hidden", "true");
+        sep.textContent = " \u00b7 ";
+        sysMeta.appendChild(sep);
+      }
+      if (sysWhen) {
+        const timeEl = document.createElement("time");
+        timeEl.className = "opp-preview-history-system-time";
+        if (sysIso) timeEl.dateTime = sysIso;
+        timeEl.textContent = sysWhen;
+        sysMeta.appendChild(timeEl);
+      }
+      sysRow.appendChild(sysMeta);
     }
     li.appendChild(sysRow);
     return li;
@@ -29455,16 +29487,9 @@ function linkifyPhonesAndEmails(container) {
         skipPhone = true;
       }
     }
-    // Emails first (avoid phone overlap)
-    txt = txt.replace(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g, (m) => `<a href="mailto:${encodeURIComponent(m)}" class="preview-link">${m}</a>`);
-    if (!skipPhone) {
-      // Phones: keep display, sanitize for tel: (remove non-digits except leading +)
-      txt = txt.replace(/(\+?[\d\s().-]{7,}\d)/g, (m) => {
-        const clean = m.replace(/[^\d+]/g, "");
-        if (clean.length < 7) return m;
-        return `<a href="tel:${clean}" class="preview-link">${m}</a>`;
-      });
-    }
+    // Emails first (avoid phone overlap); dates are not phones — see
+    // linkifyPhonesAndEmailsText (ISO / US dates and "from X to Y" ranges).
+    txt = linkifyPhonesAndEmailsText(txt, { skipPhone });
     if (txt !== tnode.textContent) {
       const wrap = document.createElement("span");
       wrap.innerHTML = txt;
