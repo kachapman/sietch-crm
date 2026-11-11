@@ -1,5 +1,19 @@
 ## Unreleased — field-change history stays compact when its category is missing
 
+### Fixed (migration runner)
+- **Failed migrations are no longer marked as applied.** `db.py` used to
+  rollback a failing `migrations/*.sql` file and then insert its filename
+  into `_applied_migrations` so boot would not retry it. That is why
+  production recorded `017_add_custom_field_groups.sql` as applied while the
+  Action category seed never landed. The runner now commits the file and the
+  applied-row together; on error it rolls back, does **not** record the
+  filename, and `init_db()` raises `SystemExit` so a deploy stops. Filenames
+  already in `_applied_migrations` are still skipped (017 will not be
+  re-run). Missing effects of already-recorded migrations are listed in
+  `plans/sietch/history-system-events-deploy-2026-11-10.md` with proposed
+  new idempotent repairs; those repairs are not applied in this change.
+
+
 Ken (8:28 PM ET, 2026-11-10): "Follow-up Due Date changed from 2026-11-11 to
 2026-11-12" still rendered as a full card with a Reply button, under a
 "Quick Context" chip. Not a missing compact renderer — a classifier miss.

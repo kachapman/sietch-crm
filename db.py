@@ -9,12 +9,25 @@ from typing import Any
 _pool = None
 
 
+class MigrationFailed(RuntimeError):
+    """A migrations/*.sql file failed. It was rolled back and was not recorded
+    as applied. ``init_db`` turns this into ``SystemExit`` so a deploy stops.
+    """
+
+
 def init_db() -> None:
     """Initialize connection pool. Call once at server startup."""
+    import logging
     import psycopg2
     from psycopg2 import pool
 
     global _pool
+    if _pool is not None:
+        try:
+            _pool.closeall()
+        except Exception:
+            pass
+        _pool = None
     _pool = pool.ThreadedConnectionPool(
         minconn=2,
         maxconn=20,
@@ -34,19 +47,27 @@ def init_db() -> None:
     # long block of inlined DDL — for a fresh deploy we skip those by
     # running the .sql files first; the inlined ALTERs are all
     # `IF NOT EXISTS`-style and remain harmless on re-run.
-    _run_pending_migrations()
+    try:
+        _run_pending_migrations()
+    except MigrationFailed as exc:
+        logging.getLogger("db.migrations").exception("%s", exc)
+        raise SystemExit(str(exc)) from exc
 
 
-def _run_pending_migrations() -> None:
+def _run_pending_migrations(migrations_dir: str | None = None) -> None:
     """Apply any migrations/*.sql not yet recorded in `_applied_migrations`.
 
     Migrations are tracked by filename; once a filename is in the table it is
-    never re-applied. This is intentionally simple — no checksums, no
-    transactional wrapping, no checks that an applied migration was later
-    edited. It exists so a fresh container can boot against a brand-new DB
-    without operator intervention. Existing live DBs already have all
-    migrations applied (manually, over months); the table starts empty
-    there and the runner records each as a no-op.
+    never re-applied (even if the file would fail or change schema if run
+    again). Each file runs in its own transaction: a successful apply is
+    committed together with the `_applied_migrations` insert; a failure
+    rolls back and is *not* recorded. The first failure raises
+    ``MigrationFailed`` and stops the remaining files so a deploy cannot
+    boot on a half-applied schema.
+
+    ``migrations_dir`` (or env ``SIETCH_MIGRATIONS_DIR``) overrides the
+    default search path; tests use this so they never touch the repo
+    migrations directory.
     """
     import glob
     import logging
@@ -57,11 +78,13 @@ def _run_pending_migrations() -> None:
 
     # Resolve the migrations directory. In Docker it's /app/migrations.
     # In a workstation venv it's <repo>/migrations (next to db.py).
+    override = migrations_dir or _os.environ.get("SIETCH_MIGRATIONS_DIR")
     candidates = [
+        override,
         "/app/migrations",
         _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "migrations"),
     ]
-    mig_dir = next((c for c in candidates if _os.path.isdir(c)), None)
+    mig_dir = next((c for c in candidates if c and _os.path.isdir(c)), None)
     if not mig_dir:
         logger.info("No migrations/ directory; skipping migration runner")
         return
@@ -99,23 +122,16 @@ def _run_pending_migrations() -> None:
                         (fname,),
                     )
                     conn.commit()
-                except psycopg2.Error as e:
+                except Exception as e:
                     conn.rollback()
-                    # If the migration fails because the change is already
-                    # present (e.g. columns already added by an earlier
-                    # inlined DDL pass), record it as applied to avoid
-                    # blocking boot on every restart.
-                    logger.warning(
-                        "Migration %s failed (%s); recording as applied to "
-                        "prevent retry loop",
+                    logger.error(
+                        "Migration %s failed; rolled back and not recorded "
+                        "as applied: %s",
                         fname, e,
                     )
-                    cur.execute(
-                        "INSERT INTO _applied_migrations (filename) VALUES (%s) "
-                        "ON CONFLICT (filename) DO NOTHING",
-                        (fname,),
-                    )
-                    conn.commit()
+                    raise MigrationFailed(
+                        f"Migration {fname} failed; not marked applied: {e}"
+                    ) from e
     finally:
         _pool.putconn(conn)
 
@@ -128,6 +144,17 @@ def get_conn():
 def put_conn(conn) -> None:
     """Return a connection to the pool."""
     _pool.putconn(conn)
+
+
+def close_pool() -> None:
+    """Shut down the pool. Used by tests that call init_db more than once."""
+    global _pool
+    if _pool is not None:
+        try:
+            _pool.closeall()
+        except Exception:
+            pass
+        _pool = None
 
 
 @contextmanager
