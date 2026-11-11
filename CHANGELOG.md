@@ -69,6 +69,37 @@ Full run: no new failures vs the 18 known pre-existing ones (3
 1 `test_mcp_api_gaps`, 1 `test_scanner_toggle_gating`, 1
 `test_sync_pull_deals_fields`); all `tests/test_*.mjs` pass.
 
+### Deployed (follow-up deploy session, Ken's 8:43 PM ET go)
+- Live on `crm.publicadjustermidwest.com` as `3e2cad0` / **v2.5.9** (21:25 ET),
+  fast-forwarded from `5e22501` (`--ff-only`), rebuilt and recreated.
+  `public/app.js` unchanged ⇒ cache-buster stays `3.7.57`.
+- Backup `/mnt/sietch_backup/sietch-prod-pre-deploy-3e2cad0-20261110-211828ET`
+  (929 MB: dump 30,182,771 B / 750 `pg_restore --list` lines, code archive of
+  `5e22501` 10,436,886 B / 502 members, data volume minus
+  `history-attachments` 932,405,417 B / 1,198 members, env/compose/Dockerfile
+  0600, account baseline + sha256-12 token fingerprints, `ROLLBACK.md`).
+  Rollback image `sietch-crm-dashboard:rollback-5e22501` (`a1a02f790f15`).
+  **No migration** (56 rows before and after; latest `052_ocr_queue_cache.sql`).
+- Smokes: health 200 loopback + public; login 200 (`app.js?v=3.7.57`,
+  `styles.css?v=3.7.22`); served app.js/styles.css byte-identical to git;
+  unauth mail/notifications/tasks APIs 401; **3 clean scanner cycles**
+  (0 `sync_gate`/refus/`invalid_grant`/`AUTHENTICATIONFAILED`/`LOGIN
+  failed`/`identity mismatch`/`Traceback`/`record_auth_error`; known
+  Spam/Trash-missing noise only); MCP `tools/list` **34 tools**,
+  `serverInfo.version` 2.5.9, `list_mail_accounts` has no secret keys; accounts
+  8/9/10 payload (deployed handler, in-container) → `authError ""`,
+  `identityStatus ok`, `oauthStatus connected`. Token fingerprints identical
+  pre/post (no token rotated by the deploy).
+- **The fix proved itself on boot:** the scanner logged
+  `Cleared stale auth_error on mail account 9 / 10 / 8 (…)` at 02:25:48Z —
+  exactly once per account, never again on the following 5 cycles.
+- **Approved data repair:** ids 8/9/10 pre-verified (identity = own address for
+  Exchange and Graph, Exchange tokens fresh, no `oauth_last_error`), then the
+  approved `UPDATE ... SET auth_error = NULL, auth_error_at = NULL WHERE id IN
+  (8,9,10)` in one transaction. **0 values changed** — the scanner had already
+  cleared them at boot, so before == after. Banner still clear after 2 further
+  scanner cycles (6 total).
+
 
 
 VERSION 2.5.7 → 2.5.8; `app.js` cache-buster 3.7.56 → 3.7.57. Approval: Ken

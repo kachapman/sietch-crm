@@ -1,7 +1,7 @@
 # Session History — Sietch CRM (new-crm branch)
 
 
-## Current session summary (for next resume) — 2026-11-10 (reconnect clears the stale auth_error, v2.5.9, NOT deployed)
+## Current session summary (for next resume) — 2026-11-10 (reconnect clears the stale auth_error, v2.5.9, DEPLOYED)
 
 **Branch:** `hotfix/reconnect-clears-auth-error` (from `5e22501` = v2.5.8 = `origin/main`).
 Worktree `/home/chapman-server/Projects/new-crm-hotfix-banner`. Merged into local
@@ -37,12 +37,18 @@ session's log: `plans/sietch/reconnect-banner-hotfix-2026-11-10.md`.
   3 `test_mail_auth_gaps`, 1 `test_mcp_api_gaps`, 1
   `test_scanner_toggle_gating`, 1 `test_sync_pull_deals_fields`); all
   `tests/test_*.mjs` pass.
-- **Deploy session TODO:** pre-deploy backup
-  (`deploy/pre-deploy-backup.sh`, target `/mnt/sietch_backup`), `git pull`
-  (origin main = this merge), `docker compose build && up -d`, smokes on
-  `/api/v2/mail/accounts`, then the one-time repair for the three rows —
+- **Deploy session DONE (21:25 ET).** `3e2cad0` / **v2.5.9** live on
+  `crm.publicadjustermidwest.com` (`merge --ff-only`, rebuild, `up -d`).
+  Backup `/mnt/sietch_backup/sietch-prod-pre-deploy-3e2cad0-20261110-211828ET`
+  (929 MB), rollback image `sietch-crm-dashboard:rollback-5e22501`, **no
+  migration** (56 → 56). All smokes pass (health, login, assets == git, auth
+  401s, 3 clean scanner cycles, 34 MCP tools, accounts 8/9/10
+  `authError ""` / `identityStatus ok`, token fingerprints identical).
+  **The scanner cleared the stale error itself at boot** (one
+  `Cleared stale auth_error` line per account, never repeated), so the approved
   `UPDATE mail_accounts SET auth_error = NULL, auth_error_at = NULL WHERE id IN
-  (8,9,10);` (the scanner fix would also clear them on its next cycle).
+  (8,9,10)` changed **0 values**; banner still clear after 2 more cycles.
+  Log: `plans/sietch/reconnect-banner-deploy-2026-11-10.md`.
 
 
 ## Current session summary (for next resume) — 2026-11-10 (API/MCP gaps pass, DEPLOYED v2.5.8)
