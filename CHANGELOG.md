@@ -75,8 +75,26 @@ VERSION 2.5.7 → 2.5.8; `app.js` cache-buster 3.7.56 → 3.7.57. Approval: Ken
 7:33 PM ET ("add the api tool batch to the deploy"). Rebased onto `ba8c750` /
 v2.5.7 (Save hotfix + notification/task-picker/Telegram fixes). Ken's 6:21 PM
 ET scope: fix everything except a residential/commercial occupancy field
-(there is no project field for it; it will be inferred from notes). **Not
-yet on production** — Deployed block to be filled after the backup and smokes.
+(there is no project field for it; it will be inferred from notes).
+
+### Deployed
+- Live on `crm.publicadjustermidwest.com` as `5e22501` / **v2.5.8**
+  (20:43 ET). `feat/mcp-api-gaps-2026-11-10` rebased onto `ba8c750` / v2.5.7
+  and fast-forwarded to `main`.
+- Backup `/mnt/sietch_backup/sietch-prod-pre-deploy-5e22501-20261110-204145ET`
+  (929 MB: dump 30.2 MB / 750 `pg_restore --list` lines, code archive of
+  `cb25cdb` 10.4 MB, data volume minus `history-attachments` 932 MB,
+  env/compose/Dockerfile 0600, account baseline + sha256-12 token
+  fingerprints, `ROLLBACK.md`). Rollback image
+  `sietch-crm-dashboard:rollback-cb25cdb`. **No migration** (56 rows before
+  and after). Droplet `merge --ff-only`, rebuild, `up -d`.
+- Smokes: health 200; login 200 (`app.js?v=3.7.57`); served app.js/styles.css
+  byte-identical to git; unauth mail/notifications/tasks APIs 401; one clean
+  scanner cycle (known Trash-folder noise only; retention dropped 1 message
+  older than 90 days); MCP `tools/list` **34 tools** (10 new, stubs absent);
+  `list_mail_accounts` returned 5 accounts with **no secrets**; token
+  fingerprints identical pre/post.
+- Spec for Baggins: `plans/sietch/api-spec-2026-11-10-v2.5.8/`.
 
 **New MCP tools (10)** — all wrap existing `/api/v2` routes, no parallel
 endpoints:

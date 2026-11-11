@@ -45,7 +45,7 @@ session's log: `plans/sietch/reconnect-banner-hotfix-2026-11-10.md`.
   (8,9,10);` (the scanner fix would also clear them on its next cycle).
 
 
-## Current session summary (for next resume) — 2026-11-10 (API/MCP gaps pass, NOT deployed)
+## Current session summary (for next resume) — 2026-11-10 (API/MCP gaps pass, DEPLOYED v2.5.8)
 
 **Branch:** `feat/mcp-api-gaps-2026-11-10` (from `7d2e55c` / deployed v2.5.5).
 Worktree `/home/chapman-server/Projects/new-crm-mcp-api-gaps`. **No VERSION
