@@ -52,9 +52,23 @@ correctly linked to 1245 "Tony Gosz (Bonnie Gosz)" — bug 3 is display-only.
 Full details/tables in the plan.
 
 Tests: Python suite (89 files) vs baseline `7d2e55c` — result recorded in the
-plan; Node 453 pass (baseline 442 + 11 new). Merged into local `main` and
-deployed as **v2.5.7** (deploy log linked above). No mail/token/account
-writes.
+plan; Node 453 pass (baseline 442 + 11 new).
+
+**Merged and deployed as `cb25cdb` / v2.5.7** (Ken 7:25 PM ET; 20:19–20:20 ET
+on prod). Full suite re-run on the merged tree vs `main`: 90 files / 1,772
+tests vs 89 / 1,763 with the **same 25 failure/error ids in the same 5 known
+files** (zero new; the invoice file shows 17 here only because this host has no
+`reportlab`); `test_mail_link_attachments` 91 OK; Node 453/453. Backup
+`/mnt/sietch_backup/sietch-prod-pre-deploy-cb25cdb-20261110-201421ET`
+(~950 MB, dump 739 TOC entries, rollback image
+`sietch-crm-dashboard:rollback-d8ae29f`), **no migration** (56 → 56). Smokes
+all green (health, login, served assets == git, 401s, two clean scanner
+cycles, MCP 25 tools, icon branches in the served JS, picker verified offline
+on the deployed commit, deployed `_project_link` resolves the two legacy
+reminder rows read-only, accounts 8/9/10 flags/`auth_error_at`/9-10
+fingerprints unchanged, test user 12 lock unchanged). Deploy log:
+`plans/sietch/notif-tasks-telegram-deploy-2026-11-10.md`. No mail/token/account
+writes; nothing was sent.
 
 ---
 

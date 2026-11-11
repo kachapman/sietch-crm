@@ -1,7 +1,32 @@
 ## 2026-11-10 — v2.5.7: notification icons, Tasks-tile project link, Telegram project line
 
 VERSION 2.5.6 → 2.5.7; `app.js` cache-buster 3.7.55 → 3.7.56. Approval: Ken
-7:25 PM ET.
+7:25 PM ET. **Deployed.**
+
+### Deployed
+- Live on `crm.publicadjustermidwest.com` as `cb25cdb` / **v2.5.7**
+  (20:19–20:20 ET). Branch `fix/notif-tasks-telegram` (`d956906`) merged into
+  `main` (`9266bb0`, `cb25cdb` = `--ff` after merging `main` into the branch;
+  conflicts only in CHANGELOG/SESSION_HISTORY, both sides kept).
+- Backup `/mnt/sietch_backup/sietch-prod-pre-deploy-cb25cdb-20261110-201421ET`
+  (~950 MB: dump 30.2 MB / 739 TOC entries, code archive of `d8ae29f`
+  10.4 MB, data volume minus `history-attachments` 932 MB, env/compose/Dockerfile
+  0600, account baseline + sha256-12 token fingerprints, `ROLLBACK.md`).
+  Rollback image `sietch-crm-dashboard:rollback-d8ae29f`. **No migration**
+  (56 rows before and after). Droplet `merge --ff-only`, rebuild, `up -d`.
+- Tests: full Python suite vs `main` baseline — 90 files / 1,772 tests vs
+  89 / 1,763, **identical 25 failure/error ids in the same 5 known files**
+  (zero new); `test_mail_link_attachments` 91 OK; Node 453/453; Playwright
+  Tasks-picker e2e OK.
+- Smokes: health 200 loopback+public; login page 200; served `app.js` == git;
+  unauth API 401s; two clean scanner cycles; MCP `tools/list` 25 tools; icon
+  branches present in the served JS and the notifications API renders them;
+  task-picker save verified offline against the deployed commit; deployed
+  `_project_link` omits the line with no project and resolves the two legacy
+  `task_reminder` rows to their real projects (read-only); accounts 8/9/10
+  flags + `auth_error_at` + 9/10 token fingerprints unchanged, test user 12
+  lock unchanged.
+- Log: `plans/sietch/notif-tasks-telegram-deploy-2026-11-10.md`.
 
 ### Fixed
 - **Notification drawer icons** (`public/app.js:_notifTypeIcon`). Mail-account
