@@ -3,7 +3,58 @@
 
 ## Current session summary (for next resume)
 
-**Date:** 2026-11-10 (dedupe follow-up: no duplicate tools — DEPLOYED v2.5.5)
+**Date:** 2026-11-10 (notification icons, Tasks-tile project link, Telegram "Unknown Project")
+
+**Branch:** `fix/notif-tasks-telegram` (worktree
+`~/Projects/new-crm-notif-tasks-telegram`, based on `7d2e55c`). **Not pushed,
+not deployed, VERSION still 2.5.5.** Plan:
+`~/Projects/plans/sietch/notif-tasks-telegram-2026-11-10.md`.
+
+Ken (6:43 PM ET): three live bugs.
+
+1. **Broken drawer icons.** `_notifTypeIcon()` mapped only
+   `task_assigned` / `note_tagged` / `reply_tagged` / `service_feed` /
+   `timesheet_overdue`; `mail_auth_error`, `task_reminder` and
+   `calendar_reminder` fell through to a default SVG whose path data was
+   malformed (disconnected strokes). Added real Tabler branches
+   (`mail-exclamation`, `bell`, `calendar-event`) and made the fallback a
+   valid bell; clock-in alarm untouched.
+   `tests/test_notification_icons.mjs` (6 tests).
+2. **Tasks-tile project picker saved/rendered a different project.**
+   Root cause was stale task state, not an index/id mixup: clicking a result
+   set only the modal closure `_taskEditProjectId`; `task.opportunityId` /
+   `task.opportunity.title` kept the modal's open-time project. The tile
+   renders that task object (wrong chip immediately), and any rerender —
+   adding/ticking a checklist item calls `persist` → `openTaskPreviewModal` —
+   reset the pick to the old project, so the next save wrote it. New
+   `_applyTaskProjectSelection()` updates closure + task object; create now
+   copies the persisted body back onto the task. `tests/test_task_project_picker.mjs`
+   (5) + local-build Playwright `tests/playwright/tasks_project_picker.py`
+   (own scratch DB, 3 projects, non-first pick + checklist rerender; verified
+   it fails pre-fix).
+3. **Telegram `Project: Unknown Project`.** `task_reminders` selected
+   `opportunity_id` but never inserted it, so every reminder row had NULL;
+   the dispatcher replaced a missing joined title with the literal
+   `"Unknown Project"`. Reminders now store/publish `opportunity_id`; the
+   dispatcher resolves legacy rows via `COALESCE(n.opportunity_id,
+   tk.opportunity_id)` (regex-guarded `payload->>'taskId'`) and omits the
+   whole `Project:` line when there is no project. Placeholder removed from
+   `server.py` and `telegram_bot.py` too.
+   `tests/test_notification_project_line.py` (9, mocked Telegram).
+
+Prod audit (read-only, `BEGIN READ ONLY;`): not determinable with certainty
+(no per-task audit trail for project changes). One heuristic hit — task
+**854** "Task for Robert Rae" (creator Claudiu, 2026-10-20 18:28 ET, now
+closed) is linked to project 130 "Ken Greene"; could be a manual re-link.
+Task **900** ("Update mdm on the reconciliation", Claudiu, 18:32 ET) is
+correctly linked to 1245 "Tony Gosz (Bonnie Gosz)" — bug 3 is display-only.
+Full details/tables in the plan.
+
+Tests: Python suite (89 files) vs baseline `7d2e55c` — result recorded in the
+plan; Node 453 pass (baseline 442 + 11 new). Merge status recorded in the
+plan. No push, no deploy, no mail/token/prod writes.
+
+## Previous session summary (2026-11-10 — dedupe follow-up: no duplicate tools — DEPLOYED v2.5.5)
 
 **Status: deployed. Prod runs `105f259` / v2.5.5** (was `f3083c8` / v2.5.4).
 

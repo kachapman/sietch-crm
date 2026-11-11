@@ -1,3 +1,45 @@
+## Unreleased — notification icons, Tasks-tile project link, Telegram project line
+
+Nothing deployed. VERSION stays 2.5.5.
+
+### Fixed
+- **Notification drawer icons** (`public/app.js:_notifTypeIcon`). Mail-account
+  warnings (`mail_auth_error`), task reminders (`task_reminder`) and calendar
+  reminders (`calendar_reminder`) had no mapping and fell through to a
+  malformed inline SVG (disconnected strokes = broken glyph). Each type now
+  has a real Tabler icon (`mail-exclamation`, `bell`, `calendar-event`) and
+  the fallback is a valid `bell`. The clock-in alarm (`timesheet_overdue`)
+  branch is unchanged.
+- **Tasks-tile project picker** (`public/app.js:openTaskPreviewModal`). The
+  picker updated only the modal closure; `task.opportunityId` /
+  `task.opportunity.title` kept the project the modal opened with. The tile
+  (rendered from that task object) therefore showed the previous project, and
+  any rerender (adding/ticking a checklist item → `persist` →
+  `openTaskPreviewModal`) reset the pick to the old project, which the next
+  save wrote. A single `_applyTaskProjectSelection()` now updates the closure
+  and the task object together, and a successful create copies the persisted
+  body back onto the task object.
+- **Telegram `Project: Unknown Project`** (`task_reminders.py`,
+  `notification_dispatcher.py`). Reminder notifications never stored
+  `opportunity_id` even though the task had one, and the dispatcher
+  substituted the literal `"Unknown Project"` when the join found no title.
+  Reminders now write `opportunity_id` (and publish it); the dispatcher
+  resolves legacy rows through `payload->>'taskId'` with
+  `COALESCE(n.opportunity_id, tk.opportunity_id)` and no longer invents a
+  placeholder. When there is genuinely no project, the `Project:` line is
+  omitted entirely. The placeholder is also gone from the bot reply
+  confirmation (`telegram_bot.py`) and the bot lookup (`server.py`).
+
+### Tests
+- `tests/test_notification_icons.mjs` (6), `tests/test_task_project_picker.mjs` (5),
+  `tests/test_notification_project_line.py` (9, mocked Telegram).
+- `tests/playwright/tasks_project_picker.py` — local-build Playwright: own
+  scratch DB, 3 fixture projects, picks a non-first project through the
+  Tasks-tile picker, touches the checklist rerender path, asserts API + tile
+  both show the chosen project. All non-localhost requests aborted.
+- Suites vs baseline `7d2e55c`: Python 89 files / zero new failures; Node
+  453 pass (baseline 442 + 11 new).
+
 ## 2026-11-10 — v2.5.5: drop the duplicate document-download tool + route
 
 ### Deployed
