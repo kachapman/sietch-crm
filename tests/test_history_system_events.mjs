@@ -285,7 +285,7 @@ test('the compact style exists and keeps it on one line', () => {
 });
 
 test('cache-buster bumped for the actor and linkify change', () => {
-  assert.ok(indexHtml.includes('app.js?v=3.7.60'));
+  assert.ok(indexHtml.includes('app.js?v=3.7.61'));
   assert.ok(indexHtml.includes('styles.css?v=3.7.23'));
   assert.ok(appSrc.includes('history-system-events.js?v=3.7.59'),
     'the classifier module query must bump when the module changes');

@@ -1,3 +1,19 @@
+## 2026-11-11 — v2.5.14: restore UI/API mail send (merge only, not deployed)
+
+Prod UI mail send was broken after the 2026-11-10 4:54 PM ET deploy of
+`200c237` (v2.5.3). `_handle_mail_send` passed `result_meta=send_meta` into
+`KanbanHandler._try_send_for_account`, but the wrapper did not accept that
+kwarg, so every send failed with HTTP 500 before SMTP/Graph.
+
+- Wrapper accepts and forwards `result_meta` to `mail_send.try_send_for_account`.
+- Missing `account_id` on `/api/v2/mail/send` returns 400, not 500.
+- Compose modal, inline reply/forward, and compose-tab Send stay disabled
+  until a From account is selected.
+- Regression tests exercise the real HTTP send path with the transport
+  mocked (compose, reply, forward, API key) and the From-required UI.
+
+Cache-buster `app.js?v=3.7.61`. Not deployed.
+
 ## 2026-11-10 — v2.5.13: mail modal stability (merge only, not deployed)
 
 Ken (11:03 PM ET, own go): restore the MDM account name, share it with the

@@ -21776,6 +21776,20 @@ function selectedFromAccountId(selectEl) {
   return selectEl ? parseInt(selectEl.value, 10) || null : null;
 }
 
+function bindFromSelectToSendButton(selectEl, sendBtn) {
+  // Send stays disabled until a From account is selected (live FLAG 2026-11-11:
+  // the compose Send button was enabled on an empty "Choose account…" value).
+  if (!sendBtn) return;
+  const sync = () => {
+    sendBtn.disabled = !selectedFromAccountId(selectEl);
+  };
+  if (selectEl && !selectEl.dataset.sendEnabledBound) {
+    selectEl.dataset.sendEnabledBound = "1";
+    selectEl.addEventListener("change", sync);
+  }
+  sync();
+}
+
 function verifySentAs(accountId, sentAs) {
   const chosen = (mailState.accounts || []).find(a => a.id === accountId);
   if (!chosen || !sentAs) return true;
@@ -21854,7 +21868,7 @@ async function openComposeModal(opts = {}) {
     fromSelect.innerHTML = composeAccountOptionsHtml(wanted || '');
     fromSelect.value = wanted ? String(wanted) : '';
     fromSelect.disabled = false;
-    if (sendBtn0) sendBtn0.disabled = false;
+    bindFromSelectToSendButton(fromSelect, sendBtn0);
   }
   modal.dataset.replyToMessageId = opts.replyToMessageId ? String(opts.replyToMessageId) : '';
   modal.dataset.dealId = opts.dealId ? String(opts.dealId) : '';
@@ -22201,8 +22215,8 @@ async function openComposeModal(opts = {}) {
       } catch (e) {
         showToast('Send failed: ' + e.message, true);
       } finally {
-        sendBtn.disabled = false;
         sendBtn.innerHTML = '<i class="ti ti-send" style="margin-right:0.3rem;"></i>Send';
+        bindFromSelectToSendButton($('#compose-from-account'), sendBtn);
       }
     });
   }
@@ -22440,6 +22454,9 @@ async function renderComposeTabContent(container, tabId, opts = {}) {
     if (wanted && !mailState.accounts.some(a => a.id === wanted)) wanted = null;
     fromSelect.innerHTML = composeAccountOptionsHtml(wanted || '');
     fromSelect.value = wanted ? String(wanted) : '';
+    bindFromSelectToSendButton(fromSelect, container.querySelector('.compose-tab-send'));
+  } else {
+    bindFromSelectToSendButton(fromSelect, container.querySelector('.compose-tab-send'));
   }
   container.dataset.replyToMessageId = opts.replyToMessageId ? String(opts.replyToMessageId) : '';
 
@@ -22564,7 +22581,10 @@ async function renderComposeTabContent(container, tabId, opts = {}) {
       addEventLogEntry("email", dealId || null, "", `Email sent to ${to}`, true);
       closeComposeTabNoConfirm(tabId);
     } catch (e) { showToast('Send failed: ' + e.message, true); }
-    finally { sendBtn.disabled = false; sendBtn.innerHTML = '<i class="ti ti-send" style="margin-right:0.3rem;"></i>Send'; }
+    finally {
+      sendBtn.innerHTML = '<i class="ti ti-send" style="margin-right:0.3rem;"></i>Send';
+      bindFromSelectToSendButton(container.querySelector('.compose-tab-from'), sendBtn);
+    }
   });
 
   // Bind Cancel
@@ -28197,6 +28217,11 @@ async function renderInlineReply(panel, type, messageId, norm, messageAccountId)
 
   // Bind cancel
   replyDiv.querySelector('.inline-reply-cancel').addEventListener("click", () => replyDiv.remove());
+
+  bindFromSelectToSendButton(
+    replyDiv.querySelector('.inline-reply-from'),
+    replyDiv.querySelector('.inline-reply-send'),
+  );
 
   // Bind send
   replyDiv.querySelector('.inline-reply-send').addEventListener("click", async () => {

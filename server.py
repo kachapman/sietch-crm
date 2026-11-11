@@ -22402,6 +22402,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         html_body: str,
         text_body: str | None,
         attachments: list[dict] | None = None,
+        result_meta: dict | None = None,
         recipient_locks: list[str] | None = None,
     ) -> tuple[bool, str | None, str]:
         """Server-side wrapper that injects the DB-aware Graph token refresher
@@ -22412,6 +22413,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         `recipient_locks` is re-checked inside the shared helper (defence in
         depth) so no routing branch can put mail on the wire for a locked
         sender, even if a future caller forgets the handler-level check.
+
+        `result_meta` must be forwarded: `_handle_mail_send` passes
+        `result_meta=send_meta` so fallback_reason / sent-as metadata
+        written by the helper is visible to the HTTP handler. Dropping
+        the kwarg TypeError'd every UI/API send (2026-11-11).
         """
         from mail_send import try_send_for_account
         return try_send_for_account(
@@ -22424,6 +22430,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             bcc_addr=bcc_addr,
             attachments=attachments,
             refresh_graph_token=self._refresh_graph_token_if_needed,
+            result_meta=result_meta,
             recipient_locks=recipient_locks,
         )
 
@@ -24093,7 +24100,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         try:
             payload = json.loads(_read_body(self) or b"{}")
             user = _require_auth(self)
-            account_id = int(payload.get("account_id"))
+            if not user:
+                return
+            try:
+                account_id = int(payload.get("account_id"))
+            except (TypeError, ValueError):
+                _json_response(self, 400, {"error": "account_id is required"})
+                return
             to_addr = payload.get("to", "")
             cc_addr = payload.get("cc")
             bcc_addr = payload.get("bcc")
