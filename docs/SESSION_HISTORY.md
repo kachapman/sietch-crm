@@ -1,6 +1,50 @@
 # Session History — Sietch CRM (new-crm branch)
 
 
+## Current session summary (for next resume) — 2026-11-10 (reconnect clears the stale auth_error, v2.5.9, NOT deployed)
+
+**Branch:** `hotfix/reconnect-clears-auth-error` (from `5e22501` = v2.5.8 = `origin/main`).
+Worktree `/home/chapman-server/Projects/new-crm-hotfix-banner`. Merged into local
+`main` (fast-forward) and pushed `origin main`; **no deploy, no restart, no prod
+DB write** — Ken's 8:43 PM ET go covers the deploy session that follows.
+Plan/root cause: `plans/sietch/email-banner-after-v256-2026-11-10.md` §5; this
+session's log: `plans/sietch/reconnect-banner-hotfix-2026-11-10.md`.
+
+- **Bug:** accounts 8/9/10 were reconnected at ~20:1x ET (tokens + identity
+  written, sync gate passing) but the red banner stayed. The pre-reconnect
+  `auth_error` was never cleared: neither connect callback, nor the CAS refresh,
+  nor either Graph refresher touched `auth_error`/`auth_error_at`, and the
+  scanner only ever wrote it. `record_auth_error` also re-stamped
+  `auth_error_at = NOW()` every 120 s cycle, so the refusal always looked fresh.
+- **Fix:** clear `auth_error`/`auth_error_at` on (a) the Exchange connect
+  callback, (b) the Graph connect callback, (c) `mail_oauth._save_refreshed_token`
+  CAS, (d) `_refresh_graph_token_if_needed`, (e) the scanner's Graph refresher.
+  New `mail_oauth.clear_auth_error(id)` (by id, `AND auth_error IS NOT NULL`)
+  called from `_mailbox_cfg_from_row` once `sync_gate` passes **and**
+  `check_account` is OK for every connected family (exchange/graph tokens,
+  SMTP login when it is an address); unverifiable/mismatched/password accounts
+  are never cleared. `record_auth_error` writes only on first set or message
+  change. Failed refresh paths still clear nothing.
+- **Payload:** `_handle_mail_accounts` now selects token **presence** booleans
+  (`has_exchange_token`/`has_exchange_refresh`, plus the existing graph flags)
+  and `mail_identity.check_account` reads them, so `identityStatus` is
+  `unverifiable` for tokens-present/identity-empty instead of `ok`. No token
+  value is selected or returned; flags are popped from the response. v2.5.6
+  Save behaviour kept (an unchanged-address Save keeps a real `auth_error`).
+- **Tests:** new `tests/test_reconnect_clears_auth_error.py` (24 tests, all
+  pass; proven to fail if the CAS clear is removed). No new failures vs the 18
+  known pre-existing (3 `test_email_project_copy`, 9 `test_invoice_coc_modern`,
+  3 `test_mail_auth_gaps`, 1 `test_mcp_api_gaps`, 1
+  `test_scanner_toggle_gating`, 1 `test_sync_pull_deals_fields`); all
+  `tests/test_*.mjs` pass.
+- **Deploy session TODO:** pre-deploy backup
+  (`deploy/pre-deploy-backup.sh`, target `/mnt/sietch_backup`), `git pull`
+  (origin main = this merge), `docker compose build && up -d`, smokes on
+  `/api/v2/mail/accounts`, then the one-time repair for the three rows —
+  `UPDATE mail_accounts SET auth_error = NULL, auth_error_at = NULL WHERE id IN
+  (8,9,10);` (the scanner fix would also clear them on its next cycle).
+
+
 ## Current session summary (for next resume) — 2026-11-10 (API/MCP gaps pass, NOT deployed)
 
 **Branch:** `feat/mcp-api-gaps-2026-11-10` (from `7d2e55c` / deployed v2.5.5).

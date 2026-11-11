@@ -21909,6 +21909,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                    oauth_provider = %s, oauth_access_token = %s, oauth_refresh_token = %s,
                    oauth_token_expires = to_timestamp(%s), oauth_identity = %s,
                    oauth_last_error = NULL, oauth_last_error_at = NULL,
+                   auth_error = NULL, auth_error_at = NULL,
                    imap_host = COALESCE(NULLIF(imap_host, ''), %s),
                    imap_port = COALESCE(NULLIF(imap_port, 0), %s),
                    smtp_host = COALESCE(NULLIF(smtp_host, ''), %s),
@@ -22165,7 +22166,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                oauth_graph_scope = %s,
                oauth_graph_identity = %s,
                oauth_graph_last_error = NULL,
-               oauth_graph_last_error_at = NULL
+               oauth_graph_last_error_at = NULL,
+               auth_error = NULL, auth_error_at = NULL
                WHERE id = %s""",
             (access_token, stored_refresh, expires_ts,
              oauth_providers.MicrosoftProvider._GRAPH_SCOPE, ms_email, account_id),
@@ -22287,7 +22289,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 self._record_graph_error(account_id, err)
                 return None, err
             db.execute(
-                "UPDATE mail_accounts SET oauth_graph_access_token = %s, oauth_graph_refresh_token = %s, oauth_graph_token_expires = to_timestamp(%s), oauth_graph_identity = %s, oauth_graph_last_error = NULL, oauth_graph_last_error_at = NULL WHERE id = %s",
+                "UPDATE mail_accounts SET oauth_graph_access_token = %s, oauth_graph_refresh_token = %s, oauth_graph_token_expires = to_timestamp(%s), oauth_graph_identity = %s, oauth_graph_last_error = NULL, oauth_graph_last_error_at = NULL, auth_error = NULL, auth_error_at = NULL WHERE id = %s",
                 (new_token, new_refresh, new_expires_ts, ms_email, account_id),
             )
             return new_token, None
@@ -23171,6 +23173,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                           last_sync, owner_user_id, created_at,
                           oauth_identity, oauth_last_error, oauth_last_error_at,
                           auth_error,
+                          oauth_access_token IS NOT NULL AS has_exchange_token,
+                          oauth_refresh_token IS NOT NULL AS has_exchange_refresh,
                           oauth_graph_access_token IS NOT NULL AS has_graph_token,
                           oauth_graph_token_expires,
                           oauth_graph_identity,
@@ -23276,6 +23280,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     r["sendVerification"] = "n/a"
                 r.pop("has_graph_token", None)
                 r.pop("has_graph_refresh", None)
+                r.pop("has_exchange_token", None)
+                r.pop("has_exchange_refresh", None)
             # Attach shared-with users for each visible account
             acct_ids = [r["id"] for r in rows]
             shares: dict[int, list[dict]] = {}

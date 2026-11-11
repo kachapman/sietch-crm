@@ -1,4 +1,75 @@
-## 2026-11-10 — v2.5.8: API/MCP gaps: tags, paging, honest spec, mail body, wrappers
+## 2026-11-10 — v2.5.9: a successful reconnect/refresh clears the stale mail auth_error
+
+VERSION 2.5.8 → 2.5.9. `public/app.js` unchanged, so the cache-buster stays
+3.7.57. Approval: Ken 8:43 PM ET ("Yes, deploy the reconnect-banner fix with a
+backup and smokes, and clear the stale error on accounts 8, 9 and 10"). **This
+session = code + tests + merge to local `main` only. Nothing deployed, no
+server restarted, no prod row touched** — the deploy session follows.
+
+**Live bug (after the 20:1x ET reconnects).** Accounts 8/9/10 were reconnected
+successfully (fresh tokens, `oauth_identity` / `oauth_graph_identity` = the
+account address, sync gate passing) yet the red "Mail account needs
+reconnecting" banner stayed up. The `auth_error` the scanner recorded *while*
+the mailbox was still unverified survived the reconnect, and nothing on any
+success path cleared it:
+
+* `server.py` Exchange connect callback (`_handle_oauth_callback`) wrote the
+  new tokens + identity but left `auth_error` / `auth_error_at` alone.
+* The Graph connect callback (`_handle_oauth_graph_callback`) did the same.
+* `mail_oauth._save_refreshed_token` (the routine CAS refresh) cleared
+  `oauth_last_error` but not `auth_error`.
+* Both Graph refreshers (`server.py:_refresh_graph_token_if_needed`,
+  `scanner/mail_scanner.py:_build_graph_token_refresher`) cleared
+  `oauth_graph_last_error` only.
+* The scanner only ever *wrote* `auth_error`; `_handle_mail_accounts` then
+  maps it straight to `authError`, which is the banner text.
+
+**Fix (clears only on proven success).**
+
+1. Exchange connect callback: also `auth_error = NULL, auth_error_at = NULL`
+   (only reached after the identity check passed and the token is written).
+2. Graph connect callback: same two columns.
+3. `mail_oauth._save_refreshed_token` CAS path: same two columns (the forced
+   path already did). A failed/losing refresh still clears nothing.
+4. `_refresh_graph_token_if_needed` and the scanner's Graph refresher: same.
+5. Scanner durability: new `mail_oauth.clear_auth_error(account_id)` — a
+   single `UPDATE ... WHERE id = %s AND auth_error IS NOT NULL`, so it only
+   clears one row, only when something is set. `_mailbox_cfg_from_row` calls
+   it after `sync_gate` passes **and** `mail_identity.check_account` is
+   `IDENTITY_OK` for every *connected* family (exchange/graph tokens present,
+   SMTP login when it is an address). Unverifiable/mismatched ⇒ no clear;
+   password accounts are never cleared here (their error may be an SMTP send
+   failure the IMAP gate knows nothing about).
+6. `record_auth_error` no longer re-stamps `auth_error_at = NOW()` for an
+   unchanged message. The scanner calls it every 120 s while unverified, which
+   is why the refusal always looked two minutes old. It now writes only on the
+   first set or a message change (admin notification unchanged).
+
+**Payload honesty gap closed.** `_handle_mail_accounts` never selected the
+Exchange token columns (and blanked them), and `check_account` only knew Graph
+tokens from `has_graph_*` booleans it did not read — so `identityStatus`
+reported `ok` for "tokens present, identity empty", the exact state the sync
+gate refuses. The payload now selects token **presence** only
+(`oauth_access_token IS NOT NULL AS has_exchange_token`, same for the refresh
+token) and `mail_identity.check_account` treats those flags like the values
+(scanner rows still pass the values). No token value is selected or returned;
+the flags are popped from the response.
+
+**Tests.** New `tests/test_reconnect_clears_auth_error.py` (24 tests): both
+connect callbacks clear a stale error; CAS + both Graph refreshers clear on
+success; failed refresh / refused Graph identity clear nothing; an
+unchanged-address Save still keeps a real `auth_error` + identity; the scanner
+clears only when every connected family verifies (and not on a graph mismatch,
+unverified graph, foreign SMTP login, refused gate, password account); no
+re-stamp of an unchanged message; payload `identityStatus` = `unverifiable`
+for tokens-present/identity-empty, `ok`/`mismatch` as appropriate, and no token
+value in the response. Verified the suite fails if the CAS clear is removed.
+Full run: no new failures vs the 18 known pre-existing ones (3
+`test_email_project_copy`, 9 `test_invoice_coc_modern`, 3 `test_mail_auth_gaps`,
+1 `test_mcp_api_gaps`, 1 `test_scanner_toggle_gating`, 1
+`test_sync_pull_deals_fields`); all `tests/test_*.mjs` pass.
+
+
 
 VERSION 2.5.7 → 2.5.8; `app.js` cache-buster 3.7.56 → 3.7.57. Approval: Ken
 7:33 PM ET ("add the api tool batch to the deploy"). Rebased onto `ba8c750` /
