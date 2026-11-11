@@ -2552,6 +2552,44 @@ def _mail_account_manageable(user: dict, account_id: int) -> bool:
     return row is not None and row.get("owner_user_id") == user["id"]
 
 
+# Columns that carry a verified credential identity or an auth failure.
+# They are written ONLY by the OAuth connect callbacks (identity is verified
+# there), the refresh helper (COALESCE'd identity) and
+# `mail_oauth.record_auth_error` — never from a client payload. A settings
+# Save that touched them is how the "needs reconnecting" banner came back
+# after every reconnect (2026-11-10).
+MAIL_ACCOUNT_PROTECTED_COLUMNS = frozenset({
+    "oauth_identity",
+    "oauth_graph_identity",
+    "oauth_access_token",
+    "oauth_refresh_token",
+    "oauth_token_expires",
+    "oauth_graph_access_token",
+    "oauth_graph_refresh_token",
+    "oauth_graph_token_expires",
+    "oauth_graph_scope",
+    "oauth_scopes",
+    "oauth_last_error",
+    "oauth_last_error_at",
+    "oauth_graph_last_error",
+    "oauth_graph_last_error_at",
+    "auth_error",
+    "auth_error_at",
+})
+
+
+def _mail_account_assignment_columns(fields: list[str]) -> set[str]:
+    """"col = %s" assignments → {col} (used by the write invariant below)."""
+    return {str(f).split("=", 1)[0].strip() for f in fields}
+
+
+def _mail_account_protected_writes(fields: list[str]) -> set[str]:
+    """Protected columns a built UPDATE would write. Must be empty for
+    client-supplied fields — the only legitimate clear is the code path that
+    NULLs identity/auth_error after a REAL address change."""
+    return _mail_account_assignment_columns(fields) & MAIL_ACCOUNT_PROTECTED_COLUMNS
+
+
 def _coerce_retention_days(value: Any, default: int = 90) -> int:
     """Normalize a mail account's retention_days value.
 
@@ -23583,11 +23621,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 if key in payload:
                     fields.append(f"{key} = %s")
                     params.append(int(payload[key]))
+            # A BLANK password field means "keep the stored one": the settings
+            # modal never echoes a secret back into the input, so every Save
+            # sent "" and overwrote a working IMAP/SMTP password with an empty
+            # string (2026-11-10 audit — same class as the identity wipe).
             for key in ("password", "password_encrypted"):
-                if key in payload:
+                if payload.get(key):
                     fields.append("password_encrypted = %s")
                     params.append(payload[key])
-            if "smtp_password" in payload:
+            if payload.get("smtp_password"):
                 fields.append("smtp_password_encrypted = %s")
                 params.append(payload["smtp_password"])
             if "smtp_use_tls" in payload:
@@ -23605,16 +23647,47 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     raw = ",".join(raw)
                 fields.append("monitored_folders = %s")
                 params.append(str(raw))
+            # A verified identity belongs to one address. A REAL address change
+            # invalidates it, and any auth error was about the old mailbox —
+            # both must be re-established / cleared.
+            #
+            # ONLY on a real change (hotfix 2026-11-10): the settings modal
+            # sends the whole form on every Save, so keying this on
+            # `"email" in payload` erased the identity stamps the reconnect
+            # callback had just written — every display-name/sharing Save put
+            # the account back to "needs reconnecting". Compare normalized
+            # addresses (trim + lowercase) so a case/whitespace round-trip is
+            # not mistaken for a new mailbox.
+            identity_clear: list[str] = []
             if "email" in payload:
-                # A verified identity belongs to one address. Changing the
-                # address invalidates it, and any auth error was about the old
-                # mailbox — both must be re-established / cleared.
-                fields.extend([
-                    "oauth_identity = NULL",
-                    "oauth_graph_identity = NULL",
-                    "auth_error = NULL",
-                    "auth_error_at = NULL",
-                ])
+                submitted_email = mail_identity.normalize_email(payload.get("email"))
+                stored_email = mail_identity.normalize_email(current.get("email"))
+                if submitted_email != stored_email:
+                    identity_clear = [
+                        "oauth_identity = NULL",
+                        "oauth_graph_identity = NULL",
+                        "auth_error = NULL",
+                        "auth_error_at = NULL",
+                    ]
+                else:
+                    logger.debug(
+                        "Mail account %s: email unchanged (case/whitespace only) — "
+                        "keeping verified identity and auth_error state", account_id)
+            # Belt and braces: nothing derived from the payload may write a
+            # credential/identity/error column, whatever a future field loop
+            # adds. The explicit address-change clear above is code, not input,
+            # and is appended only after this check passes.
+            leaked = _mail_account_protected_writes(fields)
+            if leaked:
+                logger.error(
+                    "Refusing mail account %s update: client payload would write "
+                    "protected column(s) %s", account_id, sorted(leaked))
+                _json_response(self, 400, {
+                    "error": "Identity, token and auth-error columns cannot be set "
+                             "from an account update.",
+                })
+                return
+            fields.extend(identity_clear)
             if not fields:
                 _json_response(self, 400, {"error": "No fields to update"})
                 return

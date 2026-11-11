@@ -45,7 +45,39 @@
 
 ---
 
+## Previous session summary (2026-11-10 — account-save identity hotfix v2.5.6, branch only)
+
+**Date:** 2026-11-10 (hotfix branch `hotfix/account-save-identity` — CODE FIX
+ONLY, not deployed, not merged; Ken approved the deploy at 6:52 PM ET)
+
+**Status: committed on `hotfix/account-save-identity` off `105f259`** (what
+prod runs); worktree `~/Projects/new-crm-hotfix-save`. Deploy is a separate
+session (backup → `git push` → droplet pull/build/up), then Ken reconnects
+accounts 8/9/10 once — the fix stops future wipes, it does not restore an
+already-NULLed stamp.
+
+- Bug: an account-settings Save cleared `oauth_identity` /
+  `oauth_graph_identity` / `auth_error` whenever the PUT body contained
+  `email`, and `app.js` sent `email` on every Save → "needs reconnecting" banner
+  right after a successful reconnect.
+- Fix: clear only on a real (trimmed, case-insensitive) address change; add a
+  server-side invariant so no client field can ever write an identity, OAuth
+  token/expiry/scope or auth-error column; client sends only changed fields
+  (`email`, blank passwords). Blank password no longer overwrites the stored
+  secret — a second silent wipe found in the same handler.
+- Audit of every other path (sharing, folders, toggles, sync-now, signature,
+  `mail_oauth` helpers, scanner refresh, OAuth callbacks/disconnects) in
+  `plans/sietch/email-save-hotfix-2026-11-10.md` — no other wipe.
+- Tests: new `tests/test_mail_account_save_identity.py` (21, offline); mail +
+  oauth + graph + email-matrix suites green; full Python + JS suites identical
+  to the `105f259` baseline (no new failures). VERSION 2.5.6, cache-buster
+  3.7.55.
+
+---
+
 ## Previous session summary (2026-11-10 — merge + deploy of the MCP document read / OCR worker queue)
+
+**Date:** 2026-11-10 (merge + DEPLOY of the MCP document read / OCR worker queue — Ken's go at 5:25 PM ET)
 
 **Status: MERGED and DEPLOYED. Prod `crm.publicadjustermidwest.com`
 (`147.182.164.19`) runs `f3083c8` / v2.5.4** (was `200c237` / v2.5.3).
