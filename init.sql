@@ -1176,6 +1176,15 @@ INSERT INTO history_categories (title, display_color, is_system, sort_order, ico
 VALUES ('Action', '#6c757d', TRUE, 15, 'pencil', 'accent')
 ON CONFLICT (title) DO NOTHING;
 
+INSERT INTO history_categories (title, icon_key, icon_style, is_system, sort_order, display_color)
+VALUES
+  ('Follow-Up', 'clock', 'stroke', TRUE, 9, NULL),
+  ('Estimate', 'document', 'stroke', TRUE, 10, NULL),
+  ('Inspection', 'building', 'stroke', TRUE, 11, NULL),
+  ('Expression of gratitude', 'star', 'stroke', TRUE, 12, NULL)
+ON CONFLICT (title) DO NOTHING;
+
+
 SELECT setval(pg_get_serial_sequence('history_categories', 'id'),
               (SELECT COALESCE(MAX(id), 1) FROM history_categories));
 
@@ -1325,7 +1334,8 @@ INSERT INTO _applied_migrations (filename) VALUES
     ('051_mail_send_recipient_lock.sql'),
     ('052_ocr_queue_cache.sql'),
     ('053_history_events_system_marker.sql'),
-    ('054_api_token_mail_send_lock.sql')
+    ('054_api_token_mail_send_lock.sql'),
+    ('055_seed_missing_history_categories.sql')
 ON CONFLICT (filename) DO NOTHING;
 
 

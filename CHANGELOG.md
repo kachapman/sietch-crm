@@ -1,3 +1,17 @@
+## 2026-11-10 — v2.5.12: seed the missing 016/017 history categories
+
+Ken (10:10 PM ET): add the Action history category and the four task
+categories, with a backup. New idempotent migration **055** inserts only
+what 016 and 017 were meant to seed and never landed (old runner marked
+those files applied). Values match the original INSERT statements.
+
+- Action (`#6c757d`, `is_system=TRUE`, sort 15, icon `pencil`/`accent`)
+- Follow-Up, Estimate, Inspection, Expression of gratitude (016 attributes)
+- `INSERT ... SELECT ... WHERE NOT EXISTS (title)` in one transaction
+- Does **not** reassign existing `tasks.category_id` or history rows
+  (the 016 backfill is intentionally omitted)
+- `init.sql` seeds the same five rows and stamps 055 so fresh installs match
+
 ## 2026-11-10 — v2.5.11: token sends — recipient lock on every send path
 
 Branch `hotfix/token-send-lock`, merged with `origin/main` `59a3049`
